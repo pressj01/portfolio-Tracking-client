@@ -379,13 +379,38 @@ def import_monthly_payout_tickers(file_path, profile_id=1):
 # ── Generic user upload ────────────────────────────────────────────────────────
 
 UPLOAD_COL_MAP = {
-    'ticker':        ['ticker', 'symbol', 'stock', 'etf'],
-    'quantity':      ['shares', 'quantity', 'qty', 'units', 'amount'],
-    'price_paid':    ['price paid', 'cost basis', 'avg cost', 'buy price', 'price_paid'],
-    'div':           ['div/share', 'dividend', 'div', 'distribution'],
-    'div_frequency': ['frequency', 'div frequency', 'div freq', 'div_frequency'],
-    'ex_div_date':   ['ex-div date', 'ex div date', 'ex_div_date', 'exdivdate'],
-    'reinvest':      ['drip', 'reinvest', 'reinvestment'],
+    'ticker':                     ['ticker', 'symbol', 'stock', 'etf'],
+    'description':                ['description', 'name', 'security name'],
+    'classification_type':        ['type', 'classification', 'asset type'],
+    'quantity':                    ['shares', 'quantity', 'qty', 'units', 'amount'],
+    'price_paid':                  ['price paid', 'cost basis', 'avg cost', 'buy price', 'price_paid'],
+    'current_price':               ['current price', 'market price', 'last price', 'current_price'],
+    'purchase_value':              ['purchase value', 'cost value', 'purchase_value'],
+    'current_value':               ['current value', 'market value', 'current_value'],
+    'gain_or_loss':                ['gain/loss', 'gain loss', 'gain_or_loss', 'p&l'],
+    'gain_or_loss_percentage':     ['gain/loss %', 'gain loss %', 'gain_or_loss_percentage', 'p&l %'],
+    'div':                         ['div/share', 'dividend', 'div', 'distribution'],
+    'div_frequency':               ['frequency', 'div frequency', 'div freq', 'div_frequency'],
+    'ex_div_date':                 ['ex-div date', 'ex div date', 'ex_div_date', 'exdivdate'],
+    'reinvest':                    ['drip', 'reinvest', 'reinvestment'],
+    'dividend_paid':               ['div paid', 'dividend paid', 'dividend_paid'],
+    'estim_payment_per_year':      ['est. annual pmt', 'annual payment', 'estim_payment_per_year', 'est annual'],
+    'approx_monthly_income':       ['monthly income', 'monthly div', 'approx_monthly_income'],
+    'annual_yield_on_cost':        ['yield on cost', 'yoc', 'annual_yield_on_cost'],
+    'current_annual_yield':        ['current yield', 'yield', 'current_annual_yield'],
+    'percent_of_account':          ['% of account', 'weight', 'allocation', 'percent_of_account'],
+    'shares_bought_from_dividend': ['shares from div', 'div shares', 'shares_bought_from_dividend'],
+    'shares_bought_in_year':       ['shares/year', 'shares year', 'shares_bought_in_year'],
+    'shares_in_month':             ['shares/month', 'shares month', 'shares_in_month'],
+    'ytd_divs':                    ['ytd divs', 'ytd dividends', 'ytd_divs'],
+    'total_divs_received':         ['total divs received', 'total dividends', 'total_divs_received'],
+    'paid_for_itself':             ['paid for itself', 'pfi', 'paid_for_itself'],
+    'purchase_date':               ['date purchased', 'purchase date', 'buy date', 'purchase_date'],
+    'cash_not_reinvested':         ['cash not reinvest', 'cash not reinvested', 'cash_not_reinvested'],
+    'total_cash_reinvested':       ['cash reinvested', 'total cash reinvested', 'total_cash_reinvested'],
+    'withdraw_8pct_cost_annually': ['8% annual wdraw', 'annual withdrawal', 'withdraw_8pct_cost_annually'],
+    'withdraw_8pct_per_month':     ['8% monthly wdraw', 'monthly withdrawal', 'withdraw_8pct_per_month'],
+    'percent_change':              ['% change', 'price change', 'percent_change'],
 }
 
 
@@ -490,22 +515,48 @@ def import_from_upload(df, profile_id):
         except Exception:
             info_map[t] = {}
 
+    def _val(row, col):
+        """Return a user-supplied value or None if missing/blank."""
+        v = row.get(col, None)
+        if v is None:
+            return None
+        s = str(v).strip()
+        if s in ('', 'nan', 'None', 'NaN', 'none'):
+            return None
+        return v
+
+    def _fval(row, col):
+        """Return a float from user-supplied column, or None."""
+        v = _val(row, col)
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
+
     enriched = []
     for _, row in df.iterrows():
         t = row['ticker']
         info = info_map.get(t, {})
 
-        current_price = float(
-            row.get('current_price', None) or
+        # ── Core pricing: user-supplied → yfinance → 0 ──────────────────
+        current_price = (
+            _fval(row, 'current_price') or
             price_map.get(t) or
             info.get('regularMarketPrice') or
             info.get('currentPrice') or 0.0
         )
 
-        div = float(row.get('div', None) or div_map.get(t) or info.get('dividendRate') or 0.0)
+        div = (
+            _fval(row, 'div') or
+            div_map.get(t) or
+            info.get('dividendRate') or 0.0
+        )
 
-        ex_div_raw = row.get('ex_div_date', None)
-        if ex_div_raw and str(ex_div_raw).strip() not in ('', 'nan', 'None'):
+        # Ex-div date
+        ex_div_raw = _val(row, 'ex_div_date')
+        if ex_div_raw:
             ex_div_date = str(ex_div_raw).strip()
         else:
             ex_div_date = exdiv_map.get(t)
@@ -517,7 +568,8 @@ def import_from_upload(df, profile_id):
                     except Exception:
                         ex_div_date = None
 
-        freq_raw = row.get('div_frequency', None)
+        # Frequency
+        freq_raw = _val(row, 'div_frequency')
         if freq_raw and str(freq_raw).strip().upper() in ('A', 'SA', 'Q', 'M', 'W', '52'):
             div_frequency = str(freq_raw).strip().upper()
         elif t in freq_hist:
@@ -526,44 +578,79 @@ def import_from_upload(df, profile_id):
             div_frequency = freq_map.get(info.get('payoutFrequency'), 'Q')
 
         qty = float(row['quantity'])
-        price_paid_raw = row.get('price_paid', None)
-        price_paid = float(price_paid_raw) if price_paid_raw and str(price_paid_raw) not in ('', 'nan') else current_price
+        price_paid = _fval(row, 'price_paid') or current_price
 
-        current_value = current_price * qty
-        purchase_value = price_paid * qty
-        gain_or_loss = current_value - purchase_value
-        estim = div * qty
-        reinvest = str(row.get('reinvest', 'N') or 'N').strip().upper()
+        # ── Computed values: use user-supplied if present, else compute ──
+        purchase_value = _fval(row, 'purchase_value') or (price_paid * qty)
+        current_value = _fval(row, 'current_value') or (current_price * qty)
+        gain_or_loss = _fval(row, 'gain_or_loss')
+        if gain_or_loss is None:
+            gain_or_loss = current_value - purchase_value
+        gain_or_loss_pct = _fval(row, 'gain_or_loss_percentage')
+        if gain_or_loss_pct is None:
+            gain_or_loss_pct = (gain_or_loss / purchase_value) if purchase_value else 0
+        percent_change = _fval(row, 'percent_change')
+        if percent_change is None:
+            percent_change = gain_or_loss_pct
+
+        estim = _fval(row, 'estim_payment_per_year') or (div * qty)
+        monthly_income = _fval(row, 'approx_monthly_income') or (estim / 12 if estim else 0)
+
+        reinvest = str(_val(row, 'reinvest') or 'N').strip().upper()
         if reinvest not in ('Y', 'N'):
             reinvest = 'N'
 
+        description = _val(row, 'description')
+        if not description:
+            description = info.get('longName', t)[:200] if info.get('longName') else t
+
+        classification_type = _val(row, 'classification_type')
+        if not classification_type:
+            classification_type = info.get('quoteType', 'ETF')[:20]
+
+        # Purchase date
+        purchase_date = _val(row, 'purchase_date')
+        if purchase_date:
+            try:
+                purchase_date = pd.to_datetime(purchase_date).strftime('%Y-%m-%d')
+            except Exception:
+                purchase_date = None
+
         enriched.append({
-            'ticker':                  t,
-            'description':             info.get('longName', t)[:200] if info.get('longName') else t,
-            'classification_type':     info.get('quoteType', 'ETF')[:20],
-            'price_paid':              price_paid,
-            'current_price':           current_price,
-            'percent_change':          (gain_or_loss / purchase_value) if purchase_value else 0,
-            'quantity':                qty,
-            'purchase_value':          purchase_value,
-            'current_value':           current_value,
-            'gain_or_loss':            gain_or_loss,
-            'gain_or_loss_percentage': (gain_or_loss / purchase_value) if purchase_value else 0,
-            'div_frequency':           div_frequency,
-            'reinvest':                reinvest,
-            'ex_div_date':             ex_div_date,
-            'div':                     div,
-            'dividend_paid':           None,
-            'estim_payment_per_year':  estim,
-            'approx_monthly_income':   estim / 12,
-            'annual_yield_on_cost':    (div / price_paid) if price_paid else 0,
-            'current_annual_yield':    (div / current_price) if current_price else 0,
-            'percent_of_account':      None,
-            'ytd_divs':                None,
-            'total_divs_received':     None,
-            'paid_for_itself':         None,
-            'import_date':             _date.today().isoformat(),
-            'profile_id':              profile_id,
+            'ticker':                     t,
+            'description':                description,
+            'classification_type':        str(classification_type)[:20],
+            'price_paid':                 price_paid,
+            'current_price':              current_price,
+            'percent_change':             percent_change,
+            'quantity':                    qty,
+            'purchase_value':             purchase_value,
+            'current_value':              current_value,
+            'gain_or_loss':               gain_or_loss,
+            'gain_or_loss_percentage':    gain_or_loss_pct,
+            'div_frequency':              div_frequency,
+            'reinvest':                   reinvest,
+            'ex_div_date':                ex_div_date,
+            'div':                        div,
+            'dividend_paid':              _fval(row, 'dividend_paid'),
+            'estim_payment_per_year':     estim,
+            'approx_monthly_income':      monthly_income,
+            'withdraw_8pct_cost_annually': _fval(row, 'withdraw_8pct_cost_annually'),
+            'withdraw_8pct_per_month':    _fval(row, 'withdraw_8pct_per_month'),
+            'cash_not_reinvested':        _fval(row, 'cash_not_reinvested'),
+            'total_cash_reinvested':      _fval(row, 'total_cash_reinvested'),
+            'annual_yield_on_cost':       _fval(row, 'annual_yield_on_cost') or ((div / price_paid) if price_paid else 0),
+            'current_annual_yield':       _fval(row, 'current_annual_yield') or ((div / current_price) if current_price else 0),
+            'percent_of_account':         _fval(row, 'percent_of_account'),
+            'shares_bought_from_dividend': _fval(row, 'shares_bought_from_dividend'),
+            'shares_bought_in_year':      _fval(row, 'shares_bought_in_year'),
+            'shares_in_month':            _fval(row, 'shares_in_month'),
+            'ytd_divs':                   _fval(row, 'ytd_divs'),
+            'total_divs_received':        _fval(row, 'total_divs_received'),
+            'paid_for_itself':            _fval(row, 'paid_for_itself'),
+            'purchase_date':              purchase_date,
+            'import_date':                _date.today().isoformat(),
+            'profile_id':                 profile_id,
         })
 
     out = pd.DataFrame(enriched)

@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-from flask import Flask, request, jsonify, session
+from flask import Flask, request, jsonify, session, send_file
 from flask_cors import CORS
 from config import get_connection
 from database import ensure_tables_exist
@@ -434,6 +434,22 @@ def list_monthly_tickers():
     ).fetchall()
     conn.close()
     return jsonify(rows_to_dicts(rows))
+
+
+# ── Template download ──────────────────────────────────────────────────────────
+
+@app.route("/api/template/download", methods=["GET"])
+def download_template():
+    template_path = os.path.join(os.path.dirname(__file__), '..', 'templates', 'portfolio_upload_template.xlsx')
+    if not os.path.exists(template_path):
+        from create_template import create_template
+        create_template()
+    return send_file(
+        os.path.abspath(template_path),
+        as_attachment=True,
+        download_name='portfolio_upload_template.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────
