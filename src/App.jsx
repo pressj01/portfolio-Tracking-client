@@ -7,11 +7,29 @@ import ManageHoldings from './pages/ManageHoldings'
 function Home() {
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
+  const [refreshStatus, setRefreshStatus] = useState(null)
 
   useEffect(() => {
+    // Load holdings, then auto-refresh prices & divs from Yahoo
     fetch('/api/holdings')
       .then(res => res.json())
-      .then(data => { setHoldings(data); setLoading(false) })
+      .then(data => {
+        setHoldings(data)
+        setLoading(false)
+        if (data.length > 0) {
+          setRefreshStatus('Updating prices & dividends...')
+          fetch('/api/refresh', { method: 'POST' })
+            .then(r => r.json())
+            .then(r => {
+              setRefreshStatus(r.message)
+              // Reload with updated data
+              return fetch('/api/holdings')
+            })
+            .then(r => r.json())
+            .then(updated => setHoldings(updated))
+            .catch(() => setRefreshStatus('Refresh failed'))
+        }
+      })
       .catch(() => setLoading(false))
   }, [])
 
@@ -24,7 +42,14 @@ function Home() {
 
   return (
     <div className="page">
-      <h1>Portfolio Dashboard</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+        <h1 style={{ marginBottom: 0 }}>Portfolio Dashboard</h1>
+        {refreshStatus && (
+          <span className="alert alert-info" style={{ margin: 0, padding: '0.4rem 0.8rem', fontSize: '0.85rem' }}>
+            {refreshStatus}
+          </span>
+        )}
+      </div>
       {loading ? (
         <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
       ) : holdings.length === 0 ? (
