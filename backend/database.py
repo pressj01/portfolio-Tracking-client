@@ -40,6 +40,7 @@ def ensure_tables_exist(conn=None):
             div_frequency              TEXT,
             reinvest                   TEXT,
             ex_div_date                TEXT,
+            div_pay_date               TEXT,
             div                        REAL,
             dividend_paid              REAL,
             estim_payment_per_year     REAL,
@@ -73,6 +74,12 @@ def ensure_tables_exist(conn=None):
             UNIQUE (ticker, profile_id)
         )
     """)
+
+    # ── migrations ────────────────────────────────────────────────────────────
+    try:
+        cur.execute("ALTER TABLE all_account_info ADD COLUMN div_pay_date TEXT")
+    except Exception:
+        pass  # column already exists
 
     # ── holdings ───────────────────────────────────────────────────────────────
     cur.execute("""
@@ -235,9 +242,16 @@ def ensure_tables_exist(conn=None):
             end_date        TEXT,
             market_type     TEXT,
             duration_months INTEGER,
-            rows_json       TEXT NOT NULL
+            rows_json       TEXT NOT NULL,
+            comparison_json TEXT
         )
     """)
+
+    # Add comparison_json column if missing (migration for existing DBs)
+    try:
+        cur.execute("SELECT comparison_json FROM portfolio_income_sim_saved LIMIT 1")
+    except Exception:
+        cur.execute("ALTER TABLE portfolio_income_sim_saved ADD COLUMN comparison_json TEXT")
 
     # ── watchlist_watching ─────────────────────────────────────────────────────
     cur.execute("""

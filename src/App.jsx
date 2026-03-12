@@ -1,85 +1,50 @@
-import React, { useState, useEffect } from 'react'
-import { BrowserRouter as Router, Routes, Route, NavLink } from 'react-router-dom'
+import React, { useState, useRef, useEffect } from 'react'
+import { BrowserRouter as Router, Routes, Route, NavLink, useLocation } from 'react-router-dom'
 import './index.css'
+import Dashboard from './pages/Dashboard'
 import Import from './pages/Import'
 import ManageHoldings from './pages/ManageHoldings'
+import Settings from './pages/Settings'
+import Categories from './pages/Categories'
+import Growth from './pages/Growth'
+import DividendAnalysis from './pages/DividendAnalysis'
+import TotalReturn from './pages/TotalReturn'
+import ETFScreen from './pages/ETFScreen'
+import DividendCalendar from './pages/DividendCalendar'
+import Watchlist from './pages/Watchlist'
+import BuySellSignals from './pages/BuySellSignals'
+import NavErosion from './pages/NavErosion'
+import NavErosionPortfolio from './pages/NavErosionPortfolio'
+import PortfolioIncomeSim from './pages/PortfolioIncomeSim'
 
-function Home() {
-  const [holdings, setHoldings] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [refreshStatus, setRefreshStatus] = useState(null)
+function NavDropdown({ label, children }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  const location = useLocation()
 
+  // Close on route change
+  useEffect(() => { setOpen(false) }, [location.pathname])
+
+  // Close on outside click
   useEffect(() => {
-    // Load holdings, then auto-refresh prices & divs from Yahoo
-    fetch('/api/holdings')
-      .then(res => res.json())
-      .then(data => {
-        setHoldings(data)
-        setLoading(false)
-        if (data.length > 0) {
-          setRefreshStatus('Updating prices & dividends...')
-          fetch('/api/refresh', { method: 'POST' })
-            .then(r => r.json())
-            .then(r => {
-              setRefreshStatus(r.message)
-              // Reload with updated data
-              return fetch('/api/holdings')
-            })
-            .then(r => r.json())
-            .then(updated => setHoldings(updated))
-            .catch(() => setRefreshStatus('Refresh failed'))
-        }
-      })
-      .catch(() => setLoading(false))
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const totalValue = holdings.reduce((s, h) => s + (h.current_value || 0), 0)
-  const totalGain = holdings.reduce((s, h) => s + (h.gain_or_loss || 0), 0)
-  const totalMonthly = holdings.reduce((s, h) => s + (h.approx_monthly_income || 0), 0)
-  const totalAnnual = holdings.reduce((s, h) => s + (h.estim_payment_per_year || 0), 0)
-
-  const fmt = (v) => '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const isActive = React.Children.toArray(children).some(
+    child => child.props?.to && location.pathname === child.props.to
+  )
 
   return (
-    <div className="page">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-        <h1 style={{ marginBottom: 0 }}>Portfolio Dashboard</h1>
-        {refreshStatus && (
-          <span className="alert alert-info" style={{ margin: 0, padding: '0.4rem 0.8rem', fontSize: '0.85rem' }}>
-            {refreshStatus}
-          </span>
-        )}
-      </div>
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
-      ) : holdings.length === 0 ? (
-        <div className="card">
-          <p>No holdings yet. Go to <NavLink to="/import">Import</NavLink> to upload your spreadsheet, or <NavLink to="/holdings">Manage Holdings</NavLink> to add manually.</p>
-        </div>
-      ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '1rem' }}>
-          <div className="card">
-            <h2>Holdings</h2>
-            <p style={{ fontSize: '2rem', fontWeight: 700 }}>{holdings.length}</p>
-          </div>
-          <div className="card">
-            <h2>Portfolio Value</h2>
-            <p style={{ fontSize: '2rem', fontWeight: 700 }}>{fmt(totalValue)}</p>
-          </div>
-          <div className="card">
-            <h2>Total Gain/Loss</h2>
-            <p style={{ fontSize: '2rem', fontWeight: 700, color: totalGain >= 0 ? '#81c784' : '#ef9a9a' }}>{fmt(totalGain)}</p>
-          </div>
-          <div className="card">
-            <h2>Monthly Income</h2>
-            <p style={{ fontSize: '2rem', fontWeight: 700, color: '#81c784' }}>{fmt(totalMonthly)}</p>
-          </div>
-          <div className="card">
-            <h2>Annual Income</h2>
-            <p style={{ fontSize: '2rem', fontWeight: 700, color: '#81c784' }}>{fmt(totalAnnual)}</p>
-          </div>
-        </div>
-      )}
+    <div className="nav-dropdown" ref={ref}>
+      <button
+        className={`nav-dropdown-toggle${isActive ? ' active' : ''}`}
+        onClick={() => setOpen(o => !o)}
+      >
+        {label} <span className="nav-arrow">{open ? '\u25B4' : '\u25BE'}</span>
+      </button>
+      {open && <div className="nav-dropdown-menu">{children}</div>}
     </div>
   )
 }
@@ -87,17 +52,53 @@ function Home() {
 function App() {
   return (
     <Router>
-      <nav className="nav-bar">
-        <NavLink to="/">Dashboard</NavLink>
-        <NavLink to="/import">Import</NavLink>
-        <NavLink to="/holdings">Holdings</NavLink>
-      </nav>
+      <Nav />
       <Routes>
-        <Route path="/" element={<Home />} />
+        <Route path="/" element={<Dashboard />} />
         <Route path="/import" element={<Import />} />
         <Route path="/holdings" element={<ManageHoldings />} />
+        <Route path="/settings" element={<Settings />} />
+        <Route path="/categories" element={<Categories />} />
+        <Route path="/growth" element={<Growth />} />
+        <Route path="/dividends" element={<DividendAnalysis />} />
+        <Route path="/total-return" element={<TotalReturn />} />
+        <Route path="/etf-screen" element={<ETFScreen />} />
+        <Route path="/div-calendar" element={<DividendCalendar />} />
+        <Route path="/watchlist" element={<Watchlist />} />
+        <Route path="/buy-sell-signals" element={<BuySellSignals />} />
+        <Route path="/nav-erosion" element={<NavErosion />} />
+        <Route path="/nav-erosion-portfolio" element={<NavErosionPortfolio />} />
+        <Route path="/income-sim" element={<PortfolioIncomeSim />} />
       </Routes>
     </Router>
+  )
+}
+
+function Nav() {
+  return (
+    <nav className="nav-bar">
+      <NavLink to="/">Dashboard</NavLink>
+      <NavDropdown label="Portfolio">
+        <NavLink to="/holdings">Holdings</NavLink>
+        <NavLink to="/categories">Categories</NavLink>
+        <NavLink to="/growth">Growth</NavLink>
+        <NavLink to="/dividends">Dividends</NavLink>
+        <NavLink to="/div-calendar">Dividend Calendar</NavLink>
+        <NavLink to="/total-return">Total Return</NavLink>
+      </NavDropdown>
+      <NavDropdown label="Analysis">
+        <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>
+        <NavLink to="/watchlist">Watchlist</NavLink>
+        <NavLink to="/buy-sell-signals">Buy / Sell Signals</NavLink>
+        <NavLink to="/nav-erosion">NAV Erosion</NavLink>
+        <NavLink to="/nav-erosion-portfolio">NAV Erosion Screener</NavLink>
+        <NavLink to="/income-sim">Income Simulator</NavLink>
+      </NavDropdown>
+      <NavDropdown label="Admin">
+        <NavLink to="/import">Import</NavLink>
+        <NavLink to="/settings">Settings</NavLink>
+      </NavDropdown>
+    </nav>
   )
 }
 

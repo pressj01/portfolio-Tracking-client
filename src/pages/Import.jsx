@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 
 function FileUpload({ onFileSelect, accept, file }) {
   const inputRef = useRef()
@@ -46,10 +46,19 @@ export default function Import() {
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
 
+  const [hasData, setHasData] = useState(false)
+
   // Owner-format additional imports
   const [importWeekly, setImportWeekly] = useState(true)
   const [importMonthly, setImportMonthly] = useState(true)
   const [importMonthlyTickers, setImportMonthlyTickers] = useState(true)
+
+  useEffect(() => {
+    fetch('/api/data/stats')
+      .then(r => r.json())
+      .then(d => setHasData(d.holdings > 0))
+      .catch(() => {})
+  }, [])
 
   const resetState = () => {
     setFile(null)
@@ -222,12 +231,18 @@ export default function Import() {
             </div>
           </div>
 
+          {hasData && (
+            <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+              Merge mode: existing holdings will be updated with spreadsheet values. New tickers will be added. App-only fields (like DRIP toggles or pay dates you edited) are preserved unless the spreadsheet provides them.
+            </div>
+          )}
+
           <button
             className="btn btn-primary"
             onClick={handleOwnerImport}
             disabled={!file || loading}
           >
-            {loading ? <><span className="spinner" /> Importing...</> : 'Import Spreadsheet'}
+            {loading ? <><span className="spinner" /> Importing...</> : hasData ? 'Merge Spreadsheet' : 'Import Spreadsheet'}
           </button>
         </div>
       )}
@@ -255,12 +270,18 @@ export default function Import() {
           />
 
           <div style={{ marginTop: '1rem' }}>
+            {hasData && (
+              <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+                Merge mode: existing holdings will be updated with spreadsheet values. New tickers will be added. App-only fields are preserved unless the spreadsheet provides them.
+              </div>
+            )}
+
             <button
               className="btn btn-primary"
               onClick={handleGenericImport}
               disabled={!file || loading}
             >
-              {loading ? <><span className="spinner" /> Importing...</> : 'Import Portfolio'}
+              {loading ? <><span className="spinner" /> Importing...</> : hasData ? 'Merge Portfolio' : 'Import Portfolio'}
             </button>
           </div>
         </div>

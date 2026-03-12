@@ -1,0 +1,300 @@
+import React, { useState, useMemo } from 'react'
+import Plot from 'react-plotly.js'
+
+function fmt$(v) {
+  return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+function fmt4(v) {
+  return v.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+}
+function fmtPct(v) {
+  return (v >= 0 ? '+' : '') + v.toFixed(2) + '%'
+}
+
+function StatTile({ label, value, color }) {
+  return (
+    <div className="ne-stat-tile">
+      <div className="ne-stat-val" style={{ color }}>{value}</div>
+      <div className="ne-stat-lbl">{label}</div>
+    </div>
+  )
+}
+
+export default function NavErosion() {
+  const [ticker, setTicker] = useState('')
+  const [amount, setAmount] = useState('10000')
+  const [startDate, setStartDate] = useState('2015-01-01')
+  const [endDate, setEndDate] = useState('2025-12-31')
+  const [reinvest, setReinvest] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [warning, setWarning] = useState(null)
+  const [rows, setRows] = useState([])
+  const [summary, setSummary] = useState(null)
+  const [figData, setFigData] = useState(null)
+  const [figLayout, setFigLayout] = useState(null)
+  const [sortCol, setSortCol] = useState(null)
+  const [sortAsc, setSortAsc] = useState(true)
+
+  const runBacktest = () => {
+    const sym = ticker.trim().toUpperCase()
+    if (!sym) return
+    setLoading(true)
+    setError(null)
+    setWarning(null)
+    setRows([])
+    setSummary(null)
+    setFigData(null)
+    setFigLayout(null)
+
+    const params = new URLSearchParams({
+      ticker: sym, amount, start: startDate, end: endDate, reinvest: String(reinvest)
+    })
+
+    fetch('/api/nav-erosion/data?' + params.toString())
+      .then(r => r.json())
+      .then(data => {
+        setLoading(false)
+        if (data.error) { setError(data.error); return }
+        if (data.warning) setWarning(data.warning)
+        setRows(data.rows || [])
+        setSummary(data.summary || null)
+        if (data.fig_json) {
+          try {
+            const fig = JSON.parse(data.fig_json)
+            setFigData(fig.data)
+            setFigLayout(fig.layout)
+          } catch { /* ignore */ }
+        }
+      })
+      .catch(err => {
+        setLoading(false)
+        setError('Request failed: ' + err.message)
+      })
+  }
+
+  // Sorting
+  const colKeys = ['date', 'price', 'price_delta_pct', 'div_per_share', 'total_dist',
+    'reinvested', 'shares_bought', 'total_shares', 'portfolio_val', 'breakeven_sh', 'shares_deficit']
+
+  const sorted = useMemo(() => {
+    const arr = [...rows]
+    if (sortCol !== null) {
+      const key = colKeys[sortCol]
+      arr.sort((a, b) => {
+        const aV = a[key] ?? '', bV = b[key] ?? ''
+        if (typeof aV === 'number' && typeof bV === 'number')
+          return sortAsc ? aV - bV : bV - aV
+        return sortAsc ? String(aV).localeCompare(String(bV)) : String(bV).localeCompare(String(aV))
+      })
+    }
+    return arr
+  }, [rows, sortCol, sortAsc])
+
+  const handleSort = (col) => {
+    if (sortCol === col) setSortAsc(!sortAsc)
+    else { setSortCol(col); setSortAsc(true) }
+  }
+  const arrow = (col) => sortCol === col ? (sortAsc ? ' \u25B2' : ' \u25BC') : ''
+
+  const headers = ['Date', 'Price', 'Price \u0394%', 'Div / Share', 'Total Dist',
+    'Reinvested', 'Shares Bought', 'Total Shares', 'Portfolio Value', 'Break-Even Shares', 'Shares Deficit']
+
+  const s = summary || {}
+
+  return (
+    <div className="ne-page">
+      <h1 style={{ marginBottom: '0.3rem' }}>NAV Erosion Back-Tester</h1>
+      <p className="ne-desc">
+        High-yield ETFs often pay large distributions while the share price slowly declines.
+        This tool shows month-by-month how many extra shares you need to reinvest to preserve
+        your original portfolio value — and what happens at any chosen reinvestment level (0–100%).
+        <br />
+        <span style={{ color: '#7ecfff' }}>Blue line</span> = share price &nbsp;&middot;&nbsp;
+        <span style={{ color: '#00e89a' }}>Green line</span> = portfolio value &nbsp;&middot;&nbsp;
+        <span style={{ color: '#888' }}>Dashed gray</span> = initial investment (break-even)
+        <br /><br />
+        <strong style={{ color: '#ccc' }}>Shares Deficit</strong> ={' '}
+        <em>Break-Even Shares</em> &minus; <em>Total Shares Held</em>, where
+        Break-Even Shares = Initial Investment &divide; Current Price.
+        A <span style={{ color: '#e05555', fontWeight: 600 }}>positive (red)</span> deficit means NAV erosion is winning.
+        A <span style={{ color: '#00c853', fontWeight: 600 }}>negative (green)</span> surplus means your portfolio exceeds your initial investment.
+      </p>
+
+      {/* Input form */}
+      <div className="ne-form">
+        <div className="ne-field">
+          <label className="ne-label">Ticker</label>
+          <input
+            className="ne-input"
+            style={{ width: 90, textTransform: 'uppercase' }}
+            placeholder="e.g. JEPI"
+            maxLength={10}
+            value={ticker}
+            onChange={e => setTicker(e.target.value.toUpperCase())}
+            onKeyDown={e => e.key === 'Enter' && runBacktest()}
+          />
+        </div>
+        <div className="ne-field">
+          <label className="ne-label">Initial Investment ($)</label>
+          <input
+            className="ne-input"
+            type="number"
+            min="1"
+            step="100"
+            style={{ width: 130 }}
+            value={amount}
+            onChange={e => setAmount(e.target.value)}
+          />
+        </div>
+        <div className="ne-field">
+          <label className="ne-label">Start Date</label>
+          <input
+            className="ne-input"
+            type="date"
+            value={startDate}
+            onChange={e => setStartDate(e.target.value)}
+          />
+        </div>
+        <div className="ne-field">
+          <label className="ne-label">End Date</label>
+          <input
+            className="ne-input"
+            type="date"
+            value={endDate}
+            onChange={e => setEndDate(e.target.value)}
+          />
+        </div>
+        <div className="ne-field" style={{ minWidth: 180 }}>
+          <label className="ne-label">
+            Reinvest %: <span style={{ color: '#7ecfff', fontWeight: 700 }}>{reinvest}%</span>
+          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={reinvest}
+              step="1"
+              style={{ flex: 1, accentColor: '#7ecfff' }}
+              onChange={e => setReinvest(Number(e.target.value))}
+            />
+            <input
+              className="ne-input"
+              type="number"
+              min="0"
+              max="100"
+              step="1"
+              style={{ width: 64, textAlign: 'center' }}
+              value={reinvest}
+              onChange={e => setReinvest(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
+            />
+          </div>
+        </div>
+        <button className="ne-run-btn" onClick={runBacktest} disabled={loading}>
+          Run Backtest
+        </button>
+      </div>
+
+      {/* Spinner */}
+      {loading && (
+        <div className="wl-spinner">
+          <div className="wl-spin-circle" />
+          <p>Fetching price data &amp; calculating&hellip;</p>
+        </div>
+      )}
+
+      {/* Error */}
+      {error && <div className="wl-error">{error}</div>}
+
+      {/* Warning */}
+      {warning && (
+        <div className="ne-warning">&#9888;&nbsp;{warning}</div>
+      )}
+
+      {/* Summary strip */}
+      {summary && !loading && (
+        <div className="ne-summary">
+          <StatTile label="Total Distributions" value={fmt$(s.total_dist || 0)} color="#7ecfff" />
+          <StatTile label="Shares Purchased" value={fmt4(s.total_shares_bought || 0)} color="#7ecfff" />
+          <StatTile label="Total Reinvested" value={fmt$(s.total_reinvested || 0)} color="#7ecfff" />
+          <StatTile label="Final Portfolio Value" value={fmt$(s.final_value || 0)} color="#00e89a" />
+          <StatTile label="Price Change" value={fmtPct(s.price_chg_pct || 0)} color={s.price_chg_pct < 0 ? '#e05555' : '#00c853'} />
+          <div className="ne-stat-tile">
+            <div className="ne-stat-val">
+              {s.has_erosion
+                ? <span style={{ color: '#e05555', fontWeight: 700 }}>Yes</span>
+                : <span style={{ color: '#00c853', fontWeight: 700 }}>No</span>}
+            </div>
+            <div className="ne-stat-lbl">NAV Erosion</div>
+          </div>
+          <StatTile
+            label={s.final_deficit > 0 ? 'Final Shares Deficit' : 'Final Shares Surplus'}
+            value={fmt4(s.final_deficit || 0)}
+            color={s.final_deficit > 0 ? '#e05555' : '#00c853'}
+          />
+        </div>
+      )}
+
+      {/* Chart */}
+      {figData && figLayout && !loading && (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <Plot
+            data={figData}
+            layout={{ ...figLayout, autosize: true }}
+            useResizeHandler
+            style={{ width: '100%', height: 420 }}
+            config={{ responsive: true }}
+          />
+        </div>
+      )}
+
+      {/* Monthly detail table */}
+      {rows.length > 0 && !loading && (
+        <>
+          <h2 className="ne-table-title">
+            Monthly Detail
+            <span style={{ fontWeight: 400, fontSize: '0.75rem', color: '#666' }}>&nbsp;&mdash; click any header to sort</span>
+          </h2>
+          <div className="ne-tbl-outer">
+            <table className="sst" id="ne-tbl">
+              <thead>
+                <tr>
+                  {headers.map((h, i) => {
+                    const cls = i === 0 ? 'ne-date-col' : ([3, 7, 9].includes(i) ? 'grp-left' : '')
+                    return (
+                      <th key={h} className={cls} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }}>
+                        {h}{arrow(i)}
+                      </th>
+                    )
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map(r => {
+                  const pctCls = r.price_delta_pct < 0 ? 'pct-down' : (r.price_delta_pct > 0 ? 'pct-up' : '')
+                  const defCls = r.shares_deficit > 0 ? 'ne-deficit' : 'ne-surplus'
+                  return (
+                    <tr key={r.date}>
+                      <td className="ne-date-col"><strong>{r.date}</strong></td>
+                      <td>{fmt$(r.price)}</td>
+                      <td className={pctCls}>{fmtPct(r.price_delta_pct)}</td>
+                      <td className="grp-left">{r.div_per_share > 0 ? fmt$(r.div_per_share) : '\u2014'}</td>
+                      <td>{fmt$(r.total_dist)}</td>
+                      <td>{fmt$(r.reinvested)}</td>
+                      <td>{fmt4(r.shares_bought)}</td>
+                      <td className="grp-left">{fmt4(r.total_shares)}</td>
+                      <td>{fmt$(r.portfolio_val)}</td>
+                      <td className="grp-left">{fmt4(r.breakeven_sh)}</td>
+                      <td className={defCls}>{fmt4(r.shares_deficit)}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}

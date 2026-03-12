@@ -12,8 +12,10 @@
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\""
   },
   "dependencies": {
+    "plotly.js": "^3.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-plotly.js": "^2.6.0",
     "react-router-dom": "^7.0.0"
   },
   "devDependencies": {

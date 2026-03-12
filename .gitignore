@@ -29,3 +29,6 @@ Thumbs.db
 # Electron build output
 release/
 out/
+
+# Claude Code local memory
+.claude/

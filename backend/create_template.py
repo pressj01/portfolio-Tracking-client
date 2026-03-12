@@ -22,7 +22,7 @@ def create_template():
         # Gain/loss
         "Purchase Value", "Current Value", "Gain/Loss", "Gain/Loss %", "% Change",
         # Dividend info
-        "Div/Share", "Frequency", "Ex-Div Date", "DRIP",
+        "Div/Share", "Frequency", "Ex-Div Date", "Pay Date", "DRIP",
         "Div Paid", "Est. Annual Pmt", "Monthly Income",
         # Yield
         "Yield On Cost", "Current Yield", "% of Account",
@@ -33,6 +33,8 @@ def create_template():
         "Shares from Div", "Shares/Year", "Shares/Month",
         # Withdrawal
         "8% Annual Wdraw", "8% Monthly Wdraw",
+        # Category
+        "Category",
     ]
 
     header_font = Font(bold=True, color="FFFFFF", size=11)
@@ -51,15 +53,18 @@ def create_template():
         {"Ticker": "JEPI", "Shares": 100, "Price Paid": 55.50, "Current Price": 57.20,
          "Description": "JPMorgan Equity Premium Income ETF", "Type": "ETF",
          "Div/Share": 0.45, "Frequency": "M", "Ex-Div Date": "03/01/25", "DRIP": "Y",
-         "Date Purchased": "2024-01-15", "YTD Divs": 135.00, "Total Divs Received": 540.00},
+         "Date Purchased": "2024-01-15", "YTD Divs": 135.00, "Total Divs Received": 540.00,
+         "Category": "Anchors"},
         {"Ticker": "SCHD", "Shares": 50, "Price Paid": 78.20, "Current Price": 82.50,
          "Description": "Schwab US Dividend Equity ETF", "Type": "ETF",
          "Div/Share": 0.62, "Frequency": "Q", "Ex-Div Date": "03/15/25", "DRIP": "N",
-         "Date Purchased": "2023-06-01", "YTD Divs": 31.00, "Total Divs Received": 186.00},
+         "Date Purchased": "2023-06-01", "YTD Divs": 31.00, "Total Divs Received": 186.00,
+         "Category": "Growth"},
         {"Ticker": "O", "Shares": 25, "Price Paid": 52.00, "Current Price": 55.80,
          "Description": "Realty Income Corp", "Type": "REIT",
          "Div/Share": 0.26, "Frequency": "M", "Ex-Div Date": "02/28/25", "DRIP": "Y",
-         "Date Purchased": "2024-03-10", "YTD Divs": 19.50, "Total Divs Received": 78.00},
+         "Date Purchased": "2024-03-10", "YTD Divs": 19.50, "Total Divs Received": 78.00,
+         "Category": "Boosters"},
     ]
     for row_idx, example in enumerate(examples, 2):
         for col_idx, header in enumerate(headers, 1):
@@ -91,6 +96,7 @@ def create_template():
         ("Div/Share", "No", "Dividend per share amount (auto-fetched from Yahoo Finance if blank)"),
         ("Frequency", "No", "Dividend frequency: W=Weekly, M=Monthly, Q=Quarterly, SA=Semi-Annual, A=Annual"),
         ("Ex-Div Date", "No", "Last ex-dividend date (auto-fetched if blank)"),
+        ("Pay Date", "No", "Dividend payment date (auto-estimated as ex-div + 3 weeks if blank)"),
         ("DRIP", "No", "Dividend reinvestment: Y=Yes, N=No (defaults to N)"),
         ("Div Paid", "No", "Total dividends paid to date"),
         ("Est. Annual Pmt", "No", "Estimated annual dividend payment (auto-calculated as Div/Share x Shares if blank)"),
@@ -108,6 +114,7 @@ def create_template():
         ("Shares/Month", "No", "Shares bought per month from dividends"),
         ("8% Annual Wdraw", "No", "Annual withdrawal amount at 8% rate"),
         ("8% Monthly Wdraw", "No", "Monthly withdrawal amount at 8% rate"),
+        ("Category", "No", "Category name to assign this ticker to (e.g., Anchors, Boosters, Growth). Creates category if it doesn't exist."),
     ]
     for row_idx, (a, b, c) in enumerate(instructions, 1):
         cell_a = ins.cell(row=row_idx, column=1, value=a)

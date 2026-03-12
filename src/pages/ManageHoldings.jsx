@@ -1,22 +1,54 @@
 import React, { useState, useEffect } from 'react'
 
 const EMPTY_HOLDING = {
-  ticker: '', description: '', classification_type: 'ETF',
+  ticker: '', description: '', category: '',
   quantity: '', price_paid: '', current_price: '',
   div: '', div_frequency: 'M', reinvest: 'N',
-  ex_div_date: '', purchase_date: '',
+  ex_div_date: '', div_pay_date: '', purchase_date: '',
   dividend_paid: '', ytd_divs: '', total_divs_received: '',
   paid_for_itself: '',
+  estim_payment_per_year: '', approx_monthly_income: '',
   cash_not_reinvested: '', total_cash_reinvested: '',
   shares_bought_from_dividend: '',
 }
 
 function AddEditModal({ holding, onSave, onCancel, isEdit }) {
-  const [form, setForm] = useState(holding || EMPTY_HOLDING)
+  const [form, setForm] = useState(() => {
+    if (!holding) return EMPTY_HOLDING
+    const f = {}
+    for (const key of Object.keys(EMPTY_HOLDING)) {
+      f[key] = holding[key] != null ? holding[key] : ''
+    }
+    return f
+  })
   const [looking, setLooking] = useState(false)
   const [lookupMsg, setLookupMsg] = useState(null)
+  const [categories, setCategories] = useState([])
 
-  const set = (field, value) => setForm(prev => ({ ...prev, [field]: value }))
+  useEffect(() => {
+    fetch('/api/categories/data')
+      .then(r => r.json())
+      .then(d => setCategories(d.categories || []))
+      .catch(() => {})
+  }, [])
+
+  const set = (field, value) => setForm(prev => {
+    const next = { ...prev, [field]: value }
+    if (['reinvest', 'div', 'quantity', 'div_frequency', 'current_price'].includes(field)) {
+      const div = parseFloat(next.div) || 0
+      const qty = parseFloat(next.quantity) || 0
+      const price = parseFloat(next.current_price) || 0
+      const freqMult = { W: 52, M: 12, Q: 4, SA: 2, A: 1 }
+      const mult = freqMult[(next.div_frequency || 'M').toUpperCase()] || 12
+      const annual = div * qty * mult
+      if (next.reinvest === 'Y' && annual > 0 && price > 0) {
+        next.shares_bought_from_dividend = parseFloat((annual / price).toFixed(3))
+      } else if (next.reinvest === 'N') {
+        next.shares_bought_from_dividend = ''
+      }
+    }
+    return next
+  })
 
   const lookupTicker = async (ticker) => {
     ticker = ticker.trim().toUpperCase()
@@ -30,12 +62,13 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
       setForm(prev => ({
         ...prev,
         description: prev.description || data.description,
-        classification_type: data.classification_type || prev.classification_type,
+        classification_type: data.classification_type || prev.classification_type || '',
         current_price: data.current_price || prev.current_price,
         price_paid: prev.price_paid || data.current_price || '',
         div: data.div || prev.div,
         div_frequency: data.div_frequency || prev.div_frequency,
         ex_div_date: data.ex_div_date || prev.ex_div_date,
+        div_pay_date: data.div_pay_date || prev.div_pay_date,
         dividend_paid: prev.dividend_paid || 0,
         ytd_divs: prev.ytd_divs || 0,
         total_divs_received: prev.total_divs_received || 0,
@@ -49,15 +82,17 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
     }
   }
 
+  const round3 = (v) => v !== '' && v != null ? parseFloat(Number(v).toFixed(3)) : ''
+
   const handleSubmit = (e) => {
     e.preventDefault()
     if (!form.ticker.trim()) return
 
     const payload = { ...form }
-    // Convert numeric fields
     const numericFields = [
       'quantity', 'price_paid', 'current_price', 'div',
       'dividend_paid', 'ytd_divs', 'total_divs_received', 'paid_for_itself',
+      'estim_payment_per_year', 'approx_monthly_income',
       'cash_not_reinvested', 'total_cash_reinvested', 'shares_bought_from_dividend',
     ]
     for (const f of numericFields) {
@@ -67,7 +102,6 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
         payload[f] = null
       }
     }
-    // Compute derived values
     if (payload.quantity && payload.price_paid) {
       payload.purchase_value = payload.quantity * payload.price_paid
     }
@@ -81,8 +115,13 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
       payload.percent_change = payload.gain_or_loss_percentage
     }
     if (payload.div && payload.quantity) {
-      payload.estim_payment_per_year = payload.div * payload.quantity
-      payload.approx_monthly_income = payload.estim_payment_per_year / 12
+      const freqMult = { W: 52, M: 12, Q: 4, SA: 2, A: 1 }
+      const mult = freqMult[(payload.div_frequency || 'M').toUpperCase()] || 12
+      payload.estim_payment_per_year = parseFloat((payload.div * payload.quantity * mult).toFixed(3))
+      payload.approx_monthly_income = parseFloat((payload.estim_payment_per_year / 12).toFixed(3))
+    }
+    if (payload.estim_payment_per_year && payload.current_price && payload.reinvest === 'Y') {
+      payload.shares_bought_from_dividend = parseFloat((payload.estim_payment_per_year / payload.current_price).toFixed(3))
     }
     if (payload.div && payload.price_paid) {
       payload.annual_yield_on_cost = payload.div / payload.price_paid
@@ -90,7 +129,6 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
     if (payload.div && payload.current_price) {
       payload.current_annual_yield = payload.div / payload.current_price
     }
-    // Paid for itself = total divs received / purchase value
     if (payload.total_divs_received && payload.purchase_value) {
       payload.paid_for_itself = payload.total_divs_received / payload.purchase_value
     }
@@ -149,13 +187,12 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
               />
             </div>
             <div className="form-group">
-              <label>Type</label>
-              <select value={form.classification_type || 'ETF'} onChange={(e) => set('classification_type', e.target.value)} style={{ width: '100%' }}>
-                <option value="ETF">ETF</option>
-                <option value="EQUITY">Stock</option>
-                <option value="CEF">CEF</option>
-                <option value="BDC">BDC</option>
-                <option value="REIT">REIT</option>
+              <label>Category</label>
+              <select value={form.category || ''} onChange={(e) => set('category', e.target.value)} style={{ width: '100%' }}>
+                <option value="">— None —</option>
+                {categories.map(c => (
+                  <option key={c.id} value={c.name}>{c.name}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -169,11 +206,11 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
             </div>
             <div className="form-group">
               <label>Price Paid</label>
-              <input type="number" step="any" value={form.price_paid} onChange={(e) => set('price_paid', e.target.value)} style={{ width: '100%' }} />
+              <input type="number" step="0.001" value={round3(form.price_paid)} onChange={(e) => set('price_paid', e.target.value)} style={{ width: '100%' }} />
             </div>
             <div className="form-group">
               <label>Current Price</label>
-              <input type="number" step="any" value={form.current_price} onChange={(e) => set('current_price', e.target.value)} style={{ width: '100%' }} />
+              <input type="number" step="0.001" value={round3(form.current_price)} onChange={(e) => set('current_price', e.target.value)} style={{ width: '100%' }} />
             </div>
             <div className="form-group">
               <label>Purchase Date</label>
@@ -200,14 +237,23 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
             </div>
             <div className="form-group">
               <label>DRIP</label>
-              <select value={form.reinvest || 'N'} onChange={(e) => set('reinvest', e.target.value)} style={{ width: '100%' }}>
-                <option value="Y">Yes</option>
-                <option value="N">No</option>
-              </select>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', height: '36px' }}>
+                <input
+                  type="checkbox"
+                  checked={form.reinvest === 'Y'}
+                  onChange={(e) => set('reinvest', e.target.checked ? 'Y' : 'N')}
+                  style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                />
+                <span style={{ color: '#90a4ae', fontSize: '0.85rem' }}>{form.reinvest === 'Y' ? 'Yes' : 'No'}</span>
+              </div>
             </div>
             <div className="form-group">
               <label>Ex-Div Date</label>
               <input value={form.ex_div_date || ''} onChange={(e) => set('ex_div_date', e.target.value)} placeholder="MM/DD/YY" style={{ width: '100%' }} />
+            </div>
+            <div className="form-group">
+              <label>Pay Date</label>
+              <input value={form.div_pay_date || ''} onChange={(e) => set('div_pay_date', e.target.value)} placeholder="MM/DD/YY" style={{ width: '100%' }} />
             </div>
           </div>
 
@@ -231,21 +277,31 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
               <input type="number" step="any" value={form.paid_for_itself || ''} onChange={(e) => set('paid_for_itself', e.target.value)} placeholder="Auto-calculated" style={{ width: '100%' }} />
             </div>
           </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label>Est. Annual Dividend</label>
+              <input type="number" step="0.001" value={round3(form.estim_payment_per_year)} onChange={(e) => set('estim_payment_per_year', e.target.value)} placeholder="Auto-calculated" style={{ width: '100%' }} />
+            </div>
+            <div className="form-group">
+              <label>Est. Monthly Dividend</label>
+              <input type="number" step="0.001" value={round3(form.approx_monthly_income)} onChange={(e) => set('approx_monthly_income', e.target.value)} placeholder="Auto-calculated" style={{ width: '100%' }} />
+            </div>
+          </div>
 
           {/* Section: Reinvestment */}
           <h3 style={{ color: '#90a4ae', fontSize: '0.85rem', marginBottom: '0.5rem', marginTop: '1rem', borderBottom: '1px solid #0f3460', paddingBottom: '0.3rem' }}>REINVESTMENT</h3>
           <div className="form-row">
             <div className="form-group">
               <label>Cash Not Reinvested</label>
-              <input type="number" step="any" value={form.cash_not_reinvested || ''} onChange={(e) => set('cash_not_reinvested', e.target.value)} style={{ width: '100%' }} />
+              <input type="number" step="0.001" value={round3(form.cash_not_reinvested)} onChange={(e) => set('cash_not_reinvested', e.target.value)} style={{ width: '100%' }} />
             </div>
             <div className="form-group">
               <label>Cash Reinvested</label>
-              <input type="number" step="any" value={form.total_cash_reinvested || ''} onChange={(e) => set('total_cash_reinvested', e.target.value)} style={{ width: '100%' }} />
+              <input type="number" step="0.001" value={round3(form.total_cash_reinvested)} onChange={(e) => set('total_cash_reinvested', e.target.value)} style={{ width: '100%' }} />
             </div>
             <div className="form-group">
               <label>Shares from Dividends</label>
-              <input type="number" step="any" value={form.shares_bought_from_dividend || ''} onChange={(e) => set('shares_bought_from_dividend', e.target.value)} style={{ width: '100%' }} />
+              <input type="number" step="0.001" value={round3(form.shares_bought_from_dividend)} onChange={(e) => set('shares_bought_from_dividend', e.target.value)} placeholder={form.reinvest === 'Y' ? 'Auto-calculated' : ''} style={{ width: '100%' }} />
             </div>
           </div>
 
@@ -259,6 +315,35 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
   )
 }
 
+// Column definitions for sortable table
+const COLUMNS = [
+  { key: 'ticker', label: 'Ticker', type: 'string' },
+  { key: 'description', label: 'Description', type: 'string' },
+  { key: 'category', label: 'Category', type: 'string' },
+  { key: 'quantity', label: 'Shares', type: 'number' },
+  { key: 'price_paid', label: 'Price Paid', type: 'number' },
+  { key: 'current_price', label: 'Current', type: 'number' },
+  { key: 'purchase_date', label: 'Purchase Date', type: 'string' },
+  { key: 'purchase_value', label: 'Cost Basis', type: 'number' },
+  { key: 'current_value', label: 'Value', type: 'number' },
+  { key: 'gain_or_loss', label: 'Gain/Loss', type: 'number' },
+  { key: 'gain_or_loss_percentage', label: 'G/L %', type: 'number' },
+  { key: 'div', label: 'Div/Share', type: 'number' },
+  { key: 'div_frequency', label: 'Freq', type: 'string' },
+  { key: 'ex_div_date', label: 'Ex-Div Date', type: 'string' },
+  { key: 'div_pay_date', label: 'Pay Date', type: 'string' },
+  { key: 'reinvest', label: 'DRIP', type: 'string' },
+  { key: 'estim_payment_per_year', label: 'Est. Annual', type: 'number' },
+  { key: 'approx_monthly_income', label: 'Monthly', type: 'number' },
+  { key: 'annual_yield_on_cost', label: 'YOC', type: 'number' },
+  { key: 'current_annual_yield', label: 'Yield', type: 'number' },
+  { key: 'dividend_paid', label: 'Div Paid', type: 'number' },
+  { key: 'ytd_divs', label: 'YTD Divs', type: 'number' },
+  { key: 'total_divs_received', label: 'Total Divs', type: 'number' },
+  { key: 'paid_for_itself', label: 'Paid For Itself', type: 'number' },
+  { key: '_shares_if_reinvested', label: 'Shares if Reinvested', type: 'number' },
+]
+
 export default function ManageHoldings() {
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
@@ -267,6 +352,8 @@ export default function ManageHoldings() {
   const [editHolding, setEditHolding] = useState(null)
   const [message, setMessage] = useState(null)
   const [error, setError] = useState(null)
+  const [sortKey, setSortKey] = useState('ticker')
+  const [sortDir, setSortDir] = useState('asc')
 
   const fetchHoldings = async () => {
     try {
@@ -281,6 +368,39 @@ export default function ManageHoldings() {
   }
 
   useEffect(() => { fetchHoldings() }, [])
+
+  const handleSort = (key) => {
+    if (sortKey === key) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
+
+  const getSortValue = (h, key) => {
+    if (key === '_shares_if_reinvested') {
+      return (h.reinvest === 'Y' && h.estim_payment_per_year && h.current_price)
+        ? h.estim_payment_per_year / h.current_price : 0
+    }
+    return h[key]
+  }
+
+  const sortedHoldings = [...holdings].sort((a, b) => {
+    const col = COLUMNS.find(c => c.key === sortKey)
+    const av = getSortValue(a, sortKey)
+    const bv = getSortValue(b, sortKey)
+    if (av == null && bv == null) return 0
+    if (av == null) return 1
+    if (bv == null) return -1
+    let cmp
+    if (col?.type === 'number') {
+      cmp = Number(av) - Number(bv)
+    } else {
+      cmp = String(av).localeCompare(String(bv))
+    }
+    return sortDir === 'asc' ? cmp : -cmp
+  })
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -355,6 +475,11 @@ export default function ManageHoldings() {
     return (Number(v) * 100).toFixed(2) + '%'
   }
 
+  const sortArrow = (key) => {
+    if (sortKey !== key) return ' \u2195'
+    return sortDir === 'asc' ? ' \u25B2' : ' \u25BC'
+  }
+
   return (
     <div className="page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
@@ -377,43 +502,30 @@ export default function ManageHoldings() {
           <p>No holdings yet. Add one manually or import from the Import page.</p>
         </div>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
+        <div className="sticky-table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Ticker</th>
-                <th>Description</th>
-                <th>Type</th>
-                <th>Shares</th>
-                <th>Price Paid</th>
-                <th>Current</th>
-                <th>Purchase Date</th>
-                <th>Cost Basis</th>
-                <th>Value</th>
-                <th>Gain/Loss</th>
-                <th>G/L %</th>
-                <th>Div/Share</th>
-                <th>Freq</th>
-                <th>DRIP</th>
-                <th>Est. Annual</th>
-                <th>Monthly</th>
-                <th>YOC</th>
-                <th>Yield</th>
-                <th>Div Paid</th>
-                <th>YTD Divs</th>
-                <th>Total Divs</th>
-                <th>Paid For Itself</th>
+                {COLUMNS.map(col => (
+                  <th
+                    key={col.key}
+                    onClick={() => handleSort(col.key)}
+                    style={{ cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}
+                  >
+                    {col.label}<span style={{ fontSize: '0.65rem', opacity: 0.7 }}>{sortArrow(col.key)}</span>
+                  </th>
+                ))}
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {holdings.map(h => (
+              {sortedHoldings.map(h => (
                 <tr key={h.ticker}>
                   <td style={{ fontWeight: 600, color: '#64b5f6' }}>{h.ticker}</td>
                   <td style={{ maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {h.description || '-'}
                   </td>
-                  <td>{h.classification_type || '-'}</td>
+                  <td>{h.category || '-'}</td>
                   <td>{fmt(h.quantity)}</td>
                   <td>${fmt(h.price_paid)}</td>
                   <td>${fmt(h.current_price)}</td>
@@ -428,15 +540,39 @@ export default function ManageHoldings() {
                   </td>
                   <td>${fmt(h.div, 4)}</td>
                   <td>{h.div_frequency || '-'}</td>
-                  <td>{h.reinvest || '-'}</td>
-                  <td>${fmt(h.estim_payment_per_year)}</td>
-                  <td>${fmt(h.approx_monthly_income)}</td>
+                  <td>{h.ex_div_date || '-'}</td>
+                  <td>{h.div_pay_date || '-'}</td>
+                  <td style={{ textAlign: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={h.reinvest === 'Y'}
+                      onChange={async () => {
+                        const newVal = h.reinvest === 'Y' ? 'N' : 'Y'
+                        try {
+                          await fetch(`/api/holdings/${h.ticker}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ reinvest: newVal }),
+                          })
+                          fetchHoldings()
+                        } catch (e) { setError(e.message) }
+                      }}
+                      style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                    />
+                  </td>
+                  <td>${fmt(h.estim_payment_per_year, 3)}</td>
+                  <td>${fmt(h.approx_monthly_income, 3)}</td>
                   <td>{fmtPct(h.annual_yield_on_cost)}</td>
                   <td>{fmtPct(h.current_annual_yield)}</td>
                   <td>${fmt(h.dividend_paid)}</td>
                   <td>${fmt(h.ytd_divs)}</td>
                   <td>${fmt(h.total_divs_received)}</td>
                   <td>{fmtPct(h.paid_for_itself)}</td>
+                  <td>
+                    {h.reinvest === 'Y' && h.estim_payment_per_year && h.current_price
+                      ? fmt(h.estim_payment_per_year / h.current_price, 3)
+                      : '-'}
+                  </td>
                   <td>
                     <div style={{ display: 'flex', gap: '0.4rem' }}>
                       <button className="btn btn-primary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem' }} onClick={() => handleEdit(h)}>Edit</button>

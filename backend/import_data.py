@@ -179,16 +179,17 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
     ensure_tables_exist(conn)
     cur = conn.cursor()
 
-    # Clear existing data for this profile
-    cur.execute("DELETE FROM all_account_info WHERE profile_id = ?", (profile_id,))
+    # Check if data already exists for this profile (merge mode)
+    existing = cur.execute(
+        "SELECT ticker FROM all_account_info WHERE profile_id = ?", (profile_id,)
+    ).fetchall()
+    existing_tickers = {r[0] for r in existing}
 
-    # Build insert
     cols_to_insert = [c for c in SQL_COLUMNS if c in df.columns] + ["profile_id"]
     placeholders = ", ".join(["?"] * len(cols_to_insert))
     insert_sql = f"INSERT INTO all_account_info ({', '.join(cols_to_insert)}) VALUES ({placeholders})"
 
-    row_count = 0
-    for _, row in df.iterrows():
+    def _row_values(row):
         values = []
         for col in cols_to_insert:
             val = row.get(col)
@@ -198,10 +199,66 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
                 values.append(val.isoformat()[:10])
             else:
                 values.append(val)
-        cur.execute(insert_sql, values)
-        row_count += 1
+        return values
 
-    conn.commit()
+    if not existing_tickers:
+        # First import — full load
+        row_count = 0
+        for _, row in df.iterrows():
+            cur.execute(insert_sql, _row_values(row))
+            row_count += 1
+        conn.commit()
+    else:
+        # Merge mode — update existing, insert new
+        merge_fields = [c for c in cols_to_insert if c not in ('ticker', 'profile_id')]
+        inserted = 0
+        updated = 0
+        for _, row in df.iterrows():
+            ticker = row.get('ticker')
+            if not isinstance(ticker, str):
+                continue
+            ticker = ticker.strip().upper()
+
+            if ticker in existing_tickers:
+                sets = []
+                vals = []
+                for field in merge_fields:
+                    val = row.get(field)
+                    if pd.notna(val):
+                        if isinstance(val, pd.Timestamp):
+                            val = val.isoformat()[:10]
+                        sets.append(f"{field} = ?")
+                        vals.append(val)
+                if sets:
+                    sets.append("import_date = ?")
+                    vals.append(date.today().isoformat())
+                    vals.extend([ticker, profile_id])
+                    cur.execute(
+                        f"UPDATE all_account_info SET {', '.join(sets)} WHERE ticker = ? AND profile_id = ?",
+                        vals,
+                    )
+                    updated += 1
+            else:
+                cur.execute(insert_sql, _row_values(row))
+                inserted += 1
+
+        # Remove tickers no longer in the spreadsheet
+        imported_tickers = set(
+            row.get('ticker').strip().upper()
+            for _, row in df.iterrows()
+            if isinstance(row.get('ticker'), str)
+        )
+        removed_tickers = existing_tickers - imported_tickers
+        removed = 0
+        for t in removed_tickers:
+            cur.execute(
+                "DELETE FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+                (t, profile_id),
+            )
+            removed += 1
+
+        row_count = updated + inserted
+        conn.commit()
 
     # ── Upsert monthly income totals ────────────────────────────────────────
     for _yr, _mo, _amt in _monthly_income_updates:
@@ -220,8 +277,64 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
                 (_amt, _yr, _mo, profile_id),
             )
     conn.commit()
+
+    # ── Create category assignments from classification_type ──────────────
+    _CLASSIFICATION_NAMES = {
+        "A": "Anchors", "B": "Boosters", "G": "Growth", "J": "Juicers",
+        "BDC": "BDC", "HA": "Hedged Anchor", "GS": "Gold Silver",
+        "ETF": "ETF", "EQUITY": "Equity", "CEF": "CEF", "REIT": "REIT",
+    }
+    if 'classification_type' in df.columns:
+        for _, row in df.iterrows():
+            ticker = row.get('ticker')
+            ct = row.get('classification_type')
+            if not isinstance(ticker, str) or not isinstance(ct, str):
+                continue
+            ticker = ticker.strip().upper()
+            ct = ct.strip()
+            cat_name = _CLASSIFICATION_NAMES.get(ct, ct)
+            if not cat_name:
+                continue
+
+            # Find or create the category
+            existing_cat = cur.execute(
+                "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
+                (cat_name, profile_id),
+            ).fetchone()
+            if existing_cat:
+                cat_id = existing_cat[0]
+            else:
+                max_pos = cur.execute(
+                    "SELECT COALESCE(MAX(sort_order), 0) FROM categories WHERE profile_id = ?",
+                    (profile_id,),
+                ).fetchone()[0]
+                cur.execute(
+                    "INSERT INTO categories (name, target_allocation, sort_order, profile_id) VALUES (?, 0, ?, ?)",
+                    (cat_name, max_pos + 1, profile_id),
+                )
+                cat_id = cur.lastrowid
+
+            # Assign ticker if not already assigned
+            already = cur.execute(
+                "SELECT 1 FROM ticker_categories WHERE ticker = ? AND category_id = ? AND profile_id = ?",
+                (ticker, cat_id, profile_id),
+            ).fetchone()
+            if not already:
+                cur.execute(
+                    "INSERT INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
+                    (ticker, cat_id, profile_id),
+                )
+        conn.commit()
+
     conn.close()
-    return row_count, f"Successfully imported {row_count} rows from Excel."
+    if not existing_tickers:
+        msg = f"Imported {row_count} holdings from Excel."
+    else:
+        parts = []
+        if updated: parts.append(f"updated {updated} existing")
+        if inserted: parts.append(f"added {inserted} new")
+        msg = f"Merge complete: {', '.join(parts)} holdings."
+    return row_count, msg
 
 
 # ── Weekly payouts import ──────────────────────────────────────────────────────
@@ -392,6 +505,7 @@ UPLOAD_COL_MAP = {
     'div':                         ['div/share', 'dividend', 'div', 'distribution'],
     'div_frequency':               ['frequency', 'div frequency', 'div freq', 'div_frequency'],
     'ex_div_date':                 ['ex-div date', 'ex div date', 'ex_div_date', 'exdivdate'],
+    'div_pay_date':                ['pay date', 'div pay date', 'payment date', 'div_pay_date'],
     'reinvest':                    ['drip', 'reinvest', 'reinvestment'],
     'dividend_paid':               ['div paid', 'dividend paid', 'dividend_paid'],
     'estim_payment_per_year':      ['est. annual pmt', 'annual payment', 'estim_payment_per_year', 'est annual'],
@@ -411,6 +525,7 @@ UPLOAD_COL_MAP = {
     'withdraw_8pct_cost_annually': ['8% annual wdraw', 'annual withdrawal', 'withdraw_8pct_cost_annually'],
     'withdraw_8pct_per_month':     ['8% monthly wdraw', 'monthly withdrawal', 'withdraw_8pct_per_month'],
     'percent_change':              ['% change', 'price change', 'percent_change'],
+    'category':                    ['category', 'cat', 'group'],
 }
 
 
@@ -455,6 +570,16 @@ def import_from_upload(df, profile_id):
     freq_map = {1: 'A', 2: 'SA', 4: 'Q', 12: 'M', 52: 'W'}
     tickers_list = df['ticker'].tolist()
     ticker_str = ' '.join(tickers_list)
+
+    # Load known weekly tickers from weekly_payout_tickers table
+    _weekly_set = set()
+    try:
+        _wconn = get_connection()
+        _wrows = _wconn.execute("SELECT ticker FROM weekly_payout_tickers WHERE profile_id = ?", (profile_id,)).fetchall()
+        _weekly_set = {r[0] if isinstance(r, tuple) else r['ticker'] for r in _wrows}
+        _wconn.close()
+    except Exception:
+        pass
 
     def _freq_from_count(n):
         if n >= 45: return 'W'
@@ -535,6 +660,14 @@ def import_from_upload(df, profile_id):
         except (ValueError, TypeError):
             return None
 
+    # Extract category assignments before building enriched rows
+    _category_assignments = {}  # ticker -> category name
+    for _, row in df.iterrows():
+        t = row['ticker']
+        cat_val = _val(row, 'category') if 'category' in df.columns else None
+        if cat_val:
+            _category_assignments[t] = str(cat_val).strip()
+
     enriched = []
     for _, row in df.iterrows():
         t = row['ticker']
@@ -568,10 +701,12 @@ def import_from_upload(df, profile_id):
                     except Exception:
                         ex_div_date = None
 
-        # Frequency
+        # Frequency: user-supplied > weekly_payout_tickers table > yfinance history > yfinance info > default Q
         freq_raw = _val(row, 'div_frequency')
         if freq_raw and str(freq_raw).strip().upper() in ('A', 'SA', 'Q', 'M', 'W', '52'):
             div_frequency = str(freq_raw).strip().upper()
+        elif t in _weekly_set:
+            div_frequency = 'W'
         elif t in freq_hist:
             div_frequency = freq_hist[t]
         else:
@@ -593,7 +728,9 @@ def import_from_upload(df, profile_id):
         if percent_change is None:
             percent_change = gain_or_loss_pct
 
-        estim = _fval(row, 'estim_payment_per_year') or (div * qty)
+        freq_mult = {'W': 52, '52': 52, 'M': 12, 'Q': 4, 'SA': 2, 'A': 1}
+        mult = freq_mult.get(div_frequency.upper(), 4) if div_frequency else 4
+        estim = _fval(row, 'estim_payment_per_year') or (div * qty * mult)
         monthly_income = _fval(row, 'approx_monthly_income') or (estim / 12 if estim else 0)
 
         reinvest = str(_val(row, 'reinvest') or 'N').strip().upper()
@@ -631,6 +768,7 @@ def import_from_upload(df, profile_id):
             'div_frequency':              div_frequency,
             'reinvest':                   reinvest,
             'ex_div_date':                ex_div_date,
+            'div_pay_date':               _val(row, 'div_pay_date') or ((_dt.strptime(ex_div_date, "%m/%d/%y") + pd.Timedelta(days=21)).strftime("%m/%d/%y") if ex_div_date else None),
             'div':                        div,
             'dividend_paid':              _fval(row, 'dividend_paid'),
             'estim_payment_per_year':     estim,
@@ -639,10 +777,10 @@ def import_from_upload(df, profile_id):
             'withdraw_8pct_per_month':    _fval(row, 'withdraw_8pct_per_month'),
             'cash_not_reinvested':        _fval(row, 'cash_not_reinvested'),
             'total_cash_reinvested':      _fval(row, 'total_cash_reinvested'),
-            'annual_yield_on_cost':       _fval(row, 'annual_yield_on_cost') or ((div / price_paid) if price_paid else 0),
-            'current_annual_yield':       _fval(row, 'current_annual_yield') or ((div / current_price) if current_price else 0),
+            'annual_yield_on_cost':       _fval(row, 'annual_yield_on_cost') or ((div * mult / price_paid) if price_paid else 0),
+            'current_annual_yield':       _fval(row, 'current_annual_yield') or ((div * mult / current_price) if current_price else 0),
             'percent_of_account':         _fval(row, 'percent_of_account'),
-            'shares_bought_from_dividend': _fval(row, 'shares_bought_from_dividend'),
+            'shares_bought_from_dividend': _fval(row, 'shares_bought_from_dividend') or ((estim / current_price) if reinvest == 'Y' and estim and current_price else None),
             'shares_bought_in_year':      _fval(row, 'shares_bought_in_year'),
             'shares_in_month':            _fval(row, 'shares_in_month'),
             'ytd_divs':                   _fval(row, 'ytd_divs'),
@@ -662,14 +800,102 @@ def import_from_upload(df, profile_id):
     ensure_tables_exist(conn)
     cur = conn.cursor()
 
-    cur.execute("DELETE FROM all_account_info WHERE profile_id = ?", (profile_id,))
+    # Check if data already exists for this profile (merge mode)
+    existing = cur.execute(
+        "SELECT ticker FROM all_account_info WHERE profile_id = ?", (profile_id,)
+    ).fetchall()
+    existing_tickers = {r[0] for r in existing}
 
-    row_count = 0
-    for _, row in out.iterrows():
-        values = [None if pd.isna(v) else v for v in row.tolist()]
-        cur.execute(insert_sql, values)
-        row_count += 1
+    if not existing_tickers:
+        # First import — full load
+        row_count = 0
+        for _, row in out.iterrows():
+            values = [None if pd.isna(v) else v for v in row.tolist()]
+            cur.execute(insert_sql, values)
+            row_count += 1
+        conn.commit()
+        msg = f"Imported {row_count} holdings for profile {profile_id}."
+    else:
+        # Merge mode — update existing, insert new
+        merge_fields = [
+            'quantity', 'price_paid', 'purchase_value', 'description',
+            'classification_type', 'div_frequency', 'reinvest', 'ex_div_date',
+            'div_pay_date', 'div', 'dividend_paid', 'estim_payment_per_year',
+            'approx_monthly_income', 'ytd_divs', 'total_divs_received',
+            'paid_for_itself', 'cash_not_reinvested', 'total_cash_reinvested',
+            'shares_bought_from_dividend', 'purchase_date',
+            'annual_yield_on_cost', 'current_annual_yield',
+            'current_price', 'current_value', 'gain_or_loss',
+            'gain_or_loss_percentage', 'percent_change',
+        ]
+        inserted = 0
+        updated = 0
+        for _, row in out.iterrows():
+            ticker = row.get('ticker')
+            if ticker in existing_tickers:
+                sets = []
+                vals = []
+                for field in merge_fields:
+                    if field in row.index:
+                        val = row[field]
+                        if pd.notna(val):
+                            sets.append(f"{field} = ?")
+                            vals.append(val)
+                if sets:
+                    sets.append("import_date = ?")
+                    vals.append(_date.today().isoformat())
+                    vals.extend([ticker, profile_id])
+                    cur.execute(
+                        f"UPDATE all_account_info SET {', '.join(sets)} WHERE ticker = ? AND profile_id = ?",
+                        vals,
+                    )
+                    updated += 1
+            else:
+                values = [None if pd.isna(v) else v for v in row.tolist()]
+                cur.execute(insert_sql, values)
+                inserted += 1
 
-    conn.commit()
+        conn.commit()
+        row_count = updated + inserted
+        parts = []
+        if updated:
+            parts.append(f"updated {updated} existing")
+        if inserted:
+            parts.append(f"added {inserted} new")
+        msg = f"Merge complete: {', '.join(parts)} holdings."
+
+    # ── Process category assignments from spreadsheet ─────────────────────
+    if _category_assignments:
+        for ticker, cat_name in _category_assignments.items():
+            # Find or create the category
+            existing_cat = cur.execute(
+                "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
+                (cat_name, profile_id),
+            ).fetchone()
+            if existing_cat:
+                cat_id = existing_cat[0]
+            else:
+                max_pos = cur.execute(
+                    "SELECT COALESCE(MAX(sort_order), 0) FROM categories WHERE profile_id = ?",
+                    (profile_id,),
+                ).fetchone()[0]
+                cur.execute(
+                    "INSERT INTO categories (name, target_allocation, sort_order, profile_id) VALUES (?, 0, ?, ?)",
+                    (cat_name, max_pos + 1, profile_id),
+                )
+                cat_id = cur.lastrowid
+
+            # Assign ticker if not already assigned to this category
+            already = cur.execute(
+                "SELECT 1 FROM ticker_categories WHERE ticker = ? AND category_id = ? AND profile_id = ?",
+                (ticker, cat_id, profile_id),
+            ).fetchone()
+            if not already:
+                cur.execute(
+                    "INSERT INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
+                    (ticker, cat_id, profile_id),
+                )
+        conn.commit()
+
     conn.close()
-    return row_count, f"Imported {row_count} holdings for profile {profile_id}."
+    return row_count, msg

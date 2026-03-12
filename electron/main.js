@@ -7,7 +7,7 @@ let flaskProcess
 
 function startFlask() {
   const backendDir = path.join(__dirname, '..', 'backend')
-  flaskProcess = spawn('python', ['app.py'], {
+  flaskProcess = spawn('py', ['app.py'], {
     cwd: backendDir,
     env: { ...process.env },
   })
