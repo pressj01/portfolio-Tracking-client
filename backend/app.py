@@ -4695,73 +4695,386 @@ def _portfolio_max_dd(weights, returns_df):
     return float(dd.min())
 
 
-def _optimize_sharpe(returns_df):
+def _portfolio_sortino(w, returns_df):
+    """Annualized Sortino ratio for a portfolio with given weights."""
+    import numpy as np
+    r_p = returns_df.values @ w
+    rf_daily = 0.05 / 252
+    excess = r_p - rf_daily
+    neg = r_p[r_p < 0]
+    down_std = float(neg.std()) if len(neg) > 1 else 1e-6
+    return (float(excess.mean()) / max(down_std, 1e-6)) * np.sqrt(252)
+
+
+def _optimize_sharpe(returns_df, current_weights=None, weight_caps=None, turnover_penalty=0.15):
+    """Maximize returns using 60% Sharpe + 40% Sortino blend.
+    Respects current weights (partial sells), NAV caps, and turnover penalty.
+    """
     import numpy as np
     from scipy.optimize import minimize
     n = returns_df.shape[1]
-    init = np.ones(n) / n
-    def neg_sharpe(w):
-        return -_portfolio_sharpe(w, returns_df)
-    bounds = [(0, 1)] * n
-    constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1}]
-    result = minimize(neg_sharpe, init, method="SLSQP", bounds=bounds,
-                      constraints=constraints, options={"maxiter": 1000})
-    return result.x if result.success else init
-
-
-def _optimize_income(returns_df, yields, min_sharpe=0.5, max_dd=-0.30):
-    import numpy as np
-    from scipy.optimize import minimize
-    n = returns_df.shape[1]
-    init = np.ones(n) / n
-    yields_arr = np.array(yields)
-    def neg_yield(w):
-        return -float(w.dot(yields_arr))
-    constraints = [
-        {"type": "eq", "fun": lambda w: w.sum() - 1},
-        {"type": "ineq", "fun": lambda w: _portfolio_sharpe(w, returns_df) - min_sharpe},
-        {"type": "ineq", "fun": lambda w: _portfolio_max_dd(w, returns_df) - max_dd},
-    ]
-    bounds = [(0, 1)] * n
-    result = minimize(neg_yield, init, method="SLSQP", bounds=bounds,
-                      constraints=constraints, options={"maxiter": 1000})
-    return result.x if result.success else init
-
-
-def _optimize_balanced(returns_df, yields, balance=0.5):
-    import numpy as np
-    from scipy.optimize import minimize
-    n = returns_df.shape[1]
-    mu = returns_df.mean().values * 252
-    cov = returns_df.cov().values * 252
-    yields_arr = np.array(yields)
-    max_yield = float(yields_arr.max()) if yields_arr.max() > 0 else 0.10
+    if current_weights is None:
+        current_weights = np.ones(n) / n
+    cw = np.array(current_weights)
+    if weight_caps is None:
+        weight_caps = [0.40] * n
+    bounds = []
+    for i in range(n):
+        cap = weight_caps[i]
+        if cap <= 0:
+            bounds.append((0.0, 0.0))
+        else:
+            floor = cw[i] * 0.25 if cw[i] > 0.005 else 0.0
+            bounds.append((floor, min(cap, 0.40)))
+    n_current = int(np.sum(cw > 0.005))
     def neg_objective(w):
-        port_yield = float(yields_arr @ w)
-        port_ret = float(mu @ w)
-        port_vol = float(np.sqrt(w @ cov @ w))
-        port_sharpe = (port_ret - 0.05) / port_vol if port_vol > 1e-6 else 0
-        norm_yield = port_yield / max_yield if max_yield > 0 else 0
-        norm_sharpe = min(max(port_sharpe, 0), 3) / 3.0
-        return -(balance * norm_yield + (1.0 - balance) * norm_sharpe)
+        sharpe = _portfolio_sharpe(w, returns_df)
+        sortino = _portfolio_sortino(w, returns_df)
+        norm_sharpe = min(max(sharpe, 0), 4) / 4.0
+        norm_sortino = min(max(sortino, 0), 6) / 6.0
+        score = 0.6 * norm_sharpe + 0.4 * norm_sortino
+        turnover = float(np.sum(np.abs(w - cw)))
+        n_active = float(np.sum(w > 0.005))
+        diversification_loss = max(0, n_current - n_active) * 0.01
+        return -(score - turnover_penalty * turnover - diversification_loss)
     constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1}]
-    bounds = [(0.01, 0.40)] * n
+    init = _clamp_and_normalize(cw, bounds)
     best = None
+    starts = [init]
     rng = np.random.default_rng(42)
-    for _ in range(20):
-        w0 = rng.dirichlet(np.ones(n))
+    for _ in range(4):
+        d = rng.dirichlet(np.ones(n))
+        starts.append(_clamp_and_normalize(d, bounds))
+    for w0 in starts:
         try:
             res = minimize(neg_objective, w0, method="SLSQP", bounds=bounds,
-                           constraints=constraints, options={"maxiter": 1000, "ftol": 1e-9})
+                           constraints=constraints, options={"maxiter": 1000})
             if res.success and (best is None or res.fun < best.fun):
                 best = res
         except Exception:
             pass
     if best is None:
-        return np.ones(n) / n
-    w = np.maximum(best.x, 0)
-    w[w < 0.01] = 0
-    return w / w.sum() if w.sum() > 0 else np.ones(n) / n
+        return init
+    return _clamp_and_normalize(best.x, bounds)
+
+
+def _compute_nav_erosion(close_df, tickers, trading_days=252):
+    """Compute annualized price return per ticker. Negative = NAV erosion."""
+    import numpy as np
+    erosion = {}
+    for t in tickers:
+        if t not in close_df.columns:
+            erosion[t] = 0.0
+            continue
+        s = close_df[t].dropna()
+        if len(s) < 2:
+            erosion[t] = 0.0
+            continue
+        total_ret = float(s.iloc[-1] / s.iloc[0]) - 1.0
+        n_days = len(s)
+        ann_ret = (1 + total_ret) ** (trading_days / max(n_days, 1)) - 1.0
+        erosion[t] = ann_ret
+    return erosion
+
+
+def _adjust_yields_for_nav(yields, nav_returns, tickers):
+    """Produce effective yields: yield + nav_return (clamped so minimum is 0).
+    A fund yielding 40% but losing 30% NAV has effective yield of 10%.
+    A fund yielding 5% with 10% NAV growth keeps its 5% yield (we don't boost beyond raw yield)."""
+    import numpy as np
+    adjusted = []
+    for i, t in enumerate(tickers):
+        raw_yield = yields[i]
+        nav_ret = nav_returns.get(t, 0.0)
+        if nav_ret < 0:
+            # Penalize: effective yield = raw yield + nav return (which is negative)
+            eff = max(raw_yield + nav_ret, 0.0)
+        else:
+            # Don't boost yield for price appreciation — that's captured by Sharpe/returns
+            eff = raw_yield
+        adjusted.append(eff)
+    return adjusted
+
+
+def _nav_weight_caps(nav_returns, tickers, severe=-0.30, moderate=-0.15):
+    """Return per-ticker upper weight bounds based on NAV erosion severity.
+    Severe erosion (>30% annualized loss): cap at 5%
+    Moderate erosion (>15%): cap at 15%
+    Otherwise: up to 100%"""
+    caps = []
+    for t in tickers:
+        nav = nav_returns.get(t, 0.0)
+        if nav <= severe:
+            caps.append(0.05)
+        elif nav <= moderate:
+            caps.append(0.15)
+        else:
+            caps.append(1.0)
+    return caps
+
+
+def _clamp_and_normalize(w, bounds):
+    """Enforce bounds and renormalize weights."""
+    import numpy as np
+    w = np.array(w, dtype=float)
+    for i, (lo, hi) in enumerate(bounds):
+        w[i] = max(lo, min(hi, w[i]))
+    s = w.sum()
+    if s > 0:
+        w = w / s
+        # Re-clamp after normalization (may shift slightly)
+        for i, (lo, hi) in enumerate(bounds):
+            w[i] = max(lo, min(hi, w[i]))
+    return w
+
+
+def _portfolio_income_score(w, returns_df_values, mu, rf_daily=0.05/252):
+    """Composite quality score from Sortino, Omega, Calmar, Ulcer Index.
+    All inputs are numpy arrays for speed. Returns 0-1 score (higher = better).
+    """
+    import numpy as np
+    r_p = returns_df_values @ w
+    n_days = len(r_p)
+    if n_days < 30:
+        return 0.0
+    # Sortino
+    excess_daily = r_p - rf_daily
+    neg = r_p[r_p < 0]
+    down_std = float(neg.std()) if len(neg) > 1 else 1e-6
+    sortino = (float(excess_daily.mean()) / max(down_std, 1e-6)) * np.sqrt(252)
+    norm_sortino = max(0, min(sortino, 4)) / 4.0
+    # Omega
+    gains = float(excess_daily[excess_daily > 0].sum())
+    losses = abs(float(excess_daily[excess_daily <= 0].sum()))
+    omega = gains / max(losses, 1e-8)
+    norm_omega = max(0, min(omega, 3) - 0.5) / 2.5
+    # Calmar
+    cum = np.cumprod(1 + r_p)
+    ann_ret = float(cum[-1] ** (252 / n_days) - 1)
+    running_max = np.maximum.accumulate(cum)
+    dd = (cum - running_max) / np.where(running_max > 0, running_max, 1)
+    mdd = abs(float(dd.min()))
+    calmar = ann_ret / max(mdd, 1e-6) if ann_ret > 0 else 0
+    norm_calmar = max(0, min(calmar, 5)) / 5.0
+    # Ulcer Index (lower = better)
+    pct_dd = ((cum - running_max) / np.where(running_max > 0, running_max, 1)) * 100
+    ulcer = float(np.sqrt((pct_dd ** 2).mean()))
+    norm_ulcer = 1.0 - max(0, min(ulcer, 30)) / 30.0
+    # Weighted composite: Ulcer 30%, Calmar 25%, Omega 25%, Sortino 20%
+    return 0.30 * norm_ulcer + 0.25 * norm_calmar + 0.25 * norm_omega + 0.20 * norm_sortino
+
+
+def _optimize_income(returns_df, yields, current_weights=None, weight_caps=None, turnover_penalty=0.2, nav_penalties=None):
+    """Maximize income: blend yield and income-quality score (Sortino/Omega/Calmar/Ulcer).
+    Uses 5 optimizer starts and a 40% per-holding cap.
+    nav_penalties: per-ticker penalty for NAV erosion.
+    """
+    import numpy as np
+    from scipy.optimize import minimize
+    n = returns_df.shape[1]
+    mu = returns_df.mean().values * 252
+    yields_arr = np.array(yields)
+    max_yield = float(yields_arr.max()) if yields_arr.max() > 0 else 0.10
+    if current_weights is None:
+        current_weights = np.ones(n) / n
+    cw = np.array(current_weights)
+    nav_pen = np.array(nav_penalties) if nav_penalties is not None else np.zeros(n)
+    # Build bounds: partial sells (floor at 25% of current), zero-cap respected, 40% per-holding cap
+    if weight_caps is None:
+        weight_caps = [0.40] * n
+    bounds = []
+    for i in range(n):
+        cap = weight_caps[i]
+        if cap <= 0:
+            bounds.append((0.0, 0.0))
+        else:
+            floor = cw[i] * 0.25 if cw[i] > 0.005 else 0.0
+            bounds.append((floor, min(cap, 0.40)))
+    n_current = int(np.sum(cw > 0.005))
+    # Precompute returns matrix for income score
+    ret_vals = returns_df.values
+    ret_mu = mu  # already computed above
+    # Income-focused blend: 70% yield, 30% income quality (Sortino/Omega/Calmar/Ulcer)
+    balance = 0.7
+    def neg_objective(w):
+        port_yield = float(yields_arr @ w)
+        norm_yield = port_yield / max_yield if max_yield > 0 else 0
+        quality = _portfolio_income_score(w, ret_vals, ret_mu)
+        nav_cost = float(w.dot(nav_pen))
+        turnover = float(np.sum(np.abs(w - cw)))
+        n_active = float(np.sum(w > 0.005))
+        diversification_loss = max(0, n_current - n_active) * 0.01
+        return -(balance * norm_yield + (1.0 - balance) * quality - turnover_penalty * turnover - diversification_loss - nav_cost)
+    constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1}]
+    init = _clamp_and_normalize(cw, bounds)
+    best = None
+    starts = [init]
+    rng = np.random.default_rng(42)
+    for _ in range(4):
+        d = rng.dirichlet(np.ones(n))
+        starts.append(_clamp_and_normalize(d, bounds))
+    for w0 in starts:
+        try:
+            res = minimize(neg_objective, w0, method="SLSQP", bounds=bounds,
+                           constraints=constraints, options={"maxiter": 500, "ftol": 1e-8})
+            if res.success and (best is None or res.fun < best.fun):
+                best = res
+        except Exception:
+            pass
+    if best is None:
+        return init
+    return _clamp_and_normalize(best.x, bounds)
+
+
+def _optimize_balanced(returns_df, yields, balance=0.5, current_weights=None, min_sharpe=0.8, max_dd=-0.20, weight_caps=None, turnover_penalty=0.3, nav_penalties=None):
+    """Balanced optimization: slider controls yield vs safety blend.
+    balance=1.0 → pure yield focus.
+    balance=0.0 → pure safety focus (income quality: Sortino/Omega/Calmar/Ulcer).
+    balance=0.5 → equal blend (default).
+    Enforces quality floor penalty scaled by (1-balance), heavier turnover penalty.
+    nav_penalties: per-ticker penalty for NAV erosion (higher = worse, 0 = no erosion).
+    """
+    import numpy as np
+    from scipy.optimize import minimize
+    n = returns_df.shape[1]
+    yields_arr = np.array(yields)
+    max_yield = float(yields_arr.max()) if yields_arr.max() > 0 else 0.10
+    if current_weights is None:
+        current_weights = np.ones(n) / n
+    cw = np.array(current_weights)
+    mu = returns_df.mean().values * 252
+    ret_vals = returns_df.values
+    nav_pen = np.array(nav_penalties) if nav_penalties is not None else np.zeros(n)
+    if weight_caps is None:
+        weight_caps = [0.40] * n
+    bounds = []
+    for i in range(n):
+        cap = weight_caps[i]
+        if cap <= 0:
+            bounds.append((0.0, 0.0))
+        else:
+            floor = cw[i] * 0.25 if cw[i] > 0.005 else 0.0
+            bounds.append((floor, min(cap, 0.40)))
+    n_current = int(np.sum(cw > 0.005))
+    def neg_objective(w):
+        port_yield = float(w.dot(yields_arr))
+        norm_yield = port_yield / max_yield if max_yield > 0 else 0
+        quality = _portfolio_income_score(w, ret_vals, mu)
+        # NAV erosion penalty: weighted sum of per-ticker erosion penalties
+        nav_cost = float(w.dot(nav_pen))
+        # Slider blend: balance toward yield, (1-balance) toward income quality
+        blended = balance * norm_yield + (1.0 - balance) * quality
+        # Safety penalty: quality floor enforced, scaled by safety focus
+        safety_penalty = max(0, 0.4 - quality) * 2.0 * (1.0 - balance)
+        turnover = float(np.sum(np.abs(w - cw)))
+        n_active = float(np.sum(w > 0.005))
+        diversification_loss = max(0, n_current - n_active) * 0.01
+        return -(blended - turnover_penalty * turnover - safety_penalty - diversification_loss - nav_cost)
+    constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1}]
+    init = _clamp_and_normalize(cw, bounds)
+    best = None
+    starts = [init]
+    rng = np.random.default_rng(42)
+    for _ in range(3):
+        d = rng.dirichlet(np.ones(n))
+        starts.append(_clamp_and_normalize(d, bounds))
+    for w0 in starts:
+        try:
+            res = minimize(neg_objective, w0, method="SLSQP", bounds=bounds,
+                           constraints=constraints, options={"maxiter": 500, "ftol": 1e-8})
+            if res.success and (best is None or res.fun < best.fun):
+                best = res
+        except Exception:
+            pass
+    if best is None:
+        return init
+    return _clamp_and_normalize(best.x, bounds)
+
+
+def _before_after_comparison(returns_df, opt_weights, bench_ret,
+                              port_metrics_before, curr_income, opt_income,
+                              current_weights=None):
+    """Compute before/after grade, income, and key metrics.
+    Uses already-computed port_metrics and income values from the optimization branch
+    so numbers match exactly what's shown in the optimization summary.
+    If weights are essentially unchanged, reuses before metrics to avoid grading noise."""
+    import numpy as np
+    from grading import grade_portfolio
+    pm = port_metrics_before or {}
+    grade_before = pm.get("grade", {})
+    before = {
+        "grade": grade_before.get("overall", "—") if isinstance(grade_before, dict) else str(grade_before),
+        "score": grade_before.get("score", 0) if isinstance(grade_before, dict) else 0,
+        "sharpe": pm.get("sharpe"),
+        "sortino": pm.get("sortino"),
+        "omega": pm.get("omega"),
+        "calmar": pm.get("calmar"),
+        "ulcer_index": pm.get("ulcer_index"),
+        "max_drawdown": pm.get("max_drawdown"),
+        "annual_income": round(curr_income, 2),
+        "monthly_income": round(curr_income / 12, 2),
+    }
+    # If weights barely changed (all within 0.5%), reuse before metrics — no real change
+    if current_weights is not None:
+        max_change = float(np.max(np.abs(np.array(opt_weights) - np.array(current_weights)))) * 100
+        if max_change < 0.5:
+            return {"before": before, "after": dict(before)}
+    pm_after = grade_portfolio(returns_df, opt_weights, bench_ret)
+    return {
+        "before": before,
+        "after": {
+            "grade": pm_after.get("grade", {}).get("overall", "—"),
+            "score": pm_after.get("grade", {}).get("score", 0),
+            "sharpe": pm_after.get("sharpe"),
+            "sortino": pm_after.get("sortino"),
+            "omega": pm_after.get("omega"),
+            "calmar": pm_after.get("calmar"),
+            "ulcer_index": pm_after.get("ulcer_index"),
+            "max_drawdown": pm_after.get("max_drawdown"),
+            "annual_income": round(opt_income, 2),
+            "monthly_income": round(opt_income / 12, 2),
+        },
+    }
+
+
+def _enrich_weights_with_actions(weights_out, close_df, total_val, nav_returns=None, threshold=0.5):
+    """Add action / dollar_change / shares_change / current_price / nav_change_pct to each weight dict."""
+    total_buy = 0.0
+    total_sell = 0.0
+    for w in weights_out:
+        ticker = w["ticker"]
+        change_pct = w["optimal_pct"] - w["current_pct"]
+        dollar_change = round((change_pct / 100) * total_val, 2)
+        price = 0.0
+        if ticker in close_df.columns:
+            s = close_df[ticker].dropna()
+            if len(s) > 0:
+                price = round(float(s.iloc[-1]), 2)
+        shares = int(dollar_change / price) if price > 0 else 0
+        if nav_returns:
+            w["nav_change_pct"] = round(nav_returns.get(ticker, 0.0) * 100, 1)
+        if abs(change_pct) < threshold:
+            action = "HOLD"
+        elif change_pct > 0:
+            action = "BUY"
+        else:
+            action = "SELL"
+        w["action"] = action
+        w["dollar_change"] = dollar_change
+        w["shares_change"] = shares
+        w["current_price"] = price
+        if action == "BUY":
+            total_buy += dollar_change
+        elif action == "SELL":
+            total_sell += abs(dollar_change)
+    summary = {
+        "total_buy": round(total_buy, 2),
+        "total_sell": round(total_sell, 2),
+        "num_buys": sum(1 for w in weights_out if w["action"] == "BUY"),
+        "num_sells": sum(1 for w in weights_out if w["action"] == "SELL"),
+        "num_holds": sum(1 for w in weights_out if w["action"] == "HOLD"),
+    }
+    return weights_out, summary
 
 
 def _build_efficient_frontier(returns_df, n_points=30):
@@ -4790,6 +5103,10 @@ def _build_efficient_frontier(returns_df, n_points=30):
     return frontier
 
 
+GROWTH_ETFS = ["QQQ", "VOO", "VGT", "VUG", "SCHG", "IWF", "MGK", "QQQM", "XLK", "SMH"]
+INCOME_ETFS = ["SPYI", "QQQI", "MLPI", "TSPY", "TDAQ", "IWMI", "JEPQ", "CHPY", "ULTY", "O", "MAIN", "PBDC", "XQQI"]
+
+
 @app.route("/api/analytics/data", methods=["POST"])
 def analytics_data():
     """Compute risk metrics, portfolio grade, charts and optional optimization."""
@@ -4806,8 +5123,8 @@ def analytics_data():
     benchmark = str(data.get("benchmark", "SPY")).strip().upper()
     period = data.get("period", "1y")
     mode = data.get("mode", "metrics")
-    min_sharpe = float(data.get("min_sharpe", 0.5))
-    max_dd = float(data.get("max_dd", -0.30))
+    min_sharpe = float(data.get("min_sharpe", 0.8))
+    max_dd = float(data.get("max_dd", -0.20))
     balance = float(data.get("balance", 0.5))
 
     if not tickers:
@@ -4881,6 +5198,7 @@ def analytics_data():
         score, sharpe_v, sortino_v, calmar_v, omega_v, mdd_v, dc_v, ulcer_v = ticker_score(tc, tr, bench_ret)
         uc_v, _ = _capture_ratios(tr, bench_ret) if bench_ret is not None else (None, None)
         annual_ret = round(float(tr.mean() * 252) * 100, 2)
+        annual_total_ret = round(annual_ret + yield_map.get(t, 0) * 100, 2)
         annual_vol = round(float(tr.std() * np.sqrt(252)) * 100, 2)
         metrics.append({
             "ticker": t,
@@ -4894,6 +5212,7 @@ def analytics_data():
             "down_capture": safe(dc_v),
             "max_drawdown": round(mdd_v * 100, 2) if mdd_v is not None else None,
             "annual_ret": annual_ret,
+            "annual_total_ret": annual_total_ret,
             "annual_vol": annual_vol,
             "score": round(score, 1),
             "grade": letter_grade(score),
@@ -4957,20 +5276,41 @@ def analytics_data():
         result["correlation"] = result_corr
         result["drawdown_series"] = result_dd
 
+    # Detect portfolio type and suggest complementary ETFs
+    if weight_map:
+        weighted_yield = sum(yield_map.get(t, 0) * weight_map.get(t, 0) for t in weight_map)
+        tickers_upper = [t.upper() for t in tickers]
+        if weighted_yield > 0.05:
+            result["portfolio_type"] = "income"
+            result["suggested_growth"] = [t for t in GROWTH_ETFS if t not in tickers_upper]
+        elif weighted_yield < 0.02:
+            result["portfolio_type"] = "growth"
+            result["suggested_income"] = [t for t in INCOME_ETFS if t not in tickers_upper]
+        else:
+            result["portfolio_type"] = "mixed"
+
     # Optimization modes
     if mode in ("optimize_returns", "optimize_income", "optimize_balanced") and len(available_tickers) >= 2:
         returns_df = close[available_tickers].pct_change().dropna()
         current_weights = np.array([weight_map.get(t, 0) for t in available_tickers])
         cw_sum = current_weights.sum()
-        if cw_sum > 0:
+        has_portfolio = cw_sum > 0  # True when user loaded real portfolio data
+        if has_portfolio:
             current_weights = current_weights / cw_sum
         else:
             current_weights = np.ones(len(available_tickers)) / len(available_tickers)
 
+        # Compute NAV erosion for yield-based optimizers
+        nav_returns = _compute_nav_erosion(close, available_tickers)
+
         if mode == "optimize_returns":
-            opt_w = _optimize_sharpe(returns_df)
+            ret_weight_caps = _nav_weight_caps(nav_returns, available_tickers)
+            opt_w = _optimize_sharpe(returns_df, current_weights=current_weights, weight_caps=ret_weight_caps)
             frontier = _build_efficient_frontier(returns_df)
             opt_sharpe_val = _portfolio_sharpe(opt_w, returns_df)
+            opt_sortino_val = _portfolio_sortino(opt_w, returns_df)
+            curr_sharpe_val = _portfolio_sharpe(current_weights, returns_df)
+            curr_sortino_val = _portfolio_sortino(current_weights, returns_df)
             mean_ret = float(returns_df.mean().values @ opt_w) * 252
             cov = returns_df.cov().values * 252
             opt_vol = float(np.sqrt(opt_w @ cov @ opt_w))
@@ -4978,26 +5318,47 @@ def analytics_data():
             curr_vol = float(np.sqrt(current_weights @ cov @ current_weights))
             weights_out = [{"ticker": t, "current_pct": round(current_weights[i] * 100, 2),
                             "optimal_pct": round(opt_w[i] * 100, 2)} for i, t in enumerate(available_tickers)]
-            result["optimization"] = {
+            weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, total_val, nav_returns)
+            opt_dict = {
                 "weights": weights_out, "frontier": frontier,
                 "optimal_point": {"vol": round(opt_vol * 100, 2), "ret": round(mean_ret * 100, 2)},
                 "current_point": {"vol": round(curr_vol * 100, 2), "ret": round(curr_ret * 100, 2)},
-                "summary": {"sharpe": round(opt_sharpe_val, 2), "expected_return": round(mean_ret * 100, 2),
+                "summary": {"sharpe": round(opt_sharpe_val, 2), "sortino": round(opt_sortino_val, 2),
+                             "curr_sharpe": round(curr_sharpe_val, 2), "curr_sortino": round(curr_sortino_val, 2),
+                             "expected_return": round(mean_ret * 100, 2),
                              "expected_vol": round(opt_vol * 100, 2)},
+                "rebalance_summary": rebal_summary,
             }
+            if has_portfolio:
+                yields_list_ret = [yield_map.get(t, 0) for t in available_tickers]
+                ret_curr_income = float(current_weights.dot(np.array(yields_list_ret))) * total_val
+                ret_opt_income = float(opt_w.dot(np.array(yields_list_ret))) * total_val
+                opt_dict["comparison"] = _before_after_comparison(returns_df, opt_w, bench_ret,
+                                                                   port_metrics, ret_curr_income, ret_opt_income,
+                                                                   current_weights=current_weights)
+            result["optimization"] = opt_dict
 
         elif mode == "optimize_income":
             yields_list = [yield_map.get(t, 0) for t in available_tickers]
-            opt_w = _optimize_income(returns_df, yields_list, min_sharpe=min_sharpe, max_dd=max_dd)
+            adj_yields = _adjust_yields_for_nav(yields_list, nav_returns, available_tickers)
+            weight_caps = _nav_weight_caps(nav_returns, available_tickers)
+            # Per-ticker NAV erosion penalty: abs(erosion) scaled, 0 for non-eroding
+            nav_pen = [max(0, -nav_returns.get(t, 0.0)) * 1.5 for t in available_tickers]
+            # Zero-yield tickers get capped to 0 in income modes — no reason to buy them
+            for i, t in enumerate(available_tickers):
+                if yields_list[i] <= 0:
+                    weight_caps[i] = 0.0
+            opt_w = _optimize_income(returns_df, adj_yields, current_weights=current_weights, weight_caps=weight_caps, nav_penalties=nav_pen)
             opt_yield = float(opt_w.dot(np.array(yields_list)))
             curr_yield = float(current_weights.dot(np.array(yields_list)))
-            opt_sharpe_val = _portfolio_sharpe(opt_w, returns_df)
-            opt_dd_val = _portfolio_max_dd(opt_w, returns_df)
+            # Use port_metrics for current (matches Impact Analysis "before"), grade_portfolio for optimized
+            opt_gp = grade_portfolio(returns_df, opt_w, bench_ret)
             opt_income = opt_yield * total_val
             curr_income = curr_yield * total_val
             weights_out = [{"ticker": t, "current_pct": round(current_weights[i] * 100, 2),
                             "optimal_pct": round(opt_w[i] * 100, 2), "yield_pct": round(yields_list[i] * 100, 2)}
                            for i, t in enumerate(available_tickers)]
+            weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, total_val, nav_returns)
             scatter_data = []
             for i, t in enumerate(available_tickers):
                 tc = close[t].dropna()
@@ -5005,21 +5366,41 @@ def analytics_data():
                 vol = float(tr.std() * np.sqrt(252)) if len(tr) > 1 else 0
                 scatter_data.append({"ticker": t, "yield_pct": round(yields_list[i] * 100, 2),
                                      "vol_pct": round(vol * 100, 2), "is_optimal": float(opt_w[i]) > 0.01})
-            result["optimization"] = {
+            opt_dict = {
                 "weights": weights_out, "scatter": scatter_data,
-                "summary": {"sharpe": round(opt_sharpe_val, 2), "max_dd": round(opt_dd_val * 100, 2),
+                "summary": {"opt_sortino": round(safe(opt_gp.get("sortino")) or 0, 2),
+                             "curr_sortino": round(safe(port_metrics.get("sortino")) or 0, 2),
+                             "opt_omega": round(safe(opt_gp.get("omega")) or 0, 2),
+                             "curr_omega": round(safe(port_metrics.get("omega")) or 0, 2),
+                             "opt_calmar": round(safe(opt_gp.get("calmar")) or 0, 2),
+                             "curr_calmar": round(safe(port_metrics.get("calmar")) or 0, 2),
+                             "opt_ulcer": round(safe(opt_gp.get("ulcer_index")) or 0, 2),
+                             "curr_ulcer": round(safe(port_metrics.get("ulcer_index")) or 0, 2),
+                             "max_dd": round((safe(opt_gp.get("max_drawdown")) or 0) * 100, 2),
                              "opt_yield": round(opt_yield * 100, 2), "curr_yield": round(curr_yield * 100, 2),
                              "opt_income": round(opt_income, 2), "curr_income": round(curr_income, 2)},
+                "rebalance_summary": rebal_summary,
             }
+            if has_portfolio:
+                opt_dict["comparison"] = _before_after_comparison(returns_df, opt_w, bench_ret,
+                                                                   port_metrics, curr_income, opt_income,
+                                                                   current_weights=current_weights)
+            result["optimization"] = opt_dict
 
         elif mode == "optimize_balanced":
             yields_list = [yield_map.get(t, 0) for t in available_tickers]
-            opt_w = _optimize_balanced(returns_df, yields_list, balance=balance)
+            adj_yields = _adjust_yields_for_nav(yields_list, nav_returns, available_tickers)
+            weight_caps = _nav_weight_caps(nav_returns, available_tickers)
+            # Zero-yield tickers get capped to 0 in income-oriented modes
+            for i, t in enumerate(available_tickers):
+                if yields_list[i] <= 0:
+                    weight_caps[i] = 0.0
+            nav_pen = [max(0, -nav_returns.get(t, 0.0)) * 1.5 for t in available_tickers]
+            opt_w = _optimize_balanced(returns_df, adj_yields, balance=balance, current_weights=current_weights, min_sharpe=min_sharpe, max_dd=max_dd, weight_caps=weight_caps, nav_penalties=nav_pen)
             opt_yield = float(opt_w.dot(np.array(yields_list)))
             curr_yield = float(current_weights.dot(np.array(yields_list)))
-            opt_sharpe_val = _portfolio_sharpe(opt_w, returns_df)
-            curr_sharpe_val = _portfolio_sharpe(current_weights, returns_df)
-            opt_dd_val = _portfolio_max_dd(opt_w, returns_df)
+            # Use port_metrics for current (matches Impact Analysis "before"), grade_portfolio for optimized
+            opt_gp = grade_portfolio(returns_df, opt_w, bench_ret)
             opt_income = opt_yield * total_val
             curr_income = curr_yield * total_val
             weights_out = [{"ticker": t, "current_pct": round(current_weights[i] * 100, 2),
@@ -5034,13 +5415,28 @@ def analytics_data():
                 scatter_data.append({"ticker": t, "yield_pct": round(yields_list[i] * 100, 2),
                                      "vol_pct": round(vol * 100, 2), "sharpe": sharpe_t if sharpe_t else 0,
                                      "is_optimal": float(opt_w[i]) > 0.01})
-            result["optimization"] = {
+            weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, total_val, nav_returns)
+            opt_dict = {
                 "weights": weights_out, "scatter": scatter_data,
                 "summary": {"opt_yield": round(opt_yield * 100, 2), "curr_yield": round(curr_yield * 100, 2),
                              "opt_income": round(opt_income, 2), "curr_income": round(curr_income, 2),
-                             "opt_sharpe": round(opt_sharpe_val, 2), "curr_sharpe": round(curr_sharpe_val, 2),
-                             "max_dd": round(opt_dd_val * 100, 2), "balance": round(balance * 100)},
+                             "opt_sortino": round(safe(opt_gp.get("sortino")) or 0, 2),
+                             "curr_sortino": round(safe(port_metrics.get("sortino")) or 0, 2),
+                             "opt_omega": round(safe(opt_gp.get("omega")) or 0, 2),
+                             "curr_omega": round(safe(port_metrics.get("omega")) or 0, 2),
+                             "opt_calmar": round(safe(opt_gp.get("calmar")) or 0, 2),
+                             "curr_calmar": round(safe(port_metrics.get("calmar")) or 0, 2),
+                             "opt_ulcer": round(safe(opt_gp.get("ulcer_index")) or 0, 2),
+                             "curr_ulcer": round(safe(port_metrics.get("ulcer_index")) or 0, 2),
+                             "max_dd": round((safe(opt_gp.get("max_drawdown")) or 0) * 100, 2),
+                             "balance": round(balance * 100)},
+                "rebalance_summary": rebal_summary,
             }
+            if has_portfolio:
+                opt_dict["comparison"] = _before_after_comparison(returns_df, opt_w, bench_ret,
+                                                                   port_metrics, curr_income, opt_income,
+                                                                   current_weights=current_weights)
+            result["optimization"] = opt_dict
 
     return jsonify(result)
 
