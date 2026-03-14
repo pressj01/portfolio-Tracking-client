@@ -73,6 +73,20 @@ def _omega(daily_returns, threshold=0.0):
         return None
 
 
+def _ulcer_index(close):
+    """Ulcer Index — measures depth and duration of drawdowns.
+    Lower values indicate less downside risk."""
+    try:
+        if len(close) < 30:
+            return None
+        running_max = close.cummax()
+        pct_drawdown = ((close - running_max) / running_max) * 100
+        squared_avg = (pct_drawdown ** 2).mean()
+        return round(float(np.sqrt(squared_avg)), 2)
+    except Exception:
+        return None
+
+
 def _max_drawdown(close):
     try:
         running_max = close.cummax()
@@ -163,26 +177,28 @@ def letter_grade(score):
 
 def ticker_score(close, daily_ret, bench_ret=None):
     """Compute individual ticker risk score (0-100).
-    Returns (score, sharpe, sortino, calmar, omega, mdd, down_capture)."""
+    Returns (score, sharpe, sortino, calmar, omega, mdd, down_capture, ulcer)."""
     sharpe_v = _safe(_sharpe(close))
     sortino_v = _safe(_sortino(close))
     calmar_v = _safe(_calmar(close))
     omega_v = _safe(_omega(daily_ret))
     mdd_v = _safe(_max_drawdown(close))
+    ulcer_v = _safe(_ulcer_index(close))
     _, dc = _capture_ratios(daily_ret, bench_ret) if bench_ret is not None else (None, None)
     dc = _safe(dc)
 
     mdd_pct = mdd_v * 100 if mdd_v is not None else None
     sub = {
-        "sharpe":       _score_higher(sharpe_v,  (1.5, 1.0, 0.5, 0.0)),
-        "sortino":      _score_higher(sortino_v, (2.0, 1.5, 1.0, 0.5)),
-        "calmar":       _score_higher(calmar_v,  (1.5, 1.0, 0.5, 0.2)),
-        "omega":        _score_higher(omega_v,   (2.0, 1.5, 1.2, 1.0)),
+        "ulcer_index":  _score_lower(ulcer_v,    (3, 7, 12, 20)),
+        "calmar":       _score_higher(calmar_v,   (1.5, 1.0, 0.5, 0.2)),
+        "omega":        _score_higher(omega_v,    (2.0, 1.5, 1.2, 1.0)),
+        "sortino":      _score_higher(sortino_v,  (2.0, 1.5, 1.0, 0.5)),
+        "sharpe":       _score_higher(sharpe_v,   (1.5, 1.0, 0.5, 0.0)),
         "max_drawdown": _score_lower(abs(mdd_pct) if mdd_pct is not None else None, (10, 20, 30, 40)),
         "down_capture": _score_lower(dc, (80, 90, 100, 120)),
     }
-    gw = {"sharpe": 30, "sortino": 20, "calmar": 15,
-          "omega": 15, "max_drawdown": 15, "down_capture": 5}
+    gw = {"ulcer_index": 25, "calmar": 20, "omega": 15,
+          "sortino": 15, "sharpe": 10, "max_drawdown": 10, "down_capture": 5}
     tw = ts = 0.0
     for k, w in gw.items():
         sc = sub.get(k)
@@ -190,7 +206,7 @@ def ticker_score(close, daily_ret, bench_ret=None):
             tw += w
             ts += sc * w
     score = round(ts / tw, 1) if tw > 0 else 0.0
-    return score, sharpe_v, sortino_v, calmar_v, omega_v, mdd_v, dc
+    return score, sharpe_v, sortino_v, calmar_v, omega_v, mdd_v, dc, ulcer_v
 
 
 # ── Portfolio-level grading ───────────────────────────────────────────────────
@@ -222,6 +238,7 @@ def grade_portfolio(returns_df, weights_arr, bench_ret=None):
         "calmar": _safe(_calmar(port_cum)),
         "omega": _safe(_omega(port_daily)),
         "max_drawdown": port_mdd,
+        "ulcer_index": _safe(_ulcer_index(port_cum)),
     }
 
     if bench_ret is not None:
@@ -239,20 +256,22 @@ def grade_portfolio(returns_df, weights_arr, bench_ret=None):
 
     mdd_pct = port_mdd * 100 if port_mdd is not None else None
     sub = {
-        "sharpe":        _score_higher(metrics.get("sharpe"),        (1.5, 1.0, 0.5, 0.0)),
-        "sortino":       _score_higher(metrics.get("sortino"),       (2.0, 1.5, 1.0, 0.5)),
+        "ulcer_index":   _score_lower(metrics.get("ulcer_index"),    (3, 7, 12, 20)),
         "calmar":        _score_higher(metrics.get("calmar"),        (1.5, 1.0, 0.5, 0.2)),
         "omega":         _score_higher(metrics.get("omega"),         (2.0, 1.5, 1.2, 1.0)),
+        "sortino":       _score_higher(metrics.get("sortino"),       (2.0, 1.5, 1.0, 0.5)),
+        "sharpe":        _score_higher(metrics.get("sharpe"),        (1.5, 1.0, 0.5, 0.0)),
         "max_drawdown":  _score_lower(abs(mdd_pct) if mdd_pct is not None else None, (10, 20, 30, 40)),
         "down_capture":  _score_lower(metrics.get("down_capture"),  (80, 90, 100, 120)),
         "diversification": _score_higher(metrics.get("effective_n"), (20, 12, 6, 3)),
     }
 
-    gw = {"sharpe": 25, "sortino": 15, "calmar": 10, "omega": 10,
-          "max_drawdown": 20, "down_capture": 10, "diversification": 10}
+    gw = {"ulcer_index": 20, "calmar": 20, "omega": 15, "sortino": 12,
+          "sharpe": 8, "max_drawdown": 10, "down_capture": 5, "diversification": 10}
     label_map = {
-        "sharpe": "Sharpe Ratio", "sortino": "Sortino Ratio",
-        "calmar": "Calmar Ratio", "omega": "Omega Ratio",
+        "ulcer_index": "Ulcer Index", "calmar": "Calmar Ratio",
+        "omega": "Omega Ratio", "sortino": "Sortino Ratio",
+        "sharpe": "Sharpe Ratio",
         "max_drawdown": "Max Drawdown", "down_capture": "Downside Capture",
         "diversification": "Diversification",
     }

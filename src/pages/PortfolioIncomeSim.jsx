@@ -477,8 +477,11 @@ export default function PortfolioIncomeSim() {
   }
 
   // Sorting
+  const isSim = mode === 'simulate'
   const colKeys = ['ticker', 'amount', 'reinvest_pct', 'start_price', 'end_price',
-    'price_delta_pct', 'ttm_yield_pct', 'total_dist', 'effective_yield_pct',
+    'price_delta_pct', 'ttm_yield_pct',
+    ...(isSim ? ['_hist_mean', '_hist_vol', '_hist_skew'] : []),
+    'total_dist', 'effective_yield_pct',
     'total_reinvested', 'final_value', 'gain_loss_dollar', 'gain_loss_pct',
     'has_erosion', 'final_deficit', 'warning']
 
@@ -487,8 +490,14 @@ export default function PortfolioIncomeSim() {
     const arr = [...results]
     if (sortCol !== null) {
       const key = colKeys[sortCol]
+      const getSortVal = (r, k) => {
+        if (k === '_hist_mean') return r.sim_stats?.hist_mean_monthly ?? ''
+        if (k === '_hist_vol') return r.sim_stats?.hist_sigma_monthly ?? ''
+        if (k === '_hist_skew') return r.sim_stats?.hist_skewness ?? ''
+        return r[k] ?? ''
+      }
       arr.sort((a, b) => {
-        let aV = a[key] ?? '', bV = b[key] ?? ''
+        let aV = getSortVal(a, key), bV = getSortVal(b, key)
         if (key === 'has_erosion') { aV = aV ? 1 : 0; bV = bV ? 1 : 0 }
         if (typeof aV === 'number' && typeof bV === 'number')
           return sortAsc ? aV - bV : bV - aV
@@ -748,7 +757,9 @@ export default function PortfolioIncomeSim() {
   }, [chartLines])
 
   const headers = ['Ticker', 'Amount', 'Reinvest %', 'Start Price', 'End Price',
-    'Price \u0394%', 'TTM Yield', 'Total Dist', 'Cum Yield', 'Reinvested',
+    'Price \u0394%', 'TTM Yield',
+    ...(isSim ? ['Hist \u03BC%', 'Hist \u03C3%', 'Skew'] : []),
+    'Total Dist', 'Cum Yield', 'Reinvested',
     'Final Value', 'Gain/Loss $', 'Gain/Loss %', 'NAV Erosion', 'Deficit', 'Note']
 
   // Get reinvest pct label for compare mode header
@@ -1329,7 +1340,7 @@ export default function PortfolioIncomeSim() {
                         <td><strong>{r.ticker}{r.is_comparison ? ' [C]' : ''}</strong></td>
                         <td>{fmt$(r.amount || 0)}</td>
                         <td>{(r.reinvest_pct || 0)}%</td>
-                        <td colSpan={12} style={{ textAlign: 'left', color: '#e05555' }}>{r.error}</td>
+                        <td colSpan={isSim ? 15 : 12} style={{ textAlign: 'left', color: '#e05555' }}>{r.error}</td>
                         <td></td>
                       </tr>
                     )
@@ -1352,6 +1363,9 @@ export default function PortfolioIncomeSim() {
                       <td>{fmt$(r.end_price)}</td>
                       <td className={pCls}>{fmtPct(r.price_delta_pct)}</td>
                       <td>{r.ttm_yield_pct != null ? r.ttm_yield_pct.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      {isSim && <td style={{ color: (r.sim_stats?.hist_mean_monthly || 0) >= 0 ? '#4dff91' : '#ff6b6b' }}>{r.sim_stats?.hist_mean_monthly != null ? r.sim_stats.hist_mean_monthly.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>}
+                      {isSim && <td>{r.sim_stats?.hist_sigma_monthly != null ? r.sim_stats.hist_sigma_monthly.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>}
+                      {isSim && <td style={{ color: (r.sim_stats?.hist_skewness || 0) < -0.3 ? '#f9a825' : '#aaa' }}>{r.sim_stats?.hist_skewness != null ? r.sim_stats.hist_skewness.toFixed(2) : <span style={{ color: '#555' }}>&mdash;</span>}</td>}
                       <td>{fmt$(r.total_dist)}</td>
                       <td className={effCls}>{r.effective_yield_pct.toFixed(2)}%</td>
                       <td>{fmt$(r.total_reinvested)}</td>
@@ -1377,6 +1391,7 @@ export default function PortfolioIncomeSim() {
                     <td><strong>TOTAL</strong></td>
                     <td>{fmt$(summary.totAmount)}</td>
                     <td></td><td></td><td></td><td></td><td></td>
+                    {isSim && <><td></td><td></td><td></td></>}
                     <td>{fmt$(summary.totDist)}</td>
                     <td>{summary.totEffYld.toFixed(2)}%</td>
                     <td>{fmt$(summary.totReinv)}</td>

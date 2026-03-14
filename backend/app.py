@@ -926,6 +926,7 @@ def portfolio_summary_data():
         portfolio_grade_info["calmar"] = pm.get("calmar")
         portfolio_grade_info["omega"] = pm.get("omega")
         portfolio_grade_info["max_drawdown"] = pm.get("max_drawdown")
+        portfolio_grade_info["ulcer_index"] = pm.get("ulcer_index")
 
     return jsonify(ticker_grades=ticker_grades, portfolio_grade=portfolio_grade_info)
 
@@ -4527,25 +4528,44 @@ def _pis_run_inner():
                 ttm_divs_sum = float(divs.sum()) if divs is not None else 0.0
                 ttm_yield = ttm_divs_sum / current_price if current_price > 0 else 0.0
 
-            # Historical monthly volatility
+            # Historical monthly return statistics
             monthly_returns = close.dropna().resample("ME").last().pct_change().dropna()
             if len(monthly_returns) >= 2:
                 hist_sigma = float(monthly_returns.std())
+                hist_mu = float(monthly_returns.mean())
             else:
                 hist_sigma = 0.05
+                hist_mu = 0.0
 
-            mu = bias
+            # Historical skewness (captures covered-call truncated upside, etc.)
+            if len(monthly_returns) >= 12:
+                hist_skew = float(monthly_returns.skew())
+                hist_kurt = float(monthly_returns.kurtosis())  # excess kurtosis
+            else:
+                hist_skew = 0.0
+                hist_kurt = 0.0
+
+            # Use ticker's own historical drift + market bias overlay
+            mu = hist_mu + bias
             sigma = hist_sigma * vol_mult
             SIGMA_CAP = 0.25
             sigma_capped = sigma > SIGMA_CAP
             sigma = min(sigma, SIGMA_CAP)
 
-            # Monte-Carlo GBM — 300 paths, take median
+            # Monte-Carlo GBM — 300 paths with skew-adjusted returns
             N_PATHS = 300
             drift = mu - 0.5 * sigma ** 2
             np.random.seed(None)
             Z = np.random.normal(0.0, 1.0, (N_PATHS, duration_months))
-            log_rets = drift + sigma * Z
+            # Cornish-Fisher expansion: adjust for skewness and excess kurtosis
+            # This transforms normal draws to approximate the historical return shape
+            skew_c = max(-2.0, min(2.0, hist_skew))   # clamp to avoid extreme distortion
+            kurt_c = max(-2.0, min(7.0, hist_kurt))
+            Z_adj = (Z
+                     + (skew_c / 6.0) * (Z ** 2 - 1)
+                     + (kurt_c / 24.0) * (Z ** 3 - 3 * Z)
+                     - (skew_c ** 2 / 36.0) * (2 * Z ** 3 - 5 * Z))
+            log_rets = drift + sigma * Z_adj
             cum_log = np.cumsum(
                 np.hstack([np.zeros((N_PATHS, 1)), log_rets]), axis=1
             )
@@ -4601,6 +4621,13 @@ def _pis_run_inner():
                 f"unrealistic simulation outcomes."
             ) if sigma_capped else None
 
+            # Pass per-ticker historical stats for transparency
+            sim_stats = {
+                "hist_mean_monthly": round(hist_mu * 100, 2),
+                "hist_sigma_monthly": round(hist_sigma * 100, 2),
+                "hist_skewness": round(hist_skew, 2) if len(monthly_returns) >= 12 else None,
+            }
+
             # Determine which reinvest runs to perform
             # Comparison tickers use their own per-ticker reinvest_pct (single run)
             if reinvest_compare and not r["is_comparison"]:
@@ -4635,6 +4662,7 @@ def _pis_run_inner():
                     "monthly_dividends": s["md"],
                     "date_labels": date_labels,
                     "warning": sim_warning,
+                    "sim_stats": sim_stats,
                     "error": None,
                 }
                 if compare_group is not None:
@@ -4644,6 +4672,445 @@ def _pis_run_inner():
         return jsonify(results=results)
 
     return jsonify(error=f"Unknown mode: {mode}")
+
+
+# ── Portfolio Analytics ─────────────────────────────────────────────────────────
+
+def _portfolio_sharpe(weights, returns_df, risk_free_annual=0.05):
+    import numpy as np
+    port_ret = returns_df.dot(weights)
+    daily_rf = risk_free_annual / 252
+    excess = float(port_ret.mean()) - daily_rf
+    std = float(port_ret.std())
+    if std == 0:
+        return 0.0
+    return excess / std * np.sqrt(252)
+
+
+def _portfolio_max_dd(weights, returns_df):
+    port_ret = returns_df.dot(weights)
+    cum = (1 + port_ret).cumprod()
+    running_max = cum.cummax()
+    dd = (cum - running_max) / running_max
+    return float(dd.min())
+
+
+def _optimize_sharpe(returns_df):
+    import numpy as np
+    from scipy.optimize import minimize
+    n = returns_df.shape[1]
+    init = np.ones(n) / n
+    def neg_sharpe(w):
+        return -_portfolio_sharpe(w, returns_df)
+    bounds = [(0, 1)] * n
+    constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1}]
+    result = minimize(neg_sharpe, init, method="SLSQP", bounds=bounds,
+                      constraints=constraints, options={"maxiter": 1000})
+    return result.x if result.success else init
+
+
+def _optimize_income(returns_df, yields, min_sharpe=0.5, max_dd=-0.30):
+    import numpy as np
+    from scipy.optimize import minimize
+    n = returns_df.shape[1]
+    init = np.ones(n) / n
+    yields_arr = np.array(yields)
+    def neg_yield(w):
+        return -float(w.dot(yields_arr))
+    constraints = [
+        {"type": "eq", "fun": lambda w: w.sum() - 1},
+        {"type": "ineq", "fun": lambda w: _portfolio_sharpe(w, returns_df) - min_sharpe},
+        {"type": "ineq", "fun": lambda w: _portfolio_max_dd(w, returns_df) - max_dd},
+    ]
+    bounds = [(0, 1)] * n
+    result = minimize(neg_yield, init, method="SLSQP", bounds=bounds,
+                      constraints=constraints, options={"maxiter": 1000})
+    return result.x if result.success else init
+
+
+def _optimize_balanced(returns_df, yields, balance=0.5):
+    import numpy as np
+    from scipy.optimize import minimize
+    n = returns_df.shape[1]
+    mu = returns_df.mean().values * 252
+    cov = returns_df.cov().values * 252
+    yields_arr = np.array(yields)
+    max_yield = float(yields_arr.max()) if yields_arr.max() > 0 else 0.10
+    def neg_objective(w):
+        port_yield = float(yields_arr @ w)
+        port_ret = float(mu @ w)
+        port_vol = float(np.sqrt(w @ cov @ w))
+        port_sharpe = (port_ret - 0.05) / port_vol if port_vol > 1e-6 else 0
+        norm_yield = port_yield / max_yield if max_yield > 0 else 0
+        norm_sharpe = min(max(port_sharpe, 0), 3) / 3.0
+        return -(balance * norm_yield + (1.0 - balance) * norm_sharpe)
+    constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1}]
+    bounds = [(0.01, 0.40)] * n
+    best = None
+    rng = np.random.default_rng(42)
+    for _ in range(20):
+        w0 = rng.dirichlet(np.ones(n))
+        try:
+            res = minimize(neg_objective, w0, method="SLSQP", bounds=bounds,
+                           constraints=constraints, options={"maxiter": 1000, "ftol": 1e-9})
+            if res.success and (best is None or res.fun < best.fun):
+                best = res
+        except Exception:
+            pass
+    if best is None:
+        return np.ones(n) / n
+    w = np.maximum(best.x, 0)
+    w[w < 0.01] = 0
+    return w / w.sum() if w.sum() > 0 else np.ones(n) / n
+
+
+def _build_efficient_frontier(returns_df, n_points=30):
+    import numpy as np
+    from scipy.optimize import minimize
+    n = returns_df.shape[1]
+    mean_ret = returns_df.mean().values * 252
+    cov = returns_df.cov().values * 252
+    ret_range = np.linspace(mean_ret.min(), mean_ret.max(), n_points)
+    frontier = []
+    for target in ret_range:
+        def portfolio_vol(w):
+            return np.sqrt(w @ cov @ w)
+        constraints = [
+            {"type": "eq", "fun": lambda w: w.sum() - 1},
+            {"type": "eq", "fun": lambda w, t=target: w @ mean_ret - t},
+        ]
+        bounds = [(0, 1)] * n
+        init = np.ones(n) / n
+        result = minimize(portfolio_vol, init, method="SLSQP", bounds=bounds,
+                          constraints=constraints, options={"maxiter": 500})
+        if result.success:
+            vol = float(np.sqrt(result.x @ cov @ result.x))
+            ret = float(result.x @ mean_ret)
+            frontier.append({"vol": round(vol * 100, 2), "ret": round(ret * 100, 2)})
+    return frontier
+
+
+@app.route("/api/analytics/data", methods=["POST"])
+def analytics_data():
+    """Compute risk metrics, portfolio grade, charts and optional optimization."""
+    import warnings, math
+    import numpy as np
+    import yfinance as yf
+    from grading import (ticker_score, grade_portfolio, letter_grade,
+                         _sharpe, _sortino, _calmar, _omega,
+                         _ulcer_index, _max_drawdown, _capture_ratios, _safe)
+    warnings.filterwarnings("ignore")
+
+    data = request.get_json(force=True, silent=True) or {}
+    tickers = [str(t).strip().upper() for t in data.get("tickers", []) if str(t).strip()]
+    benchmark = str(data.get("benchmark", "SPY")).strip().upper()
+    period = data.get("period", "1y")
+    mode = data.get("mode", "metrics")
+    min_sharpe = float(data.get("min_sharpe", 0.5))
+    max_dd = float(data.get("max_dd", -0.30))
+    balance = float(data.get("balance", 0.5))
+
+    if not tickers:
+        return jsonify(error="No tickers provided."), 400
+
+    valid_periods = {"1mo", "3mo", "6mo", "ytd", "1y", "2y", "5y", "max"}
+    if period not in valid_periods:
+        period = "1y"
+
+    all_dl = list(set(tickers + [benchmark]))
+    try:
+        raw = yf.download(" ".join(all_dl), period=period, auto_adjust=True, progress=False)
+        if raw.empty:
+            return jsonify(error="No price data returned."), 500
+    except Exception as e:
+        return jsonify(error=f"yfinance error: {str(e)}"), 500
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        close = raw["Close"].dropna(how="all")
+    else:
+        close = raw[["Close"]].dropna(how="all")
+        close.columns = [all_dl[0]]
+
+    # DB weights and yields
+    profile_id = get_profile_id()
+    conn = get_connection()
+    try:
+        db_rows = conn.execute(
+            "SELECT ticker, current_value, estim_payment_per_year FROM all_account_info "
+            "WHERE current_value IS NOT NULL AND current_value > 0 AND profile_id = ?",
+            (profile_id,)
+        ).fetchall()
+    except Exception:
+        db_rows = []
+    conn.close()
+
+    db_df = pd.DataFrame([dict(r) for r in db_rows]) if db_rows else pd.DataFrame(columns=["ticker", "current_value", "estim_payment_per_year"])
+    total_val = float(db_df["current_value"].sum()) if not db_df.empty else 1
+    weight_map = {}
+    yield_map = {}
+    income_map = {}
+    for _, r in db_df.iterrows():
+        t = r["ticker"]
+        weight_map[t] = float(r["current_value"]) / total_val if total_val > 0 else 0
+        cv = float(r["current_value"]) if r["current_value"] and float(r["current_value"]) > 0 else 1
+        ep = float(r["estim_payment_per_year"]) if pd.notna(r.get("estim_payment_per_year")) else 0
+        yield_map[t] = ep / cv
+        income_map[t] = ep
+
+    bench_close = close[benchmark] if benchmark in close.columns else None
+    bench_ret = bench_close.pct_change().dropna() if bench_close is not None else None
+
+    def safe(v):
+        if v is None:
+            return None
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return None
+        return v
+
+    # Per-ticker metrics
+    metrics = []
+    available_tickers = []
+    for t in tickers:
+        if t not in close.columns:
+            continue
+        tc = close[t].dropna()
+        if len(tc) < 30:
+            continue
+        available_tickers.append(t)
+        tr = tc.pct_change().dropna()
+        score, sharpe_v, sortino_v, calmar_v, omega_v, mdd_v, dc_v, ulcer_v = ticker_score(tc, tr, bench_ret)
+        uc_v, _ = _capture_ratios(tr, bench_ret) if bench_ret is not None else (None, None)
+        annual_ret = round(float(tr.mean() * 252) * 100, 2)
+        annual_vol = round(float(tr.std() * np.sqrt(252)) * 100, 2)
+        metrics.append({
+            "ticker": t,
+            "weight": round(weight_map.get(t, 0) * 100, 2),
+            "sharpe": safe(sharpe_v),
+            "sortino": safe(sortino_v),
+            "calmar": safe(calmar_v),
+            "omega": safe(omega_v),
+            "ulcer_index": safe(ulcer_v),
+            "up_capture": safe(uc_v),
+            "down_capture": safe(dc_v),
+            "max_drawdown": round(mdd_v * 100, 2) if mdd_v is not None else None,
+            "annual_ret": annual_ret,
+            "annual_vol": annual_vol,
+            "score": round(score, 1),
+            "grade": letter_grade(score),
+            "annual_income": round(income_map.get(t, 0), 2),
+        })
+
+    # Portfolio-level metrics and grade
+    port_metrics = {}
+    result_corr = None
+    result_dd = None
+    if len(available_tickers) >= 2:
+        returns_df = close[available_tickers].pct_change().fillna(0)
+        weights_arr = np.array([weight_map.get(t, 0) for t in available_tickers])
+        w_sum = weights_arr.sum()
+        if w_sum > 0:
+            weights_arr = weights_arr / w_sum
+        else:
+            # No DB weights available — use equal weight
+            weights_arr = np.ones(len(available_tickers)) / len(available_tickers)
+
+        pm = grade_portfolio(returns_df, weights_arr, bench_ret)
+        port_metrics = {
+            "sharpe": pm.get("sharpe"),
+            "sortino": pm.get("sortino"),
+            "calmar": pm.get("calmar"),
+            "omega": pm.get("omega"),
+            "ulcer_index": pm.get("ulcer_index"),
+            "max_drawdown": pm.get("max_drawdown"),
+            "up_capture": pm.get("up_capture"),
+            "down_capture": pm.get("down_capture"),
+            "top_weight": pm.get("top_weight"),
+            "effective_n": pm.get("effective_n"),
+            "n_holdings": len(available_tickers),
+            "grade": pm.get("grade"),
+            "total_value": round(total_val, 2),
+            "est_annual_income": round(sum(income_map.get(t, 0) for t in available_tickers), 2),
+        }
+
+        # Correlation matrix
+        corr = returns_df.corr()
+        result_corr = {
+            "labels": available_tickers,
+            "matrix": [[round(float(corr.loc[a, b]), 3) for b in available_tickers]
+                       for a in available_tickers],
+        }
+
+        # Portfolio drawdown series
+        port_daily = returns_df.dot(weights_arr)
+        port_cum = (1 + port_daily).cumprod()
+        roll_max = port_cum.cummax()
+        drawdown_s = (port_cum / roll_max - 1)
+        step = max(1, len(drawdown_s) // 200)
+        dd_sampled = drawdown_s.iloc[::step]
+        result_dd = {
+            "dates": [d.strftime("%Y-%m-%d") for d in dd_sampled.index],
+            "values": [round(float(v) * 100, 2) for v in dd_sampled.values],
+        }
+
+    result = {"metrics": metrics, "portfolio_metrics": port_metrics}
+    if result_corr:
+        result["correlation"] = result_corr
+        result["drawdown_series"] = result_dd
+
+    # Optimization modes
+    if mode in ("optimize_returns", "optimize_income", "optimize_balanced") and len(available_tickers) >= 2:
+        returns_df = close[available_tickers].pct_change().dropna()
+        current_weights = np.array([weight_map.get(t, 0) for t in available_tickers])
+        cw_sum = current_weights.sum()
+        if cw_sum > 0:
+            current_weights = current_weights / cw_sum
+        else:
+            current_weights = np.ones(len(available_tickers)) / len(available_tickers)
+
+        if mode == "optimize_returns":
+            opt_w = _optimize_sharpe(returns_df)
+            frontier = _build_efficient_frontier(returns_df)
+            opt_sharpe_val = _portfolio_sharpe(opt_w, returns_df)
+            mean_ret = float(returns_df.mean().values @ opt_w) * 252
+            cov = returns_df.cov().values * 252
+            opt_vol = float(np.sqrt(opt_w @ cov @ opt_w))
+            curr_ret = float(returns_df.mean().values @ current_weights) * 252
+            curr_vol = float(np.sqrt(current_weights @ cov @ current_weights))
+            weights_out = [{"ticker": t, "current_pct": round(current_weights[i] * 100, 2),
+                            "optimal_pct": round(opt_w[i] * 100, 2)} for i, t in enumerate(available_tickers)]
+            result["optimization"] = {
+                "weights": weights_out, "frontier": frontier,
+                "optimal_point": {"vol": round(opt_vol * 100, 2), "ret": round(mean_ret * 100, 2)},
+                "current_point": {"vol": round(curr_vol * 100, 2), "ret": round(curr_ret * 100, 2)},
+                "summary": {"sharpe": round(opt_sharpe_val, 2), "expected_return": round(mean_ret * 100, 2),
+                             "expected_vol": round(opt_vol * 100, 2)},
+            }
+
+        elif mode == "optimize_income":
+            yields_list = [yield_map.get(t, 0) for t in available_tickers]
+            opt_w = _optimize_income(returns_df, yields_list, min_sharpe=min_sharpe, max_dd=max_dd)
+            opt_yield = float(opt_w.dot(np.array(yields_list)))
+            curr_yield = float(current_weights.dot(np.array(yields_list)))
+            opt_sharpe_val = _portfolio_sharpe(opt_w, returns_df)
+            opt_dd_val = _portfolio_max_dd(opt_w, returns_df)
+            opt_income = opt_yield * total_val
+            curr_income = curr_yield * total_val
+            weights_out = [{"ticker": t, "current_pct": round(current_weights[i] * 100, 2),
+                            "optimal_pct": round(opt_w[i] * 100, 2), "yield_pct": round(yields_list[i] * 100, 2)}
+                           for i, t in enumerate(available_tickers)]
+            scatter_data = []
+            for i, t in enumerate(available_tickers):
+                tc = close[t].dropna()
+                tr = tc.pct_change().dropna()
+                vol = float(tr.std() * np.sqrt(252)) if len(tr) > 1 else 0
+                scatter_data.append({"ticker": t, "yield_pct": round(yields_list[i] * 100, 2),
+                                     "vol_pct": round(vol * 100, 2), "is_optimal": float(opt_w[i]) > 0.01})
+            result["optimization"] = {
+                "weights": weights_out, "scatter": scatter_data,
+                "summary": {"sharpe": round(opt_sharpe_val, 2), "max_dd": round(opt_dd_val * 100, 2),
+                             "opt_yield": round(opt_yield * 100, 2), "curr_yield": round(curr_yield * 100, 2),
+                             "opt_income": round(opt_income, 2), "curr_income": round(curr_income, 2)},
+            }
+
+        elif mode == "optimize_balanced":
+            yields_list = [yield_map.get(t, 0) for t in available_tickers]
+            opt_w = _optimize_balanced(returns_df, yields_list, balance=balance)
+            opt_yield = float(opt_w.dot(np.array(yields_list)))
+            curr_yield = float(current_weights.dot(np.array(yields_list)))
+            opt_sharpe_val = _portfolio_sharpe(opt_w, returns_df)
+            curr_sharpe_val = _portfolio_sharpe(current_weights, returns_df)
+            opt_dd_val = _portfolio_max_dd(opt_w, returns_df)
+            opt_income = opt_yield * total_val
+            curr_income = curr_yield * total_val
+            weights_out = [{"ticker": t, "current_pct": round(current_weights[i] * 100, 2),
+                            "optimal_pct": round(opt_w[i] * 100, 2), "yield_pct": round(yields_list[i] * 100, 2)}
+                           for i, t in enumerate(available_tickers)]
+            scatter_data = []
+            for i, t in enumerate(available_tickers):
+                tc = close[t].dropna()
+                tr = tc.pct_change().dropna()
+                vol = float(tr.std() * np.sqrt(252)) if len(tr) > 1 else 0
+                sharpe_t = safe(_sharpe(tc))
+                scatter_data.append({"ticker": t, "yield_pct": round(yields_list[i] * 100, 2),
+                                     "vol_pct": round(vol * 100, 2), "sharpe": sharpe_t if sharpe_t else 0,
+                                     "is_optimal": float(opt_w[i]) > 0.01})
+            result["optimization"] = {
+                "weights": weights_out, "scatter": scatter_data,
+                "summary": {"opt_yield": round(opt_yield * 100, 2), "curr_yield": round(curr_yield * 100, 2),
+                             "opt_income": round(opt_income, 2), "curr_income": round(curr_income, 2),
+                             "opt_sharpe": round(opt_sharpe_val, 2), "curr_sharpe": round(curr_sharpe_val, 2),
+                             "max_dd": round(opt_dd_val * 100, 2), "balance": round(balance * 100)},
+            }
+
+    return jsonify(result)
+
+
+# ── Correlation Matrix ─────────────────────────────────────────────────────────
+
+@app.route("/api/correlation/data", methods=["POST"])
+def correlation_data():
+    """Compute correlation matrix for arbitrary tickers over a given period."""
+    import math
+    import warnings
+    import numpy as np
+    import yfinance as yf
+    warnings.filterwarnings("ignore")
+
+    data = request.get_json(force=True, silent=True) or {}
+    tickers = [str(t).strip().upper() for t in data.get("tickers", []) if str(t).strip()]
+    period = data.get("period", "1y")
+
+    if len(tickers) < 2:
+        return jsonify(error="Please enter at least 2 tickers.")
+    if len(tickers) > 50:
+        return jsonify(error="Maximum 50 tickers allowed.")
+
+    valid_periods = {"3mo", "6mo", "1y", "2y", "5y", "max"}
+    if period not in valid_periods:
+        period = "1y"
+
+    unique = list(dict.fromkeys(tickers))
+
+    try:
+        raw = yf.download(" ".join(unique), period=period, auto_adjust=True, progress=False)
+        if raw.empty:
+            return jsonify(error="No price data returned from Yahoo Finance.")
+    except Exception as e:
+        return jsonify(error=f"Failed to fetch data: {str(e)}")
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        close = raw["Close"].dropna(how="all")
+    else:
+        close = raw[["Close"]].dropna(how="all")
+        close.columns = [unique[0]]
+
+    available = [t for t in unique if t in close.columns and close[t].dropna().count() >= 30]
+    missing = [t for t in unique if t not in available]
+
+    if len(available) < 2:
+        return jsonify(error="Need at least 2 tickers with sufficient data.")
+
+    daily_returns = close[available].pct_change().dropna()
+    corr = daily_returns.corr()
+
+    def _safe(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else round(f, 3)
+        except (TypeError, ValueError):
+            return None
+
+    matrix = [[_safe(corr.iloc[i, j]) for j in range(len(available))] for i in range(len(available))]
+
+    return jsonify(
+        tickers=available,
+        matrix=matrix,
+        missing=missing,
+        period=period,
+        data_points=len(daily_returns),
+    )
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────
