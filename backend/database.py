@@ -368,6 +368,14 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    # ── settings ──────────────────────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+
     conn.commit()
     if close:
         conn.close()

@@ -5509,6 +5509,866 @@ def correlation_data():
     )
 
 
+# ── Portfolio Builder CRUD ────────────────────────────────────────────────────
+
+@app.route("/api/builder/portfolios", methods=["GET"])
+def builder_list_portfolios():
+    pid = get_profile_id()
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT p.id, p.name, p.notes, p.created_at, p.updated_at,
+               (SELECT COUNT(*) FROM builder_holdings h WHERE h.portfolio_id = p.id) AS holding_count
+        FROM builder_portfolios p WHERE p.profile_id = ?
+        ORDER BY p.updated_at DESC
+    """, (pid,)).fetchall()
+    conn.close()
+    return jsonify({"portfolios": rows_to_dicts(rows)})
+
+
+@app.route("/api/builder/portfolios", methods=["POST"])
+def builder_create_portfolio():
+    pid = get_profile_id()
+    data = request.get_json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    notes = (data.get("notes") or "").strip()
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO builder_portfolios (profile_id, name, notes) VALUES (?, ?, ?)",
+            (pid, name, notes))
+        conn.commit()
+        new_id = cur.lastrowid
+    except Exception as e:
+        conn.close()
+        return jsonify({"error": str(e)}), 400
+    conn.close()
+    return jsonify({"id": new_id, "name": name}), 201
+
+
+@app.route("/api/builder/portfolios/<int:port_id>", methods=["PATCH"])
+def builder_update_portfolio(port_id):
+    pid = get_profile_id()
+    data = request.get_json()
+    conn = get_connection()
+    fields, vals = [], []
+    if "name" in data:
+        fields.append("name = ?")
+        vals.append(data["name"].strip())
+    if "notes" in data:
+        fields.append("notes = ?")
+        vals.append(data["notes"].strip())
+    if not fields:
+        conn.close()
+        return jsonify({"error": "Nothing to update"}), 400
+    fields.append("updated_at = CURRENT_TIMESTAMP")
+    vals.extend([port_id, pid])
+    conn.execute(f"UPDATE builder_portfolios SET {', '.join(fields)} WHERE id = ? AND profile_id = ?", vals)
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/builder/portfolios/<int:port_id>", methods=["DELETE"])
+def builder_delete_portfolio(port_id):
+    pid = get_profile_id()
+    conn = get_connection()
+    conn.execute("DELETE FROM builder_holdings WHERE portfolio_id = ?", (port_id,))
+    conn.execute("DELETE FROM builder_portfolios WHERE id = ? AND profile_id = ?", (port_id, pid))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/builder/portfolios/<int:port_id>/holdings", methods=["GET"])
+def builder_list_holdings(port_id):
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT id, ticker, dollar_amount, added_at FROM builder_holdings WHERE portfolio_id = ? ORDER BY added_at",
+        (port_id,)).fetchall()
+    conn.close()
+    return jsonify({"holdings": rows_to_dicts(rows)})
+
+
+@app.route("/api/builder/portfolios/<int:port_id>/holdings", methods=["POST"])
+def builder_add_holding(port_id):
+    data = request.get_json()
+    ticker = (data.get("ticker") or "").strip().upper()
+    dollar_amount = float(data.get("dollar_amount", 0))
+    if not ticker:
+        return jsonify({"error": "Ticker is required"}), 400
+    conn = get_connection()
+    conn.execute(
+        "INSERT OR REPLACE INTO builder_holdings (portfolio_id, ticker, dollar_amount) VALUES (?, ?, ?)",
+        (port_id, ticker, dollar_amount))
+    conn.execute("UPDATE builder_portfolios SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (port_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ticker": ticker, "dollar_amount": dollar_amount})
+
+
+@app.route("/api/builder/portfolios/<int:port_id>/holdings/<ticker>", methods=["DELETE"])
+def builder_delete_holding(port_id, ticker):
+    conn = get_connection()
+    conn.execute("DELETE FROM builder_holdings WHERE portfolio_id = ? AND ticker = ?", (port_id, ticker.upper()))
+    conn.execute("UPDATE builder_portfolios SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (port_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+# ── Portfolio Builder Analyze ────────────────────────────────────────────────
+
+@app.route("/api/builder/portfolios/<int:port_id>/analyze", methods=["POST"])
+def builder_analyze(port_id):
+    import numpy as np
+    import math
+    import yfinance as yf
+    from grading import (ticker_score, grade_portfolio, letter_grade,
+                         _ulcer_index, _sharpe, _sortino, _calmar, _omega,
+                         _max_drawdown, _capture_ratios, _safe)
+
+    data = request.get_json() or {}
+    benchmark = (data.get("benchmark") or "SPY").strip().upper()
+    period = data.get("period", "1y")
+
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT ticker, dollar_amount FROM builder_holdings WHERE portfolio_id = ?",
+        (port_id,)).fetchall()
+    pname = conn.execute("SELECT name FROM builder_portfolios WHERE id = ?", (port_id,)).fetchone()
+    conn.close()
+
+    if not rows:
+        return jsonify({"error": "No holdings in this portfolio"}), 400
+
+    holdings_raw = [{"ticker": r["ticker"].upper(), "dollar_amount": float(r["dollar_amount"])} for r in rows]
+    tickers = [h["ticker"] for h in holdings_raw]
+    all_tickers = list(set(tickers + [benchmark]))
+
+    # Download price data
+    try:
+        df = yf.download(all_tickers, period=period, auto_adjust=True, progress=False)
+    except Exception as e:
+        return jsonify({"error": f"yfinance download failed: {e}"}), 500
+
+    if df.empty:
+        return jsonify({"error": "No price data returned"}), 500
+
+    if isinstance(df.columns, pd.MultiIndex):
+        close_df = df["Close"] if "Close" in df.columns.get_level_values(0) else df
+    else:
+        close_df = df if len(all_tickers) == 1 else df
+        if len(all_tickers) == 1:
+            close_df = pd.DataFrame({all_tickers[0]: df["Close"] if "Close" in df.columns else df.iloc[:, 0]})
+
+    close_df = close_df.ffill().dropna(how="all")
+    bench_close = close_df[benchmark] if benchmark in close_df.columns else None
+    bench_ret = bench_close.pct_change().dropna() if bench_close is not None else None
+
+    # NAV erosion
+    nav_erosion = _compute_nav_erosion(close_df, tickers)
+
+    # Total portfolio value
+    total_value = sum(h["dollar_amount"] for h in holdings_raw)
+    if total_value <= 0:
+        total_value = 1.0
+
+    # Per-ticker analysis
+    result_holdings = []
+    returns_cols = {}
+    weights_list = []
+
+    for h in holdings_raw:
+        t = h["ticker"]
+        amt = h["dollar_amount"]
+        weight = amt / total_value
+
+        row = {
+            "ticker": t, "dollar_amount": amt, "weight_pct": round(weight * 100, 2),
+            "shares": 0, "current_price": 0, "score": 0, "grade": "N/A",
+            "ulcer_index": None, "sharpe": None, "sortino": None, "calmar": None,
+            "omega": None, "up_capture": None, "down_capture": None,
+            "annual_ret": None, "annual_vol": None, "max_drawdown": None,
+            "week52_high": None, "week52_low": None,
+            "annual_yield_pct": 0, "annual_income": 0, "monthly_income": 0,
+            "nav_erosion_pct": round((nav_erosion.get(t, 0)) * 100, 2),
+        }
+
+        if t not in close_df.columns:
+            result_holdings.append(row)
+            weights_list.append(weight)
+            continue
+
+        tc = close_df[t].dropna()
+        if len(tc) < 10:
+            result_holdings.append(row)
+            weights_list.append(weight)
+            continue
+
+        daily_ret = tc.pct_change().dropna()
+        returns_cols[t] = daily_ret
+
+        # Current price and shares
+        cur_price = float(tc.iloc[-1])
+        row["current_price"] = round(cur_price, 2)
+        row["shares"] = round(amt / cur_price, 4) if cur_price > 0 else 0
+
+        # 52-week
+        row["week52_high"] = round(float(tc.max()), 2)
+        row["week52_low"] = round(float(tc.min()), 2)
+
+        # Annualized return and vol
+        n_days = len(tc)
+        total_ret = float(tc.iloc[-1] / tc.iloc[0]) - 1.0
+        ann_ret = (1 + total_ret) ** (252 / max(n_days, 1)) - 1.0
+        ann_vol = float(daily_ret.std()) * np.sqrt(252) if len(daily_ret) > 1 else None
+
+        row["annual_ret"] = round(ann_ret * 100, 2)
+        row["annual_vol"] = round(ann_vol * 100, 2) if ann_vol is not None else None
+        row["annual_total_ret"] = row["annual_ret"]
+
+        # Ticker score (includes ulcer index)
+        score, sharpe, sortino, calmar, omega, mdd, dc, ulcer = ticker_score(tc, daily_ret, bench_ret)
+        row["score"] = score
+        row["grade"] = letter_grade(score)
+        row["sharpe"] = sharpe
+        row["sortino"] = sortino
+        row["calmar"] = calmar
+        row["omega"] = omega
+        row["max_drawdown"] = round(mdd * 100, 2) if mdd is not None else None
+        row["down_capture"] = dc
+        row["ulcer_index"] = ulcer
+
+        # Up capture
+        if bench_ret is not None:
+            uc, _ = _capture_ratios(daily_ret, bench_ret)
+            row["up_capture"] = uc
+
+        # Dividend income — try info first, fall back to dividend history
+        try:
+            yf_ticker = yf.Ticker(t)
+            info = yf_ticker.info or {}
+            div_yield = info.get("yield") or 0
+            # dividendYield from yfinance can be a percentage (e.g. 11.84) or
+            # decimal (e.g. 0.1184) depending on the ticker — use "yield" which
+            # is consistently a decimal, and fall back to dividendYield only if
+            # it looks like a decimal (< 1)
+            if div_yield == 0:
+                dy = info.get("dividendYield") or 0
+                if dy > 0:
+                    div_yield = dy / 100 if dy > 1 else dy
+
+            # Fallback: compute yield from dividend history, annualizing if < 1 year
+            if div_yield == 0 and cur_price > 0:
+                try:
+                    divs = yf_ticker.dividends
+                    if divs is not None and len(divs) > 0:
+                        cutoff = divs.index[-1] - pd.Timedelta(days=365)
+                        recent_divs = divs[divs.index >= cutoff]
+                        if len(recent_divs) > 0:
+                            total_div = float(recent_divs.sum())
+                            span_days = (recent_divs.index[-1] - recent_divs.index[0]).days
+                            if span_days < 300 and len(recent_divs) >= 2:
+                                # Short history: annualize using avg payment × estimated frequency
+                                avg_gap = span_days / (len(recent_divs) - 1)
+                                payments_per_year = 365.0 / max(avg_gap, 1)
+                                avg_payment = total_div / len(recent_divs)
+                                annual_div_per_share = avg_payment * payments_per_year
+                            else:
+                                annual_div_per_share = total_div
+                            div_yield = annual_div_per_share / cur_price
+                except Exception:
+                    pass
+
+            # Fallback 2: check distributions (for return-of-capital / covered-call ETFs)
+            if div_yield == 0 and cur_price > 0:
+                try:
+                    actions = yf_ticker.actions
+                    if actions is not None and "Dividends" in actions.columns:
+                        div_col = actions["Dividends"]
+                        div_col = div_col[div_col > 0]
+                        if len(div_col) > 0:
+                            cutoff = div_col.index[-1] - pd.Timedelta(days=365)
+                            recent = div_col[div_col.index >= cutoff]
+                            if len(recent) > 0:
+                                total_div = float(recent.sum())
+                                span_days = (recent.index[-1] - recent.index[0]).days
+                                if span_days < 300 and len(recent) >= 2:
+                                    avg_gap = span_days / (len(recent) - 1)
+                                    payments_per_year = 365.0 / max(avg_gap, 1)
+                                    avg_payment = total_div / len(recent)
+                                    annual_div_per_share = avg_payment * payments_per_year
+                                else:
+                                    annual_div_per_share = total_div
+                                div_yield = annual_div_per_share / cur_price
+                except Exception:
+                    pass
+
+            row["annual_yield_pct"] = round(div_yield * 100, 2)
+            row["annual_income"] = round(amt * div_yield, 2)
+            row["monthly_income"] = round(amt * div_yield / 12, 2)
+        except Exception:
+            pass
+
+        result_holdings.append(row)
+        weights_list.append(weight)
+
+    # Portfolio-level metrics
+    if returns_cols:
+        # Exclude tickers with < 30 data points so they don't truncate
+        # the overlap window below the grading minimum
+        long_cols = {t: s for t, s in returns_cols.items() if len(s) >= 30}
+        if not long_cols:
+            long_cols = returns_cols  # fallback: use whatever we have
+        returns_df = pd.DataFrame(long_cols).dropna()
+        available = [t for t in tickers if t in long_cols]
+        avail_weights = np.array([weights_list[tickers.index(t)] for t in available])
+        if avail_weights.sum() > 0:
+            avail_weights = avail_weights / avail_weights.sum()
+        port_grade = grade_portfolio(returns_df[available], avail_weights, bench_ret)
+    else:
+        port_grade = {"grade": {"overall": "N/A", "score": 0, "breakdown": []}}
+        returns_df = pd.DataFrame()
+        available = []
+
+    # NAV Health factor — add to grade breakdown
+    if returns_cols and available:
+        weighted_nav = sum(
+            avail_weights[i] * nav_erosion.get(available[i], 0)
+            for i in range(len(available))
+        )
+        if weighted_nav < 0:
+            nav_health_score = max(0.0, 100.0 + weighted_nav * 200.0)
+        else:
+            nav_health_score = 100.0
+
+        port_grade["grade"]["breakdown"].append({
+            "category": "NAV Health",
+            "score": round(nav_health_score, 1),
+            "weight": 10,
+            "grade": letter_grade(nav_health_score),
+        })
+        # Recalculate overall
+        total_w = sum(b["weight"] for b in port_grade["grade"]["breakdown"])
+        total_s = sum(b["score"] * b["weight"] for b in port_grade["grade"]["breakdown"])
+        new_score = round(total_s / total_w, 1) if total_w > 0 else 0.0
+        port_grade["grade"]["score"] = new_score
+        port_grade["grade"]["overall"] = letter_grade(new_score)
+        port_grade["nav_erosion_avg_pct"] = round(weighted_nav * 100, 2)
+
+    port_grade["n_holdings"] = len(tickers)
+    port_grade["total_value"] = round(total_value, 2)
+    ann_income = sum(h["annual_income"] for h in result_holdings)
+    port_grade["est_annual_income"] = round(ann_income, 2)
+    port_grade["est_monthly_income"] = round(ann_income / 12, 2)
+
+    # Correlation matrix
+    corr_data = None
+    if len(returns_cols) > 1:
+        corr_df = pd.DataFrame(returns_cols).dropna().corr()
+        labels = list(corr_df.columns)
+        matrix = []
+        for i in range(len(labels)):
+            row = []
+            for j in range(len(labels)):
+                v = corr_df.iloc[i, j]
+                row.append(round(float(v), 3) if not (math.isnan(v) or math.isinf(v)) else 0)
+            matrix.append(row)
+        corr_data = {"labels": labels, "matrix": matrix}
+
+    # Drawdown series
+    dd_data = None
+    if returns_cols and available:
+        port_daily = returns_df[available].dot(avail_weights)
+        port_cum = (1 + port_daily).cumprod()
+        running_max = port_cum.cummax()
+        drawdown = ((port_cum - running_max) / running_max) * 100
+        dates = [d.strftime("%Y-%m-%d") for d in drawdown.index]
+        vals = [round(float(v), 2) for v in drawdown.values]
+        # Subsample if > 300 points
+        if len(dates) > 300:
+            step = len(dates) // 300
+            dates = dates[::step]
+            vals = vals[::step]
+        dd_data = {"dates": dates, "values": vals}
+
+    return jsonify({
+        "portfolio_id": port_id,
+        "portfolio_name": pname["name"] if pname else "",
+        "portfolio_metrics": port_grade,
+        "holdings": result_holdings,
+        "correlation": corr_data,
+        "drawdown_series": dd_data,
+    })
+
+
+# ── Portfolio Builder Compare ────────────────────────────────────────────────
+
+@app.route("/api/builder/compare", methods=["POST"])
+def builder_compare():
+    import numpy as np
+    import yfinance as yf
+    from grading import grade_portfolio, letter_grade
+
+    data = request.get_json() or {}
+    port_ids = data.get("portfolio_ids", [])
+    period = data.get("period", "1y")
+    benchmark = (data.get("benchmark") or "SPY").strip().upper()
+
+    if len(port_ids) < 2:
+        return jsonify({"error": "Select at least 2 portfolios"}), 400
+
+    conn = get_connection()
+    results = []
+
+    # Gather all tickers across all portfolios
+    all_tickers_set = {benchmark}
+    port_data = []
+    for pid in port_ids:
+        rows = conn.execute(
+            "SELECT ticker, dollar_amount FROM builder_holdings WHERE portfolio_id = ?", (pid,)).fetchall()
+        pname = conn.execute("SELECT name FROM builder_portfolios WHERE id = ?", (pid,)).fetchone()
+        holdings = [{"ticker": r["ticker"].upper(), "dollar_amount": float(r["dollar_amount"])} for r in rows]
+        for h in holdings:
+            all_tickers_set.add(h["ticker"])
+        port_data.append({"id": pid, "name": pname["name"] if pname else f"Portfolio {pid}", "holdings": holdings})
+    conn.close()
+
+    all_tickers = list(all_tickers_set)
+    try:
+        df = yf.download(all_tickers, period=period, auto_adjust=True, progress=False)
+    except Exception as e:
+        return jsonify({"error": f"yfinance download failed: {e}"}), 500
+
+    if df.empty:
+        return jsonify({"error": "No price data"}), 500
+
+    if isinstance(df.columns, pd.MultiIndex):
+        close_df = df["Close"]
+    else:
+        close_df = df if len(all_tickers) > 1 else pd.DataFrame({all_tickers[0]: df["Close"]})
+
+    close_df = close_df.ffill().dropna(how="all")
+    bench_ret = close_df[benchmark].pct_change().dropna() if benchmark in close_df.columns else None
+
+    for p in port_data:
+        holdings = p["holdings"]
+        total_val = sum(h["dollar_amount"] for h in holdings)
+        if total_val <= 0:
+            continue
+
+        avail_tickers = [h["ticker"] for h in holdings if h["ticker"] in close_df.columns]
+        if not avail_tickers:
+            continue
+
+        # Build returns per ticker, then exclude short-history tickers
+        # (< 30 days) so they don't truncate the overlap below grading minimum
+        returns_cols = {}
+        for t in avail_tickers:
+            col = close_df[t].dropna()
+            if len(col) >= 2:
+                returns_cols[t] = col.pct_change().dropna()
+        if not returns_cols:
+            continue
+        long_cols = {t: s for t, s in returns_cols.items() if len(s) >= 30}
+        if not long_cols:
+            long_cols = returns_cols  # fallback
+        returns_df = pd.DataFrame(long_cols).dropna()
+        if len(returns_df) < 2:
+            returns_df = pd.DataFrame(long_cols).fillna(0)
+        used_tickers = list(long_cols.keys())
+        weights = np.array([next(h["dollar_amount"] for h in holdings if h["ticker"] == t) for t in used_tickers])
+        weights = weights / weights.sum()
+
+        pg = grade_portfolio(returns_df[used_tickers], weights, bench_ret)
+
+        # Add NAV Health to match analyze endpoint grading
+        nav_erosion = _compute_nav_erosion(close_df, used_tickers)
+        weighted_nav = sum(
+            weights[i] * nav_erosion.get(used_tickers[i], 0)
+            for i in range(len(used_tickers))
+        )
+        nav_health_score = max(0.0, 100.0 + weighted_nav * 200.0) if weighted_nav < 0 else 100.0
+        pg["grade"]["breakdown"].append({
+            "category": "NAV Health",
+            "score": round(nav_health_score, 1),
+            "weight": 10,
+            "grade": letter_grade(nav_health_score),
+        })
+        total_w = sum(b["weight"] for b in pg["grade"]["breakdown"])
+        total_s = sum(b["score"] * b["weight"] for b in pg["grade"]["breakdown"])
+        new_score = round(total_s / total_w, 1) if total_w > 0 else 0.0
+        pg["grade"]["score"] = new_score
+        pg["grade"]["overall"] = letter_grade(new_score)
+
+        ann_income = 0
+        for h in holdings:
+            try:
+                info = yf.Ticker(h["ticker"]).info or {}
+                dy = info.get("yield") or 0
+                if dy == 0:
+                    raw_dy = info.get("dividendYield") or 0
+                    if raw_dy > 0:
+                        dy = raw_dy / 100 if raw_dy > 1 else raw_dy
+                ann_income += h["dollar_amount"] * dy
+            except Exception:
+                pass
+
+        results.append({
+            "id": p["id"],
+            "name": p["name"],
+            "score": pg["grade"]["score"],
+            "grade": pg["grade"]["overall"],
+            "monthly_income": round(ann_income / 12, 2),
+            "sharpe": pg.get("sharpe"),
+            "sortino": pg.get("sortino"),
+            "calmar": pg.get("calmar"),
+            "omega": pg.get("omega"),
+            "ulcer_index": pg.get("ulcer_index"),
+            "max_drawdown": pg.get("max_drawdown"),
+            "effective_n": pg.get("effective_n"),
+            "breakdown": {b["category"]: b["score"] for b in pg["grade"]["breakdown"]},
+        })
+
+    return jsonify({"results": results})
+
+
+# ── Portfolio Builder All Weather ────────────────────────────────────────────
+
+ALL_WEATHER_TARGETS_INCOME = [
+    {"asset_class": "US Stocks",         "target_pct": 30.0, "etfs": ["SCHD", "SPYI", "QQQI", "JEPQ", "O", "MAIN"]},
+    {"asset_class": "Long-Term Bonds",   "target_pct": 40.0, "etfs": ["TLT", "TLTW", "EDV"]},
+    {"asset_class": "Intermediate Bonds", "target_pct": 15.0, "etfs": ["VCIT", "BND", "AGG"]},
+    {"asset_class": "Gold",              "target_pct": 5.0,  "etfs": ["IAUI", "KGLD", "GLDN", "GLDM", "GLD", "IAU"]},
+    {"asset_class": "Silver",            "target_pct": 2.5,  "etfs": ["KSLV", "SVLX"]},
+    {"asset_class": "Commodities",       "target_pct": 7.5,  "etfs": ["PDBC", "DJP", "GSG"]},
+]
+
+ALL_WEATHER_TARGETS_GROWTH = [
+    {"asset_class": "US Stocks",         "target_pct": 30.0, "etfs": ["VTI", "VOO", "QQQ", "VUG", "SCHG"]},
+    {"asset_class": "Long-Term Bonds",   "target_pct": 40.0, "etfs": ["TLT", "EDV", "ZROZ"]},
+    {"asset_class": "Intermediate Bonds", "target_pct": 15.0, "etfs": ["IEF", "BND", "GOVT"]},
+    {"asset_class": "Gold",              "target_pct": 7.5,  "etfs": ["GLD", "GLDM", "IAU"]},
+    {"asset_class": "Commodities",       "target_pct": 7.5,  "etfs": ["DJP", "PDBC", "GSG"]},
+]
+
+# ── Income Factory Targets (Steven Bavaria style: 2/3 credit, 1/3 equity-income) ──
+
+INCOME_FACTORY_TARGETS_INCOME = [
+    {"asset_class": "Covered Call ETFs",     "target_pct": 20.0, "etfs": ["SPYI", "QQQI", "JEPQ", "JEPI", "XYLD"]},
+    {"asset_class": "High-Yield Bonds",      "target_pct": 20.0, "etfs": ["HYG", "JNK", "HYGV", "USHY"]},
+    {"asset_class": "Senior Loans / CLOs",   "target_pct": 15.0, "etfs": ["JAAA", "CLOZ", "SRLN", "FLOT"]},
+    {"asset_class": "BDCs",                  "target_pct": 15.0, "etfs": ["BIZD", "ARCC", "MAIN", "HTGC"]},
+    {"asset_class": "REITs",                 "target_pct": 10.0, "etfs": ["O", "VNQ", "STAG", "NNN"]},
+    {"asset_class": "MLPs & Infrastructure", "target_pct": 10.0, "etfs": ["MLPA", "AMLP", "TPVG"]},
+    {"asset_class": "Preferred Stock",       "target_pct": 10.0, "etfs": ["PFF", "PGX", "PFFD"]},
+]
+
+INCOME_FACTORY_TARGETS_GROWTH = [
+    {"asset_class": "Dividend Growth",       "target_pct": 20.0, "etfs": ["SCHD", "VIG", "DGRO", "DGRW"]},
+    {"asset_class": "Covered Call ETFs",     "target_pct": 15.0, "etfs": ["SPYI", "QQQI", "JEPQ", "JEPI"]},
+    {"asset_class": "High-Yield Bonds",      "target_pct": 15.0, "etfs": ["HYG", "JNK", "HYGV"]},
+    {"asset_class": "Senior Loans / CLOs",   "target_pct": 15.0, "etfs": ["JAAA", "CLOZ", "SRLN", "FLOT"]},
+    {"asset_class": "BDCs",                  "target_pct": 10.0, "etfs": ["BIZD", "ARCC", "MAIN"]},
+    {"asset_class": "REITs",                 "target_pct": 10.0, "etfs": ["O", "VNQ", "STAG"]},
+    {"asset_class": "MLPs & Infrastructure", "target_pct": 10.0, "etfs": ["MLPA", "AMLP", "TPVG"]},
+    {"asset_class": "Preferred Stock",       "target_pct": 5.0,  "etfs": ["PFF", "PGX", "PFFD"]},
+]
+
+
+def get_strategy_targets(strategy, mode):
+    """Pick the right target allocation list based on strategy + mode."""
+    if strategy == "income_factory":
+        return INCOME_FACTORY_TARGETS_INCOME if mode == "income" else INCOME_FACTORY_TARGETS_GROWTH
+    return ALL_WEATHER_TARGETS_INCOME if mode == "income" else ALL_WEATHER_TARGETS_GROWTH
+
+
+@app.route("/api/builder/all-weather", methods=["POST"])
+def builder_all_weather():
+    data = request.get_json() or {}
+    mode = data.get("mode", "income")
+    budget = float(data.get("budget", 100000))
+    strategy = data.get("strategy", "all_weather")
+    funds_per_class = min(int(data.get("funds_per_class", 1)), 4)
+    if funds_per_class < 1:
+        funds_per_class = 1
+
+    targets = get_strategy_targets(strategy, mode)
+
+    # Get user's existing holdings for matching
+    conn = get_connection()
+    existing = conn.execute("SELECT ticker, current_value FROM holdings").fetchall()
+    conn.close()
+    existing_map = {r["ticker"].upper(): float(r["current_value"] or 0) for r in existing}
+
+    allocations = []
+    used_tickers = set()  # no duplicate tickers across classes
+    for slot in targets:
+        candidates = slot["etfs"]
+        class_budget = budget * slot["target_pct"] / 100
+
+        # Rank candidates: existing holdings first (by value desc), then remaining
+        owned = [(etf, existing_map[etf.upper()]) for etf in candidates if etf.upper() in existing_map]
+        owned.sort(key=lambda x: -x[1])
+        not_owned = [etf for etf in candidates if etf.upper() not in existing_map]
+        ranked = [etf for etf, _ in owned] + not_owned
+
+        # Filter out already-used tickers
+        available = [etf for etf in ranked if etf.upper() not in used_tickers]
+        n_funds = min(funds_per_class, len(available))
+        if n_funds < 1:
+            n_funds = 1
+            available = ranked[:1]  # fallback: reuse if no alternatives
+        per_fund = round(class_budget / n_funds, 2)
+
+        for i in range(n_funds):
+            ticker = available[i]
+            used_tickers.add(ticker.upper())
+            source = "existing" if ticker.upper() in existing_map else "recommended"
+            # Last fund gets any rounding remainder
+            amt = per_fund if i < n_funds - 1 else round(class_budget - per_fund * (n_funds - 1), 2)
+            allocations.append({
+                "asset_class": slot["asset_class"],
+                "target_pct": round(slot["target_pct"] / n_funds, 2),
+                "ticker": ticker,
+                "source": source,
+                "dollar_amount": amt,
+                "candidates": [c for c in candidates if c.upper() not in used_tickers or c.upper() == ticker.upper()],
+            })
+
+    return jsonify({"allocations": allocations, "mode": mode, "budget": budget})
+
+
+# ── Portfolio Builder All Weather AI ─────────────────────────────────────────
+
+@app.route("/api/builder/all-weather-ai", methods=["POST"])
+def builder_all_weather_ai():
+    import json as json_mod
+
+    data = request.get_json() or {}
+    mode = data.get("mode", "income")
+    budget = float(data.get("budget", 100000))
+    strategy = data.get("strategy", "all_weather")
+
+    # Get API key from settings or env
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        conn = get_connection()
+        row = conn.execute("SELECT value FROM settings WHERE key = 'gemini_api_key'").fetchone()
+        conn.close()
+        if row:
+            api_key = row["value"]
+
+    if not api_key:
+        return jsonify({"error": "No Gemini API key configured. Add it in Settings or set GEMINI_API_KEY env var."}), 400
+
+    # Get user's existing holdings
+    conn = get_connection()
+    existing = conn.execute("SELECT ticker, current_value, description FROM holdings").fetchall()
+    conn.close()
+    existing_list = [{"ticker": r["ticker"], "value": float(r["current_value"] or 0),
+                      "description": r["description"] or ""} for r in existing]
+
+    targets = get_strategy_targets(strategy, mode)
+    asset_classes_desc = "\n".join(
+        f"- {s['asset_class']}: {s['target_pct']}% (candidate ETFs: {', '.join(s['etfs'])})"
+        for s in targets
+    )
+
+    strategy_desc = "a Steven Bavaria-style Income Factory Portfolio (high-yield, credit-heavy)" if strategy == "income_factory" else "a Ray Dalio-style All Weather Portfolio"
+    prompt = f"""You are a portfolio allocation advisor. The user wants to build {strategy_desc}.
+
+Mode: {"INCOME (prefer high-dividend/income ETFs)" if mode == "income" else "GROWTH (prefer capital appreciation ETFs)"}
+Budget: ${budget:,.0f}
+
+Target asset class allocation:
+{asset_classes_desc}
+
+The user currently owns these holdings:
+{json_mod.dumps(existing_list, indent=2) if existing_list else "None"}
+
+For each asset class, recommend ONE ETF ticker. Prefer ETFs the user already owns when they fit the asset class.
+For income mode gold, consider IAUI, KGLD, GLDN. For income mode silver, consider KSLV, SVLX.
+
+Return ONLY a JSON array with objects like:
+{{"asset_class": "US Stocks", "ticker": "SCHD", "reasoning": "brief explanation"}}
+One entry per asset class. No markdown, just raw JSON."""
+
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+        )
+        text = response.text.strip()
+        # Strip markdown fences if present
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1]
+            if text.endswith("```"):
+                text = text[:-3]
+            elif "```" in text:
+                text = text[:text.rfind("```")]
+            text = text.strip()
+        ai_picks = json_mod.loads(text)
+    except Exception as e:
+        return jsonify({"error": f"Gemini API call failed: {e}"}), 500
+
+    # Build allocations from AI picks
+    existing_map = {r["ticker"].upper(): float(r["current_value"] or 0) for r in existing}
+    allocations = []
+    for slot in targets:
+        ai_match = next((p for p in ai_picks if p.get("asset_class") == slot["asset_class"]), None)
+        ticker = ai_match["ticker"] if ai_match else slot["etfs"][0]
+        reasoning = ai_match.get("reasoning", "") if ai_match else ""
+        source = "existing" if ticker.upper() in existing_map else "ai"
+
+        allocations.append({
+            "asset_class": slot["asset_class"],
+            "target_pct": slot["target_pct"],
+            "ticker": ticker,
+            "source": source,
+            "dollar_amount": round(budget * slot["target_pct"] / 100, 2),
+            "candidates": slot["etfs"],
+            "reasoning": reasoning,
+        })
+
+    return jsonify({"allocations": allocations, "mode": mode, "budget": budget})
+
+
+# ── Settings API (for Gemini key) ────────────────────────────────────────────
+
+@app.route("/api/settings", methods=["GET"])
+def get_settings():
+    conn = get_connection()
+    rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    conn.close()
+    out = {}
+    for r in rows:
+        k = r["key"]
+        v = r["value"]
+        # Mask sensitive keys
+        if "key" in k.lower() or "secret" in k.lower():
+            out[k] = v[:4] + "..." + v[-4:] if v and len(v) > 8 else "***"
+        else:
+            out[k] = v
+    return jsonify(out)
+
+
+@app.route("/api/settings", methods=["POST"])
+def save_settings():
+    data = request.get_json() or {}
+    conn = get_connection()
+    for k, v in data.items():
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+# ── Portfolio Builder Rebalance ────────────────────────────────────────────────
+
+@app.route("/api/builder/portfolios/<int:pid>/rebalance", methods=["POST"])
+def builder_rebalance(pid):
+    data = request.get_json() or {}
+    mode = data.get("mode", "income")
+    strategy = data.get("strategy", "all_weather")
+
+    targets = get_strategy_targets(strategy, mode)
+
+    # Fetch portfolio holdings
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT ticker, dollar_amount FROM builder_holdings WHERE portfolio_id = ?", (pid,)
+    ).fetchall()
+    if not rows:
+        conn.close()
+        return jsonify({"error": "Portfolio has no holdings"}), 400
+
+    port_holdings = [{"ticker": r["ticker"].upper(), "amount": float(r["dollar_amount"] or 0)} for r in rows]
+    total_value = sum(h["amount"] for h in port_holdings)
+    if total_value <= 0:
+        conn.close()
+        return jsonify({"error": "Portfolio total value is zero"}), 400
+
+    # Build ETF → asset class lookup
+    etf_to_class = {}
+    for slot in targets:
+        for etf in slot["etfs"]:
+            etf_to_class[etf.upper()] = slot["asset_class"]
+
+    # Classify holdings
+    class_holdings = {slot["asset_class"]: [] for slot in targets}
+    unclassified = []
+    for h in port_holdings:
+        ac = etf_to_class.get(h["ticker"])
+        if ac:
+            class_holdings[ac].append(h)
+        else:
+            unclassified.append(h)
+
+    # Get user's real holdings for suggesting new ETFs
+    existing = conn.execute("SELECT ticker, current_value FROM holdings").fetchall()
+    conn.close()
+    existing_map = {r["ticker"].upper(): float(r["current_value"] or 0) for r in existing}
+
+    suggestions = []
+    for slot in targets:
+        ac = slot["asset_class"]
+        current_amount = sum(h["amount"] for h in class_holdings[ac])
+        current_pct = round(current_amount / total_value * 100, 1)
+        target_pct = slot["target_pct"]
+        drift_pct = round(current_pct - target_pct, 1)
+        target_amount = round(total_value * target_pct / 100, 2)
+        change_amount = round(target_amount - current_amount, 2)
+
+        # Determine action
+        if not class_holdings[ac]:
+            action = "add_new"
+        elif change_amount > 0:
+            action = "buy"
+        elif change_amount < 0:
+            action = "reduce"
+        else:
+            action = "on_target"
+
+        # Suggest ETF: use existing holding in that class, or auto-select
+        if class_holdings[ac]:
+            suggested = max(class_holdings[ac], key=lambda h: h["amount"])["ticker"]
+        else:
+            # Same auto-select logic: prefer user's real holdings
+            suggested = None
+            best_val = -1
+            for etf in slot["etfs"]:
+                if etf.upper() in existing_map and existing_map[etf.upper()] > best_val:
+                    best_val = existing_map[etf.upper()]
+                    suggested = etf
+            if suggested is None:
+                suggested = slot["etfs"][0]
+
+        suggestions.append({
+            "asset_class": ac,
+            "target_pct": target_pct,
+            "current_pct": current_pct,
+            "drift_pct": drift_pct,
+            "current_amount": round(current_amount, 2),
+            "target_amount": target_amount,
+            "change_amount": change_amount,
+            "action": action,
+            "holdings": class_holdings[ac],
+            "suggested_ticker": suggested,
+        })
+
+    return jsonify({
+        "total_value": round(total_value, 2),
+        "mode": mode,
+        "suggestions": suggestions,
+        "unclassified": unclassified,
+    })
+
+
 # ── Run ────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

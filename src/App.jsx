@@ -18,6 +18,7 @@ import NavErosionPortfolio from './pages/NavErosionPortfolio'
 import PortfolioIncomeSim from './pages/PortfolioIncomeSim'
 import Correlation from './pages/Correlation'
 import Analytics from './pages/Analytics'
+import PortfolioBuilder from './pages/PortfolioBuilder'
 
 function NavDropdown({ label, children }) {
   const [open, setOpen] = useState(false)
@@ -73,6 +74,7 @@ function App() {
         <Route path="/income-sim" element={<PortfolioIncomeSim />} />
         <Route path="/correlation" element={<Correlation />} />
         <Route path="/analytics" element={<Analytics />} />
+        <Route path="/portfolio-builder" element={<PortfolioBuilder />} />
       </Routes>
     </Router>
   )
@@ -99,6 +101,7 @@ function Nav() {
         <NavLink to="/income-sim">Income Simulator</NavLink>
         <NavLink to="/correlation">Correlation Matrix</NavLink>
         <NavLink to="/analytics">Portfolio Analytics</NavLink>
+        <NavLink to="/portfolio-builder">Portfolio Builder</NavLink>
       </NavDropdown>
       <NavDropdown label="Admin">
         <NavLink to="/import">Import</NavLink>
