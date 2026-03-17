@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "dev:all": "concurrently --kill-others \"py backend/app.py\" \"vite\"",
+    "start": "concurrently --kill-others \"py backend/app.py\" \"wait-on http://localhost:5001/api/profiles && electron .\"",
     "build": "vite build",
     "electron": "electron .",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
@@ -54,6 +55,22 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Portfolio Tracker"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "category": "public.app-category.finance"
+    },
+    "dmg": {
+      "title": "Portfolio Tracker",
+      "contents": [
+        { "x": 130, "y": 220 },
+        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+      ]
     }
   },
   "dependencies": {
