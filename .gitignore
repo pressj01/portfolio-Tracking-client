@@ -30,5 +30,8 @@ Thumbs.db
 release/
 out/
 
+# PyInstaller build output
+installer/
+
 # Claude Code local memory
 .claude/

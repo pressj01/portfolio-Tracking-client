@@ -1,0 +1,54 @@
+name: Build Windows Installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install pyinstaller
+
+      - name: Build Flask backend executable
+        run: |
+          cd backend
+          pyinstaller --noconfirm --clean --distpath ../installer/flask-dist --workpath ../installer/flask-build --name backend app.py --hidden-import flask --hidden-import flask_cors --hidden-import pandas --hidden-import openpyxl --hidden-import yfinance --hidden-import plotly --hidden-import sqlite3 --hidden-import statistics --hidden-import decimal --hidden-import config --hidden-import database --hidden-import import_data --hidden-import normalize --hidden-import grading --hidden-import create_template --add-data "config.py;." --add-data "database.py;." --add-data "import_data.py;." --add-data "normalize.py;." --add-data "grading.py;." --add-data "create_template.py;."
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build frontend and Windows installer
+        run: npm run dist
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PortfolioTrackingClient-Setup
+          path: release/*.exe
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.exe
+          generate_release_notes: true

@@ -3,13 +3,58 @@
   "version": "1.0.0",
   "private": true,
   "description": "Portfolio Tracking Desktop Application",
+  "author": "Press",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "dev:all": "concurrently --kill-others \"py backend/app.py\" \"vite\"",
     "build": "vite build",
     "electron": "electron .",
-    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\""
+    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "dist": "npm run build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.portfolio-tracker.client",
+    "productName": "Portfolio Tracking Client",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/main-prod.js",
+      "!backend/**",
+      "!src/**",
+      "!installer/**",
+      "!deploy/**",
+      "!node_modules/**"
+    ],
+    "extraMetadata": {
+      "main": "electron/main-prod.js"
+    },
+    "extraResources": [
+      {
+        "from": "installer/flask-dist/backend",
+        "to": "flask-backend",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Portfolio Tracker"
+    }
   },
   "dependencies": {
     "plotly.js": "^3.4.0",
@@ -22,6 +67,7 @@
     "@vitejs/plugin-react": "^4.3.0",
     "concurrently": "^9.0.0",
     "electron": "^33.0.0",
+    "electron-builder": "^26.8.1",
     "vite": "^6.0.0",
     "wait-on": "^8.0.0"
   }
