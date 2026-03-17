@@ -19,6 +19,7 @@ import PortfolioIncomeSim from './pages/PortfolioIncomeSim'
 import Correlation from './pages/Correlation'
 import Analytics from './pages/Analytics'
 import PortfolioBuilder from './pages/PortfolioBuilder'
+import DistributionCompare from './pages/DistributionCompare'
 
 function NavDropdown({ label, children }) {
   const [open, setOpen] = useState(false)
@@ -75,6 +76,7 @@ function App() {
         <Route path="/correlation" element={<Correlation />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/portfolio-builder" element={<PortfolioBuilder />} />
+        <Route path="/dist-compare" element={<DistributionCompare />} />
       </Routes>
     </Router>
   )
@@ -102,6 +104,7 @@ function Nav() {
         <NavLink to="/correlation">Correlation Matrix</NavLink>
         <NavLink to="/analytics">Portfolio Analytics</NavLink>
         <NavLink to="/portfolio-builder">Portfolio Builder</NavLink>
+        <NavLink to="/dist-compare">Distribution Compare</NavLink>
       </NavDropdown>
       <NavDropdown label="Admin">
         <NavLink to="/import">Import</NavLink>

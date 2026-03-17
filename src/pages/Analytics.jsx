@@ -1,4 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import RiskReturnCharts from './analytics/RiskReturnCharts'
+import IncomeCharts from './analytics/IncomeCharts'
+import BacktestCharts from './analytics/BacktestCharts'
+import ToolsPanel from './analytics/ToolsPanel'
 
 const PERIODS = [
   { label: '1M', value: '1mo' },
@@ -38,6 +42,8 @@ export default function Analytics() {
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
   const [balance, setBalance] = useState(50)
+  const [snapshots, setSnapshots] = useState([])
+  const [chartTab, setChartTab] = useState('risk')
 
   // Load portfolio tickers on mount
   useEffect(() => {
@@ -104,146 +110,6 @@ export default function Analytics() {
     else { setSortCol(col); setSortAsc(false) }
   }
 
-  // Plotly charts
-  useEffect(() => {
-    if (!result || !window.Plotly) return
-
-    // Risk vs Return scatter
-    const scatterEl = document.getElementById('analytics-scatter')
-    if (scatterEl && result.metrics?.length > 0) {
-      const m = result.metrics
-      window.Plotly.newPlot(scatterEl, [{
-        x: m.map(d => d.annual_vol),
-        y: m.map(d => d.annual_ret),
-        text: m.map(d => d.ticker),
-        mode: 'markers',
-        marker: {
-          size: m.map(d => Math.max(8, (d.weight || 1) * 1.5)),
-          color: m.map(d => d.annual_ret >= 0 ? '#4caf50' : '#ef5350'),
-          line: { color: '#1a1a2e', width: 1 },
-        },
-        hovertemplate: '%{text}<br>Vol: %{x:.1f}%<br>Return: %{y:.1f}%<extra></extra>',
-        type: 'scatter',
-      }], {
-        template: 'plotly_dark',
-        paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
-        title: { text: 'Risk vs Return', font: { size: 14, color: '#e0e8f5' } },
-        xaxis: { title: { text: 'Risk — Annualized Volatility (%)', font: { size: 14, color: '#e0e8f5' }, standoff: 15 }, gridcolor: '#1a2a3e' },
-        yaxis: { title: { text: 'Return — Annualized Return (%)', font: { size: 14, color: '#e0e8f5' }, standoff: 15 }, gridcolor: '#1a2a3e' },
-        height: 420, margin: { l: 80, r: 30, t: 50, b: 60 },
-      }, { responsive: true })
-    }
-
-    // Correlation heatmap
-    const heatEl = document.getElementById('analytics-heatmap')
-    if (heatEl && result.correlation) {
-      const { labels, matrix } = result.correlation
-      const reversed = [...labels].reverse()
-      const rMatrix = [...matrix].reverse()
-      window.Plotly.newPlot(heatEl, [{
-        z: rMatrix, x: labels, y: reversed,
-        type: 'heatmap',
-        colorscale: [[0, '#c62828'], [0.25, '#e05555'], [0.5, '#f9a825'], [0.75, '#4caf50'], [1, '#2e7d32']],
-        zmin: -1, zmax: 1,
-        text: rMatrix.map(row => row.map(v => v != null ? v.toFixed(2) : '')),
-        texttemplate: '%{text}',
-        hovertemplate: '%{x} vs %{y}: %{z:.3f}<extra></extra>',
-        colorbar: { title: 'Corr', tickvals: [-1, -0.5, 0, 0.5, 1] },
-      }], {
-        template: 'plotly_dark',
-        paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
-        title: { text: 'Correlation Heatmap', font: { size: 14, color: '#e0e8f5' } },
-        xaxis: { side: 'bottom', tickangle: -45 },
-        height: Math.max(350, labels.length * 40 + 100),
-        margin: { l: 80, r: 60, t: 50, b: 80 },
-      }, { responsive: true })
-    }
-
-    // Drawdown chart
-    const ddEl = document.getElementById('analytics-drawdown')
-    if (ddEl && result.drawdown_series) {
-      const { dates, values } = result.drawdown_series
-      window.Plotly.newPlot(ddEl, [{
-        x: dates, y: values,
-        type: 'scatter', mode: 'lines',
-        fill: 'tozeroy',
-        fillcolor: 'rgba(239,83,80,0.2)',
-        line: { color: '#ef5350', width: 1.5 },
-        hovertemplate: '%{x}<br>Drawdown: %{y:.1f}%<extra></extra>',
-      }], {
-        template: 'plotly_dark',
-        paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
-        title: { text: 'Portfolio Drawdown', font: { size: 14, color: '#e0e8f5' } },
-        xaxis: { gridcolor: '#1a2a3e' },
-        xaxis: { title: { text: 'Date', font: { size: 14, color: '#e0e8f5' }, standoff: 15 }, gridcolor: '#1a2a3e' },
-        yaxis: { title: { text: 'Drawdown (%)', font: { size: 14, color: '#e0e8f5' }, standoff: 15 }, gridcolor: '#1a2a3e' },
-        height: 320, margin: { l: 80, r: 30, t: 50, b: 60 },
-      }, { responsive: true })
-    }
-
-    // Optimization charts
-    const frontEl = document.getElementById('analytics-frontier')
-    if (frontEl && result.optimization?.frontier) {
-      const { frontier, optimal_point, current_point } = result.optimization
-      const traces = [{
-        x: frontier.map(p => p.vol), y: frontier.map(p => p.ret),
-        type: 'scatter', mode: 'lines', name: 'Efficient Frontier',
-        line: { color: '#64b5f6', width: 2 },
-      }]
-      if (optimal_point) traces.push({
-        x: [optimal_point.vol], y: [optimal_point.ret],
-        type: 'scatter', mode: 'markers+text', name: 'Optimal',
-        text: ['Optimal'], textposition: 'top right',
-        textfont: { color: '#4dff91' },
-        marker: { size: 14, color: '#4dff91', symbol: 'star' },
-      })
-      if (current_point) traces.push({
-        x: [current_point.vol], y: [current_point.ret],
-        type: 'scatter', mode: 'markers+text', name: 'Current',
-        text: ['Current'], textposition: 'bottom left',
-        textfont: { color: '#ffb74d' },
-        marker: { size: 12, color: '#ffb74d', symbol: 'diamond' },
-      })
-      window.Plotly.newPlot(frontEl, traces, {
-        template: 'plotly_dark',
-        paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
-        title: { text: 'Efficient Frontier', font: { size: 14, color: '#e0e8f5' } },
-        xaxis: { title: { text: 'Risk — Volatility (%)', font: { size: 14, color: '#e0e8f5' }, standoff: 15 }, gridcolor: '#1a2a3e' },
-        yaxis: { title: { text: 'Return — Expected Return (%)', font: { size: 14, color: '#e0e8f5' }, standoff: 15 }, gridcolor: '#1a2a3e' },
-        height: 420, margin: { l: 80, r: 30, t: 50, b: 60 },
-        showlegend: true, legend: { font: { color: '#8899aa' } },
-      }, { responsive: true })
-    }
-
-    const incScatterEl = document.getElementById('analytics-income-scatter')
-    if (incScatterEl && result.optimization?.scatter) {
-      const sc = result.optimization.scatter
-      window.Plotly.newPlot(incScatterEl, [{
-        x: sc.map(d => d.vol_pct), y: sc.map(d => d.yield_pct),
-        text: sc.map(d => d.ticker), mode: 'markers',
-        marker: {
-          size: sc.map(d => d.sharpe != null ? Math.max(8, d.sharpe * 8) : 10),
-          color: sc.map(d => d.is_optimal ? '#4caf50' : '#555'),
-          line: { color: '#1a1a2e', width: 1 },
-        },
-        hovertemplate: '%{text}<br>Vol: %{x:.1f}%<br>Yield: %{y:.2f}%<extra></extra>',
-        type: 'scatter',
-      }], {
-        template: 'plotly_dark',
-        paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
-        title: { text: 'Yield vs Risk', font: { size: 14, color: '#e0e8f5' } },
-        xaxis: { title: { text: 'Risk — Volatility (%)', font: { size: 14, color: '#e0e8f5' }, standoff: 15 }, gridcolor: '#1a2a3e' },
-        yaxis: { title: { text: 'Yield — Dividend Yield (%)', font: { size: 14, color: '#e0e8f5' }, standoff: 15 }, gridcolor: '#1a2a3e' },
-        height: 420, margin: { l: 80, r: 30, t: 50, b: 60 },
-      }, { responsive: true })
-    }
-
-    return () => {
-      [scatterEl, heatEl, ddEl, frontEl, incScatterEl].forEach(el => {
-        if (el) window.Plotly.purge(el)
-      })
-    }
-  }, [result])
 
   const pm = result?.portfolio_metrics || {}
   const grade = pm.grade || {}
@@ -458,25 +324,25 @@ export default function Analytics() {
                       { key: 'grade', label: 'Grade' },
                       { key: 'score', label: 'Score' },
                       { key: 'weight', label: 'Wt %' },
-                      { key: 'ulcer_index', label: 'Ulcer' },
-                      { key: 'sharpe', label: 'Sharpe' },
-                      { key: 'sortino', label: 'Sortino' },
-                      { key: 'calmar', label: 'Calmar' },
-                      { key: 'omega', label: 'Omega' },
-                      { key: 'max_drawdown', label: 'Max DD' },
-                      { key: 'up_capture', label: 'Up Cap' },
-                      { key: 'down_capture', label: 'Dn Cap' },
-                      { key: 'annual_ret', label: 'Ann Ret' },
-                      { key: 'annual_total_ret', label: 'Tot Ret' },
-                      { key: 'annual_vol', label: 'Ann Vol' },
+                      { key: 'ulcer_index', label: 'Ulcer', tip: 'Drawdown severity & duration. <3 great, <5 good, >10 poor' },
+                      { key: 'sharpe', label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
+                      { key: 'sortino', label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
+                      { key: 'calmar', label: 'Calmar', tip: 'Return vs max drawdown. >2.0 great, >1.0 good' },
+                      { key: 'omega', label: 'Omega', tip: 'Gains vs losses ratio. >2.0 great, >1.5 good' },
+                      { key: 'max_drawdown', label: 'Max DD', tip: 'Largest peak-to-trough decline. Closer to 0% is better' },
+                      { key: 'up_capture', label: 'Up Cap', tip: '% of benchmark gains captured. >100% = outperforming in up markets' },
+                      { key: 'down_capture', label: 'Dn Cap', tip: '% of benchmark losses captured. <100% = less downside than benchmark' },
+                      { key: 'annual_ret', label: 'Ann Ret', tip: 'Price return annualized (excludes dividends)' },
+                      { key: 'annual_total_ret', label: 'Tot Ret', tip: 'Price return + dividend yield annualized' },
+                      { key: 'annual_vol', label: 'Ann Vol', tip: 'Annualized standard deviation. Lower = less volatile' },
                     ].map(col => (
-                      <th key={col.key} onClick={() => handleSort(col.key)} style={{
+                      <th key={col.key} onClick={() => handleSort(col.key)} title={col.tip || ''} style={{
                         padding: '0.4rem 0.5rem', borderBottom: '1px solid #2a3a4e',
                         color: sortCol === col.key ? '#64b5f6' : '#8899aa',
                         cursor: 'pointer', whiteSpace: 'nowrap', textAlign: col.key === 'ticker' ? 'left' : 'right',
                         fontSize: '0.78rem',
                       }}>
-                        {col.label} {sortCol === col.key ? (sortAsc ? '\u25B4' : '\u25BE') : ''}
+                        {col.label}{col.tip ? ' \u24D8' : ''} {sortCol === col.key ? (sortAsc ? '\u25B4' : '\u25BE') : ''}
                       </th>
                     ))}
                   </tr>
@@ -641,9 +507,9 @@ export default function Analytics() {
                 const fmtPct = v => (v * 100).toFixed(1) + '%'
                 const fmtDollar = v => '$' + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })
                 const fmtNum = v => v.toFixed(2)
-                const metricRow = (label, bv, av, fmt, isDollar = false) => (
+                const metricRow = (label, bv, av, fmt, isDollar = false, tip = '') => (
                   <tr key={label} style={{ borderBottom: '1px solid #1a2a3e' }}>
-                    <td style={{ padding: '0.3rem 0.5rem', color: '#8899aa', fontSize: '0.78rem' }}>{label}</td>
+                    <td title={tip} style={{ padding: '0.3rem 0.5rem', color: '#8899aa', fontSize: '0.78rem', cursor: tip ? 'help' : 'default' }}>{label}{tip ? ' \u24D8' : ''}</td>
                     <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: '#e0e8f5', fontWeight: 600 }}>{bv != null ? (isDollar ? '$' + Math.abs(bv).toLocaleString(undefined, {maximumFractionDigits: 0}) : fmt(bv)) : '—'}</td>
                     <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: '#e0e8f5', fontWeight: 600 }}>{av != null ? (isDollar ? '$' + Math.abs(av).toLocaleString(undefined, {maximumFractionDigits: 0}) : fmt(av)) : '—'}</td>
                     <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>{delta(bv, av, fmt, isDollar)}</td>
@@ -674,12 +540,12 @@ export default function Analytics() {
                         </tr>
                         {metricRow('Monthly Income', b.monthly_income, a.monthly_income, fmtDollar, true)}
                         {metricRow('Annual Income', b.annual_income, a.annual_income, fmtDollar, true)}
-                        {metricRow('Sharpe Ratio', b.sharpe, a.sharpe, fmtNum)}
-                        {metricRow('Sortino Ratio', b.sortino, a.sortino, fmtNum)}
-                        {metricRow('Omega Ratio', b.omega, a.omega, fmtNum)}
-                        {metricRow('Calmar Ratio', b.calmar, a.calmar, fmtNum)}
-                        {metricRow('Ulcer Index', b.ulcer_index, a.ulcer_index, fmtNum)}
-                        {metricRow('Max Drawdown', b.max_drawdown, a.max_drawdown, fmtPct)}
+                        {metricRow('Sharpe Ratio', b.sharpe, a.sharpe, fmtNum, false, 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor')}
+                        {metricRow('Sortino Ratio', b.sortino, a.sortino, fmtNum, false, 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good')}
+                        {metricRow('Omega Ratio', b.omega, a.omega, fmtNum, false, 'Gains vs losses ratio. >2.0 great, >1.5 good')}
+                        {metricRow('Calmar Ratio', b.calmar, a.calmar, fmtNum, false, 'Return vs max drawdown. >2.0 great, >1.0 good')}
+                        {metricRow('Ulcer Index', b.ulcer_index, a.ulcer_index, fmtNum, false, 'Drawdown severity & duration. <3 great, <5 good, >10 poor')}
+                        {metricRow('Max Drawdown', b.max_drawdown, a.max_drawdown, fmtPct, false, 'Largest peak-to-trough decline. Closer to 0% is better')}
                       </tbody>
                     </table>
                   </div>
@@ -696,9 +562,54 @@ export default function Analytics() {
                 const rs = result.optimization.rebalance_summary || {}
                 const actionColor = { BUY: '#4dff91', SELL: '#ff6b6b', HOLD: '#8899aa' }
                 const actionBg = { BUY: 'rgba(77,255,145,0.12)', SELL: 'rgba(255,107,107,0.12)', HOLD: 'rgba(136,153,170,0.08)' }
+                // Quick action summary
+                const comp = result.optimization.comparison
+                const incomeChange = comp ? (comp.after.annual_income - comp.before.annual_income) : null
+                const summaryParts = []
+                if (rs.num_sells > 0) summaryParts.push(`Sell ${rs.num_sells} holding${rs.num_sells > 1 ? 's' : ''}`)
+                if (rs.num_buys > 0) summaryParts.push(`buy ${rs.num_buys} holding${rs.num_buys > 1 ? 's' : ''}`)
+                const summaryText = summaryParts.join(', ')
+                const incomeSuffix = incomeChange != null ? ` \u2014 net income ${incomeChange >= 0 ? '+' : '-'}$${Math.abs(incomeChange).toLocaleString(undefined, {maximumFractionDigits: 0})}/yr` : ''
+
+                // CSV export
+                const exportCsv = () => {
+                  const modeLabel = mode === 'optimize_returns' ? 'Optimize Returns' : mode === 'optimize_income' ? 'Optimize Income' : `Balanced (${balance}%)`
+                  const header = `# ${modeLabel} - ${new Date().toLocaleDateString()}\n`
+                  const cols = 'Action,Ticker,$ Change,~Shares,Price,NAV Chg %,Current %,Target %\n'
+                  const rows = sorted.map(w =>
+                    `${w.action},${w.ticker},${w.dollar_change},${w.shares_change},${w.current_price?.toFixed(2) ?? ''},${w.nav_change_pct?.toFixed(1) ?? ''},${w.current_pct.toFixed(1)},${w.optimal_pct.toFixed(1)}`
+                  ).join('\n')
+                  const blob = new Blob([header + cols + rows], { type: 'text/csv' })
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement('a')
+                  a.href = url; a.download = `optimization-${mode}-${new Date().toISOString().slice(0,10)}.csv`
+                  a.click(); URL.revokeObjectURL(url)
+                }
+
                 return (
                   <div style={{ marginBottom: '0.75rem' }}>
-                    <div style={{ fontSize: '0.85rem', color: '#e0e8f5', fontWeight: 600, marginBottom: '0.4rem' }}>Recommended Changes</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.4rem' }}>
+                      <span style={{ fontSize: '0.85rem', color: '#e0e8f5', fontWeight: 600 }}>Recommended Changes</span>
+                      <button onClick={exportCsv} style={{
+                        background: 'none', border: '1px solid #3a5a8c', borderRadius: 4, color: '#7ecfff',
+                        fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer',
+                      }}>Export CSV</button>
+                      {result.optimization.comparison && (
+                        <button onClick={() => {
+                          const label = prompt('Snapshot label:', `${mode === 'optimize_balanced' ? `Balanced ${balance}%` : mode === 'optimize_income' ? 'Income' : 'Returns'}`)
+                          if (label) setSnapshots(prev => [...prev.slice(-2), { label, mode, balance, optimization: result.optimization, portfolio_metrics: result.portfolio_metrics }])
+                        }} style={{
+                          background: 'none', border: '1px solid #3a5a3c', borderRadius: 4, color: '#66bb6a',
+                          fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer',
+                        }}>Save Snapshot</button>
+                      )}
+                    </div>
+                    {summaryText && (
+                      <div style={{ fontSize: '0.8rem', color: '#b0bec5', marginBottom: '0.4rem', fontStyle: 'italic' }}>
+                        {summaryText}
+                        <span style={{ color: incomeChange >= 0 ? '#4dff91' : '#ff6b6b' }}>{incomeSuffix}</span>
+                      </div>
+                    )}
                     <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.5rem', fontSize: '0.78rem' }}>
                       {rs.num_sells > 0 && <span style={{ color: '#ff6b6b' }}>{rs.num_sells} Sell{rs.num_sells > 1 ? 's' : ''} totaling ${rs.total_sell?.toLocaleString()}</span>}
                       {rs.num_buys > 0 && <span style={{ color: '#4dff91' }}>{rs.num_buys} Buy{rs.num_buys > 1 ? 's' : ''} totaling ${rs.total_buy?.toLocaleString()}</span>}
@@ -758,29 +669,82 @@ export default function Analytics() {
                 )
               })()}
 
-              {/* Optimization charts */}
-              <div id="analytics-frontier" />
-              <div id="analytics-income-scatter" />
+              {/* Scenario Comparison */}
+              {snapshots.length >= 2 && (
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.4rem' }}>
+                    <span style={{ fontSize: '0.85rem', color: '#e0e8f5', fontWeight: 600 }}>Compare Scenarios</span>
+                    <button onClick={() => setSnapshots([])} style={{
+                      background: 'none', border: '1px solid #3a3a5c', borderRadius: 4, color: '#8899aa',
+                      fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer',
+                    }}>Clear All</button>
+                  </div>
+                  <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem', width: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th style={thStyle}>Metric</th>
+                        {snapshots.map((s, i) => <th key={i} style={{ ...thStyle, textAlign: 'right' }}>{s.label}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        { label: 'Grade', get: s => { const c = s.optimization.comparison; return c ? `${c.after.grade} (${c.after.score})` : '—' } },
+                        { label: 'Annual Income', get: s => { const c = s.optimization.comparison; return c ? '$' + c.after.annual_income?.toLocaleString(undefined, {maximumFractionDigits: 0}) : '—' } },
+                        { label: 'Sharpe', get: s => s.optimization.comparison?.after.sharpe?.toFixed(2) ?? '—' },
+                        { label: 'Sortino', get: s => s.optimization.comparison?.after.sortino?.toFixed(2) ?? '—' },
+                        { label: 'Omega', get: s => s.optimization.comparison?.after.omega?.toFixed(2) ?? '—' },
+                        { label: 'Calmar', get: s => s.optimization.comparison?.after.calmar?.toFixed(2) ?? '—' },
+                        { label: 'Ulcer Index', get: s => s.optimization.comparison?.after.ulcer_index?.toFixed(2) ?? '—' },
+                        { label: 'Max Drawdown', get: s => { const v = s.optimization.comparison?.after.max_drawdown; return v != null ? (v * 100).toFixed(1) + '%' : '—' } },
+                        { label: 'Buys', get: s => { const r = s.optimization.rebalance_summary; return r ? `${r.num_buys} ($${r.total_buy?.toLocaleString()})` : '—' } },
+                        { label: 'Sells', get: s => { const r = s.optimization.rebalance_summary; return r ? `${r.num_sells} ($${r.total_sell?.toLocaleString()})` : '—' } },
+                      ].map(row => (
+                        <tr key={row.label} style={{ borderBottom: '1px solid #1a2a3e' }}>
+                          <td style={{ padding: '0.3rem 0.5rem', color: '#8899aa', fontSize: '0.78rem' }}>{row.label}</td>
+                          {snapshots.map((s, i) => (
+                            <td key={i} style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: '#e0e8f5' }}>{row.get(s)}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
             </div>
           )}
 
-          {/* Charts */}
-          <div style={{ display: 'grid', gridTemplateColumns: result.correlation ? '1fr 1fr' : '1fr', gap: '1rem', marginBottom: '1rem' }}>
-            <div className="card" style={{ padding: '0.75rem 1rem' }}>
-              <div id="analytics-scatter" />
-            </div>
-            {result.correlation && (
-              <div className="card" style={{ padding: '0.75rem 1rem' }}>
-                <div id="analytics-heatmap" />
-              </div>
-            )}
+        </>
+      )}
+
+      {/* Chart Tabs — always visible when tickers exist */}
+      {tickers.length > 0 && !loading && (
+        <>
+          <div style={{ display: 'flex', gap: 6, marginBottom: '1rem', flexWrap: 'wrap' }}>
+            {[
+              { key: 'risk', label: 'Risk & Returns' },
+              { key: 'income', label: 'Income & Allocation' },
+              { key: 'backtest', label: 'Backtesting' },
+              { key: 'tools', label: 'Tools' },
+            ].map(t => (
+              <button
+                key={t.key}
+                onClick={() => setChartTab(t.key)}
+                style={{
+                  padding: '0.45rem 1.1rem', borderRadius: 4, cursor: 'pointer',
+                  border: chartTab === t.key ? '1px solid #64b5f6' : '1px solid #3a3a5c',
+                  background: chartTab === t.key ? '#1a3a5c' : '#1a1a2e',
+                  color: chartTab === t.key ? '#64b5f6' : '#8899aa',
+                  fontSize: '0.85rem', fontWeight: chartTab === t.key ? 600 : 400,
+                }}
+              >{t.label}</button>
+            ))}
           </div>
 
-          {result.drawdown_series && (
-            <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-              <div id="analytics-drawdown" />
-            </div>
-          )}
+          {chartTab === 'risk' && <RiskReturnCharts result={result} />}
+          {chartTab === 'income' && <IncomeCharts tickers={tickers} result={result} period={period} />}
+          {chartTab === 'backtest' && <BacktestCharts tickers={tickers} result={result} period={period} />}
+          {chartTab === 'tools' && <ToolsPanel tickers={tickers} result={result} onAddTicker={t => { if (!tickers.includes(t)) setTickers(prev => [...prev, t]) }} />}
         </>
       )}
     </div>

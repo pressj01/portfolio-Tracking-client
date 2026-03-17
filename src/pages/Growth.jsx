@@ -174,41 +174,44 @@ export default function Growth() {
 
       {/* Filters */}
       <div className="growth-filters">
-        <div className="growth-filter-group" style={{ position: 'relative' }} ref={catRef}>
-          <label>Categories</label>
-          <button
-            className="btn btn-secondary"
-            style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', minWidth: '140px', textAlign: 'left' }}
-            onClick={() => setCatOpen(o => !o)}
-          >
-            {categories.length === 0 ? 'All Holdings' : `${categories.length} selected`}
-            <span style={{ float: 'right', marginLeft: '0.5rem' }}>{catOpen ? '\u25B4' : '\u25BE'}</span>
-          </button>
-          {catOpen && (
-            <div className="growth-cat-dropdown">
-              <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
-                <input type="checkbox" checked={categories.length === 0} onChange={() => setCategories([])} />
-                <span>All Holdings</span>
-              </label>
-              {(data?.categories || []).map(c => (
-                <label key={c.id} className="growth-cat-option">
-                  <input
-                    type="checkbox"
-                    checked={categories.includes(String(c.id))}
-                    onChange={e => {
-                      if (e.target.checked) {
-                        setCategories(prev => [...prev, String(c.id)])
-                      } else {
-                        setCategories(prev => prev.filter(id => id !== String(c.id)))
-                      }
-                    }}
-                  />
-                  <span>{c.name}</span>
+        {/* Category filter — only show when categories are defined */}
+        {(data?.categories?.length > 0) && (
+          <div className="growth-filter-group" style={{ position: 'relative' }} ref={catRef}>
+            <label>Categories</label>
+            <button
+              className="btn btn-secondary"
+              style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', minWidth: '140px', textAlign: 'left' }}
+              onClick={() => setCatOpen(o => !o)}
+            >
+              {categories.length === 0 ? 'All Holdings' : `${categories.length} selected`}
+              <span style={{ float: 'right', marginLeft: '0.5rem' }}>{catOpen ? '\u25B4' : '\u25BE'}</span>
+            </button>
+            {catOpen && (
+              <div className="growth-cat-dropdown">
+                <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
+                  <input type="checkbox" checked={categories.length === 0} onChange={() => setCategories([])} />
+                  <span>All Holdings</span>
                 </label>
-              ))}
-            </div>
-          )}
-        </div>
+                {data.categories.map(c => (
+                  <label key={c.id} className="growth-cat-option">
+                    <input
+                      type="checkbox"
+                      checked={categories.includes(String(c.id))}
+                      onChange={e => {
+                        if (e.target.checked) {
+                          setCategories(prev => [...prev, String(c.id)])
+                        } else {
+                          setCategories(prev => prev.filter(id => id !== String(c.id)))
+                        }
+                      }}
+                    />
+                    <span>{c.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <div className="growth-filter-group">
           <label>Benchmark</label>
           <div style={{ display: 'flex', gap: '0.3rem' }}>

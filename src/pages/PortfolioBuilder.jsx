@@ -82,9 +82,6 @@ export default function PortfolioBuilder() {
   const [rebalanceResult, setRebalanceResult] = useState(null)
   const [rebalanceLoading, setRebalanceLoading] = useState(false)
 
-  // Settings state (for Gemini key)
-  const [showSettings, setShowSettings] = useState(false)
-  const [geminiKey, setGeminiKey] = useState('')
 
   const chartsRendered = useRef(false)
 
@@ -414,7 +411,7 @@ export default function PortfolioBuilder() {
     setAwError(null)
     setAwResult(null)
     setAwOverrides({})
-    const endpoint = awSelectionMode === 'ai' ? '/api/builder/all-weather-ai' : '/api/builder/all-weather'
+    const endpoint = '/api/builder/all-weather'
     try {
       const res = await fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -478,16 +475,6 @@ export default function PortfolioBuilder() {
     setRebalanceResult(null)
     loadHoldings(activeId)
     loadPortfolios()
-  }
-
-  // ── Save Gemini key ──────────────────────────────────────────────────────
-  const saveGeminiKey = async () => {
-    await fetch('/api/settings', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gemini_api_key: geminiKey }),
-    })
-    setShowSettings(false)
-    alert('API key saved')
   }
 
   // ── Sorting ──────────────────────────────────────────────────────────────
@@ -634,9 +621,6 @@ export default function PortfolioBuilder() {
                 </button>
                 <button className="btn-danger" onClick={clearHoldings} disabled={holdings.length === 0} style={{ padding: '0.35rem 0.7rem' }}>
                   Clear
-                </button>
-                <button className="btn-secondary" onClick={() => setShowSettings(true)} title="Settings" style={{ padding: '0.35rem 0.6rem' }}>
-                  &#9881;
                 </button>
               </div>
             </div>
@@ -1030,7 +1014,7 @@ export default function PortfolioBuilder() {
           <div className="pb-modal" onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h3 style={{ color: '#ddd', margin: 0 }}>
-                {awStrategy === 'income_factory' ? "Bavaria's Income Factory" : 'All Weather Portfolio'}
+                {{ all_weather: 'All Weather Portfolio', income_factory: "Bavaria's Income Factory", covered_call: 'Covered Call Income', dividend_growth: 'Dividend Growth', retirement_income: 'Retirement Income', growth: 'Growth Portfolio' }[awStrategy]}
               </h3>
               <button className="pb-port-del" onClick={() => setAwOpen(false)} style={{ fontSize: '1.4rem' }}>&times;</button>
             </div>
@@ -1039,21 +1023,29 @@ export default function PortfolioBuilder() {
             <div style={{ display: 'flex', gap: 6, marginBottom: '0.75rem' }}>
               {[
                 { key: 'all_weather', label: 'All Weather' },
-                { key: 'income_factory', label: "Bavaria's Income Factory" },
+                { key: 'income_factory', label: 'Income Factory' },
+                { key: 'covered_call', label: 'Covered Call' },
+                { key: 'dividend_growth', label: 'Dividend Growth' },
+                { key: 'retirement_income', label: 'Retirement' },
+                { key: 'growth', label: 'Growth' },
               ].map(s => (
                 <button
                   key={s.key}
                   className={`pb-period-btn ${awStrategy === s.key ? 'pb-period-active' : ''}`}
                   onClick={() => { setAwStrategy(s.key); setAwResult(null); setRebalanceResult(null); setAwError(null) }}
-                  style={{ padding: '0.5rem 1.2rem', fontSize: '0.95rem' }}
+                  style={{ padding: '0.4rem 0.9rem', fontSize: '0.85rem' }}
                 >{s.label}</button>
               ))}
             </div>
 
             <p style={{ color: '#8899aa', fontSize: '0.85rem', marginBottom: '1rem' }}>
-              {awStrategy === 'income_factory'
-                ? 'Steven Bavaria-style Income Factory: ~2/3 credit (HY bonds, CLOs, BDCs) + ~1/3 equity-income (covered calls, REITs, MLPs, preferred). Target 8-10%+ yield.'
-                : 'Ray Dalio-style allocation: 30% Stocks, 40% Long Bonds, 15% Intermediate Bonds, 5-7.5% Gold, 2.5% Silver (income), 7.5% Commodities'}
+              {{ all_weather: 'Ray Dalio-style allocation: 30% Stocks, 40% Long Bonds, 15% Intermediate Bonds, 5-7.5% Gold, 2.5% Silver (income), 7.5% Commodities.',
+                income_factory: 'Steven Bavaria-style Income Factory: ~2/3 credit (HY bonds, CLOs, BDCs) + ~1/3 equity-income (covered calls, REITs, MLPs, preferred). Target 8-10%+ yield.',
+                covered_call: 'Option-premium focused: heavy covered-call ETFs (S&P 500, Nasdaq, single-stock) for maximum monthly income, anchored with dividend growth and bonds. Target 10-15%+ yield.',
+                dividend_growth: 'Focus on companies with strong, growing dividends — aristocrats, quality payers, and international diversification. Lower current yield but rising income stream.',
+                retirement_income: '3-bucket strategy: cash/short bonds for near-term spending, intermediate bonds for stability, equities and covered calls for long-term growth and income.',
+                growth: 'Capital appreciation focused: heavy US large-cap growth, Nasdaq/tech, semiconductors, and innovation. Minimal income, maximum growth potential.',
+              }[awStrategy]}
             </p>
 
             {/* Controls */}
@@ -1072,18 +1064,13 @@ export default function PortfolioBuilder() {
                 </div>
               </div>
               <div>
-                <label style={{ color: '#8899aa', fontSize: '0.85rem' }}>ETF Selection Method</label>
+                <label style={{ color: '#8899aa', fontSize: '0.85rem' }}>ETF Selection</label>
                 <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
                   <button
                     className={`aw-mode-btn ${awSelectionMode === 'auto' ? 'aw-mode-active' : ''}`}
                     onClick={() => setAwSelectionMode('auto')}
                     style={{ padding: '0.45rem 1rem', fontSize: '0.9rem' }}
                   >Auto</button>
-                  <button
-                    className={`aw-mode-btn aw-mode-ai ${awSelectionMode === 'ai' ? 'aw-mode-active' : ''}`}
-                    onClick={() => setAwSelectionMode('ai')}
-                    style={{ padding: '0.45rem 1rem', fontSize: '0.9rem' }}
-                  >AI-Assisted</button>
                   <button
                     className={`aw-mode-btn ${awSelectionMode === 'manual' ? 'aw-mode-active' : ''}`}
                     onClick={() => setAwSelectionMode('manual')}
@@ -1248,29 +1235,6 @@ export default function PortfolioBuilder() {
         </div>
       )}
 
-      {/* ── Settings Modal ───────────────────────────────────────────────── */}
-      {showSettings && (
-        <div className="pb-modal-overlay" onClick={() => setShowSettings(false)}>
-          <div className="pb-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
-            <h3 style={{ color: '#ddd', marginBottom: '1rem' }}>Builder Settings</h3>
-            <label style={{ color: '#8899aa', fontSize: '0.85rem' }}>Google Gemini API Key</label>
-            <input
-              type="password"
-              value={geminiKey}
-              onChange={e => setGeminiKey(e.target.value)}
-              placeholder="Enter Gemini API key..."
-              style={{ width: '100%', marginTop: '0.3rem', marginBottom: '1rem' }}
-            />
-            <p style={{ color: '#556', fontSize: '0.75rem', marginBottom: '1rem' }}>
-              Get a free key at aistudio.google.com. Required for AI-assisted ETF selection.
-            </p>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button className="btn-primary" onClick={saveGeminiKey}>Save</button>
-              <button className="btn-secondary" onClick={() => setShowSettings(false)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

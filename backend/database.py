@@ -134,6 +134,45 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    # ── drip_settings ─────────────────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS drip_settings (
+            ticker       TEXT NOT NULL,
+            reinvest_pct REAL NOT NULL DEFAULT 100,
+            profile_id   INTEGER NOT NULL DEFAULT 1,
+            UNIQUE (ticker, profile_id)
+        )
+    """)
+
+    # ── drip_monthly_contribution ─────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS drip_monthly_contribution (
+            profile_id     INTEGER NOT NULL DEFAULT 1,
+            monthly_amount REAL NOT NULL DEFAULT 0,
+            targeted       INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (profile_id)
+        )
+    """)
+
+    # ── drip_contribution_targets ─────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS drip_contribution_targets (
+            profile_id INTEGER NOT NULL DEFAULT 1,
+            ticker     TEXT NOT NULL,
+            UNIQUE (ticker, profile_id)
+        )
+    """)
+
+    # ── drip_redirects ────────────────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS drip_redirects (
+            profile_id    INTEGER NOT NULL DEFAULT 1,
+            source_ticker TEXT NOT NULL,
+            target_ticker TEXT NOT NULL,
+            UNIQUE (source_ticker, profile_id)
+        )
+    """)
+
     # ── pillar_weights ─────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS pillar_weights (

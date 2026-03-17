@@ -1580,3 +1580,172 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
   .pb-layout { flex-direction: column; }
   .pb-sidebar { width: 100%; min-width: unset; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid #0f3460; }
 }
+
+/* ── Distribution Comparison ──────────────────────────────────────── */
+.dc-controls { display:flex; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
+.dc-mode-row { display:flex; gap:18px; align-items:center; flex-wrap:wrap; width:100%; }
+.dc-mode-row label { color:#c8d6e5; font-size:0.9rem; cursor:pointer; }
+.dc-mode-row input[type="radio"] { margin-right:4px; accent-color:#7ecfff; }
+
+.dc-funds { display:flex; gap:20px; width:100%; flex-wrap:wrap; }
+.dc-fund-card {
+  flex:1; min-width:320px;
+  background:#1a1a2e; border:1px solid #2a2a4e; border-radius:10px;
+  padding:18px 20px;
+}
+.dc-fund-title { color:#7ecfff; font-weight:700; font-size:1.05rem; margin-bottom:12px; }
+.dc-field { margin-bottom:10px; }
+.dc-field label { display:block; color:#8899aa; font-size:0.82rem; margin-bottom:3px; }
+.dc-field input, .dc-field select {
+  width:100%; padding:7px 10px; background:#0e1117; color:#e0e0e0;
+  border:1px solid #2a2a4e; border-radius:6px; font-size:0.9rem;
+}
+.dc-field input:focus, .dc-field select:focus { border-color:#7ecfff; outline:none; }
+.dc-ticker-row { display:flex; gap:8px; align-items:flex-end; }
+.dc-ticker-row input { flex:1; }
+.dc-lookup-btn {
+  padding:7px 14px; background:rgba(126,207,255,0.15); color:#7ecfff;
+  border:1px solid rgba(126,207,255,0.35); border-radius:6px; cursor:pointer;
+  font-size:0.85rem; white-space:nowrap;
+}
+.dc-lookup-btn:hover { background:rgba(126,207,255,0.28); }
+.dc-info { font-size:0.82rem; color:#6b7b8d; margin-top:4px; }
+.dc-info.warn { color:#ffc107; }
+
+.dc-global-row { display:flex; gap:18px; align-items:flex-end; flex-wrap:wrap; width:100%; }
+.dc-global-row .dc-field { min-width:160px; }
+.dc-run-btn {
+  padding:10px 28px; background:#7ecfff; color:#0e1117; border:none;
+  border-radius:8px; font-weight:700; font-size:1rem; cursor:pointer;
+  transition: background 0.2s;
+}
+.dc-run-btn:hover { background:#5bb8e8; }
+.dc-run-btn:disabled { opacity:0.5; cursor:not-allowed; }
+
+.dc-market-row { display:flex; gap:14px; align-items:center; }
+.dc-market-row label { color:#c8d6e5; font-size:0.88rem; cursor:pointer; }
+
+.dc-results { margin-top:24px; }
+.dc-summary-cards { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:48px; }
+.dc-scard {
+  flex:1; min-width:200px; background:#1a1a2e; border:1px solid #2a2a4e;
+  border-radius:10px; padding:14px 16px; text-align:center;
+}
+.dc-scard-label { color:#8899aa; font-size:0.78rem; text-transform:uppercase; letter-spacing:.5px; }
+.dc-scard-row { display:flex; justify-content:space-around; margin-top:6px; gap:8px; }
+.dc-scard-val { font-size:1.1rem; font-weight:700; }
+.dc-scard-sub { font-size:0.75rem; color:#6b7b8d; }
+
+.dc-charts { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+.dc-chart-wrap {
+  background:#1a1a2e; border:1px solid #2a2a4e; border-radius:10px;
+  padding:12px; min-height:340px;
+}
+
+.dc-spinner { text-align:center; padding:40px; }
+.dc-spin-icon {
+  display:inline-block; width:36px; height:36px;
+  border:3px solid rgba(126,207,255,0.2); border-top-color:#7ecfff;
+  border-radius:50%; animation:dc-spin .7s linear infinite;
+}
+@keyframes dc-spin { to { transform:rotate(360deg); } }
+.dc-error { color:#ff6b6b; text-align:center; padding:20px; }
+
+.dc-grade-panel {
+  background:#1a1a2e; border:1px solid #2a2a4e; border-radius:10px;
+  padding:18px 24px; margin-bottom:18px;
+}
+.dc-grade-header { display:flex; align-items:center; gap:18px; margin-bottom:14px; flex-wrap:wrap; }
+.dc-grade-badge {
+  font-size:2rem; font-weight:900; padding:8px 20px; border-radius:10px;
+  line-height:1; min-width:60px; text-align:center;
+}
+.dc-grade-a { background:rgba(0,232,154,0.15); color:#00e89a; border:2px solid #00e89a; }
+.dc-grade-b { background:rgba(126,207,255,0.15); color:#7ecfff; border:2px solid #7ecfff; }
+.dc-grade-tie { background:rgba(255,193,7,0.15); color:#ffc107; border:2px solid #ffc107; }
+.dc-grade-text { color:#c8d6e5; font-size:0.95rem; line-height:1.4; }
+.dc-grade-winner { font-weight:700; font-size:1.1rem; }
+.dc-comp-tbl { width:100%; border-collapse:collapse; font-size:0.85rem; }
+.dc-comp-tbl th {
+  color:#8899aa; text-transform:uppercase; letter-spacing:.3px; font-size:0.75rem;
+  padding:6px 12px; text-align:right; border-bottom:1px solid #2a2a4e;
+}
+.dc-comp-tbl th:first-child { text-align:left; }
+.dc-comp-tbl td { padding:6px 12px; text-align:right; color:#c8d6e5; border-bottom:1px solid rgba(42,42,78,0.4); }
+.dc-comp-tbl td:first-child { text-align:left; color:#8899aa; }
+.dc-comp-tbl .dc-better { color:#00e89a; font-weight:700; }
+
+.dc-tables { display:flex; flex-direction:column; gap:20px; margin-top:22px; }
+.dc-table-wrap {
+  width:100%; background:#1a1a2e; border:1px solid #2a2a4e;
+  border-radius:10px; overflow:hidden;
+}
+.dc-table-title {
+  padding:10px 16px; font-weight:700; font-size:1rem; color:#7ecfff;
+  border-bottom:1px solid #2a2a4e;
+}
+.dc-table-scroll { max-height:600px; overflow:auto; }
+.dc-tbl { width:100%; border-collapse:collapse; font-size:0.78rem; white-space:nowrap; }
+.dc-tbl th {
+  position:sticky; top:0; z-index:2;
+  background:#151528; color:#8899aa; text-transform:uppercase; letter-spacing:.3px;
+  padding:6px 8px; text-align:right; border-bottom:1px solid #2a2a4e; font-size:0.72rem;
+}
+.dc-tbl th:first-child, .dc-tbl td:first-child { text-align:left; }
+.dc-tbl td { padding:5px 8px; text-align:right; color:#c8d6e5; border-bottom:1px solid rgba(42,42,78,0.4); }
+.dc-tbl tbody tr:hover { background:rgba(126,207,255,0.06); }
+.dc-tbl tfoot td {
+  position:sticky; bottom:0; z-index:2;
+  background:#151528; font-weight:700; color:#e0e0e0;
+  border-top:2px solid #7ecfff; padding:7px 8px;
+}
+.dc-tbl .dc-pos { color:#00e89a; }
+.dc-tbl .dc-neg { color:#ff6b6b; }
+
+/* Annual distribution estimate */
+.dc-dist-estimate {
+  margin-top:8px; padding:8px 10px; font-size:0.82rem; color:#c8d6e5;
+  background:rgba(0,232,154,0.06); border:1px solid rgba(0,232,154,0.18);
+  border-radius:6px; line-height:1.5;
+}
+.dc-dist-estimate strong { color:#00e89a; }
+
+/* Ticker combo dropdown */
+.dc-ticker-dropdown {
+  position:absolute; top:100%; left:0; right:0; z-index:20;
+  max-height:180px; overflow-y:auto;
+  background:#1e1e3a; border:1px solid #334; border-radius:0 0 6px 6px;
+  box-shadow:0 4px 12px rgba(0,0,0,0.4);
+}
+.dc-ticker-option {
+  padding:6px 10px; cursor:pointer; font-size:0.85rem; color:#c8d6e5;
+}
+.dc-ticker-option:hover { background:rgba(126,207,255,0.12); }
+
+/* Shortfall row highlighting */
+.dc-tbl tr.dc-shortfall { background:rgba(255,107,107,0.1); }
+.dc-tbl tr.dc-shortfall:hover { background:rgba(255,107,107,0.18); }
+
+/* Saved setups & scenario chips strip */
+.dc-saved-strip {
+  display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  margin-bottom:12px;
+}
+.dc-scenario-chip {
+  display:inline-flex; align-items:center; gap:6px;
+  background:rgba(126,207,255,0.1); border:1px solid #334;
+  border-radius:14px; padding:3px 12px; font-size:0.82rem; color:#c8d6e5;
+}
+.dc-scenario-chip button {
+  background:none; border:none; color:#ff6b6b; cursor:pointer;
+  font-size:0.9rem; line-height:1; padding:0 2px;
+}
+.dc-scenario-chip button:hover { color:#ff9999; }
+
+/* Fund C grade badge */
+.dc-grade-c { background:rgba(255,107,107,0.15); color:#ff6b6b; border:2px solid #ff6b6b; }
+
+@media (max-width:900px) {
+  .dc-charts { grid-template-columns:1fr; }
+  .dc-funds { flex-direction:column; }
+}
