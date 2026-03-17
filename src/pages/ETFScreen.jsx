@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { API_BASE } from '../config'
 import Plot from 'react-plotly.js'
 
 // ── Indicator helpers ────────────────────────────────────────────────────────
@@ -1999,7 +2000,7 @@ export default function ETFScreen() {
   const [returnLoading, setReturnLoading] = useState(false)
 
   useEffect(() => {
-    fetch('/api/etf-screen/tickers')
+    fetch(`${API_BASE}/api/etf-screen/tickers`)
       .then(r => r.json())
       .then(d => setPortfolioTickers(d.tickers || []))
       .catch(() => {})
@@ -2011,7 +2012,7 @@ export default function ETFScreen() {
     setLoading(true)
     setError('')
     const intParam = interval ? `&interval=${interval}` : ''
-    fetch(`/api/etf-screen/data?ticker=${encodeURIComponent(ticker.trim())}&period=${period}&mode=ohlcv${intParam}`)
+    fetch(`${API_BASE}/api/etf-screen/data?ticker=${encodeURIComponent(ticker.trim())}&period=${period}&mode=ohlcv${intParam}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) { setError(d.error); setRecords([]); setTickerName(''); setIvData(null) }
@@ -2029,7 +2030,7 @@ export default function ETFScreen() {
     setReturnLoading(true)
     setError('')
     const extra = compareTickers.filter(t => t !== primary).join(',')
-    const url = `/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra)}`
+    const url = `${API_BASE}/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra)}`
     fetch(url)
       .then(r => r.json())
       .then(d => {

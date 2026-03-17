@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import { API_BASE } from '../config'
 
 function CategoryModal({ category, onSave, onCancel }) {
   const [name, setName] = useState(category?.name || '')
@@ -78,7 +79,7 @@ export default function Categories() {
 
   const reload = useCallback(async () => {
     try {
-      const res = await fetch('/api/categories/data')
+      const res = await fetch(`${API_BASE}/api/categories/data`)
       const d = await res.json()
       setData(d)
     } catch (e) {
@@ -99,12 +100,12 @@ export default function Categories() {
     setError(null)
     try {
       if (editCat) {
-        await fetch(`/api/categories/${editCat.id}`, {
+        await fetch(`${API_BASE}/api/categories/${editCat.id}`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, target_pct }),
         })
       } else {
-        await fetch('/api/categories', {
+        await fetch(`${API_BASE}/api/categories`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, target_pct }),
         })
@@ -116,13 +117,13 @@ export default function Categories() {
 
   const handleDelete = async (cat) => {
     if (!confirm(`Delete category "${cat.name}"? Tickers will become unallocated.`)) return
-    await fetch(`/api/categories/${cat.id}`, { method: 'DELETE' })
+    await fetch(`${API_BASE}/api/categories/${cat.id}`, { method: 'DELETE' })
     if (expandedId === cat.id) setExpandedId(null)
     reload()
   }
 
   const handleAssign = async (tickers, categoryId) => {
-    await fetch('/api/categories/assign', {
+    await fetch(`${API_BASE}/api/categories/assign`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ category_id: categoryId, tickers }),
     })
@@ -131,7 +132,7 @@ export default function Categories() {
   }
 
   const handleUnassign = async (tickers) => {
-    await fetch('/api/categories/unassign', {
+    await fetch(`${API_BASE}/api/categories/unassign`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers }),
     })

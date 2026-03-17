@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { API_BASE } from '../config'
 
 const MAX_ROWS = 80
 
@@ -40,14 +41,14 @@ export default function NavErosionPortfolio() {
 
   // Load saved list and ETF list on mount
   const loadSavedList = useCallback(() => {
-    fetch('/api/nav-erosion-portfolio/saved')
+    fetch(`${API_BASE}/api/nav-erosion-portfolio/saved`)
       .then(r => r.json())
       .then(d => setSavedList(d.saved || []))
       .catch(() => {})
   }, [])
 
   const loadEtfList = useCallback(() => {
-    fetch('/api/nav-erosion-portfolio/list')
+    fetch(`${API_BASE}/api/nav-erosion-portfolio/list`)
       .then(r => r.json())
       .then(d => {
         if (d.rows && d.rows.length > 0) {
@@ -77,7 +78,7 @@ export default function NavErosionPortfolio() {
   const clearGrid = () => {
     setGridRows([{ ticker: '', amount: '', reinvest_pct: '' }])
     // Also clear the persisted list
-    fetch('/api/nav-erosion-portfolio/list', {
+    fetch(`${API_BASE}/api/nav-erosion-portfolio/list`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rows: [] }),
@@ -91,7 +92,7 @@ export default function NavErosionPortfolio() {
 
   const saveList = useCallback(() => {
     const rows = collectRows(gridRows)
-    return fetch('/api/nav-erosion-portfolio/list', {
+    return fetch(`${API_BASE}/api/nav-erosion-portfolio/list`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rows }),
@@ -107,7 +108,7 @@ export default function NavErosionPortfolio() {
 
   const loadSaved = () => {
     if (!selectedSaved) return
-    fetch('/api/nav-erosion-portfolio/saved/' + selectedSaved)
+    fetch(`${API_BASE}/api/nav-erosion-portfolio/saved/` + selectedSaved)
       .then(r => r.json())
       .then(d => {
         if (d.error) { alert(d.error); return }
@@ -126,7 +127,7 @@ export default function NavErosionPortfolio() {
     if (!selectedSaved) return
     const sel = savedList.find(s => String(s.id) === selectedSaved)
     if (!confirm('Delete saved backtest "' + (sel?.name || '') + '"?')) return
-    fetch('/api/nav-erosion-portfolio/saved/' + selectedSaved, { method: 'DELETE' })
+    fetch(`${API_BASE}/api/nav-erosion-portfolio/saved/` + selectedSaved, { method: 'DELETE' })
       .then(r => r.json())
       .then(d => {
         if (d.error) { alert(d.error); return }
@@ -150,7 +151,7 @@ export default function NavErosionPortfolio() {
     if (!name) { setBtError('Please enter a name.'); return }
     const rows = collectRows(gridRows)
     const overwrite = btOverwrite && !!selectedSaved
-    const url = overwrite ? '/api/nav-erosion-portfolio/saved/' + selectedSaved : '/api/nav-erosion-portfolio/saved'
+    const url = overwrite ? `${API_BASE}/api/nav-erosion-portfolio/saved/${selectedSaved}` : `${API_BASE}/api/nav-erosion-portfolio/saved`
     const method = overwrite ? 'PUT' : 'POST'
 
     fetch(url, {
@@ -178,12 +179,12 @@ export default function NavErosionPortfolio() {
     const rows = collectRows(gridRows)
 
     // Save list first, then run
-    fetch('/api/nav-erosion-portfolio/list', {
+    fetch(`${API_BASE}/api/nav-erosion-portfolio/list`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rows }),
     }).then(() => {
-      fetch('/api/nav-erosion-portfolio/data', {
+      fetch(`${API_BASE}/api/nav-erosion-portfolio/data`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ start: startDate, end: endDate, rows }),

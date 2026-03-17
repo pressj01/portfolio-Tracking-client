@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import { API_BASE } from '../config'
 
 const PERIODS = [
   { label: '3mo', value: '3mo' },
@@ -58,7 +59,7 @@ export default function Correlation() {
   const runCorrelation = () => {
     if (tickers.length < 2) { setError('Enter at least 2 tickers.'); return }
     setError(null); setResult(null); setLoading(true)
-    fetch('/api/correlation/data', {
+    fetch(`${API_BASE}/api/correlation/data`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers, period }),

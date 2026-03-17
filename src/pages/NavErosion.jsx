@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react'
+import { API_BASE } from '../config'
 import Plot from 'react-plotly.js'
 
 function fmt$(v) {
@@ -51,7 +52,7 @@ export default function NavErosion() {
       ticker: sym, amount, start: startDate, end: endDate, reinvest: String(reinvest)
     })
 
-    fetch('/api/nav-erosion/data?' + params.toString())
+    fetch(`${API_BASE}/api/nav-erosion/data?` + params.toString())
       .then(r => r.json())
       .then(data => {
         setLoading(false)

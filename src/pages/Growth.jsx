@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { API_BASE } from '../config'
 
 const PERIODS = ['1y', '5y', 'max']
 const PERIOD_LABELS = { '1y': '1Y', '5y': '5Y', 'max': 'Max' }
@@ -41,7 +42,7 @@ export default function Growth() {
     setError(null)
     const params = new URLSearchParams({ period, benchmark })
     if (categories.length) params.set('category', categories.join(','))
-    fetch(`/api/growth/data?${params}`)
+    fetch(`${API_BASE}/api/growth/data?${params}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)

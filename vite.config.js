@@ -9,6 +9,7 @@ export default defineConfig({
       '/api': 'http://localhost:5001',
     },
   },
+  base: './',
   build: {
     outDir: 'dist',
   },

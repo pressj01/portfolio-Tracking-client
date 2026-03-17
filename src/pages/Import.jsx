@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
+import { API_BASE } from '../config'
 
 function FileUpload({ onFileSelect, accept, file }) {
   const inputRef = useRef()
@@ -54,7 +55,7 @@ export default function Import() {
   const [importMonthlyTickers, setImportMonthlyTickers] = useState(true)
 
   useEffect(() => {
-    fetch('/api/data/stats')
+    fetch(`${API_BASE}/api/data/stats`)
       .then(r => r.json())
       .then(d => setHasData(d.holdings > 0))
       .catch(() => {})
@@ -102,13 +103,13 @@ export default function Import() {
 
     try {
       // Main import
-      const main = await uploadFile('/api/import/excel', { sheet_name: sheetName })
+      const main = await uploadFile(`${API_BASE}/api/import/excel`, { sheet_name: sheetName })
       results.push(main.message)
 
       // Additional imports from the same file
       if (importWeekly) {
         try {
-          const w = await uploadFile('/api/import/weekly-payouts')
+          const w = await uploadFile(`${API_BASE}/api/import/weekly-payouts`)
           results.push(w.message)
         } catch (e) {
           results.push(`Weekly payouts: ${e.message}`)
@@ -116,7 +117,7 @@ export default function Import() {
       }
       if (importMonthly) {
         try {
-          const m = await uploadFile('/api/import/monthly-payouts')
+          const m = await uploadFile(`${API_BASE}/api/import/monthly-payouts`)
           results.push(m.message)
         } catch (e) {
           results.push(`Monthly payouts: ${e.message}`)
@@ -124,7 +125,7 @@ export default function Import() {
       }
       if (importMonthlyTickers) {
         try {
-          const mt = await uploadFile('/api/import/monthly-payout-tickers')
+          const mt = await uploadFile(`${API_BASE}/api/import/monthly-payout-tickers`)
           results.push(mt.message)
         } catch (e) {
           results.push(`Monthly tickers: ${e.message}`)
@@ -145,7 +146,7 @@ export default function Import() {
     setError(null)
 
     try {
-      const data = await uploadFile('/api/import/generic')
+      const data = await uploadFile(`${API_BASE}/api/import/generic`)
       setResult([data.message])
     } catch (e) {
       setError(e.message)
@@ -155,7 +156,7 @@ export default function Import() {
   }
 
   const handleDownloadTemplate = () => {
-    window.open('/api/template/download', '_blank')
+    window.open(`${API_BASE}/api/template/download`, '_blank')
   }
 
   return (

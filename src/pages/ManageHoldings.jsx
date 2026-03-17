@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { API_BASE } from '../config'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '',
@@ -26,7 +27,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
   const [categories, setCategories] = useState([])
 
   useEffect(() => {
-    fetch('/api/categories/data')
+    fetch(`${API_BASE}/api/categories/data`)
       .then(r => r.json())
       .then(d => setCategories(d.categories || []))
       .catch(() => {})
@@ -56,7 +57,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
     setLooking(true)
     setLookupMsg(null)
     try {
-      const res = await fetch(`/api/lookup/${ticker}`)
+      const res = await fetch(`${API_BASE}/api/lookup/${ticker}`)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setForm(prev => ({
@@ -357,7 +358,7 @@ export default function ManageHoldings() {
 
   const fetchHoldings = async () => {
     try {
-      const res = await fetch('/api/holdings')
+      const res = await fetch(`${API_BASE}/api/holdings`)
       const data = await res.json()
       setHoldings(data)
     } catch (e) {
@@ -407,7 +408,7 @@ export default function ManageHoldings() {
     setError(null)
     setMessage(null)
     try {
-      const res = await fetch('/api/refresh', { method: 'POST' })
+      const res = await fetch(`${API_BASE}/api/refresh`, { method: 'POST' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setMessage(data.message)
@@ -433,7 +434,7 @@ export default function ManageHoldings() {
     if (!confirm(`Delete ${ticker}?`)) return
     setError(null)
     try {
-      const res = await fetch(`/api/holdings/${ticker}`, { method: 'DELETE' })
+      const res = await fetch(`${API_BASE}/api/holdings/${ticker}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setMessage(`${ticker} deleted`)
@@ -449,7 +450,7 @@ export default function ManageHoldings() {
     const isEdit = !!editHolding
 
     try {
-      const url = isEdit ? `/api/holdings/${payload.ticker}` : '/api/holdings'
+      const url = isEdit ? `${API_BASE}/api/holdings/${payload.ticker}` : `${API_BASE}/api/holdings`
       const res = await fetch(url, {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -549,7 +550,7 @@ export default function ManageHoldings() {
                       onChange={async () => {
                         const newVal = h.reinvest === 'Y' ? 'N' : 'Y'
                         try {
-                          await fetch(`/api/holdings/${h.ticker}`, {
+                          await fetch(`${API_BASE}/api/holdings/${h.ticker}`, {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ reinvest: newVal }),

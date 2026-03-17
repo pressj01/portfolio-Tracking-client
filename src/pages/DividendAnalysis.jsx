@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
+import { API_BASE } from '../config'
 
 function GradeBadge({ grade, large }) {
   if (!grade || grade === 'N/A') return <span className={`grade-badge grade-na ${large ? 'grade-lg' : ''}`}>N/A</span>
@@ -41,7 +42,7 @@ export default function DividendAnalysis() {
     setError(null)
     const params = new URLSearchParams()
     if (categories.length) params.set('category', categories.join(','))
-    fetch(`/api/dividend-analysis/data?${params}`)
+    fetch(`${API_BASE}/api/dividend-analysis/data?${params}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import { API_BASE } from '../config'
 import RiskReturnCharts from './analytics/RiskReturnCharts'
 import IncomeCharts from './analytics/IncomeCharts'
 import BacktestCharts from './analytics/BacktestCharts'
@@ -47,7 +48,7 @@ export default function Analytics() {
 
   // Load portfolio tickers on mount
   useEffect(() => {
-    fetch('/api/holdings')
+    fetch(`${API_BASE}/api/holdings`)
       .then(r => r.json())
       .then(d => {
         const t = (d.holdings || d || []).map(h => h.ticker).filter(Boolean)
@@ -77,7 +78,7 @@ export default function Analytics() {
     setError(null); setResult(null); setLoading(true)
     const body = { tickers, benchmark, period, mode: runMode || mode }
     if (runMode === 'optimize_balanced') body.balance = balance / 100
-    fetch('/api/analytics/data', {
+    fetch(`${API_BASE}/api/analytics/data`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

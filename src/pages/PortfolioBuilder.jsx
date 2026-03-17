@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { API_BASE } from '../config'
 
 const PERIODS = [
   { label: '1M', value: '1mo' },
@@ -88,7 +89,7 @@ export default function PortfolioBuilder() {
   // ── Load portfolios ──────────────────────────────────────────────────────
   const loadPortfolios = useCallback(async () => {
     try {
-      const res = await fetch('/api/builder/portfolios')
+      const res = await fetch(`${API_BASE}/api/builder/portfolios`)
       const data = await res.json()
       setPortfolios(data.portfolios || [])
     } catch (e) { console.error(e) }
@@ -100,7 +101,7 @@ export default function PortfolioBuilder() {
   const loadHoldings = useCallback(async (pid) => {
     if (!pid) return
     try {
-      const res = await fetch(`/api/builder/portfolios/${pid}/holdings`)
+      const res = await fetch(`${API_BASE}/api/builder/portfolios/${pid}/holdings`)
       const data = await res.json()
       setHoldings(data.holdings || [])
     } catch (e) { console.error(e) }
@@ -111,7 +112,7 @@ export default function PortfolioBuilder() {
     setError(null)
     chartsRendered.current = false
     try {
-      const res = await fetch(`/api/builder/portfolios/${pid}/analyze`, {
+      const res = await fetch(`${API_BASE}/api/builder/portfolios/${pid}/analyze`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ benchmark, period }),
       })
@@ -142,7 +143,7 @@ export default function PortfolioBuilder() {
     const name = prompt('Portfolio name:')
     if (!name || !name.trim()) return
     try {
-      const res = await fetch('/api/builder/portfolios', {
+      const res = await fetch(`${API_BASE}/api/builder/portfolios`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim() }),
       })
@@ -158,7 +159,7 @@ export default function PortfolioBuilder() {
   const deletePortfolio = async (pid, e) => {
     e.stopPropagation()
     if (!confirm('Delete this portfolio?')) return
-    await fetch(`/api/builder/portfolios/${pid}`, { method: 'DELETE' })
+    await fetch(`${API_BASE}/api/builder/portfolios/${pid}`, { method: 'DELETE' })
     if (activeId === pid) {
       setActiveId(null)
       setActiveName('')
@@ -174,7 +175,7 @@ export default function PortfolioBuilder() {
     const name = prompt('Save as new portfolio name:')
     if (!name || !name.trim()) return
     try {
-      const res = await fetch('/api/builder/portfolios', {
+      const res = await fetch(`${API_BASE}/api/builder/portfolios`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim() }),
       })
@@ -182,7 +183,7 @@ export default function PortfolioBuilder() {
       if (data.error) { alert(data.error); return }
       const newId = data.id
       for (const h of holdings) {
-        await fetch(`/api/builder/portfolios/${newId}/holdings`, {
+        await fetch(`${API_BASE}/api/builder/portfolios/${newId}/holdings`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ticker: h.ticker, dollar_amount: h.dollar_amount }),
         })
@@ -201,7 +202,7 @@ export default function PortfolioBuilder() {
   const commitRename = async () => {
     setEditingName(false)
     if (nameInput.trim() && nameInput.trim() !== activeName) {
-      await fetch(`/api/builder/portfolios/${activeId}`, {
+      await fetch(`${API_BASE}/api/builder/portfolios/${activeId}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: nameInput.trim() }),
       })
@@ -215,7 +216,7 @@ export default function PortfolioBuilder() {
     if (!activeId || holdings.length === 0) return
     if (!confirm('Remove all holdings from this portfolio?')) return
     for (const h of holdings) {
-      await fetch(`/api/builder/portfolios/${activeId}/holdings/${h.ticker}`, { method: 'DELETE' })
+      await fetch(`${API_BASE}/api/builder/portfolios/${activeId}/holdings/${h.ticker}`, { method: 'DELETE' })
     }
     setHoldings([])
     setAnalysisResult(null)
@@ -227,7 +228,7 @@ export default function PortfolioBuilder() {
   const addHolding = async () => {
     if (!activeId || !tickerInput.trim()) return
     const amount = parseFloat(dollarInput) || 0
-    await fetch(`/api/builder/portfolios/${activeId}/holdings`, {
+    await fetch(`${API_BASE}/api/builder/portfolios/${activeId}/holdings`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticker: tickerInput.trim(), dollar_amount: amount }),
     })
@@ -239,7 +240,7 @@ export default function PortfolioBuilder() {
 
   // ── Delete holding ───────────────────────────────────────────────────────
   const deleteHolding = async (ticker) => {
-    await fetch(`/api/builder/portfolios/${activeId}/holdings/${ticker}`, { method: 'DELETE' })
+    await fetch(`${API_BASE}/api/builder/portfolios/${activeId}/holdings/${ticker}`, { method: 'DELETE' })
     loadHoldings(activeId)
     loadPortfolios()
   }
@@ -252,7 +253,7 @@ export default function PortfolioBuilder() {
   const commitDollarEdit = async (ticker) => {
     setEditingDollar(null)
     const newVal = parseFloat(editDollarVal) || 0
-    await fetch(`/api/builder/portfolios/${activeId}/holdings`, {
+    await fetch(`${API_BASE}/api/builder/portfolios/${activeId}/holdings`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticker, dollar_amount: newVal }),
     })
@@ -266,7 +267,7 @@ export default function PortfolioBuilder() {
     setError(null)
     chartsRendered.current = false
     try {
-      const res = await fetch(`/api/builder/portfolios/${activeId}/analyze`, {
+      const res = await fetch(`${API_BASE}/api/builder/portfolios/${activeId}/analyze`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ benchmark, period }),
       })
@@ -359,7 +360,7 @@ export default function PortfolioBuilder() {
     setCompareLoading(true)
     setCompareResult(null)
     try {
-      const res = await fetch('/api/builder/compare', {
+      const res = await fetch(`${API_BASE}/api/builder/compare`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ portfolio_ids: compareIds, period, benchmark }),
       })
@@ -411,7 +412,7 @@ export default function PortfolioBuilder() {
     setAwError(null)
     setAwResult(null)
     setAwOverrides({})
-    const endpoint = '/api/builder/all-weather'
+    const endpoint = `${API_BASE}/api/builder/all-weather`
     try {
       const res = await fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -433,7 +434,7 @@ export default function PortfolioBuilder() {
       tickerAmounts[ticker] = (tickerAmounts[ticker] || 0) + alloc.dollar_amount
     })
     for (const [ticker, amount] of Object.entries(tickerAmounts)) {
-      await fetch(`/api/builder/portfolios/${activeId}/holdings`, {
+      await fetch(`${API_BASE}/api/builder/portfolios/${activeId}/holdings`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ticker, dollar_amount: amount }),
       })
@@ -451,7 +452,7 @@ export default function PortfolioBuilder() {
     setAwError(null)
     setRebalanceResult(null)
     try {
-      const res = await fetch(`/api/builder/portfolios/${activeId}/rebalance`, {
+      const res = await fetch(`${API_BASE}/api/builder/portfolios/${activeId}/rebalance`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: awMode, strategy: awStrategy }),
       })
@@ -466,7 +467,7 @@ export default function PortfolioBuilder() {
     if (!activeId || !rebalanceResult) return
     for (const s of rebalanceResult.suggestions) {
       if (s.action === 'on_target') continue
-      await fetch(`/api/builder/portfolios/${activeId}/holdings`, {
+      await fetch(`${API_BASE}/api/builder/portfolios/${activeId}/holdings`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ticker: s.suggested_ticker, dollar_amount: s.target_amount }),
       })

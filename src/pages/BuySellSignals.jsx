@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { API_BASE } from '../config'
 import Plot from 'react-plotly.js'
 
 function Sig({ signal }) {
@@ -40,7 +41,7 @@ export default function BuySellSignals() {
   const loadData = useCallback(() => {
     setLoading(true)
     setError(null)
-    fetch('/api/buy-sell-signals')
+    fetch(`${API_BASE}/api/buy-sell-signals`)
       .then(r => r.json())
       .then(data => {
         setLoading(false)

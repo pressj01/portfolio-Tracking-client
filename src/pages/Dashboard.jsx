@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import { API_BASE } from '../config'
 import { NavLink } from 'react-router-dom'
 
 const fmt = (v) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -72,7 +73,7 @@ function TickerModal({ ticker, onClose }) {
     if (!ticker) return
     setLoading(true)
     setError(null)
-    fetch(`/api/ticker-return/${ticker}`)
+    fetch(`${API_BASE}/api/ticker-return/${ticker}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)
@@ -158,30 +159,30 @@ export default function Dashboard() {
   const [modalTicker, setModalTicker] = useState(null)
 
   useEffect(() => {
-    fetch('/api/holdings')
+    fetch(`${API_BASE}/api/holdings`)
       .then(res => res.json())
       .then(data => {
         setHoldings(data)
         setLoading(false)
         if (data.length > 0) {
           // Fetch upcoming dividends immediately (no refresh needed)
-          fetch('/api/upcoming-dividends')
+          fetch(`${API_BASE}/api/upcoming-dividends`)
             .then(r => r.json())
             .then(d => { if (Array.isArray(d)) setUpcomingDivs(d) })
             .catch(() => {})
 
           setRefreshStatus('Updating prices & dividends...')
-          fetch('/api/refresh', { method: 'POST' })
+          fetch(`${API_BASE}/api/refresh`, { method: 'POST' })
             .then(r => r.json())
             .then(r => {
               setRefreshStatus(r.message)
-              return fetch('/api/holdings')
+              return fetch(`${API_BASE}/api/holdings`)
             })
             .then(r => r.json())
             .then(updated => {
               setHoldings(updated)
               setGradeStatus('Loading risk grades...')
-              return fetch('/api/portfolio-summary/data')
+              return fetch(`${API_BASE}/api/portfolio-summary/data`)
             })
             .then(r => r.json())
             .then(g => {

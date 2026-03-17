@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { API_BASE } from '../../config'
 
 export default function IncomeCharts({ tickers, result, period }) {
   const [calendarData, setCalendarData] = useState(null)
@@ -13,7 +14,7 @@ export default function IncomeCharts({ tickers, result, period }) {
   useEffect(() => {
     if (!tickers?.length) return
     setCalendarLoading(true)
-    fetch('/api/analytics/income-calendar', {
+    fetch(`${API_BASE}/api/analytics/income-calendar`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers }),
     }).then(r => r.json()).then(setCalendarData).catch(() => {}).finally(() => setCalendarLoading(false))
@@ -23,7 +24,7 @@ export default function IncomeCharts({ tickers, result, period }) {
   useEffect(() => {
     if (!tickers?.length) return
     setYieldLoading(true)
-    fetch('/api/analytics/yield-trend', {
+    fetch(`${API_BASE}/api/analytics/yield-trend`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers, period: '2y' }),
     }).then(r => r.json()).then(setYieldData).catch(() => {}).finally(() => setYieldLoading(false))
@@ -33,7 +34,7 @@ export default function IncomeCharts({ tickers, result, period }) {
   useEffect(() => {
     if (!navTicker) return
     setNavLoading(true)
-    fetch('/api/analytics/nav-erosion-chart', {
+    fetch(`${API_BASE}/api/analytics/nav-erosion-chart`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers: [navTicker], period: '2y' }),
     }).then(r => r.json()).then(setNavData).catch(() => {}).finally(() => setNavLoading(false))

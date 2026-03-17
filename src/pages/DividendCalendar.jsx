@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
+import { API_BASE } from '../config'
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -20,7 +21,7 @@ export default function DividendCalendar() {
 
   useEffect(() => {
     setLoading(true)
-    fetch('/api/div-calendar')
+    fetch(`${API_BASE}/api/div-calendar`)
       .then(r => r.json())
       .then(data => {
         setEvents(data.events || [])

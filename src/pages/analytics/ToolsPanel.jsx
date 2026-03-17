@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
+import { API_BASE } from '../../config'
 
 function metricColor(val, thresholds, lowerBetter = false) {
   if (val == null) return '#8899aa'
@@ -23,7 +24,7 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
   const fetchPeers = () => {
     if (!peerTicker) return
     setPeerLoading(true)
-    fetch('/api/analytics/peers', {
+    fetch(`${API_BASE}/api/analytics/peers`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticker: peerTicker }),
     }).then(r => r.json()).then(setPeerData).catch(() => {}).finally(() => setPeerLoading(false))

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { API_BASE } from '../config'
 
 const DURATION_OPTIONS = Array.from({ length: 20 }, (_, i) => ({
   value: `${i + 1}y`,
@@ -231,7 +232,7 @@ export default function DistributionCompare() {
 
   // Fetch portfolio tickers on mount
   useEffect(() => {
-    fetch('/api/pis/portfolio-tickers')
+    fetch(`${API_BASE}/api/pis/portfolio-tickers`)
       .then(r => r.json())
       .then(d => setPortfolioTickers(d.tickers || []))
       .catch(() => {})
@@ -265,7 +266,7 @@ export default function DistributionCompare() {
     setInfo({ text: `Looking up ${ticker}...`, warn: false })
     lookupSetters[which](null)
 
-    fetch(`/api/distribution-compare/lookup?ticker=${encodeURIComponent(ticker)}`)
+    fetch(`${API_BASE}/api/distribution-compare/lookup?ticker=${encodeURIComponent(ticker)}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) { setInfo({ text: d.error, warn: true }); return }
@@ -326,7 +327,7 @@ export default function DistributionCompare() {
     setResults(null)
     chartsRendered.current = false
 
-    fetch('/api/distribution-compare/run', {
+    fetch(`${API_BASE}/api/distribution-compare/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -343,7 +344,7 @@ export default function DistributionCompare() {
   // Export
   const exportExcel = useCallback(() => {
     const body = buildBody()
-    fetch('/api/distribution-compare/export', {
+    fetch(`${API_BASE}/api/distribution-compare/export`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

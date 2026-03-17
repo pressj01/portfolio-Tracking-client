@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { API_BASE } from '../config'
 
 function SignalBadge({ signal }) {
   if (!signal || signal === '\u2014') return <span>{'\u2014'}</span>
@@ -30,7 +31,7 @@ export default function Watchlist() {
   const loadAnalysis = useCallback(() => {
     setLoading(true)
     setError(null)
-    fetch('/api/watchlist/data')
+    fetch(`${API_BASE}/api/watchlist/data`)
       .then(r => r.json())
       .then(data => {
         setLoading(false)
@@ -44,7 +45,7 @@ export default function Watchlist() {
   }, [])
 
   const loadWatchingList = useCallback(() => {
-    fetch('/api/watchlist/watching')
+    fetch(`${API_BASE}/api/watchlist/watching`)
       .then(r => r.json())
       .then(data => {
         setWatchingList(data.rows || [])
@@ -57,7 +58,7 @@ export default function Watchlist() {
 
   const saveList = useCallback((newList) => {
     setWatchingList(newList)
-    fetch('/api/watchlist/watching', {
+    fetch(`${API_BASE}/api/watchlist/watching`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rows: newList }),

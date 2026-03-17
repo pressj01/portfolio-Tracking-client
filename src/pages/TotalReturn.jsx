@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
+import { API_BASE } from '../config'
 
 // 30 bright, high-contrast colors for dark backgrounds
 const PALETTE = [
@@ -65,7 +66,7 @@ export default function TotalReturn() {
     setSummaryError(null)
     const params = new URLSearchParams()
     if (categories.length) params.set('category', categories.join(','))
-    fetch(`/api/total-return/summary?${params}`)
+    fetch(`${API_BASE}/api/total-return/summary?${params}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)
@@ -81,7 +82,7 @@ export default function TotalReturn() {
     setChartError(null)
     const params = new URLSearchParams({ period: '1y' })
     if (categories.length) params.set('category', categories.join(','))
-    fetch(`/api/total-return/charts?${params}`)
+    fetch(`${API_BASE}/api/total-return/charts?${params}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)
@@ -167,7 +168,7 @@ export default function TotalReturn() {
     const params = new URLSearchParams({ period: cmpPeriod })
     if (cmpTickers.length) params.set('tickers', cmpTickers.join(','))
     if (cmpExtra) params.set('extra', cmpExtra)
-    fetch(`/api/total-return/compare?${params}`)
+    fetch(`${API_BASE}/api/total-return/compare?${params}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)
