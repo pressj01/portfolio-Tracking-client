@@ -1810,6 +1810,115 @@ const STUDY_TEMPLATES = [
       }
     },
   },
+  {
+    type: 'ttm_squeeze', label: 'TTM Squeeze', group: 'Volatility', panel: 'lower',
+    multi: false,
+    defaultParams: { bbPeriod: 20, bbMult: 2.0, kcPeriod: 20, kcMult: 1.5, momPeriod: 12 },
+    paramFields: [
+      { key: 'bbPeriod', label: 'BB Period', type: 'number', min: 2, max: 100 },
+      { key: 'bbMult', label: 'BB Mult', type: 'number', min: 0.5, max: 5, step: 0.1 },
+      { key: 'kcPeriod', label: 'KC Period', type: 'number', min: 2, max: 100 },
+      { key: 'kcMult', label: 'KC Mult', type: 'number', min: 0.1, max: 5, step: 0.1 },
+      { key: 'momPeriod', label: 'Mom Period', type: 'number', min: 2, max: 50 },
+    ],
+    compute(records, params) {
+      const dates = records.map(r => r.date)
+      const closes = records.map(r => r.close)
+      const highs = records.map(r => r.high)
+      const lows = records.map(r => r.low)
+      const n = closes.length
+      const { bbPeriod, bbMult, kcPeriod, kcMult, momPeriod } = params
+
+      if (n < 2) return { mainTraces: [], subTraces: [], subTitle: '' }
+
+      // Bollinger Bands
+      const bbMid = sma(closes, bbPeriod)
+      const bbUpper = new Array(n).fill(null)
+      const bbLower = new Array(n).fill(null)
+      for (let i = 0; i < n; i++) {
+        if (bbMid[i] == null) continue
+        const w = Math.min(bbPeriod, i + 1)
+        let sumSq = 0
+        for (let j = i - w + 1; j <= i; j++) sumSq += (closes[j] - bbMid[i]) ** 2
+        const sd = Math.sqrt(sumSq / w)
+        bbUpper[i] = bbMid[i] + bbMult * sd
+        bbLower[i] = bbMid[i] - bbMult * sd
+      }
+
+      // Keltner Channels
+      const kcMid = ema(closes, kcPeriod)
+      const tr = []
+      for (let i = 0; i < n; i++) {
+        if (i === 0) { tr.push(highs[i] - lows[i]); continue }
+        tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])))
+      }
+      const atr = ema(tr, kcPeriod)
+      const kcUpper = new Array(n).fill(null)
+      const kcLower = new Array(n).fill(null)
+      for (let i = 0; i < n; i++) {
+        if (kcMid[i] == null || atr[i] == null) continue
+        kcUpper[i] = kcMid[i] + kcMult * atr[i]
+        kcLower[i] = kcMid[i] - kcMult * atr[i]
+      }
+
+      // Squeeze detection: BB inside KC = squeeze on
+      const sqzOn = new Array(n).fill(false)
+      for (let i = 0; i < n; i++) {
+        if (bbLower[i] != null && kcLower[i] != null) {
+          sqzOn[i] = bbLower[i] > kcLower[i] && bbUpper[i] < kcUpper[i]
+        }
+      }
+
+      // Momentum: linear regression of (close - avg(highest high, lowest low, KC midline))
+      const mom = new Array(n).fill(null)
+      for (let i = 0; i < n; i++) {
+        const w = Math.min(kcPeriod, i + 1)
+        let hh = -Infinity, ll = Infinity
+        for (let j = i - w + 1; j <= i; j++) { hh = Math.max(hh, highs[j]); ll = Math.min(ll, lows[j]) }
+        const donchianMid = (hh + ll) / 2
+        const avg = (donchianMid + (kcMid[i] || closes[i])) / 2
+        mom[i] = closes[i] - avg
+      }
+
+      // Linear regression value of momentum over momPeriod
+      const linreg = new Array(n).fill(null)
+      for (let i = 0; i < n; i++) {
+        const len = Math.min(momPeriod, i + 1)
+        if (len < 2) { linreg[i] = mom[i]; continue }
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
+        for (let j = 0; j < len; j++) {
+          const y = mom[i - len + 1 + j]
+          sumX += j; sumY += y; sumXY += j * y; sumX2 += j * j
+        }
+        const slope = (len * sumXY - sumX * sumY) / (len * sumX2 - sumX * sumX)
+        const intercept = (sumY - slope * sumX) / len
+        linreg[i] = intercept + slope * (len - 1)
+      }
+
+      // Momentum histogram colors: increasing positive = aqua, decreasing positive = dark blue,
+      // increasing negative (toward zero) = dark red, decreasing negative = red
+      const momColors = linreg.map((v, i) => {
+        if (v == null) return '#999'
+        const prev = i > 0 ? linreg[i - 1] : 0
+        if (v >= 0) return v > prev ? '#00BCD4' : '#0D47A1'
+        return v < prev ? '#F44336' : '#B71C1C'
+      })
+
+      // Squeeze dots on zero line
+      const sqzColors = sqzOn.map(on => on ? '#F44336' : '#4CAF50')
+      const sqzY = new Array(n).fill(0)
+
+      return {
+        mainTraces: [],
+        subTraces: [
+          { x: dates, y: linreg, type: 'bar', name: 'Momentum', marker: { color: momColors }, showlegend: false },
+          { x: dates, y: sqzY, type: 'scatter', mode: 'markers', name: 'Squeeze',
+            marker: { color: sqzColors, size: 5, symbol: 'circle' }, showlegend: false },
+        ],
+        subTitle: `TTM Squeeze (${bbPeriod}, ${bbMult}, ${kcPeriod}, ${kcMult})`,
+      }
+    },
+  },
 ]
 
 // ── Constants ────────────────────────────────────────────────────────────────
