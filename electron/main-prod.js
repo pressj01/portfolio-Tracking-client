@@ -1,10 +1,23 @@
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
-const { spawn } = require('child_process')
+const { spawn, execSync } = require('child_process')
 const net = require('net')
 
 let mainWindow
 let flaskProcess
+
+function killStaleBackends() {
+  // Kill any orphaned backend processes from previous runs
+  try {
+    if (process.platform === 'win32') {
+      execSync('taskkill /IM backend.exe /F', { stdio: 'ignore' })
+    } else {
+      execSync('pkill -f flask-backend/backend', { stdio: 'ignore' })
+    }
+  } catch (e) {
+    // No stale processes found — expected
+  }
+}
 
 function getBackendPath() {
   const exeName = process.platform === 'win32' ? 'backend.exe' : 'backend'
@@ -34,6 +47,7 @@ function startFlask() {
     cwd: cwd,
     env: { ...process.env },
     stdio: ['pipe', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',  // Create new process group on macOS/Linux for clean tree kill
   })
 
   flaskProcess.stdout.on('data', (data) => console.log(`Flask: ${data}`))
@@ -94,18 +108,27 @@ function createWindow() {
 function killFlask() {
   if (flaskProcess && !flaskProcess.killed) {
     flaskProcess.kill()
-    // On Windows, also kill the process tree
     if (process.platform === 'win32') {
+      // On Windows, kill the entire process tree
       try {
         require('child_process').execSync(`taskkill /pid ${flaskProcess.pid} /T /F`, { stdio: 'ignore' })
       } catch (e) {
         // Process may already be dead
+      }
+    } else {
+      // On macOS/Linux, kill the entire process group so child processes
+      // (e.g. Werkzeug reloader children) don't become orphaned
+      try {
+        process.kill(-flaskProcess.pid, 'SIGTERM')
+      } catch (e) {
+        // Process group may already be dead
       }
     }
   }
 }
 
 app.whenReady().then(async () => {
+  killStaleBackends()
   startFlask()
   try {
     await waitForBackend(5001, 15000)

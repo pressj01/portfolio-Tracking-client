@@ -8185,4 +8185,5 @@ def _distribution_compare_compute():
 # ── Run ────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5001)
+    is_packaged = getattr(sys, "frozen", False) or os.environ.get("ELECTRON_RUN_AS_NODE")
+    app.run(debug=not is_packaged, port=5001, use_reloader=False)
