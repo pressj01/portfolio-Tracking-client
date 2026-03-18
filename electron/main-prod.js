@@ -7,13 +7,13 @@ let mainWindow
 let flaskProcess
 
 function getBackendPath() {
-  // In packaged app, resources are in app.asar.unpacked
+  const exeName = process.platform === 'win32' ? 'backend.exe' : 'backend'
   const isPacked = app.isPackaged
   if (isPacked) {
-    return path.join(process.resourcesPath, 'flask-backend', 'backend.exe')
+    return path.join(process.resourcesPath, 'flask-backend', exeName)
   }
   // Dev fallback
-  return path.join(__dirname, '..', 'installer', 'flask-dist', 'backend', 'backend.exe')
+  return path.join(__dirname, '..', 'installer', 'flask-dist', 'backend', exeName)
 }
 
 function getBackendCwd() {
