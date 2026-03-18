@@ -38,6 +38,7 @@ COLUMN_MAP = {
     "Total Divs Received": "total_divs_received",
     "Paid For Itself": "paid_for_itself",
     "Date Purchased": "purchase_date",
+    "Purchase Date": "purchase_date",
 }
 
 SQL_COLUMNS = list(COLUMN_MAP.values()) + ["import_date", "current_month_income"]
@@ -51,6 +52,27 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
     """Read the owner's Excel file and import into all_account_info.
     Returns (row_count, message).
     """
+    # Auto-detect sheet if the requested name doesn't exist
+    import openpyxl as _xl
+    _wb_check = _xl.load_workbook(file_path, read_only=True, data_only=True)
+    _available = _wb_check.sheetnames
+    _wb_check.close()
+
+    if sheet_name not in _available:
+        # Look for first sheet that has a "Ticker" column in row 1
+        _found = None
+        for sn in _available:
+            _test = pd.read_excel(file_path, sheet_name=sn, nrows=0, engine="openpyxl")
+            if "Ticker" in _test.columns:
+                _found = sn
+                break
+        if _found:
+            sheet_name = _found
+        else:
+            raise ValueError(
+                f"Sheet '{sheet_name}' not found. Available sheets: {', '.join(_available)}"
+            )
+
     df = pd.read_excel(file_path, sheet_name=sheet_name, engine="openpyxl")
 
     # ── Detect "[Month] Income" columns and capture monthly totals ──────────
@@ -309,7 +331,7 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
                     (profile_id,),
                 ).fetchone()[0]
                 cur.execute(
-                    "INSERT INTO categories (name, target_allocation, sort_order, profile_id) VALUES (?, 0, ?, ?)",
+                    "INSERT INTO categories (name, target_pct, sort_order, profile_id) VALUES (?, 0, ?, ?)",
                     (cat_name, max_pos + 1, profile_id),
                 )
                 cat_id = cur.lastrowid
@@ -416,18 +438,51 @@ def import_monthly_payouts(file_path, profile_id=1):
     import openpyxl
 
     wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True, keep_vba=True)
-    ws = wb["Monthly Tracking"]
+    # Support alternate sheet names
+    sheet_name = None
+    for candidate in ["Monthly Tracking", "Monthly Income History"]:
+        if candidate in wb.sheetnames:
+            sheet_name = candidate
+            break
+    if sheet_name is None:
+        wb.close()
+        raise ValueError("No monthly tracking sheet found (expected 'Monthly Tracking' or 'Monthly Income History')")
+    ws = wb[sheet_name]
 
     rows_to_insert = []
-    for row in ws.iter_rows(min_row=2):
-        year_val = row[0].value
-        if year_val is None or not isinstance(year_val, (int, float)):
-            continue
-        year = int(year_val)
-        for month_idx in range(1, 13):
-            amount = row[month_idx].value
-            if amount is not None:
-                rows_to_insert.append((year, month_idx, float(amount)))
+
+    # Detect format from first data row
+    first_val = None
+    for row in ws.iter_rows(min_row=2, max_row=2):
+        first_val = row[0].value
+
+    if isinstance(first_val, str) and '-' in first_val:
+        # "Monthly Income History" format: "YYYY-MM" in col 0, amount in col 1
+        for row in ws.iter_rows(min_row=2):
+            month_str = row[0].value
+            amount_val = row[1].value
+            if not isinstance(month_str, str) or '-' not in month_str:
+                continue
+            if amount_val is None or isinstance(amount_val, str):
+                continue
+            try:
+                parts = month_str.split('-')
+                year = int(parts[0])
+                month = int(parts[1])
+                rows_to_insert.append((year, month, float(amount_val)))
+            except (ValueError, IndexError):
+                continue
+    else:
+        # "Monthly Tracking" format: year in col 0, Jan-Dec in cols 1-12
+        for row in ws.iter_rows(min_row=2):
+            year_val = row[0].value
+            if year_val is None or not isinstance(year_val, (int, float)):
+                continue
+            year = int(year_val)
+            for month_idx in range(1, 13):
+                amount = row[month_idx].value
+                if amount is not None:
+                    rows_to_insert.append((year, month_idx, float(amount)))
     wb.close()
 
     conn = get_connection()
@@ -880,7 +935,7 @@ def import_from_upload(df, profile_id):
                     (profile_id,),
                 ).fetchone()[0]
                 cur.execute(
-                    "INSERT INTO categories (name, target_allocation, sort_order, profile_id) VALUES (?, 0, ?, ?)",
+                    "INSERT INTO categories (name, target_pct, sort_order, profile_id) VALUES (?, 0, ?, ?)",
                     (cat_name, max_pos + 1, profile_id),
                 )
                 cat_id = cur.lastrowid
