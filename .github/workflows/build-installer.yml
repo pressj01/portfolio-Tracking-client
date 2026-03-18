@@ -5,12 +5,23 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to build (all, windows, mac)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - windows
+          - mac
 
 permissions:
   contents: write
 
 jobs:
   build-windows:
+    if: ${{ github.event.inputs.platform != 'mac' }}
     runs-on: windows-latest
 
     steps:
@@ -61,6 +72,7 @@ jobs:
           generate_release_notes: true
 
   build-mac:
+    if: ${{ github.event.inputs.platform != 'windows' }}
     runs-on: macos-latest
 
     steps:
