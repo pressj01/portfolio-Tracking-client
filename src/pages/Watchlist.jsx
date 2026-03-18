@@ -205,10 +205,25 @@ export default function Watchlist() {
           <table className="sst">
             <thead>
               <tr>
-                {['Ticker', 'Price', '1D Chg', 'Div Yield', 'Signal', 'AO', 'RSI', 'MACD',
-                  'SMA 50', 'SMA 200', 'Sharpe', 'Sortino', '1Y Return', 'NAV Erosion', 'Notes'].map((h, i) => (
-                  <th key={h} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }}>
-                    {h}{arrow(i)}
+                {[
+                  { label: 'Ticker' },
+                  { label: 'Price', tip: 'Current market price' },
+                  { label: '1D Chg', tip: '1-day price change percentage' },
+                  { label: 'Div Yield', tip: 'Current annual dividend yield' },
+                  { label: 'Signal', tip: 'Overall buy/sell signal — majority vote across indicators' },
+                  { label: 'AO', tip: 'Awesome Oscillator signal — momentum based on 5/34-period midpoint SMAs' },
+                  { label: 'RSI', tip: 'Relative Strength Index signal — overbought >70, oversold <30' },
+                  { label: 'MACD', tip: 'Moving Average Convergence Divergence signal' },
+                  { label: 'SMA 50', tip: 'Simple Moving Average 50-day — BUY when price is above' },
+                  { label: 'SMA 200', tip: 'Simple Moving Average 200-day — BUY when price is above' },
+                  { label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
+                  { label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
+                  { label: '1Y Return', tip: 'Total return over the past 12 months' },
+                  { label: 'NAV Erosion', tip: 'Whether the fund\'s net asset value is declining over time' },
+                  { label: 'Notes' },
+                ].map((h, i) => (
+                  <th key={h.label} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }} title={h.tip || ''}>
+                    {h.label}{h.tip ? ' \u24D8' : ''}{arrow(i)}
                   </th>
                 ))}
                 <th>Actions</th>

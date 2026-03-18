@@ -264,12 +264,13 @@ export default function Dashboard() {
     setSortCol(col)
   }, [sortCol, enrichedHoldings])
 
-  const SortHeader = ({ col, children, align }) => (
+  const SortHeader = ({ col, children, align, tip }) => (
     <th
       onClick={() => handleSort(col)}
       style={{ cursor: 'pointer', textAlign: align || 'left', userSelect: 'none' }}
+      title={tip || ''}
     >
-      {children} {sortCol === col ? (sortAsc ? '↑' : '↓') : ''}
+      {children}{tip ? ' \u24D8' : ''} {sortCol === col ? (sortAsc ? '↑' : '↓') : ''}
     </th>
   )
 
@@ -376,25 +377,25 @@ export default function Dashboard() {
           <thead>
             <tr>
               <SortHeader col="ticker">Ticker</SortHeader>
-              <SortHeader col="description">Desc</SortHeader>
-              <SortHeader col="category">Cat</SortHeader>
-              <SortHeader col="div_frequency" align="center">Freq</SortHeader>
+              <SortHeader col="description" tip="Security description / name">Desc</SortHeader>
+              <SortHeader col="category" tip="Investment category">Cat</SortHeader>
+              <SortHeader col="div_frequency" align="center" tip="Dividend payment frequency (M=Monthly, Q=Quarterly, W=Weekly)">Freq</SortHeader>
               <SortHeader col="purchase_date">Purchased</SortHeader>
-              <SortHeader col="quantity" align="right">Qty</SortHeader>
-              <SortHeader col="price_paid" align="right">Paid</SortHeader>
-              <SortHeader col="current_price" align="right">Price</SortHeader>
-              <SortHeader col="pct_of_account" align="right">%Acct</SortHeader>
-              <SortHeader col="gain_or_loss_percentage" align="right">G/L%</SortHeader>
-              <SortHeader col="price_return_pct" align="right">PrRtn</SortHeader>
-              <SortHeader col="total_return_pct" align="right">TotRtn</SortHeader>
-              <SortHeader col="current_annual_yield" align="right">CurYld</SortHeader>
-              <SortHeader col="annual_yield_on_cost" align="right">YOC</SortHeader>
-              <SortHeader col="ytd_divs" align="right">YTD</SortHeader>
-              <SortHeader col="current_month_income" align="right">{currentMonth}</SortHeader>
-              <SortHeader col="approx_monthly_income" align="right">Mo$</SortHeader>
-              <SortHeader col="estim_payment_per_year" align="right">Yr$</SortHeader>
-              <SortHeader col="paid_for_itself" align="right">PFI%</SortHeader>
-              <th style={{ textAlign: 'center' }}>Grd</th>
+              <SortHeader col="quantity" align="right" tip="Number of shares held">Qty</SortHeader>
+              <SortHeader col="price_paid" align="right" tip="Price paid per share">Paid</SortHeader>
+              <SortHeader col="current_price" align="right" tip="Current market price per share">Price</SortHeader>
+              <SortHeader col="pct_of_account" align="right" tip="Percent of total account value">%Acct</SortHeader>
+              <SortHeader col="gain_or_loss_percentage" align="right" tip="Unrealized gain or loss percentage">G/L%</SortHeader>
+              <SortHeader col="price_return_pct" align="right" tip="Price-only return (excludes dividends)">PrRtn</SortHeader>
+              <SortHeader col="total_return_pct" align="right" tip="Total return including dividends">TotRtn</SortHeader>
+              <SortHeader col="current_annual_yield" align="right" tip="Current annual dividend yield based on market price">CurYld</SortHeader>
+              <SortHeader col="annual_yield_on_cost" align="right" tip="Annual dividend yield based on your cost basis">YOC</SortHeader>
+              <SortHeader col="ytd_divs" align="right" tip="Year-to-date dividends received">YTD</SortHeader>
+              <SortHeader col="current_month_income" align="right" tip={`Dividend income received in ${currentMonth}`}>{currentMonth}</SortHeader>
+              <SortHeader col="approx_monthly_income" align="right" tip="Estimated monthly dividend income">Mo$</SortHeader>
+              <SortHeader col="estim_payment_per_year" align="right" tip="Estimated annual dividend income">Yr$</SortHeader>
+              <SortHeader col="paid_for_itself" align="right" tip="Percentage of original cost recovered through dividends">PFI%</SortHeader>
+              <th style={{ textAlign: 'center' }} title="Composite grade based on yield, growth, and risk metrics">Grd ⓘ</th>
             </tr>
           </thead>
           <tbody>

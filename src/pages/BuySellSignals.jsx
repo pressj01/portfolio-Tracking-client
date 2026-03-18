@@ -97,8 +97,23 @@ export default function BuySellSignals() {
   }
   const arrow = (col) => sortCol === col ? (sortAsc ? ' \u25B2' : ' \u25BC') : ''
 
-  const headers = ['Ticker', 'Name', 'Type', 'Source', 'Overall', 'AO', 'AO Value', 'AO Dir',
-    'RSI', 'MACD', 'SMA 50', 'SMA 200', 'Sharpe', 'Sortino', 'Portfolio $']
+  const headers = [
+    { label: 'Ticker' },
+    { label: 'Name' },
+    { label: 'Type' },
+    { label: 'Source', tip: 'Where the ticker originates (Portfolio or Watchlist)' },
+    { label: 'Overall', tip: 'Majority-vote signal across AO, RSI, MACD, SMA50, SMA200' },
+    { label: 'AO', tip: 'Awesome Oscillator signal — momentum based on 5/34-period midpoint SMAs' },
+    { label: 'AO Value', tip: 'Raw Awesome Oscillator value' },
+    { label: 'AO Dir', tip: 'Awesome Oscillator direction (rising or falling)' },
+    { label: 'RSI', tip: 'Relative Strength Index signal — overbought >70, oversold <30' },
+    { label: 'MACD', tip: 'Moving Average Convergence Divergence signal' },
+    { label: 'SMA 50', tip: 'Simple Moving Average 50-day — BUY when price is above' },
+    { label: 'SMA 200', tip: 'Simple Moving Average 200-day — BUY when price is above' },
+    { label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
+    { label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
+    { label: 'Portfolio $', tip: 'Current market value of this position in portfolio' },
+  ]
 
   return (
     <div className="bss-page">
@@ -177,8 +192,8 @@ export default function BuySellSignals() {
                   {headers.map((h, i) => {
                     const cls = i === 0 ? 'col-tick' : i === 1 ? 'col-name' : ([4, 5, 8, 9, 10, 11, 12, 14].includes(i) ? 'grp-left' : '')
                     return (
-                      <th key={h} className={cls} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }}>
-                        {h}{arrow(i)}
+                      <th key={h.label} className={cls} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }} title={h.tip || ''}>
+                        {h.label}{h.tip ? ' \u24D8' : ''}{arrow(i)}
                       </th>
                     )
                   })}
