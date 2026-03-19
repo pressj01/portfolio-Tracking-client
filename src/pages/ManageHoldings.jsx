@@ -522,7 +522,17 @@ export default function ManageHoldings() {
             <tbody>
               {sortedHoldings.map(h => (
                 <tr key={h.ticker}>
-                  <td style={{ fontWeight: 600, color: '#64b5f6' }}>{h.ticker}</td>
+                  <td style={{ fontWeight: 600 }}>
+                    <a
+                      href="#"
+                      onClick={(e) => { e.preventDefault(); handleEdit(h) }}
+                      style={{ color: '#64b5f6', textDecoration: 'none', cursor: 'pointer' }}
+                      onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
+                      onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
+                    >
+                      {h.ticker}
+                    </a>
+                  </td>
                   <td style={{ maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {h.description || '-'}
                   </td>

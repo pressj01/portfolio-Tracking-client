@@ -385,6 +385,9 @@ label {
   top: 0;
   background: #0f3460;
 }
+.holdings-table tbody tr:hover {
+  background: rgba(126, 207, 255, 0.12) !important;
+}
 .holdings-table tfoot td {
   position: sticky;
   bottom: 0;

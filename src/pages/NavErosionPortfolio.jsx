@@ -206,7 +206,7 @@ export default function NavErosionPortfolio() {
   const colKeys = ['ticker', 'amount', 'reinvest_pct', 'start_price', 'end_price',
     'price_delta_pct', 'total_dist', 'total_reinvested', 'final_value',
     'gain_loss_dollar', 'gain_loss_pct', 'total_return_dollar', 'total_return_pct',
-    'has_erosion', 'final_deficit', 'warning']
+    'has_erosion', 'final_deficit', 'coverage_ratio', 'warning']
 
   const sortedResults = useMemo(() => {
     if (!results) return []
@@ -236,6 +236,7 @@ export default function NavErosionPortfolio() {
     let totAmount = 0, totDist = 0, totReinv = 0, totFinal = 0, totGL = 0, totTR = 0
     let erosionCount = 0, validCount = 0, errorCount = 0
     let best = null, worst = null
+    let covWeightedSum = 0, covWeightTotal = 0
     results.forEach(r => {
       if (r.error && !r.start_price) { errorCount++; return }
       validCount++
@@ -246,20 +247,25 @@ export default function NavErosionPortfolio() {
       totGL += r.gain_loss_dollar || 0
       totTR += r.total_return_dollar || 0
       if (r.has_erosion) erosionCount++
+      if (r.coverage_ratio != null) {
+        covWeightedSum += r.coverage_ratio * (r.amount || 0)
+        covWeightTotal += r.amount || 0
+      }
       if (best === null || r.total_return_pct > best.total_return_pct) best = r
       if (worst === null || r.total_return_pct < worst.total_return_pct) worst = r
     })
     const totGLPct = totAmount > 0 ? totGL / totAmount * 100 : 0
+    const aggCoverage = covWeightTotal > 0 ? covWeightedSum / covWeightTotal : null
     return {
       totAmount, totDist, totReinv, totFinal, totGL, totTR, totGLPct,
-      erosionCount, validCount, errorCount, best, worst,
+      erosionCount, validCount, errorCount, best, worst, aggCoverage,
     }
   }, [results])
 
   const headers = ['Ticker', 'Amount', 'Reinvest %', 'Start Price', 'End Price',
     'Price \u0394%', 'Total Distributions', 'Total Reinvested', 'Final Value',
     'Gain/Loss $', 'Gain/Loss %', 'Total Return $', 'Total Return %',
-    'NAV Erosion', 'Shares Deficit', 'Note']
+    'NAV Erosion', 'Shares Deficit', 'Coverage', 'Note']
 
   return (
     <div className="nep-page">
@@ -445,6 +451,29 @@ export default function NavErosionPortfolio() {
                 color={summary.erosionCount > 0 ? '#e05555' : '#00c853'}
                 sub="funds showing erosion"
               />
+              <StatTile
+                label="Portfolio Coverage"
+                value={summary.aggCoverage != null ? summary.aggCoverage.toFixed(4) : '\u2014'}
+                color={summary.aggCoverage == null ? '#666' : summary.aggCoverage < 0.8 ? '#e05555' : summary.aggCoverage < 1.0 ? '#ffb300' : '#00c853'}
+                sub="dollar-weighted avg"
+              />
+              {summary.aggCoverage != null && (
+                <div className="nep-stat-tile" style={{
+                  border: summary.aggCoverage < 0.8 ? '2px solid #e05555' : summary.aggCoverage < 1.0 ? '2px solid #ffb300' : '2px solid #00c853',
+                  borderRadius: '8px',
+                  background: summary.aggCoverage < 0.8 ? 'rgba(224,85,85,0.12)' : summary.aggCoverage < 1.0 ? 'rgba(255,179,0,0.12)' : 'rgba(0,200,83,0.12)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <div className="nep-stat-val" style={{
+                    color: summary.aggCoverage < 0.8 ? '#e05555' : summary.aggCoverage < 1.0 ? '#ffb300' : '#00c853',
+                    fontSize: '0.85rem',
+                    lineHeight: 1.3,
+                    textAlign: 'center',
+                  }}>
+                    {summary.aggCoverage < 0.8 ? 'High Probability of Portfolio NAV Erosion' : summary.aggCoverage < 1.0 ? 'Borderline Portfolio NAV Erosion Risk' : 'Low Probability of Portfolio NAV Erosion'}
+                  </div>
+                </div>
+              )}
               {summary.best && (
                 <StatTile
                   label="Best Performer"
@@ -490,7 +519,7 @@ export default function NavErosionPortfolio() {
                         <td><strong>{r.ticker}</strong></td>
                         <td>{fmt$(r.amount || 0)}</td>
                         <td>{(r.reinvest_pct || 0)}%</td>
-                        <td colSpan={12} style={{ textAlign: 'left', color: '#e05555' }}>{r.error}</td>
+                        <td colSpan={13} style={{ textAlign: 'left', color: '#e05555' }}>{r.error}</td>
                         <td></td>
                       </tr>
                     )
@@ -522,6 +551,9 @@ export default function NavErosionPortfolio() {
                           : <span style={{ color: '#00c853', fontWeight: 700 }}>No</span>}
                       </td>
                       <td className={defCls}>{parseFloat(r.final_deficit).toFixed(4)}</td>
+                      <td style={{ color: r.coverage_ratio == null ? '#666' : r.coverage_ratio < 0.8 ? '#e05555' : r.coverage_ratio < 1.0 ? '#ffb300' : '#00c853', fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
+                        {r.coverage_ratio != null ? r.coverage_ratio.toFixed(4) : '\u2014'}
+                      </td>
                       <td style={{ textAlign: 'left', fontSize: '0.78rem', color: '#aaa' }}>
                         {r.warning
                           ? <span title={r.warning} style={{ cursor: 'help' }}>&#9888; {r.warning.substring(0, 40)}{r.warning.length > 40 ? '\u2026' : ''}</span>
@@ -543,7 +575,11 @@ export default function NavErosionPortfolio() {
                     <td className={summary.totGL >= 0 ? 'pct-up' : 'pct-down'}>{fmt$(summary.totGL)}</td>
                     <td></td>
                     <td className={summary.totTR >= 0 ? 'pct-up' : 'pct-down'}>{fmt$(summary.totTR)}</td>
-                    <td></td><td></td><td></td><td></td>
+                    <td></td><td></td>
+                    <td style={{ color: summary.aggCoverage == null ? '#666' : summary.aggCoverage < 0.8 ? '#e05555' : summary.aggCoverage < 1.0 ? '#ffb300' : '#00c853', fontWeight: 600 }}>
+                      {summary.aggCoverage != null ? summary.aggCoverage.toFixed(4) : '\u2014'}
+                    </td>
+                    <td></td>
                   </tr>
                 </tfoot>
               )}

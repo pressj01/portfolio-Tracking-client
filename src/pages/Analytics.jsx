@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { API_BASE } from '../config'
+import Plot from 'react-plotly.js'
 import RiskReturnCharts from './analytics/RiskReturnCharts'
 import IncomeCharts from './analytics/IncomeCharts'
 import BacktestCharts from './analytics/BacktestCharts'
@@ -45,6 +46,8 @@ export default function Analytics() {
   const [balance, setBalance] = useState(50)
   const [snapshots, setSnapshots] = useState([])
   const [chartTab, setChartTab] = useState('risk')
+  const [portfolioCoverage, setPortfolioCoverage] = useState(null)
+  const [tickerCoverage, setTickerCoverage] = useState({})
 
   // Load portfolio tickers on mount
   useEffect(() => {
@@ -88,6 +91,13 @@ export default function Analytics() {
         if (d.error) { setError(d.error); return }
         setResult(d)
         setMode(runMode || mode)
+        // Extract coverage from analytics response
+        if (d.coverage) {
+          if (d.coverage.aggregate_coverage != null) setPortfolioCoverage(d.coverage.aggregate_coverage)
+          const map = {}
+          if (d.coverage.results) d.coverage.results.forEach(r => { if (r.coverage_ratio != null) map[r.ticker] = r.coverage_ratio })
+          setTickerCoverage(map)
+        }
       })
       .catch(e => setError('Request failed: ' + e.message))
       .finally(() => setLoading(false))
@@ -304,19 +314,90 @@ export default function Analytics() {
                   <Stat label="Ulcer Index" value={pm.ulcer_index?.toFixed(2)} color={metricColor(pm.ulcer_index, [3, 7, 12], true)} />
                   <Stat label="Est. Annual Income" value={pm.est_annual_income != null ? '$' + pm.est_annual_income.toLocaleString() : '—'} color="#66bb6a" />
                 </div>
+
+                {/* Coverage Ratio */}
+                {portfolioCoverage != null && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: 140, alignItems: 'center' }}>
+                    <div style={{ fontSize: '0.82rem', color: '#8899aa' }}>Coverage Ratio</div>
+                    <div style={{
+                      fontSize: '1.6rem', fontWeight: 700,
+                      color: portfolioCoverage < 0.8 ? '#ff6b6b' : portfolioCoverage < 1.0 ? '#ffb300' : '#4dff91',
+                    }}>
+                      {portfolioCoverage.toFixed(4)}
+                    </div>
+                    <div style={{
+                      padding: '0.3rem 0.7rem', borderRadius: 6,
+                      border: portfolioCoverage < 0.8 ? '2px solid #ff6b6b' : portfolioCoverage < 1.0 ? '2px solid #ffb300' : '2px solid #4dff91',
+                      background: portfolioCoverage < 0.8 ? 'rgba(255,107,107,0.12)' : portfolioCoverage < 1.0 ? 'rgba(255,179,0,0.12)' : 'rgba(77,255,145,0.12)',
+                      fontSize: '0.78rem', fontWeight: 600, textAlign: 'center',
+                      color: portfolioCoverage < 0.8 ? '#ff6b6b' : portfolioCoverage < 1.0 ? '#ffb300' : '#4dff91',
+                    }}>
+                      {portfolioCoverage < 0.8 ? 'High Probability of NAV Erosion' : portfolioCoverage < 1.0 ? 'Borderline NAV Erosion Risk' : 'Low Probability of NAV Erosion'}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
 
+          {/* Coverage Chart */}
+          {sortedMetrics.length > 0 && Object.keys(tickerCoverage).length > 0 && (() => {
+            const covTickers = sortedMetrics.filter(m => tickerCoverage[m.ticker] != null)
+            if (covTickers.length === 0) return null
+            const sorted = [...covTickers].sort((a, b) => (tickerCoverage[b.ticker] || 0) - (tickerCoverage[a.ticker] || 0))
+            const tks = sorted.map(m => m.ticker)
+            const rawVals = sorted.map(m => tickerCoverage[m.ticker])
+            const CAP = 5
+            const clippedVals = rawVals.map(v => Math.min(v, CAP))
+            const colors = rawVals.map(v => v < 0.8 ? '#ff6b6b' : v < 1.0 ? '#ffb300' : '#4dff91')
+            const textLabels = rawVals.map(v => v > CAP ? v.toFixed(1) : '')
+            return (
+              <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+                <Plot
+                  data={[
+                    {
+                      x: tks, y: clippedVals, type: 'bar',
+                      marker: { color: colors },
+                      text: textLabels,
+                      textposition: 'outside',
+                      textfont: { color: '#4dff91', size: 10 },
+                      customdata: rawVals,
+                      hovertemplate: '<b>%{x}</b><br>Coverage: %{customdata:.4f}<extra></extra>',
+                    },
+                    {
+                      x: [tks[0], tks[tks.length - 1]], y: [1, 1],
+                      type: 'scatter', mode: 'lines',
+                      line: { color: '#ffffff', width: 2, dash: 'dash' },
+                      hoverinfo: 'skip', name: 'Sustainable (1.0)',
+                    },
+                  ]}
+                  layout={{
+                    title: 'Per-Ticker Coverage Ratio',
+                    template: 'plotly_dark',
+                    margin: { t: 40, l: 50, r: 20, b: 60 },
+                    height: 300, autosize: true,
+                    showlegend: false,
+                    yaxis: { title: 'Coverage', zeroline: true, range: [Math.min(...rawVals, 0) - 0.2, CAP + 0.5] },
+                    hoverlabel: { bgcolor: '#111124', bordercolor: '#3a3a5c', font: { color: '#e0e0e0', size: 13 } },
+                  }}
+                  useResizeHandler
+                  style={{ width: '100%', height: 300 }}
+                  config={{ responsive: true }}
+                />
+              </div>
+            )
+          })()}
+
           {/* Metrics Table */}
           {sortedMetrics.length > 0 && (
-            <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem', overflowX: 'auto' }}>
+            <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
               <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '0.95rem' }}>
                 Per-Ticker Metrics
                 <span style={{ color: '#556677', fontWeight: 400, fontSize: '0.82rem', marginLeft: '0.5rem' }}>
                   ({PERIODS.find(p => p.value === period)?.label || period})
                 </span>
               </h3>
+              <div style={{ maxHeight: '600px', overflow: 'auto', borderRadius: '4px' }}>
               <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem', width: '100%' }}>
                 <thead>
                   <tr>
@@ -336,12 +417,14 @@ export default function Analytics() {
                       { key: 'annual_ret', label: 'Ann Ret', tip: 'Price return annualized (excludes dividends)' },
                       { key: 'annual_total_ret', label: 'Tot Ret', tip: 'Price return + dividend yield annualized' },
                       { key: 'annual_vol', label: 'Ann Vol', tip: 'Annualized standard deviation. Lower = less volatile' },
+                      { key: '_coverage', label: 'Cov', tip: 'Coverage ratio — above 1.0 sustainable, 0.8–1.0 borderline, below 0.8 likely NAV decay' },
                     ].map(col => (
                       <th key={col.key} onClick={() => handleSort(col.key)} title={col.tip || ''} style={{
                         padding: '0.4rem 0.5rem', borderBottom: '1px solid #2a3a4e',
                         color: sortCol === col.key ? '#64b5f6' : '#8899aa',
                         cursor: 'pointer', whiteSpace: 'nowrap', textAlign: col.key === 'ticker' ? 'left' : 'right',
                         fontSize: '0.78rem',
+                        position: 'sticky', top: 0, zIndex: 3, background: '#0b0b1c',
                       }}>
                         {col.label}{col.tip ? ' \u24D8' : ''} {sortCol === col.key ? (sortAsc ? '\u25B4' : '\u25BE') : ''}
                       </th>
@@ -381,6 +464,9 @@ export default function Analytics() {
                         {pm.down_capture?.toFixed(0) ?? '—'}
                       </td>
                       <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }} colSpan={3}></td>
+                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', fontWeight: 600, color: portfolioCoverage == null ? '#556' : portfolioCoverage < 0.8 ? '#ff6b6b' : portfolioCoverage < 1.0 ? '#ffb300' : '#4dff91' }}>
+                        {portfolioCoverage != null ? portfolioCoverage.toFixed(2) : '—'}
+                      </td>
                     </tr>
                   )}
                   {sortedMetrics.map(m => (
@@ -422,10 +508,19 @@ export default function Analytics() {
                       <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: '#8899aa' }}>
                         {m.annual_vol?.toFixed(1)}%
                       </td>
+                      {(() => {
+                        const cov = tickerCoverage[m.ticker]
+                        return (
+                          <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', fontWeight: 600, color: cov == null ? '#556' : cov < 0.8 ? '#ff6b6b' : cov < 1.0 ? '#ffb300' : '#4dff91' }}>
+                            {cov != null ? cov.toFixed(2) : '—'}
+                          </td>
+                        )
+                      })()}
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
 
@@ -547,6 +642,20 @@ export default function Analytics() {
                         {metricRow('Calmar Ratio', b.calmar, a.calmar, fmtNum, false, 'Return vs max drawdown. >2.0 great, >1.0 good')}
                         {metricRow('Ulcer Index', b.ulcer_index, a.ulcer_index, fmtNum, false, 'Drawdown severity & duration. <3 great, <5 good, >10 poor')}
                         {metricRow('Max Drawdown', b.max_drawdown, a.max_drawdown, fmtPct, false, 'Largest peak-to-trough decline. Closer to 0% is better')}
+                        {(b.coverage != null || a.coverage != null) && (() => {
+                          const covColor = (v) => v == null ? '#556' : v < 0.8 ? '#ff6b6b' : v < 1.0 ? '#ffb300' : '#4dff91'
+                          const covDelta = b.coverage != null && a.coverage != null ? a.coverage - b.coverage : null
+                          return (
+                            <tr style={{ borderBottom: '1px solid #1a2a3e' }}>
+                              <td title="Coverage ratio — above 1.0 sustainable, 0.8–1.0 borderline, below 0.8 likely NAV decay" style={{ padding: '0.3rem 0.5rem', color: '#8899aa', fontSize: '0.78rem', cursor: 'help' }}>Coverage Ratio ⓘ</td>
+                              <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covColor(b.coverage), fontWeight: 600 }}>{b.coverage != null ? b.coverage.toFixed(4) : '—'}</td>
+                              <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covColor(a.coverage), fontWeight: 600 }}>{a.coverage != null ? a.coverage.toFixed(4) : '—'}</td>
+                              <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covDelta == null ? '#8899aa' : covDelta > 0.01 ? '#4dff91' : covDelta < -0.01 ? '#ff6b6b' : '#8899aa', fontWeight: 600 }}>
+                                {covDelta != null ? (covDelta > 0 ? '+' : '') + covDelta.toFixed(4) : '—'}
+                              </td>
+                            </tr>
+                          )
+                        })()}
                       </tbody>
                     </table>
                   </div>

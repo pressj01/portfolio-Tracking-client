@@ -157,6 +157,8 @@ export default function Dashboard() {
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
   const [modalTicker, setModalTicker] = useState(null)
+  const [portfolioCoverage, setPortfolioCoverage] = useState(null)
+  const [tickerCoverage, setTickerCoverage] = useState({})
 
   useEffect(() => {
     fetch(`${API_BASE}/api/holdings`)
@@ -165,10 +167,21 @@ export default function Dashboard() {
         setHoldings(data)
         setLoading(false)
         if (data.length > 0) {
-          // Fetch upcoming dividends immediately (no refresh needed)
+          // Fetch upcoming dividends and portfolio coverage immediately (no refresh needed)
           fetch(`${API_BASE}/api/upcoming-dividends`)
             .then(r => r.json())
             .then(d => { if (Array.isArray(d)) setUpcomingDivs(d) })
+            .catch(() => {})
+          fetch(`${API_BASE}/api/portfolio-coverage`)
+            .then(r => r.json())
+            .then(d => {
+              if (d.aggregate_coverage != null) setPortfolioCoverage(d.aggregate_coverage)
+              if (d.results) {
+                const map = {}
+                d.results.forEach(r => { if (r.coverage_ratio != null) map[r.ticker] = r.coverage_ratio })
+                setTickerCoverage(map)
+              }
+            })
             .catch(() => {})
 
           setRefreshStatus('Updating prices & dividends...')
@@ -239,9 +252,10 @@ export default function Dashboard() {
           price_return_pct: pv ? (gl / pv) : 0,
           total_return_pct: pv ? ((gl + td) / pv) : 0,
           pct_of_account: totalCv ? (cv / totalCv) : 0,
+          _coverage: tickerCoverage[h.ticker] ?? null,
         }
       })
-  }, [holdings, totals])
+  }, [holdings, totals, tickerCoverage])
 
   // Sorting
   const sorted = useMemo(() => {
@@ -340,6 +354,28 @@ export default function Dashboard() {
           color={gradeColor(totals.priceReturn)}
         />
         <SummaryCard
+          label="Coverage Ratio"
+          value={portfolioCoverage != null ? portfolioCoverage.toFixed(4) : '—'}
+          color={portfolioCoverage == null ? undefined : portfolioCoverage < 0.8 ? '#ff6b6b' : portfolioCoverage < 1.0 ? '#ffb300' : '#4dff91'}
+        />
+        {portfolioCoverage != null && (
+          <div className={`summary-card`} style={{
+            border: portfolioCoverage < 0.8 ? '2px solid #ff6b6b' : portfolioCoverage < 1.0 ? '2px solid #ffb300' : '2px solid #4dff91',
+            borderRadius: '8px',
+            background: portfolioCoverage < 0.8 ? 'rgba(255,107,107,0.12)' : portfolioCoverage < 1.0 ? 'rgba(255,179,0,0.12)' : 'rgba(77,255,145,0.12)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <div className="summary-value" style={{
+              color: portfolioCoverage < 0.8 ? '#ff6b6b' : portfolioCoverage < 1.0 ? '#ffb300' : '#4dff91',
+              fontSize: '0.82rem',
+              lineHeight: 1.3,
+              textAlign: 'center',
+            }}>
+              {portfolioCoverage < 0.8 ? 'High Probability of NAV Erosion' : portfolioCoverage < 1.0 ? 'Borderline NAV Erosion Risk' : 'Low Probability of NAV Erosion'}
+            </div>
+          </div>
+        )}
+        <SummaryCard
           label="Total Return"
           value={pct(totals.totalReturn)}
           color={gradeColor(totals.totalReturn)}
@@ -395,14 +431,17 @@ export default function Dashboard() {
               <SortHeader col="approx_monthly_income" align="right" tip="Estimated monthly dividend income">Mo$</SortHeader>
               <SortHeader col="estim_payment_per_year" align="right" tip="Estimated annual dividend income">Yr$</SortHeader>
               <SortHeader col="paid_for_itself" align="right" tip="Percentage of original cost recovered through dividends">PFI%</SortHeader>
+              <SortHeader col="_coverage" align="right" tip="Coverage ratio — above 1.0 sustainable, 0.8–1.0 borderline, below 0.8 likely NAV decay">Cov</SortHeader>
               <th style={{ textAlign: 'center' }} title="Composite grade based on yield, growth, and risk metrics">Grd ⓘ</th>
             </tr>
           </thead>
           <tbody>
             {sorted.map(h => {
               const g = tickerGrades[h.ticker]
+              const cov = h._coverage
+              const covBad = cov != null && cov < 0.8
               return (
-                <tr key={h.ticker}>
+                <tr key={h.ticker} style={covBad ? { background: 'rgba(255,107,107,0.1)' } : undefined}>
                   <td>
                     <a
                       href="#"
@@ -432,6 +471,9 @@ export default function Dashboard() {
                   <td style={{ textAlign: 'right', color: pfiColor(h.paid_for_itself), fontWeight: pfiVal(h.paid_for_itself) >= 100 ? 700 : 400 }}>
                     {h.paid_for_itself == null ? '—' : (h.paid_for_itself * 100).toFixed(2) + '%'}
                   </td>
+                  <td style={{ textAlign: 'right', color: cov == null ? '#556' : cov < 0.8 ? '#ff6b6b' : cov < 1.0 ? '#ffb300' : '#4dff91', fontWeight: cov != null ? 600 : 400 }}>
+                    {cov != null ? cov.toFixed(2) : '—'}
+                  </td>
                   <td style={{ textAlign: 'center' }}>{g ? <GradeBadge grade={g.grade} /> : '—'}</td>
                 </tr>
               )
@@ -439,7 +481,7 @@ export default function Dashboard() {
           </tbody>
           <tfoot>
             <tr style={{ fontWeight: 700, borderTop: '2px solid #0f3460' }}>
-              <td colSpan={14} style={{ textAlign: 'right' }}>Totals</td>
+              <td colSpan={15} style={{ textAlign: 'right' }}>Totals</td>
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.ytdDivs)}</td>
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.currentMonthIncome)}</td>
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.monthlyIncome)}</td>

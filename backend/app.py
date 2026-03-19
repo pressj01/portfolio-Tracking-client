@@ -859,6 +859,117 @@ def upcoming_dividends():
 
 # ── Portfolio Summary Data (grades) ────────────────────────────────────────────
 
+@app.route("/api/portfolio-coverage", methods=["GET"])
+def portfolio_coverage():
+    """Compute TTM yield-based coverage for each ticker and aggregate.
+
+    Coverage ≈ (TTM price return % + TTM distribution yield %) / TTM distribution yield %
+    This approximates  (SEC Yield + Option Yield) / 12-mo Distribution Yield.
+
+    Interpretation:
+      > 1.0  → sustainable
+      0.8–1.0 → borderline
+      < 0.8  → likely NAV decay
+    """
+    import warnings
+    warnings.filterwarnings("ignore")
+
+    pid = get_profile_id()
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT ticker, current_price, quantity "
+        "FROM all_account_info "
+        "WHERE profile_id = ? AND quantity > 0",
+        (pid,),
+    ).fetchall()
+    conn.close()
+
+    import yfinance as yf
+    from datetime import datetime as _dt, timedelta as _td
+
+    # Deduplicate tickers, aggregate quantities and dollar values
+    ticker_info = {}
+    for r in rows:
+        tk = r[0]
+        cur_price = float(r[1] or 0)
+        qty = float(r[2] or 0)
+        if tk not in ticker_info:
+            ticker_info[tk] = {"current_price": cur_price, "quantity": qty}
+        else:
+            ticker_info[tk]["quantity"] += qty
+            if cur_price > 0:
+                ticker_info[tk]["current_price"] = cur_price
+
+    tickers = list(ticker_info.keys())
+    one_year_ago = (_dt.now() - _td(days=365)).strftime("%Y-%m-%d")
+
+    results = []
+    total_price_return_dollars = 0.0
+    total_dist_dollars = 0.0
+
+    for tk in tickers:
+        info = ticker_info[tk]
+        cur_price = info["current_price"]
+        qty = info["quantity"]
+
+        if cur_price <= 0:
+            results.append({"ticker": tk, "coverage_ratio": None})
+            continue
+
+        try:
+            yf_tk = yf.Ticker(tk)
+            hist = yf_tk.history(start=one_year_ago, interval="1d", auto_adjust=True)
+            if hist.empty or len(hist) < 2:
+                results.append({"ticker": tk, "coverage_ratio": None})
+                continue
+
+            price_1yr_ago = float(hist["Close"].iloc[0])
+            if price_1yr_ago <= 0:
+                results.append({"ticker": tk, "coverage_ratio": None})
+                continue
+
+            # TTM price return as a percentage of starting price
+            ttm_price_return_pct = (cur_price - price_1yr_ago) / price_1yr_ago
+
+            # TTM distributions per share
+            divs = yf_tk.dividends
+            if divs is not None and not divs.empty:
+                cutoff = _dt.now() - _td(days=365)
+                if divs.index.tz is not None:
+                    cutoff = cutoff.astimezone(divs.index.tz)
+                ttm_divs = divs[divs.index >= cutoff]
+                ttm_dist_per_share = float(ttm_divs.sum())
+            else:
+                ttm_dist_per_share = 0.0
+
+            # TTM distribution yield
+            ttm_dist_yield = ttm_dist_per_share / cur_price if cur_price > 0 else 0.0
+
+            if ttm_dist_yield > 0:
+                coverage = round((ttm_price_return_pct + ttm_dist_yield) / ttm_dist_yield, 4)
+            else:
+                coverage = None
+
+            results.append({"ticker": tk, "coverage_ratio": coverage})
+
+            if coverage is not None:
+                # Dollar-weight for aggregate
+                dist_dollars = ttm_dist_per_share * qty
+                price_return_dollars = (cur_price - price_1yr_ago) * qty
+                total_dist_dollars += dist_dollars
+                total_price_return_dollars += price_return_dollars
+
+        except Exception:
+            results.append({"ticker": tk, "coverage_ratio": None})
+
+    if total_dist_dollars > 0:
+        agg_coverage = round((total_price_return_dollars + total_dist_dollars) / total_dist_dollars, 4)
+    else:
+        agg_coverage = None
+
+    return jsonify(results=results, aggregate_coverage=agg_coverage)
+
+
 @app.route("/api/portfolio-summary/data", methods=["GET"])
 def portfolio_summary_data():
     """Compute per-ticker grades and portfolio-level grade via yfinance."""
@@ -4026,6 +4137,8 @@ def nav_erosion_data():
         cumulative_dist = 0.0
         cumulative_reinvested = 0.0
         cumulative_shares_bought = 0.0
+        prev_price = initial_price
+        cumulative_divs_per_share = 0.0
 
         for dt, row in df.iterrows():
             price = float(row["price"])
@@ -4041,6 +4154,15 @@ def nav_erosion_data():
             cumulative_dist += total_dist
             cumulative_reinvested += reinvest_amt
             cumulative_shares_bought += shares_bought
+            cumulative_divs_per_share += div_per_share
+
+            # Coverage ratio: (month-over-month price change + distribution) / distribution
+            price_change = price - prev_price
+            if div_per_share > 0:
+                coverage_ratio = round((price_change + div_per_share) / div_per_share, 4)
+            else:
+                coverage_ratio = None
+            prev_price = price
 
             rows.append({
                 "date": dt.strftime("%b %Y"),
@@ -4054,9 +4176,16 @@ def nav_erosion_data():
                 "portfolio_val": round(portfolio_val, 2),
                 "breakeven_sh": round(breakeven_sh, 4),
                 "shares_deficit": round(shares_deficit, 4),
+                "coverage_ratio": coverage_ratio,
             })
 
         final_row = rows[-1]
+        # Aggregate coverage: (total price change + total divs per share) / total divs per share
+        total_price_change = final_row["price"] - initial_price
+        if cumulative_divs_per_share > 0:
+            total_coverage = round((total_price_change + cumulative_divs_per_share) / cumulative_divs_per_share, 4)
+        else:
+            total_coverage = None
         summary = {
             "total_dist": round(cumulative_dist, 2),
             "total_shares_bought": round(cumulative_shares_bought, 4),
@@ -4065,6 +4194,7 @@ def nav_erosion_data():
             "price_chg_pct": final_row["price_delta_pct"],
             "has_erosion": final_row["shares_deficit"] > 0,
             "final_deficit": final_row["shares_deficit"],
+            "total_coverage": total_coverage,
         }
 
         dates_list = [r["date"] for r in rows]
@@ -4406,6 +4536,7 @@ def nav_erosion_portfolio_data():
         current_shares = amount / initial_price
         cumul_dist = 0.0
         cumul_reinvested = 0.0
+        cumul_divs_per_share = 0.0
 
         for dt, row in df.iterrows():
             price = float(row["price"])
@@ -4416,6 +4547,7 @@ def nav_erosion_portfolio_data():
             current_shares += shares_bought
             cumul_dist += total_dist
             cumul_reinvested += reinvest_amt
+            cumul_divs_per_share += div_per_share
 
         final_price = float(df["price"].iloc[-1])
         portfolio_val = current_shares * final_price
@@ -4428,6 +4560,13 @@ def nav_erosion_portfolio_data():
         cash_taken = cumul_dist - cumul_reinvested
         total_return_dollar = portfolio_val + cash_taken - amount
         total_return_pct = total_return_dollar / amount * 100 if amount else 0.0
+
+        # Coverage ratio: (total price change + total divs per share) / total divs per share
+        total_price_change = final_price - initial_price
+        if cumul_divs_per_share > 0:
+            coverage_ratio = round((total_price_change + cumul_divs_per_share) / cumul_divs_per_share, 4)
+        else:
+            coverage_ratio = None
 
         results.append({
             "ticker": sym,
@@ -4445,6 +4584,7 @@ def nav_erosion_portfolio_data():
             "total_return_pct": round(total_return_pct, 2),
             "has_erosion": has_erosion_at_end,
             "final_deficit": round(final_deficit, 4),
+            "coverage_ratio": coverage_ratio,
             "warning": warning,
             "error": None,
         })
@@ -5473,8 +5613,9 @@ def _optimize_balanced(returns_df, yields, balance=0.5, current_weights=None, mi
 
 def _before_after_comparison(returns_df, opt_weights, bench_ret,
                               port_metrics_before, curr_income, opt_income,
-                              current_weights=None):
-    """Compute before/after grade, income, and key metrics.
+                              current_weights=None, coverage_map=None,
+                              available_tickers=None):
+    """Compute before/after grade, income, coverage, and key metrics.
     Uses already-computed port_metrics and income values from the optimization branch
     so numbers match exactly what's shown in the optimization summary.
     If weights are essentially unchanged, reuses before metrics to avoid grading noise."""
@@ -5482,6 +5623,24 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
     from grading import grade_portfolio
     pm = port_metrics_before or {}
     grade_before = pm.get("grade", {})
+
+    # Compute weighted coverage for current and optimal weights
+    def _weighted_coverage(weights_arr):
+        if coverage_map is None or available_tickers is None:
+            return None
+        total_w = 0.0
+        weighted_sum = 0.0
+        for i, t in enumerate(available_tickers):
+            cov = coverage_map.get(t)
+            w = float(weights_arr[i]) if i < len(weights_arr) else 0
+            if cov is not None and w > 0.001:
+                weighted_sum += cov * w
+                total_w += w
+        return round(weighted_sum / total_w, 4) if total_w > 0 else None
+
+    curr_cov = _weighted_coverage(current_weights) if current_weights is not None else None
+    opt_cov = _weighted_coverage(opt_weights)
+
     before = {
         "grade": grade_before.get("overall", "—") if isinstance(grade_before, dict) else str(grade_before),
         "score": grade_before.get("score", 0) if isinstance(grade_before, dict) else 0,
@@ -5493,6 +5652,7 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
         "max_drawdown": pm.get("max_drawdown"),
         "annual_income": round(curr_income, 2),
         "monthly_income": round(curr_income / 12, 2),
+        "coverage": curr_cov,
     }
     # If weights barely changed (all within 0.5%), reuse before metrics — no real change
     if current_weights is not None:
@@ -5513,6 +5673,7 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
             "max_drawdown": pm_after.get("max_drawdown"),
             "annual_income": round(opt_income, 2),
             "monthly_income": round(opt_income / 12, 2),
+            "coverage": opt_cov,
         },
     }
 
@@ -5685,6 +5846,23 @@ def analytics_data():
         yield_map[t] = ep / cv
         income_map[t] = ep
 
+    # Per-ticker coverage ratio: (TTM price return % + TTM dist yield %) / TTM dist yield %
+    coverage_map = {}
+    for t in tickers:
+        if t not in close.columns:
+            continue
+        tc = close[t].dropna()
+        if len(tc) < 2:
+            continue
+        price_start = float(tc.iloc[0])
+        price_end = float(tc.iloc[-1])
+        if price_start <= 0:
+            continue
+        price_return_pct = (price_end - price_start) / price_start
+        dist_yield = yield_map.get(t, 0)
+        if dist_yield > 0:
+            coverage_map[t] = round((price_return_pct + dist_yield) / dist_yield, 4)
+
     bench_close = close[benchmark] if benchmark in close.columns else None
     bench_ret = bench_close.pct_change().dropna() if bench_close is not None else None
 
@@ -5759,7 +5937,7 @@ def analytics_data():
             "n_holdings": len(available_tickers),
             "grade": pm.get("grade"),
             "total_value": round(total_val, 2),
-            "est_annual_income": round(sum(income_map.get(t, 0) for t in available_tickers), 2),
+            "est_annual_income": round(sum(income_map.values()), 2),
         }
 
         # Correlation matrix
@@ -5782,7 +5960,21 @@ def analytics_data():
             "values": [round(float(v) * 100, 2) for v in dd_sampled.values],
         }
 
-    result = {"metrics": metrics, "portfolio_metrics": port_metrics}
+    # Include per-ticker coverage and aggregate in response
+    cov_results = [{"ticker": t, "coverage_ratio": coverage_map.get(t)} for t in available_tickers]
+    # Dollar-weighted aggregate coverage
+    _cov_num = 0.0
+    _cov_den = 0.0
+    for t in available_tickers:
+        cov = coverage_map.get(t)
+        w = weight_map.get(t, 0)
+        if cov is not None and w > 0:
+            _cov_num += cov * w
+            _cov_den += w
+    agg_cov = round(_cov_num / _cov_den, 4) if _cov_den > 0 else None
+
+    result = {"metrics": metrics, "portfolio_metrics": port_metrics,
+              "coverage": {"results": cov_results, "aggregate_coverage": agg_cov}}
     if result_corr:
         result["correlation"] = result_corr
         result["drawdown_series"] = result_dd
@@ -5893,7 +6085,9 @@ def analytics_data():
                 ret_opt_income = float(opt_w.dot(np.array(yields_list_ret))) * total_val
                 opt_dict["comparison"] = _before_after_comparison(returns_df, opt_w, bench_ret,
                                                                    port_metrics, ret_curr_income, ret_opt_income,
-                                                                   current_weights=current_weights)
+                                                                   current_weights=current_weights,
+                                                                   coverage_map=coverage_map,
+                                                                   available_tickers=available_tickers)
             result["optimization"] = opt_dict
 
         elif mode == "optimize_income":
@@ -5942,7 +6136,9 @@ def analytics_data():
             if has_portfolio:
                 opt_dict["comparison"] = _before_after_comparison(returns_df, opt_w, bench_ret,
                                                                    port_metrics, curr_income, opt_income,
-                                                                   current_weights=current_weights)
+                                                                   current_weights=current_weights,
+                                                                   coverage_map=coverage_map,
+                                                                   available_tickers=available_tickers)
             result["optimization"] = opt_dict
 
         elif mode == "optimize_balanced":
@@ -6015,7 +6211,9 @@ def analytics_data():
             if has_portfolio:
                 opt_dict["comparison"] = _before_after_comparison(returns_df, opt_w, bench_ret,
                                                                    port_metrics, curr_income, opt_income,
-                                                                   current_weights=current_weights)
+                                                                   current_weights=current_weights,
+                                                                   coverage_map=coverage_map,
+                                                                   available_tickers=available_tickers)
             result["optimization"] = opt_dict
 
     return jsonify(result)
