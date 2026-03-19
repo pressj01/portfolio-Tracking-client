@@ -3029,6 +3029,7 @@ def etf_screen_data():
             if df.empty:
                 return jsonify(error=f"No data found for {ticker}"), 404
 
+            df = df.dropna(subset=["Open", "High", "Low", "Close"])
             records = []
             for dt, row in df.iterrows():
                 records.append({
