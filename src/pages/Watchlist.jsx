@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { API_BASE } from '../config'
+import { useDialog } from '../components/DialogProvider'
 
 function SignalBadge({ signal }) {
   if (!signal || signal === '\u2014') return <span>{'\u2014'}</span>
@@ -18,6 +19,7 @@ function pctClass(v) {
 }
 
 export default function Watchlist() {
+  const dialog = useDialog()
   const [watchingList, setWatchingList] = useState([])
   const [analysisData, setAnalysisData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -68,12 +70,12 @@ export default function Watchlist() {
   const watchingListRef = useRef(watchingList)
   useEffect(() => { watchingListRef.current = watchingList }, [watchingList])
 
-  const addWatching = () => {
+  const addWatching = async () => {
     const t = ticker.trim().toUpperCase()
     if (!t) return
     const current = watchingListRef.current
     if (current.some(r => r.ticker === t)) {
-      alert(t + ' is already in your watching list.')
+      await dialog.alert(t + ' is already in your watching list.')
       return
     }
     const newList = [...current, { ticker: t, notes: notes.trim() }]

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { API_BASE } from '../config'
 import Plot from 'react-plotly.js'
+import { useDialog } from '../components/DialogProvider'
 
 const MAX_ROWS = 80
 const CHART_COLORS = [
@@ -205,8 +206,8 @@ function DripProjectionsPanel() {
     setCustomTickerLoading(true)
     fetch(`${API_BASE}/api/lookup/${sym}`)
       .then(r => r.json())
-      .then(data => {
-        if (data.error) { alert(`Could not find ticker: ${sym}`); return }
+      .then(async data => {
+        if (data.error) { await dialog.alert(`Could not find ticker: ${sym}`); return }
         setCustomTickers(prev => [...prev, {
           ticker: sym,
           description: data.description || sym,
@@ -216,7 +217,7 @@ function DripProjectionsPanel() {
         }])
         setSelectedTickers(prev => [...prev, sym])
       })
-      .catch(() => alert(`Could not look up ${sym}`))
+      .catch(async () => await dialog.alert(`Could not look up ${sym}`))
       .finally(() => { setCustomTickerLoading(false); setCustomTickerInput('') })
   }
 
@@ -738,6 +739,7 @@ function DripProjectionsPanel() {
 }
 
 export default function PortfolioIncomeSim() {
+  const dialog = useDialog()
   // Mode
   const [mode, setMode] = useState('historical')
   // Historical settings
@@ -972,8 +974,8 @@ export default function PortfolioIncomeSim() {
   // Load saved
   const loadSaved = () => {
     if (!selectedSaved) return
-    fetch(`${API_BASE}/api/pis/saved/` + selectedSaved).then(r => r.json()).then(d => {
-      if (d.error) { alert(d.error); return }
+    fetch(`${API_BASE}/api/pis/saved/` + selectedSaved).then(r => r.json()).then(async d => {
+      if (d.error) { await dialog.alert(d.error); return }
       setMode(d.mode || 'historical')
       if (d.mode === 'historical' || !d.mode) {
         if (d.start) setStartDate(d.start)
@@ -1007,19 +1009,19 @@ export default function PortfolioIncomeSim() {
       setCompYieldOverride(yieldMap)
       setResults(null)
       if (rows.length === 0 && tickers.length === 0) {
-        alert('Warning: This saved simulation has no ETFs. Add tickers before running.')
+        await dialog.alert('Warning: This saved simulation has no ETFs. Add tickers before running.')
       }
-    }).catch(err => alert('Load failed: ' + err.message))
+    }).catch(async err => await dialog.alert('Load failed: ' + err.message))
   }
 
   // Delete saved
-  const deleteSaved = () => {
+  const deleteSaved = async () => {
     if (!selectedSaved) return
     const sel = savedList.find(s => String(s.id) === selectedSaved)
-    if (!confirm('Delete "' + (sel?.name || '') + '"?')) return
+    if (!await dialog.confirm('Delete "' + (sel?.name || '') + '"?')) return
     fetch(`${API_BASE}/api/pis/saved/` + selectedSaved, { method: 'DELETE' })
-      .then(r => r.json()).then(d => {
-        if (d.error) { alert(d.error); return }
+      .then(r => r.json()).then(async d => {
+        if (d.error) { await dialog.alert(d.error); return }
         setDeleteMsg(true)
         setTimeout(() => setDeleteMsg(false), 2000)
         setSelectedSaved('')
@@ -1047,8 +1049,8 @@ export default function PortfolioIncomeSim() {
   }
 
   // Rename
-  const openRename = () => {
-    if (!selectedSaved) { alert('Select a simulation first.'); return }
+  const openRename = async () => {
+    if (!selectedSaved) { await dialog.alert('Select a simulation first.'); return }
     const sel = savedList.find(s => String(s.id) === selectedSaved)
     setRenameName(sel?.name || '')
     setRenameError(null)
@@ -1071,8 +1073,8 @@ export default function PortfolioIncomeSim() {
   }
 
   // Update saved with current grid
-  const updateSaved = () => {
-    if (!selectedSaved) { alert('Select a simulation first.'); return }
+  const updateSaved = async () => {
+    if (!selectedSaved) { await dialog.alert('Select a simulation first.'); return }
     const sel = savedList.find(s => String(s.id) === selectedSaved)
     const rows = collectRows(gridRows)
     const payload = { name: sel?.name || 'Unnamed', mode, rows, comparison_tickers: compTickers.map(t => ({ ticker: t, reinvest_pct: compReinvest[t] || 0, amount: compAmount[t] || 10000, yield_override: compYieldOverride[t] ?? null })) }
@@ -1081,8 +1083,8 @@ export default function PortfolioIncomeSim() {
     fetch(`${API_BASE}/api/pis/saved/` + selectedSaved, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-    }).then(r => r.json()).then(d => {
-      if (d.error) { alert(d.error); return }
+    }).then(r => r.json()).then(async d => {
+      if (d.error) { await dialog.alert(d.error); return }
       setSavedMsg(true)
       setTimeout(() => setSavedMsg(false), 2500)
       loadSavedList()
@@ -1150,13 +1152,13 @@ export default function PortfolioIncomeSim() {
   }
   const pickerClearAll = () => setPickerChecked(new Set())
 
-  const pickerAddSelected = () => {
+  const pickerAddSelected = async () => {
     const toAdd = pickerTickers.filter(t => pickerChecked.has(t.ticker))
     if (toAdd.length === 0) return
     // Remove empty rows
     const nonEmpty = gridRows.filter(r => r.ticker.trim())
     if (nonEmpty.length + toAdd.length > MAX_ROWS) {
-      alert(`Adding ${toAdd.length} tickers would exceed the ${MAX_ROWS} row limit.`)
+      await dialog.alert(`Adding ${toAdd.length} tickers would exceed the ${MAX_ROWS} row limit.`)
       return
     }
     const newRows = toAdd.map(t => ({
@@ -1169,13 +1171,13 @@ export default function PortfolioIncomeSim() {
     setPickerOpen(false)
   }
 
-  const pickerAddAll = () => {
+  const pickerAddAll = async () => {
     setPickerSearch('')
     const all = pickerTickers.filter(t => !existingTickers.has(t.ticker))
     if (all.length === 0) return
     const nonEmpty = gridRows.filter(r => r.ticker.trim())
     if (nonEmpty.length + all.length > MAX_ROWS) {
-      alert(`Adding ${all.length} tickers would exceed the ${MAX_ROWS} row limit.`)
+      await dialog.alert(`Adding ${all.length} tickers would exceed the ${MAX_ROWS} row limit.`)
       return
     }
     const newRows = all.map(t => ({

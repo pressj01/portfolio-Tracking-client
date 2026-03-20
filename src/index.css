@@ -472,6 +472,61 @@ label {
   color: #e0e0e0;
 }
 
+/* Dialog (replaces window.prompt / confirm / alert) */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+.dialog-box {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 10px;
+  padding: 1.5rem;
+  min-width: 340px;
+  max-width: 480px;
+  width: 90vw;
+}
+.dialog-message {
+  margin: 0 0 1rem 0;
+  color: #e0e0e0;
+  font-size: 0.95rem;
+  white-space: pre-wrap;
+}
+.dialog-input {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+  box-sizing: border-box;
+}
+.dialog-input:focus {
+  outline: none;
+  border-color: #e94560;
+}
+.dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+.dialog-buttons .btn-secondary {
+  background: #2a2a4e;
+  color: #aaa;
+  border: 1px solid #0f3460;
+}
+.dialog-buttons .btn-secondary:hover {
+  background: #3a3a5e;
+  color: #e0e0e0;
+}
+
 /* Upcoming Dividends */
 .upcoming-grid {
   display: grid;

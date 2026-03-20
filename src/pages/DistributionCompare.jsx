@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { API_BASE } from '../config'
+import { useDialog } from '../components/DialogProvider'
 
 const DURATION_OPTIONS = Array.from({ length: 20 }, (_, i) => ({
   value: `${i + 1}y`,
@@ -177,6 +178,7 @@ function MonthlyTable({ fund, months, which }) {
 
 /* ── Main Component ─────────────────────────────────────────────── */
 export default function DistributionCompare() {
+  const dialog = useDialog()
   // Mode & comparison
   const [mode, setMode] = useState('historical')
   const [compareType, setCompareType] = useState('income_vs_growth')
@@ -363,15 +365,15 @@ export default function DistributionCompare() {
   }, [buildBody])
 
   // Save/load setups
-  const saveSetup = useCallback(() => {
-    const name = prompt('Name this setup:', `${tickerA} vs ${tickerB} - ${duration}`)
+  const saveSetup = useCallback(async () => {
+    const name = await dialog.prompt('Name this setup:', `${tickerA} vs ${tickerB} - ${duration}`)
     if (!name) return
     setSavedSetups(prev => [...prev, {
       name, tickerA, tickerB, investA, investB, yieldA, yieldB, duration, withdrawal, cashWedge,
       mode, compareType, market, withdrawalStrategy, withdrawalPct, inflationAdj, inflationRate,
       dynamicReducePct, dynamicThresholdPct, dripA, dripB, showFundC, tickerC, investC, yieldC, dripC,
     }])
-  }, [tickerA, tickerB, investA, investB, yieldA, yieldB, duration, withdrawal, cashWedge, mode, compareType, market, withdrawalStrategy, withdrawalPct, inflationAdj, inflationRate, dynamicReducePct, dynamicThresholdPct, dripA, dripB, showFundC, tickerC, investC, yieldC, dripC])
+  }, [dialog, tickerA, tickerB, investA, investB, yieldA, yieldB, duration, withdrawal, cashWedge, mode, compareType, market, withdrawalStrategy, withdrawalPct, inflationAdj, inflationRate, dynamicReducePct, dynamicThresholdPct, dripA, dripB, showFundC, tickerC, investC, yieldC, dripC])
 
   const loadSetup = useCallback((s) => {
     setTickerA(s.tickerA || ''); setTickerB(s.tickerB || '')

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { API_BASE } from '../config'
+import { useDialog } from '../components/DialogProvider'
 import Plot from 'react-plotly.js'
 import RiskReturnCharts from './analytics/RiskReturnCharts'
 import IncomeCharts from './analytics/IncomeCharts'
@@ -32,6 +33,7 @@ function metricColor(val, thresholds, lowerBetter = false) {
 }
 
 export default function Analytics() {
+  const dialog = useDialog()
   const [tickers, setTickers] = useState([])
   const [input, setInput] = useState('')
   const [benchmark, setBenchmark] = useState('SPY')
@@ -705,8 +707,8 @@ export default function Analytics() {
                         fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer',
                       }}>Export CSV</button>
                       {result.optimization.comparison && (
-                        <button onClick={() => {
-                          const label = prompt('Snapshot label:', `${mode === 'optimize_balanced' ? `Balanced ${balance}%` : mode === 'optimize_income' ? 'Income' : 'Returns'}`)
+                        <button onClick={async () => {
+                          const label = await dialog.prompt('Snapshot label:', `${mode === 'optimize_balanced' ? `Balanced ${balance}%` : mode === 'optimize_income' ? 'Income' : 'Returns'}`)
                           if (label) setSnapshots(prev => [...prev.slice(-2), { label, mode, balance, optimization: result.optimization, portfolio_metrics: result.portfolio_metrics }])
                         }} style={{
                           background: 'none', border: '1px solid #3a5a3c', borderRadius: 4, color: '#66bb6a',

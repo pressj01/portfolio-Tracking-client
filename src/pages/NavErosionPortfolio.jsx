@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { API_BASE } from '../config'
+import { useDialog } from '../components/DialogProvider'
 
 const MAX_ROWS = 80
 
@@ -21,6 +22,7 @@ function StatTile({ label, value, color, sub }) {
 }
 
 export default function NavErosionPortfolio() {
+  const dialog = useDialog()
   const [startDate, setStartDate] = useState('2015-01-01')
   const [endDate, setEndDate] = useState('2025-12-31')
   const [gridRows, setGridRows] = useState([{ ticker: '', amount: '', reinvest_pct: '' }])
@@ -106,36 +108,35 @@ export default function NavErosionPortfolio() {
       })
   }, [gridRows])
 
-  const loadSaved = () => {
+  const loadSaved = async () => {
     if (!selectedSaved) return
-    fetch(`${API_BASE}/api/nav-erosion-portfolio/saved/` + selectedSaved)
-      .then(r => r.json())
-      .then(d => {
-        if (d.error) { alert(d.error); return }
-        if (d.start) setStartDate(d.start)
-        if (d.end) setEndDate(d.end)
-        const rows = (d.rows || []).map(r => ({
-          ticker: r.ticker || '', amount: String(r.amount || ''), reinvest_pct: String(r.reinvest_pct || '')
-        }))
-        setGridRows(rows.length > 0 ? rows : [{ ticker: '', amount: '', reinvest_pct: '' }])
-        setResults(null)
-      })
-      .catch(err => alert('Load failed: ' + err.message))
+    try {
+      const r = await fetch(`${API_BASE}/api/nav-erosion-portfolio/saved/` + selectedSaved)
+      const d = await r.json()
+      if (d.error) { await dialog.alert(d.error); return }
+      if (d.start) setStartDate(d.start)
+      if (d.end) setEndDate(d.end)
+      const rows = (d.rows || []).map(r => ({
+        ticker: r.ticker || '', amount: String(r.amount || ''), reinvest_pct: String(r.reinvest_pct || '')
+      }))
+      setGridRows(rows.length > 0 ? rows : [{ ticker: '', amount: '', reinvest_pct: '' }])
+      setResults(null)
+    } catch (err) {
+      await dialog.alert('Load failed: ' + err.message)
+    }
   }
 
-  const deleteSaved = () => {
+  const deleteSaved = async () => {
     if (!selectedSaved) return
     const sel = savedList.find(s => String(s.id) === selectedSaved)
-    if (!confirm('Delete saved backtest "' + (sel?.name || '') + '"?')) return
-    fetch(`${API_BASE}/api/nav-erosion-portfolio/saved/` + selectedSaved, { method: 'DELETE' })
-      .then(r => r.json())
-      .then(d => {
-        if (d.error) { alert(d.error); return }
-        setDeleteMsg(true)
-        setTimeout(() => setDeleteMsg(false), 2000)
-        setSelectedSaved('')
-        loadSavedList()
-      })
+    if (!await dialog.confirm('Delete saved backtest "' + (sel?.name || '') + '"?')) return
+    const r = await fetch(`${API_BASE}/api/nav-erosion-portfolio/saved/` + selectedSaved, { method: 'DELETE' })
+    const d = await r.json()
+    if (d.error) { await dialog.alert(d.error); return }
+    setDeleteMsg(true)
+    setTimeout(() => setDeleteMsg(false), 2000)
+    setSelectedSaved('')
+    loadSavedList()
   }
 
   const showSaveBtForm = () => {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { API_BASE } from '../config'
+import { useDialog } from '../components/DialogProvider'
 
 function CategoryModal({ category, onSave, onCancel }) {
   const [name, setName] = useState(category?.name || '')
@@ -69,6 +70,7 @@ function AllocationBar({ categories, totalValue }) {
 }
 
 export default function Categories() {
+  const dialog = useDialog()
   const [data, setData] = useState({ categories: [], unallocated: [], total_value: 0 })
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState(null)
@@ -116,7 +118,7 @@ export default function Categories() {
   }
 
   const handleDelete = async (cat) => {
-    if (!confirm(`Delete category "${cat.name}"? Tickers will become unallocated.`)) return
+    if (!await dialog.confirm(`Delete category "${cat.name}"? Tickers will become unallocated.`)) return
     await fetch(`${API_BASE}/api/categories/${cat.id}`, { method: 'DELETE' })
     if (expandedId === cat.id) setExpandedId(null)
     reload()

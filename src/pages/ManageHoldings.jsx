@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { API_BASE } from '../config'
+import { useDialog } from '../components/DialogProvider'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '',
@@ -346,6 +347,7 @@ const COLUMNS = [
 ]
 
 export default function ManageHoldings() {
+  const dialog = useDialog()
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -431,7 +433,7 @@ export default function ManageHoldings() {
   }
 
   const handleDelete = async (ticker) => {
-    if (!confirm(`Delete ${ticker}?`)) return
+    if (!await dialog.confirm(`Delete ${ticker}?`)) return
     setError(null)
     try {
       const res = await fetch(`${API_BASE}/api/holdings/${ticker}`, { method: 'DELETE' })

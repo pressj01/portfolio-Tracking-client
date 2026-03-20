@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { HashRouter as Router, Routes, Route, NavLink, useLocation } from 'react-router-dom'
 import './index.css'
+import DialogProvider from './components/DialogProvider'
 import Dashboard from './pages/Dashboard'
 import Import from './pages/Import'
 import ManageHoldings from './pages/ManageHoldings'
@@ -55,6 +56,7 @@ function NavDropdown({ label, children }) {
 
 function App() {
   return (
+    <DialogProvider>
     <Router>
       <Nav />
       <Routes>
@@ -79,6 +81,7 @@ function App() {
         <Route path="/dist-compare" element={<DistributionCompare />} />
       </Routes>
     </Router>
+    </DialogProvider>
   )
 }
 

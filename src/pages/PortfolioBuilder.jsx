@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { API_BASE } from '../config'
+import { useDialog } from '../components/DialogProvider'
 
 const PERIODS = [
   { label: '1M', value: '1mo' },
@@ -37,6 +38,7 @@ function fmtN(v, dec = 2) {
 }
 
 export default function PortfolioBuilder() {
+  const dialog = useDialog()
   // Portfolio list state
   const [portfolios, setPortfolios] = useState([])
   const [activeId, setActiveId] = useState(null)
@@ -49,7 +51,6 @@ export default function PortfolioBuilder() {
   const [tickerInput, setTickerInput] = useState('')
   const [dollarInput, setDollarInput] = useState('')
   const [editingDollar, setEditingDollar] = useState(null)
-  const [editDollarVal, setEditDollarVal] = useState('')
 
   // Analysis state
   const [period, setPeriod] = useState('1y')
@@ -140,7 +141,7 @@ export default function PortfolioBuilder() {
 
   // ── Create portfolio ─────────────────────────────────────────────────────
   const createPortfolio = async () => {
-    const name = prompt('Portfolio name:')
+    const name = await dialog.prompt('Portfolio name:')
     if (!name || !name.trim()) return
     try {
       const res = await fetch(`${API_BASE}/api/builder/portfolios`, {
@@ -148,17 +149,17 @@ export default function PortfolioBuilder() {
         body: JSON.stringify({ name: name.trim() }),
       })
       const data = await res.json()
-      if (data.error) { alert(data.error); return }
+      if (data.error) { await dialog.alert(data.error); return }
       await loadPortfolios()
       setActiveId(data.id)
       setActiveName(name.trim())
-    } catch (e) { alert(e) }
+    } catch (e) { await dialog.alert(String(e)) }
   }
 
   // ── Delete portfolio ─────────────────────────────────────────────────────
   const deletePortfolio = async (pid, e) => {
     e.stopPropagation()
-    if (!confirm('Delete this portfolio?')) return
+    if (!await dialog.confirm('Delete this portfolio?')) return
     await fetch(`${API_BASE}/api/builder/portfolios/${pid}`, { method: 'DELETE' })
     if (activeId === pid) {
       setActiveId(null)
@@ -172,7 +173,7 @@ export default function PortfolioBuilder() {
   // ── Save As (duplicate) portfolio ───────────────────────────────────────
   const saveAsPortfolio = async () => {
     if (!activeId || holdings.length === 0) return
-    const name = prompt('Save as new portfolio name:')
+    const name = await dialog.prompt('Save as new portfolio name:')
     if (!name || !name.trim()) return
     try {
       const res = await fetch(`${API_BASE}/api/builder/portfolios`, {
@@ -180,7 +181,7 @@ export default function PortfolioBuilder() {
         body: JSON.stringify({ name: name.trim() }),
       })
       const data = await res.json()
-      if (data.error) { alert(data.error); return }
+      if (data.error) { await dialog.alert(data.error); return }
       const newId = data.id
       for (const h of holdings) {
         await fetch(`${API_BASE}/api/builder/portfolios/${newId}/holdings`, {
@@ -191,7 +192,7 @@ export default function PortfolioBuilder() {
       await loadPortfolios()
       setActiveId(newId)
       setActiveName(name.trim())
-    } catch (e) { alert(e) }
+    } catch (e) { await dialog.alert(String(e)) }
   }
 
   // ── Rename portfolio ─────────────────────────────────────────────────────
@@ -214,7 +215,7 @@ export default function PortfolioBuilder() {
   // ── Clear all holdings ────────────────────────────────────────────────────
   const clearHoldings = async () => {
     if (!activeId || holdings.length === 0) return
-    if (!confirm('Remove all holdings from this portfolio?')) return
+    if (!await dialog.confirm('Remove all holdings from this portfolio?')) return
     for (const h of holdings) {
       await fetch(`${API_BASE}/api/builder/portfolios/${activeId}/holdings/${h.ticker}`, { method: 'DELETE' })
     }
@@ -246,13 +247,33 @@ export default function PortfolioBuilder() {
   }
 
   // ── Inline dollar edit ───────────────────────────────────────────────────
-  const startDollarEdit = (ticker, val) => {
+  const committingRef = useRef(false)
+  const startDollarEdit = (ticker) => {
     setEditingDollar(ticker)
-    setEditDollarVal(String(val))
+    committingRef.current = false
   }
-  const commitDollarEdit = async (ticker) => {
+  const commitDollarEdit = async (ticker, newVal) => {
+    if (committingRef.current) return
+    committingRef.current = true
     setEditingDollar(null)
-    const newVal = parseFloat(editDollarVal) || 0
+    setAnalysisResult(prev => {
+      if (!prev) return prev
+      const updated = prev.holdings.map(h =>
+        h.ticker === ticker ? {
+          ...h,
+          dollar_amount: newVal,
+          shares: h.current_price ? newVal / h.current_price : 0,
+        } : h
+      )
+      const total = updated.reduce((s, h) => s + (h.dollar_amount || 0), 0)
+      return {
+        ...prev,
+        holdings: updated.map(h => ({
+          ...h,
+          weight_pct: total > 0 ? (h.dollar_amount / total) * 100 : 0,
+        })),
+      }
+    })
     await fetch(`${API_BASE}/api/builder/portfolios/${activeId}/holdings`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticker, dollar_amount: newVal }),
@@ -356,7 +377,7 @@ export default function PortfolioBuilder() {
   }
 
   const runCompare = async () => {
-    if (compareIds.length < 2) { alert('Select at least 2 portfolios'); return }
+    if (compareIds.length < 2) { await dialog.alert('Select at least 2 portfolios'); return }
     setCompareLoading(true)
     setCompareResult(null)
     try {
@@ -365,9 +386,9 @@ export default function PortfolioBuilder() {
         body: JSON.stringify({ portfolio_ids: compareIds, period, benchmark }),
       })
       const data = await res.json()
-      if (data.error) alert(data.error)
+      if (data.error) await dialog.alert(data.error)
       else setCompareResult(data)
-    } catch (e) { alert(e) }
+    } catch (e) { await dialog.alert(String(e)) }
     setCompareLoading(false)
   }
 
@@ -681,10 +702,9 @@ export default function PortfolioBuilder() {
                               <input
                                 type="number"
                                 className="pb-dollar-input"
-                                value={editDollarVal}
-                                onChange={e => setEditDollarVal(e.target.value)}
-                                onBlur={() => commitDollarEdit(h.ticker)}
-                                onKeyDown={e => e.key === 'Enter' && commitDollarEdit(h.ticker)}
+                                defaultValue={h.dollar_amount}
+                                onBlur={e => commitDollarEdit(h.ticker, parseFloat(e.target.value) || 0)}
+                                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitDollarEdit(h.ticker, parseFloat(e.target.value) || 0) } }}
                                 autoFocus
                               />
                             </td>
@@ -695,7 +715,7 @@ export default function PortfolioBuilder() {
                             <td
                               key={c.key}
                               className="pb-dollar-cell"
-                              onClick={() => startDollarEdit(h.ticker, val)}
+                              onClick={() => startDollarEdit(h.ticker)}
                               style={{ cursor: 'pointer', textAlign: 'right' }}
                             >{c.fmt(val)}</td>
                           )
