@@ -395,6 +395,21 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    # Migrate old schemas: rename target_allocation → target_pct if needed
+    _cat_cols = {r[1] for r in cur.execute("PRAGMA table_info(categories)").fetchall()}
+    if "target_allocation" in _cat_cols and "target_pct" not in _cat_cols:
+        cur.execute("ALTER TABLE categories RENAME COLUMN target_allocation TO target_pct")
+    elif "target_pct" not in _cat_cols and "target_allocation" not in _cat_cols:
+        try:
+            cur.execute("ALTER TABLE categories ADD COLUMN target_pct REAL")
+        except Exception:
+            pass
+    if "sort_order" not in _cat_cols:
+        try:
+            cur.execute("ALTER TABLE categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+
     # ── ticker_categories ──────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS ticker_categories (
