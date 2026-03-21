@@ -62,15 +62,19 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
         # Look for first sheet that has a "Ticker" column in row 1
         _found = None
         for sn in _available:
-            _test = pd.read_excel(file_path, sheet_name=sn, nrows=0, engine="openpyxl")
-            if "Ticker" in _test.columns:
-                _found = sn
-                break
+            try:
+                _test = pd.read_excel(file_path, sheet_name=sn, nrows=0, engine="openpyxl")
+                if "Ticker" in _test.columns:
+                    _found = sn
+                    break
+            except Exception:
+                continue
         if _found:
             sheet_name = _found
         else:
             raise ValueError(
-                f"Sheet '{sheet_name}' not found. Available sheets: {', '.join(_available)}"
+                f"Sheet '{sheet_name}' not found. Available sheets: {', '.join(_available)}. "
+                f"Please enter the correct sheet name (e.g. 'Adam') in the Sheet Name field."
             )
 
     df = pd.read_excel(file_path, sheet_name=sheet_name, engine="openpyxl")
