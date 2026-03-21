@@ -1,9 +1,22 @@
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
-const { spawn } = require('child_process')
+const { spawn, execSync } = require('child_process')
 
 let mainWindow
 let flaskProcess
+
+function killFlask() {
+  if (!flaskProcess) return
+  const pid = flaskProcess.pid
+  try {
+    // Kill the entire process tree (py launcher + python.exe child)
+    execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' })
+  } catch {
+    // Fallback
+    try { flaskProcess.kill() } catch {}
+  }
+  flaskProcess = null
+}
 
 function startFlask() {
   const backendDir = path.join(__dirname, '..', 'backend')
@@ -47,14 +60,10 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  if (flaskProcess) {
-    flaskProcess.kill()
-  }
+  killFlask()
   app.quit()
 })
 
 app.on('before-quit', () => {
-  if (flaskProcess) {
-    flaskProcess.kill()
-  }
+  killFlask()
 })
