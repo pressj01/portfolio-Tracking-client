@@ -7,9 +7,10 @@ let flaskProcess
 
 function startFlask() {
   const backendDir = path.join(__dirname, '..', 'backend')
+  const userDataDir = app.getPath('userData')
   flaskProcess = spawn('py', ['app.py'], {
     cwd: backendDir,
-    env: { ...process.env },
+    env: { ...process.env, PORTFOLIO_DB_DIR: userDataDir },
   })
   flaskProcess.stdout.on('data', (data) => console.log(`Flask: ${data}`))
   flaskProcess.stderr.on('data', (data) => console.error(`Flask: ${data}`))
