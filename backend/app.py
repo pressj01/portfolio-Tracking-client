@@ -3133,12 +3133,17 @@ def etf_screen_data():
             divs_raw = _extract_col(div_df, "Dividends", sym)
             divs = divs_raw.reindex(div_close.index, fill_value=0.0) if not divs_raw.empty else pd.Series(0.0, index=div_close.index)
 
-            if close.empty:
+            if close.empty and div_close.empty:
                 result["warnings"].append(f"{sym}: no data available")
                 continue
 
-            dates = [d.strftime("%Y-%m-%d") for d in close.index]
-            norm_price = [round(float(v), 4) for v in (close / float(close.iloc[0]) * 100)]
+            # Use div_close (daily) for dates and price normalization so all
+            # traces share the same x-axis.  close (from price_df) may use a
+            # coarser interval (weekly/monthly) whose length differs from the
+            # daily return traces, causing misaligned chart data.
+            base = div_close if not div_close.empty else close
+            dates = [d.strftime("%Y-%m-%d") for d in base.index]
+            norm_price = [round(float(v), 4) for v in (base / float(base.iloc[0]) * 100)]
 
             # Compute return series based on mode
             traces = {}
@@ -3169,8 +3174,8 @@ def etf_screen_data():
                 drip = _blend_price_drip(div_close, divs, 1.0, track_cash=True)
                 traces["drip"] = [round(v, 4) for v in drip.tolist()]
 
-            # Statistics
-            price_ret = round((float(close.iloc[-1]) / float(close.iloc[0]) - 1) * 100, 2)
+            # Statistics — use base (daily) consistently with traces
+            price_ret = round((float(base.iloc[-1]) / float(base.iloc[0]) - 1) * 100, 2)
             # Use the best available total return figure
             if "total" in traces:
                 total_ret = round(traces["total"][-1] - 100, 2)
@@ -3183,7 +3188,7 @@ def etf_screen_data():
             div_contrib = round(total_ret - price_ret, 2)
 
             # Annualized return
-            n_days = (close.index[-1] - close.index[0]).days
+            n_days = (base.index[-1] - base.index[0]).days
             if n_days > 30:
                 years = n_days / 365.25
                 final_norm = 100 + total_ret
@@ -3192,8 +3197,8 @@ def etf_screen_data():
                 ann = None
 
             # Max drawdown (on price)
-            running_max = close.cummax()
-            drawdown = ((close - running_max) / running_max * 100)
+            running_max = base.cummax()
+            drawdown = ((base - running_max) / running_max * 100)
             mdd = round(float(drawdown.min()), 2)
 
             result["series"][sym] = {"dates": dates, "traces": traces}
@@ -3505,11 +3510,55 @@ def _bss_sma(close, period):
 
 
 def _bss_vote(signals):
-    if signals.count("BUY") >= 3:
+    """Majority-vote: need >50% of valid (non-None) signals to agree."""
+    valid = [s for s in signals if s is not None]
+    if not valid:
+        return "NEUTRAL"
+    threshold = len(valid) / 2
+    if valid.count("BUY") > threshold:
         return "BUY"
-    if signals.count("SELL") >= 3:
+    if valid.count("SELL") > threshold:
         return "SELL"
     return "NEUTRAL"
+
+
+def _bss_coverage(close, divs_series):
+    """Compute TTM yield-based coverage ratio — same formula as /api/portfolio-coverage.
+
+    coverage = (TTM_price_return_pct + TTM_dist_yield) / TTM_dist_yield
+    Returns (coverage_ratio, signal, nav_erosion_label).
+    """
+    try:
+        if close is None or len(close) < 2:
+            return None, None, None
+        cur_price = float(close.iloc[-1])
+        price_1yr_ago = float(close.iloc[0])
+        if cur_price <= 0 or price_1yr_ago <= 0:
+            return None, None, None
+
+        ttm_price_return_pct = (cur_price - price_1yr_ago) / price_1yr_ago
+
+        ttm_dist_per_share = float(divs_series.sum()) if divs_series is not None and not divs_series.empty else 0.0
+        ttm_dist_yield = ttm_dist_per_share / cur_price if cur_price > 0 else 0.0
+
+        if ttm_dist_yield <= 0:
+            return None, None, None
+
+        coverage = round((ttm_price_return_pct + ttm_dist_yield) / ttm_dist_yield, 4)
+
+        if coverage > 1:
+            sig = "BUY"
+            erosion = "Low"
+        elif coverage < 1:
+            sig = "SELL"
+            erosion = "High"
+        else:
+            sig = "NEUTRAL"
+            erosion = "Medium"
+
+        return coverage, sig, erosion
+    except Exception:
+        return None, None, None
 
 
 def _bss_sharpe(close, risk_free_annual=0.05):
@@ -3603,6 +3652,7 @@ def buy_sell_signals_data():
             period="1y",
             interval="1d",
             auto_adjust=True,
+            actions=True,
             progress=False,
         )
 
@@ -3615,6 +3665,12 @@ def buy_sell_signals_data():
                 close_df = raw["Close"]
             except KeyError:
                 high_df = low_df = close_df = None
+
+            # Extract dividends for coverage ratio
+            try:
+                divs_df = raw["Dividends"]
+            except KeyError:
+                divs_df = None
 
             if any(df is None for df in [high_df, low_df, close_df]):
                 error = "Missing OHLC price data from Yahoo Finance."
@@ -3645,7 +3701,17 @@ def buy_sell_signals_data():
                     sma200_sig, sma200_v, sma200_pct = _bss_sma(close, 200)
                     sharpe_val = _bss_sharpe(close)
                     sortino_val = _bss_sortino(close)
-                    signal = _bss_vote([ao_sig, rsi_sig, macd_sig, sma50_sig, sma200_sig])
+
+                    # Coverage ratio (same formula as /api/portfolio-coverage)
+                    tk_divs = pd.Series(dtype=float)
+                    if divs_df is not None and has_data:
+                        if isinstance(divs_df, pd.DataFrame) and ticker in divs_df.columns:
+                            tk_divs = divs_df[ticker].dropna()
+                        elif isinstance(divs_df, pd.Series):
+                            tk_divs = divs_df.dropna()
+                    cov_ratio, cov_sig, nav_erosion = _bss_coverage(close, tk_divs)
+
+                    signal = _bss_vote([ao_sig, rsi_sig, macd_sig, sma50_sig, sma200_sig, cov_sig])
 
                     is_portfolio = ticker in port_sizes
                     is_sector = ticker in SECTOR_SET and not is_portfolio
@@ -3655,13 +3721,15 @@ def buy_sell_signals_data():
                     if has_plotly:
                         ao_val_str = f"{ao_val:.4f}" if ao_val is not None else "\u2014"
                         rsi_val_str = f"{rsi_val:.1f}" if rsi_val is not None else "\u2014"
+                        cov_str = f"{cov_ratio:.2f}" if cov_ratio is not None else "\u2014"
                         hover_text = (
                             f"<b>{signal}</b><br>"
                             f"AO: {ao_sig} ({ao_val_str}, {ao_dir or chr(8212)})<br>"
                             f"RSI: {rsi_sig} ({rsi_val_str})<br>"
                             f"MACD: {macd_sig}<br>"
                             f"SMA 50: {sma50_sig} ({_fmt_pct(sma50_pct)})<br>"
-                            f"SMA 200: {sma200_sig} ({_fmt_pct(sma200_pct)})"
+                            f"SMA 200: {sma200_sig} ({_fmt_pct(sma200_pct)})<br>"
+                            f"Coverage: {cov_str} ({nav_erosion or chr(8212)} erosion risk)"
                         )
                         if is_portfolio:
                             labels.append(ticker)
@@ -3704,6 +3772,11 @@ def buy_sell_signals_data():
                         "sharpe_val_num": sharpe_val if sharpe_val is not None else "",
                         "sortino_val": f"{sortino_val:.2f}" if sortino_val is not None else "\u2014",
                         "sortino_val_num": sortino_val if sortino_val is not None else "",
+                        "cov_ratio": f"{cov_ratio:.2f}" if cov_ratio is not None else "\u2014",
+                        "cov_ratio_num": cov_ratio if cov_ratio is not None else "",
+                        "cov_sig": cov_sig or "NEUTRAL",
+                        "cov_sig_ord": SIGNAL_ORDER.get(cov_sig or "NEUTRAL", 1),
+                        "nav_erosion": nav_erosion or "\u2014",
                         "pv_fmt": f"${size:,.2f}" if is_portfolio else "\u2014",
                         "pv_num": float(size) if is_portfolio else 0,
                         "src_order": 0 if is_portfolio else (1 if is_sector else 2),
@@ -3876,9 +3949,13 @@ def watchlist_data():
         return "NEUTRAL", sma_f, pct
 
     def _vote(signals):
-        if signals.count("BUY") >= 3:
+        valid = [s for s in signals if s is not None]
+        if not valid:
+            return "NEUTRAL"
+        threshold = len(valid) / 2
+        if valid.count("BUY") > threshold:
             return "BUY"
-        if signals.count("SELL") >= 3:
+        if valid.count("SELL") > threshold:
             return "SELL"
         return "NEUTRAL"
 
@@ -3968,7 +4045,17 @@ def watchlist_data():
             macd_sig = _macd(close)
             sma50_sig, sma50_v, sma50_pct = _sma(close, 50)
             sma200_sig, sma200_v, sma200_pct = _sma(close, 200)
-            signal = _vote([ao_sig, rsi_sig, macd_sig, sma50_sig, sma200_sig])
+            # Coverage ratio
+            cov_ratio, cov_sig, cov_erosion = None, None, None
+            if divs_df is not None and has_data:
+                try:
+                    t_divs_cov = divs_df[ticker].dropna() if ticker in divs_df.columns else pd.Series([], dtype=float)
+                    t_divs_cov = t_divs_cov[t_divs_cov > 0]
+                    cov_ratio, cov_sig, cov_erosion = _bss_coverage(close, t_divs_cov)
+                except Exception:
+                    pass
+
+            signal = _vote([ao_sig, rsi_sig, macd_sig, sma50_sig, sma200_sig, cov_sig])
 
             sharpe_val = _sharpe(close)
             sortino_val = _sortino(close)
@@ -4023,6 +4110,9 @@ def watchlist_data():
                 "nav_erosion": nav_erosion,
                 "sharpe": round(sharpe_val, 2) if sharpe_val is not None else None,
                 "sortino": round(sortino_val, 2) if sortino_val is not None else None,
+                "cov_ratio": round(cov_ratio, 4) if cov_ratio is not None else None,
+                "cov_sig": cov_sig,
+                "nav_erosion_prob": cov_erosion,
             }
 
         # Build watching result rows

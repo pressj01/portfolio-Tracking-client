@@ -2103,10 +2103,18 @@ export default function ETFScreen() {
   // Returns tab state
   const [returnMode, setReturnMode] = useState('total')
   const [reinvest, setReinvest] = useState(100)
+  const [debouncedReinvest, setDebouncedReinvest] = useState(100)
   const [compareTickers, setCompareTickers] = useState([])
   const [compareInput, setCompareInput] = useState('')
   const [returnData, setReturnData] = useState(null)
   const [returnLoading, setReturnLoading] = useState(false)
+  const returnAbortRef = useRef(null)
+
+  // Debounce the reinvest slider — wait 300ms after user stops dragging
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedReinvest(reinvest), 300)
+    return () => clearTimeout(timer)
+  }, [reinvest])
 
   useEffect(() => {
     fetch(`${API_BASE}/api/etf-screen/tickers`)
@@ -2131,29 +2139,33 @@ export default function ETFScreen() {
       .finally(() => setLoading(false))
   }, [ticker, period, interval])
 
-  // Load return data
+  // Load return data — cancel any in-flight request to prevent stale data
   const loadReturns = useCallback(() => {
     // Use primary ticker, or fall back to first comparison ticker
     const primary = ticker.trim() || (compareTickers.length ? compareTickers[0] : '')
     if (!primary) return
+    // Abort previous request
+    if (returnAbortRef.current) returnAbortRef.current.abort()
+    const controller = new AbortController()
+    returnAbortRef.current = controller
     setReturnLoading(true)
     setError('')
     const extra = compareTickers.filter(t => t !== primary).join(',')
-    const url = `${API_BASE}/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra)}`
-    fetch(url)
+    const url = `${API_BASE}/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${debouncedReinvest}&extra=${encodeURIComponent(extra)}`
+    fetch(url, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
         if (d.error) { setError(d.error); setReturnData(null) }
         else { setReturnData(d) }
       })
-      .catch(e => setError(e.message))
+      .catch(e => { if (e.name !== 'AbortError') setError(e.message) })
       .finally(() => setReturnLoading(false))
-  }, [ticker, period, returnMode, reinvest, compareTickers])
+  }, [ticker, period, returnMode, debouncedReinvest, compareTickers])
 
   // Auto-reload returns chart when mode/reinvest changes (only if already loaded)
   useEffect(() => {
     if (tab === 'returns' && returnData) loadReturns()
-  }, [returnMode, reinvest]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [returnMode, debouncedReinvest]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-reload chart when period or interval changes (only if data already loaded)
   useEffect(() => {
@@ -2711,10 +2723,22 @@ export default function ETFScreen() {
           </div>
 
           <div className="etf-reinvest">
-            <label>Reinvest: <strong>{reinvest}%</strong></label>
+            <label title="% of dividends reinvested (DRIP). 0% = cash, 100% = full DRIP. Higher reinvestment compounds gains in rising markets but can underperform in declining markets.">Reinvest: <strong>{reinvest}%</strong></label>
             <input type="range" min={0} max={100} value={reinvest} onChange={e => setReinvest(Number(e.target.value))} disabled={sliderDisabled} />
             <input type="number" min={0} max={100} value={reinvest} onChange={e => setReinvest(Math.min(100, Math.max(0, Number(e.target.value) || 0)))} disabled={sliderDisabled} className="reinvest-num" />
           </div>
+          <details className="reinvest-note">
+            <summary>What does Reinvest % do?</summary>
+            <p>
+              Controls what percentage of dividends are reinvested (DRIP) vs kept as cash.
+              <strong> 0%</strong> = all dividends kept as cash.
+              <strong> 100%</strong> = full DRIP — all dividends buy more shares.
+            </p>
+            <p>
+              In <strong>rising markets</strong>, higher reinvestment compounds gains (more shares x rising price).
+              In <strong>declining markets</strong>, lower reinvestment can outperform because cash retains its value while reinvested dividends lose value with the stock.
+            </p>
+          </details>
 
           <div className="etf-compare">
             <select value="" onChange={e => {

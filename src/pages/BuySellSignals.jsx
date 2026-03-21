@@ -72,7 +72,8 @@ export default function BuySellSignals() {
 
   // Sorting
   const colKeys = ['ticker', 'desc', 'ctype', 'source', 'sig_order', 'ao_sig_ord', 'ao_val_num', 'ao_dir',
-    'rsi_sig_ord', 'macd_sig_ord', 'sma50_sig_ord', 'sma200_sig_ord', 'sharpe_val_num', 'sortino_val_num', 'pv_num']
+    'rsi_sig_ord', 'macd_sig_ord', 'sma50_sig_ord', 'sma200_sig_ord', 'sharpe_val_num', 'sortino_val_num',
+    'cov_ratio_num', 'cov_sig_ord', 'nav_erosion', 'pv_num']
 
   const sorted = useMemo(() => {
     const arr = [...rows]
@@ -112,6 +113,9 @@ export default function BuySellSignals() {
     { label: 'SMA 200', tip: 'Simple Moving Average 200-day — BUY when price is above' },
     { label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
     { label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
+    { label: 'Coverage', tip: 'TTM coverage ratio: (price return + dist yield) / dist yield. >1 = sustainable, <1 = NAV eroding' },
+    { label: 'Cov Signal', tip: 'Coverage signal: BUY (>1 sustainable), SELL (<1 eroding), NEUTRAL (=1)' },
+    { label: 'NAV Erosion', tip: 'Probability of NAV erosion: Low (>1), High (<1), Medium (=1)' },
     { label: 'Portfolio $', tip: 'Current market value of this position in portfolio' },
   ]
 
@@ -130,7 +134,7 @@ export default function BuySellSignals() {
         <span style={{ color: '#00c853', fontWeight: 600 }}>&#9632; BUY</span>&nbsp;
         <span style={{ color: '#d50000', fontWeight: 600 }}>&#9632; SELL</span>&nbsp;
         <span style={{ color: '#f9a825', fontWeight: 600 }}>&#9632; NEUTRAL</span>
-        &nbsp;&middot;&nbsp; Overall signal = majority vote across AO, RSI, MACD, SMA50, SMA200
+        &nbsp;&middot;&nbsp; Overall signal = majority vote across AO, RSI, MACD, SMA50, SMA200, Coverage
       </p>
 
       {/* Counts */}
@@ -190,7 +194,7 @@ export default function BuySellSignals() {
               <thead>
                 <tr>
                   {headers.map((h, i) => {
-                    const cls = i === 0 ? 'col-tick' : i === 1 ? 'col-name' : ([4, 5, 8, 9, 10, 11, 12, 14].includes(i) ? 'grp-left' : '')
+                    const cls = i === 0 ? 'col-tick' : i === 1 ? 'col-name' : ([4, 5, 8, 9, 10, 11, 12, 14, 17].includes(i) ? 'grp-left' : '')
                     return (
                       <th key={h.label} className={cls} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }} title={h.tip || ''}>
                         {h.label}{h.tip ? ' \u24D8' : ''}{arrow(i)}
@@ -227,6 +231,13 @@ export default function BuySellSignals() {
                     </td>
                     <td className="grp-left">{r.sharpe_val}</td>
                     <td>{r.sortino_val}</td>
+                    <td className="grp-left">{r.cov_ratio}</td>
+                    <td><Sig signal={r.cov_sig} /></td>
+                    <td style={{
+                      color: r.nav_erosion === 'Low' ? '#00c853' : r.nav_erosion === 'High' ? '#d50000' : r.nav_erosion === 'Medium' ? '#f9a825' : '#888',
+                      fontWeight: 600,
+                      backgroundColor: r.nav_erosion === 'Low' ? 'rgba(0,200,83,0.12)' : r.nav_erosion === 'High' ? 'rgba(213,0,0,0.12)' : r.nav_erosion === 'Medium' ? 'rgba(249,168,37,0.12)' : 'transparent',
+                    }}>{r.nav_erosion}</td>
                     <td className="grp-left">{r.pv_fmt}</td>
                   </tr>
                 ))}

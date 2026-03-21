@@ -994,6 +994,26 @@ label {
 .reinvest-num:disabled {
   opacity: 0.35;
 }
+.reinvest-note {
+  font-size: 0.8rem;
+  color: #aaa;
+  margin: 0.2rem 0 0.3rem;
+}
+.reinvest-note summary {
+  cursor: pointer;
+  color: #64b5f6;
+  font-size: 0.78rem;
+  user-select: none;
+}
+.reinvest-note summary:hover {
+  color: #90caf9;
+}
+.reinvest-note p {
+  margin: 0.3rem 0;
+  line-height: 1.4;
+  color: #bbb;
+  max-width: 600px;
+}
 .etf-compare {
   display: flex;
   align-items: center;

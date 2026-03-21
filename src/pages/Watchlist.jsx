@@ -106,18 +106,20 @@ export default function Watchlist() {
   const sortedRows = [...displayRows]
   if (sortCol !== null) {
     const cols = ['ticker', 'price', 'change_1d', 'div_yield', 'signal', 'ao_sig',
-      'rsi_sig', 'macd_sig', 'sma50_sig', 'sma200_sig', 'sharpe', 'sortino', 'one_yr_ret', 'nav_erosion', 'notes']
+      'rsi_sig', 'macd_sig', 'sma50_sig', 'sma200_sig', 'sharpe', 'sortino', 'one_yr_ret',
+      'cov_ratio', 'cov_sig', 'nav_erosion_prob', 'notes']
     const key = cols[sortCol]
     const sigOrder = { BUY: 0, NEUTRAL: 1, SELL: 2 }
     sortedRows.sort((a, b) => {
       let aV = a[key], bV = b[key]
-      if (['signal', 'ao_sig', 'rsi_sig', 'macd_sig', 'sma50_sig', 'sma200_sig'].includes(key)) {
+      if (['signal', 'ao_sig', 'rsi_sig', 'macd_sig', 'sma50_sig', 'sma200_sig', 'cov_sig'].includes(key)) {
         aV = sigOrder[aV] ?? 9
         bV = sigOrder[bV] ?? 9
       }
-      if (key === 'nav_erosion') {
-        aV = aV ? 1 : 0
-        bV = bV ? 1 : 0
+      if (key === 'nav_erosion_prob') {
+        const eroOrder = { High: 0, Medium: 1, Low: 2 }
+        aV = eroOrder[aV] ?? 9
+        bV = eroOrder[bV] ?? 9
       }
       if (aV == null) aV = ''
       if (bV == null) bV = ''
@@ -221,7 +223,9 @@ export default function Watchlist() {
                   { label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
                   { label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
                   { label: '1Y Return', tip: 'Total return over the past 12 months' },
-                  { label: 'NAV Erosion', tip: 'Whether the fund\'s net asset value is declining over time' },
+                  { label: 'Coverage', tip: 'TTM coverage ratio: (price return + dist yield) / dist yield. >1 = sustainable, <1 = NAV eroding' },
+                  { label: 'Cov Signal', tip: 'Coverage signal: BUY (>1 sustainable), SELL (<1 eroding), NEUTRAL (=1)' },
+                  { label: 'NAV Erosion', tip: 'Probability of NAV erosion based on coverage ratio: Low (>1), High (<1), Medium (=1)' },
                   { label: 'Notes' },
                 ].map((h, i) => (
                   <th key={h.label} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }} title={h.tip || ''}>
@@ -258,12 +262,13 @@ export default function Watchlist() {
                     <td>{a?.sharpe != null ? a.sharpe.toFixed(2) : '\u2014'}</td>
                     <td>{a?.sortino != null ? a.sortino.toFixed(2) : '\u2014'}</td>
                     <td className={pctClass(a?.one_yr_ret)}>{a?.one_yr_ret != null ? fmtPct(a.one_yr_ret) : '\u2014'}</td>
-                    <td>
-                      {a ? (a.nav_erosion
-                        ? <span className="erosion-flag">YES</span>
-                        : <span style={{ color: '#4dff91' }}>NO</span>)
-                        : '\u2014'}
-                    </td>
+                    <td>{a?.cov_ratio != null ? a.cov_ratio.toFixed(4) : '\u2014'}</td>
+                    <td><SignalBadge signal={a?.cov_sig} /></td>
+                    <td style={{
+                      color: a?.nav_erosion_prob === 'Low' ? '#00c853' : a?.nav_erosion_prob === 'High' ? '#d50000' : a?.nav_erosion_prob === 'Medium' ? '#f9a825' : '#888',
+                      fontWeight: 600,
+                      backgroundColor: a?.nav_erosion_prob === 'Low' ? 'rgba(0,200,83,0.12)' : a?.nav_erosion_prob === 'High' ? 'rgba(213,0,0,0.12)' : a?.nav_erosion_prob === 'Medium' ? 'rgba(249,168,37,0.12)' : 'transparent',
+                    }}>{a?.nav_erosion_prob ? `${a.nav_erosion_prob} Probability` : '\u2014'}</td>
                     <td>{r.notes || ''}</td>
                     <td>
                       <button className="btn-del" onClick={() => removeWatching(r.ticker)}>Remove</button>
