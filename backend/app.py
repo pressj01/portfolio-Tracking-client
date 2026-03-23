@@ -143,12 +143,15 @@ def _auto_reconcile_owner():
     ).fetchall()
     owner_tickers = {r["ticker"] for r in owner_rows}
 
+    # Sync these fields from sub-profiles; Owner-only fields (ytd_divs,
+    # total_divs_received, paid_for_itself, current_month_income,
+    # estim_payment_per_year, approx_monthly_income) are preserved since
+    # the Owner spreadsheet is the authoritative source for income data.
     sync_fields = [
         "description", "classification_type", "quantity", "price_paid",
         "current_price", "purchase_value", "current_value", "gain_or_loss",
         "gain_or_loss_percentage", "percent_change", "div_frequency", "reinvest",
         "ex_div_date", "div_pay_date", "div", "dividend_paid",
-        "estim_payment_per_year", "approx_monthly_income",
         "withdraw_8pct_cost_annually", "withdraw_8pct_per_month",
         "cash_not_reinvested", "total_cash_reinvested",
         "shares_bought_from_dividend", "shares_bought_in_year", "shares_in_month",
@@ -404,22 +407,20 @@ def reconcile_owner():
     updated = 0
     removed = 0
 
-    # Fields to sync from sub-profiles to Owner
+    # Fields to sync from sub-profiles to Owner.
+    # Owner-only fields are preserved: ytd_divs, total_divs_received,
+    # paid_for_itself, current_month_income, estim_payment_per_year,
+    # approx_monthly_income — the Owner spreadsheet is authoritative for income.
     update_fields = [
         "description", "classification_type", "quantity", "price_paid",
         "current_price", "purchase_value", "current_value", "gain_or_loss",
         "gain_or_loss_percentage", "percent_change", "div_frequency", "reinvest",
         "ex_div_date", "div_pay_date", "div", "dividend_paid",
-        "estim_payment_per_year", "approx_monthly_income",
         "withdraw_8pct_cost_annually", "withdraw_8pct_per_month",
         "cash_not_reinvested", "total_cash_reinvested",
         "shares_bought_from_dividend", "shares_bought_in_year", "shares_in_month",
         "purchase_date",
     ]
-
-    # Fields that are only populated in the Owner spreadsheet — preserve them
-    # (ytd_divs, total_divs_received, paid_for_itself, current_month_income)
-    # These are NOT overwritten during reconcile since sub-profiles have 0.
 
     for ticker, agg in agg_map.items():
         if ticker in owner_tickers:
@@ -958,14 +959,14 @@ def list_holdings():
                    MAX(a.div_pay_date) as div_pay_date,
                    CASE WHEN SUM(a.quantity) > 0 THEN SUM(a.dividend_paid) / SUM(a.quantity) ELSE MAX(a.div) END as div,
                    SUM(a.dividend_paid) as dividend_paid,
-                   SUM(a.estim_payment_per_year) as estim_payment_per_year,
-                   SUM(a.approx_monthly_income) as approx_monthly_income,
+                   COALESCE((SELECT o.estim_payment_per_year FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.estim_payment_per_year)) as estim_payment_per_year,
+                   COALESCE((SELECT o.approx_monthly_income FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.approx_monthly_income)) as approx_monthly_income,
                    SUM(a.withdraw_8pct_cost_annually) as withdraw_8pct_cost_annually,
                    SUM(a.withdraw_8pct_per_month) as withdraw_8pct_per_month,
                    SUM(a.cash_not_reinvested) as cash_not_reinvested,
                    SUM(a.total_cash_reinvested) as total_cash_reinvested,
-                   CASE WHEN SUM(a.purchase_value) > 0 THEN SUM(a.estim_payment_per_year) / SUM(a.purchase_value) ELSE 0 END as annual_yield_on_cost,
-                   CASE WHEN SUM(a.current_value) > 0 THEN SUM(a.estim_payment_per_year) / SUM(a.current_value) ELSE 0 END as current_annual_yield,
+                   CASE WHEN SUM(a.purchase_value) > 0 THEN COALESCE((SELECT o.estim_payment_per_year FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.estim_payment_per_year)) / SUM(a.purchase_value) ELSE 0 END as annual_yield_on_cost,
+                   CASE WHEN SUM(a.current_value) > 0 THEN COALESCE((SELECT o.estim_payment_per_year FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.estim_payment_per_year)) / SUM(a.current_value) ELSE 0 END as current_annual_yield,
                    NULL as percent_of_account,
                    SUM(a.shares_bought_from_dividend) as shares_bought_from_dividend,
                    SUM(a.shares_bought_in_year) as shares_bought_in_year,
