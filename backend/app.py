@@ -754,9 +754,10 @@ def refresh_market_data():
     profile_id = get_profile_id()
     conn = get_connection()
 
-    # Gather all non-aggregate profile IDs so we can refresh every profile
+    # Refresh ALL profiles (including aggregate members) so div/income
+    # values stay consistent across Owner and sub-profiles
     all_pids = [r[0] for r in conn.execute(
-        "SELECT id FROM profiles WHERE id NOT IN (SELECT member_profile_id FROM aggregate_config)"
+        "SELECT id FROM profiles"
     ).fetchall()] or [profile_id]
 
     # Collect unique tickers and per-profile holdings across ALL profiles
