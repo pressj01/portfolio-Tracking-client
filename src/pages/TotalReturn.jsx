@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 // 30 bright, high-contrast colors for dark backgrounds
 const PALETTE = [
@@ -23,6 +23,8 @@ function MetricCard({ label, value, className }) {
 }
 
 export default function TotalReturn() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const [categories, setCategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const catRef = useRef(null)
@@ -66,7 +68,7 @@ export default function TotalReturn() {
     setSummaryError(null)
     const params = new URLSearchParams()
     if (categories.length) params.set('category', categories.join(','))
-    fetch(`${API_BASE}/api/total-return/summary?${params}`)
+    pf(`/api/total-return/summary?${params}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)
@@ -74,7 +76,7 @@ export default function TotalReturn() {
       })
       .catch(e => setSummaryError(e.message))
       .finally(() => setSummaryLoading(false))
-  }, [categories])
+  }, [categories, selection])
 
   // Fetch yfinance charts
   useEffect(() => {
@@ -82,7 +84,7 @@ export default function TotalReturn() {
     setChartError(null)
     const params = new URLSearchParams({ period: '1y' })
     if (categories.length) params.set('category', categories.join(','))
-    fetch(`${API_BASE}/api/total-return/charts?${params}`)
+    pf(`/api/total-return/charts?${params}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)
@@ -90,7 +92,7 @@ export default function TotalReturn() {
       })
       .catch(e => setChartError(e.message))
       .finally(() => setChartLoading(false))
-  }, [categories])
+  }, [categories, selection])
 
   // Render Plotly charts with consistent colors across bar + line charts
   useEffect(() => {
@@ -168,7 +170,7 @@ export default function TotalReturn() {
     const params = new URLSearchParams({ period: cmpPeriod })
     if (cmpTickers.length) params.set('tickers', cmpTickers.join(','))
     if (cmpExtra) params.set('extra', cmpExtra)
-    fetch(`${API_BASE}/api/total-return/compare?${params}`)
+    pf(`/api/total-return/compare?${params}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)
@@ -176,7 +178,7 @@ export default function TotalReturn() {
       })
       .catch(e => setCmpError(e.message))
       .finally(() => setCmpLoading(false))
-  }, [cmpTickers, cmpExtra, cmpPeriod])
+  }, [cmpTickers, cmpExtra, cmpPeriod, selection])
 
   // Render comparison chart
   useEffect(() => {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 
 const DURATION_OPTIONS = Array.from({ length: 20 }, (_, i) => ({
@@ -178,6 +178,8 @@ function MonthlyTable({ fund, months, which }) {
 
 /* ── Main Component ─────────────────────────────────────────────── */
 export default function DistributionCompare() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const dialog = useDialog()
   // Mode & comparison
   const [mode, setMode] = useState('historical')
@@ -234,11 +236,11 @@ export default function DistributionCompare() {
 
   // Fetch portfolio tickers on mount
   useEffect(() => {
-    fetch(`${API_BASE}/api/pis/portfolio-tickers`)
+    pf('/api/pis/portfolio-tickers')
       .then(r => r.json())
       .then(d => setPortfolioTickers(d.tickers || []))
       .catch(() => {})
-  }, [])
+  }, [pf, selection])
 
   // Persist saved setups
   useEffect(() => {
@@ -268,7 +270,7 @@ export default function DistributionCompare() {
     setInfo({ text: `Looking up ${ticker}...`, warn: false })
     lookupSetters[which](null)
 
-    fetch(`${API_BASE}/api/distribution-compare/lookup?ticker=${encodeURIComponent(ticker)}`)
+    pf(`/api/distribution-compare/lookup?ticker=${encodeURIComponent(ticker)}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) { setInfo({ text: d.error, warn: true }); return }
@@ -329,7 +331,7 @@ export default function DistributionCompare() {
     setResults(null)
     chartsRendered.current = false
 
-    fetch(`${API_BASE}/api/distribution-compare/run`, {
+    pf('/api/distribution-compare/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -346,7 +348,7 @@ export default function DistributionCompare() {
   // Export
   const exportExcel = useCallback(() => {
     const body = buildBody()
-    fetch(`${API_BASE}/api/distribution-compare/export`, {
+    pf('/api/distribution-compare/export', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

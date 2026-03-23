@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { API_BASE } from '../../config'
+import { useProfileFetch } from '../../context/ProfileContext'
 
 export default function BacktestCharts({ tickers, result, period }) {
+  const pf = useProfileFetch()
   const [backtestData, setBacktestData] = useState(null)
   const [rollingData, setRollingData] = useState(null)
   const [backtestLoading, setBacktestLoading] = useState(false)
@@ -12,7 +13,7 @@ export default function BacktestCharts({ tickers, result, period }) {
   useEffect(() => {
     if (!tickers?.length) return
     setBacktestLoading(true)
-    fetch(`${API_BASE}/api/analytics/backtest`, {
+    pf('/api/analytics/backtest', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers, period }),
     }).then(r => r.json()).then(setBacktestData).catch(() => {}).finally(() => setBacktestLoading(false))
@@ -22,7 +23,7 @@ export default function BacktestCharts({ tickers, result, period }) {
   useEffect(() => {
     if (!tickers?.length) return
     setRollingLoading(true)
-    fetch(`${API_BASE}/api/analytics/rolling-metrics`, {
+    pf('/api/analytics/rolling-metrics', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers, period: '2y', window: rollingWindow }),
     }).then(r => r.json()).then(setRollingData).catch(() => {}).finally(() => setRollingLoading(false))

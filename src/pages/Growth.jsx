@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 const PERIODS = ['1y', '5y', 'max']
 const PERIOD_LABELS = { '1y': '1Y', '5y': '5Y', 'max': 'Max' }
@@ -21,6 +21,8 @@ function MetricCard({ label, value }) {
 }
 
 export default function Growth() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const [period, setPeriod] = useState('1y')
   const [benchmark, setBenchmark] = useState('SPY')
   const [benchInput, setBenchInput] = useState('SPY')
@@ -42,7 +44,7 @@ export default function Growth() {
     setError(null)
     const params = new URLSearchParams({ period, benchmark })
     if (categories.length) params.set('category', categories.join(','))
-    fetch(`${API_BASE}/api/growth/data?${params}`)
+    pf(`/api/growth/data?${params}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)
@@ -50,7 +52,7 @@ export default function Growth() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [period, benchmark, categories])
+  }, [period, benchmark, categories, selection])
 
   useEffect(() => {
     if (!data || !window.Plotly) return

@@ -84,7 +84,8 @@ def ensure_tables_exist(conn=None):
     # ── holdings ───────────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS holdings (
-            ticker              TEXT NOT NULL PRIMARY KEY,
+            ticker              TEXT NOT NULL,
+            profile_id          INTEGER NOT NULL DEFAULT 1,
             description         TEXT,
             classification_type TEXT,
             quantity            REAL,
@@ -95,14 +96,38 @@ def ensure_tables_exist(conn=None):
             gain_or_loss        REAL,
             gain_or_loss_percentage REAL,
             percent_change      REAL,
-            purchase_date       TEXT
+            purchase_date       TEXT,
+            UNIQUE (ticker, profile_id)
         )
     """)
+    # Migrate: add profile_id if missing
+    _h_cols = {r[1] for r in cur.execute("PRAGMA table_info(holdings)").fetchall()}
+    if "profile_id" not in _h_cols:
+        cur.execute("DROP TABLE holdings")
+        cur.execute("""
+            CREATE TABLE holdings (
+                ticker              TEXT NOT NULL,
+                profile_id          INTEGER NOT NULL DEFAULT 1,
+                description         TEXT,
+                classification_type TEXT,
+                quantity            REAL,
+                price_paid          REAL,
+                current_price       REAL,
+                purchase_value      REAL,
+                current_value       REAL,
+                gain_or_loss        REAL,
+                gain_or_loss_percentage REAL,
+                percent_change      REAL,
+                purchase_date       TEXT,
+                UNIQUE (ticker, profile_id)
+            )
+        """)
 
     # ── dividends ──────────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS dividends (
-            ticker                 TEXT NOT NULL PRIMARY KEY,
+            ticker                 TEXT NOT NULL,
+            profile_id             INTEGER NOT NULL DEFAULT 1,
             div_frequency          TEXT,
             reinvest               TEXT,
             ex_div_date            TEXT,
@@ -114,9 +139,33 @@ def ensure_tables_exist(conn=None):
             current_annual_yield   REAL,
             ytd_divs               REAL,
             total_divs_received    REAL,
-            paid_for_itself        REAL
+            paid_for_itself        REAL,
+            UNIQUE (ticker, profile_id)
         )
     """)
+    # Migrate: add profile_id if missing
+    _d_cols = {r[1] for r in cur.execute("PRAGMA table_info(dividends)").fetchall()}
+    if "profile_id" not in _d_cols:
+        cur.execute("DROP TABLE dividends")
+        cur.execute("""
+            CREATE TABLE dividends (
+                ticker                 TEXT NOT NULL,
+                profile_id             INTEGER NOT NULL DEFAULT 1,
+                div_frequency          TEXT,
+                reinvest               TEXT,
+                ex_div_date            TEXT,
+                div_per_share          REAL,
+                dividend_paid          REAL,
+                estim_payment_per_year REAL,
+                approx_monthly_income  REAL,
+                annual_yield_on_cost   REAL,
+                current_annual_yield   REAL,
+                ytd_divs               REAL,
+                total_divs_received    REAL,
+                paid_for_itself        REAL,
+                UNIQUE (ticker, profile_id)
+            )
+        """)
 
     # ── income_tracking ────────────────────────────────────────────────────────
     cur.execute("""
@@ -419,6 +468,14 @@ def ensure_tables_exist(conn=None):
             profile_id  INTEGER NOT NULL DEFAULT 1,
             UNIQUE (ticker, profile_id),
             FOREIGN KEY (category_id) REFERENCES categories(id)
+        )
+    """)
+
+    # ── aggregate_config ────────────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS aggregate_config (
+            member_profile_id INTEGER NOT NULL UNIQUE,
+            FOREIGN KEY (member_profile_id) REFERENCES profiles(id) ON DELETE CASCADE
         )
     """)
 

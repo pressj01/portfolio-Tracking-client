@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 export default function Settings() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const [stats, setStats] = useState(null)
   const [confirming, setConfirming] = useState(false)
   const [status, setStatus] = useState(null)
@@ -15,14 +17,14 @@ export default function Settings() {
   const [etfSaving, setEtfSaving] = useState(false)
 
   const fetchStats = () => {
-    fetch(`${API_BASE}/api/data/stats`)
+    pf('/api/data/stats')
       .then(r => r.json())
       .then(setStats)
       .catch(() => setStats(null))
   }
 
   const fetchSingleStockEtfs = () => {
-    fetch(`${API_BASE}/api/single-stock-etfs`)
+    pf('/api/single-stock-etfs')
       .then(r => r.json())
       .then(data => {
         setBuiltinEtfs(data.builtin || [])
@@ -31,13 +33,13 @@ export default function Settings() {
       .catch(() => {})
   }
 
-  useEffect(() => { fetchStats(); fetchSingleStockEtfs() }, [])
+  useEffect(() => { fetchStats(); fetchSingleStockEtfs() }, [selection])
 
   const handleClearAll = async () => {
     setLoading(true)
     setStatus(null)
     try {
-      const res = await fetch(`${API_BASE}/api/data/clear-all`, { method: 'POST' })
+      const res = await pf('/api/data/clear-all', { method: 'POST' })
       const data = await res.json()
       if (res.ok) {
         setStatus({ type: 'success', msg: 'All data cleared successfully.' })
@@ -59,7 +61,7 @@ export default function Settings() {
     setEtfSaving(true)
     setEtfStatus(null)
     try {
-      const res = await fetch(`${API_BASE}/api/single-stock-etfs`, {
+      const res = await pf('/api/single-stock-etfs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tickers: merged }),
@@ -83,7 +85,7 @@ export default function Settings() {
     setEtfSaving(true)
     setEtfStatus(null)
     try {
-      const res = await fetch(`${API_BASE}/api/single-stock-etfs`, {
+      const res = await pf('/api/single-stock-etfs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tickers: updated }),

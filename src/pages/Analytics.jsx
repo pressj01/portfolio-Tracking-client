@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import Plot from 'react-plotly.js'
 import RiskReturnCharts from './analytics/RiskReturnCharts'
@@ -33,6 +33,8 @@ function metricColor(val, thresholds, lowerBetter = false) {
 }
 
 export default function Analytics() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const dialog = useDialog()
   const [tickers, setTickers] = useState([])
   const [input, setInput] = useState('')
@@ -53,14 +55,14 @@ export default function Analytics() {
 
   // Load portfolio tickers on mount
   useEffect(() => {
-    fetch(`${API_BASE}/api/holdings`)
+    pf('/api/holdings')
       .then(r => r.json())
       .then(d => {
         const t = (d.holdings || d || []).map(h => h.ticker).filter(Boolean)
         setPortfolioTickers([...new Set(t)])
       })
       .catch(() => {})
-  }, [])
+  }, [pf, selection])
 
   const addTicker = useCallback(() => {
     const t = input.trim().toUpperCase()
@@ -83,7 +85,7 @@ export default function Analytics() {
     setError(null); setResult(null); setLoading(true)
     const body = { tickers, benchmark, period, mode: runMode || mode }
     if (runMode === 'optimize_balanced') body.balance = balance / 100
-    fetch(`${API_BASE}/api/analytics/data`, {
+    pf('/api/analytics/data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

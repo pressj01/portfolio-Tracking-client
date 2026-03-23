@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { API_BASE } from '../config'
 import { useDialog } from '../components/DialogProvider'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '',
@@ -14,7 +14,7 @@ const EMPTY_HOLDING = {
   shares_bought_from_dividend: '',
 }
 
-function AddEditModal({ holding, onSave, onCancel, isEdit }) {
+function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
   const [form, setForm] = useState(() => {
     if (!holding) return EMPTY_HOLDING
     const f = {}
@@ -28,11 +28,11 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
   const [categories, setCategories] = useState([])
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/categories/data`)
+    pf('/api/categories/data')
       .then(r => r.json())
       .then(d => setCategories(d.categories || []))
       .catch(() => {})
-  }, [])
+  }, [pf])
 
   const set = (field, value) => setForm(prev => {
     const next = { ...prev, [field]: value }
@@ -58,7 +58,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit }) {
     setLooking(true)
     setLookupMsg(null)
     try {
-      const res = await fetch(`${API_BASE}/api/lookup/${ticker}`)
+      const res = await pf(`/api/lookup/${ticker}`)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setForm(prev => ({
@@ -347,6 +347,8 @@ const COLUMNS = [
 ]
 
 export default function ManageHoldings() {
+  const pf = useProfileFetch()
+  const { profileId, isAggregate, selection } = useProfile()
   const dialog = useDialog()
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
@@ -360,7 +362,7 @@ export default function ManageHoldings() {
 
   const fetchHoldings = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/holdings`)
+      const res = await pf('/api/holdings')
       const data = await res.json()
       setHoldings(data)
     } catch (e) {
@@ -370,7 +372,7 @@ export default function ManageHoldings() {
     }
   }
 
-  useEffect(() => { fetchHoldings() }, [])
+  useEffect(() => { fetchHoldings() }, [selection])
 
   const handleSort = (key) => {
     if (sortKey === key) {
@@ -410,7 +412,7 @@ export default function ManageHoldings() {
     setError(null)
     setMessage(null)
     try {
-      const res = await fetch(`${API_BASE}/api/refresh`, { method: 'POST' })
+      const res = await pf('/api/refresh', { method: 'POST' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setMessage(data.message)
@@ -436,7 +438,7 @@ export default function ManageHoldings() {
     if (!await dialog.confirm(`Delete ${ticker}?`)) return
     setError(null)
     try {
-      const res = await fetch(`${API_BASE}/api/holdings/${ticker}`, { method: 'DELETE' })
+      const res = await pf(`/api/holdings/${ticker}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setMessage(`${ticker} deleted`)
@@ -452,8 +454,8 @@ export default function ManageHoldings() {
     const isEdit = !!editHolding
 
     try {
-      const url = isEdit ? `${API_BASE}/api/holdings/${payload.ticker}` : `${API_BASE}/api/holdings`
-      const res = await fetch(url, {
+      const url = isEdit ? `/api/holdings/${payload.ticker}` : `/api/holdings`
+      const res = await pf(url, {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -485,6 +487,11 @@ export default function ManageHoldings() {
 
   return (
     <div className="page">
+      {isAggregate && (
+        <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+          Aggregate view — edits will apply to the portfolio with the largest position for each ticker.
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <h1>Manage Holdings</h1>
         <div style={{ display: 'flex', gap: '0.75rem' }}>
@@ -562,7 +569,7 @@ export default function ManageHoldings() {
                       onChange={async () => {
                         const newVal = h.reinvest === 'Y' ? 'N' : 'Y'
                         try {
-                          await fetch(`${API_BASE}/api/holdings/${h.ticker}`, {
+                          await pf(`/api/holdings/${h.ticker}`, {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ reinvest: newVal }),
@@ -605,6 +612,7 @@ export default function ManageHoldings() {
           onSave={handleSave}
           onCancel={() => setShowModal(false)}
           isEdit={!!editHolding}
+          pf={pf}
         />
       )}
     </div>

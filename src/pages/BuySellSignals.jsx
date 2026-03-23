@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import Plot from 'react-plotly.js'
 
 function Sig({ signal }) {
@@ -29,6 +29,8 @@ function pctCls(s) {
 }
 
 export default function BuySellSignals() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const [rows, setRows] = useState([])
   const [figData, setFigData] = useState(null)
   const [figLayout, setFigLayout] = useState(null)
@@ -41,7 +43,7 @@ export default function BuySellSignals() {
   const loadData = useCallback(() => {
     setLoading(true)
     setError(null)
-    fetch(`${API_BASE}/api/buy-sell-signals`)
+    pf('/api/buy-sell-signals')
       .then(r => r.json())
       .then(data => {
         setLoading(false)
@@ -60,7 +62,7 @@ export default function BuySellSignals() {
         setLoading(false)
         setError('Failed to load data: ' + err.message)
       })
-  }, [])
+  }, [pf, selection])
 
   useEffect(() => { loadData() }, [loadData])
 

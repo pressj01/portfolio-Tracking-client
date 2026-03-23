@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import Plot from 'react-plotly.js'
 
 function fmt$(v) {
@@ -22,6 +22,8 @@ function StatTile({ label, value, color }) {
 }
 
 export default function NavErosion() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const [ticker, setTicker] = useState('')
   const [amount, setAmount] = useState('10000')
   const [startDate, setStartDate] = useState('2015-01-01')
@@ -52,7 +54,7 @@ export default function NavErosion() {
       ticker: sym, amount, start: startDate, end: endDate, reinvest: String(reinvest)
     })
 
-    fetch(`${API_BASE}/api/nav-erosion/data?` + params.toString())
+    pf('/api/nav-erosion/data?' + params.toString())
       .then(r => r.json())
       .then(data => {
         setLoading(false)

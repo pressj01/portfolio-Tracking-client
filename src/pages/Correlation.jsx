@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 const PERIODS = [
   { label: '3mo', value: '3mo' },
@@ -38,6 +38,8 @@ function corrTextColor(v) {
 }
 
 export default function Correlation() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const [tickers, setTickers] = useState([])
   const [input, setInput] = useState('')
   const [period, setPeriod] = useState('1y')
@@ -59,7 +61,7 @@ export default function Correlation() {
   const runCorrelation = () => {
     if (tickers.length < 2) { setError('Enter at least 2 tickers.'); return }
     setError(null); setResult(null); setLoading(true)
-    fetch(`${API_BASE}/api/correlation/data`, {
+    pf('/api/correlation/data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers, period }),

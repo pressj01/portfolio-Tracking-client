@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 
 function CategoryModal({ category, onSave, onCancel }) {
@@ -70,6 +70,8 @@ function AllocationBar({ categories, totalValue }) {
 }
 
 export default function Categories() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const dialog = useDialog()
   const [data, setData] = useState({ categories: [], unallocated: [], total_value: 0 })
   const [loading, setLoading] = useState(true)
@@ -81,7 +83,7 @@ export default function Categories() {
 
   const reload = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/categories/data`)
+      const res = await pf('/api/categories/data')
       const d = await res.json()
       setData(d)
     } catch (e) {
@@ -89,9 +91,9 @@ export default function Categories() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [pf])
 
-  useEffect(() => { reload() }, [reload])
+  useEffect(() => { reload() }, [reload, selection])
 
   const fmt = (v) => v != null ? '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'
 
@@ -102,12 +104,12 @@ export default function Categories() {
     setError(null)
     try {
       if (editCat) {
-        await fetch(`${API_BASE}/api/categories/${editCat.id}`, {
+        await pf(`/api/categories/${editCat.id}`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, target_pct }),
         })
       } else {
-        await fetch(`${API_BASE}/api/categories`, {
+        await pf('/api/categories', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, target_pct }),
         })
@@ -119,13 +121,13 @@ export default function Categories() {
 
   const handleDelete = async (cat) => {
     if (!await dialog.confirm(`Delete category "${cat.name}"? Tickers will become unallocated.`)) return
-    await fetch(`${API_BASE}/api/categories/${cat.id}`, { method: 'DELETE' })
+    await pf(`/api/categories/${cat.id}`, { method: 'DELETE' })
     if (expandedId === cat.id) setExpandedId(null)
     reload()
   }
 
   const handleAssign = async (tickers, categoryId) => {
-    await fetch(`${API_BASE}/api/categories/assign`, {
+    await pf('/api/categories/assign', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ category_id: categoryId, tickers }),
     })
@@ -134,7 +136,7 @@ export default function Categories() {
   }
 
   const handleUnassign = async (tickers) => {
-    await fetch(`${API_BASE}/api/categories/unassign`, {
+    await pf('/api/categories/unassign', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers }),
     })

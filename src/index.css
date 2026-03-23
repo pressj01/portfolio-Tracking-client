@@ -81,6 +81,30 @@ a:hover {
 .nav-dropdown-menu a:first-child { border-radius: 6px 6px 0 0; }
 .nav-dropdown-menu a:last-child { border-radius: 0 0 6px 6px; }
 
+/* Profile Selector */
+.profile-selector {
+  margin-left: auto;
+}
+.profile-selector select {
+  background: #0f3460;
+  color: #64b5f6;
+  border: 1px solid #1a4a8a;
+  border-radius: 4px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+}
+.profile-selector select:hover {
+  background: #163d6e;
+  border-color: #64b5f6;
+}
+.profile-selector select:focus {
+  border-color: #64b5f6;
+  box-shadow: 0 0 0 2px rgba(100, 181, 246, 0.25);
+}
+
 /* Page container */
 .page {
   padding: 2rem;

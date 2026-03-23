@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import Plot from 'react-plotly.js'
 
 // ── Indicator helpers ────────────────────────────────────────────────────────
@@ -1956,6 +1956,8 @@ function pctColor(v) { return v >= 0 ? '#4caf50' : '#ef5350' }
 // ── Main Component ───────────────────────────────────────────────────────────
 
 export default function ETFScreen() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const [tab, setTab] = useState('technical') // 'technical' | 'returns'
   const [ticker, setTicker] = useState('')
   const [period, setPeriod] = useState('1y')
@@ -2117,11 +2119,11 @@ export default function ETFScreen() {
   }, [reinvest])
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/etf-screen/tickers`)
+    pf('/api/etf-screen/tickers')
       .then(r => r.json())
       .then(d => setPortfolioTickers(d.tickers || []))
       .catch(() => {})
-  }, [])
+  }, [pf, selection])
 
   // Load OHLCV for technical tab
   const loadTechnical = useCallback(() => {
@@ -2129,7 +2131,7 @@ export default function ETFScreen() {
     setLoading(true)
     setError('')
     const intParam = interval ? `&interval=${interval}` : ''
-    fetch(`${API_BASE}/api/etf-screen/data?ticker=${encodeURIComponent(ticker.trim())}&period=${period}&mode=ohlcv${intParam}`)
+    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(ticker.trim())}&period=${period}&mode=ohlcv${intParam}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) { setError(d.error); setRecords([]); setTickerName(''); setIvData(null) }
@@ -2151,8 +2153,8 @@ export default function ETFScreen() {
     setReturnLoading(true)
     setError('')
     const extra = compareTickers.filter(t => t !== primary).join(',')
-    const url = `${API_BASE}/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${debouncedReinvest}&extra=${encodeURIComponent(extra)}`
-    fetch(url, { signal: controller.signal })
+    const url = `/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${debouncedReinvest}&extra=${encodeURIComponent(extra)}`
+    pf(url, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
         if (d.error) { setError(d.error); setReturnData(null) }

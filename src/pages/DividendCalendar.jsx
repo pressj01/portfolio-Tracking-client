@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -14,6 +14,8 @@ function addDays(iso, n) {
 }
 
 export default function DividendCalendar() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const [events, setEvents] = useState([])
   const [today, setToday] = useState('')
   const [filter, setFilter] = useState('all')
@@ -21,7 +23,7 @@ export default function DividendCalendar() {
 
   useEffect(() => {
     setLoading(true)
-    fetch(`${API_BASE}/api/div-calendar`)
+    pf('/api/div-calendar')
       .then(r => r.json())
       .then(data => {
         setEvents(data.events || [])
@@ -29,7 +31,7 @@ export default function DividendCalendar() {
         setLoading(false)
       })
       .catch(() => setLoading(false))
-  }, [])
+  }, [selection])
 
   const filtered = useMemo(() => {
     if (!today) return events

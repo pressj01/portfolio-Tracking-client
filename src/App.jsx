@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import { HashRouter as Router, Routes, Route, NavLink, useLocation } from 'react-router-dom'
 import './index.css'
 import DialogProvider from './components/DialogProvider'
+import ProfileProvider, { useProfile } from './context/ProfileContext'
 import Dashboard from './pages/Dashboard'
 import Import from './pages/Import'
 import ManageHoldings from './pages/ManageHoldings'
@@ -21,6 +22,7 @@ import Correlation from './pages/Correlation'
 import Analytics from './pages/Analytics'
 import PortfolioBuilder from './pages/PortfolioBuilder'
 import DistributionCompare from './pages/DistributionCompare'
+import ManagePortfolios from './pages/ManagePortfolios'
 
 function NavDropdown({ label, children }) {
   const [open, setOpen] = useState(false)
@@ -57,6 +59,7 @@ function NavDropdown({ label, children }) {
 function App() {
   return (
     <DialogProvider>
+    <ProfileProvider>
     <Router>
       <Nav />
       <Routes>
@@ -79,9 +82,30 @@ function App() {
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/portfolio-builder" element={<PortfolioBuilder />} />
         <Route path="/dist-compare" element={<DistributionCompare />} />
+        <Route path="/portfolios" element={<ManagePortfolios />} />
       </Routes>
     </Router>
+    </ProfileProvider>
     </DialogProvider>
+  )
+}
+
+function ProfileSelector() {
+  const { profiles, selection, setProfileId, currentProfileName, aggregateConfig, aggregateName } = useProfile()
+
+  return (
+    <div className="profile-selector">
+      <select
+        value={selection}
+        onChange={(e) => setProfileId(e.target.value)}
+        title={`Active portfolio: ${currentProfileName}`}
+      >
+        {profiles.map(p => (
+          <option key={p.id} value={String(p.id)}>{p.name}</option>
+        ))}
+        {aggregateConfig.length > 0 && <option value="aggregate">{aggregateName}</option>}
+      </select>
+    </div>
   )
 }
 
@@ -111,8 +135,10 @@ function Nav() {
       </NavDropdown>
       <NavDropdown label="Admin">
         <NavLink to="/import">Import</NavLink>
+        <NavLink to="/portfolios">Portfolios</NavLink>
         <NavLink to="/settings">Settings</NavLink>
       </NavDropdown>
+      <ProfileSelector />
     </nav>
   )
 }

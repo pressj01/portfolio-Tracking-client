@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 function GradeBadge({ grade, large }) {
   if (!grade || grade === 'N/A') return <span className={`grade-badge grade-na ${large ? 'grade-lg' : ''}`}>N/A</span>
@@ -22,6 +22,8 @@ const fmtPct = v => v != null ? `${(Number(v) * 100).toFixed(2)}%` : '—'
 const fmtPctRaw = v => v != null ? `${Number(v).toFixed(2)}%` : '—'
 
 export default function DividendAnalysis() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -42,7 +44,7 @@ export default function DividendAnalysis() {
     setError(null)
     const params = new URLSearchParams()
     if (categories.length) params.set('category', categories.join(','))
-    fetch(`${API_BASE}/api/dividend-analysis/data?${params}`)
+    pf(`/api/dividend-analysis/data?${params}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)
@@ -50,7 +52,7 @@ export default function DividendAnalysis() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [categories])
+  }, [categories, selection])
 
   useEffect(() => {
     if (!data || !window.Plotly) return

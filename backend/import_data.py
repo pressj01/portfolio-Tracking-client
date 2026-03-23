@@ -43,7 +43,8 @@ COLUMN_MAP = {
 
 SQL_COLUMNS = list(COLUMN_MAP.values()) + ["import_date", "current_month_income"]
 
-_VALID_TICKER = re.compile(r'^[A-Z][A-Z0-9]{0,8}$')
+_VALID_TICKER = re.compile(r'^[A-Z][A-Z0-9.\-/]{0,10}$')
+_EXCLUDED_TICKERS = {"TOTALS", "TOTAL", "GRAND", "SUMMARY"}
 
 
 # ── Owner Excel import ─────────────────────────────────────────────────────────
@@ -59,22 +60,34 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
     _wb_check.close()
 
     if sheet_name not in _available:
-        # Look for first sheet that has a "Ticker" column in row 1
-        _found = None
-        for sn in _available:
-            try:
-                _test = pd.read_excel(file_path, sheet_name=sn, nrows=0, engine="openpyxl")
-                if "Ticker" in _test.columns:
-                    _found = sn
-                    break
-            except Exception:
-                continue
-        if _found:
-            sheet_name = _found
+        # Try case-insensitive match first
+        _lower_map = {s.lower().strip(): s for s in _available}
+        _ci_match = _lower_map.get(sheet_name.lower().strip())
+        if _ci_match:
+            sheet_name = _ci_match
+        elif sheet_name == "All Accounts":
+            # Only auto-detect for the default sheet name (user didn't specify one)
+            _found = None
+            for sn in _available:
+                try:
+                    _test = pd.read_excel(file_path, sheet_name=sn, nrows=0, engine="openpyxl")
+                    if "Ticker" in _test.columns:
+                        _found = sn
+                        break
+                except Exception:
+                    continue
+            if _found:
+                sheet_name = _found
+            else:
+                raise ValueError(
+                    f"Sheet '{sheet_name}' not found. Available sheets: {', '.join(_available)}. "
+                    f"Please enter the correct sheet name."
+                )
         else:
+            # User specified a sheet name that doesn't exist — don't guess, show available sheets
             raise ValueError(
                 f"Sheet '{sheet_name}' not found. Available sheets: {', '.join(_available)}. "
-                f"Please enter the correct sheet name (e.g. 'Adam') in the Sheet Name field."
+                f"Please enter the correct sheet name."
             )
 
     df = pd.read_excel(file_path, sheet_name=sheet_name, engine="openpyxl")
@@ -124,8 +137,10 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
     df = df.dropna(subset=["ticker"])
     df = df[df["ticker"].astype(str).str.strip() != ""]
 
-    # Keep only valid stock tickers
-    df = df[df["ticker"].astype(str).str.strip().apply(lambda t: bool(_VALID_TICKER.match(t)))]
+    # Keep only valid stock tickers (exclude summary rows like TOTALS)
+    df = df[df["ticker"].astype(str).str.strip().apply(
+        lambda t: bool(_VALID_TICKER.match(t)) and t not in _EXCLUDED_TICKERS
+    )]
 
     # Coerce float columns to numeric
     float_sql_cols = [
@@ -147,9 +162,9 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
         df["purchase_date"] = pd.to_datetime(df["purchase_date"], errors="coerce")
         df["purchase_date"] = df["purchase_date"].where(df["purchase_date"].notna(), other=None)
 
-    # Drop rows where current_price is NaN
+    # Fill missing current_price with 0 instead of dropping rows
     if "current_price" in df.columns:
-        df = df[df["current_price"].notna()]
+        df["current_price"] = df["current_price"].fillna(0)
 
     # ── Recompute paid_for_itself from yfinance dividend history ────────────
     if "purchase_date" in df.columns:
@@ -354,12 +369,12 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
 
     conn.close()
     if not existing_tickers:
-        msg = f"Imported {row_count} holdings from Excel."
+        msg = f"Imported {row_count} holdings from Excel (sheet: '{sheet_name}')."
     else:
         parts = []
         if updated: parts.append(f"updated {updated} existing")
         if inserted: parts.append(f"added {inserted} new")
-        msg = f"Merge complete: {', '.join(parts)} holdings."
+        msg = f"Merge complete: {', '.join(parts)} holdings (sheet: '{sheet_name}')."
     return row_count, msg
 
 
@@ -764,6 +779,8 @@ def import_from_upload(df, profile_id):
         freq_raw = _val(row, 'div_frequency')
         if freq_raw and str(freq_raw).strip().upper() in ('A', 'SA', 'Q', 'M', 'W', '52'):
             div_frequency = str(freq_raw).strip().upper()
+            if div_frequency == '52':
+                div_frequency = 'W'
         elif t in _weekly_set:
             div_frequency = 'W'
         elif t in freq_hist:
@@ -958,3 +975,88 @@ def import_from_upload(df, profile_id):
 
     conn.close()
     return row_count, msg
+
+
+# ── Multi-sheet import helpers ────────────────────────────────────────────────
+
+def _get_or_create_profile(name, conn):
+    """Find a profile by name or create it. Returns profile_id."""
+    row = conn.execute("SELECT id FROM profiles WHERE name = ?", (name,)).fetchone()
+    if row:
+        return row[0] if isinstance(row, tuple) else row["id"]
+    cur = conn.execute("INSERT INTO profiles (name) VALUES (?)", (name,))
+    conn.commit()
+    return cur.lastrowid
+
+
+def import_multi_excel(file_path, default_profile_id=1):
+    """Import multiple sheets from the owner's Excel format.
+
+    Each sheet (except special ones) is treated as a separate portfolio.
+    Returns list of {profile_id, profile_name, rows, message}.
+    """
+    import openpyxl
+    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+    sheet_names = wb.sheetnames
+    wb.close()
+
+    skip_sheets = {"Weekly_Payers", "Monthly Tracking", "DivMonths", "Instructions"}
+    results = []
+
+    for sheet in sheet_names:
+        if sheet in skip_sheets:
+            continue
+        # "All Accounts" maps to the default profile
+        if sheet == "All Accounts":
+            pid = default_profile_id
+        else:
+            conn = get_connection()
+            pid = _get_or_create_profile(sheet, conn)
+            conn.close()
+
+        try:
+            count, msg = import_from_excel(file_path, sheet_name=sheet, profile_id=pid)
+            results.append({"profile_id": pid, "profile_name": sheet, "rows": count, "message": msg})
+        except Exception as e:
+            results.append({"profile_id": pid, "profile_name": sheet, "rows": 0, "message": f"Error: {str(e)}"})
+
+    return results
+
+
+def import_multi_upload(file_path):
+    """Import a multi-tab generic upload file.
+
+    Each non-empty sheet becomes a separate portfolio (auto-created from sheet name).
+    Returns list of {profile_id, profile_name, rows, message}.
+    """
+    import openpyxl
+    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+    sheet_names = [s for s in wb.sheetnames if s != "Instructions"]
+    wb.close()
+
+    conn = get_connection()
+    results = []
+
+    for sheet in sheet_names:
+        try:
+            df = pd.read_excel(file_path, sheet_name=sheet, engine="openpyxl")
+        except Exception:
+            continue
+
+        # Skip empty sheets
+        if df.empty or len(df) == 0:
+            continue
+        # Check if it has any data rows (not just headers)
+        if df.dropna(how="all").empty:
+            continue
+
+        pid = _get_or_create_profile(sheet, conn)
+
+        try:
+            count, msg = import_from_upload(df, pid)
+            results.append({"profile_id": pid, "profile_name": sheet, "rows": count, "message": msg})
+        except Exception as e:
+            results.append({"profile_id": pid, "profile_name": sheet, "rows": 0, "message": f"Error: {str(e)}"})
+
+    conn.close()
+    return results

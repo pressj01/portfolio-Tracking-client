@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 
 function SignalBadge({ signal }) {
@@ -19,6 +19,8 @@ function pctClass(v) {
 }
 
 export default function Watchlist() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const dialog = useDialog()
   const [watchingList, setWatchingList] = useState([])
   const [analysisData, setAnalysisData] = useState(null)
@@ -33,7 +35,7 @@ export default function Watchlist() {
   const loadAnalysis = useCallback(() => {
     setLoading(true)
     setError(null)
-    fetch(`${API_BASE}/api/watchlist/data`)
+    pf('/api/watchlist/data')
       .then(r => r.json())
       .then(data => {
         setLoading(false)
@@ -44,10 +46,10 @@ export default function Watchlist() {
         setLoading(false)
         setError('Error loading analysis: ' + err)
       })
-  }, [])
+  }, [pf, selection])
 
   const loadWatchingList = useCallback(() => {
-    fetch(`${API_BASE}/api/watchlist/watching`)
+    pf('/api/watchlist/watching')
       .then(r => r.json())
       .then(data => {
         setWatchingList(data.rows || [])
@@ -60,12 +62,12 @@ export default function Watchlist() {
 
   const saveList = useCallback((newList) => {
     setWatchingList(newList)
-    fetch(`${API_BASE}/api/watchlist/watching`, {
+    pf('/api/watchlist/watching', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rows: newList }),
     })
-  }, [])
+  }, [pf])
 
   const watchingListRef = useRef(watchingList)
   useEffect(() => { watchingListRef.current = watchingList }, [watchingList])

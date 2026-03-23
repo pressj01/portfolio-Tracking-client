@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import Plot from 'react-plotly.js'
 import { useDialog } from '../components/DialogProvider'
 
@@ -31,6 +31,8 @@ const DRIP_HORIZON_OPTIONS = [1, 2, 3, 5, 10]
 const DRIP_PCT_OPTIONS = Array.from({ length: 101 }, (_, i) => i)
 
 function DripProjectionsPanel() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const [years, setYears] = useState(1)
   const [categories, setCategories] = useState([])
   const [selectedCats, setSelectedCats] = useState([])
@@ -85,11 +87,11 @@ function DripProjectionsPanel() {
 
   // Load all saved settings on mount
   useEffect(() => {
-    fetch(`${API_BASE}/api/drip-settings`)
+    pf('/api/drip-settings')
       .then(r => r.json())
       .then(data => { if (data && typeof data === 'object' && !data.error) setDripSettings(data) })
       .catch(() => {})
-    fetch(`${API_BASE}/api/drip-contribution-settings`)
+    pf('/api/drip-contribution-settings')
       .then(r => r.json())
       .then(data => {
         if (data && !data.error) {
@@ -99,7 +101,7 @@ function DripProjectionsPanel() {
         }
       })
       .catch(() => {})
-    fetch(`${API_BASE}/api/drip-redirects`)
+    pf('/api/drip-redirects')
       .then(r => r.json())
       .then(data => {
         if (data?.redirects?.length) {
@@ -108,11 +110,11 @@ function DripProjectionsPanel() {
         }
       })
       .catch(() => {})
-  }, [])
+  }, [pf, selection])
 
   const fetchProjection = useCallback(() => {
     setLoading(true)
-    fetch(`${API_BASE}/api/analytics/drip-projection`, {
+    pf('/api/analytics/drip-projection', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         years, categories: selectedCats, drip_settings: dripSettings,
@@ -150,22 +152,22 @@ function DripProjectionsPanel() {
       })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [years, selectedCats, dripSettings, monthlyAmount, contributionTargeted, contributionTargets, redirects, customTickers])
+  }, [pf, years, selectedCats, dripSettings, monthlyAmount, contributionTargeted, contributionTargets, redirects, customTickers])
 
   useEffect(() => { if (skipRefetch.current) { skipRefetch.current = false; return } fetchProjection() }, [fetchProjection])
 
   const saveSettings = () => {
     setSaving(true)
     Promise.all([
-      fetch(`${API_BASE}/api/drip-settings`, {
+      pf('/api/drip-settings', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ settings: dripSettings }),
       }),
-      fetch(`${API_BASE}/api/drip-contribution-settings`, {
+      pf('/api/drip-contribution-settings', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ monthly_amount: monthlyAmount, targeted: contributionTargeted, targets: contributionTargets }),
       }),
-      fetch(`${API_BASE}/api/drip-redirects`, {
+      pf('/api/drip-redirects', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ redirects }),
       }),
@@ -204,7 +206,7 @@ function DripProjectionsPanel() {
       return
     }
     setCustomTickerLoading(true)
-    fetch(`${API_BASE}/api/lookup/${sym}`)
+    pf(`/api/lookup/${sym}`)
       .then(r => r.json())
       .then(async data => {
         if (data.error) { await dialog.alert(`Could not find ticker: ${sym}`); return }
@@ -739,6 +741,8 @@ function DripProjectionsPanel() {
 }
 
 export default function PortfolioIncomeSim() {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const dialog = useDialog()
   // Mode
   const [mode, setMode] = useState('historical')
@@ -792,15 +796,15 @@ export default function PortfolioIncomeSim() {
 
   // Load saved list + ETF list on mount
   const loadSavedList = useCallback(() => {
-    fetch(`${API_BASE}/api/pis/saved`).then(r => r.json()).then(d => setSavedList(d.saved || [])).catch(() => {})
-  }, [])
+    pf('/api/pis/saved').then(r => r.json()).then(d => setSavedList(d.saved || [])).catch(() => {})
+  }, [pf])
 
   // Load portfolio tickers for comparison dropdown
   useEffect(() => {
-    fetch(`${API_BASE}/api/pis/portfolio-tickers`).then(r => r.json()).then(d => {
+    pf('/api/pis/portfolio-tickers').then(r => r.json()).then(d => {
       setCompPortfolioTickers(d.tickers || [])
     }).catch(() => {})
-  }, [])
+  }, [pf, selection])
 
   // Close comparison dropdown on outside click
   useEffect(() => {
@@ -814,7 +818,7 @@ export default function PortfolioIncomeSim() {
 
   useEffect(() => {
     loadSavedList()
-    fetch(`${API_BASE}/api/pis/list`).then(r => r.json()).then(d => {
+    pf('/api/pis/list').then(r => r.json()).then(d => {
       if (d.rows && d.rows.length > 0)
         setGridRows(d.rows.map(r => ({
           ticker: r.ticker, amount: String(r.amount),
@@ -822,7 +826,7 @@ export default function PortfolioIncomeSim() {
           yield_override: r.yield_override != null ? String(r.yield_override) : '',
         })))
     }).catch(() => {})
-  }, [loadSavedList])
+  }, [loadSavedList, pf, selection])
 
   // Grid helpers
   const updateRow = (idx, field, value) => {
@@ -836,7 +840,7 @@ export default function PortfolioIncomeSim() {
   const clearGrid = () => {
     setGridRows([{ ticker: '', amount: '', reinvest_pct: '', yield_override: '' }])
     setResults(null)
-    fetch(`${API_BASE}/api/pis/list`, {
+    pf('/api/pis/list', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rows: [] }),
     })
@@ -960,7 +964,7 @@ export default function PortfolioIncomeSim() {
   // Save list
   const saveList = () => {
     const rows = collectRows(gridRows)
-    return fetch(`${API_BASE}/api/pis/list`, {
+    return pf('/api/pis/list', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rows }),
     }).then(r => r.json()).then(d => {
@@ -974,7 +978,7 @@ export default function PortfolioIncomeSim() {
   // Load saved
   const loadSaved = () => {
     if (!selectedSaved) return
-    fetch(`${API_BASE}/api/pis/saved/` + selectedSaved).then(r => r.json()).then(async d => {
+    pf('/api/pis/saved/' + selectedSaved).then(r => r.json()).then(async d => {
       if (d.error) { await dialog.alert(d.error); return }
       setMode(d.mode || 'historical')
       if (d.mode === 'historical' || !d.mode) {
@@ -1019,7 +1023,7 @@ export default function PortfolioIncomeSim() {
     if (!selectedSaved) return
     const sel = savedList.find(s => String(s.id) === selectedSaved)
     if (!await dialog.confirm('Delete "' + (sel?.name || '') + '"?')) return
-    fetch(`${API_BASE}/api/pis/saved/` + selectedSaved, { method: 'DELETE' })
+    pf('/api/pis/saved/' + selectedSaved, { method: 'DELETE' })
       .then(r => r.json()).then(async d => {
         if (d.error) { await dialog.alert(d.error); return }
         setDeleteMsg(true)
@@ -1037,7 +1041,7 @@ export default function PortfolioIncomeSim() {
     const payload = { name, mode, rows, comparison_tickers: compTickers.map(t => ({ ticker: t, reinvest_pct: compReinvest[t] || 0, amount: compAmount[t] || 10000, yield_override: compYieldOverride[t] ?? null })) }
     if (mode === 'historical') { payload.start = startDate; payload.end = endDate }
     else { payload.market_type = marketType; payload.duration_months = durationMonths }
-    fetch(`${API_BASE}/api/pis/saved`, {
+    pf('/api/pis/saved', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }).then(r => r.json()).then(d => {
@@ -1059,9 +1063,9 @@ export default function PortfolioIncomeSim() {
   const confirmRename = () => {
     const name = renameName.trim()
     if (!name) { setRenameError('Enter a name.'); return }
-    fetch(`${API_BASE}/api/pis/saved/` + selectedSaved).then(r => r.json()).then(d => {
+    pf('/api/pis/saved/' + selectedSaved).then(r => r.json()).then(d => {
       if (d.error) { setRenameError(d.error); return }
-      return fetch(`${API_BASE}/api/pis/saved/` + selectedSaved, {
+      return pf('/api/pis/saved/' + selectedSaved, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, mode: d.mode, rows: d.rows, start: d.start, end: d.end, market_type: d.market_type, duration_months: d.duration_months, comparison_tickers: d.comparison_tickers || [] }),
       }).then(r => r.json())
@@ -1080,7 +1084,7 @@ export default function PortfolioIncomeSim() {
     const payload = { name: sel?.name || 'Unnamed', mode, rows, comparison_tickers: compTickers.map(t => ({ ticker: t, reinvest_pct: compReinvest[t] || 0, amount: compAmount[t] || 10000, yield_override: compYieldOverride[t] ?? null })) }
     if (mode === 'historical') { payload.start = startDate; payload.end = endDate }
     else { payload.market_type = marketType; payload.duration_months = durationMonths }
-    fetch(`${API_BASE}/api/pis/saved/` + selectedSaved, {
+    pf('/api/pis/saved/' + selectedSaved, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }).then(r => r.json()).then(async d => {
@@ -1104,11 +1108,11 @@ export default function PortfolioIncomeSim() {
     }
 
     // Save list first
-    fetch(`${API_BASE}/api/pis/list`, {
+    pf('/api/pis/list', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rows }),
     }).then(() => {
-      fetch(`${API_BASE}/api/pis/run`, {
+      pf('/api/pis/run', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       }).then(r => r.json()).then(data => {
@@ -1123,7 +1127,7 @@ export default function PortfolioIncomeSim() {
   // Portfolio picker
   const openPicker = () => {
     setPickerSearch(''); setPickerChecked(new Set()); setPickerOpen(true)
-    fetch(`${API_BASE}/api/pis/portfolio-tickers`).then(r => r.json()).then(d => {
+    pf('/api/pis/portfolio-tickers').then(r => r.json()).then(d => {
       setPickerTickers(d.tickers || [])
     }).catch(() => setPickerTickers([]))
   }

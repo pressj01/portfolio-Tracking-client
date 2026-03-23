@@ -77,6 +77,17 @@ def create_template():
     for i, header in enumerate(headers, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = max(len(header) + 4, 12)
 
+    # ── Additional portfolio sheets (2-12) ─────────────────────────────────────
+    for sheet_num in range(2, 13):
+        ps = wb.create_sheet(f"Portfolio {sheet_num}")
+        for col, header in enumerate(headers, 1):
+            cell = ps.cell(row=1, column=col, value=header)
+            cell.font = header_font
+            cell.fill = required_fill if col <= 2 else optional_fill
+            cell.alignment = Alignment(horizontal="center")
+        for i, header in enumerate(headers, 1):
+            ps.column_dimensions[openpyxl.utils.get_column_letter(i)].width = max(len(header) + 4, 12)
+
     # ── Instructions sheet ─────────────────────────────────────────────────────
     ins = wb.create_sheet("Instructions")
     instructions = [

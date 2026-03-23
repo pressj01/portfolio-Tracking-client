@@ -14,6 +14,7 @@ from import_data import (
     import_from_excel, import_from_upload,
     import_weekly_payouts, import_monthly_payouts,
     import_monthly_payout_tickers,
+    import_multi_excel, import_multi_upload,
 )
 from normalize import (
     populate_holdings,
@@ -33,7 +34,46 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def get_profile_id():
+    """Return a single profile_id (for write operations)."""
     return int(request.args.get("profile_id", session.get("profile_id", 1)))
+
+
+def get_profile_filter():
+    """Return (is_aggregate, profile_ids_list) for read operations.
+
+    If ?aggregate=true, reads member IDs from aggregate_config.
+    Otherwise returns (False, [single_profile_id]).
+    """
+    if request.args.get("aggregate") == "true":
+        conn = get_connection()
+        rows = conn.execute("SELECT member_profile_id FROM aggregate_config").fetchall()
+        conn.close()
+        ids = [r["member_profile_id"] if isinstance(r, dict) else r[0] for r in rows]
+        return True, ids if ids else [1]
+    pid = int(request.args.get("profile_id", session.get("profile_id", 1)))
+    return False, [pid]
+
+
+def _resolve_aggregate_profile(ticker, profile_ids):
+    """For aggregate writes, find the profile with the largest position for a ticker."""
+    conn = get_connection()
+    placeholders = ",".join("?" * len(profile_ids))
+    row = conn.execute(
+        f"SELECT profile_id FROM all_account_info WHERE ticker = ? AND profile_id IN ({placeholders}) ORDER BY quantity DESC LIMIT 1",
+        [ticker] + profile_ids,
+    ).fetchone()
+    conn.close()
+    if row:
+        return row["profile_id"] if isinstance(row, dict) else row[0]
+    return profile_ids[0]
+
+
+def _get_write_profile_id():
+    """Get a single profile_id for write operations, resolving aggregate if needed."""
+    is_agg, pids = get_profile_filter()
+    if is_agg:
+        return pids[0]  # default; caller should use _resolve_aggregate_profile for ticker-specific ops
+    return pids[0]
 
 
 def rows_to_dicts(rows):
@@ -95,16 +135,237 @@ def delete_profile(pid):
     if pid == 1:
         return jsonify({"error": "Cannot delete the default profile"}), 400
     conn = get_connection()
-    conn.execute("DELETE FROM all_account_info WHERE profile_id = ?", (pid,))
-    conn.execute("DELETE FROM income_tracking WHERE profile_id = ?", (pid,))
-    conn.execute("DELETE FROM weekly_payouts WHERE profile_id = ?", (pid,))
-    conn.execute("DELETE FROM monthly_payouts WHERE profile_id = ?", (pid,))
-    conn.execute("DELETE FROM weekly_payout_tickers WHERE profile_id = ?", (pid,))
-    conn.execute("DELETE FROM monthly_payout_tickers WHERE profile_id = ?", (pid,))
+    _clear_profile_data(conn, pid)
+    conn.execute("DELETE FROM aggregate_config WHERE member_profile_id = ?", (pid,))
     conn.execute("DELETE FROM profiles WHERE id = ?", (pid,))
     conn.commit()
     conn.close()
     return jsonify({"deleted": pid})
+
+
+def _clear_profile_data(conn, pid):
+    """Remove all data for a profile from every profile-scoped table."""
+    for table in [
+        "all_account_info", "holdings", "dividends", "income_tracking",
+        "weekly_payouts", "monthly_payouts", "weekly_payout_tickers",
+        "monthly_payout_tickers", "drip_settings", "drip_contribution_targets",
+        "drip_redirects", "swap_candidates", "ticker_categories",
+    ]:
+        conn.execute(f"DELETE FROM {table} WHERE profile_id = ?", (pid,))
+
+
+@app.route("/api/profiles/<int:pid>/clear", methods=["POST"])
+def clear_profile_data(pid):
+    """Clear all data for a profile without deleting the profile itself."""
+    conn = get_connection()
+    _clear_profile_data(conn, pid)
+    conn.commit()
+    conn.close()
+    return jsonify({"cleared": pid, "message": f"All data cleared for profile {pid}"})
+
+
+@app.route("/api/profiles/summary", methods=["GET"])
+def profiles_summary():
+    """Return per-profile stats for the Manage Portfolios page."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT p.id, p.name, p.created_at,
+               COUNT(a.ticker) as holdings_count,
+               COALESCE(SUM(a.current_value), 0) as total_value
+        FROM profiles p
+        LEFT JOIN all_account_info a ON p.id = a.profile_id
+        GROUP BY p.id
+        ORDER BY p.id
+    """).fetchall()
+    flag = conn.execute("SELECT value FROM settings WHERE key = 'owner_import_used'").fetchone()
+    conn.close()
+    return jsonify({"profiles": rows_to_dicts(rows), "owner_import_used": bool(flag)})
+
+
+@app.route("/api/aggregate-config", methods=["GET"])
+def get_aggregate_config():
+    conn = get_connection()
+    rows = conn.execute("SELECT member_profile_id FROM aggregate_config").fetchall()
+    name_row = conn.execute("SELECT value FROM settings WHERE key = 'aggregate_name'").fetchone()
+    conn.close()
+    ids = [r["member_profile_id"] if isinstance(r, dict) else r[0] for r in rows]
+    name = (name_row[0] if name_row else "Aggregate")
+    return jsonify({"member_ids": ids, "name": name})
+
+
+@app.route("/api/aggregate-config", methods=["PUT"])
+def set_aggregate_config():
+    data = request.get_json()
+    member_ids = data.get("member_ids", [])
+    name = data.get("name", "Aggregate")
+    conn = get_connection()
+    conn.execute("DELETE FROM aggregate_config")
+    for mid in member_ids:
+        conn.execute("INSERT OR IGNORE INTO aggregate_config (member_profile_id) VALUES (?)", (mid,))
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("aggregate_name", name))
+    conn.commit()
+    conn.close()
+    return jsonify({"member_ids": member_ids, "name": name})
+
+
+@app.route("/api/aggregate-config", methods=["DELETE"])
+def delete_aggregate_config():
+    conn = get_connection()
+    conn.execute("DELETE FROM aggregate_config")
+    conn.execute("DELETE FROM settings WHERE key = 'aggregate_name'")
+    conn.commit()
+    conn.close()
+    return jsonify({"deleted": True})
+
+
+@app.route("/api/profiles/reconcile-owner", methods=["POST"])
+def reconcile_owner():
+    """Compare Owner (profile 1) against the sum of the other portfolios and sync mismatches.
+
+    For each ticker across all non-Owner profiles:
+    - If missing from Owner: insert it
+    - If quantity/value differs: update Owner
+    - If ticker exists in Owner but not in any sub-portfolio: remove it
+    """
+    from datetime import date as _date
+
+    data = request.get_json() or {}
+    source_ids = data.get("source_ids", [])
+
+    conn = get_connection()
+    owner_id = 1
+
+    if not source_ids:
+        # Default: all profiles except Owner
+        rows = conn.execute("SELECT id FROM profiles WHERE id != ?", (owner_id,)).fetchall()
+        source_ids = [r["id"] if isinstance(r, dict) else r[0] for r in rows]
+
+    if not source_ids:
+        conn.close()
+        return jsonify({"error": "No source portfolios to reconcile from"}), 400
+
+    placeholders = ",".join("?" * len(source_ids))
+
+    # Aggregate holdings from source portfolios
+    agg_rows = conn.execute(f"""
+        SELECT
+            ticker,
+            MAX(description) as description,
+            MAX(classification_type) as classification_type,
+            SUM(quantity) as quantity,
+            CASE WHEN SUM(quantity) > 0 THEN SUM(purchase_value) / SUM(quantity) ELSE 0 END as price_paid,
+            MAX(current_price) as current_price,
+            SUM(purchase_value) as purchase_value,
+            SUM(current_value) as current_value,
+            SUM(gain_or_loss) as gain_or_loss,
+            CASE WHEN SUM(purchase_value) > 0 THEN SUM(gain_or_loss) / SUM(purchase_value) ELSE 0 END as gain_or_loss_percentage,
+            CASE WHEN SUM(purchase_value) > 0 THEN SUM(gain_or_loss) / SUM(purchase_value) ELSE 0 END as percent_change,
+            MAX(div_frequency) as div_frequency,
+            MAX(reinvest) as reinvest,
+            MAX(ex_div_date) as ex_div_date,
+            MAX(div_pay_date) as div_pay_date,
+            MAX(div) as div,
+            SUM(dividend_paid) as dividend_paid,
+            SUM(estim_payment_per_year) as estim_payment_per_year,
+            SUM(approx_monthly_income) as approx_monthly_income,
+            SUM(withdraw_8pct_cost_annually) as withdraw_8pct_cost_annually,
+            SUM(withdraw_8pct_per_month) as withdraw_8pct_per_month,
+            SUM(cash_not_reinvested) as cash_not_reinvested,
+            SUM(total_cash_reinvested) as total_cash_reinvested,
+            SUM(shares_bought_from_dividend) as shares_bought_from_dividend,
+            SUM(shares_bought_in_year) as shares_bought_in_year,
+            SUM(shares_in_month) as shares_in_month,
+            SUM(ytd_divs) as ytd_divs,
+            SUM(total_divs_received) as total_divs_received,
+            CASE WHEN SUM(purchase_value) > 0 THEN SUM(total_divs_received) / SUM(purchase_value) ELSE 0 END as paid_for_itself,
+            MIN(purchase_date) as purchase_date,
+            SUM(current_month_income) as current_month_income
+        FROM all_account_info
+        WHERE profile_id IN ({placeholders})
+        GROUP BY ticker
+    """, source_ids).fetchall()
+
+    agg_map = {r["ticker"]: dict(r) for r in agg_rows}
+
+    # Get current Owner holdings
+    owner_rows = conn.execute(
+        "SELECT ticker, quantity, current_value FROM all_account_info WHERE profile_id = ?",
+        (owner_id,),
+    ).fetchall()
+    owner_tickers = {r["ticker"] for r in owner_rows}
+    owner_qty = {r["ticker"]: r["quantity"] for r in owner_rows}
+
+    inserted = 0
+    updated = 0
+    removed = 0
+
+    update_fields = [
+        "description", "classification_type", "quantity", "price_paid",
+        "current_price", "purchase_value", "current_value", "gain_or_loss",
+        "gain_or_loss_percentage", "percent_change", "div_frequency", "reinvest",
+        "ex_div_date", "div_pay_date", "div", "dividend_paid",
+        "estim_payment_per_year", "approx_monthly_income",
+        "withdraw_8pct_cost_annually", "withdraw_8pct_per_month",
+        "cash_not_reinvested", "total_cash_reinvested",
+        "shares_bought_from_dividend", "shares_bought_in_year", "shares_in_month",
+        "ytd_divs", "total_divs_received", "paid_for_itself",
+        "purchase_date", "current_month_income",
+    ]
+
+    for ticker, agg in agg_map.items():
+        if ticker in owner_tickers:
+            # Check if quantity or value differs (tolerance for float comparison)
+            owner_q = owner_qty.get(ticker, 0) or 0
+            agg_q = agg.get("quantity", 0) or 0
+            if abs(owner_q - agg_q) > 0.0001:
+                # Update Owner with aggregated values
+                sets = []
+                vals = []
+                for f in update_fields:
+                    v = agg.get(f)
+                    sets.append(f"{f} = ?")
+                    vals.append(v)
+                sets.append("import_date = ?")
+                vals.append(_date.today().isoformat())
+                vals.extend([ticker, owner_id])
+                conn.execute(
+                    f"UPDATE all_account_info SET {', '.join(sets)} WHERE ticker = ? AND profile_id = ?",
+                    vals,
+                )
+                updated += 1
+        else:
+            # Insert new ticker into Owner
+            cols = ["ticker", "profile_id", "import_date"] + update_fields
+            vals = [ticker, owner_id, _date.today().isoformat()] + [agg.get(f) for f in update_fields]
+            ph = ",".join("?" * len(cols))
+            conn.execute(f"INSERT INTO all_account_info ({', '.join(cols)}) VALUES ({ph})", vals)
+            inserted += 1
+
+    # Remove tickers from Owner that no longer exist in any sub-portfolio
+    agg_tickers = set(agg_map.keys())
+    for ticker in owner_tickers - agg_tickers:
+        conn.execute(
+            "DELETE FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+            (ticker, owner_id),
+        )
+        removed += 1
+
+    conn.commit()
+
+    # Refresh derived tables for Owner
+    populate_holdings(owner_id)
+    populate_dividends(owner_id)
+    populate_income_tracking(owner_id)
+
+    conn.close()
+
+    parts = []
+    if updated: parts.append(f"{updated} updated")
+    if inserted: parts.append(f"{inserted} added")
+    if removed: parts.append(f"{removed} removed")
+    msg = f"Owner reconciled: {', '.join(parts)}." if parts else "Owner is already in sync — no changes needed."
+
+    return jsonify({"updated": updated, "inserted": inserted, "removed": removed, "message": msg})
 
 
 # ── Import endpoints ──────────────────────────────────────────────────────────
@@ -119,14 +380,37 @@ def api_import_excel():
     path = os.path.join(UPLOAD_FOLDER, f.filename)
     f.save(path)
     try:
-        sheet = request.form.get("sheet_name", "All Accounts")
-        count, msg = import_from_excel(path, sheet_name=sheet, profile_id=profile_id)
-        # Auto-populate derived tables
-        populate_holdings(profile_id)
-        populate_dividends(profile_id)
-        populate_income_tracking(profile_id)
-        populate_pillar_weights(profile_id)
-        return jsonify({"rows": count, "message": msg})
+        multi = request.form.get("multi_sheet", "false").lower() == "true"
+        if multi:
+            results = import_multi_excel(path, default_profile_id=profile_id)
+            # Populate derived tables for each imported profile
+            for r in results:
+                if r["rows"] > 0:
+                    populate_holdings(r["profile_id"])
+                    populate_dividends(r["profile_id"])
+                    populate_income_tracking(r["profile_id"])
+                    populate_pillar_weights(r["profile_id"])
+            total = sum(r["rows"] for r in results)
+            # Mark owner import as used
+            conn2 = get_connection()
+            conn2.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("owner_import_used", "true"))
+            conn2.commit()
+            conn2.close()
+            return jsonify({"rows": total, "message": f"Imported {len(results)} sheets ({total} total holdings)", "details": results})
+        else:
+            sheet = request.form.get("sheet_name", "All Accounts")
+            count, msg = import_from_excel(path, sheet_name=sheet, profile_id=profile_id)
+            # Auto-populate derived tables
+            populate_holdings(profile_id)
+            populate_dividends(profile_id)
+            populate_income_tracking(profile_id)
+            populate_pillar_weights(profile_id)
+            # Mark owner import as used
+            conn2 = get_connection()
+            conn2.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("owner_import_used", "true"))
+            conn2.commit()
+            conn2.close()
+            return jsonify({"rows": count, "message": msg})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     finally:
@@ -144,9 +428,20 @@ def api_import_generic():
     path = os.path.join(UPLOAD_FOLDER, f.filename)
     f.save(path)
     try:
-        df = pd.read_excel(path, engine="openpyxl")
-        count, msg = import_from_upload(df, profile_id)
-        populate_holdings(profile_id)
+        multi = request.form.get("multi_sheet", "false").lower() == "true"
+        if multi:
+            results = import_multi_upload(path)
+            for r in results:
+                if r["rows"] > 0:
+                    populate_holdings(r["profile_id"])
+                    populate_dividends(r["profile_id"])
+                    populate_income_tracking(r["profile_id"])
+            total = sum(r["rows"] for r in results)
+            return jsonify({"rows": total, "message": f"Imported {len(results)} portfolios ({total} total holdings)", "details": results})
+        else:
+            df = pd.read_excel(path, engine="openpyxl")
+            count, msg = import_from_upload(df, profile_id)
+            populate_holdings(profile_id)
         populate_dividends(profile_id)
         populate_income_tracking(profile_id)
         return jsonify({"rows": count, "message": msg})
@@ -495,19 +790,83 @@ def refresh_market_data():
 
 @app.route("/api/holdings", methods=["GET"])
 def list_holdings():
-    profile_id = get_profile_id()
+    is_agg, pids = get_profile_filter()
     conn = get_connection()
-    rows = conn.execute(
-        """SELECT a.*, c.name AS category
-           FROM all_account_info a
-           LEFT JOIN ticker_categories tc ON a.ticker = tc.ticker AND a.profile_id = tc.profile_id
-           LEFT JOIN categories c ON tc.category_id = c.id
-           WHERE a.profile_id = ?
-           ORDER BY a.ticker""",
-        (profile_id,),
-    ).fetchall()
+    placeholders = ",".join("?" * len(pids))
+
+    if is_agg and len(pids) > 1:
+        # Aggregate: combine duplicate tickers across portfolios
+        rows = conn.execute(
+            f"""SELECT
+                   a.ticker,
+                   MAX(a.description) as description,
+                   MAX(a.classification_type) as classification_type,
+                   SUM(a.quantity) as quantity,
+                   CASE WHEN SUM(a.quantity) > 0 THEN SUM(a.purchase_value) / SUM(a.quantity) ELSE 0 END as price_paid,
+                   MAX(a.current_price) as current_price,
+                   SUM(a.purchase_value) as purchase_value,
+                   SUM(a.current_value) as current_value,
+                   SUM(a.gain_or_loss) as gain_or_loss,
+                   CASE WHEN SUM(a.purchase_value) > 0 THEN SUM(a.gain_or_loss) / SUM(a.purchase_value) ELSE 0 END as gain_or_loss_percentage,
+                   CASE WHEN SUM(a.purchase_value) > 0 THEN SUM(a.gain_or_loss) / SUM(a.purchase_value) ELSE 0 END as percent_change,
+                   MAX(a.div_frequency) as div_frequency,
+                   MAX(a.reinvest) as reinvest,
+                   MAX(a.ex_div_date) as ex_div_date,
+                   MAX(a.div_pay_date) as div_pay_date,
+                   CASE WHEN SUM(a.quantity) > 0 THEN SUM(a.dividend_paid) / SUM(a.quantity) ELSE MAX(a.div) END as div,
+                   SUM(a.dividend_paid) as dividend_paid,
+                   SUM(a.estim_payment_per_year) as estim_payment_per_year,
+                   SUM(a.approx_monthly_income) as approx_monthly_income,
+                   SUM(a.withdraw_8pct_cost_annually) as withdraw_8pct_cost_annually,
+                   SUM(a.withdraw_8pct_per_month) as withdraw_8pct_per_month,
+                   SUM(a.cash_not_reinvested) as cash_not_reinvested,
+                   SUM(a.total_cash_reinvested) as total_cash_reinvested,
+                   CASE WHEN SUM(a.purchase_value) > 0 THEN SUM(a.estim_payment_per_year) / SUM(a.purchase_value) ELSE 0 END as annual_yield_on_cost,
+                   CASE WHEN SUM(a.current_value) > 0 THEN SUM(a.estim_payment_per_year) / SUM(a.current_value) ELSE 0 END as current_annual_yield,
+                   NULL as percent_of_account,
+                   SUM(a.shares_bought_from_dividend) as shares_bought_from_dividend,
+                   SUM(a.shares_bought_in_year) as shares_bought_in_year,
+                   SUM(a.shares_in_month) as shares_in_month,
+                   SUM(a.ytd_divs) as ytd_divs,
+                   SUM(a.total_divs_received) as total_divs_received,
+                   CASE WHEN SUM(a.purchase_value) > 0 THEN SUM(a.total_divs_received) / SUM(a.purchase_value) ELSE 0 END as paid_for_itself,
+                   MAX(a.import_date) as import_date,
+                   MIN(a.purchase_date) as purchase_date,
+                   SUM(a.current_month_income) as current_month_income,
+                   (SELECT c2.name FROM ticker_categories tc2
+                    JOIN categories c2 ON tc2.category_id = c2.id
+                    WHERE tc2.ticker = a.ticker AND tc2.profile_id = (
+                        SELECT a2.profile_id FROM all_account_info a2
+                        WHERE a2.ticker = a.ticker AND a2.profile_id IN ({placeholders})
+                        ORDER BY a2.quantity DESC LIMIT 1
+                    ) LIMIT 1) as category
+               FROM all_account_info a
+               WHERE a.profile_id IN ({placeholders})
+               GROUP BY a.ticker
+               ORDER BY a.ticker""",
+            pids + pids,
+        ).fetchall()
+    else:
+        pid = pids[0]
+        rows = conn.execute(
+            """SELECT a.*, c.name AS category
+               FROM all_account_info a
+               LEFT JOIN ticker_categories tc ON a.ticker = tc.ticker AND a.profile_id = tc.profile_id
+               LEFT JOIN categories c ON tc.category_id = c.id
+               WHERE a.profile_id = ?
+               ORDER BY a.ticker""",
+            (pid,),
+        ).fetchall()
+
+    # Recalculate percent_of_account
+    results = rows_to_dicts(rows)
+    total_value = sum(r.get("current_value") or 0 for r in results)
+    if total_value > 0:
+        for r in results:
+            r["percent_of_account"] = (r.get("current_value") or 0) / total_value
+
     conn.close()
-    return jsonify(rows_to_dicts(rows))
+    return jsonify(results)
 
 
 @app.route("/api/holdings", methods=["POST"])
@@ -574,9 +933,14 @@ def add_holding():
 @app.route("/api/holdings/<ticker>", methods=["PUT"])
 def update_holding(ticker):
     """Update a holding's fields."""
-    profile_id = get_profile_id()
+    is_agg, pids = get_profile_filter()
     data = request.get_json()
     ticker = ticker.upper()
+
+    if is_agg:
+        profile_id = _resolve_aggregate_profile(ticker, pids)
+    else:
+        profile_id = pids[0]
 
     conn = get_connection()
     existing = conn.execute(
@@ -642,15 +1006,19 @@ def update_holding(ticker):
 @app.route("/api/holdings/<ticker>", methods=["DELETE"])
 def delete_holding(ticker):
     """Delete a holding."""
-    profile_id = get_profile_id()
+    is_agg, pids = get_profile_filter()
+    if is_agg:
+        profile_id = _resolve_aggregate_profile(ticker, pids)
+    else:
+        profile_id = pids[0]
     ticker = ticker.upper()
     conn = get_connection()
     conn.execute(
         "DELETE FROM all_account_info WHERE ticker = ? AND profile_id = ?",
         (ticker, profile_id),
     )
-    conn.execute("DELETE FROM holdings WHERE ticker = ?", (ticker,))
-    conn.execute("DELETE FROM dividends WHERE ticker = ?", (ticker,))
+    conn.execute("DELETE FROM holdings WHERE ticker = ? AND profile_id = ?", (ticker, profile_id))
+    conn.execute("DELETE FROM dividends WHERE ticker = ? AND profile_id = ?", (ticker, profile_id))
     conn.commit()
     conn.close()
     return jsonify({"ticker": ticker, "message": f"{ticker} deleted"})
@@ -660,8 +1028,12 @@ def delete_holding(ticker):
 
 @app.route("/api/dividends", methods=["GET"])
 def list_dividends():
+    is_agg, pids = get_profile_filter()
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM dividends ORDER BY ticker").fetchall()
+    placeholders = ",".join("?" * len(pids))
+    rows = conn.execute(
+        f"SELECT * FROM dividends WHERE profile_id IN ({placeholders}) ORDER BY ticker", pids
+    ).fetchall()
     conn.close()
     return jsonify(rows_to_dicts(rows))
 
@@ -689,8 +1061,14 @@ def update_dividend(ticker):
         conn.close()
         return jsonify({"error": "No fields to update"}), 400
 
+    is_agg, pids = get_profile_filter()
+    if is_agg:
+        upd_pid = _resolve_aggregate_profile(ticker, pids)
+    else:
+        upd_pid = pids[0]
     vals.append(ticker)
-    conn.execute(f"UPDATE dividends SET {', '.join(updates)} WHERE ticker = ?", vals)
+    vals.append(upd_pid)
+    conn.execute(f"UPDATE dividends SET {', '.join(updates)} WHERE ticker = ? AND profile_id = ?", vals)
     conn.commit()
     conn.close()
     return jsonify({"ticker": ticker, "message": f"{ticker} dividend info updated"})
@@ -783,15 +1161,28 @@ def upcoming_dividends():
     """Return holdings with ex-div dates projected into the upcoming week."""
     from datetime import datetime, timedelta
 
-    profile_id = get_profile_id()
+    is_agg, pids = get_profile_filter()
     conn = get_connection()
-    rows = conn.execute(
-        """SELECT ticker, description, ex_div_date, div, div_frequency, quantity, approx_monthly_income
-           FROM all_account_info
-           WHERE profile_id = ? AND ex_div_date IS NOT NULL AND ex_div_date != ''
-             AND ex_div_date != '--' AND quantity > 0""",
-        (profile_id,),
-    ).fetchall()
+    placeholders = ",".join("?" * len(pids))
+    if is_agg and len(pids) > 1:
+        rows = conn.execute(
+            f"""SELECT ticker, MAX(description) as description, MAX(ex_div_date) as ex_div_date,
+                   MAX(div) as div, MAX(div_frequency) as div_frequency,
+                   SUM(quantity) as quantity, SUM(approx_monthly_income) as approx_monthly_income
+               FROM all_account_info
+               WHERE profile_id IN ({placeholders}) AND ex_div_date IS NOT NULL AND ex_div_date != ''
+                 AND ex_div_date != '--' AND quantity > 0
+               GROUP BY ticker""",
+            pids,
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"""SELECT ticker, description, ex_div_date, div, div_frequency, quantity, approx_monthly_income
+               FROM all_account_info
+               WHERE profile_id IN ({placeholders}) AND ex_div_date IS NOT NULL AND ex_div_date != ''
+                 AND ex_div_date != '--' AND quantity > 0""",
+            pids,
+        ).fetchall()
     conn.close()
 
     if not rows:
@@ -979,11 +1370,12 @@ def portfolio_summary_data():
     from grading import ticker_score, grade_portfolio, letter_grade
     warnings.filterwarnings("ignore")
 
-    profile_id = get_profile_id()
+    is_agg, pids = get_profile_filter()
     conn = get_connection()
+    placeholders = ",".join("?" * len(pids))
     rows = conn.execute(
-        "SELECT ticker, current_value FROM all_account_info WHERE profile_id = ? AND purchase_value > 0 AND quantity > 0",
-        (profile_id,),
+        f"SELECT ticker, SUM(current_value) as current_value FROM all_account_info WHERE profile_id IN ({placeholders}) AND purchase_value > 0 AND quantity > 0 GROUP BY ticker",
+        pids,
     ).fetchall()
     conn.close()
 
@@ -1127,15 +1519,104 @@ def clear_all_data():
 @app.route("/api/data/stats", methods=["GET"])
 def data_stats():
     """Return row counts for key tables."""
-    profile_id = get_profile_id()
+    is_agg, pids = get_profile_filter()
     conn = get_connection()
+    placeholders = ",".join("?" * len(pids))
     holdings = conn.execute(
-        "SELECT COUNT(*) as c FROM all_account_info WHERE profile_id = ?", (profile_id,)
+        f"SELECT COUNT(DISTINCT ticker) as c FROM all_account_info WHERE profile_id IN ({placeholders})", pids
     ).fetchone()["c"]
-    dividends = conn.execute("SELECT COUNT(*) as c FROM dividends").fetchone()["c"]
-    income = conn.execute("SELECT COUNT(*) as c FROM income_tracking").fetchone()["c"]
+    dividends = conn.execute(
+        f"SELECT COUNT(*) as c FROM dividends WHERE profile_id IN ({placeholders})", pids
+    ).fetchone()["c"]
+    income = conn.execute(
+        f"SELECT COUNT(*) as c FROM income_tracking WHERE profile_id IN ({placeholders})", pids
+    ).fetchone()["c"]
     conn.close()
     return jsonify({"holdings": holdings, "dividends": dividends, "income_tracking": income})
+
+
+# ── Income Summary ────────────────────────────────────────────────────────────
+
+@app.route("/api/income-summary", methods=["GET"])
+def income_summary():
+    """Compute current month and YTD income from payout tables + estimates."""
+    import datetime
+    is_agg, pids = get_profile_filter()
+    conn = get_connection()
+    today = datetime.date.today()
+    year = today.year
+    month = today.month
+    placeholders = ",".join("?" * len(pids))
+
+    month_start = f"{year}-{month:02d}-01"
+    if month == 12:
+        month_end = f"{year + 1}-01-01"
+    else:
+        month_end = f"{year}-{month + 1:02d}-01"
+
+    # YTD from weekly_payouts
+    weekly_ytd = conn.execute(
+        f"SELECT COALESCE(SUM(amount), 0) as total FROM weekly_payouts WHERE profile_id IN ({placeholders}) AND pay_date >= ? AND pay_date < ?",
+        pids + [f"{year}-01-01", f"{year + 1}-01-01"],
+    ).fetchone()["total"]
+
+    # YTD from monthly_payouts
+    monthly_ytd = conn.execute(
+        f"SELECT COALESCE(SUM(amount), 0) as total FROM monthly_payouts WHERE profile_id IN ({placeholders}) AND year = ?",
+        pids + [year],
+    ).fetchone()["total"]
+
+    ytd_income = weekly_ytd + monthly_ytd
+
+    # Current month from weekly_payouts
+    weekly_month = conn.execute(
+        f"SELECT COALESCE(SUM(amount), 0) as total FROM weekly_payouts WHERE profile_id IN ({placeholders}) AND pay_date >= ? AND pay_date < ?",
+        pids + [month_start, month_end],
+    ).fetchone()["total"]
+
+    # Current month from monthly_payouts
+    monthly_month = conn.execute(
+        f"SELECT COALESCE(SUM(amount), 0) as total FROM monthly_payouts WHERE profile_id IN ({placeholders}) AND year = ? AND month = ?",
+        pids + [year, month],
+    ).fetchone()["total"]
+
+    # Estimated income from tickers with ex_div_date in current month
+    # Fetch all non-weekly tickers with ex_div_date and check in Python (handles multiple date formats)
+    all_divs = conn.execute(
+        f"""SELECT a.quantity, a.div, a.ex_div_date, a.div_frequency
+            FROM all_account_info a
+            WHERE a.profile_id IN ({placeholders})
+              AND a.div_frequency NOT IN ('W')
+              AND a.ex_div_date IS NOT NULL AND a.ex_div_date != ''
+              AND a.div IS NOT NULL AND a.div > 0""",
+        pids,
+    ).fetchall()
+
+    estimated_month = 0.0
+    for row in all_divs:
+        ex_date_str = row["ex_div_date"] if isinstance(row, dict) else row[2]
+        try:
+            # Try MM/DD/YY
+            ex_dt = datetime.datetime.strptime(ex_date_str, "%m/%d/%y").date()
+        except (ValueError, TypeError):
+            try:
+                # Try YYYY-MM-DD
+                ex_dt = datetime.datetime.strptime(ex_date_str, "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+        if ex_dt.year == year and ex_dt.month == month:
+            qty = float(row["quantity"] if isinstance(row, dict) else row[0] or 0)
+            div = float(row["div"] if isinstance(row, dict) else row[1] or 0)
+            estimated_month += qty * div
+
+    current_month_income = weekly_month + monthly_month + estimated_month
+
+    conn.close()
+    return jsonify({
+        "ytd_income": ytd_income,
+        "current_month_income": current_month_income,
+        "month_label": today.strftime("%B"),
+    })
 
 
 # ── Categories ────────────────────────────────────────────────────────────────
@@ -6387,6 +6868,8 @@ def analytics_income_calendar():
     if not req_tickers:
         return jsonify({"months": [], "tickers": [], "monthly_totals": []})
 
+    _, cal_pids = get_profile_filter()
+    cal_ph = ",".join("?" * len(cal_pids))
     conn = get_connection()
     months_labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -6394,7 +6877,10 @@ def analytics_income_calendar():
     for t in req_tickers:
         # Get pay months from monthly_payout_tickers
         row = conn.execute("SELECT pay_month FROM monthly_payout_tickers WHERE ticker = ?", (t,)).fetchone()
-        div_row = conn.execute("SELECT estim_payment_per_year, div_frequency FROM dividends WHERE ticker = ?", (t,)).fetchone()
+        div_row = conn.execute(
+            f"SELECT estim_payment_per_year, div_frequency FROM dividends WHERE ticker = ? AND profile_id IN ({cal_ph})",
+            [t] + cal_pids
+        ).fetchone()
         if not div_row:
             continue
         annual = float(div_row["estim_payment_per_year"] or 0)
@@ -7426,8 +7912,12 @@ def builder_all_weather():
     targets = get_strategy_targets(strategy, mode)
 
     # Get user's existing holdings for matching
+    _, h_pids = get_profile_filter()
     conn = get_connection()
-    existing = conn.execute("SELECT ticker, current_value FROM holdings").fetchall()
+    h_ph = ",".join("?" * len(h_pids))
+    existing = conn.execute(
+        f"SELECT ticker, current_value FROM holdings WHERE profile_id IN ({h_ph})", h_pids
+    ).fetchall()
     conn.close()
     existing_map = {r["ticker"].upper(): float(r["current_value"] or 0) for r in existing}
 
@@ -7572,7 +8062,11 @@ def builder_rebalance(pid):
             unclassified.append(h)
 
     # Get user's real holdings for suggesting new ETFs
-    existing = conn.execute("SELECT ticker, current_value FROM holdings").fetchall()
+    _, r_pids = get_profile_filter()
+    r_ph = ",".join("?" * len(r_pids))
+    existing = conn.execute(
+        f"SELECT ticker, current_value FROM holdings WHERE profile_id IN ({r_ph})", r_pids
+    ).fetchall()
     conn.close()
     existing_map = {r["ticker"].upper(): float(r["current_value"] or 0) for r in existing}
 

@@ -7,12 +7,12 @@ def populate_holdings(profile_id=1):
     cur = conn.cursor()
     cur.execute("""
         INSERT OR REPLACE INTO holdings (
-            ticker, description, classification_type, quantity,
+            ticker, profile_id, description, classification_type, quantity,
             price_paid, current_price, purchase_value, current_value,
             gain_or_loss, gain_or_loss_percentage, percent_change,
             purchase_date
         )
-        SELECT ticker, description, classification_type, quantity,
+        SELECT ticker, profile_id, description, classification_type, quantity,
                price_paid, current_price, purchase_value, current_value,
                gain_or_loss, gain_or_loss_percentage, percent_change,
                purchase_date
@@ -31,12 +31,12 @@ def populate_dividends(profile_id=1):
     cur = conn.cursor()
     cur.execute("""
         INSERT OR REPLACE INTO dividends (
-            ticker, div_frequency, reinvest, ex_div_date, div_per_share,
+            ticker, profile_id, div_frequency, reinvest, ex_div_date, div_per_share,
             dividend_paid, estim_payment_per_year, approx_monthly_income,
             annual_yield_on_cost, current_annual_yield,
             ytd_divs, total_divs_received, paid_for_itself
         )
-        SELECT ticker, div_frequency, reinvest, ex_div_date, div,
+        SELECT ticker, profile_id, div_frequency, reinvest, ex_div_date, div,
                dividend_paid, estim_payment_per_year, approx_monthly_income,
                annual_yield_on_cost, current_annual_yield,
                ytd_divs, total_divs_received, paid_for_itself

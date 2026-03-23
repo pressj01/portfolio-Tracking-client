@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { API_BASE } from '../config'
 import { NavLink } from 'react-router-dom'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 const fmt = (v) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const pct = (v) => (v == null ? '—' : (Number(v) * 100).toFixed(2) + '%')
@@ -65,6 +66,8 @@ function UpcomingDividends({ events }) {
 }
 
 function TickerModal({ ticker, onClose }) {
+  const pf = useProfileFetch()
+  const { selection } = useProfile()
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -73,7 +76,7 @@ function TickerModal({ ticker, onClose }) {
     if (!ticker) return
     setLoading(true)
     setError(null)
-    fetch(`${API_BASE}/api/ticker-return/${ticker}`)
+    pf(`/api/ticker-return/${ticker}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)
@@ -81,7 +84,7 @@ function TickerModal({ ticker, onClose }) {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [ticker])
+  }, [ticker, pf, selection])
 
   useEffect(() => {
     const handleEsc = (e) => { if (e.key === 'Escape') onClose() }
@@ -147,6 +150,8 @@ function TickerModal({ ticker, onClose }) {
 }
 
 export default function Dashboard() {
+  const pf = useProfileFetch()
+  const { profileId, isAggregate, selection } = useProfile()
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshStatus, setRefreshStatus] = useState(null)
@@ -154,6 +159,7 @@ export default function Dashboard() {
   const [tickerGrades, setTickerGrades] = useState({})
   const [portfolioGrade, setPortfolioGrade] = useState({})
   const [upcomingDivs, setUpcomingDivs] = useState([])
+  const [incomeSummary, setIncomeSummary] = useState(null)
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
   const [modalTicker, setModalTicker] = useState(null)
@@ -161,18 +167,23 @@ export default function Dashboard() {
   const [tickerCoverage, setTickerCoverage] = useState({})
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/holdings`)
+    setIncomeSummary(null)
+    pf('/api/holdings')
       .then(res => res.json())
       .then(data => {
         setHoldings(data)
         setLoading(false)
         if (data.length > 0) {
           // Fetch upcoming dividends and portfolio coverage immediately (no refresh needed)
-          fetch(`${API_BASE}/api/upcoming-dividends`)
+          pf('/api/upcoming-dividends')
             .then(r => r.json())
             .then(d => { if (Array.isArray(d)) setUpcomingDivs(d) })
             .catch(() => {})
-          fetch(`${API_BASE}/api/portfolio-coverage`)
+          pf('/api/income-summary')
+            .then(r => r.json())
+            .then(d => setIncomeSummary(d))
+            .catch(() => {})
+          pf('/api/portfolio-coverage')
             .then(r => r.json())
             .then(d => {
               if (d.aggregate_coverage != null) setPortfolioCoverage(d.aggregate_coverage)
@@ -185,17 +196,17 @@ export default function Dashboard() {
             .catch(() => {})
 
           setRefreshStatus('Updating prices & dividends...')
-          fetch(`${API_BASE}/api/refresh`, { method: 'POST' })
+          pf('/api/refresh', { method: 'POST' })
             .then(r => r.json())
             .then(r => {
               setRefreshStatus(r.message)
-              return fetch(`${API_BASE}/api/holdings`)
+              return pf('/api/holdings')
             })
             .then(r => r.json())
             .then(updated => {
               setHoldings(updated)
               setGradeStatus('Loading risk grades...')
-              return fetch(`${API_BASE}/api/portfolio-summary/data`)
+              return pf('/api/portfolio-summary/data')
             })
             .then(r => r.json())
             .then(g => {
@@ -208,7 +219,7 @@ export default function Dashboard() {
         }
       })
       .catch(() => setLoading(false))
-  }, [])
+  }, [pf, selection])
 
   // Derived totals
   const totals = useMemo(() => {
@@ -218,10 +229,10 @@ export default function Dashboard() {
     const currentValue = sum('current_value')
     const gainLoss = sum('gain_or_loss')
     const totalDivs = sum('total_divs_received')
-    const ytdDivs = sum('ytd_divs')
+    const ytdDivs = sum('ytd_divs') || (incomeSummary?.ytd_income ?? 0)
     const monthlyIncome = sum('approx_monthly_income')
     const annualIncome = sum('estim_payment_per_year')
-    const currentMonthIncome = sum('current_month_income')
+    const currentMonthIncome = sum('current_month_income') || (incomeSummary?.current_month_income ?? 0)
 
     let avgYoc = 0
     const valid = holdings.filter(h => h.purchase_value > 0 && h.annual_yield_on_cost != null)
@@ -235,12 +246,12 @@ export default function Dashboard() {
     const totalReturn = purchaseValue ? ((gainLoss + totalDivs) / purchaseValue) : 0
 
     return { ytdDivs, monthlyIncome, annualIncome, currentValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, currentMonthIncome }
-  }, [holdings])
+  }, [holdings, incomeSummary])
 
   // Enrich holdings with computed fields
   const enrichedHoldings = useMemo(() => {
     return holdings
-      .filter(h => h.purchase_value > 0 && h.quantity > 0)
+      .filter(h => h.quantity > 0)
       .map(h => {
         const pv = h.purchase_value || 0
         const gl = h.gain_or_loss || 0

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 function FileUpload({ onFileSelect, accept, file }) {
   const inputRef = useRef()
@@ -40,12 +41,15 @@ function FileUpload({ onFileSelect, accept, file }) {
 }
 
 export default function Import() {
+  const pf = useProfileFetch()
+  const { selection, profiles, isAggregate, refreshProfiles, currentProfileName } = useProfile()
   const [activeTab, setActiveTab] = useState('owner')
   const [file, setFile] = useState(null)
   const [sheetName, setSheetName] = useState('All Accounts')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+  const [multiSheet, setMultiSheet] = useState(false)
 
   const [hasData, setHasData] = useState(false)
 
@@ -55,11 +59,11 @@ export default function Import() {
   const [importMonthlyTickers, setImportMonthlyTickers] = useState(true)
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/data/stats`)
+    pf('/api/data/stats')
       .then(r => r.json())
       .then(d => setHasData(d.holdings > 0))
       .catch(() => {})
-  }, [])
+  }, [pf, selection])
 
   const resetState = () => {
     setFile(null)
@@ -85,7 +89,7 @@ export default function Import() {
     }
 
     try {
-      const res = await fetch(endpoint, { method: 'POST', body: formData })
+      const res = await pf(endpoint, { method: 'POST', body: formData })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Import failed')
       return data
@@ -103,13 +107,18 @@ export default function Import() {
 
     try {
       // Main import
-      const main = await uploadFile(`${API_BASE}/api/import/excel`, { sheet_name: sheetName })
+      const extraFields = multiSheet ? { multi_sheet: 'true' } : { sheet_name: sheetName }
+      const main = await uploadFile(`/api/import/excel`, extraFields)
       results.push(main.message)
+      if (main.details) {
+        main.details.forEach(d => results.push(`  ${d.profile_name}: ${d.message}`))
+        refreshProfiles()
+      }
 
       // Additional imports from the same file
       if (importWeekly) {
         try {
-          const w = await uploadFile(`${API_BASE}/api/import/weekly-payouts`)
+          const w = await uploadFile(`/api/import/weekly-payouts`)
           results.push(w.message)
         } catch (e) {
           results.push(`Weekly payouts: ${e.message}`)
@@ -117,7 +126,7 @@ export default function Import() {
       }
       if (importMonthly) {
         try {
-          const m = await uploadFile(`${API_BASE}/api/import/monthly-payouts`)
+          const m = await uploadFile(`/api/import/monthly-payouts`)
           results.push(m.message)
         } catch (e) {
           results.push(`Monthly payouts: ${e.message}`)
@@ -125,7 +134,7 @@ export default function Import() {
       }
       if (importMonthlyTickers) {
         try {
-          const mt = await uploadFile(`${API_BASE}/api/import/monthly-payout-tickers`)
+          const mt = await uploadFile(`/api/import/monthly-payout-tickers`)
           results.push(mt.message)
         } catch (e) {
           results.push(`Monthly tickers: ${e.message}`)
@@ -146,8 +155,13 @@ export default function Import() {
     setError(null)
 
     try {
-      const data = await uploadFile(`${API_BASE}/api/import/generic`)
+      const extraFields = multiSheet ? { multi_sheet: 'true' } : {}
+      const data = await uploadFile(`/api/import/generic`, extraFields)
       setResult([data.message])
+      if (data.details) {
+        setResult([data.message, ...data.details.map(d => `  ${d.profile_name}: ${d.message}`)])
+        refreshProfiles()
+      }
     } catch (e) {
       setError(e.message)
     } finally {
@@ -159,9 +173,23 @@ export default function Import() {
     window.open(`${API_BASE}/api/template/download`, '_blank')
   }
 
+  if (isAggregate) {
+    return (
+      <div className="page">
+        <h1>Import Portfolio Data</h1>
+        <div className="alert alert-info">
+          Cannot import while viewing the Aggregate portfolio. Please select a specific portfolio from the navbar dropdown.
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="page">
       <h1>Import Portfolio Data</h1>
+      <p style={{ color: '#7ecfff', marginBottom: '1rem', fontSize: '0.9rem' }}>
+        Importing into: <strong>{currentProfileName}</strong>
+      </p>
 
       <div className="tabs">
         <button
@@ -194,15 +222,29 @@ export default function Import() {
           />
 
           <div style={{ marginTop: '1rem' }}>
-            <div className="form-group">
-              <label>Sheet Name</label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '1rem' }}>
               <input
-                type="text"
-                value={sheetName}
-                onChange={(e) => setSheetName(e.target.value)}
-                style={{ width: '250px' }}
+                type="checkbox"
+                checked={multiSheet}
+                onChange={(e) => setMultiSheet(e.target.checked)}
               />
-            </div>
+              <strong>Import all sheets as separate portfolios</strong>
+              <span style={{ color: '#90a4ae', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+                (each sheet becomes its own portfolio, named after the sheet)
+              </span>
+            </label>
+
+            {!multiSheet && (
+              <div className="form-group">
+                <label>Sheet Name</label>
+                <input
+                  type="text"
+                  value={sheetName}
+                  onChange={(e) => setSheetName(e.target.value)}
+                  style={{ width: '250px' }}
+                />
+              </div>
+            )}
 
             <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '1rem' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
@@ -256,6 +298,7 @@ export default function Import() {
             Upload an Excel file with at minimum <strong>Ticker</strong> and <strong>Shares</strong> columns.
             Optional columns: Price Paid, Dividend, Frequency, Ex-Div Date, DRIP.
             Market data will be enriched automatically via Yahoo Finance.
+            The template includes up to 12 portfolio tabs.
           </p>
 
           <div style={{ marginBottom: '1rem' }}>
@@ -271,6 +314,18 @@ export default function Import() {
           />
 
           <div style={{ marginTop: '1rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '1rem' }}>
+              <input
+                type="checkbox"
+                checked={multiSheet}
+                onChange={(e) => setMultiSheet(e.target.checked)}
+              />
+              <strong>Import all tabs as separate portfolios</strong>
+              <span style={{ color: '#90a4ae', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+                (each filled tab creates a portfolio named after the tab)
+              </span>
+            </label>
+
             {hasData && (
               <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
                 Merge mode: existing holdings will be updated with spreadsheet values. New tickers will be added. App-only fields are preserved unless the spreadsheet provides them.

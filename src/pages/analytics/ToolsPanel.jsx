@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { API_BASE } from '../../config'
+import { useProfileFetch } from '../../context/ProfileContext'
 
 function metricColor(val, thresholds, lowerBetter = false) {
   if (val == null) return '#8899aa'
@@ -9,6 +9,7 @@ function metricColor(val, thresholds, lowerBetter = false) {
 }
 
 export default function ToolsPanel({ tickers, result, onAddTicker }) {
+  const pf = useProfileFetch()
   // Peer comparison
   const [peerTicker, setPeerTicker] = useState('')
   const [peerData, setPeerData] = useState(null)
@@ -24,7 +25,7 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
   const fetchPeers = () => {
     if (!peerTicker) return
     setPeerLoading(true)
-    fetch(`${API_BASE}/api/analytics/peers`, {
+    pf('/api/analytics/peers', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticker: peerTicker }),
     }).then(r => r.json()).then(setPeerData).catch(() => {}).finally(() => setPeerLoading(false))
