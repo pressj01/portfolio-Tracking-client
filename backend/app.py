@@ -81,6 +81,111 @@ def rows_to_dicts(rows):
     return [dict(r) for r in rows]
 
 
+def _auto_reconcile_owner():
+    """Silently reconcile Owner (profile 1) from sub-profiles after any import.
+
+    Syncs quantities, prices, and income fields while preserving Owner-only
+    data (ytd_divs, total_divs_received, paid_for_itself, current_month_income).
+    """
+    from datetime import date as _date
+
+    conn = get_connection()
+    owner_id = 1
+
+    # Get all non-Owner profiles
+    rows = conn.execute("SELECT id FROM profiles WHERE id != ?", (owner_id,)).fetchall()
+    source_ids = [r["id"] if isinstance(r, dict) else r[0] for r in rows]
+    if not source_ids:
+        conn.close()
+        return
+
+    placeholders = ",".join("?" * len(source_ids))
+
+    # Aggregate holdings from source portfolios
+    agg_rows = conn.execute(f"""
+        SELECT
+            ticker,
+            MAX(description) as description,
+            MAX(classification_type) as classification_type,
+            SUM(quantity) as quantity,
+            CASE WHEN SUM(quantity) > 0 THEN SUM(purchase_value) / SUM(quantity) ELSE 0 END as price_paid,
+            MAX(current_price) as current_price,
+            SUM(purchase_value) as purchase_value,
+            SUM(current_value) as current_value,
+            SUM(gain_or_loss) as gain_or_loss,
+            CASE WHEN SUM(purchase_value) > 0 THEN SUM(gain_or_loss) / SUM(purchase_value) ELSE 0 END as gain_or_loss_percentage,
+            CASE WHEN SUM(purchase_value) > 0 THEN SUM(gain_or_loss) / SUM(purchase_value) ELSE 0 END as percent_change,
+            MAX(div_frequency) as div_frequency,
+            MAX(reinvest) as reinvest,
+            MAX(ex_div_date) as ex_div_date,
+            MAX(div_pay_date) as div_pay_date,
+            MAX(div) as div,
+            SUM(dividend_paid) as dividend_paid,
+            SUM(estim_payment_per_year) as estim_payment_per_year,
+            SUM(approx_monthly_income) as approx_monthly_income,
+            SUM(withdraw_8pct_cost_annually) as withdraw_8pct_cost_annually,
+            SUM(withdraw_8pct_per_month) as withdraw_8pct_per_month,
+            SUM(cash_not_reinvested) as cash_not_reinvested,
+            SUM(total_cash_reinvested) as total_cash_reinvested,
+            SUM(shares_bought_from_dividend) as shares_bought_from_dividend,
+            SUM(shares_bought_in_year) as shares_bought_in_year,
+            SUM(shares_in_month) as shares_in_month,
+            MIN(purchase_date) as purchase_date
+        FROM all_account_info
+        WHERE profile_id IN ({placeholders})
+        GROUP BY ticker
+    """, source_ids).fetchall()
+
+    agg_map = {r["ticker"]: dict(r) for r in agg_rows}
+
+    owner_rows = conn.execute(
+        "SELECT ticker FROM all_account_info WHERE profile_id = ?", (owner_id,)
+    ).fetchall()
+    owner_tickers = {r["ticker"] for r in owner_rows}
+
+    sync_fields = [
+        "description", "classification_type", "quantity", "price_paid",
+        "current_price", "purchase_value", "current_value", "gain_or_loss",
+        "gain_or_loss_percentage", "percent_change", "div_frequency", "reinvest",
+        "ex_div_date", "div_pay_date", "div", "dividend_paid",
+        "estim_payment_per_year", "approx_monthly_income",
+        "withdraw_8pct_cost_annually", "withdraw_8pct_per_month",
+        "cash_not_reinvested", "total_cash_reinvested",
+        "shares_bought_from_dividend", "shares_bought_in_year", "shares_in_month",
+        "purchase_date",
+    ]
+
+    for ticker, agg in agg_map.items():
+        if ticker in owner_tickers:
+            sets = [f"{f} = ?" for f in sync_fields] + ["import_date = ?"]
+            vals = [agg.get(f) for f in sync_fields] + [_date.today().isoformat(), ticker, owner_id]
+            conn.execute(
+                f"UPDATE all_account_info SET {', '.join(sets)} WHERE ticker = ? AND profile_id = ?",
+                vals,
+            )
+        else:
+            cols = ["ticker", "profile_id", "import_date"] + sync_fields
+            vals = [ticker, owner_id, _date.today().isoformat()] + [agg.get(f) for f in sync_fields]
+            ph = ",".join("?" * len(cols))
+            conn.execute(f"INSERT INTO all_account_info ({', '.join(cols)}) VALUES ({ph})", vals)
+
+    # Remove tickers from Owner that no longer exist in any sub-portfolio
+    for ticker in owner_tickers - set(agg_map.keys()):
+        conn.execute(
+            "DELETE FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+            (ticker, owner_id),
+        )
+
+    conn.commit()
+
+    # Refresh derived tables for Owner
+    populate_holdings(owner_id)
+    populate_dividends(owner_id)
+    populate_income_tracking(owner_id)
+
+    conn.close()
+
+
 # ── Startup ────────────────────────────────────────────────────────────────────
 
 @app.before_request
@@ -299,6 +404,7 @@ def reconcile_owner():
     updated = 0
     removed = 0
 
+    # Fields to sync from sub-profiles to Owner
     update_fields = [
         "description", "classification_type", "quantity", "price_paid",
         "current_price", "purchase_value", "current_value", "gain_or_loss",
@@ -308,13 +414,16 @@ def reconcile_owner():
         "withdraw_8pct_cost_annually", "withdraw_8pct_per_month",
         "cash_not_reinvested", "total_cash_reinvested",
         "shares_bought_from_dividend", "shares_bought_in_year", "shares_in_month",
-        "ytd_divs", "total_divs_received", "paid_for_itself",
-        "purchase_date", "current_month_income",
+        "purchase_date",
     ]
+
+    # Fields that are only populated in the Owner spreadsheet — preserve them
+    # (ytd_divs, total_divs_received, paid_for_itself, current_month_income)
+    # These are NOT overwritten during reconcile since sub-profiles have 0.
 
     for ticker, agg in agg_map.items():
         if ticker in owner_tickers:
-            # Always sync all fields (quantities, income, etc.) from sub-portfolios
+            # Sync quantity/income fields from sub-portfolios, preserve Owner-only fields
             sets = []
             vals = []
             for f in update_fields:
@@ -330,9 +439,10 @@ def reconcile_owner():
             )
             updated += 1
         else:
-            # Insert new ticker into Owner
-            cols = ["ticker", "profile_id", "import_date"] + update_fields
-            vals = [ticker, owner_id, _date.today().isoformat()] + [agg.get(f) for f in update_fields]
+            # Insert new ticker into Owner (includes all fields since Owner has no prior data)
+            all_fields = update_fields + ["ytd_divs", "total_divs_received", "paid_for_itself", "current_month_income"]
+            cols = ["ticker", "profile_id", "import_date"] + all_fields
+            vals = [ticker, owner_id, _date.today().isoformat()] + [agg.get(f) for f in all_fields]
             ph = ",".join("?" * len(cols))
             conn.execute(f"INSERT INTO all_account_info ({', '.join(cols)}) VALUES ({ph})", vals)
             inserted += 1
@@ -392,6 +502,8 @@ def api_import_excel():
             conn2.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("owner_import_used", "true"))
             conn2.commit()
             conn2.close()
+            # Auto-reconcile Owner quantities from sub-profiles
+            _auto_reconcile_owner()
             return jsonify({"rows": total, "message": f"Imported {len(results)} sheets ({total} total holdings)", "details": results})
         else:
             sheet = request.form.get("sheet_name", "All Accounts")
@@ -433,6 +545,8 @@ def api_import_generic():
                     populate_dividends(r["profile_id"])
                     populate_income_tracking(r["profile_id"])
             total = sum(r["rows"] for r in results)
+            # Auto-reconcile Owner quantities from sub-profiles
+            _auto_reconcile_owner()
             return jsonify({"rows": total, "message": f"Imported {len(results)} portfolios ({total} total holdings)", "details": results})
         else:
             df = pd.read_excel(path, engine="openpyxl")
@@ -440,6 +554,9 @@ def api_import_generic():
             populate_holdings(profile_id)
         populate_dividends(profile_id)
         populate_income_tracking(profile_id)
+        # Auto-reconcile Owner if a sub-profile was imported
+        if profile_id != 1:
+            _auto_reconcile_owner()
         return jsonify({"rows": count, "message": msg})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
