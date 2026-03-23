@@ -862,6 +862,13 @@ def refresh_market_data():
                 nf = db_freq_map.get(t)
         effective_freq[t] = nf
 
+    # Check if Owner import was used — if so, skip income recalculation for
+    # Owner (pid=1) since the spreadsheet values are authoritative.
+    _oiu_row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'owner_import_used'"
+    ).fetchone()
+    _owner_import_used = _oiu_row and _oiu_row[0] == "true"
+
     updated = 0
     updated_pids = set()
     for pid in all_pids:
@@ -897,11 +904,15 @@ def refresh_market_data():
                 annual_div = new_div * mult
                 yoc = (annual_div / price_paid) if price_paid else 0
                 cur_yield = (annual_div / new_price) if new_price else 0
-                estim_annual = new_div * qty * mult
-                estim_monthly = estim_annual / 12 if estim_annual else 0
-                sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?",
-                             "estim_payment_per_year = ?", "approx_monthly_income = ?"])
-                vals.extend([new_div, yoc, cur_yield, estim_annual, estim_monthly])
+                sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?"])
+                vals.extend([new_div, yoc, cur_yield])
+                # Only recalculate income for non-Owner profiles (or if no Owner import)
+                # Owner spreadsheet values are authoritative for income.
+                if not (_owner_import_used and pid == 1):
+                    estim_annual = new_div * qty * mult
+                    estim_monthly = estim_annual / 12 if estim_annual else 0
+                    sets.extend(["estim_payment_per_year = ?", "approx_monthly_income = ?"])
+                    vals.extend([estim_annual, estim_monthly])
 
             if new_exdiv:
                 sets.append("ex_div_date = ?")
