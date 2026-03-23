@@ -450,14 +450,14 @@ def api_import_generic():
 
 @app.route("/api/import/weekly-payouts", methods=["POST"])
 def api_import_weekly():
-    profile_id = get_profile_id()
+    # Weekly payouts are portfolio-wide actuals — always store under Owner (id=1)
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     f = request.files["file"]
     path = os.path.join(UPLOAD_FOLDER, f.filename)
     f.save(path)
     try:
-        count, msg = import_weekly_payouts(path, profile_id)
+        count, msg = import_weekly_payouts(path, 1)
         return jsonify({"rows": count, "message": msg})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -468,14 +468,14 @@ def api_import_weekly():
 
 @app.route("/api/import/monthly-payouts", methods=["POST"])
 def api_import_monthly():
-    profile_id = get_profile_id()
+    # Monthly payouts are portfolio-wide actuals — always store under Owner (id=1)
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     f = request.files["file"]
     path = os.path.join(UPLOAD_FOLDER, f.filename)
     f.save(path)
     try:
-        count, msg = import_monthly_payouts(path, profile_id)
+        count, msg = import_monthly_payouts(path, 1)
         return jsonify({"rows": count, "message": msg})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -486,7 +486,8 @@ def api_import_monthly():
 
 @app.route("/api/import/monthly-payout-tickers", methods=["POST"])
 def api_import_monthly_tickers():
-    profile_id = get_profile_id()
+    # Monthly payout tickers are portfolio-wide — always store under Owner (id=1)
+    profile_id = 1
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     f = request.files["file"]
@@ -624,19 +625,30 @@ def refresh_market_data():
 
     profile_id = get_profile_id()
     conn = get_connection()
-    rows = conn.execute(
-        "SELECT ticker, quantity, price_paid, purchase_value FROM all_account_info WHERE profile_id = ?",
-        (profile_id,),
+
+    # Gather all non-aggregate profile IDs so we can refresh every profile
+    all_pids = [r[0] for r in conn.execute(
+        "SELECT id FROM profiles WHERE id NOT IN (SELECT member_profile_id FROM aggregate_config)"
+    ).fetchall()] or [profile_id]
+
+    # Collect unique tickers and per-profile holdings across ALL profiles
+    all_rows = conn.execute(
+        "SELECT profile_id, ticker, quantity, price_paid, purchase_value FROM all_account_info WHERE profile_id IN ({})".format(
+            ",".join("?" * len(all_pids))
+        ), all_pids,
     ).fetchall()
 
-    if not rows:
+    if not all_rows:
         conn.close()
         return jsonify({"updated": 0, "message": "No holdings to refresh"})
 
-    tickers = [r["ticker"] for r in rows]
-    qty_map = {r["ticker"]: (r["quantity"] or 0, r["price_paid"] or 0, r["purchase_value"] or 0) for r in rows}
+    tickers = list({r["ticker"] for r in all_rows})
+    # Build per-profile holding map: {(profile_id, ticker): (qty, price_paid, purchase_value)}
+    holding_map = {}
+    for r in all_rows:
+        holding_map[(r["profile_id"], r["ticker"])] = (r["quantity"] or 0, r["price_paid"] or 0, r["purchase_value"] or 0)
 
-    # Batch download prices + dividends
+    # Batch download prices + dividends (one yfinance call for all tickers)
     ticker_str = " ".join(tickers)
     price_map = {}
     div_map = {}
@@ -688,101 +700,116 @@ def refresh_market_data():
     except Exception:
         pass
 
-    # Load known weekly tickers so refresh doesn't overwrite their frequency
+    # Load known weekly tickers across all profiles
     weekly_set = set()
     try:
-        wrows = conn.execute("SELECT ticker FROM weekly_payout_tickers WHERE profile_id = ?", (profile_id,)).fetchall()
+        wrows = conn.execute("SELECT DISTINCT ticker FROM weekly_payout_tickers").fetchall()
         weekly_set = {r["ticker"] for r in wrows}
     except Exception:
         pass
 
-    # Also load current DB frequencies to preserve manually-set ones
+    # Load current DB frequencies across all profiles (use highest rank per ticker)
     db_freq_map = {}
     try:
-        frows = conn.execute("SELECT ticker, div_frequency FROM all_account_info WHERE profile_id = ?", (profile_id,)).fetchall()
-        db_freq_map = {r["ticker"]: r["div_frequency"] for r in frows}
+        frows = conn.execute("SELECT ticker, div_frequency FROM all_account_info").fetchall()
+        freq_rank = {'W': 6, '52': 6, 'M': 5, 'Q': 4, 'SA': 3, 'A': 2, None: 0}
+        for r in frows:
+            t, f = r["ticker"], r["div_frequency"]
+            if freq_rank.get(f, 0) > freq_rank.get(db_freq_map.get(t), 0):
+                db_freq_map[t] = f
     except Exception:
         pass
 
-    updated = 0
+    # Resolve effective frequency per ticker (once, shared across profiles)
+    freq_rank = {'W': 6, '52': 6, 'M': 5, 'Q': 4, 'SA': 3, 'A': 2, None: 0}
+    effective_freq = {}
     for t in tickers:
-        new_price = price_map.get(t)
-        new_div = div_map.get(t)
-        new_exdiv = exdiv_map.get(t)
-        new_freq = freq_map.get(t)
-
-        # Never downgrade frequency — the imported/user-set value is authoritative.
-        # yfinance often misdetects new ETFs with limited history.
-        freq_rank = {'W': 6, '52': 6, 'M': 5, 'Q': 4, 'SA': 3, 'A': 2, None: 0}
+        nf = freq_map.get(t)
         if t in weekly_set:
-            new_freq = 'W'
+            nf = 'W'
         else:
             db_rank = freq_rank.get(db_freq_map.get(t), 0)
-            new_rank = freq_rank.get(new_freq, 0)
+            new_rank = freq_rank.get(nf, 0)
             if new_rank < db_rank:
-                new_freq = db_freq_map.get(t)
+                nf = db_freq_map.get(t)
+        effective_freq[t] = nf
 
-        if not new_price and not new_div:
-            continue
+    updated = 0
+    updated_pids = set()
+    for pid in all_pids:
+        for t in tickers:
+            key = (pid, t)
+            if key not in holding_map:
+                continue
 
-        qty, price_paid, purchase_value = qty_map[t]
-        sets = []
-        vals = []
+            new_price = price_map.get(t)
+            new_div = div_map.get(t)
+            new_exdiv = exdiv_map.get(t)
+            new_freq = effective_freq.get(t)
 
-        if new_price:
-            current_value = new_price * qty
-            gain = current_value - purchase_value if purchase_value else 0
-            gain_pct = (gain / purchase_value) if purchase_value else 0
-            sets.extend(["current_price = ?", "current_value = ?", "gain_or_loss = ?",
-                         "gain_or_loss_percentage = ?", "percent_change = ?"])
-            vals.extend([new_price, current_value, gain, gain_pct, gain_pct])
+            if not new_price and not new_div:
+                continue
 
-        if new_div:
-            freq_mult = {'W': 52, '52': 52, 'M': 12, 'Q': 4, 'SA': 2, 'A': 1}
-            cur_freq = (new_freq or freq_map.get(t, 'Q')).upper()
-            mult = freq_mult.get(cur_freq, 4)
-            annual_div = new_div * mult
-            monthly_div = annual_div / 12 if annual_div else 0
-            yoc = (annual_div / price_paid) if price_paid else 0
-            cur_yield = (annual_div / new_price) if new_price else 0
-            estim_annual = new_div * qty * mult
-            estim_monthly = estim_annual / 12 if estim_annual else 0
-            sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?",
-                         "estim_payment_per_year = ?", "approx_monthly_income = ?"])
-            vals.extend([new_div, yoc, cur_yield, estim_annual, estim_monthly])
+            qty, price_paid, purchase_value = holding_map[key]
+            sets = []
+            vals = []
 
-        if new_exdiv:
-            sets.append("ex_div_date = ?")
-            vals.append(new_exdiv)
-            # Estimate pay date as ex-div + 21 days
-            try:
-                ex_dt = _dt.strptime(new_exdiv, "%m/%d/%y")
-                est_pay = ex_dt + pd.Timedelta(days=21)
-                sets.append("div_pay_date = ?")
-                vals.append(est_pay.strftime("%m/%d/%y"))
-            except Exception:
-                pass
+            if new_price:
+                current_value = new_price * qty
+                gain = current_value - purchase_value if purchase_value else 0
+                gain_pct = (gain / purchase_value) if purchase_value else 0
+                sets.extend(["current_price = ?", "current_value = ?", "gain_or_loss = ?",
+                             "gain_or_loss_percentage = ?", "percent_change = ?"])
+                vals.extend([new_price, current_value, gain, gain_pct, gain_pct])
 
-        if new_freq:
-            sets.append("div_frequency = ?")
-            vals.append(new_freq)
+            if new_div:
+                freq_mult = {'W': 52, '52': 52, 'M': 12, 'Q': 4, 'SA': 2, 'A': 1}
+                cur_freq = (new_freq or 'Q').upper()
+                mult = freq_mult.get(cur_freq, 4)
+                annual_div = new_div * mult
+                yoc = (annual_div / price_paid) if price_paid else 0
+                cur_yield = (annual_div / new_price) if new_price else 0
+                estim_annual = new_div * qty * mult
+                estim_monthly = estim_annual / 12 if estim_annual else 0
+                sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?",
+                             "estim_payment_per_year = ?", "approx_monthly_income = ?"])
+                vals.extend([new_div, yoc, cur_yield, estim_annual, estim_monthly])
 
-        if sets:
-            vals.extend([t, profile_id])
-            conn.execute(
-                f"UPDATE all_account_info SET {', '.join(sets)} WHERE ticker = ? AND profile_id = ?",
-                vals,
-            )
-            updated += 1
+            if new_exdiv:
+                sets.append("ex_div_date = ?")
+                vals.append(new_exdiv)
+                try:
+                    ex_dt = _dt.strptime(new_exdiv, "%m/%d/%y")
+                    est_pay = ex_dt + pd.Timedelta(days=21)
+                    sets.append("div_pay_date = ?")
+                    vals.append(est_pay.strftime("%m/%d/%y"))
+                except Exception:
+                    pass
+
+            if new_freq:
+                sets.append("div_frequency = ?")
+                vals.append(new_freq)
+
+            if sets:
+                vals.extend([t, pid])
+                conn.execute(
+                    f"UPDATE all_account_info SET {', '.join(sets)} WHERE ticker = ? AND profile_id = ?",
+                    vals,
+                )
+                updated += 1
+                updated_pids.add(pid)
 
     conn.commit()
 
-    # Update derived tables
-    populate_holdings(profile_id)
-    populate_dividends(profile_id)
+    # Update derived tables for all affected profiles
+    for pid in updated_pids:
+        populate_holdings(pid)
+        populate_dividends(pid)
 
     conn.close()
-    return jsonify({"updated": updated, "message": f"Refreshed {updated} of {len(tickers)} holdings"})
+    # Report count for the selected profile's tickers
+    selected_count = sum(1 for t in tickers if (profile_id, t) in holding_map)
+    return jsonify({"updated": updated, "message": f"Refreshed {selected_count} of {selected_count} holdings"})
 
 
 # ── Holdings CRUD ──────────────────────────────────────────────────────────────
@@ -826,12 +853,12 @@ def list_holdings():
                    SUM(a.shares_bought_from_dividend) as shares_bought_from_dividend,
                    SUM(a.shares_bought_in_year) as shares_bought_in_year,
                    SUM(a.shares_in_month) as shares_in_month,
-                   SUM(a.ytd_divs) as ytd_divs,
-                   SUM(a.total_divs_received) as total_divs_received,
-                   CASE WHEN SUM(a.purchase_value) > 0 THEN SUM(a.total_divs_received) / SUM(a.purchase_value) ELSE 0 END as paid_for_itself,
+                   COALESCE((SELECT o.ytd_divs FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.ytd_divs)) as ytd_divs,
+                   COALESCE((SELECT o.total_divs_received FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.total_divs_received)) as total_divs_received,
+                   CASE WHEN SUM(a.purchase_value) > 0 THEN COALESCE((SELECT o.total_divs_received FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.total_divs_received)) / SUM(a.purchase_value) ELSE 0 END as paid_for_itself,
                    MAX(a.import_date) as import_date,
                    MIN(a.purchase_date) as purchase_date,
-                   SUM(a.current_month_income) as current_month_income,
+                   COALESCE((SELECT o.current_month_income FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.current_month_income)) as current_month_income,
                    (SELECT c2.name FROM ticker_categories tc2
                     JOIN categories c2 ON tc2.category_id = c2.id
                     WHERE tc2.ticker = a.ticker AND tc2.profile_id = (
@@ -1555,30 +1582,35 @@ def income_summary():
     else:
         month_end = f"{year}-{month + 1:02d}-01"
 
+    # Weekly/monthly payout tables are portfolio-wide actuals imported under
+    # the Owner profile (id=1).  Always query profile_id=1 to avoid
+    # double-counting when in aggregate mode.
+    payout_pid = 1
+
     # YTD from weekly_payouts
     weekly_ytd = conn.execute(
-        f"SELECT COALESCE(SUM(amount), 0) as total FROM weekly_payouts WHERE profile_id IN ({placeholders}) AND pay_date >= ? AND pay_date < ?",
-        pids + [f"{year}-01-01", f"{year + 1}-01-01"],
+        "SELECT COALESCE(SUM(amount), 0) as total FROM weekly_payouts WHERE profile_id = ? AND pay_date >= ? AND pay_date < ?",
+        [payout_pid, f"{year}-01-01", f"{year + 1}-01-01"],
     ).fetchone()["total"]
 
     # YTD from monthly_payouts
     monthly_ytd = conn.execute(
-        f"SELECT COALESCE(SUM(amount), 0) as total FROM monthly_payouts WHERE profile_id IN ({placeholders}) AND year = ?",
-        pids + [year],
+        "SELECT COALESCE(SUM(amount), 0) as total FROM monthly_payouts WHERE profile_id = ? AND year = ?",
+        [payout_pid, year],
     ).fetchone()["total"]
 
     ytd_income = weekly_ytd + monthly_ytd
 
     # Current month from weekly_payouts
     weekly_month = conn.execute(
-        f"SELECT COALESCE(SUM(amount), 0) as total FROM weekly_payouts WHERE profile_id IN ({placeholders}) AND pay_date >= ? AND pay_date < ?",
-        pids + [month_start, month_end],
+        "SELECT COALESCE(SUM(amount), 0) as total FROM weekly_payouts WHERE profile_id = ? AND pay_date >= ? AND pay_date < ?",
+        [payout_pid, month_start, month_end],
     ).fetchone()["total"]
 
     # Current month from monthly_payouts
     monthly_month = conn.execute(
-        f"SELECT COALESCE(SUM(amount), 0) as total FROM monthly_payouts WHERE profile_id IN ({placeholders}) AND year = ? AND month = ?",
-        pids + [year, month],
+        "SELECT COALESCE(SUM(amount), 0) as total FROM monthly_payouts WHERE profile_id = ? AND year = ? AND month = ?",
+        [payout_pid, year, month],
     ).fetchone()["total"]
 
     # Estimated income from tickers with ex_div_date in current month

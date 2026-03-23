@@ -360,15 +360,10 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
                 cat_id = cur.lastrowid
 
             # Assign ticker if not already assigned
-            already = cur.execute(
-                "SELECT 1 FROM ticker_categories WHERE ticker = ? AND category_id = ? AND profile_id = ?",
+            cur.execute(
+                "INSERT OR IGNORE INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
                 (ticker, cat_id, profile_id),
-            ).fetchone()
-            if not already:
-                cur.execute(
-                    "INSERT INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
-                    (ticker, cat_id, profile_id),
-                )
+            )
         conn.commit()
 
     conn.close()
@@ -978,15 +973,10 @@ def import_from_upload(df, profile_id):
                 cat_id = cur.lastrowid
 
             # Assign ticker if not already assigned to this category
-            already = cur.execute(
-                "SELECT 1 FROM ticker_categories WHERE ticker = ? AND category_id = ? AND profile_id = ?",
+            cur.execute(
+                "INSERT OR IGNORE INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
                 (ticker, cat_id, profile_id),
-            ).fetchone()
-            if not already:
-                cur.execute(
-                    "INSERT INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
-                    (ticker, cat_id, profile_id),
-                )
+            )
         conn.commit()
 
     conn.close()
