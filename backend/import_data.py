@@ -270,6 +270,10 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
                             val = val.isoformat()[:10]
                         sets.append(f"{field} = ?")
                         vals.append(val)
+                    elif field in float_sql_cols:
+                        # Numeric fields: overwrite stale DB value with 0
+                        sets.append(f"{field} = ?")
+                        vals.append(0)
                 if sets:
                     sets.append("import_date = ?")
                     vals.append(date.today().isoformat())
@@ -911,12 +915,24 @@ def import_from_upload(df, profile_id):
             if ticker in existing_tickers:
                 sets = []
                 vals = []
+                _numeric_merge = {
+                    'quantity', 'price_paid', 'purchase_value', 'div',
+                    'dividend_paid', 'estim_payment_per_year', 'approx_monthly_income',
+                    'ytd_divs', 'total_divs_received', 'paid_for_itself',
+                    'cash_not_reinvested', 'total_cash_reinvested',
+                    'shares_bought_from_dividend', 'annual_yield_on_cost',
+                    'current_annual_yield', 'current_price', 'current_value',
+                    'gain_or_loss', 'gain_or_loss_percentage', 'percent_change',
+                }
                 for field in merge_fields:
                     if field in row.index:
                         val = row[field]
                         if pd.notna(val):
                             sets.append(f"{field} = ?")
                             vals.append(val)
+                        elif field in _numeric_merge:
+                            sets.append(f"{field} = ?")
+                            vals.append(0)
                 if sets:
                     sets.append("import_date = ?")
                     vals.append(_date.today().isoformat())

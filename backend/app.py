@@ -314,25 +314,21 @@ def reconcile_owner():
 
     for ticker, agg in agg_map.items():
         if ticker in owner_tickers:
-            # Check if quantity or value differs (tolerance for float comparison)
-            owner_q = owner_qty.get(ticker, 0) or 0
-            agg_q = agg.get("quantity", 0) or 0
-            if abs(owner_q - agg_q) > 0.0001:
-                # Update Owner with aggregated values
-                sets = []
-                vals = []
-                for f in update_fields:
-                    v = agg.get(f)
-                    sets.append(f"{f} = ?")
-                    vals.append(v)
-                sets.append("import_date = ?")
-                vals.append(_date.today().isoformat())
-                vals.extend([ticker, owner_id])
-                conn.execute(
-                    f"UPDATE all_account_info SET {', '.join(sets)} WHERE ticker = ? AND profile_id = ?",
-                    vals,
-                )
-                updated += 1
+            # Always sync all fields (quantities, income, etc.) from sub-portfolios
+            sets = []
+            vals = []
+            for f in update_fields:
+                v = agg.get(f)
+                sets.append(f"{f} = ?")
+                vals.append(v)
+            sets.append("import_date = ?")
+            vals.append(_date.today().isoformat())
+            vals.extend([ticker, owner_id])
+            conn.execute(
+                f"UPDATE all_account_info SET {', '.join(sets)} WHERE ticker = ? AND profile_id = ?",
+                vals,
+            )
+            updated += 1
         else:
             # Insert new ticker into Owner
             cols = ["ticker", "profile_id", "import_date"] + update_fields
@@ -849,10 +845,12 @@ def list_holdings():
     else:
         pid = pids[0]
         rows = conn.execute(
-            """SELECT a.*, c.name AS category
+            """SELECT a.*,
+                      (SELECT c.name FROM ticker_categories tc
+                       JOIN categories c ON tc.category_id = c.id
+                       WHERE tc.ticker = a.ticker AND tc.profile_id = a.profile_id
+                       LIMIT 1) AS category
                FROM all_account_info a
-               LEFT JOIN ticker_categories tc ON a.ticker = tc.ticker AND a.profile_id = tc.profile_id
-               LEFT JOIN categories c ON tc.category_id = c.id
                WHERE a.profile_id = ?
                ORDER BY a.ticker""",
             (pid,),

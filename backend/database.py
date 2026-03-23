@@ -466,10 +466,34 @@ def ensure_tables_exist(conn=None):
             ticker      TEXT NOT NULL,
             category_id INTEGER NOT NULL,
             profile_id  INTEGER NOT NULL DEFAULT 1,
-            UNIQUE (ticker, profile_id),
+            UNIQUE (ticker, category_id, profile_id),
             FOREIGN KEY (category_id) REFERENCES categories(id)
         )
     """)
+
+    # Migrate: widen unique constraint from (ticker, profile_id) to (ticker, category_id, profile_id)
+    _needs_tc_migrate = False
+    for idx in cur.execute("PRAGMA index_list(ticker_categories)").fetchall():
+        if idx[2] == 1:  # unique index
+            cols = [r[2] for r in cur.execute(f"PRAGMA index_info('{idx[1]}')").fetchall()]
+            if len(cols) == 2 and "category_id" not in cols:
+                _needs_tc_migrate = True
+                break
+    if _needs_tc_migrate:
+        cur.executescript("""
+            CREATE TABLE IF NOT EXISTS ticker_categories_new (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker      TEXT NOT NULL,
+                category_id INTEGER NOT NULL,
+                profile_id  INTEGER NOT NULL DEFAULT 1,
+                UNIQUE (ticker, category_id, profile_id),
+                FOREIGN KEY (category_id) REFERENCES categories(id)
+            );
+            INSERT OR IGNORE INTO ticker_categories_new (id, ticker, category_id, profile_id)
+                SELECT id, ticker, category_id, profile_id FROM ticker_categories;
+            DROP TABLE ticker_categories;
+            ALTER TABLE ticker_categories_new RENAME TO ticker_categories;
+        """)
 
     # ── aggregate_config ────────────────────────────────────────────────────
     cur.execute("""
