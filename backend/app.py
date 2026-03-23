@@ -529,6 +529,8 @@ def api_import_excel():
             conn2.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("owner_import_used", "true"))
             conn2.commit()
             conn2.close()
+            # Auto-reconcile Owner quantities from sub-profiles
+            _auto_reconcile_owner()
             return jsonify({"rows": count, "message": msg})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
