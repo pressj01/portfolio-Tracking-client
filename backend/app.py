@@ -742,11 +742,14 @@ def refresh_market_data():
             cur_freq = (new_freq or freq_map.get(t, 'Q')).upper()
             mult = freq_mult.get(cur_freq, 4)
             annual_div = new_div * mult
+            monthly_div = annual_div / 12 if annual_div else 0
             yoc = (annual_div / price_paid) if price_paid else 0
             cur_yield = (annual_div / new_price) if new_price else 0
-            # Only update div/share and yields — preserve imported annual/monthly estimates
-            sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?"])
-            vals.extend([new_div, yoc, cur_yield])
+            estim_annual = new_div * qty * mult
+            estim_monthly = estim_annual / 12 if estim_annual else 0
+            sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?",
+                         "estim_payment_per_year = ?", "approx_monthly_income = ?"])
+            vals.extend([new_div, yoc, cur_yield, estim_annual, estim_monthly])
 
         if new_exdiv:
             sets.append("ex_div_date = ?")
