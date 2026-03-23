@@ -84,13 +84,23 @@ def rows_to_dicts(rows):
 def _auto_reconcile_owner():
     """Silently reconcile Owner (profile 1) from sub-profiles after any import.
 
+    Only runs if the Owner import has been used (owner_import_used setting).
     Syncs quantities, prices, and income fields while preserving Owner-only
-    data (ytd_divs, total_divs_received, paid_for_itself, current_month_income).
+    data (ytd_divs, total_divs_received, paid_for_itself, current_month_income,
+    estim_payment_per_year, approx_monthly_income).
     """
     from datetime import date as _date
 
     conn = get_connection()
     owner_id = 1
+
+    # Only reconcile if Owner import was used
+    _oiu = conn.execute(
+        "SELECT value FROM settings WHERE key = 'owner_import_used'"
+    ).fetchone()
+    if not (_oiu and _oiu[0] == "true"):
+        conn.close()
+        return
 
     # Get all non-Owner profiles
     rows = conn.execute("SELECT id FROM profiles WHERE id != ?", (owner_id,)).fetchall()
@@ -939,6 +949,27 @@ def list_holdings():
     placeholders = ",".join("?" * len(pids))
 
     if is_agg and len(pids) > 1:
+        # Check if Owner import was used — if so, prefer Owner's per-ticker
+        # income/dividend data since the Owner spreadsheet is authoritative.
+        # For generic-only imports (no Owner), just SUM across sub-profiles.
+        _oiu = conn.execute(
+            "SELECT value FROM settings WHERE key = 'owner_import_used'"
+        ).fetchone()
+        use_owner = _oiu and _oiu[0] == "true"
+
+        def _own_or_sum(field):
+            """COALESCE from Owner if Owner import exists, else plain SUM."""
+            if use_owner:
+                return (f"COALESCE((SELECT o.{field} FROM all_account_info o "
+                        f"WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.{field}))")
+            return f"SUM(a.{field})"
+
+        est_yr = _own_or_sum("estim_payment_per_year")
+        est_mo = _own_or_sum("approx_monthly_income")
+        ytd = _own_or_sum("ytd_divs")
+        tot_div = _own_or_sum("total_divs_received")
+        cur_mo = _own_or_sum("current_month_income")
+
         # Aggregate: combine duplicate tickers across portfolios
         rows = conn.execute(
             f"""SELECT
@@ -959,24 +990,24 @@ def list_holdings():
                    MAX(a.div_pay_date) as div_pay_date,
                    CASE WHEN SUM(a.quantity) > 0 THEN SUM(a.dividend_paid) / SUM(a.quantity) ELSE MAX(a.div) END as div,
                    SUM(a.dividend_paid) as dividend_paid,
-                   COALESCE((SELECT o.estim_payment_per_year FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.estim_payment_per_year)) as estim_payment_per_year,
-                   COALESCE((SELECT o.approx_monthly_income FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.approx_monthly_income)) as approx_monthly_income,
+                   {est_yr} as estim_payment_per_year,
+                   {est_mo} as approx_monthly_income,
                    SUM(a.withdraw_8pct_cost_annually) as withdraw_8pct_cost_annually,
                    SUM(a.withdraw_8pct_per_month) as withdraw_8pct_per_month,
                    SUM(a.cash_not_reinvested) as cash_not_reinvested,
                    SUM(a.total_cash_reinvested) as total_cash_reinvested,
-                   CASE WHEN SUM(a.purchase_value) > 0 THEN COALESCE((SELECT o.estim_payment_per_year FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.estim_payment_per_year)) / SUM(a.purchase_value) ELSE 0 END as annual_yield_on_cost,
-                   CASE WHEN SUM(a.current_value) > 0 THEN COALESCE((SELECT o.estim_payment_per_year FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.estim_payment_per_year)) / SUM(a.current_value) ELSE 0 END as current_annual_yield,
+                   CASE WHEN SUM(a.purchase_value) > 0 THEN {est_yr} / SUM(a.purchase_value) ELSE 0 END as annual_yield_on_cost,
+                   CASE WHEN SUM(a.current_value) > 0 THEN {est_yr} / SUM(a.current_value) ELSE 0 END as current_annual_yield,
                    NULL as percent_of_account,
                    SUM(a.shares_bought_from_dividend) as shares_bought_from_dividend,
                    SUM(a.shares_bought_in_year) as shares_bought_in_year,
                    SUM(a.shares_in_month) as shares_in_month,
-                   COALESCE((SELECT o.ytd_divs FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.ytd_divs)) as ytd_divs,
-                   COALESCE((SELECT o.total_divs_received FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.total_divs_received)) as total_divs_received,
-                   CASE WHEN SUM(a.purchase_value) > 0 THEN COALESCE((SELECT o.total_divs_received FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.total_divs_received)) / SUM(a.purchase_value) ELSE 0 END as paid_for_itself,
+                   {ytd} as ytd_divs,
+                   {tot_div} as total_divs_received,
+                   CASE WHEN SUM(a.purchase_value) > 0 THEN {tot_div} / SUM(a.purchase_value) ELSE 0 END as paid_for_itself,
                    MAX(a.import_date) as import_date,
                    MIN(a.purchase_date) as purchase_date,
-                   COALESCE((SELECT o.current_month_income FROM all_account_info o WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.current_month_income)) as current_month_income,
+                   {cur_mo} as current_month_income,
                    (SELECT c2.name FROM ticker_categories tc2
                     JOIN categories c2 ON tc2.category_id = c2.id
                     WHERE tc2.ticker = a.ticker AND tc2.profile_id = (
@@ -1700,35 +1731,44 @@ def income_summary():
     else:
         month_end = f"{year}-{month + 1:02d}-01"
 
-    # Weekly/monthly payout tables are portfolio-wide actuals imported under
-    # the Owner profile (id=1).  Always query profile_id=1 to avoid
-    # double-counting when in aggregate mode.
-    payout_pid = 1
+    # If Owner import was used, payout tables are portfolio-wide actuals
+    # stored under profile_id=1.  Use Owner only to avoid double-counting.
+    # For generic-only imports, query payouts for the requested profile(s).
+    _oiu = conn.execute(
+        "SELECT value FROM settings WHERE key = 'owner_import_used'"
+    ).fetchone()
+    use_owner_payouts = _oiu and _oiu[0] == "true"
+
+    if use_owner_payouts:
+        payout_pids = [1]
+    else:
+        payout_pids = pids
+    pp_ph = ",".join("?" * len(payout_pids))
 
     # YTD from weekly_payouts
     weekly_ytd = conn.execute(
-        "SELECT COALESCE(SUM(amount), 0) as total FROM weekly_payouts WHERE profile_id = ? AND pay_date >= ? AND pay_date < ?",
-        [payout_pid, f"{year}-01-01", f"{year + 1}-01-01"],
+        f"SELECT COALESCE(SUM(amount), 0) as total FROM weekly_payouts WHERE profile_id IN ({pp_ph}) AND pay_date >= ? AND pay_date < ?",
+        payout_pids + [f"{year}-01-01", f"{year + 1}-01-01"],
     ).fetchone()["total"]
 
     # YTD from monthly_payouts
     monthly_ytd = conn.execute(
-        "SELECT COALESCE(SUM(amount), 0) as total FROM monthly_payouts WHERE profile_id = ? AND year = ?",
-        [payout_pid, year],
+        f"SELECT COALESCE(SUM(amount), 0) as total FROM monthly_payouts WHERE profile_id IN ({pp_ph}) AND year = ?",
+        payout_pids + [year],
     ).fetchone()["total"]
 
     ytd_income = weekly_ytd + monthly_ytd
 
     # Current month from weekly_payouts
     weekly_month = conn.execute(
-        "SELECT COALESCE(SUM(amount), 0) as total FROM weekly_payouts WHERE profile_id = ? AND pay_date >= ? AND pay_date < ?",
-        [payout_pid, month_start, month_end],
+        f"SELECT COALESCE(SUM(amount), 0) as total FROM weekly_payouts WHERE profile_id IN ({pp_ph}) AND pay_date >= ? AND pay_date < ?",
+        payout_pids + [month_start, month_end],
     ).fetchone()["total"]
 
     # Current month from monthly_payouts
     monthly_month = conn.execute(
-        "SELECT COALESCE(SUM(amount), 0) as total FROM monthly_payouts WHERE profile_id = ? AND year = ? AND month = ?",
-        [payout_pid, year, month],
+        f"SELECT COALESCE(SUM(amount), 0) as total FROM monthly_payouts WHERE profile_id IN ({pp_ph}) AND year = ? AND month = ?",
+        payout_pids + [year, month],
     ).fetchone()["total"]
 
     # Estimated income from tickers with ex_div_date in current month
