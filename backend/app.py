@@ -153,15 +153,15 @@ def _auto_reconcile_owner():
     ).fetchall()
     owner_tickers = {r["ticker"] for r in owner_rows}
 
-    # Sync these fields from sub-profiles; Owner-only fields (ytd_divs,
-    # total_divs_received, paid_for_itself, current_month_income,
-    # estim_payment_per_year, approx_monthly_income) are preserved since
-    # the Owner spreadsheet is the authoritative source for income data.
+    # Sync these fields from sub-profiles.  Owner-only payout history fields
+    # (ytd_divs, total_divs_received, paid_for_itself, current_month_income)
+    # are preserved since sub-profiles don't track those.
     sync_fields = [
         "description", "classification_type", "quantity", "price_paid",
         "current_price", "purchase_value", "current_value", "gain_or_loss",
         "gain_or_loss_percentage", "percent_change", "div_frequency", "reinvest",
         "ex_div_date", "div_pay_date", "div", "dividend_paid",
+        "estim_payment_per_year", "approx_monthly_income",
         "withdraw_8pct_cost_annually", "withdraw_8pct_per_month",
         "cash_not_reinvested", "total_cash_reinvested",
         "shares_bought_from_dividend", "shares_bought_in_year", "shares_in_month",
@@ -418,14 +418,14 @@ def reconcile_owner():
     removed = 0
 
     # Fields to sync from sub-profiles to Owner.
-    # Owner-only fields are preserved: ytd_divs, total_divs_received,
-    # paid_for_itself, current_month_income, estim_payment_per_year,
-    # approx_monthly_income — the Owner spreadsheet is authoritative for income.
+    # Owner-only payout history fields are preserved: ytd_divs,
+    # total_divs_received, paid_for_itself, current_month_income.
     update_fields = [
         "description", "classification_type", "quantity", "price_paid",
         "current_price", "purchase_value", "current_value", "gain_or_loss",
         "gain_or_loss_percentage", "percent_change", "div_frequency", "reinvest",
         "ex_div_date", "div_pay_date", "div", "dividend_paid",
+        "estim_payment_per_year", "approx_monthly_income",
         "withdraw_8pct_cost_annually", "withdraw_8pct_per_month",
         "cash_not_reinvested", "total_cash_reinvested",
         "shares_bought_from_dividend", "shares_bought_in_year", "shares_in_month",
@@ -862,13 +862,6 @@ def refresh_market_data():
                 nf = db_freq_map.get(t)
         effective_freq[t] = nf
 
-    # Check if Owner import was used — if so, skip income recalculation for
-    # Owner (pid=1) since the spreadsheet values are authoritative.
-    _oiu_row = conn.execute(
-        "SELECT value FROM settings WHERE key = 'owner_import_used'"
-    ).fetchone()
-    _owner_import_used = _oiu_row and _oiu_row[0] == "true"
-
     updated = 0
     updated_pids = set()
     for pid in all_pids:
@@ -904,15 +897,11 @@ def refresh_market_data():
                 annual_div = new_div * mult
                 yoc = (annual_div / price_paid) if price_paid else 0
                 cur_yield = (annual_div / new_price) if new_price else 0
-                sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?"])
-                vals.extend([new_div, yoc, cur_yield])
-                # Only recalculate income for non-Owner profiles (or if no Owner import)
-                # Owner spreadsheet values are authoritative for income.
-                if not (_owner_import_used and pid == 1):
-                    estim_annual = new_div * qty * mult
-                    estim_monthly = estim_annual / 12 if estim_annual else 0
-                    sets.extend(["estim_payment_per_year = ?", "approx_monthly_income = ?"])
-                    vals.extend([estim_annual, estim_monthly])
+                estim_annual = new_div * qty * mult
+                estim_monthly = estim_annual / 12 if estim_annual else 0
+                sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?",
+                             "estim_payment_per_year = ?", "approx_monthly_income = ?"])
+                vals.extend([new_div, yoc, cur_yield, estim_annual, estim_monthly])
 
             if new_exdiv:
                 sets.append("ex_div_date = ?")
@@ -975,8 +964,9 @@ def list_holdings():
                         f"WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.{field}))")
             return f"SUM(a.{field})"
 
-        est_yr = _own_or_sum("estim_payment_per_year")
-        est_mo = _own_or_sum("approx_monthly_income")
+        # Income fields are recalculated by refresh for all profiles, so just SUM.
+        # Payout history fields (ytd, total divs, current month) only exist in
+        # Owner, so COALESCE from Owner when available.
         ytd = _own_or_sum("ytd_divs")
         tot_div = _own_or_sum("total_divs_received")
         cur_mo = _own_or_sum("current_month_income")
@@ -1001,14 +991,14 @@ def list_holdings():
                    MAX(a.div_pay_date) as div_pay_date,
                    CASE WHEN SUM(a.quantity) > 0 THEN SUM(a.dividend_paid) / SUM(a.quantity) ELSE MAX(a.div) END as div,
                    SUM(a.dividend_paid) as dividend_paid,
-                   {est_yr} as estim_payment_per_year,
-                   {est_mo} as approx_monthly_income,
+                   SUM(a.estim_payment_per_year) as estim_payment_per_year,
+                   SUM(a.approx_monthly_income) as approx_monthly_income,
                    SUM(a.withdraw_8pct_cost_annually) as withdraw_8pct_cost_annually,
                    SUM(a.withdraw_8pct_per_month) as withdraw_8pct_per_month,
                    SUM(a.cash_not_reinvested) as cash_not_reinvested,
                    SUM(a.total_cash_reinvested) as total_cash_reinvested,
-                   CASE WHEN SUM(a.purchase_value) > 0 THEN {est_yr} / SUM(a.purchase_value) ELSE 0 END as annual_yield_on_cost,
-                   CASE WHEN SUM(a.current_value) > 0 THEN {est_yr} / SUM(a.current_value) ELSE 0 END as current_annual_yield,
+                   CASE WHEN SUM(a.purchase_value) > 0 THEN SUM(a.estim_payment_per_year) / SUM(a.purchase_value) ELSE 0 END as annual_yield_on_cost,
+                   CASE WHEN SUM(a.current_value) > 0 THEN SUM(a.estim_payment_per_year) / SUM(a.current_value) ELSE 0 END as current_annual_yield,
                    NULL as percent_of_account,
                    SUM(a.shares_bought_from_dividend) as shares_bought_from_dividend,
                    SUM(a.shares_bought_in_year) as shares_bought_in_year,
