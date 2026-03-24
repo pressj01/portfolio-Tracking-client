@@ -1335,6 +1335,175 @@ def download_template():
     )
 
 
+# ── Export Holdings ───────────────────────────────────────────────────────────
+
+# Shared column definitions (matches create_template.py headers exactly)
+_EXPORT_COL_MAP = [
+    ("Ticker",              "ticker"),
+    ("Shares",              "quantity"),
+    ("Price Paid",          "price_paid"),
+    ("Current Price",       "current_price"),
+    ("Description",         "description"),
+    ("Type",                "classification_type"),
+    ("Date Purchased",      "purchase_date"),
+    ("Purchase Value",      "purchase_value"),
+    ("Current Value",       "current_value"),
+    ("Gain/Loss",           "gain_or_loss"),
+    ("Gain/Loss %",         "gain_or_loss_percentage"),
+    ("% Change",            "percent_change"),
+    ("Div/Share",           "div"),
+    ("Frequency",           "div_frequency"),
+    ("Ex-Div Date",         "ex_div_date"),
+    ("Pay Date",            "div_pay_date"),
+    ("DRIP",                "reinvest"),
+    ("Div Paid",            "dividend_paid"),
+    ("Est. Annual Pmt",     "estim_payment_per_year"),
+    ("Monthly Income",      "approx_monthly_income"),
+    ("Yield On Cost",       "annual_yield_on_cost"),
+    ("Current Yield",       "current_annual_yield"),
+    ("% of Account",        "percent_of_account"),
+    ("YTD Divs",            "ytd_divs"),
+    ("Total Divs Received", "total_divs_received"),
+    ("Paid For Itself",     "paid_for_itself"),
+    ("Cash Not Reinvest",   "cash_not_reinvested"),
+    ("Cash Reinvested",     "total_cash_reinvested"),
+    ("Shares from Div",     "shares_bought_from_dividend"),
+    ("Shares/Year",         "shares_bought_in_year"),
+    ("Shares/Month",        "shares_in_month"),
+    ("8% Annual Wdraw",     "withdraw_8pct_cost_annually"),
+    ("8% Monthly Wdraw",    "withdraw_8pct_per_month"),
+    ("Category",            None),  # joined separately
+]
+
+
+def _export_profile_data(conn, profile_id):
+    """Fetch export rows for a single profile. Returns (profile_name, [row_dicts])."""
+    headers = [h for h, _ in _EXPORT_COL_MAP]
+    sql_cols = [c for _, c in _EXPORT_COL_MAP if c is not None]
+
+    prof = conn.execute("SELECT name FROM profiles WHERE id = ?", (profile_id,)).fetchone()
+    profile_name = prof["name"] if prof else f"Portfolio {profile_id}"
+
+    rows = conn.execute(
+        f"SELECT {', '.join(sql_cols)} FROM all_account_info WHERE profile_id = ?",
+        (profile_id,),
+    ).fetchall()
+
+    cat_map = {}
+    cat_rows = conn.execute(
+        "SELECT tc.ticker, c.name AS category_name "
+        "FROM ticker_categories tc JOIN categories c ON c.id = tc.category_id "
+        "WHERE tc.profile_id = ?",
+        (profile_id,),
+    ).fetchall()
+    for cr in cat_rows:
+        cat_map.setdefault(cr["ticker"], []).append(cr["category_name"])
+
+    out_rows = []
+    for row in rows:
+        out = {}
+        for header, sql_col in _EXPORT_COL_MAP:
+            if header == "Category":
+                out[header] = ", ".join(cat_map.get(row["ticker"], []))
+            else:
+                val = row[sql_col]
+                out[header] = val if val is not None else ""
+        out_rows.append(out)
+
+    return profile_name, out_rows
+
+
+@app.route("/api/export/holdings", methods=["GET"])
+def export_holdings():
+    """Export holdings as an Excel file compatible with both Generic and Owner reimport."""
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    is_agg, profile_ids = get_profile_filter()
+    conn = get_connection()
+    headers = [h for h, _ in _EXPORT_COL_MAP]
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    required_fill = PatternFill(start_color="1565C0", end_color="1565C0", fill_type="solid")
+    optional_fill = PatternFill(start_color="37474F", end_color="37474F", fill_type="solid")
+    thin_border = Border(bottom=Side(style="thin", color="90CAF9"))
+
+    for pid in profile_ids:
+        profile_name, rows = _export_profile_data(conn, pid)
+        ws = wb.create_sheet(title=profile_name[:31])
+
+        for ci, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=ci, value=header)
+            cell.font = header_font
+            cell.fill = required_fill if ci <= 2 else optional_fill
+            cell.alignment = Alignment(horizontal="center")
+
+        for ri, row in enumerate(rows, 2):
+            for ci, header in enumerate(headers, 1):
+                cell = ws.cell(row=ri, column=ci, value=row[header])
+                cell.border = thin_border
+
+        for i, header in enumerate(headers, 1):
+            ws.column_dimensions[get_column_letter(i)].width = max(len(header) + 4, 12)
+
+    conn.close()
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    if len(profile_ids) == 1:
+        prof_name = wb.sheetnames[0].replace(" ", "_")
+        fname = f"portfolio_export_{prof_name}.xlsx"
+    else:
+        fname = "portfolio_export_all.xlsx"
+
+    return send_file(buf, as_attachment=True,
+                     download_name=fname,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.route("/api/export/holdings/csv", methods=["GET"])
+def export_holdings_csv():
+    """Export holdings as a CSV file compatible with Generic reimport."""
+    import csv
+    from io import StringIO, BytesIO
+
+    is_agg, profile_ids = get_profile_filter()
+    conn = get_connection()
+    headers = [h for h, _ in _EXPORT_COL_MAP]
+
+    profile_name = None
+    buf = StringIO()
+    writer = csv.DictWriter(buf, fieldnames=headers)
+    writer.writeheader()
+
+    for pid in profile_ids:
+        name, rows = _export_profile_data(conn, pid)
+        if profile_name is None:
+            profile_name = name
+        writer.writerows(rows)
+
+    conn.close()
+
+    out = BytesIO(buf.getvalue().encode("utf-8"))
+
+    if len(profile_ids) == 1:
+        prof_name = (profile_name or "portfolio").replace(" ", "_")
+        fname = f"portfolio_export_{prof_name}.csv"
+    else:
+        fname = "portfolio_export_all.csv"
+
+    return send_file(out, as_attachment=True,
+                     download_name=fname,
+                     mimetype="text/csv")
+
+
 # ── Upcoming Dividends ─────────────────────────────────────────────────────────
 
 @app.route("/api/upcoming-dividends", methods=["GET"])

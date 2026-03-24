@@ -13,13 +13,16 @@ COLUMN_MAP = {
     "Current Price": "current_price",
     "% Change": "percent_change",
     "Qty": "quantity",
+    "Shares": "quantity",
     "Purchase Value": "purchase_value",
     "Current Value": "current_value",
     "Gain/Loss": "gain_or_loss",
     "Gain/Loss %": "gain_or_loss_percentage",
     "Div Freq": "div_frequency",
+    "Frequency": "div_frequency",
     "DRIP": "reinvest",
     "Ex-Div Date": "ex_div_date",
+    "Pay Date": "div_pay_date",
     "Div/Share": "div",
     "Div Paid": "dividend_paid",
     "Est. Annual Pmt": "estim_payment_per_year",
@@ -41,7 +44,7 @@ COLUMN_MAP = {
     "Purchase Date": "purchase_date",
 }
 
-SQL_COLUMNS = list(COLUMN_MAP.values()) + ["import_date", "current_month_income"]
+SQL_COLUMNS = list(dict.fromkeys(list(COLUMN_MAP.values()) + ["import_date", "current_month_income"]))
 
 _VALID_TICKER = re.compile(r'^[A-Z][A-Z0-9.\-/]{0,10}$')
 _EXCLUDED_TICKERS = {"TOTALS", "TOTAL", "GRAND", "SUMMARY"}

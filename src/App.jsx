@@ -23,6 +23,7 @@ import Analytics from './pages/Analytics'
 import PortfolioBuilder from './pages/PortfolioBuilder'
 import DistributionCompare from './pages/DistributionCompare'
 import ManagePortfolios from './pages/ManagePortfolios'
+import Export from './pages/Export'
 
 function NavDropdown({ label, children }) {
   const [open, setOpen] = useState(false)
@@ -83,6 +84,7 @@ function App() {
         <Route path="/portfolio-builder" element={<PortfolioBuilder />} />
         <Route path="/dist-compare" element={<DistributionCompare />} />
         <Route path="/portfolios" element={<ManagePortfolios />} />
+        <Route path="/export" element={<Export />} />
       </Routes>
     </Router>
     </ProfileProvider>
@@ -135,6 +137,7 @@ function Nav() {
       </NavDropdown>
       <NavDropdown label="Admin">
         <NavLink to="/import">Import</NavLink>
+        <NavLink to="/export">Export</NavLink>
         <NavLink to="/portfolios">Portfolios</NavLink>
         <NavLink to="/settings">Settings</NavLink>
       </NavDropdown>
