@@ -1,37 +1,83 @@
 $src = "C:\Users\Press\Portfolio_Tracking_client"
-$out = "C:\Users\Press\Desktop\PortfolioTrackingClient"
+$outWin = "C:\Users\Press\Desktop\PortfolioTrackingClient"
+$outMac = "C:\Users\Press\Desktop\PortfolioTrackingClient-Mac"
 
-if (Test-Path $out) { Remove-Item -Recurse -Force $out }
-New-Item -ItemType Directory -Path $out -Force | Out-Null
-New-Item -ItemType Directory -Path "$out\backend\uploads" -Force | Out-Null
-New-Item -ItemType Directory -Path "$out\electron" -Force | Out-Null
+# ── Windows Package ──────────────────────────────────────────────────────────
+Write-Host "=== Building Windows Package ===" -ForegroundColor Cyan
+
+if (Test-Path $outWin) { Remove-Item -Recurse -Force $outWin }
+New-Item -ItemType Directory -Path $outWin -Force | Out-Null
+New-Item -ItemType Directory -Path "$outWin\backend\uploads" -Force | Out-Null
+New-Item -ItemType Directory -Path "$outWin\electron" -Force | Out-Null
 
 # Backend python files
-Copy-Item "$src\backend\*.py" "$out\backend\"
-Copy-Item "$src\backend\requirements.txt" "$out\backend\"
+Copy-Item "$src\backend\*.py" "$outWin\backend\"
+Copy-Item "$src\backend\requirements.txt" "$outWin\backend\"
 
 # Built frontend
-Copy-Item "$src\dist" "$out\dist" -Recurse
+Copy-Item "$src\dist" "$outWin\dist" -Recurse
 
 # Electron
-Copy-Item "$src\electron\main.js" "$out\electron\"
+Copy-Item "$src\electron\main.js" "$outWin\electron\"
 
 # Config files
-Copy-Item "$src\package.json" "$out\"
-Copy-Item "$src\package-lock.json" "$out\"
-Copy-Item "$src\index.html" "$out\"
-Copy-Item "$src\vite.config.js" "$out\"
+Copy-Item "$src\package.json" "$outWin\"
+Copy-Item "$src\package-lock.json" "$outWin\"
+Copy-Item "$src\index.html" "$outWin\"
+Copy-Item "$src\vite.config.js" "$outWin\"
 
-# Startup scripts
-Copy-Item "$src\deploy\setup.bat" "$out\"
-Copy-Item "$src\deploy\start.bat" "$out\"
-Copy-Item "$src\deploy\start-browser.bat" "$out\"
+# Windows startup scripts
+Copy-Item "$src\deploy\setup.bat" "$outWin\"
+Copy-Item "$src\deploy\start.bat" "$outWin\"
+Copy-Item "$src\deploy\start-browser.bat" "$outWin\"
 
-Write-Host "Files copied to $out"
-Get-ChildItem $out -Recurse -File | Measure-Object -Property Length -Sum | ForEach-Object { Write-Host ("Total size: {0:N2} MB" -f ($_.Sum / 1MB)) }
+Write-Host "Windows files copied to $outWin"
+Get-ChildItem $outWin -Recurse -File | Measure-Object -Property Length -Sum | ForEach-Object { Write-Host ("Total size: {0:N2} MB" -f ($_.Sum / 1MB)) }
 
-# Create zip
-$zipPath = "$out.zip"
-if (Test-Path $zipPath) { Remove-Item $zipPath }
-Compress-Archive -Path "$out\*" -DestinationPath $zipPath -Force
-Get-Item $zipPath | ForEach-Object { Write-Host ("Zip created: {0} ({1:N2} MB)" -f $_.FullName, ($_.Length / 1MB)) }
+# Create Windows zip
+$zipWin = "$outWin.zip"
+if (Test-Path $zipWin) { Remove-Item $zipWin }
+Compress-Archive -Path "$outWin\*" -DestinationPath $zipWin -Force
+Get-Item $zipWin | ForEach-Object { Write-Host ("Zip created: {0} ({1:N2} MB)" -f $_.FullName, ($_.Length / 1MB)) }
+
+# ── Mac Package ──────────────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "=== Building Mac Package ===" -ForegroundColor Cyan
+
+if (Test-Path $outMac) { Remove-Item -Recurse -Force $outMac }
+New-Item -ItemType Directory -Path $outMac -Force | Out-Null
+New-Item -ItemType Directory -Path "$outMac\backend\uploads" -Force | Out-Null
+New-Item -ItemType Directory -Path "$outMac\electron" -Force | Out-Null
+
+# Backend python files
+Copy-Item "$src\backend\*.py" "$outMac\backend\"
+Copy-Item "$src\backend\requirements.txt" "$outMac\backend\"
+
+# Built frontend
+Copy-Item "$src\dist" "$outMac\dist" -Recurse
+
+# Electron
+Copy-Item "$src\electron\main.js" "$outMac\electron\"
+
+# Config files
+Copy-Item "$src\package.json" "$outMac\"
+Copy-Item "$src\package-lock.json" "$outMac\"
+Copy-Item "$src\index.html" "$outMac\"
+Copy-Item "$src\vite.config.js" "$outMac\"
+
+# Mac startup scripts
+Copy-Item "$src\deploy\setup.sh" "$outMac\"
+Copy-Item "$src\deploy\start.sh" "$outMac\"
+Copy-Item "$src\deploy\start-browser.sh" "$outMac\"
+
+Write-Host "Mac files copied to $outMac"
+Get-ChildItem $outMac -Recurse -File | Measure-Object -Property Length -Sum | ForEach-Object { Write-Host ("Total size: {0:N2} MB" -f ($_.Sum / 1MB)) }
+
+# Create Mac zip
+$zipMac = "$outMac.zip"
+if (Test-Path $zipMac) { Remove-Item $zipMac }
+Compress-Archive -Path "$outMac\*" -DestinationPath $zipMac -Force
+Get-Item $zipMac | ForEach-Object { Write-Host ("Zip created: {0} ({1:N2} MB)" -f $_.FullName, ($_.Length / 1MB)) }
+
+Write-Host ""
+Write-Host "=== Done ===" -ForegroundColor Green
