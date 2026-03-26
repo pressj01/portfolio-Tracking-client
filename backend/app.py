@@ -857,7 +857,7 @@ def refresh_market_data():
 
     # Collect unique tickers and per-profile holdings across ALL profiles
     all_rows = conn.execute(
-        "SELECT profile_id, ticker, quantity, price_paid, purchase_value, purchase_date FROM all_account_info WHERE profile_id IN ({})".format(
+        "SELECT profile_id, ticker, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity FROM all_account_info WHERE profile_id IN ({})".format(
             ",".join("?" * len(all_pids))
         ), all_pids,
     ).fetchall()
@@ -867,10 +867,17 @@ def refresh_market_data():
         return jsonify({"updated": 0, "message": "No holdings to refresh"})
 
     tickers = list({r["ticker"] for r in all_rows})
-    # Build per-profile holding map: {(profile_id, ticker): (qty, price_paid, purchase_value, purchase_date)}
+    # Build per-profile holding map
     holding_map = {}
     for r in all_rows:
-        holding_map[(r["profile_id"], r["ticker"])] = (r["quantity"] or 0, r["price_paid"] or 0, r["purchase_value"] or 0, r["purchase_date"] or "")
+        holding_map[(r["profile_id"], r["ticker"])] = {
+            "qty": r["quantity"] or 0,
+            "price_paid": r["price_paid"] or 0,
+            "purchase_value": r["purchase_value"] or 0,
+            "purchase_date": r["purchase_date"] or "",
+            "reinvest": (r["reinvest"] or "").upper(),
+            "base_quantity": r["base_quantity"] or r["quantity"] or 0,
+        }
 
     # Batch download prices + dividends (one yfinance call for all tickers)
     ticker_str = " ".join(tickers)
@@ -878,7 +885,8 @@ def refresh_market_data():
     div_map = {}
     exdiv_map = {}
     freq_map = {}
-    div_history = {}  # ticker -> pandas Series of positive dividends (index=dates)
+    div_history = {}    # ticker -> pandas Series of positive dividends (index=dates)
+    close_history = {}  # ticker -> pandas Series of close prices (index=dates)
 
     try:
         raw = yf.download(ticker_str, period="1y", progress=False, auto_adjust=False, actions=True)
@@ -895,12 +903,14 @@ def refresh_market_data():
                     s = close.dropna()
                     if len(s):
                         price_map[tickers[0]] = float(s.iloc[-1])
+                        close_history[tickers[0]] = s
                 else:
                     for t in tickers:
                         if t in close.columns:
                             s = close[t].dropna()
                             if len(s):
                                 price_map[t] = float(s.iloc[-1])
+                                close_history[t] = s
 
             # Dividends
             divs = _col("Dividends")
@@ -1041,9 +1051,63 @@ def refresh_market_data():
             if not new_price and not new_div:
                 continue
 
-            qty, price_paid, purchase_value, purchase_date = holding_map[key]
+            h = holding_map[key]
+            qty = h["qty"]
+            price_paid = h["price_paid"]
+            purchase_value = h["purchase_value"]
+            purchase_date = h["purchase_date"]
+            base_qty = h["base_quantity"]
+            is_drip = h["reinvest"] == "Y"
             sets = []
             vals = []
+
+            # ── DRIP simulation ──────────────────────────────────────────
+            # For reinvest=Y holdings, simulate dividend reinvestment from
+            # purchase_date forward using actual dividend history + close prices.
+            # This is idempotent: starts from base_quantity each time.
+            drip_shares = 0.0
+            drip_total_divs = 0.0
+            div_series = div_history.get(t)
+            close_series = close_history.get(t)
+
+            if is_drip and div_series is not None and not div_series.empty and close_series is not None:
+                pdt = None
+                if purchase_date:
+                    try:
+                        pdt = pd.Timestamp(purchase_date)
+                    except Exception:
+                        pass
+                # Filter dividends to those on or after purchase_date
+                eligible = div_series
+                if pdt is not None:
+                    eligible = eligible[eligible.index >= pdt]
+                if not eligible.empty:
+                    running_qty = base_qty
+                    for div_date, div_amt in eligible.items():
+                        # Find the close price on the dividend date (or nearest prior)
+                        prices_on_or_before = close_series[close_series.index <= div_date]
+                        if prices_on_or_before.empty:
+                            continue
+                        reinvest_price = float(prices_on_or_before.iloc[-1])
+                        if reinvest_price <= 0:
+                            continue
+                        div_income = div_amt * running_qty
+                        new_shares = div_income / reinvest_price
+                        drip_shares += new_shares
+                        drip_total_divs += div_income
+                        running_qty += new_shares
+                    qty = running_qty  # Update qty for all subsequent calculations
+
+                    sets.extend(["quantity = ?", "base_quantity = ?",
+                                 "shares_bought_from_dividend = ?",
+                                 "total_cash_reinvested = ?"])
+                    vals.extend([round(qty, 6), base_qty,
+                                 round(drip_shares, 6),
+                                 round(drip_total_divs, 2)])
+                    # Recalculate purchase_value: base cost + reinvested dividends
+                    purchase_value = (base_qty * price_paid) + drip_total_divs
+                    sets.append("purchase_value = ?")
+                    vals.append(round(purchase_value, 2))
 
             if new_price:
                 current_value = new_price * qty
@@ -1083,12 +1147,11 @@ def refresh_market_data():
 
             # Actual YTD and current-month dividends from yfinance history,
             # filtered to only include dividends on or after purchase_date.
-            div_series = div_history.get(t)
+            # Uses DRIP-adjusted qty for accurate income calculation.
             if div_series is not None and not div_series.empty:
                 jan1 = pd.Timestamp(_dt.now().year, 1, 1)
                 today = pd.Timestamp(_dt.now().date())
                 first_of_month = pd.Timestamp(today.year, today.month, 1)
-                # Only count dividends after this holding was purchased
                 start = jan1
                 if purchase_date:
                     try:
@@ -1275,6 +1338,12 @@ def add_holding():
             cols.append(field)
             vals.append(data[field])
 
+    # Set base_quantity = quantity for DRIP tracking
+    qty_val = data.get("quantity")
+    if qty_val is not None:
+        cols.append("base_quantity")
+        vals.append(qty_val)
+
     placeholders = ", ".join(["?"] * len(cols))
     conn.execute(
         f"INSERT INTO all_account_info ({', '.join(cols)}) VALUES ({placeholders})",
@@ -1338,6 +1407,11 @@ def update_holding(ticker):
         if field in data:
             updates.append(f"{field} = ?")
             vals.append(data[field])
+
+    # When quantity is manually changed, update base_quantity too (new purchase/sale)
+    if "quantity" in data:
+        updates.append("base_quantity = ?")
+        vals.append(data["quantity"])
 
     if not updates:
         conn.close()

@@ -308,6 +308,13 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
         row_count = updated + inserted
         conn.commit()
 
+    # Set base_quantity for any holdings where it's not yet set
+    cur.execute(
+        "UPDATE all_account_info SET base_quantity = quantity WHERE base_quantity IS NULL AND profile_id = ?",
+        (profile_id,),
+    )
+    conn.commit()
+
     # ── Upsert monthly income totals ────────────────────────────────────────
     for _yr, _mo, _amt in _monthly_income_updates:
         existing = cur.execute(

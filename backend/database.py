@@ -87,6 +87,14 @@ def ensure_tables_exist(conn=None):
     except Exception:
         pass  # column already exists
 
+    try:
+        cur.execute("ALTER TABLE all_account_info ADD COLUMN base_quantity REAL")
+    except Exception:
+        pass  # column already exists
+
+    # Initialize base_quantity from quantity where not yet set
+    cur.execute("UPDATE all_account_info SET base_quantity = quantity WHERE base_quantity IS NULL")
+
     # ── holdings ───────────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS holdings (
