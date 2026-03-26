@@ -1,9 +1,13 @@
 $src = "C:\Users\Press\Portfolio_Tracking_client"
-$outWin = "C:\Users\Press\Desktop\PortfolioTrackingClient"
-$outMac = "C:\Users\Press\Desktop\PortfolioTrackingClient-Mac"
+$releaseDir = "$src\release"
+$version = (Get-Content "$src\package.json" | ConvertFrom-Json).version
+
+# Staging dirs (temp, cleaned up after zipping)
+$outWin = "$env:TEMP\PortfolioTrackingClient-Win"
+$outMac = "$env:TEMP\PortfolioTrackingClient-Mac"
 
 # ── Windows Package ──────────────────────────────────────────────────────────
-Write-Host "=== Building Windows Package ===" -ForegroundColor Cyan
+Write-Host "=== Building Windows Package (v$version) ===" -ForegroundColor Cyan
 
 if (Test-Path $outWin) { Remove-Item -Recurse -Force $outWin }
 New-Item -ItemType Directory -Path $outWin -Force | Out-Null
@@ -31,18 +35,19 @@ Copy-Item "$src\deploy\setup.bat" "$outWin\"
 Copy-Item "$src\deploy\start.bat" "$outWin\"
 Copy-Item "$src\deploy\start-browser.bat" "$outWin\"
 
-Write-Host "Windows files copied to $outWin"
+Write-Host "Windows files staged"
 Get-ChildItem $outWin -Recurse -File | Measure-Object -Property Length -Sum | ForEach-Object { Write-Host ("Total size: {0:N2} MB" -f ($_.Sum / 1MB)) }
 
-# Create Windows zip
-$zipWin = "$outWin.zip"
+# Create Windows zip in release folder
+$zipWin = "$releaseDir\PortfolioTrackingClient-Win-$version.zip"
 if (Test-Path $zipWin) { Remove-Item $zipWin }
 Compress-Archive -Path "$outWin\*" -DestinationPath $zipWin -Force
 Get-Item $zipWin | ForEach-Object { Write-Host ("Zip created: {0} ({1:N2} MB)" -f $_.FullName, ($_.Length / 1MB)) }
+Remove-Item -Recurse -Force $outWin
 
 # ── Mac Package ──────────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "=== Building Mac Package ===" -ForegroundColor Cyan
+Write-Host "=== Building Mac Package (v$version) ===" -ForegroundColor Cyan
 
 if (Test-Path $outMac) { Remove-Item -Recurse -Force $outMac }
 New-Item -ItemType Directory -Path $outMac -Force | Out-Null
@@ -70,14 +75,15 @@ Copy-Item "$src\deploy\setup.sh" "$outMac\"
 Copy-Item "$src\deploy\start.sh" "$outMac\"
 Copy-Item "$src\deploy\start-browser.sh" "$outMac\"
 
-Write-Host "Mac files copied to $outMac"
+Write-Host "Mac files staged"
 Get-ChildItem $outMac -Recurse -File | Measure-Object -Property Length -Sum | ForEach-Object { Write-Host ("Total size: {0:N2} MB" -f ($_.Sum / 1MB)) }
 
-# Create Mac zip
-$zipMac = "$outMac.zip"
+# Create Mac zip in release folder
+$zipMac = "$releaseDir\PortfolioTrackingClient-Mac-$version.zip"
 if (Test-Path $zipMac) { Remove-Item $zipMac }
 Compress-Archive -Path "$outMac\*" -DestinationPath $zipMac -Force
 Get-Item $zipMac | ForEach-Object { Write-Host ("Zip created: {0} ({1:N2} MB)" -f $_.FullName, ($_.Length / 1MB)) }
+Remove-Item -Recurse -Force $outMac
 
 Write-Host ""
 Write-Host "=== Done ===" -ForegroundColor Green

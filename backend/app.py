@@ -878,6 +878,8 @@ def refresh_market_data():
     div_map = {}
     exdiv_map = {}
     freq_map = {}
+    ytd_divs_per_share = {}    # ticker -> sum of divs-per-share from Jan 1 through today
+    curmo_divs_per_share = {}  # ticker -> sum of divs-per-share in current month
 
     try:
         raw = yf.download(ticker_str, period="1y", progress=False, auto_adjust=False, actions=True)
@@ -886,6 +888,18 @@ def refresh_market_data():
                 if isinstance(raw.columns, pd.MultiIndex):
                     return raw[name] if name in raw.columns.get_level_values(0) else None
                 return raw[name] if name in raw.columns else None
+
+            def _accum_div_history(ticker, div_series):
+                """Sum per-share dividends for YTD and current month."""
+                jan1 = pd.Timestamp(_dt.now().year, 1, 1)
+                today = pd.Timestamp(_dt.now().date())
+                first_of_month = pd.Timestamp(today.year, today.month, 1)
+                ytd = div_series[(div_series.index >= jan1) & (div_series.index <= today)]
+                curmo = div_series[(div_series.index >= first_of_month) & (div_series.index <= today)]
+                if not ytd.empty:
+                    ytd_divs_per_share[ticker] = float(ytd.sum())
+                if not curmo.empty:
+                    curmo_divs_per_share[ticker] = float(curmo.sum())
 
             # Prices
             close = _col("Close")
@@ -912,6 +926,7 @@ def refresh_market_data():
                         exdiv_map[t0] = d.index[-1].strftime("%m/%d/%y")
                         n = len(d)
                         freq_map[t0] = "W" if n >= 45 else "M" if n >= 10 else "Q" if n >= 3 else "SA" if n >= 2 else "A"
+                        _accum_div_history(t0, d)
                 else:
                     for t in tickers:
                         if t in divs.columns:
@@ -921,6 +936,7 @@ def refresh_market_data():
                                 exdiv_map[t] = d.index[-1].strftime("%m/%d/%y")
                                 n = len(d)
                                 freq_map[t] = "W" if n >= 45 else "M" if n >= 10 else "Q" if n >= 3 else "SA" if n >= 2 else "A"
+                                _accum_div_history(t, d)
     except Exception:
         pass
 
@@ -949,6 +965,7 @@ def refresh_market_data():
                                 exdiv_map[t] = d.index[-1].strftime("%m/%d/%y")
                                 n = len(d)
                                 freq_map[t] = "W" if n >= 45 else "M" if n >= 10 else "Q" if n >= 3 else "SA" if n >= 2 else "A"
+                                _accum_div_history(t, d)
                     # If still no data, try a separate download for the new symbol
                     if t not in price_map:
                         try:
@@ -968,6 +985,7 @@ def refresh_market_data():
                                         exdiv_map[t] = d2s.index[-1].strftime("%m/%d/%y")
                                         n = len(d2s)
                                         freq_map[t] = "W" if n >= 45 else "M" if n >= 10 else "Q" if n >= 3 else "SA" if n >= 2 else "A"
+                                        _accum_div_history(t, d2s)
                         except Exception:
                             pass
                     # Update description if it matches the ticker (i.e., never got enriched)
@@ -1075,6 +1093,16 @@ def refresh_market_data():
             if new_freq:
                 sets.append("div_frequency = ?")
                 vals.append(new_freq)
+
+            # Actual YTD and current-month dividends from yfinance history
+            ytd_ps = ytd_divs_per_share.get(t)
+            curmo_ps = curmo_divs_per_share.get(t)
+            if ytd_ps is not None:
+                sets.append("ytd_divs = ?")
+                vals.append(round(ytd_ps * qty, 2))
+            if curmo_ps is not None:
+                sets.append("current_month_income = ?")
+                vals.append(round(curmo_ps * qty, 2))
 
             if sets:
                 vals.extend([t, pid])
@@ -1201,10 +1229,12 @@ def list_holdings():
         for r in results:
             r["percent_of_account"] = (r.get("current_value") or 0) / total_value
 
-    # Estimate current_month_income and ytd_divs for every holding
+    # Use stored actuals from refresh if available, otherwise estimate
     for r in results:
-        r["current_month_income"] = _estimate_current_month_income(r)
-        r["ytd_divs"] = _estimate_ytd_income(r)
+        if not r.get("current_month_income"):
+            r["current_month_income"] = _estimate_current_month_income(r)
+        if not r.get("ytd_divs"):
+            r["ytd_divs"] = _estimate_ytd_income(r)
 
     conn.close()
     return jsonify(results)
@@ -2296,27 +2326,29 @@ def income_summary():
     today = datetime.date.today()
     placeholders = ",".join("?" * len(pids))
 
-    # Estimate from holdings using div_frequency logic (consistent for all profiles)
+    # Use stored actuals from refresh, fall back to estimates for holdings without data
     holdings = conn.execute(
-        f"""SELECT quantity, div, ex_div_date, div_frequency
+        f"""SELECT quantity, div, ex_div_date, div_frequency,
+                   ytd_divs, current_month_income
             FROM all_account_info
             WHERE profile_id IN ({placeholders})
-              AND div IS NOT NULL AND div > 0
               AND quantity IS NOT NULL AND quantity > 0""",
         pids,
     ).fetchall()
 
-    estimated_month = 0.0
-    estimated_ytd = 0.0
+    total_month = 0.0
+    total_ytd = 0.0
     for row in holdings:
         h = dict(row)
-        estimated_month += _estimate_current_month_income(h)
-        estimated_ytd += _estimate_ytd_income(h)
+        stored_month = h.get("current_month_income") or 0
+        stored_ytd = h.get("ytd_divs") or 0
+        total_month += stored_month if stored_month else _estimate_current_month_income(h)
+        total_ytd += stored_ytd if stored_ytd else _estimate_ytd_income(h)
 
     conn.close()
     return jsonify({
-        "ytd_income": estimated_ytd,
-        "current_month_income": estimated_month,
+        "ytd_income": total_ytd,
+        "current_month_income": total_month,
         "month_label": today.strftime("%B"),
     })
 
