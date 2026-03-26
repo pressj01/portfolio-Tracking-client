@@ -91,6 +91,67 @@ def rows_to_dicts(rows):
     return [dict(r) for r in rows]
 
 
+def _estimate_month_income(holding, month):
+    """Estimate income for a specific month (1-12) from a single holding.
+
+    Uses div_frequency and ex_div_date to determine whether the holding
+    pays out in the given calendar month and returns qty * div if so.
+    Weekly payers use 4.33 payments per month (52 / 12).
+    """
+    import datetime
+
+    qty = float(holding.get("quantity") or 0)
+    div = float(holding.get("div") or 0)
+    freq = (holding.get("div_frequency") or "").strip().upper()
+    ex_raw = holding.get("ex_div_date") or ""
+
+    if qty <= 0 or div <= 0 or not freq:
+        return 0.0
+
+    # Weekly: one payment per week, 52 per year ≈ 4.33 per month.
+    # Consistent with the projected income chart (annual / 52 * 4.33).
+    if freq in ("W", "52"):
+        return round(qty * div * 4.33, 2)
+
+    # Monthly: always pays
+    if freq == "M":
+        return round(qty * div, 2)
+
+    # For Q / SA / A we need the ex_div_date to figure out the cycle
+    ex_month = None
+    for fmt in ("%m/%d/%y", "%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            ex_month = datetime.datetime.strptime(ex_raw.strip(), fmt).month
+            break
+        except (ValueError, TypeError):
+            continue
+
+    if ex_month is None:
+        return 0.0
+
+    period = {"Q": 3, "SA": 6, "A": 12}.get(freq)
+    if period is None:
+        return 0.0
+
+    if (month - ex_month) % period == 0:
+        return round(qty * div, 2)
+
+    return 0.0
+
+
+def _estimate_current_month_income(holding):
+    """Estimate income for the current month from a single holding."""
+    import datetime
+    return _estimate_month_income(holding, datetime.date.today().month)
+
+
+def _estimate_ytd_income(holding):
+    """Estimate year-to-date income from a single holding (Jan through current month)."""
+    import datetime
+    cur_month = datetime.date.today().month
+    return sum(_estimate_month_income(holding, m) for m in range(1, cur_month + 1))
+
+
 def _auto_reconcile_owner():
     """Silently reconcile Owner (profile 1) from sub-profiles after any import.
 
@@ -1139,6 +1200,11 @@ def list_holdings():
     if total_value > 0:
         for r in results:
             r["percent_of_account"] = (r.get("current_value") or 0) / total_value
+
+    # Estimate current_month_income and ytd_divs for every holding
+    for r in results:
+        r["current_month_income"] = _estimate_current_month_income(r)
+        r["ytd_divs"] = _estimate_ytd_income(r)
 
     conn.close()
     return jsonify(results)
@@ -2238,13 +2304,13 @@ def income_summary():
     else:
         month_end = f"{year}-{month + 1:02d}-01"
 
-    # If Owner import was used, payout tables are portfolio-wide actuals
-    # stored under profile_id=1.  Use Owner only to avoid double-counting.
-    # For generic-only imports, query payouts for the requested profile(s).
+    # If Owner import was used AND we're viewing Owner (profile 1) or an
+    # aggregated view that includes Owner, use actual payout tables.
+    # Otherwise estimate from holdings data.
     _oiu = conn.execute(
         "SELECT value FROM settings WHERE key = 'owner_import_used'"
     ).fetchone()
-    use_owner_payouts = _oiu and _oiu[0] == "true"
+    use_owner_payouts = (_oiu and _oiu[0] == "true") and (1 in pids)
 
     if use_owner_payouts:
         payout_pids = [1]
@@ -2252,67 +2318,43 @@ def income_summary():
         payout_pids = pids
     pp_ph = ",".join("?" * len(payout_pids))
 
-    # YTD from weekly_payouts
+    # YTD from payout tables (only meaningful for Owner profile)
     weekly_ytd = conn.execute(
         f"SELECT COALESCE(SUM(amount), 0) as total FROM weekly_payouts WHERE profile_id IN ({pp_ph}) AND pay_date >= ? AND pay_date < ?",
         payout_pids + [f"{year}-01-01", f"{year + 1}-01-01"],
     ).fetchone()["total"]
 
-    # YTD from monthly_payouts
     monthly_ytd = conn.execute(
         f"SELECT COALESCE(SUM(amount), 0) as total FROM monthly_payouts WHERE profile_id IN ({pp_ph}) AND year = ?",
         payout_pids + [year],
     ).fetchone()["total"]
 
-    ytd_income = weekly_ytd + monthly_ytd
+    payout_ytd = weekly_ytd + monthly_ytd
 
-    # Current month from weekly_payouts
-    weekly_month = conn.execute(
-        f"SELECT COALESCE(SUM(amount), 0) as total FROM weekly_payouts WHERE profile_id IN ({pp_ph}) AND pay_date >= ? AND pay_date < ?",
-        payout_pids + [month_start, month_end],
-    ).fetchone()["total"]
-
-    # Current month from monthly_payouts
-    monthly_month = conn.execute(
-        f"SELECT COALESCE(SUM(amount), 0) as total FROM monthly_payouts WHERE profile_id IN ({pp_ph}) AND year = ? AND month = ?",
-        payout_pids + [year, month],
-    ).fetchone()["total"]
-
-    # Estimated income from tickers with ex_div_date in current month
-    # Fetch all non-weekly tickers with ex_div_date and check in Python (handles multiple date formats)
-    all_divs = conn.execute(
-        f"""SELECT a.quantity, a.div, a.ex_div_date, a.div_frequency
-            FROM all_account_info a
-            WHERE a.profile_id IN ({placeholders})
-              AND a.div_frequency NOT IN ('W')
-              AND a.ex_div_date IS NOT NULL AND a.ex_div_date != ''
-              AND a.div IS NOT NULL AND a.div > 0""",
+    # Estimate from holdings using div_frequency logic
+    holdings = conn.execute(
+        f"""SELECT quantity, div, ex_div_date, div_frequency
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND div IS NOT NULL AND div > 0
+              AND quantity IS NOT NULL AND quantity > 0""",
         pids,
     ).fetchall()
 
     estimated_month = 0.0
-    for row in all_divs:
-        ex_date_str = row["ex_div_date"] if isinstance(row, dict) else row[2]
-        try:
-            # Try MM/DD/YY
-            ex_dt = datetime.datetime.strptime(ex_date_str, "%m/%d/%y").date()
-        except (ValueError, TypeError):
-            try:
-                # Try YYYY-MM-DD
-                ex_dt = datetime.datetime.strptime(ex_date_str, "%Y-%m-%d").date()
-            except (ValueError, TypeError):
-                continue
-        if ex_dt.year == year and ex_dt.month == month:
-            qty = float(row["quantity"] if isinstance(row, dict) else row[0] or 0)
-            div = float(row["div"] if isinstance(row, dict) else row[1] or 0)
-            estimated_month += qty * div
+    estimated_ytd = 0.0
+    for row in holdings:
+        h = dict(row)
+        estimated_month += _estimate_current_month_income(h)
+        estimated_ytd += _estimate_ytd_income(h)
 
-    current_month_income = weekly_month + monthly_month + estimated_month
+    # Use payout-table YTD if available (Owner), otherwise use estimate
+    ytd_income = payout_ytd if payout_ytd > 0 else estimated_ytd
 
     conn.close()
     return jsonify({
         "ytd_income": ytd_income,
-        "current_month_income": current_month_income,
+        "current_month_income": estimated_month,
         "month_label": today.strftime("%B"),
     })
 
