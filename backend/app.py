@@ -857,7 +857,7 @@ def refresh_market_data():
 
     # Collect unique tickers and per-profile holdings across ALL profiles
     all_rows = conn.execute(
-        "SELECT profile_id, ticker, quantity, price_paid, purchase_value FROM all_account_info WHERE profile_id IN ({})".format(
+        "SELECT profile_id, ticker, quantity, price_paid, purchase_value, purchase_date FROM all_account_info WHERE profile_id IN ({})".format(
             ",".join("?" * len(all_pids))
         ), all_pids,
     ).fetchall()
@@ -867,10 +867,10 @@ def refresh_market_data():
         return jsonify({"updated": 0, "message": "No holdings to refresh"})
 
     tickers = list({r["ticker"] for r in all_rows})
-    # Build per-profile holding map: {(profile_id, ticker): (qty, price_paid, purchase_value)}
+    # Build per-profile holding map: {(profile_id, ticker): (qty, price_paid, purchase_value, purchase_date)}
     holding_map = {}
     for r in all_rows:
-        holding_map[(r["profile_id"], r["ticker"])] = (r["quantity"] or 0, r["price_paid"] or 0, r["purchase_value"] or 0)
+        holding_map[(r["profile_id"], r["ticker"])] = (r["quantity"] or 0, r["price_paid"] or 0, r["purchase_value"] or 0, r["purchase_date"] or "")
 
     # Batch download prices + dividends (one yfinance call for all tickers)
     ticker_str = " ".join(tickers)
@@ -878,8 +878,7 @@ def refresh_market_data():
     div_map = {}
     exdiv_map = {}
     freq_map = {}
-    ytd_divs_per_share = {}    # ticker -> sum of divs-per-share from Jan 1 through today
-    curmo_divs_per_share = {}  # ticker -> sum of divs-per-share in current month
+    div_history = {}  # ticker -> pandas Series of positive dividends (index=dates)
 
     try:
         raw = yf.download(ticker_str, period="1y", progress=False, auto_adjust=False, actions=True)
@@ -888,18 +887,6 @@ def refresh_market_data():
                 if isinstance(raw.columns, pd.MultiIndex):
                     return raw[name] if name in raw.columns.get_level_values(0) else None
                 return raw[name] if name in raw.columns else None
-
-            def _accum_div_history(ticker, div_series):
-                """Sum per-share dividends for YTD and current month."""
-                jan1 = pd.Timestamp(_dt.now().year, 1, 1)
-                today = pd.Timestamp(_dt.now().date())
-                first_of_month = pd.Timestamp(today.year, today.month, 1)
-                ytd = div_series[(div_series.index >= jan1) & (div_series.index <= today)]
-                curmo = div_series[(div_series.index >= first_of_month) & (div_series.index <= today)]
-                if not ytd.empty:
-                    ytd_divs_per_share[ticker] = float(ytd.sum())
-                if not curmo.empty:
-                    curmo_divs_per_share[ticker] = float(curmo.sum())
 
             # Prices
             close = _col("Close")
@@ -926,7 +913,7 @@ def refresh_market_data():
                         exdiv_map[t0] = d.index[-1].strftime("%m/%d/%y")
                         n = len(d)
                         freq_map[t0] = "W" if n >= 45 else "M" if n >= 10 else "Q" if n >= 3 else "SA" if n >= 2 else "A"
-                        _accum_div_history(t0, d)
+                        div_history[t0] = d
                 else:
                     for t in tickers:
                         if t in divs.columns:
@@ -936,7 +923,7 @@ def refresh_market_data():
                                 exdiv_map[t] = d.index[-1].strftime("%m/%d/%y")
                                 n = len(d)
                                 freq_map[t] = "W" if n >= 45 else "M" if n >= 10 else "Q" if n >= 3 else "SA" if n >= 2 else "A"
-                                _accum_div_history(t, d)
+                                div_history[t] = d
     except Exception:
         pass
 
@@ -965,7 +952,7 @@ def refresh_market_data():
                                 exdiv_map[t] = d.index[-1].strftime("%m/%d/%y")
                                 n = len(d)
                                 freq_map[t] = "W" if n >= 45 else "M" if n >= 10 else "Q" if n >= 3 else "SA" if n >= 2 else "A"
-                                _accum_div_history(t, d)
+                                div_history[t] = d
                     # If still no data, try a separate download for the new symbol
                     if t not in price_map:
                         try:
@@ -985,7 +972,7 @@ def refresh_market_data():
                                         exdiv_map[t] = d2s.index[-1].strftime("%m/%d/%y")
                                         n = len(d2s)
                                         freq_map[t] = "W" if n >= 45 else "M" if n >= 10 else "Q" if n >= 3 else "SA" if n >= 2 else "A"
-                                        _accum_div_history(t, d2s)
+                                        div_history[t] = d2s
                         except Exception:
                             pass
                     # Update description if it matches the ticker (i.e., never got enriched)
@@ -1054,7 +1041,7 @@ def refresh_market_data():
             if not new_price and not new_div:
                 continue
 
-            qty, price_paid, purchase_value = holding_map[key]
+            qty, price_paid, purchase_value, purchase_date = holding_map[key]
             sets = []
             vals = []
 
@@ -1094,15 +1081,29 @@ def refresh_market_data():
                 sets.append("div_frequency = ?")
                 vals.append(new_freq)
 
-            # Actual YTD and current-month dividends from yfinance history
-            ytd_ps = ytd_divs_per_share.get(t)
-            curmo_ps = curmo_divs_per_share.get(t)
-            if ytd_ps is not None:
+            # Actual YTD and current-month dividends from yfinance history,
+            # filtered to only include dividends on or after purchase_date.
+            div_series = div_history.get(t)
+            if div_series is not None and not div_series.empty:
+                jan1 = pd.Timestamp(_dt.now().year, 1, 1)
+                today = pd.Timestamp(_dt.now().date())
+                first_of_month = pd.Timestamp(today.year, today.month, 1)
+                # Only count dividends after this holding was purchased
+                start = jan1
+                if purchase_date:
+                    try:
+                        pdt = pd.Timestamp(purchase_date)
+                        if pdt > start:
+                            start = pdt
+                    except Exception:
+                        pass
+                ytd = div_series[(div_series.index >= start) & (div_series.index <= today)]
+                curmo_start = max(first_of_month, start)
+                curmo = div_series[(div_series.index >= curmo_start) & (div_series.index <= today)]
                 sets.append("ytd_divs = ?")
-                vals.append(round(ytd_ps * qty, 2))
-            if curmo_ps is not None:
+                vals.append(round(float(ytd.sum()) * qty, 2) if not ytd.empty else 0)
                 sets.append("current_month_income = ?")
-                vals.append(round(curmo_ps * qty, 2))
+                vals.append(round(float(curmo.sum()) * qty, 2) if not curmo.empty else 0)
 
             if sets:
                 vals.extend([t, pid])
