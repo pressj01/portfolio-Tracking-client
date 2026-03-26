@@ -13,13 +13,19 @@ def ensure_tables_exist(conn=None):
     # ── profiles ───────────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS profiles (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            name       TEXT NOT NULL,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            name             TEXT NOT NULL,
+            include_in_owner INTEGER NOT NULL DEFAULT 0,
+            created_at       TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Migration: add include_in_owner column if missing (existing databases)
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(profiles)").fetchall()]
+    if "include_in_owner" not in cols:
+        cur.execute("ALTER TABLE profiles ADD COLUMN include_in_owner INTEGER NOT NULL DEFAULT 0")
+        cur.execute("UPDATE profiles SET include_in_owner = 1 WHERE id = 1")
     cur.execute("""
-        INSERT OR IGNORE INTO profiles (id, name) VALUES (1, 'Owner')
+        INSERT OR IGNORE INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 1)
     """)
 
     # ── all_account_info ───────────────────────────────────────────────────────

@@ -126,20 +126,30 @@ export default function ManagePortfolios() {
 
   const [reconciling, setReconciling] = useState(false)
 
+  const toggleIncludeInOwner = async (p) => {
+    const newVal = !p.include_in_owner
+    const res = await fetch(`${API_BASE}/api/profiles/${p.id}/include-in-owner`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ include: newVal }),
+    })
+    if (res.ok) loadSummary()
+  }
+
   const reconcileOwner = async () => {
-    const nonOwner = profiles.filter(p => p.id !== 1)
-    if (nonOwner.length === 0) {
-      await dialog.alert('No sub-portfolios to reconcile from. Create additional portfolios first.')
+    const included = summary.filter(p => p.id !== 1 && p.include_in_owner)
+    if (included.length === 0) {
+      await dialog.alert('No sub-portfolios are marked "Include in Owner". Check the box for each portfolio you want included.')
       return
     }
     const ok = await dialog.confirm(
-      `Reconcile Owner against ${nonOwner.length} sub-portfolio(s)?\n\nThis will update Owner holdings to match the combined totals of: ${nonOwner.map(p => p.name).join(', ')}.`
+      `Reconcile Owner against ${included.length} sub-portfolio(s)?\n\nThis will update Owner holdings to match the combined totals of: ${included.map(p => p.name).join(', ')}.`
     )
     if (!ok) return
 
     setReconciling(true)
     try {
-      const sourceIds = nonOwner.map(p => p.id)
+      const sourceIds = included.map(p => p.id)
       const res = await fetch(`${API_BASE}/api/profiles/reconcile-owner`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -169,6 +179,7 @@ export default function ManagePortfolios() {
         <thead>
           <tr>
             <th>Name</th>
+            <th style={{ textAlign: 'center' }} title="Include this portfolio in Owner reconciliation and aggregate">Include</th>
             <th style={{ textAlign: 'right' }}>Holdings</th>
             <th style={{ textAlign: 'right' }}>Total Value</th>
             <th style={{ textAlign: 'right' }}>Created</th>
@@ -197,6 +208,18 @@ export default function ManagePortfolios() {
                   >
                     {p.name}
                   </span>
+                )}
+              </td>
+              <td style={{ textAlign: 'center' }}>
+                {p.id === 1 ? (
+                  <input type="checkbox" checked disabled title="Owner is always included" />
+                ) : (
+                  <input
+                    type="checkbox"
+                    checked={!!p.include_in_owner}
+                    onChange={() => toggleIncludeInOwner(p)}
+                    title="Include in Owner reconciliation and aggregate"
+                  />
                 )}
               </td>
               <td style={{ textAlign: 'right' }}>{p.holdings_count}</td>
@@ -261,9 +284,9 @@ export default function ManagePortfolios() {
             <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid #333' }}>
               <h3 style={{ marginBottom: '0.5rem' }}>Reconcile Owner</h3>
               <p style={{ color: '#aaa', marginBottom: '1rem', fontSize: '0.9rem' }}>
-                Compare Owner (profile 1) against the combined totals of all other portfolios.
-                If any ticker quantities differ, Owner will be updated to match. Missing tickers will be added;
-                tickers no longer in any sub-portfolio will be removed.
+                Compare Owner (profile 1) against the combined totals of portfolios with "Include" checked above.
+                Only checked portfolios will be included. Missing tickers will be added;
+                tickers no longer in any included sub-portfolio will be removed.
               </p>
               <button
                 className="btn btn-primary"

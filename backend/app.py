@@ -102,8 +102,8 @@ def _auto_reconcile_owner():
         conn.close()
         return
 
-    # Get all non-Owner profiles
-    rows = conn.execute("SELECT id FROM profiles WHERE id != ?", (owner_id,)).fetchall()
+    # Get all non-Owner profiles that are marked for inclusion
+    rows = conn.execute("SELECT id FROM profiles WHERE id != ? AND include_in_owner = 1", (owner_id,)).fetchall()
     source_ids = [r["id"] if isinstance(r, dict) else r[0] for r in rows]
     if not source_ids:
         conn.close()
@@ -282,12 +282,26 @@ def clear_profile_data(pid):
     return jsonify({"cleared": pid, "message": f"All data cleared for profile {pid}"})
 
 
+@app.route("/api/profiles/<int:pid>/include-in-owner", methods=["PUT"])
+def set_include_in_owner(pid):
+    """Toggle whether a profile is included in Owner reconciliation."""
+    if pid == 1:
+        return jsonify({"error": "Owner is always included"}), 400
+    data = request.get_json() or {}
+    val = 1 if data.get("include") else 0
+    conn = get_connection()
+    conn.execute("UPDATE profiles SET include_in_owner = ? WHERE id = ?", (val, pid))
+    conn.commit()
+    conn.close()
+    return jsonify({"id": pid, "include_in_owner": val})
+
+
 @app.route("/api/profiles/summary", methods=["GET"])
 def profiles_summary():
     """Return per-profile stats for the Manage Portfolios page."""
     conn = get_connection()
     rows = conn.execute("""
-        SELECT p.id, p.name, p.created_at,
+        SELECT p.id, p.name, p.created_at, p.include_in_owner,
                COUNT(a.ticker) as holdings_count,
                COALESCE(SUM(a.current_value), 0) as total_value
         FROM profiles p
@@ -354,8 +368,8 @@ def reconcile_owner():
     owner_id = 1
 
     if not source_ids:
-        # Default: all profiles except Owner
-        rows = conn.execute("SELECT id FROM profiles WHERE id != ?", (owner_id,)).fetchall()
+        # Default: all profiles except Owner that are marked for inclusion
+        rows = conn.execute("SELECT id FROM profiles WHERE id != ? AND include_in_owner = 1", (owner_id,)).fetchall()
         source_ids = [r["id"] if isinstance(r, dict) else r[0] for r in rows]
 
     if not source_ids:
