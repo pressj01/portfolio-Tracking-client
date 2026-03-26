@@ -2294,44 +2294,9 @@ def income_summary():
     is_agg, pids = get_profile_filter()
     conn = get_connection()
     today = datetime.date.today()
-    year = today.year
-    month = today.month
     placeholders = ",".join("?" * len(pids))
 
-    month_start = f"{year}-{month:02d}-01"
-    if month == 12:
-        month_end = f"{year + 1}-01-01"
-    else:
-        month_end = f"{year}-{month + 1:02d}-01"
-
-    # If Owner import was used AND we're viewing Owner (profile 1) or an
-    # aggregated view that includes Owner, use actual payout tables.
-    # Otherwise estimate from holdings data.
-    _oiu = conn.execute(
-        "SELECT value FROM settings WHERE key = 'owner_import_used'"
-    ).fetchone()
-    use_owner_payouts = (_oiu and _oiu[0] == "true") and (1 in pids)
-
-    if use_owner_payouts:
-        payout_pids = [1]
-    else:
-        payout_pids = pids
-    pp_ph = ",".join("?" * len(payout_pids))
-
-    # YTD from payout tables (only meaningful for Owner profile)
-    weekly_ytd = conn.execute(
-        f"SELECT COALESCE(SUM(amount), 0) as total FROM weekly_payouts WHERE profile_id IN ({pp_ph}) AND pay_date >= ? AND pay_date < ?",
-        payout_pids + [f"{year}-01-01", f"{year + 1}-01-01"],
-    ).fetchone()["total"]
-
-    monthly_ytd = conn.execute(
-        f"SELECT COALESCE(SUM(amount), 0) as total FROM monthly_payouts WHERE profile_id IN ({pp_ph}) AND year = ?",
-        payout_pids + [year],
-    ).fetchone()["total"]
-
-    payout_ytd = weekly_ytd + monthly_ytd
-
-    # Estimate from holdings using div_frequency logic
+    # Estimate from holdings using div_frequency logic (consistent for all profiles)
     holdings = conn.execute(
         f"""SELECT quantity, div, ex_div_date, div_frequency
             FROM all_account_info
@@ -2348,12 +2313,9 @@ def income_summary():
         estimated_month += _estimate_current_month_income(h)
         estimated_ytd += _estimate_ytd_income(h)
 
-    # Use payout-table YTD if available (Owner), otherwise use estimate
-    ytd_income = payout_ytd if payout_ytd > 0 else estimated_ytd
-
     conn.close()
     return jsonify({
-        "ytd_income": ytd_income,
+        "ytd_income": estimated_ytd,
         "current_month_income": estimated_month,
         "month_label": today.strftime("%B"),
     })
