@@ -27,6 +27,16 @@ app = Flask(__name__)
 app.secret_key = "portfolio-tracking-client-secret-key"
 CORS(app)
 
+
+@app.errorhandler(500)
+def handle_500(e):
+    return jsonify({"error": "Internal server error", "detail": str(e)}), 500
+
+
+@app.errorhandler(404)
+def handle_404(e):
+    return jsonify({"error": "Not found"}), 404
+
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -675,6 +685,14 @@ def lookup_ticker(ticker):
         tk = yf.Ticker(ticker)
         info = tk.info or {}
 
+        # Detect ticker rename (e.g. TOPW → WPAY)
+        actual_symbol = info.get("symbol", "").upper()
+        if actual_symbol and actual_symbol != ticker:
+            # yfinance resolved this to a different ticker — fetch data under the new symbol
+            tk = yf.Ticker(actual_symbol)
+            info = tk.info or {}
+            result["renamed_to"] = actual_symbol
+
         result["description"] = (info.get("longName") or info.get("shortName") or ticker)[:200]
         result["classification_type"] = (info.get("quoteType") or "ETF")[:20]
         result["current_price"] = info.get("regularMarketPrice") or info.get("currentPrice") or 0
@@ -844,6 +862,68 @@ def refresh_market_data():
                                 freq_map[t] = "W" if n >= 45 else "M" if n >= 10 else "Q" if n >= 3 else "SA" if n >= 2 else "A"
     except Exception:
         pass
+
+    # Detect renamed tickers: if a ticker got no price data from batch download,
+    # check if yfinance maps it to a new symbol and pull data under that column.
+    rename_map = {}  # old_ticker -> new_ticker
+    for t in tickers:
+        if t not in price_map:
+            try:
+                info = yf.Ticker(t).info or {}
+                new_sym = (info.get("symbol") or "").upper()
+                if new_sym and new_sym != t:
+                    rename_map[t] = new_sym
+                    # Try to pull data from the new symbol's column in the batch download
+                    if not raw.empty and isinstance(raw.columns, pd.MultiIndex):
+                        close = raw["Close"] if "Close" in raw.columns.get_level_values(0) else None
+                        if close is not None and not isinstance(close, pd.Series) and new_sym in close.columns:
+                            s = close[new_sym].dropna()
+                            if len(s):
+                                price_map[t] = float(s.iloc[-1])
+                        divs = raw["Dividends"] if "Dividends" in raw.columns.get_level_values(0) else None
+                        if divs is not None and not isinstance(divs, pd.Series) and new_sym in divs.columns:
+                            d = divs[new_sym][divs[new_sym] > 0].dropna()
+                            if not d.empty:
+                                div_map[t] = float(d.iloc[-1])
+                                exdiv_map[t] = d.index[-1].strftime("%m/%d/%y")
+                                n = len(d)
+                                freq_map[t] = "W" if n >= 45 else "M" if n >= 10 else "Q" if n >= 3 else "SA" if n >= 2 else "A"
+                    # If still no data, try a separate download for the new symbol
+                    if t not in price_map:
+                        try:
+                            r2 = yf.download(new_sym, period="1y", progress=False, auto_adjust=False, actions=True)
+                            if not r2.empty:
+                                c2 = r2["Close"] if "Close" in r2.columns else (r2["Close"][new_sym] if isinstance(r2.columns, pd.MultiIndex) else None)
+                                if c2 is not None:
+                                    s2 = c2.squeeze().dropna()
+                                    if len(s2):
+                                        price_map[t] = float(s2.iloc[-1])
+                                d2 = r2["Dividends"] if "Dividends" in r2.columns else (r2["Dividends"][new_sym] if isinstance(r2.columns, pd.MultiIndex) else None)
+                                if d2 is not None:
+                                    d2s = d2.squeeze()
+                                    d2s = d2s[d2s > 0].dropna()
+                                    if not d2s.empty:
+                                        div_map[t] = float(d2s.iloc[-1])
+                                        exdiv_map[t] = d2s.index[-1].strftime("%m/%d/%y")
+                                        n = len(d2s)
+                                        freq_map[t] = "W" if n >= 45 else "M" if n >= 10 else "Q" if n >= 3 else "SA" if n >= 2 else "A"
+                        except Exception:
+                            pass
+                    # Update description if it matches the ticker (i.e., never got enriched)
+                    if new_sym:
+                        try:
+                            new_info = yf.Ticker(new_sym).info or {}
+                            new_desc = new_info.get("longName") or new_info.get("shortName")
+                            if new_desc:
+                                for pid in all_pids:
+                                    conn.execute(
+                                        "UPDATE all_account_info SET description = ? WHERE ticker = ? AND profile_id = ? AND (description = ? OR description IS NULL OR description = '')",
+                                        (new_desc[:200], t, pid, t),
+                                    )
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
     # Load known weekly tickers across all profiles
     weekly_set = set()
@@ -1939,6 +2019,19 @@ def portfolio_summary_data():
     tickers = [r["ticker"] for r in rows]
     all_dl = list(set(tickers + ["SPY"]))
 
+    # Detect renamed tickers and include both old and new in download
+    rename_map = {}
+    for t in tickers:
+        try:
+            _info = yf.Ticker(t).info or {}
+            _new = (_info.get("symbol") or "").upper()
+            if _new and _new != t:
+                rename_map[t] = _new
+                if _new not in all_dl:
+                    all_dl.append(_new)
+        except Exception:
+            pass
+
     try:
         raw = yf.download(" ".join(all_dl), period="1y", auto_adjust=True, progress=False)
         if raw.empty:
@@ -1951,6 +2044,11 @@ def portfolio_summary_data():
     else:
         close = raw[["Close"]].dropna(how="all")
         close.columns = [all_dl[0]]
+
+    # Map renamed ticker columns back to original names
+    for old_t, new_t in rename_map.items():
+        if old_t not in close.columns and new_t in close.columns:
+            close[old_t] = close[new_t]
 
     bench_close = close["SPY"] if "SPY" in close.columns else None
     bench_ret = bench_close.pct_change().dropna() if bench_close is not None else None
@@ -2017,34 +2115,66 @@ def ticker_return_chart(ticker):
         return jsonify({"error": f"Missing purchase date or price for {ticker}"}), 404
 
     start_str = purchase_date.strftime("%Y-%m-%d")
-    raw = yf.download(ticker, start=start_str, progress=False, auto_adjust=False, actions=True)
+
+    # Detect ticker rename (e.g. TOPW → WPAY)
+    dl_ticker = ticker
+    try:
+        _info = yf.Ticker(ticker).info or {}
+        _new_sym = (_info.get("symbol") or "").upper()
+        if _new_sym and _new_sym != ticker:
+            dl_ticker = _new_sym
+    except Exception:
+        pass
+
+    try:
+        raw = yf.download(dl_ticker, start=start_str, progress=False, auto_adjust=False, actions=True)
+    except Exception as e:
+        return jsonify({"error": f"Yahoo Finance error for {ticker}: {str(e)}"}), 404
 
     if raw.empty:
         return jsonify({"error": f"No Yahoo Finance data for {ticker}"}), 404
 
-    if isinstance(raw.columns, pd.MultiIndex):
-        close_col = raw["Close"][ticker] if ticker in raw["Close"].columns else raw["Close"].iloc[:, 0]
-        divs_col = raw["Dividends"][ticker] if ticker in raw["Dividends"].columns else raw["Dividends"].iloc[:, 0]
-    else:
-        close_col = raw["Close"]
-        divs_col = raw["Dividends"]
+    try:
+        if isinstance(raw.columns, pd.MultiIndex):
+            close_col = raw["Close"][dl_ticker] if dl_ticker in raw["Close"].columns else raw["Close"].iloc[:, 0]
+            divs_col = raw["Dividends"][dl_ticker] if dl_ticker in raw["Dividends"].columns else raw["Dividends"].iloc[:, 0]
+        else:
+            close_col = raw["Close"]
+            divs_col = raw["Dividends"]
 
-    close_col = close_col.squeeze()
-    divs_col = divs_col.squeeze()
-    cum_divs = divs_col.cumsum()
+        # Ensure we have Series (not scalar from squeeze on single-row data)
+        if not isinstance(close_col, pd.Series):
+            close_col = pd.Series(close_col) if hasattr(close_col, '__iter__') else pd.Series()
+        else:
+            close_col = close_col.squeeze()
+            if not isinstance(close_col, pd.Series):
+                return jsonify({"error": f"Not enough price history for {ticker}"}), 404
+        if not isinstance(divs_col, pd.Series):
+            divs_col = pd.Series(0, index=close_col.index)
+        else:
+            divs_col = divs_col.squeeze()
+            if not isinstance(divs_col, pd.Series):
+                divs_col = pd.Series(0, index=close_col.index)
 
-    price_return = ((close_col - price_paid) / price_paid * 100).round(2)
-    total_return = ((close_col - price_paid + cum_divs) / price_paid * 100).round(2)
+        if len(close_col) < 2:
+            return jsonify({"error": f"Not enough price history for {ticker}"}), 404
 
-    return jsonify({
-        "ticker": ticker,
-        "description": description,
-        "purchase_date": start_str,
-        "price_paid": price_paid,
-        "dates": close_col.index.strftime("%Y-%m-%d").tolist(),
-        "price_return": price_return.tolist(),
-        "total_return": total_return.tolist(),
-    })
+        cum_divs = divs_col.reindex(close_col.index, fill_value=0).cumsum()
+
+        price_return = ((close_col - price_paid) / price_paid * 100).round(2)
+        total_return = ((close_col - price_paid + cum_divs) / price_paid * 100).round(2)
+
+        return jsonify({
+            "ticker": ticker,
+            "description": description,
+            "purchase_date": start_str,
+            "price_paid": price_paid,
+            "dates": close_col.index.strftime("%Y-%m-%d").tolist(),
+            "price_return": price_return.tolist(),
+            "total_return": total_return.tolist(),
+        })
+    except Exception as e:
+        return jsonify({"error": f"Could not compute return data for {ticker}: {str(e)}"}), 500
 
 
 # ── Data Management ───────────────────────────────────────────────────────────

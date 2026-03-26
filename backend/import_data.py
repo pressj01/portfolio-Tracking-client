@@ -709,10 +709,35 @@ def import_from_upload(df, profile_id):
         pass
 
     # Per-ticker info for description / quoteType
+    # Also detect ticker renames (e.g. TOPW → WPAY) and fetch data under new symbol
     info_map = {}
+    _rename_map = {}  # old_ticker -> new_ticker
     for t in tickers_list:
         try:
-            info_map[t] = yf.Ticker(t).info or {}
+            info = yf.Ticker(t).info or {}
+            new_sym = (info.get("symbol") or "").upper()
+            if new_sym and new_sym != t:
+                _rename_map[t] = new_sym
+                # Re-fetch info under the new symbol for accurate data
+                info = yf.Ticker(new_sym).info or {}
+                # Also grab price/dividend data under new symbol if missing
+                if t not in price_map:
+                    try:
+                        r2 = yf.download(new_sym, period='1y', progress=False, auto_adjust=False, actions=True)
+                        if not r2.empty:
+                            c2 = r2["Close"].squeeze().dropna() if "Close" in r2.columns else None
+                            if c2 is not None and len(c2):
+                                price_map[t] = float(c2.iloc[-1]) if hasattr(c2, 'iloc') else float(c2)
+                            d2 = r2["Dividends"].squeeze() if "Dividends" in r2.columns else None
+                            if d2 is not None:
+                                d2 = d2[d2 > 0].dropna() if hasattr(d2, 'dropna') else None
+                                if d2 is not None and len(d2):
+                                    div_map[t] = float(d2.iloc[-1])
+                                    exdiv_map[t] = d2.index[-1].strftime('%m/%d/%y')
+                                    freq_hist[t] = _freq_from_count(len(d2))
+                    except Exception:
+                        pass
+            info_map[t] = info
         except Exception:
             info_map[t] = {}
 

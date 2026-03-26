@@ -77,7 +77,10 @@ function TickerModal({ ticker, onClose }) {
     setLoading(true)
     setError(null)
     pf(`/api/ticker-return/${ticker}`)
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`Could not load return data for ${ticker}`)
+        return r.json()
+      })
       .then(d => {
         if (d.error) throw new Error(d.error)
         setData(d)
@@ -149,6 +152,12 @@ function TickerModal({ ticker, onClose }) {
   )
 }
 
+/** Parse JSON from a fetch response, throwing on non-OK status. */
+function safeJson(r) {
+  if (!r.ok) throw new Error(`Request failed (${r.status})`)
+  return r.json()
+}
+
 export default function Dashboard() {
   const pf = useProfileFetch()
   const { profileId, isAggregate, selection, currentProfileName } = useProfile()
@@ -177,7 +186,7 @@ export default function Dashboard() {
     setRefreshStatus(null)
     setGradeStatus(null)
     pf('/api/holdings')
-      .then(res => res.json())
+      .then(safeJson)
       .then(data => {
         if (stale) return
         setHoldings(data)
@@ -185,15 +194,15 @@ export default function Dashboard() {
         if (data.length > 0) {
           // Fetch upcoming dividends and portfolio coverage immediately (no refresh needed)
           pf('/api/upcoming-dividends')
-            .then(r => r.json())
+            .then(safeJson)
             .then(d => { if (!stale && Array.isArray(d)) setUpcomingDivs(d) })
             .catch(() => {})
           pf('/api/income-summary')
-            .then(r => r.json())
+            .then(safeJson)
             .then(d => { if (!stale) setIncomeSummary(d) })
             .catch(() => {})
           pf('/api/portfolio-coverage')
-            .then(r => r.json())
+            .then(safeJson)
             .then(d => {
               if (stale) return
               if (d.aggregate_coverage != null) setPortfolioCoverage(d.aggregate_coverage)
@@ -207,20 +216,20 @@ export default function Dashboard() {
 
           setRefreshStatus('Updating prices & dividends...')
           pf('/api/refresh', { method: 'POST' })
-            .then(r => r.json())
+            .then(safeJson)
             .then(r => {
               if (stale) return
               setRefreshStatus(r.message)
               return pf('/api/holdings')
             })
-            .then(r => { if (!stale && r) return r.json() })
+            .then(r => { if (!stale && r) return safeJson(r) })
             .then(updated => {
               if (stale || !updated) return
               setHoldings(updated)
               setGradeStatus('Loading risk grades...')
               return pf('/api/portfolio-summary/data')
             })
-            .then(r => { if (!stale && r) return r.json() })
+            .then(r => { if (!stale && r) return safeJson(r) })
             .then(g => {
               if (stale || !g) return
               if (g.ticker_grades) setTickerGrades(g.ticker_grades)
