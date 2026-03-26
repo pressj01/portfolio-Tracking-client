@@ -24,6 +24,7 @@ import PortfolioBuilder from './pages/PortfolioBuilder'
 import DistributionCompare from './pages/DistributionCompare'
 import ManagePortfolios from './pages/ManagePortfolios'
 import Export from './pages/Export'
+import DividendCompare from './pages/DividendCompare'
 
 function NavDropdown({ label, children }) {
   const [open, setOpen] = useState(false)
@@ -85,6 +86,7 @@ function App() {
         <Route path="/dist-compare" element={<DistributionCompare />} />
         <Route path="/portfolios" element={<ManagePortfolios />} />
         <Route path="/export" element={<Export />} />
+        <Route path="/div-compare" element={<DividendCompare />} />
       </Routes>
     </Router>
     </ProfileProvider>
@@ -121,6 +123,7 @@ function Nav() {
         <NavLink to="/growth">Growth</NavLink>
         <NavLink to="/dividends">Dividends</NavLink>
         <NavLink to="/div-calendar">Dividend Calendar</NavLink>
+        <NavLink to="/div-compare">Dividend Compare</NavLink>
         <NavLink to="/total-return">Total Return</NavLink>
       </NavDropdown>
       <NavDropdown label="Analysis">

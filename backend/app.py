@@ -1504,6 +1504,196 @@ def export_holdings_csv():
                      mimetype="text/csv")
 
 
+# ── Dividend Comparison (Forward vs TTM) ──────────────────────────────────────
+
+@app.route("/api/dividend-compare/holdings", methods=["GET"])
+def dividend_compare_holdings():
+    """Return forward and trailing-12-month dividend data for current portfolio holdings."""
+    import yfinance as yf
+    from datetime import datetime as _dt
+
+    is_agg, pids = get_profile_filter()
+    conn = get_connection()
+    placeholders = ",".join("?" * len(pids))
+
+    if is_agg and len(pids) > 1:
+        rows = conn.execute(
+            f"""SELECT ticker, MAX(description) as description, SUM(quantity) as quantity,
+                   MAX(div_frequency) as div_frequency, MAX(current_price) as current_price,
+                   CASE WHEN SUM(quantity) > 0 THEN SUM(purchase_value) / SUM(quantity) ELSE 0 END as price_paid
+               FROM all_account_info
+               WHERE profile_id IN ({placeholders}) AND quantity > 0
+               GROUP BY ticker""",
+            pids,
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"""SELECT ticker, description, quantity, div_frequency, current_price, price_paid
+               FROM all_account_info
+               WHERE profile_id IN ({placeholders}) AND quantity > 0""",
+            pids,
+        ).fetchall()
+    conn.close()
+
+    if not rows:
+        return jsonify([])
+
+    tickers = [r["ticker"] for r in rows]
+    holding_map = {r["ticker"]: dict(r) for r in rows}
+
+    # Batch download dividend history (one yfinance call for TTM)
+    ttm_map = {}
+    try:
+        raw = yf.download(" ".join(tickers), period="1y", progress=False, auto_adjust=False, actions=True)
+        if not raw.empty:
+            if isinstance(raw.columns, pd.MultiIndex):
+                divs = raw["Dividends"] if "Dividends" in raw.columns.get_level_values(0) else None
+            else:
+                divs = raw[["Dividends"]] if "Dividends" in raw.columns else None
+
+            if divs is not None:
+                one_year_ago = pd.Timestamp.now() - pd.Timedelta(days=365)
+                if hasattr(divs.index, 'tz') and divs.index.tz is not None:
+                    one_year_ago = pd.Timestamp.now(tz=divs.index.tz) - pd.Timedelta(days=365)
+                recent = divs[divs.index >= one_year_ago]
+
+                if isinstance(recent, pd.Series):
+                    # Single ticker
+                    total = float(recent[recent > 0].sum())
+                    if total > 0:
+                        ttm_map[tickers[0]] = total
+                else:
+                    for t in tickers:
+                        if t in recent.columns:
+                            col = recent[t].dropna()
+                            total = float(col[col > 0].sum())
+                            if total > 0:
+                                ttm_map[t] = total
+    except Exception:
+        pass
+
+    # Fetch forward dividend rate via info (use threads for speed)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    fwd_map = {}
+
+    def _get_fwd(sym):
+        try:
+            info = yf.Ticker(sym).info or {}
+            rate = info.get("dividendRate")
+            return sym, rate if rate and rate > 0 else None
+        except Exception:
+            return sym, None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_get_fwd, t): t for t in tickers}
+        for fut in as_completed(futures):
+            sym, rate = fut.result()
+            if rate:
+                fwd_map[sym] = rate
+
+    # Build results
+    results = []
+    for tk_sym in tickers:
+        h = holding_map[tk_sym]
+        price = h["current_price"] or 0
+        qty = h["quantity"] or 0
+        fwd = fwd_map.get(tk_sym)
+        ttm = ttm_map.get(tk_sym)
+
+        entry = {
+            "ticker": tk_sym,
+            "description": h["description"] or tk_sym,
+            "quantity": qty,
+            "current_price": price,
+            "price_paid": h["price_paid"] or 0,
+            "div_frequency": h["div_frequency"] or "Q",
+            "forward_annual_dividend": round(fwd, 4) if fwd else None,
+            "forward_dividend_yield": round(fwd / price, 6) if fwd and price else None,
+            "forward_income": round(fwd * qty, 2) if fwd else None,
+            "ttm_dividend": round(ttm, 4) if ttm else None,
+            "ttm_dividend_yield": round(ttm / price, 6) if ttm and price else None,
+            "ttm_income": round(ttm * qty, 2) if ttm else None,
+            "error": None if (fwd or ttm) else "Not enough information to compute",
+        }
+        results.append(entry)
+
+    results.sort(key=lambda r: r["ticker"])
+    return jsonify(results)
+
+
+@app.route("/api/dividend-compare/lookup", methods=["POST"])
+def dividend_compare_lookup():
+    """Fetch forward and TTM dividend data for user-supplied tickers."""
+    import yfinance as yf
+
+    data = request.get_json()
+    tickers = data.get("tickers", [])
+    if not tickers:
+        return jsonify([])
+
+    results = []
+    for tk_sym in tickers:
+        tk_sym = tk_sym.strip().upper()
+        if not tk_sym:
+            continue
+        entry = {
+            "ticker": tk_sym,
+            "description": tk_sym,
+            "quantity": None,
+            "current_price": 0,
+            "price_paid": None,
+            "div_frequency": None,
+            "forward_annual_dividend": None,
+            "forward_dividend_yield": None,
+            "ttm_dividend": None,
+            "ttm_dividend_yield": None,
+            "ttm_income": None,
+            "forward_income": None,
+            "error": None,
+        }
+        try:
+            tk = yf.Ticker(tk_sym)
+            info = tk.info or {}
+            price = info.get("regularMarketPrice") or info.get("currentPrice") or 0
+            entry["current_price"] = price
+            entry["description"] = (info.get("longName") or info.get("shortName") or tk_sym)[:200]
+
+            # Infer frequency from history
+            try:
+                hist = tk.dividends
+                if hist is not None and len(hist) > 0:
+                    if hist.index.tz is not None:
+                        one_year_ago = pd.Timestamp.now(tz=hist.index.tz) - pd.Timedelta(days=365)
+                    else:
+                        one_year_ago = pd.Timestamp.now() - pd.Timedelta(days=365)
+                    recent = hist[hist.index >= one_year_ago]
+                    n = len(recent[recent > 0])
+                    entry["div_frequency"] = "W" if n >= 45 else "M" if n >= 10 else "Q" if n >= 3 else "SA" if n >= 2 else "A" if n >= 1 else None
+
+                    ttm_total = float(recent[recent > 0].sum()) if n > 0 else 0
+                    if ttm_total > 0:
+                        entry["ttm_dividend"] = round(ttm_total, 4)
+                        entry["ttm_dividend_yield"] = round(ttm_total / price, 6) if price else None
+            except Exception:
+                pass
+
+            # Forward
+            fwd = info.get("dividendRate")
+            if fwd and fwd > 0:
+                entry["forward_annual_dividend"] = round(fwd, 4)
+                entry["forward_dividend_yield"] = round(fwd / price, 6) if price else None
+
+            if entry["forward_annual_dividend"] is None and entry["ttm_dividend"] is None:
+                entry["error"] = "Not enough information to compute"
+
+        except Exception as e:
+            entry["error"] = f"Lookup failed: {str(e)}"
+
+        results.append(entry)
+
+    return jsonify(results)
+
+
 # ── Upcoming Dividends ─────────────────────────────────────────────────────────
 
 @app.route("/api/upcoming-dividends", methods=["GET"])

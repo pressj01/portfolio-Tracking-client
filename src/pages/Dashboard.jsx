@@ -151,7 +151,7 @@ function TickerModal({ ticker, onClose }) {
 
 export default function Dashboard() {
   const pf = useProfileFetch()
-  const { profileId, isAggregate, selection } = useProfile()
+  const { profileId, isAggregate, selection, currentProfileName } = useProfile()
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshStatus, setRefreshStatus] = useState(null)
@@ -167,25 +167,35 @@ export default function Dashboard() {
   const [tickerCoverage, setTickerCoverage] = useState({})
 
   useEffect(() => {
+    let stale = false
     setIncomeSummary(null)
+    setUpcomingDivs([])
+    setTickerGrades({})
+    setPortfolioGrade({})
+    setPortfolioCoverage(null)
+    setTickerCoverage({})
+    setRefreshStatus(null)
+    setGradeStatus(null)
     pf('/api/holdings')
       .then(res => res.json())
       .then(data => {
+        if (stale) return
         setHoldings(data)
         setLoading(false)
         if (data.length > 0) {
           // Fetch upcoming dividends and portfolio coverage immediately (no refresh needed)
           pf('/api/upcoming-dividends')
             .then(r => r.json())
-            .then(d => { if (Array.isArray(d)) setUpcomingDivs(d) })
+            .then(d => { if (!stale && Array.isArray(d)) setUpcomingDivs(d) })
             .catch(() => {})
           pf('/api/income-summary')
             .then(r => r.json())
-            .then(d => setIncomeSummary(d))
+            .then(d => { if (!stale) setIncomeSummary(d) })
             .catch(() => {})
           pf('/api/portfolio-coverage')
             .then(r => r.json())
             .then(d => {
+              if (stale) return
               if (d.aggregate_coverage != null) setPortfolioCoverage(d.aggregate_coverage)
               if (d.results) {
                 const map = {}
@@ -199,26 +209,30 @@ export default function Dashboard() {
           pf('/api/refresh', { method: 'POST' })
             .then(r => r.json())
             .then(r => {
+              if (stale) return
               setRefreshStatus(r.message)
               return pf('/api/holdings')
             })
-            .then(r => r.json())
+            .then(r => { if (!stale && r) return r.json() })
             .then(updated => {
+              if (stale || !updated) return
               setHoldings(updated)
               setGradeStatus('Loading risk grades...')
               return pf('/api/portfolio-summary/data')
             })
-            .then(r => r.json())
+            .then(r => { if (!stale && r) return r.json() })
             .then(g => {
+              if (stale || !g) return
               if (g.ticker_grades) setTickerGrades(g.ticker_grades)
               if (g.portfolio_grade) setPortfolioGrade(g.portfolio_grade)
               setGradeStatus('Grades loaded.')
-              setTimeout(() => setGradeStatus(null), 3000)
+              setTimeout(() => { if (!stale) setGradeStatus(null) }, 3000)
             })
-            .catch(() => setGradeStatus('Grade loading failed.'))
+            .catch(() => { if (!stale) setGradeStatus('Grade loading failed.') })
         }
       })
-      .catch(() => setLoading(false))
+      .catch(() => { if (!stale) setLoading(false) })
+    return () => { stale = true }
   }, [pf, selection])
 
   // Derived totals
@@ -323,7 +337,12 @@ export default function Dashboard() {
   return (
     <div className="page dashboard">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h1 style={{ marginBottom: 0 }}>Portfolio Dashboard</h1>
+        <div>
+          <h1 style={{ marginBottom: 0 }}>Portfolio Dashboard</h1>
+          <p style={{ color: '#8899aa', fontSize: '0.85rem', margin: '0.25rem 0 0' }}>
+            {currentProfileName} — {enrichedHoldings.length} holding{enrichedHoldings.length !== 1 ? 's' : ''}
+          </p>
+        </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           {refreshStatus && (
             <span className="alert alert-info" style={{ margin: 0, padding: '0.3rem 0.7rem', fontSize: '0.8rem' }}>
@@ -466,7 +485,7 @@ export default function Dashboard() {
                   <td>{h.category || '—'}</td>
                   <td style={{ textAlign: 'center' }}>{h.div_frequency || '—'}</td>
                   <td>{h.purchase_date ? new Date(h.purchase_date).toLocaleDateString() : '—'}</td>
-                  <td style={{ textAlign: 'right' }}>{h.quantity}</td>
+                  <td style={{ textAlign: 'right' }}>{Number.isInteger(h.quantity) ? h.quantity : parseFloat(h.quantity.toFixed(3))}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(h.price_paid)}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(h.current_price)}</td>
                   <td style={{ textAlign: 'right' }}>{pct(h.pct_of_account)}</td>
@@ -492,12 +511,15 @@ export default function Dashboard() {
           </tbody>
           <tfoot>
             <tr style={{ fontWeight: 700, borderTop: '2px solid #0f3460' }}>
-              <td colSpan={15} style={{ textAlign: 'right' }}>Totals</td>
+              <td colSpan={10} style={{ textAlign: 'right' }}>Totals</td>
+              <td style={{ textAlign: 'right', color: gradeColor(totals.priceReturn) }}>{pct(totals.priceReturn)}</td>
+              <td style={{ textAlign: 'right', color: gradeColor(totals.totalReturn) }}>{pct(totals.totalReturn)}</td>
+              <td colSpan={2} />
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.ytdDivs)}</td>
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.currentMonthIncome)}</td>
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.monthlyIncome)}</td>
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.annualIncome)}</td>
-              <td colSpan={2} />
+              <td colSpan={3} />
             </tr>
           </tfoot>
         </table>
