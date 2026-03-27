@@ -1063,6 +1063,12 @@ def refresh_market_data():
             sets = []
             vals = []
 
+            # Backfill purchase_value if missing
+            if not purchase_value and price_paid and qty:
+                purchase_value = qty * price_paid
+                sets.append("purchase_value = ?")
+                vals.append(round(purchase_value, 2))
+
             # ── DRIP simulation ──────────────────────────────────────────
             # For reinvest=Y holdings, simulate dividend reinvestment from
             # import_date forward using actual dividend history + close prices.
@@ -3106,6 +3112,72 @@ def dividend_analysis_data():
         grade=grade_info,
         categories=categories,
     )
+
+
+# ── Sync DRIP flags from sub-profiles to Owner ──────────────────────────────
+
+@app.route("/api/sync-drip-to-owner", methods=["POST"])
+def sync_drip_to_owner():
+    """Copy reinvest flags from sub-profiles to Owner.
+
+    For each ticker in Owner (profile 1), if ANY sub-profile has reinvest='Y'
+    for that same ticker, set Owner's reinvest to 'Y'.  Otherwise set to 'N'.
+    """
+    conn = get_connection()
+    owner_id = 1
+
+    # Get sub-profile ids that are included in owner
+    rows = conn.execute(
+        "SELECT id FROM profiles WHERE id != ? AND include_in_owner = 1",
+        (owner_id,),
+    ).fetchall()
+    sub_ids = [r["id"] if isinstance(r, dict) else r[0] for r in rows]
+
+    if not sub_ids:
+        return jsonify({"message": "No sub-profiles found", "updated": 0})
+
+    # Build lookup: ticker -> 'Y' if any sub-profile has reinvest='Y'
+    placeholders = ",".join("?" * len(sub_ids))
+    sub_rows = conn.execute(
+        f"SELECT ticker, reinvest FROM all_account_info WHERE profile_id IN ({placeholders})",
+        sub_ids,
+    ).fetchall()
+
+    drip_map = {}  # ticker -> bool (any sub has Y)
+    for r in sub_rows:
+        t = r["ticker"] if isinstance(r, dict) else r[0]
+        v = r["reinvest"] if isinstance(r, dict) else r[1]
+        if v == "Y":
+            drip_map[t] = True
+        elif t not in drip_map:
+            drip_map[t] = False
+
+    # Update owner holdings
+    updated = 0
+    for ticker, any_drip in drip_map.items():
+        new_val = "Y" if any_drip else "N"
+        cur = conn.execute(
+            "SELECT reinvest FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+            (ticker, owner_id),
+        ).fetchone()
+        if cur is None:
+            continue
+        old_val = cur["reinvest"] if isinstance(cur, dict) else cur[0]
+        if old_val != new_val:
+            conn.execute(
+                "UPDATE all_account_info SET reinvest = ? WHERE ticker = ? AND profile_id = ?",
+                (new_val, ticker, owner_id),
+            )
+            updated += 1
+
+    conn.commit()
+    conn.close()
+
+    # Refresh derived tables for owner
+    populate_holdings(owner_id)
+    populate_dividends(owner_id)
+
+    return jsonify({"message": f"Synced DRIP flags to Owner — {updated} tickers updated", "updated": updated})
 
 
 # ── DRIP Settings & Projections ───────────────────────────────────────────────

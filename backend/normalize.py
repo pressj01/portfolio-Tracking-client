@@ -13,8 +13,22 @@ def populate_holdings(profile_id=1):
             purchase_date
         )
         SELECT ticker, profile_id, description, classification_type, quantity,
-               price_paid, current_price, purchase_value, current_value,
-               gain_or_loss, gain_or_loss_percentage, percent_change,
+               price_paid, current_price,
+               COALESCE(purchase_value, ROUND(quantity * price_paid, 2)),
+               COALESCE(current_value, ROUND(quantity * current_price, 2)),
+               COALESCE(gain_or_loss,
+                   ROUND(COALESCE(current_value, quantity * current_price) -
+                         COALESCE(purchase_value, quantity * price_paid), 2)),
+               CASE WHEN COALESCE(purchase_value, quantity * price_paid) > 0
+                    THEN ROUND((COALESCE(current_value, quantity * current_price) -
+                                COALESCE(purchase_value, quantity * price_paid)) /
+                               COALESCE(purchase_value, quantity * price_paid), 6)
+                    ELSE 0 END,
+               CASE WHEN COALESCE(purchase_value, quantity * price_paid) > 0
+                    THEN ROUND((COALESCE(current_value, quantity * current_price) -
+                                COALESCE(purchase_value, quantity * price_paid)) /
+                               COALESCE(purchase_value, quantity * price_paid), 6)
+                    ELSE 0 END,
                purchase_date
         FROM all_account_info
         WHERE profile_id = ?

@@ -365,6 +365,7 @@ export default function ManageHoldings() {
   const [error, setError] = useState(null)
   const [sortKey, setSortKey] = useState('ticker')
   const [sortDir, setSortDir] = useState('asc')
+  const [syncingDrip, setSyncingDrip] = useState(false)
 
   const fetchHoldings = async () => {
     try {
@@ -427,6 +428,23 @@ export default function ManageHoldings() {
       setError(e.message)
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  const handleSyncDrip = async () => {
+    setSyncingDrip(true)
+    setError(null)
+    setMessage(null)
+    try {
+      const res = await pf('/api/sync-drip-to-owner', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setMessage(data.message)
+      await fetchHoldings()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSyncingDrip(false)
     }
   }
 
@@ -504,6 +522,11 @@ export default function ManageHoldings() {
           <button className="btn btn-primary" onClick={handleRefresh} disabled={refreshing || holdings.length === 0}>
             {refreshing ? <><span className="spinner" /> Refreshing...</> : 'Refresh Prices & Divs'}
           </button>
+          {profileId === 1 && (
+            <button className="btn btn-secondary" onClick={handleSyncDrip} disabled={syncingDrip || holdings.length === 0}>
+              {syncingDrip ? <><span className="spinner" /> Syncing...</> : 'Sync DRIP from Accounts'}
+            </button>
+          )}
           <button className="btn btn-success" onClick={handleAdd}>+ Add Holding</button>
         </div>
       </div>
