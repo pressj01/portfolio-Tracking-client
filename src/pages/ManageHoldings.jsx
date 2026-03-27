@@ -318,6 +318,12 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
 }
 
 // Column definitions for sortable table
+const FROZEN_COLS = 4 // first 4 columns are frozen
+const FROZEN_WIDTHS = [80, 180, 90, 70] // px widths for frozen cols
+const FROZEN_LEFT = FROZEN_WIDTHS.map((_, i) =>
+  FROZEN_WIDTHS.slice(0, i).reduce((s, w) => s + w, 0)
+)
+
 const COLUMNS = [
   { key: 'ticker', label: 'Ticker', type: 'string' },
   { key: 'description', label: 'Description', type: 'string' },
@@ -516,11 +522,21 @@ export default function ManageHoldings() {
           <table>
             <thead>
               <tr>
-                {COLUMNS.map(col => (
+                {COLUMNS.map((col, i) => (
                   <th
                     key={col.key}
                     onClick={() => handleSort(col.key)}
-                    style={{ cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}
+                    className={i < FROZEN_COLS ? 'frozen-col' : undefined}
+                    style={{
+                      cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none',
+                      ...(i < FROZEN_COLS ? {
+                        position: 'sticky',
+                        left: FROZEN_LEFT[i],
+                        minWidth: FROZEN_WIDTHS[i],
+                        maxWidth: FROZEN_WIDTHS[i],
+                        zIndex: 4,
+                      } : {}),
+                    }}
                   >
                     {col.label}<span style={{ fontSize: '0.65rem', opacity: 0.7 }}>{sortArrow(col.key)}</span>
                   </th>
@@ -531,7 +547,7 @@ export default function ManageHoldings() {
             <tbody>
               {sortedHoldings.map(h => (
                 <tr key={h.ticker}>
-                  <td style={{ fontWeight: 600 }}>
+                  <td className="frozen-col" style={{ fontWeight: 600, position: 'sticky', left: FROZEN_LEFT[0], minWidth: FROZEN_WIDTHS[0], maxWidth: FROZEN_WIDTHS[0], zIndex: 1 }}>
                     <a
                       href="#"
                       onClick={(e) => { e.preventDefault(); handleEdit(h) }}
@@ -542,11 +558,11 @@ export default function ManageHoldings() {
                       {h.ticker}
                     </a>
                   </td>
-                  <td style={{ maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[1], minWidth: FROZEN_WIDTHS[1], maxWidth: FROZEN_WIDTHS[1], overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>
                     {h.description || '-'}
                   </td>
-                  <td>{h.category || '-'}</td>
-                  <td>{fmt(h.quantity)}</td>
+                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[2], minWidth: FROZEN_WIDTHS[2], maxWidth: FROZEN_WIDTHS[2], zIndex: 1 }}>{h.category || '-'}</td>
+                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[3], minWidth: FROZEN_WIDTHS[3], maxWidth: FROZEN_WIDTHS[3], zIndex: 1 }}>{fmt(h.quantity)}</td>
                   <td>${fmt(h.price_paid)}</td>
                   <td>${fmt(h.current_price)}</td>
                   <td>{h.purchase_date || '-'}</td>

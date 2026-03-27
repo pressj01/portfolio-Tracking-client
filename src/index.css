@@ -393,6 +393,21 @@ label {
   z-index: 2;
   box-shadow: 0 1px 0 #1a3a6a;
 }
+
+/* Frozen left columns (like Excel freeze panes) */
+.sticky-table-wrap .frozen-col {
+  position: sticky;
+  background: #16213e;
+  box-shadow: 1px 0 0 #0f3460;
+}
+.sticky-table-wrap thead th.frozen-col {
+  background: #0f3460;
+  z-index: 4;
+}
+.sticky-table-wrap tbody tr:hover .frozen-col {
+  background: #1a2744;
+}
+
 .holdings-table {
   font-size: 0.74rem;
   width: 100%;

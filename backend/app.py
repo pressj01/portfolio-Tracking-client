@@ -857,7 +857,7 @@ def refresh_market_data():
 
     # Collect unique tickers and per-profile holdings across ALL profiles
     all_rows = conn.execute(
-        "SELECT profile_id, ticker, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity FROM all_account_info WHERE profile_id IN ({})".format(
+        "SELECT profile_id, ticker, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date FROM all_account_info WHERE profile_id IN ({})".format(
             ",".join("?" * len(all_pids))
         ), all_pids,
     ).fetchall()
@@ -877,6 +877,7 @@ def refresh_market_data():
             "purchase_date": r["purchase_date"] or "",
             "reinvest": (r["reinvest"] or "").upper(),
             "base_quantity": r["base_quantity"] or r["quantity"] or 0,
+            "import_date": r["import_date"] or "",
         }
 
     # Batch download prices + dividends (one yfinance call for all tickers)
@@ -1063,24 +1064,35 @@ def refresh_market_data():
 
             # ── DRIP simulation ──────────────────────────────────────────
             # For reinvest=Y holdings, simulate dividend reinvestment from
-            # purchase_date forward using actual dividend history + close prices.
+            # import_date forward using actual dividend history + close prices.
+            # Uses import_date (not purchase_date) because base_quantity
+            # already includes all DRIP shares through the import date.
             # This is idempotent: starts from base_quantity each time.
             drip_shares = 0.0
             drip_total_divs = 0.0
             div_series = div_history.get(t)
             close_series = close_history.get(t)
+            import_date = h["import_date"]
 
             if is_drip and div_series is not None and not div_series.empty and close_series is not None:
-                pdt = None
-                if purchase_date:
+                drip_start = None
+                # Use import_date as the DRIP start: base_quantity already
+                # reflects all reinvestment through the import snapshot.
+                if import_date:
                     try:
-                        pdt = pd.Timestamp(purchase_date)
+                        drip_start = pd.Timestamp(import_date)
                     except Exception:
                         pass
-                # Filter dividends to those on or after purchase_date
+                # Fall back to purchase_date only if no import_date
+                if drip_start is None and purchase_date:
+                    try:
+                        drip_start = pd.Timestamp(purchase_date)
+                    except Exception:
+                        pass
+                # Filter dividends to those AFTER the drip start date
                 eligible = div_series
-                if pdt is not None:
-                    eligible = eligible[eligible.index >= pdt]
+                if drip_start is not None:
+                    eligible = eligible[eligible.index > drip_start]
                 if not eligible.empty:
                     running_qty = base_qty
                     for div_date, div_amt in eligible.items():
@@ -1106,6 +1118,16 @@ def refresh_market_data():
                                  round(drip_total_divs, 2)])
                     # Recalculate purchase_value: base cost + reinvested dividends
                     purchase_value = (base_qty * price_paid) + drip_total_divs
+                    sets.append("purchase_value = ?")
+                    vals.append(round(purchase_value, 2))
+                elif qty != base_qty:
+                    # No eligible DRIP dividends — reset quantity to base
+                    qty = base_qty
+                    sets.extend(["quantity = ?", "base_quantity = ?",
+                                 "shares_bought_from_dividend = ?",
+                                 "total_cash_reinvested = ?"])
+                    vals.extend([base_qty, base_qty, 0, 0])
+                    purchase_value = base_qty * price_paid
                     sets.append("purchase_value = ?")
                     vals.append(round(purchase_value, 2))
 
