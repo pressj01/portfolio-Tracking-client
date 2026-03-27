@@ -1355,11 +1355,14 @@ def add_holding():
             cols.append(field)
             vals.append(data[field])
 
-    # Set base_quantity = quantity for DRIP tracking
+    # Set base_quantity and import_date for DRIP tracking
+    from datetime import date as _date
     qty_val = data.get("quantity")
     if qty_val is not None:
         cols.append("base_quantity")
         vals.append(qty_val)
+    cols.append("import_date")
+    vals.append(_date.today().isoformat())
 
     placeholders = ", ".join(["?"] * len(cols))
     conn.execute(
@@ -1425,10 +1428,15 @@ def update_holding(ticker):
             updates.append(f"{field} = ?")
             vals.append(data[field])
 
-    # When quantity is manually changed, update base_quantity too (new purchase/sale)
+    # When quantity is manually changed, reset base_quantity and import_date
+    # so DRIP simulation restarts from this point (the user's new share count
+    # already accounts for any DRIP up to now)
     if "quantity" in data:
+        from datetime import date as _date
         updates.append("base_quantity = ?")
         vals.append(data["quantity"])
+        updates.append("import_date = ?")
+        vals.append(_date.today().isoformat())
 
     if not updates:
         conn.close()
