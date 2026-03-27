@@ -857,7 +857,7 @@ def refresh_market_data():
 
     # Collect unique tickers and per-profile holdings across ALL profiles
     all_rows = conn.execute(
-        "SELECT profile_id, ticker, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity FROM all_account_info WHERE profile_id IN ({})".format(
+        "SELECT profile_id, ticker, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date FROM all_account_info WHERE profile_id IN ({})".format(
             ",".join("?" * len(all_pids))
         ), all_pids,
     ).fetchall()
@@ -877,6 +877,7 @@ def refresh_market_data():
             "purchase_date": r["purchase_date"] or "",
             "reinvest": (r["reinvest"] or "").upper(),
             "base_quantity": r["base_quantity"] or r["quantity"] or 0,
+            "import_date": r["import_date"] or "",
         }
 
     # Batch download prices + dividends (one yfinance call for all tickers)
@@ -1056,14 +1057,74 @@ def refresh_market_data():
             price_paid = h["price_paid"]
             purchase_value = h["purchase_value"]
             purchase_date = h["purchase_date"]
+            base_qty = h["base_quantity"]
+            is_drip = h["reinvest"] == "Y"
+            import_date = h["import_date"]
             sets = []
             vals = []
 
-            # Refresh never modifies quantity — imported quantities already
-            # reflect real brokerage DRIP. Only prices, yields, and income
-            # are updated.
+            # ── DRIP simulation ──────────────────────────────────────────
+            # For reinvest=Y holdings, simulate dividend reinvestment from
+            # import_date forward using actual dividend history + close prices.
+            # base_quantity already includes all DRIP through the import date
+            # (whether imported from spreadsheet or entered via form), so we
+            # only add shares for dividends received AFTER that date.
+            drip_shares = 0.0
+            drip_total_divs = 0.0
             div_series = div_history.get(t)
             close_series = close_history.get(t)
+
+            if is_drip and div_series is not None and not div_series.empty and close_series is not None:
+                drip_start = None
+                if import_date:
+                    try:
+                        drip_start = pd.Timestamp(import_date)
+                    except Exception:
+                        pass
+                if drip_start is None and purchase_date:
+                    try:
+                        drip_start = pd.Timestamp(purchase_date)
+                    except Exception:
+                        pass
+                # Only include dividends AFTER the import/entry date
+                eligible = div_series
+                if drip_start is not None:
+                    eligible = eligible[eligible.index > drip_start]
+                if not eligible.empty:
+                    running_qty = base_qty
+                    for div_date, div_amt in eligible.items():
+                        prices_on_or_before = close_series[close_series.index <= div_date]
+                        if prices_on_or_before.empty:
+                            continue
+                        reinvest_price = float(prices_on_or_before.iloc[-1])
+                        if reinvest_price <= 0:
+                            continue
+                        div_income = div_amt * running_qty
+                        new_shares = div_income / reinvest_price
+                        drip_shares += new_shares
+                        drip_total_divs += div_income
+                        running_qty += new_shares
+                    qty = running_qty
+
+                    sets.extend(["quantity = ?", "base_quantity = ?",
+                                 "shares_bought_from_dividend = ?",
+                                 "total_cash_reinvested = ?"])
+                    vals.extend([round(qty, 6), base_qty,
+                                 round(drip_shares, 6),
+                                 round(drip_total_divs, 2)])
+                    purchase_value = (base_qty * price_paid) + drip_total_divs
+                    sets.append("purchase_value = ?")
+                    vals.append(round(purchase_value, 2))
+                elif qty != base_qty:
+                    # No new DRIP dividends since import — reset to base
+                    qty = base_qty
+                    sets.extend(["quantity = ?", "base_quantity = ?",
+                                 "shares_bought_from_dividend = ?",
+                                 "total_cash_reinvested = ?"])
+                    vals.extend([base_qty, base_qty, 0, 0])
+                    purchase_value = base_qty * price_paid
+                    sets.append("purchase_value = ?")
+                    vals.append(round(purchase_value, 2))
 
             if new_price:
                 current_value = new_price * qty
