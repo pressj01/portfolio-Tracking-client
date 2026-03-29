@@ -95,6 +95,11 @@ def ensure_tables_exist(conn=None):
     # Initialize base_quantity from quantity where not yet set
     cur.execute("UPDATE all_account_info SET base_quantity = quantity WHERE base_quantity IS NULL")
 
+    try:
+        cur.execute("ALTER TABLE all_account_info ADD COLUMN realized_gains REAL DEFAULT 0")
+    except Exception:
+        pass  # column already exists
+
     # ── holdings ───────────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS holdings (
@@ -508,6 +513,34 @@ def ensure_tables_exist(conn=None):
             DROP TABLE ticker_categories;
             ALTER TABLE ticker_categories_new RENAME TO ticker_categories;
         """)
+
+    # ── transactions ─────────────────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker          TEXT NOT NULL,
+            profile_id      INTEGER NOT NULL DEFAULT 1,
+            transaction_type TEXT NOT NULL DEFAULT 'BUY',
+            transaction_date TEXT,
+            shares          REAL NOT NULL,
+            price_per_share REAL,
+            fees            REAL DEFAULT 0,
+            realized_gain   REAL,
+            notes           TEXT,
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # Migration: add transaction_type and realized_gain if missing
+    _txn_cols = {r[1] for r in cur.execute("PRAGMA table_info(transactions)").fetchall()}
+    if "transaction_type" not in _txn_cols:
+        cur.execute("ALTER TABLE transactions ADD COLUMN transaction_type TEXT NOT NULL DEFAULT 'BUY'")
+    if "realized_gain" not in _txn_cols:
+        cur.execute("ALTER TABLE transactions ADD COLUMN realized_gain REAL")
+    # Index for fast rollup queries
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_transactions_ticker_profile
+        ON transactions (ticker, profile_id)
+    """)
 
     # ── aggregate_config ────────────────────────────────────────────────────
     cur.execute("""

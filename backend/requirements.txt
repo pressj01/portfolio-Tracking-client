@@ -4,3 +4,4 @@ pandas
 openpyxl
 yfinance
 plotly
+scipy

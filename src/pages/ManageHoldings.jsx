@@ -26,13 +26,21 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
   const [looking, setLooking] = useState(false)
   const [lookupMsg, setLookupMsg] = useState(null)
   const [categories, setCategories] = useState([])
+  const [hasTxns, setHasTxns] = useState(false)
 
   useEffect(() => {
     pf('/api/categories/data')
       .then(r => r.json())
       .then(d => setCategories(d.categories || []))
       .catch(() => {})
-  }, [pf])
+    // Check if this ticker has transactions (position fields become read-only)
+    if (isEdit && holding?.ticker) {
+      pf(`/api/holdings/${holding.ticker}/has_transactions`)
+        .then(r => r.json())
+        .then(d => setHasTxns(d.has_transactions))
+        .catch(() => {})
+    }
+  }, [pf, isEdit, holding])
 
   const set = (field, value) => setForm(prev => {
     const next = { ...prev, [field]: value }
@@ -201,14 +209,19 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
 
           {/* Section: Position */}
           <h3 style={{ color: '#90a4ae', fontSize: '0.85rem', marginBottom: '0.5rem', marginTop: '1rem', borderBottom: '1px solid #0f3460', paddingBottom: '0.3rem' }}>POSITION</h3>
+          {hasTxns && (
+            <div className="alert alert-info" style={{ marginBottom: '0.75rem', padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}>
+              Shares, Price Paid, and Purchase Date are managed by transactions. Use the Txn button to add or edit lots.
+            </div>
+          )}
           <div className="form-row">
             <div className="form-group">
-              <label>Shares *</label>
-              <input type="number" step="any" value={form.quantity} onChange={(e) => set('quantity', e.target.value)} style={{ width: '100%' }} required />
+              <label>Shares {!hasTxns && '*'}</label>
+              <input type="number" step="any" value={form.quantity} onChange={(e) => set('quantity', e.target.value)} style={{ width: '100%', ...(hasTxns ? { opacity: 0.6 } : {}) }} required={!hasTxns} disabled={hasTxns} />
             </div>
             <div className="form-group">
               <label>Price Paid</label>
-              <input type="number" step="0.001" value={round3(form.price_paid)} onChange={(e) => set('price_paid', e.target.value)} style={{ width: '100%' }} />
+              <input type="number" step="0.001" value={round3(form.price_paid)} onChange={(e) => set('price_paid', e.target.value)} style={{ width: '100%', ...(hasTxns ? { opacity: 0.6 } : {}) }} disabled={hasTxns} />
             </div>
             <div className="form-group">
               <label>Current Price</label>
@@ -216,7 +229,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
             </div>
             <div className="form-group">
               <label>Purchase Date</label>
-              <input type="date" value={form.purchase_date || ''} onChange={(e) => set('purchase_date', e.target.value)} style={{ width: '100%' }} />
+              <input type="date" value={form.purchase_date || ''} onChange={(e) => set('purchase_date', e.target.value)} style={{ width: '100%', ...(hasTxns ? { opacity: 0.6 } : {}) }} disabled={hasTxns} />
             </div>
           </div>
 
@@ -317,6 +330,310 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
   )
 }
 
+function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
+  const [transactions, setTransactions] = useState([])
+  const [loading, setLoading] = useState(!isNew)
+  const [form, setForm] = useState({
+    ticker: ticker || '', transaction_type: 'BUY', shares: '', price_per_share: '', fees: '', transaction_date: '', notes: '',
+    // Fields for new ticker creation (lookup data)
+    description: '', classification_type: '', current_price: '',
+    div: '', div_frequency: 'M', ex_div_date: '', div_pay_date: '', reinvest: 'N', category: '',
+  })
+  const [looking, setLooking] = useState(false)
+  const [lookupMsg, setLookupMsg] = useState(null)
+  const [categories, setCategories] = useState([])
+  const [editId, setEditId] = useState(null)
+  const [error, setError] = useState(null)
+  const [successMsg, setSuccessMsg] = useState(null)
+
+  useEffect(() => {
+    if (isNew) {
+      pf('/api/categories/data')
+        .then(r => r.json())
+        .then(d => setCategories(d.categories || []))
+        .catch(() => {})
+    }
+  }, [pf, isNew])
+
+  const fetchTxns = async () => {
+    if (!ticker) return
+    try {
+      const res = await pf(`/api/holdings/${ticker}/transactions`)
+      const data = await res.json()
+      setTransactions(data)
+    } catch { /* ignore */ } finally { setLoading(false) }
+  }
+  useEffect(() => { if (ticker) fetchTxns() }, [ticker])
+
+  const lookupTicker = async (t) => {
+    t = t.trim().toUpperCase()
+    if (!t) return
+    setLooking(true)
+    setLookupMsg(null)
+    try {
+      const res = await pf(`/api/lookup/${t}`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setForm(prev => ({
+        ...prev,
+        description: prev.description || data.description,
+        classification_type: data.classification_type || prev.classification_type || '',
+        current_price: data.current_price || prev.current_price,
+        price_per_share: prev.price_per_share || data.current_price || '',
+        div: data.div || prev.div,
+        div_frequency: data.div_frequency || prev.div_frequency,
+        ex_div_date: data.ex_div_date || prev.ex_div_date,
+        div_pay_date: data.div_pay_date || prev.div_pay_date,
+      }))
+      setLookupMsg(`Fetched data for ${t}`)
+    } catch (e) {
+      setLookupMsg(`Could not find ${t}`)
+    } finally { setLooking(false) }
+  }
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setError(null)
+    const effectiveTicker = (ticker || form.ticker).trim().toUpperCase()
+    if (!effectiveTicker) return
+
+    const payload = {
+      transaction_type: form.transaction_type || 'BUY',
+      shares: parseFloat(form.shares),
+      price_per_share: form.price_per_share ? parseFloat(form.price_per_share) : null,
+      fees: form.fees ? parseFloat(form.fees) : 0,
+      transaction_date: form.transaction_date || null,
+      notes: form.notes || null,
+    }
+    // For new tickers, include lookup data
+    if (isNew) {
+      for (const f of ['description', 'classification_type', 'current_price', 'div',
+                        'div_frequency', 'ex_div_date', 'div_pay_date', 'reinvest', 'category']) {
+        if (form[f]) payload[f] = form[f]
+      }
+    }
+
+    try {
+      let res
+      const isEdit = !!editId
+      if (editId) {
+        res = await pf(`/api/holdings/${effectiveTicker}/transactions/${editId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+      } else {
+        res = await pf(`/api/holdings/${effectiveTicker}/transactions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+      }
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      const action = isEdit ? 'updated' : 'added'
+      setSuccessMsg(`${payload.transaction_type} ${payload.shares} shares @ $${payload.price_per_share ?? 0} ${action} successfully`)
+      setTimeout(() => setSuccessMsg(null), 4000)
+      setForm(prev => ({ ...prev, transaction_type: 'BUY', shares: '', price_per_share: '', fees: '', transaction_date: '', notes: '' }))
+      setEditId(null)
+      await fetchTxns()
+      onSaved()
+    } catch (e) { setError(e.message) }
+  }
+
+  const handleEditTxn = (txn) => {
+    setEditId(txn.id)
+    setForm(prev => ({
+      ...prev,
+      transaction_type: txn.transaction_type || 'BUY',
+      shares: txn.shares || '',
+      price_per_share: txn.price_per_share || '',
+      fees: txn.fees || '',
+      transaction_date: txn.transaction_date || '',
+      notes: txn.notes || '',
+    }))
+  }
+
+  const handleDeleteTxn = async (txnId) => {
+    setError(null)
+    try {
+      const res = await pf(`/api/holdings/${ticker}/transactions/${txnId}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setSuccessMsg('Transaction deleted successfully')
+      setTimeout(() => setSuccessMsg(null), 4000)
+      await fetchTxns()
+      onSaved()
+    } catch (e) { setError(e.message) }
+  }
+
+  const fmt = (v, d = 2) => v != null ? Number(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }) : '-'
+
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      zIndex: 1000,
+    }}>
+      <div className="card" style={{ width: '95vw', maxWidth: '1200px', maxHeight: '85vh', overflow: 'auto' }}>
+        <h2>{isNew ? 'Add Ticker via Transaction' : `Transactions — ${ticker}`}</h2>
+
+        {error && <div className="alert alert-error" style={{ marginBottom: '0.75rem' }}>{error}</div>}
+        {successMsg && <div className="alert alert-success" style={{ marginBottom: '0.75rem' }}>{successMsg}</div>}
+
+        {/* Existing transactions list */}
+        {!isNew && transactions.length > 0 && (
+          <div style={{ marginBottom: '1rem', overflowX: 'auto' }}>
+            <table style={{ width: '100%', fontSize: '0.85rem', minWidth: '900px' }}>
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Date</th>
+                  <th>Shares</th>
+                  <th>Price</th>
+                  <th>Fees</th>
+                  <th>Cost/Proceeds</th>
+                  <th>Realized G/L</th>
+                  <th>Notes</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transactions.map(txn => {
+                  const isSell = (txn.transaction_type || 'BUY') === 'SELL'
+                  const amount = isSell
+                    ? ((txn.shares || 0) * (txn.price_per_share || 0)) - (txn.fees || 0)
+                    : ((txn.shares || 0) * (txn.price_per_share || 0)) + (txn.fees || 0)
+                  return (
+                  <tr key={txn.id}>
+                    <td style={{ color: isSell ? '#ef9a9a' : '#81c784', fontWeight: 600 }}>{isSell ? 'SELL' : 'BUY'}</td>
+                    <td>
+                      <div>{txn.transaction_date || '-'}</div>
+                      {txn.created_at && <div style={{ fontSize: '0.7rem', color: '#90a4ae' }}>{new Date(txn.created_at + 'Z').toLocaleString()}</div>}
+                    </td>
+                    <td>{fmt(txn.shares, 3)}</td>
+                    <td>${fmt(txn.price_per_share)}</td>
+                    <td>${fmt(txn.fees)}</td>
+                    <td>${fmt(amount)}</td>
+                    <td style={{ color: txn.realized_gain > 0 ? '#81c784' : txn.realized_gain < 0 ? '#ef9a9a' : undefined }}>
+                      {txn.realized_gain != null ? '$' + fmt(txn.realized_gain) : '-'}
+                    </td>
+                    <td style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{txn.notes || '-'}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: '0.3rem' }}>
+                        <button className="btn btn-primary" style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem' }} onClick={() => handleEditTxn(txn)}>Edit</button>
+                        <button className="btn btn-danger" style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem' }} onClick={() => handleDeleteTxn(txn.id)}>Del</button>
+                      </div>
+                    </td>
+                  </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {!isNew && loading && <div style={{ textAlign: 'center', padding: '1rem' }}><span className="spinner" /></div>}
+
+        {/* Add/Edit transaction form */}
+        <h3 style={{ color: '#90a4ae', fontSize: '0.85rem', marginBottom: '0.5rem', borderBottom: '1px solid #0f3460', paddingBottom: '0.3rem' }}>
+          {editId ? 'EDIT TRANSACTION' : 'ADD TRANSACTION'}
+        </h3>
+        <form onSubmit={handleSubmit}>
+          {/* Ticker field for new tickers */}
+          {isNew && (
+            <>
+              {lookupMsg && (
+                <div className={`alert ${lookupMsg.startsWith('Could not') ? 'alert-error' : 'alert-info'}`} style={{ marginBottom: '0.75rem', padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}>
+                  {lookupMsg}
+                </div>
+              )}
+              <div className="form-row" style={{ gridTemplateColumns: '1fr 2fr 1fr' }}>
+                <div className="form-group">
+                  <label>Ticker *</label>
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <input
+                      value={form.ticker}
+                      onChange={(e) => setForm(prev => ({ ...prev, ticker: e.target.value.toUpperCase() }))}
+                      onBlur={(e) => { if (e.target.value.trim()) lookupTicker(e.target.value) }}
+                      required
+                      style={{ width: '80px' }}
+                    />
+                    <button type="button" className="btn btn-primary"
+                      style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                      onClick={() => lookupTicker(form.ticker)}
+                      disabled={!form.ticker.trim() || looking}>
+                      {looking ? <span className="spinner" /> : 'Lookup'}
+                    </button>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Description</label>
+                  <input value={form.description || ''} onChange={(e) => setForm(prev => ({ ...prev, description: e.target.value }))} style={{ width: '100%' }} />
+                </div>
+                <div className="form-group">
+                  <label>Category</label>
+                  <select value={form.category || ''} onChange={(e) => setForm(prev => ({ ...prev, category: e.target.value }))} style={{ width: '100%' }}>
+                    <option value="">— None —</option>
+                    {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                  </select>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* BUY/SELL toggle — hidden for new tickers (must be BUY) */}
+          {!isNew && (
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+              {['BUY', 'SELL'].map(t => (
+                <button key={t} type="button"
+                  style={{
+                    padding: '0.4rem 1.2rem', fontSize: '0.85rem', fontWeight: 600, border: 'none', borderRadius: '4px', cursor: 'pointer',
+                    background: form.transaction_type === t
+                      ? (t === 'BUY' ? '#2e7d32' : '#c62828')
+                      : 'rgba(255,255,255,0.1)',
+                    color: form.transaction_type === t ? '#fff' : '#90a4ae',
+                  }}
+                  onClick={() => setForm(prev => ({ ...prev, transaction_type: t }))}
+                >{t}</button>
+              ))}
+            </div>
+          )}
+
+          <div className="form-row">
+            <div className="form-group">
+              <label>Date</label>
+              <input type="date" value={form.transaction_date} onChange={(e) => setForm(prev => ({ ...prev, transaction_date: e.target.value }))} style={{ width: '100%' }} />
+            </div>
+            <div className="form-group">
+              <label>{form.transaction_type === 'SELL' ? 'Shares Sold *' : 'Shares *'}</label>
+              <input type="number" step="any" value={form.shares} onChange={(e) => setForm(prev => ({ ...prev, shares: e.target.value }))} required style={{ width: '100%' }} />
+            </div>
+            <div className="form-group">
+              <label>Price Per Share</label>
+              <input type="number" step="0.001" value={form.price_per_share} onChange={(e) => setForm(prev => ({ ...prev, price_per_share: e.target.value }))} style={{ width: '100%' }} />
+            </div>
+            <div className="form-group">
+              <label>Fees</label>
+              <input type="number" step="0.01" value={form.fees} onChange={(e) => setForm(prev => ({ ...prev, fees: e.target.value }))} placeholder="0.00" style={{ width: '100%' }} />
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group" style={{ flex: 1 }}>
+              <label>Notes</label>
+              <input value={form.notes || ''} onChange={(e) => setForm(prev => ({ ...prev, notes: e.target.value }))} style={{ width: '100%' }} />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
+            <button type="submit" className="btn btn-success">{editId ? 'Edit via Transaction' : 'Add via Transaction'}</button>
+            {editId && <button type="button" className="btn btn-secondary" onClick={() => { setEditId(null); setForm(prev => ({ ...prev, transaction_type: 'BUY', shares: '', price_per_share: '', fees: '', transaction_date: '', notes: '' })) }}>Cancel Edit</button>}
+            <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 // Column definitions for sortable table
 const FROZEN_COLS = 4 // first 4 columns are frozen
 const FROZEN_WIDTHS = [80, 180, 90, 70] // px widths for frozen cols
@@ -350,6 +667,7 @@ const COLUMNS = [
   { key: 'total_divs_received', label: 'Total Divs', type: 'number' },
   { key: 'paid_for_itself', label: 'Paid For Itself', type: 'number' },
   { key: '_shares_if_reinvested', label: 'Shares if Reinvested', type: 'number' },
+  { key: 'realized_gains', label: 'Realized G/L', type: 'number' },
 ]
 
 export default function ManageHoldings() {
@@ -366,6 +684,9 @@ export default function ManageHoldings() {
   const [sortKey, setSortKey] = useState('ticker')
   const [sortDir, setSortDir] = useState('asc')
   const [syncingDrip, setSyncingDrip] = useState(false)
+  const [txnTicker, setTxnTicker] = useState(null)    // ticker for transaction modal
+  const [txnIsNew, setTxnIsNew] = useState(false)      // true = new ticker via transaction
+  const [expandedTickers, setExpandedTickers] = useState({})  // { ticker: [txns] | 'loading' }
 
   const fetchHoldings = async () => {
     try {
@@ -445,6 +766,21 @@ export default function ManageHoldings() {
       setError(e.message)
     } finally {
       setSyncingDrip(false)
+    }
+  }
+
+  const toggleExpand = async (ticker) => {
+    if (expandedTickers[ticker]) {
+      setExpandedTickers(prev => { const next = { ...prev }; delete next[ticker]; return next })
+      return
+    }
+    setExpandedTickers(prev => ({ ...prev, [ticker]: 'loading' }))
+    try {
+      const res = await pf(`/api/holdings/${ticker}/transactions`)
+      const data = await res.json()
+      setExpandedTickers(prev => ({ ...prev, [ticker]: data }))
+    } catch {
+      setExpandedTickers(prev => ({ ...prev, [ticker]: [] }))
     }
   }
 
@@ -528,6 +864,7 @@ export default function ManageHoldings() {
             </button>
           )}
           <button className="btn btn-success" onClick={handleAdd}>+ Add Holding</button>
+          <button className="btn btn-success" style={{ background: '#2e7d32' }} onClick={() => { setTxnTicker(null); setTxnIsNew(true) }}>+ Add/Edit via Transaction</button>
         </div>
       </div>
 
@@ -569,24 +906,34 @@ export default function ManageHoldings() {
             </thead>
             <tbody>
               {sortedHoldings.map(h => (
-                <tr key={h.ticker}>
+                <React.Fragment key={h.ticker}>
+                <tr>
                   <td className="frozen-col" style={{ fontWeight: 600, position: 'sticky', left: FROZEN_LEFT[0], minWidth: FROZEN_WIDTHS[0], maxWidth: FROZEN_WIDTHS[0], zIndex: 1 }}>
-                    <a
-                      href="#"
-                      onClick={(e) => { e.preventDefault(); handleEdit(h) }}
-                      style={{ color: '#64b5f6', textDecoration: 'none', cursor: 'pointer' }}
-                      onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
-                      onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
-                    >
-                      {h.ticker}
-                    </a>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                      <span
+                        onClick={() => toggleExpand(h.ticker)}
+                        style={{ cursor: 'pointer', fontSize: '0.7rem', opacity: 0.7, userSelect: 'none', width: '12px' }}
+                        title="Show/hide transaction lots"
+                      >
+                        {expandedTickers[h.ticker] ? '\u25BC' : '\u25B6'}
+                      </span>
+                      <a
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); handleEdit(h) }}
+                        style={{ color: '#64b5f6', textDecoration: 'none', cursor: 'pointer' }}
+                        onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
+                        onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
+                      >
+                        {h.ticker}
+                      </a>
+                    </div>
                   </td>
                   <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[1], minWidth: FROZEN_WIDTHS[1], maxWidth: FROZEN_WIDTHS[1], overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>
                     {h.description || '-'}
                   </td>
                   <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[2], minWidth: FROZEN_WIDTHS[2], maxWidth: FROZEN_WIDTHS[2], zIndex: 1 }}>{h.category || '-'}</td>
                   <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[3], minWidth: FROZEN_WIDTHS[3], maxWidth: FROZEN_WIDTHS[3], zIndex: 1 }}>{fmt(h.quantity)}</td>
-                  <td>${fmt(h.price_paid)}</td>
+                  <td>${fmt(h.price_paid, 4)}</td>
                   <td>${fmt(h.current_price)}</td>
                   <td>{h.purchase_date || '-'}</td>
                   <td>${fmt(h.purchase_value)}</td>
@@ -632,13 +979,79 @@ export default function ManageHoldings() {
                       ? fmt(h.estim_payment_per_year / h.current_price, 3)
                       : '-'}
                   </td>
+                  <td style={{ color: h.realized_gains > 0 ? '#81c784' : h.realized_gains < 0 ? '#ef9a9a' : undefined }}>
+                    {h.realized_gains ? '$' + fmt(h.realized_gains) : '-'}
+                  </td>
                   <td>
                     <div style={{ display: 'flex', gap: '0.4rem' }}>
                       <button className="btn btn-primary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem' }} onClick={() => handleEdit(h)}>Edit</button>
+                      <button className="btn btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem' }} onClick={() => { setTxnTicker(h.ticker); setTxnIsNew(false) }}>Txn</button>
                       <button className="btn btn-danger" style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem' }} onClick={() => handleDelete(h.ticker)}>Del</button>
                     </div>
                   </td>
                 </tr>
+                {expandedTickers[h.ticker] && (
+                  <tr>
+                    <td colSpan={COLUMNS.length + 1} style={{ padding: 0, background: 'rgba(0,0,0,0.2)' }}>
+                      {expandedTickers[h.ticker] === 'loading' ? (
+                        <div style={{ padding: '0.75rem', textAlign: 'center' }}><span className="spinner" /></div>
+                      ) : expandedTickers[h.ticker].length === 0 ? (
+                        <div style={{ padding: '0.75rem 1rem', fontSize: '0.85rem', color: '#90a4ae' }}>
+                          No transaction lots recorded. Use the Txn button to add purchase lots.
+                        </div>
+                      ) : (
+                        <div style={{ padding: '0.5rem 1rem' }}>
+                          <table style={{ width: 'auto', fontSize: '0.82rem', marginBottom: 0 }}>
+                            <thead>
+                              <tr style={{ borderBottom: '1px solid #1a3a5c' }}>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Type</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Date</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Shares</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Price</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Fees</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Cost/Proceeds</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Unrealized G/L</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Realized G/L</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Notes</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {expandedTickers[h.ticker].map(txn => {
+                                const isSell = (txn.transaction_type || 'BUY') === 'SELL'
+                                const lotCost = isSell
+                                  ? ((txn.shares || 0) * (txn.price_per_share || 0)) - (txn.fees || 0)
+                                  : ((txn.shares || 0) * (txn.price_per_share || 0)) + (txn.fees || 0)
+                                const lotValue = isSell ? null : (txn.shares || 0) * (h.current_price || 0)
+                                const lotGL = isSell ? null : lotValue - (((txn.shares || 0) * (txn.price_per_share || 0)) + (txn.fees || 0))
+                                return (
+                                  <tr key={txn.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                    <td style={{ padding: '0.3rem 0.75rem', color: isSell ? '#ef9a9a' : '#81c784', fontWeight: 600 }}>{isSell ? 'SELL' : 'BUY'}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem' }}>
+                                      <div>{txn.transaction_date || '-'}</div>
+                                      {txn.created_at && <div style={{ fontSize: '0.7rem', color: '#90a4ae' }}>{new Date(txn.created_at + 'Z').toLocaleString()}</div>}
+                                    </td>
+                                    <td style={{ padding: '0.3rem 0.75rem' }}>{fmt(txn.shares, 3)}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(txn.price_per_share)}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(txn.fees)}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(lotCost)}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem', color: lotGL != null ? (lotGL >= 0 ? '#81c784' : '#ef9a9a') : undefined }}>
+                                      {lotGL != null ? '$' + fmt(lotGL) : '-'}
+                                    </td>
+                                    <td style={{ padding: '0.3rem 0.75rem', color: txn.realized_gain != null ? (txn.realized_gain >= 0 ? '#81c784' : '#ef9a9a') : undefined }}>
+                                      {txn.realized_gain != null ? '$' + fmt(txn.realized_gain) : '-'}
+                                    </td>
+                                    <td style={{ padding: '0.3rem 0.75rem', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{txn.notes || '-'}</td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -651,6 +1064,16 @@ export default function ManageHoldings() {
           onSave={handleSave}
           onCancel={() => setShowModal(false)}
           isEdit={!!editHolding}
+          pf={pf}
+        />
+      )}
+
+      {(txnTicker !== null || txnIsNew) && (
+        <TransactionModal
+          ticker={txnTicker}
+          isNew={txnIsNew}
+          onClose={() => { setTxnTicker(null); setTxnIsNew(false) }}
+          onSaved={fetchHoldings}
           pf={pf}
         />
       )}

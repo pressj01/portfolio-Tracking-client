@@ -583,15 +583,30 @@ def api_import_excel():
     f.save(path)
     try:
         multi = request.form.get("multi_sheet", "false").lower() == "true"
+        as_txns = request.form.get("as_transactions", "false").lower() == "true"
         if multi:
+            # Snapshot all existing profiles before import
+            pre_snaps = {}
+            if as_txns:
+                conn_snap = get_connection()
+                all_profiles = conn_snap.execute("SELECT id FROM profiles").fetchall()
+                conn_snap.close()
+                for p in all_profiles:
+                    pid = p["id"] if isinstance(p, dict) else p[0]
+                    pre_snaps[pid] = _snapshot_positions(pid)
             results = import_multi_excel(path, default_profile_id=profile_id)
             # Populate derived tables for each imported profile
             for r in results:
                 if r["rows"] > 0:
-                    populate_holdings(r["profile_id"])
-                    populate_dividends(r["profile_id"])
-                    populate_income_tracking(r["profile_id"])
-                    populate_pillar_weights(r["profile_id"])
+                    pid = r["profile_id"]
+                    if as_txns:
+                        _import_as_transactions(pid, pre_snaps.get(pid, {}))
+                    populate_holdings(pid)
+                    populate_dividends(pid)
+                    populate_income_tracking(pid)
+                    populate_pillar_weights(pid)
+                    if not as_txns:
+                        _rerollup_after_import(pid)
             total = sum(r["rows"] for r in results)
             # Mark owner import as used
             conn2 = get_connection()
@@ -603,12 +618,18 @@ def api_import_excel():
             return jsonify({"rows": total, "message": f"Imported {len(results)} sheets ({total} total holdings)", "details": results})
         else:
             sheet = request.form.get("sheet_name", "All Accounts")
+            # Snapshot BEFORE import so we know the pre-import state
+            pre_snap = _snapshot_positions(profile_id) if as_txns else None
             count, msg = import_from_excel(path, sheet_name=sheet, profile_id=profile_id)
             # Auto-populate derived tables
+            if as_txns:
+                _import_as_transactions(profile_id, pre_snap)
             populate_holdings(profile_id)
             populate_dividends(profile_id)
             populate_income_tracking(profile_id)
             populate_pillar_weights(profile_id)
+            if not as_txns:
+                _rerollup_after_import(profile_id)
             # Mark owner import as used
             conn2 = get_connection()
             conn2.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("owner_import_used", "true"))
@@ -620,8 +641,11 @@ def api_import_excel():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     finally:
-        if os.path.exists(path):
-            os.remove(path)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
 
 
 @app.route("/api/import/generic", methods=["POST"])
@@ -635,32 +659,56 @@ def api_import_generic():
     f.save(path)
     try:
         multi = request.form.get("multi_sheet", "false").lower() == "true"
+        as_txns = request.form.get("as_transactions", "false").lower() == "true"
         if multi:
+            # Snapshot all existing profiles before import
+            pre_snaps = {}
+            if as_txns:
+                conn_snap = get_connection()
+                all_profiles = conn_snap.execute("SELECT id FROM profiles").fetchall()
+                conn_snap.close()
+                for p in all_profiles:
+                    pid = p["id"] if isinstance(p, dict) else p[0]
+                    pre_snaps[pid] = _snapshot_positions(pid)
             results = import_multi_upload(path)
             for r in results:
                 if r["rows"] > 0:
-                    populate_holdings(r["profile_id"])
-                    populate_dividends(r["profile_id"])
-                    populate_income_tracking(r["profile_id"])
+                    pid = r["profile_id"]
+                    if as_txns:
+                        _import_as_transactions(pid, pre_snaps.get(pid, {}))
+                    populate_holdings(pid)
+                    populate_dividends(pid)
+                    populate_income_tracking(pid)
+                    if not as_txns:
+                        _rerollup_after_import(pid)
             total = sum(r["rows"] for r in results)
             # Auto-reconcile Owner quantities from sub-profiles
             _auto_reconcile_owner()
             return jsonify({"rows": total, "message": f"Imported {len(results)} portfolios ({total} total holdings)", "details": results})
         else:
+            # Snapshot BEFORE import
+            pre_snap = _snapshot_positions(profile_id) if as_txns else None
             df = pd.read_excel(path, engine="openpyxl")
             count, msg = import_from_upload(df, profile_id)
+            if as_txns:
+                _import_as_transactions(profile_id, pre_snap)
             populate_holdings(profile_id)
-        populate_dividends(profile_id)
-        populate_income_tracking(profile_id)
-        # Auto-reconcile Owner if a sub-profile was imported
-        if profile_id != 1:
-            _auto_reconcile_owner()
-        return jsonify({"rows": count, "message": msg})
+            populate_dividends(profile_id)
+            populate_income_tracking(profile_id)
+            if not as_txns:
+                _rerollup_after_import(profile_id)
+            # Auto-reconcile Owner if a sub-profile was imported
+            if profile_id != 1:
+                _auto_reconcile_owner()
+            return jsonify({"rows": count, "message": msg})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     finally:
-        if os.path.exists(path):
-            os.remove(path)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
 
 
 @app.route("/api/import/weekly-payouts", methods=["POST"])
@@ -669,16 +717,20 @@ def api_import_weekly():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     f = request.files["file"]
-    path = os.path.join(UPLOAD_FOLDER, f.filename)
-    f.save(path)
+    import uuid
+    path = os.path.join(UPLOAD_FOLDER, f"weekly_{uuid.uuid4().hex}_{f.filename}")
     try:
+        f.save(path)
         count, msg = import_weekly_payouts(path, 1)
         return jsonify({"rows": count, "message": msg})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     finally:
-        if os.path.exists(path):
-            os.remove(path)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
 
 
 @app.route("/api/import/monthly-payouts", methods=["POST"])
@@ -687,16 +739,20 @@ def api_import_monthly():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     f = request.files["file"]
-    path = os.path.join(UPLOAD_FOLDER, f.filename)
-    f.save(path)
+    import uuid
+    path = os.path.join(UPLOAD_FOLDER, f"monthly_{uuid.uuid4().hex}_{f.filename}")
     try:
+        f.save(path)
         count, msg = import_monthly_payouts(path, 1)
         return jsonify({"rows": count, "message": msg})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     finally:
-        if os.path.exists(path):
-            os.remove(path)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
 
 
 @app.route("/api/import/monthly-payout-tickers", methods=["POST"])
@@ -706,16 +762,20 @@ def api_import_monthly_tickers():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     f = request.files["file"]
-    path = os.path.join(UPLOAD_FOLDER, f.filename)
-    f.save(path)
+    import uuid
+    path = os.path.join(UPLOAD_FOLDER, f"tickers_{uuid.uuid4().hex}_{f.filename}")
     try:
+        f.save(path)
         count, msg = import_monthly_payout_tickers(path, profile_id)
         return jsonify({"rows": count, "message": msg})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     finally:
-        if os.path.exists(path):
-            os.remove(path)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
 
 
 # ── Ticker Lookup (yfinance) ────────────────────────────────────────────────────
@@ -1496,9 +1556,426 @@ def delete_holding(ticker):
     )
     conn.execute("DELETE FROM holdings WHERE ticker = ? AND profile_id = ?", (ticker, profile_id))
     conn.execute("DELETE FROM dividends WHERE ticker = ? AND profile_id = ?", (ticker, profile_id))
+    conn.execute("DELETE FROM transactions WHERE ticker = ? AND profile_id = ?", (ticker, profile_id))
     conn.commit()
     conn.close()
     return jsonify({"ticker": ticker, "message": f"{ticker} deleted"})
+
+
+# ── Transactions ───────────────────────────────────────────────────────────────
+
+def _rerollup_after_import(profile_id):
+    """After an import, re-rollup any tickers that have transactions so the
+    transaction-managed position data overrides whatever the spreadsheet had."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT DISTINCT ticker FROM transactions WHERE profile_id = ?",
+        (profile_id,),
+    ).fetchall()
+    for r in rows:
+        ticker = r["ticker"] if isinstance(r, dict) else r[0]
+        _rollup_transactions(ticker, profile_id, conn)
+    conn.close()
+
+
+def _snapshot_positions(profile_id):
+    """Capture pre-import position data + transaction status for each ticker.
+
+    Returns {ticker: {qty, price, date, has_txns}} — call BEFORE the import
+    writes to all_account_info so we know what to seed vs. what's new.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT ticker, quantity, price_paid, purchase_date "
+        "FROM all_account_info WHERE profile_id = ?",
+        (profile_id,),
+    ).fetchall()
+    snap = {}
+    for r in rows:
+        ticker = r["ticker"] if isinstance(r, dict) else r[0]
+        cnt_row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM transactions WHERE ticker = ? AND profile_id = ?",
+            (ticker, profile_id),
+        ).fetchone()
+        has_txns = (cnt_row["cnt"] if isinstance(cnt_row, dict) else cnt_row[0]) > 0
+        snap[ticker] = {
+            "qty": r["quantity"] if isinstance(r, dict) else r[1],
+            "price": r["price_paid"] if isinstance(r, dict) else r[2],
+            "date": r["purchase_date"] if isinstance(r, dict) else r[3],
+            "has_txns": has_txns,
+        }
+    conn.close()
+    return snap
+
+
+def _import_as_transactions(profile_id, pre_snapshot):
+    """Convert freshly-imported rows into delta-based transactions.
+
+    pre_snapshot is the result of _snapshot_positions() taken BEFORE the import.
+    The imported quantity represents the user's NEW total position. We compare
+    it against the pre-import quantity to determine the delta:
+
+    - delta > 0 → BUY delta shares at the imported price
+    - delta < 0 → SELL abs(delta) shares at the imported price
+    - delta == 0 → no transaction (position unchanged)
+    - New ticker (not in snapshot) → first BUY for the full imported quantity
+    - Existing ticker WITHOUT transactions → seed old position first, then
+      apply the delta as a BUY or SELL
+    """
+    from datetime import date as _date
+    conn = get_connection()
+
+    rows = conn.execute(
+        "SELECT ticker, quantity, price_paid, purchase_date "
+        "FROM all_account_info WHERE profile_id = ?",
+        (profile_id,),
+    ).fetchall()
+
+    for r in rows:
+        ticker = r["ticker"] if isinstance(r, dict) else r[0]
+        imp_qty = (r["quantity"] if isinstance(r, dict) else r[1]) or 0
+        imp_price = (r["price_paid"] if isinstance(r, dict) else r[2]) or 0
+        imp_date = (r["purchase_date"] if isinstance(r, dict) else r[3]) or _date.today().isoformat()
+
+        old = pre_snapshot.get(ticker)
+
+        if not old:
+            # New ticker — create first BUY from imported data
+            if imp_qty > 0:
+                conn.execute(
+                    "INSERT INTO transactions (ticker, profile_id, transaction_type, "
+                    "transaction_date, shares, price_per_share, fees, notes) "
+                    "VALUES (?, ?, 'BUY', ?, ?, ?, 0, 'Imported from spreadsheet')",
+                    (ticker, profile_id, imp_date, imp_qty, imp_price),
+                )
+                conn.commit()
+                _rollup_transactions(ticker, profile_id, conn)
+            continue
+
+        old_qty = old["qty"] or 0
+        delta = round(imp_qty - old_qty, 6)
+
+        if not old["has_txns"]:
+            # Seed the pre-import position as the first transaction
+            if old_qty > 0:
+                conn.execute(
+                    "INSERT INTO transactions (ticker, profile_id, transaction_type, "
+                    "transaction_date, shares, price_per_share, fees, notes) "
+                    "VALUES (?, ?, 'BUY', ?, ?, ?, 0, 'Seed from pre-import position')",
+                    (ticker, profile_id, old["date"] or _date.today().isoformat(),
+                     old_qty, old["price"] or 0),
+                )
+                conn.commit()
+
+        if delta > 0:
+            conn.execute(
+                "INSERT INTO transactions (ticker, profile_id, transaction_type, "
+                "transaction_date, shares, price_per_share, fees, notes) "
+                "VALUES (?, ?, 'BUY', ?, ?, ?, 0, 'Imported from spreadsheet')",
+                (ticker, profile_id, imp_date, delta, imp_price),
+            )
+            conn.commit()
+            _rollup_transactions(ticker, profile_id, conn)
+        elif delta < 0:
+            conn.execute(
+                "INSERT INTO transactions (ticker, profile_id, transaction_type, "
+                "transaction_date, shares, price_per_share, fees, notes) "
+                "VALUES (?, ?, 'SELL', ?, ?, ?, 0, 'Imported from spreadsheet')",
+                (ticker, profile_id, imp_date, abs(delta), imp_price),
+            )
+            conn.commit()
+            _rollup_transactions(ticker, profile_id, conn)
+        elif not old["has_txns"] and old_qty > 0:
+            # No delta but we seeded — still need to rollup
+            _rollup_transactions(ticker, profile_id, conn)
+
+    conn.close()
+
+
+def _rollup_transactions(ticker, profile_id, conn):
+    """Recalculate all_account_info from transactions using FIFO for sells.
+
+    BUY transactions add to a FIFO lot queue.
+    SELL transactions consume lots oldest-first, computing realized gains.
+    The remaining lots determine quantity, weighted-average price_paid, and
+    purchase_value.  Realized gains are stored per-sell transaction and summed.
+    """
+    rows = conn.execute(
+        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
+        "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
+        (ticker, profile_id),
+    ).fetchall()
+    if not rows:
+        return
+
+    def _val(r, key, idx):
+        return r[key] if isinstance(r, dict) else r[idx]
+
+    # Build FIFO lot queue and compute realized gains
+    lots = []  # each lot: { shares, cost_per_share (incl. fees), date }
+    total_realized = 0
+    earliest_buy = None
+
+    for r in rows:
+        txn_id = _val(r, "id", 0)
+        txn_type = (_val(r, "transaction_type", 1) or "BUY").upper()
+        shares = _val(r, "shares", 2) or 0
+        price = _val(r, "price_per_share", 3) or 0
+        fees = _val(r, "fees", 4) or 0
+        tdate = _val(r, "transaction_date", 5)
+
+        if txn_type == "BUY":
+            lot_cost = (shares * price) + fees
+            cost_per = lot_cost / shares if shares else 0
+            lots.append({"shares": shares, "cost_per_share": cost_per, "date": tdate})
+            if tdate and (earliest_buy is None or tdate < earliest_buy):
+                earliest_buy = tdate
+            # Clear any realized_gain on BUY rows
+            conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
+        else:  # SELL
+            sell_proceeds = (shares * price) - fees  # fees reduce proceeds
+            sell_remaining = shares
+            cost_of_sold = 0
+            # Consume lots FIFO
+            while sell_remaining > 0 and lots:
+                lot = lots[0]
+                if lot["shares"] <= sell_remaining:
+                    cost_of_sold += lot["shares"] * lot["cost_per_share"]
+                    sell_remaining -= lot["shares"]
+                    lots.pop(0)
+                else:
+                    cost_of_sold += sell_remaining * lot["cost_per_share"]
+                    lot["shares"] -= sell_remaining
+                    sell_remaining = 0
+            realized = sell_proceeds - cost_of_sold
+            total_realized += realized
+            conn.execute("UPDATE transactions SET realized_gain = ? WHERE id = ?",
+                         (round(realized, 2), txn_id))
+
+    # Remaining lots = current position
+    total_shares = sum(lot["shares"] for lot in lots)
+    total_cost = sum(lot["shares"] * lot["cost_per_share"] for lot in lots)
+    avg_price = total_cost / total_shares if total_shares else 0
+
+    from datetime import date as _date
+    conn.execute(
+        """UPDATE all_account_info
+           SET quantity = ?, price_paid = ?, purchase_value = ?,
+               purchase_date = ?, base_quantity = ?, import_date = ?,
+               realized_gains = ?
+           WHERE ticker = ? AND profile_id = ?""",
+        (round(total_shares, 6), round(avg_price, 4), round(total_cost, 2),
+         earliest_buy, round(total_shares, 6), _date.today().isoformat(),
+         round(total_realized, 2),
+         ticker, profile_id),
+    )
+    conn.commit()
+    populate_holdings(profile_id)
+    populate_dividends(profile_id)
+
+
+def _seed_transaction_if_needed(ticker, profile_id, conn):
+    """Auto-create a seed transaction from existing all_account_info data
+    when a user first uses transactions for this ticker."""
+    existing = conn.execute(
+        "SELECT COUNT(*) as cnt FROM transactions WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    cnt = existing["cnt"] if isinstance(existing, dict) else existing[0]
+    if cnt > 0:
+        return  # already has transactions
+
+    holding = conn.execute(
+        "SELECT quantity, price_paid, purchase_date FROM all_account_info "
+        "WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    if not holding:
+        return
+    qty = holding["quantity"] if isinstance(holding, dict) else holding[0]
+    price = holding["price_paid"] if isinstance(holding, dict) else holding[1]
+    pdate = holding["purchase_date"] if isinstance(holding, dict) else holding[2]
+    if not qty:
+        return
+    conn.execute(
+        "INSERT INTO transactions (ticker, profile_id, transaction_date, shares, price_per_share, fees, notes) "
+        "VALUES (?, ?, ?, ?, ?, 0, 'Initial seed from existing holding')",
+        (ticker, profile_id, pdate, qty, price),
+    )
+    conn.commit()
+
+
+@app.route("/api/holdings/<ticker>/transactions", methods=["GET"])
+def list_transactions(ticker):
+    """List all transactions for a ticker."""
+    is_agg, pids = get_profile_filter()
+    ticker = ticker.upper()
+    conn = get_connection()
+    placeholders = ",".join("?" * len(pids))
+    rows = conn.execute(
+        f"SELECT * FROM transactions WHERE ticker = ? AND profile_id IN ({placeholders}) ORDER BY transaction_date",
+        [ticker] + pids,
+    ).fetchall()
+    conn.close()
+    return jsonify(rows_to_dicts(rows))
+
+
+@app.route("/api/holdings/<ticker>/transactions", methods=["POST"])
+def add_transaction(ticker):
+    """Add a new transaction for a ticker. Auto-seeds if first transaction."""
+    is_agg, pids = get_profile_filter()
+    if is_agg:
+        profile_id = _resolve_aggregate_profile(ticker.upper(), pids)
+    else:
+        profile_id = pids[0]
+
+    data = request.get_json()
+    ticker = ticker.upper()
+
+    shares = data.get("shares")
+    if not shares:
+        return jsonify({"error": "Shares is required"}), 400
+
+    conn = get_connection()
+
+    # Check if the holding exists; if not, create it (new ticker via transaction flow)
+    existing = conn.execute(
+        "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    if not existing:
+        # Create a minimal holding — the rollup will fill in quantity/price/value
+        from datetime import date as _date
+        conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, description, import_date) VALUES (?, ?, ?, ?)",
+            (ticker, profile_id, data.get("description", ""), _date.today().isoformat()),
+        )
+        # If a lookup was done on the frontend, apply those fields
+        for field in ["description", "classification_type", "div", "div_frequency",
+                      "ex_div_date", "div_pay_date", "current_price", "reinvest"]:
+            if data.get(field) is not None:
+                conn.execute(
+                    f"UPDATE all_account_info SET {field} = ? WHERE ticker = ? AND profile_id = ?",
+                    (data[field], ticker, profile_id),
+                )
+        # Handle category for new ticker
+        cat_name = (data.get("category") or "").strip()
+        if cat_name:
+            cat_row = conn.execute(
+                "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
+                (cat_name, profile_id),
+            ).fetchone()
+            if cat_row:
+                cat_id = cat_row["id"] if isinstance(cat_row, dict) else cat_row[0]
+                conn.execute(
+                    "INSERT OR IGNORE INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
+                    (ticker, cat_id, profile_id),
+                )
+        conn.commit()
+    else:
+        # Auto-seed existing holding's current data as the first transaction
+        _seed_transaction_if_needed(ticker, profile_id, conn)
+
+    # Insert the new transaction
+    txn_type = (data.get("transaction_type") or "BUY").upper()
+    if txn_type not in ("BUY", "SELL"):
+        conn.close()
+        return jsonify({"error": "transaction_type must be BUY or SELL"}), 400
+
+    conn.execute(
+        "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (ticker, profile_id, txn_type, data.get("transaction_date"), float(shares),
+         data.get("price_per_share"), data.get("fees", 0), data.get("notes")),
+    )
+    conn.commit()
+
+    # Rollup into all_account_info
+    _rollup_transactions(ticker, profile_id, conn)
+    conn.close()
+    return jsonify({"ticker": ticker, "message": f"Transaction added for {ticker}"}), 201
+
+
+@app.route("/api/holdings/<ticker>/transactions/<int:txn_id>", methods=["PUT"])
+def update_transaction(ticker, txn_id):
+    """Update an existing transaction."""
+    is_agg, pids = get_profile_filter()
+    ticker = ticker.upper()
+    if is_agg:
+        profile_id = _resolve_aggregate_profile(ticker, pids)
+    else:
+        profile_id = pids[0]
+
+    data = request.get_json()
+    conn = get_connection()
+
+    existing = conn.execute("SELECT 1 FROM transactions WHERE id = ?", (txn_id,)).fetchone()
+    if not existing:
+        conn.close()
+        return jsonify({"error": "Transaction not found"}), 404
+
+    updates = []
+    vals = []
+    for field in ["transaction_type", "transaction_date", "shares", "price_per_share", "fees", "notes"]:
+        if field in data:
+            updates.append(f"{field} = ?")
+            vals.append(data[field])
+
+    if not updates:
+        conn.close()
+        return jsonify({"error": "No fields to update"}), 400
+
+    vals.append(txn_id)
+    conn.execute(f"UPDATE transactions SET {', '.join(updates)} WHERE id = ?", vals)
+    conn.commit()
+
+    _rollup_transactions(ticker, profile_id, conn)
+    conn.close()
+    return jsonify({"ticker": ticker, "message": f"Transaction {txn_id} updated"})
+
+
+@app.route("/api/holdings/<ticker>/transactions/<int:txn_id>", methods=["DELETE"])
+def delete_transaction(ticker, txn_id):
+    """Delete a transaction and re-rollup."""
+    is_agg, pids = get_profile_filter()
+    ticker = ticker.upper()
+    if is_agg:
+        profile_id = _resolve_aggregate_profile(ticker, pids)
+    else:
+        profile_id = pids[0]
+
+    conn = get_connection()
+    conn.execute("DELETE FROM transactions WHERE id = ?", (txn_id,))
+    conn.commit()
+
+    # Check if any transactions remain
+    remaining = conn.execute(
+        "SELECT COUNT(*) as cnt FROM transactions WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    cnt = remaining["cnt"] if isinstance(remaining, dict) else remaining[0]
+    if cnt > 0:
+        _rollup_transactions(ticker, profile_id, conn)
+    # If no transactions left, the holding stays as-is (user can manage via edit modal)
+
+    conn.close()
+    return jsonify({"ticker": ticker, "message": f"Transaction {txn_id} deleted"})
+
+
+@app.route("/api/holdings/<ticker>/has_transactions", methods=["GET"])
+def has_transactions(ticker):
+    """Check if a ticker has any transactions (used by frontend to toggle read-only)."""
+    is_agg, pids = get_profile_filter()
+    ticker = ticker.upper()
+    conn = get_connection()
+    placeholders = ",".join("?" * len(pids))
+    row = conn.execute(
+        f"SELECT COUNT(*) as cnt FROM transactions WHERE ticker = ? AND profile_id IN ({placeholders})",
+        [ticker] + pids,
+    ).fetchone()
+    conn.close()
+    cnt = row["cnt"] if isinstance(row, dict) else row[0]
+    return jsonify({"has_transactions": cnt > 0, "count": cnt})
 
 
 # ── Dividends ──────────────────────────────────────────────────────────────────
@@ -9869,6 +10346,681 @@ def _distribution_compare_compute():
         return results
 
     return {"error": f"Unknown mode: {mode}"}
+
+
+# ── Consolidation Analysis ─────────────────────────────────────────────────────
+
+@app.route("/api/consolidation/clusters", methods=["POST"])
+def consolidation_clusters():
+    """Auto-group holdings by underlying exposure using correlation analysis."""
+    import math
+    import warnings
+    import numpy as np
+    import yfinance as yf
+    from scipy.cluster.hierarchy import linkage, fcluster
+    from scipy.spatial.distance import squareform
+    from collections import Counter
+    warnings.filterwarnings("ignore")
+
+    def _safe(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else round(f, 4)
+        except (TypeError, ValueError):
+            return None
+
+    # Get threshold from request (default 0.80)
+    body = request.get_json(silent=True) or {}
+    corr_threshold = float(body.get("threshold", 0.80))
+    corr_threshold = max(0.50, min(0.95, corr_threshold))  # clamp
+    dist_threshold = 1.0 - corr_threshold
+
+    _, pids = get_profile_filter()
+    placeholders = ",".join("?" * len(pids))
+    conn = get_connection()
+    rows = conn.execute(
+        f"SELECT ticker, description, quantity, current_value, current_price, "
+        f"approx_monthly_income, current_annual_yield "
+        f"FROM all_account_info WHERE profile_id IN ({placeholders}) "
+        f"AND quantity > 0 AND current_value > 0",
+        pids,
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        return jsonify(error="No holdings found for this profile.")
+
+    holdings = {r["ticker"]: dict(r) for r in rows}
+    tickers = list(holdings.keys())
+
+    if len(tickers) < 2:
+        # Not enough tickers to cluster
+        unclustered = []
+        for t in tickers:
+            h = holdings[t]
+            unclustered.append({
+                "ticker": t,
+                "description": h.get("description") or "",
+                "quantity": _safe(h.get("quantity")),
+                "current_value": _safe(h.get("current_value")),
+                "monthly_income": _safe(h.get("approx_monthly_income")),
+                "current_yield": _safe(h.get("current_annual_yield")),
+            })
+        return jsonify(clusters=[], unclustered=unclustered, correlation_matrix={})
+
+    # Download 1 year of daily close prices
+    try:
+        raw = yf.download(" ".join(tickers), period="1y", auto_adjust=True, progress=False)
+        if raw.empty:
+            return jsonify(error="No price data returned from Yahoo Finance.")
+    except Exception as e:
+        return jsonify(error=f"Failed to fetch data: {str(e)}")
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        close = raw["Close"].dropna(how="all")
+    else:
+        close = raw[["Close"]].dropna(how="all")
+        close.columns = [tickers[0]]
+
+    available = [t for t in tickers if t in close.columns and close[t].dropna().count() >= 30]
+    unavailable = [t for t in tickers if t not in available]
+
+    if len(available) < 2:
+        unclustered = []
+        for t in tickers:
+            h = holdings[t]
+            unclustered.append({
+                "ticker": t,
+                "description": h.get("description") or "",
+                "quantity": _safe(h.get("quantity")),
+                "current_value": _safe(h.get("current_value")),
+                "monthly_income": _safe(h.get("approx_monthly_income")),
+                "current_yield": _safe(h.get("current_annual_yield")),
+            })
+        return jsonify(clusters=[], unclustered=unclustered, correlation_matrix={})
+
+    daily_returns = close[available].pct_change().dropna()
+    corr = daily_returns.corr()
+
+    # Build correlation matrix response
+    corr_matrix = {}
+    for t1 in available:
+        corr_matrix[t1] = {}
+        for t2 in available:
+            corr_matrix[t1][t2] = _safe(corr.loc[t1, t2])
+
+    # Hierarchical clustering
+    # Convert correlation to distance: distance = 1 - correlation
+    dist_matrix = 1 - corr.values
+    np.fill_diagonal(dist_matrix, 0)
+    # Ensure symmetry and no negative values
+    dist_matrix = np.clip((dist_matrix + dist_matrix.T) / 2, 0, 2)
+
+    try:
+        condensed = squareform(dist_matrix)
+        Z = linkage(condensed, method="average")
+        labels = fcluster(Z, t=dist_threshold, criterion="distance")
+    except Exception:
+        # Fallback: treat every ticker as unclustered
+        labels = list(range(1, len(available) + 1))
+
+    # Group tickers by cluster label
+    cluster_groups = {}
+    for i, t in enumerate(available):
+        lbl = int(labels[i])
+        cluster_groups.setdefault(lbl, []).append(t)
+
+    clusters = []
+    unclustered = []
+    cluster_id = 0
+
+    for lbl, group_tickers in sorted(cluster_groups.items()):
+        if len(group_tickers) < 2:
+            # Single ticker = unclustered
+            h = holdings[group_tickers[0]]
+            unclustered.append({
+                "ticker": group_tickers[0],
+                "description": h.get("description") or "",
+                "quantity": _safe(h.get("quantity")),
+                "current_value": _safe(h.get("current_value")),
+                "monthly_income": _safe(h.get("approx_monthly_income")),
+                "current_yield": _safe(h.get("current_annual_yield")),
+            })
+            continue
+
+        cluster_id += 1
+
+        # Calculate avg correlation within group
+        pair_corrs = []
+        for i, t1 in enumerate(group_tickers):
+            for t2 in group_tickers[i + 1:]:
+                val = corr.loc[t1, t2]
+                if not math.isnan(val):
+                    pair_corrs.append(val)
+        avg_corr = float(np.mean(pair_corrs)) if pair_corrs else 0.0
+
+        # Identify underlying: most common meaningful words in descriptions
+        all_words = []
+        for t in group_tickers:
+            desc = (holdings[t].get("description") or "").strip()
+            if desc:
+                # Filter out common filler words
+                stop = {"etf", "fund", "inc", "corp", "the", "and", "of", "trust",
+                        "a", "an", "for", "in", "on", "to", "with", "&", "-", ""}
+                words = [w for w in desc.lower().split() if w not in stop and len(w) > 1]
+                all_words.extend(words)
+
+        if all_words:
+            word_counts = Counter(all_words)
+            # Take the top 2-3 most common words to form the underlying name
+            common = word_counts.most_common(3)
+            underlying = " ".join(w.title() for w, _ in common if _ > 1)
+            if not underlying:
+                underlying = common[0][0].title() if common else group_tickers[0]
+        else:
+            # Fallback: ticker with most history
+            max_count = 0
+            best = group_tickers[0]
+            for t in group_tickers:
+                cnt = close[t].dropna().count() if t in close.columns else 0
+                if cnt > max_count:
+                    max_count = cnt
+                    best = t
+            underlying = best
+
+        # Build ticker detail list
+        ticker_details = []
+        total_value = 0.0
+        total_income = 0.0
+        for t in group_tickers:
+            h = holdings[t]
+            cv = float(h.get("current_value") or 0)
+            mi = float(h.get("approx_monthly_income") or 0)
+            total_value += cv
+            total_income += mi
+
+            # Correlation to group average
+            group_others = [t2 for t2 in group_tickers if t2 != t]
+            if group_others:
+                corr_to_group = float(np.mean([corr.loc[t, t2] for t2 in group_others
+                                                if not math.isnan(corr.loc[t, t2])]))
+            else:
+                corr_to_group = 1.0
+
+            ticker_details.append({
+                "ticker": t,
+                "description": h.get("description") or "",
+                "quantity": _safe(h.get("quantity")),
+                "current_value": _safe(cv),
+                "monthly_income": _safe(mi),
+                "current_yield": _safe(h.get("current_annual_yield")),
+                "correlation_to_group": _safe(corr_to_group),
+            })
+
+        clusters.append({
+            "cluster_id": cluster_id,
+            "underlying": underlying,
+            "tickers": ticker_details,
+            "avg_correlation": _safe(avg_corr),
+            "total_value": _safe(total_value),
+            "total_monthly_income": _safe(total_income),
+        })
+
+    # Add unavailable tickers to unclustered
+    for t in unavailable:
+        h = holdings[t]
+        unclustered.append({
+            "ticker": t,
+            "description": h.get("description") or "",
+            "quantity": _safe(h.get("quantity")),
+            "current_value": _safe(h.get("current_value")),
+            "monthly_income": _safe(h.get("approx_monthly_income")),
+            "current_yield": _safe(h.get("current_annual_yield")),
+        })
+
+    # Add "nearest cluster" info for each unclustered ticker
+    for item in unclustered:
+        t = item["ticker"]
+        if t not in corr_matrix:
+            continue
+        best_cluster = None
+        best_corr = -1.0
+        for c in clusters:
+            cluster_tickers = [ct["ticker"] for ct in c["tickers"]]
+            vals = []
+            for ct in cluster_tickers:
+                if ct in corr_matrix.get(t, {}):
+                    v = corr_matrix[t][ct]
+                    if v is not None:
+                        vals.append(v)
+            if vals:
+                avg = sum(vals) / len(vals)
+                if avg > best_corr:
+                    best_corr = avg
+                    best_cluster = c["underlying"]
+        if best_cluster and best_corr > 0:
+            item["nearest_cluster"] = best_cluster
+            item["nearest_correlation"] = _safe(best_corr)
+
+    return jsonify(
+        clusters=clusters,
+        unclustered=unclustered,
+        correlation_matrix=corr_matrix,
+    )
+
+
+@app.route("/api/consolidation/simulate", methods=["POST"])
+def consolidation_simulate():
+    """Simulate selling one ticker and redistributing to another."""
+    import math
+    import warnings
+    import numpy as np
+    import yfinance as yf
+    warnings.filterwarnings("ignore")
+
+    def _safe(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else round(f, 4)
+        except (TypeError, ValueError):
+            return None
+
+    data = request.get_json(force=True, silent=True) or {}
+    sell_ticker = str(data.get("sell_ticker", "")).strip().upper()
+    buy_ticker = str(data.get("buy_ticker", "")).strip().upper()
+    period = data.get("period", "1y")
+
+    if not sell_ticker or not buy_ticker:
+        return jsonify(error="Both sell_ticker and buy_ticker are required."), 400
+    if sell_ticker == buy_ticker:
+        return jsonify(error="sell_ticker and buy_ticker must be different."), 400
+
+    valid_periods = {"3mo", "6mo", "1y", "2y", "5y"}
+    if period not in valid_periods:
+        period = "1y"
+
+    # Get current holdings data
+    _, pids = get_profile_filter()
+    placeholders = ",".join("?" * len(pids))
+    conn = get_connection()
+    sell_row = conn.execute(
+        f"SELECT ticker, description, quantity, current_value, current_price, "
+        f"approx_monthly_income, current_annual_yield "
+        f"FROM all_account_info WHERE ticker = ? AND profile_id IN ({placeholders}) "
+        f"AND quantity > 0",
+        [sell_ticker] + pids,
+    ).fetchone()
+    buy_row = conn.execute(
+        f"SELECT ticker, description, quantity, current_value, current_price, "
+        f"approx_monthly_income, current_annual_yield "
+        f"FROM all_account_info WHERE ticker = ? AND profile_id IN ({placeholders}) "
+        f"AND quantity > 0",
+        [buy_ticker] + pids,
+    ).fetchone()
+    conn.close()
+
+    if not sell_row:
+        return jsonify(error=f"No holding found for {sell_ticker}."), 404
+    if not buy_row:
+        return jsonify(error=f"No holding found for {buy_ticker}."), 404
+
+    sell_data = dict(sell_row)
+    buy_data = dict(buy_row)
+
+    sell_value = float(sell_data.get("current_value") or 0)
+    sell_income = float(sell_data.get("approx_monthly_income") or 0)
+    sell_yield = float(sell_data.get("current_annual_yield") or 0)
+    buy_value = float(buy_data.get("current_value") or 0)
+    buy_income = float(buy_data.get("approx_monthly_income") or 0)
+    buy_yield = float(buy_data.get("current_annual_yield") or 0)
+    buy_price = float(buy_data.get("current_price") or 0)
+
+    if buy_price <= 0:
+        return jsonify(error=f"Cannot simulate: {buy_ticker} has no valid price."), 400
+
+    # Calculate consolidation impact
+    new_shares_added = sell_value / buy_price
+    new_total_value = sell_value + buy_value  # value doesn't change at moment of swap
+    # New income from added shares: (sell_value / buy_price) * (buy annual yield * buy_price / 12)
+    # Simpler: sell_value * buy_yield / 12
+    new_monthly_from_added = (sell_value * buy_yield) / 12 if buy_yield else 0
+    new_monthly_income = buy_income + new_monthly_from_added
+    old_combined_income = sell_income + buy_income
+    income_change = new_monthly_income - old_combined_income
+    income_change_pct = (income_change / old_combined_income * 100) if old_combined_income > 0 else 0
+    new_yield = (new_monthly_income * 12 / new_total_value) if new_total_value > 0 else 0
+
+    # Download historical data for performance comparison
+    both_tickers = list(set([sell_ticker, buy_ticker]))
+    try:
+        raw = yf.download(" ".join(both_tickers), period=period, auto_adjust=True,
+                          actions=True, progress=False)
+        if raw.empty:
+            return jsonify(error="No historical data returned from Yahoo Finance.")
+    except Exception as e:
+        return jsonify(error=f"Failed to fetch data: {str(e)}")
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        close = raw["Close"].dropna(how="all")
+        # Try to get dividends
+        try:
+            divs = raw["Dividends"].fillna(0)
+        except KeyError:
+            divs = pd.DataFrame(0, index=close.index, columns=close.columns)
+    else:
+        close = raw[["Close"]].dropna(how="all")
+        close.columns = [both_tickers[0]]
+        try:
+            divs = raw[["Dividends"]].fillna(0)
+            divs.columns = [both_tickers[0]]
+        except KeyError:
+            divs = pd.DataFrame(0, index=close.index, columns=[both_tickers[0]])
+
+    # Ensure both tickers present
+    for t in [sell_ticker, buy_ticker]:
+        if t not in close.columns:
+            return jsonify(error=f"No price data available for {t}.")
+        if t not in divs.columns:
+            divs[t] = 0
+
+    # Calculate performance metrics for each ticker
+    perf = {}
+    history = {"dates": [], "sell_total_return": [], "buy_total_return": [],
+               "sell_price_return": [], "buy_price_return": []}
+
+    for label, t in [("sell_ticker", sell_ticker), ("buy_ticker", buy_ticker)]:
+        tc = close[t].dropna()
+        if len(tc) < 2:
+            perf[label] = {"total_return": None, "price_return": None,
+                           "volatility": None, "max_drawdown": None, "sharpe": None}
+            continue
+
+        prices = tc.values
+        start_price = float(prices[0])
+
+        # Price return series
+        price_ret_series = (prices / start_price - 1) * 100
+
+        # Total return (including dividends reinvested)
+        td = divs[t].reindex(tc.index).fillna(0)
+        cum_shares = 1.0
+        total_ret_series = np.zeros(len(tc))
+        for i in range(len(tc)):
+            d = float(td.iloc[i])
+            p = float(prices[i])
+            if p > 0 and d > 0:
+                cum_shares += d * cum_shares / p
+            total_ret_series[i] = (cum_shares * p / start_price - 1) * 100
+
+        # Daily returns for volatility/sharpe
+        daily_ret = np.diff(prices) / prices[:-1]
+        vol = float(np.std(daily_ret) * np.sqrt(252) * 100) if len(daily_ret) > 1 else 0
+
+        # Max drawdown
+        running_max = np.maximum.accumulate(prices)
+        drawdowns = (prices - running_max) / running_max * 100
+        max_dd = float(np.min(drawdowns))
+
+        # Sharpe (annualized, assuming 0 risk-free rate)
+        mean_daily = float(np.mean(daily_ret)) if len(daily_ret) > 0 else 0
+        std_daily = float(np.std(daily_ret)) if len(daily_ret) > 0 else 1
+        sharpe = (mean_daily / std_daily * np.sqrt(252)) if std_daily > 0 else 0
+
+        perf[label] = {
+            "total_return": _safe(total_ret_series[-1]),
+            "price_return": _safe(price_ret_series[-1]),
+            "volatility": _safe(vol),
+            "max_drawdown": _safe(max_dd),
+            "sharpe": _safe(sharpe),
+        }
+
+        # Build history arrays
+        dates_str = [d.strftime("%Y-%m-%d") for d in tc.index]
+        if label == "sell_ticker":
+            history["dates"] = dates_str
+            history["sell_total_return"] = [_safe(v) for v in total_ret_series]
+            history["sell_price_return"] = [_safe(v) for v in price_ret_series]
+        else:
+            # Align buy to same dates if needed (use its own dates)
+            history["buy_total_return"] = [_safe(v) for v in total_ret_series]
+            history["buy_price_return"] = [_safe(v) for v in price_ret_series]
+
+    # If dates differ between tickers, use the intersection
+    # For simplicity, use sell_ticker dates as base (already set)
+
+    return jsonify(
+        sell={
+            "ticker": sell_ticker,
+            "current_value": _safe(sell_value),
+            "monthly_income": _safe(sell_income),
+            "current_yield": _safe(sell_yield),
+        },
+        buy={
+            "ticker": buy_ticker,
+            "current_value": _safe(buy_value),
+            "monthly_income": _safe(buy_income),
+            "current_yield": _safe(buy_yield),
+        },
+        after_consolidation={
+            "new_shares_added": _safe(new_shares_added),
+            "new_total_value": _safe(new_total_value),
+            "new_monthly_income": _safe(new_monthly_income),
+            "income_change": _safe(income_change),
+            "income_change_pct": _safe(income_change_pct),
+            "new_yield": _safe(new_yield),
+        },
+        performance_comparison=perf,
+        history=history,
+    )
+
+
+@app.route("/api/consolidation/regimes", methods=["POST"])
+def consolidation_regimes():
+    """Analyze performance by market regime (bull/bear/sideways + high vol overlay)."""
+    import math
+    import warnings
+    import numpy as np
+    import yfinance as yf
+    warnings.filterwarnings("ignore")
+
+    def _safe(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else round(f, 4)
+        except (TypeError, ValueError):
+            return None
+
+    data = request.get_json(force=True, silent=True) or {}
+    tickers = [str(t).strip().upper() for t in data.get("tickers", []) if str(t).strip()]
+    period = data.get("period", "2y")
+
+    if not tickers:
+        return jsonify(error="No tickers provided."), 400
+    if len(tickers) > 20:
+        return jsonify(error="Maximum 20 tickers allowed."), 400
+
+    valid_periods = {"6mo", "1y", "2y", "5y", "max"}
+    if period not in valid_periods:
+        period = "2y"
+
+    # Download SPY, VIX, and all requested tickers
+    all_dl = list(set(tickers + ["SPY", "^VIX"]))
+    try:
+        raw = yf.download(" ".join(all_dl), period=period, auto_adjust=True,
+                          actions=True, progress=False)
+        if raw.empty:
+            return jsonify(error="No price data returned from Yahoo Finance.")
+    except Exception as e:
+        return jsonify(error=f"Failed to fetch data: {str(e)}")
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        close = raw["Close"].dropna(how="all")
+        try:
+            divs = raw["Dividends"].fillna(0)
+        except KeyError:
+            divs = pd.DataFrame(0, index=close.index, columns=close.columns)
+    else:
+        close = raw[["Close"]].dropna(how="all")
+        close.columns = [all_dl[0]]
+        try:
+            divs = raw[["Dividends"]].fillna(0)
+            divs.columns = [all_dl[0]]
+        except KeyError:
+            divs = pd.DataFrame(0, index=close.index, columns=[all_dl[0]])
+
+    if "SPY" not in close.columns:
+        return jsonify(error="Could not fetch SPY benchmark data.")
+
+    # VIX data
+    has_vix = "^VIX" in close.columns
+    if has_vix:
+        vix_series = close["^VIX"].ffill()
+    else:
+        vix_series = pd.Series(20.0, index=close.index)
+
+    spy = close["SPY"].dropna()
+    if len(spy) < 63:
+        return jsonify(error="Not enough SPY data to calculate regimes (need 63+ trading days).")
+
+    # Calculate SPY 63-day rolling return (percentage)
+    spy_rolling = spy.pct_change(63) * 100
+    spy_rolling = spy_rolling.reindex(close.index)
+
+    # Classify regimes
+    regime_series = pd.Series("sideways", index=close.index)
+    regime_series[spy_rolling > 5] = "bull"
+    regime_series[spy_rolling < -5] = "bear"
+    # First 63 days have no rolling return; label as sideways
+    regime_series.iloc[:63] = "sideways"
+
+    # High vol overlay
+    high_vol = vix_series > 25
+
+    # Count regime days
+    total_days = len(regime_series)
+    regime_counts = regime_series.value_counts()
+    regimes_summary = {}
+    for r in ["bull", "bear", "sideways"]:
+        days = int(regime_counts.get(r, 0))
+        regimes_summary[r] = {
+            "days": days,
+            "pct_of_period": _safe(days / total_days * 100) if total_days > 0 else 0,
+        }
+
+    # Analyze each ticker per regime
+    data_warnings = {}
+    ticker_performance = {}
+
+    for t in tickers:
+        if t not in close.columns:
+            data_warnings[t] = "No price data available"
+            continue
+
+        tc = close[t].dropna()
+        if len(tc) < 30:
+            data_warnings[t] = f"Only {len(tc)} days of history available"
+            continue
+
+        # Note if limited history
+        expected_days = len(close.index)
+        actual_days = len(tc)
+        if actual_days < expected_days * 0.8:
+            months_avail = round(actual_days / 21)
+            data_warnings[t] = f"Only {months_avail} months of history available"
+
+        td = divs[t].reindex(tc.index).fillna(0) if t in divs.columns else pd.Series(0, index=tc.index)
+
+        ticker_perf = {}
+
+        for regime_name in ["bull", "bear", "sideways", "high_vol"]:
+            if regime_name == "high_vol":
+                mask = high_vol.reindex(tc.index).fillna(False)
+            else:
+                mask = (regime_series.reindex(tc.index) == regime_name)
+
+            regime_prices = tc[mask]
+            regime_divs = td[mask]
+
+            if len(regime_prices) < 2:
+                ticker_perf[regime_name] = {
+                    "price_return": None, "income_return": None,
+                    "total_return": None, "max_drawdown": None, "volatility": None,
+                }
+                continue
+
+            # Daily returns within regime days
+            prices_arr = regime_prices.values
+            daily_rets = np.diff(prices_arr) / prices_arr[:-1]
+            daily_rets = daily_rets[np.isfinite(daily_rets)]
+
+            if len(daily_rets) < 1:
+                ticker_perf[regime_name] = {
+                    "price_return": None, "income_return": None,
+                    "total_return": None, "max_drawdown": None, "volatility": None,
+                }
+                continue
+
+            # Annualized price return
+            n_days = len(regime_prices)
+            cumulative_price_ret = (float(prices_arr[-1]) / float(prices_arr[0]) - 1)
+            ann_factor = 252 / n_days if n_days > 0 else 1
+            ann_price_ret = cumulative_price_ret * ann_factor * 100
+
+            # Income return: sum of dividends / average price, annualized
+            total_div = float(regime_divs.sum())
+            avg_price = float(regime_prices.mean())
+            if avg_price > 0 and n_days > 0:
+                income_ret_period = total_div / avg_price
+                ann_income_ret = income_ret_period * ann_factor * 100
+            else:
+                ann_income_ret = 0
+
+            ann_total_ret = ann_price_ret + ann_income_ret
+
+            # Volatility (annualized)
+            vol = float(np.std(daily_rets) * np.sqrt(252) * 100) if len(daily_rets) > 1 else 0
+
+            # Max drawdown within regime periods
+            running_max = np.maximum.accumulate(prices_arr)
+            drawdowns = (prices_arr - running_max) / running_max * 100
+            max_dd = float(np.min(drawdowns))
+
+            ticker_perf[regime_name] = {
+                "price_return": _safe(ann_price_ret),
+                "income_return": _safe(ann_income_ret),
+                "total_return": _safe(ann_total_ret),
+                "max_drawdown": _safe(max_dd),
+                "volatility": _safe(vol),
+            }
+
+        ticker_performance[t] = ticker_perf
+
+    # Build timeline for visualization
+    timeline = {
+        "dates": [d.strftime("%Y-%m-%d") for d in close.index],
+        "regime": [regime_series.iloc[i] for i in range(len(regime_series))],
+        "spy_price": [_safe(float(spy.reindex(close.index).iloc[i]))
+                      if i < len(spy.reindex(close.index)) and not math.isnan(spy.reindex(close.index).iloc[i])
+                      else None
+                      for i in range(len(close.index))],
+        "vix": [_safe(float(vix_series.iloc[i]))
+                if not math.isnan(vix_series.iloc[i])
+                else None
+                for i in range(len(close.index))],
+    }
+
+    return jsonify(
+        regimes=regimes_summary,
+        ticker_performance=ticker_performance,
+        timeline=timeline,
+        data_warnings=data_warnings,
+    )
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────

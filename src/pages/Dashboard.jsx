@@ -3,7 +3,7 @@ import { API_BASE } from '../config'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
-const fmt = (v) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmt = (v, d = 2) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
 const pct = (v) => (v == null ? '—' : (Number(v) * 100).toFixed(2) + '%')
 
 function SummaryCard({ label, value, sub, color, className }) {
@@ -495,7 +495,7 @@ export default function Dashboard() {
                   <td style={{ textAlign: 'center' }}>{h.div_frequency || '—'}</td>
                   <td>{h.purchase_date ? new Date(h.purchase_date).toLocaleDateString() : '—'}</td>
                   <td style={{ textAlign: 'right' }}>{Number.isInteger(h.quantity) ? h.quantity : parseFloat(h.quantity.toFixed(3))}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(h.price_paid)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(h.price_paid, 4)}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(h.current_price)}</td>
                   <td style={{ textAlign: 'right' }}>{pct(h.pct_of_account)}</td>
                   <td style={{ textAlign: 'right', color: gradeColor(h.gain_or_loss_percentage) }}>{pct(h.gain_or_loss_percentage)}</td>

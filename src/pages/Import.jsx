@@ -57,6 +57,7 @@ export default function Import() {
   const [importWeekly, setImportWeekly] = useState(true)
   const [importMonthly, setImportMonthly] = useState(true)
   const [importMonthlyTickers, setImportMonthlyTickers] = useState(true)
+  const [asTransactions, setAsTransactions] = useState(false)
 
   useEffect(() => {
     pf('/api/data/stats')
@@ -108,6 +109,7 @@ export default function Import() {
     try {
       // Main import
       const extraFields = multiSheet ? { multi_sheet: 'true' } : { sheet_name: sheetName }
+      if (asTransactions) extraFields.as_transactions = 'true'
       const main = await uploadFile(`/api/import/excel`, extraFields)
       results.push(main.message)
       if (main.details) {
@@ -156,6 +158,7 @@ export default function Import() {
 
     try {
       const extraFields = multiSheet ? { multi_sheet: 'true' } : {}
+      if (asTransactions) extraFields.as_transactions = 'true'
       const data = await uploadFile(`/api/import/generic`, extraFields)
       setResult([data.message])
       if (data.details) {
@@ -280,6 +283,18 @@ export default function Import() {
             </div>
           )}
 
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '1rem' }}>
+            <input
+              type="checkbox"
+              checked={asTransactions}
+              onChange={(e) => setAsTransactions(e.target.checked)}
+            />
+            <strong>Import rows as transactions</strong>
+            <span style={{ color: '#90a4ae', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+              (compares imported shares to current position — creates a BUY or SELL transaction for the difference)
+            </span>
+          </label>
+
           <button
             className="btn btn-primary"
             onClick={handleOwnerImport}
@@ -331,6 +346,18 @@ export default function Import() {
                 Merge mode: existing holdings will be updated with spreadsheet values. New tickers will be added. App-only fields are preserved unless the spreadsheet provides them.
               </div>
             )}
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '1rem' }}>
+              <input
+                type="checkbox"
+                checked={asTransactions}
+                onChange={(e) => setAsTransactions(e.target.checked)}
+              />
+              <strong>Import rows as transactions</strong>
+              <span style={{ color: '#90a4ae', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+                (compares imported shares to current position — creates a BUY or SELL transaction for the difference)
+              </span>
+            </label>
 
             <button
               className="btn btn-primary"

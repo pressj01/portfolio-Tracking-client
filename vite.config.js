@@ -6,7 +6,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:5001',
+      '/api': {
+        target: 'http://localhost:5001',
+        timeout: 120000,
+      },
     },
   },
   base: './',
