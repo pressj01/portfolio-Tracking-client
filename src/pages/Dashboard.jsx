@@ -65,6 +65,106 @@ function UpcomingDividends({ events }) {
   )
 }
 
+const DONUT_COLORS = [
+  '#4fc3f7', '#81c784', '#ffb74d', '#e57373', '#ba68c8',
+  '#4dd0e1', '#aed581', '#fff176', '#f06292', '#7986cb',
+  '#90a4ae', '#a1887f',
+]
+
+function PortfolioOverview({ groups, totalValue }) {
+  const chartRef = React.useRef(null)
+
+  useEffect(() => {
+    if (!groups || !groups.length || !window.Plotly || !chartRef.current) return
+    const labels = groups.map(g => g.name)
+    const values = groups.map(g => g.value)
+    const colors = groups.map((_, i) => DONUT_COLORS[i % DONUT_COLORS.length])
+
+    const trace = {
+      labels, values,
+      type: 'pie', hole: 0.55,
+      marker: { colors },
+      textinfo: 'none',
+      hovertemplate: '%{label}: $%{value:,.2f}<br>%{percent}<extra></extra>',
+      sort: false,
+    }
+    const layout = {
+      template: 'plotly_dark',
+      paper_bgcolor: '#16213e', plot_bgcolor: '#16213e',
+      margin: { l: 10, r: 10, t: 10, b: 10 },
+      showlegend: false,
+      height: 220, width: 220,
+    }
+    window.Plotly.newPlot(chartRef.current, [trace], layout, { responsive: true, displayModeBar: false })
+    return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
+  }, [groups])
+
+  const hasTargets = groups?.some(g => g.target_pct != null)
+
+  if (!groups || !groups.length) return null
+
+  return (
+    <div className="portfolio-overview card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem' }}>
+      <h3 style={{ color: '#90caf9', margin: '0 0 0.75rem', fontSize: '1rem' }}>Portfolio</h3>
+      <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
+        <div ref={chartRef} style={{ width: 220, flexShrink: 0 }} />
+        <div style={{ flex: 1, overflowX: 'auto' }}>
+          <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid #0f3460' }}>
+                <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Name</th>
+                <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Value/Invested</th>
+                <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Gain</th>
+                {hasTargets && <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Target</th>}
+                <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Allocation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map((g, i) => {
+                const color = DONUT_COLORS[i % DONUT_COLORS.length]
+                const gain = g.value - g.invested
+                const gainPct = g.invested ? ((gain / g.invested) * 100) : 0
+                const alloc = totalValue ? ((g.value / totalValue) * 100) : 0
+                return (
+                  <tr key={g.name} style={{ borderBottom: '1px solid #0a1628' }}>
+                    <td style={{ padding: '0.5rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                        <div>
+                          <div style={{ color: '#e0e8f5', fontWeight: 600 }}>{g.name}</div>
+                          <div style={{ color: '#8899aa', fontSize: '0.75rem' }}>{g.count} item{g.count !== 1 ? 's' : ''}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td style={{ textAlign: 'right', padding: '0.5rem' }}>
+                      <div style={{ color: '#e0e8f5' }}>{fmt(g.value)}</div>
+                      <div style={{ color: '#8899aa', fontSize: '0.75rem' }}>{fmt(g.invested)}</div>
+                    </td>
+                    <td style={{ textAlign: 'right', padding: '0.5rem' }}>
+                      <div style={{ color: gain >= 0 ? '#4dff91' : '#ff6b6b' }}>{gain >= 0 ? '+' : ''}{fmt(gain)}</div>
+                      <div style={{ color: gain >= 0 ? '#4dff91' : '#ff6b6b', fontSize: '0.75rem' }}>
+                        {gain >= 0 ? '▲' : '▼'} {Math.abs(gainPct).toFixed(2)}%
+                      </div>
+                    </td>
+                    {hasTargets && (
+                      <td style={{ textAlign: 'right', padding: '0.5rem', color: '#8899aa' }}>
+                        {g.target_pct != null ? `${Number(g.target_pct).toFixed(0)}%` : '—'}
+                      </td>
+                    )}
+                    <td style={{ textAlign: 'right', padding: '0.5rem' }}>
+                      <div style={{ color: '#e0e8f5' }}>{alloc.toFixed(2)}%</div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function TickerModal({ ticker, onClose }) {
   const pf = useProfileFetch()
   const { selection } = useProfile()
@@ -174,6 +274,7 @@ export default function Dashboard() {
   const [modalTicker, setModalTicker] = useState(null)
   const [portfolioCoverage, setPortfolioCoverage] = useState(null)
   const [tickerCoverage, setTickerCoverage] = useState({})
+  const [overviewGroups, setOverviewGroups] = useState(null)
 
   useEffect(() => {
     let stale = false
@@ -183,6 +284,7 @@ export default function Dashboard() {
     setPortfolioGrade({})
     setPortfolioCoverage(null)
     setTickerCoverage({})
+    setOverviewGroups(null)
     setRefreshStatus(null)
     setGradeStatus(null)
     pf('/api/holdings')
@@ -200,6 +302,41 @@ export default function Dashboard() {
           pf('/api/income-summary')
             .then(safeJson)
             .then(d => { if (!stale) setIncomeSummary(d) })
+            .catch(() => {})
+          // Build portfolio overview groups from categories or classification_type
+          pf('/api/categories/data')
+            .then(safeJson)
+            .then(catData => {
+              if (stale) return
+              const cats = catData.categories || []
+              if (cats.length > 0) {
+                // Use category grouping — need purchase_value per ticker from holdings
+                const holdingMap = {}
+                data.forEach(h => { if (h.quantity > 0) holdingMap[h.ticker] = h })
+                const groups = cats
+                  .map(c => {
+                    const tickers = (c.tickers || []).filter(t => holdingMap[t.ticker])
+                    const value = tickers.reduce((s, t) => s + (holdingMap[t.ticker]?.current_value || 0), 0)
+                    const invested = tickers.reduce((s, t) => s + (holdingMap[t.ticker]?.purchase_value || 0), 0)
+                    return { name: c.name, value, invested, count: tickers.length, target_pct: c.target_pct }
+                  })
+                  .filter(g => g.count > 0)
+                  .sort((a, b) => b.value - a.value)
+                setOverviewGroups(groups)
+              } else {
+                // Fallback: group by classification_type
+                const byType = {}
+                data.forEach(h => {
+                  if (h.quantity <= 0) return
+                  const ct = h.classification_type || 'Other'
+                  if (!byType[ct]) byType[ct] = { name: ct, value: 0, invested: 0, count: 0 }
+                  byType[ct].value += h.current_value || 0
+                  byType[ct].invested += h.purchase_value || 0
+                  byType[ct].count += 1
+                })
+                setOverviewGroups(Object.values(byType).sort((a, b) => b.value - a.value))
+              }
+            })
             .catch(() => {})
           pf('/api/portfolio-coverage')
             .then(safeJson)
@@ -445,6 +582,9 @@ export default function Dashboard() {
 
       {/* Upcoming Dividends This Week */}
       <UpcomingDividends events={upcomingDivs} />
+
+      {/* Portfolio Overview — Donut + Category Table */}
+      {overviewGroups && <PortfolioOverview groups={overviewGroups} totalValue={totals.currentValue} />}
 
       {/* Holdings Table */}
       <div className="holdings-table-wrap">

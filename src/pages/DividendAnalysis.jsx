@@ -119,18 +119,18 @@ export default function DividendAnalysis() {
   }
 
   const columns = [
-    { key: 'ticker', label: 'Ticker' },
-    { key: 'description', label: 'Description' },
-    { key: 'category_name', label: 'Category', tip: 'Investment category' },
-    { key: 'ytd_divs', label: 'YTD Divs', fmt: fmt, tip: 'Year-to-date dividends received' },
-    { key: 'total_divs_received', label: 'Total Divs', fmt: fmt, tip: 'Total dividends received since purchase' },
-    { key: 'paid_for_itself', label: 'Paid For Itself', fmt: v => fmtPctRaw(v != null ? v * 100 : null), tip: 'Percentage of original cost recovered through dividends' },
-    { key: 'dividend_paid', label: 'Div Paid', fmt: fmt, tip: 'Last dividend amount paid per share' },
-    { key: 'estim_payment_per_year', label: 'Est. Annual', fmt: fmt, tip: 'Estimated annual dividend income' },
-    { key: 'approx_monthly_income', label: 'Est. Monthly', fmt: fmt, tip: 'Estimated monthly dividend income' },
-    { key: 'annual_yield_on_cost', label: 'Yield on Cost', fmt: fmtPct, tip: 'Annual dividend yield based on your cost basis' },
-    { key: 'current_annual_yield', label: 'Current Yield', fmt: fmtPct, tip: 'Current annual dividend yield based on market price' },
-    { key: 'gain_or_loss', label: 'Gain / Loss', fmt: fmt, tip: 'Unrealized gain or loss in dollar amount' },
+    { key: 'ticker', label: 'Ticker', width: '5%' },
+    { key: 'description', label: 'Description', width: '20%' },
+    { key: 'category_name', label: 'Category', tip: 'Investment category', width: '7%' },
+    { key: 'ytd_divs', label: 'YTD Divs', fmt: fmt, align: 'right', tip: 'Year-to-date dividends received' },
+    { key: 'total_divs_received', label: 'Total Divs', fmt: fmt, align: 'right', tip: 'Total dividends received since purchase' },
+    { key: 'paid_for_itself', label: 'Paid For Itself', fmt: v => fmtPctRaw(v != null ? v * 100 : null), align: 'right', tip: 'Percentage of original cost recovered through dividends' },
+    { key: 'dividend_paid', label: 'Div Paid', fmt: fmt, align: 'right', tip: 'Last dividend amount paid per share' },
+    { key: 'estim_payment_per_year', label: 'Est. Annual', fmt: fmt, align: 'right', tip: 'Estimated annual dividend income' },
+    { key: 'approx_monthly_income', label: 'Est. Monthly', fmt: fmt, align: 'right', tip: 'Estimated monthly dividend income' },
+    { key: 'annual_yield_on_cost', label: 'Yield on Cost', fmt: fmtPct, align: 'right', tip: 'Annual dividend yield based on your cost basis' },
+    { key: 'current_annual_yield', label: 'Current Yield', fmt: fmtPct, align: 'right', tip: 'Current annual dividend yield based on market price' },
+    { key: 'gain_or_loss', label: 'Gain / Loss', fmt: fmt, align: 'right', tip: 'Unrealized gain or loss in dollar amount' },
   ]
 
   return (
@@ -218,7 +218,7 @@ export default function DividendAnalysis() {
               <thead>
                 <tr>
                   {columns.map(col => (
-                    <th key={col.key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} onClick={() => handleSort(col.key)} title={col.tip || ''}>
+                    <th key={col.key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: col.align || 'left', width: col.width || undefined }} onClick={() => handleSort(col.key)} title={col.tip || ''}>
                       {col.label}{col.tip ? ' \u24D8' : ''}
                       <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === col.key ? '#7ecfff' : '#8899aa' }}>
                         {sortIcon(col.key)}
@@ -234,9 +234,8 @@ export default function DividendAnalysis() {
                     <tr key={row.ticker} style={paidPct >= 100 ? { background: 'rgba(77,255,145,0.05)' } : {}}>
                       {columns.map(col => {
                         const val = row[col.key]
-                        const isNum = typeof val === 'number'
                         let display = col.fmt ? col.fmt(val) : (val ?? '')
-                        let style = isNum ? { textAlign: 'right' } : {}
+                        let style = col.align ? { textAlign: col.align } : {}
 
                         if (col.key === 'ticker') display = <strong>{val}</strong>
                         if (col.key === 'total_divs_received') display = <strong>{fmt(val)}</strong>

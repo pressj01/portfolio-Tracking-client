@@ -603,6 +603,26 @@ function CategoriesHelp() {
         directing you to the Unallocated Assets panel.
       </p>
 
+      {/* ── Dashboard Overview ────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Dashboard Overview</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Once you define categories, a <strong>Portfolio Overview</strong> section appears on the Dashboard
+        above the holdings table. It displays a <strong>donut chart</strong> on the left showing your
+        category allocation visually, alongside a <strong>summary table</strong> on the right with:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Name</strong> — Category name and number of holdings.</li>
+        <li><strong>Value / Invested</strong> — Current market value and original cost basis for the category.</li>
+        <li><strong>Gain</strong> — Dollar gain or loss with a percentage, color-coded green (gain) or red (loss).</li>
+        <li><strong>Target</strong> — If any category has a target allocation set, a Target column appears showing the target percentage.</li>
+        <li><strong>Allocation</strong> — The category's actual percentage of total portfolio value.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        If no categories have been defined yet, the overview falls back to grouping holdings by
+        asset class (ETF, Equity, CEF, REIT, etc.) so you always have a high-level breakdown
+        of your portfolio on the Dashboard.
+      </p>
+
       {/* ── Tips ──────────────────────────────────────────────── */}
       <h4 style={{ marginTop: '1.25rem', marginBottom: '0.4rem' }}>Tips</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
