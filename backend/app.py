@@ -1191,6 +1191,15 @@ def refresh_market_data():
                     purchase_value = base_qty * price_paid
                     sets.append("purchase_value = ?")
                     vals.append(round(purchase_value, 2))
+            elif not is_drip and qty != base_qty:
+                # reinvest changed from Y to N — clear accumulated DRIP shares
+                qty = base_qty
+                sets.extend(["quantity = ?", "shares_bought_from_dividend = ?",
+                             "total_cash_reinvested = ?"])
+                vals.extend([round(base_qty, 6), 0, 0])
+                purchase_value = base_qty * price_paid
+                sets.append("purchase_value = ?")
+                vals.append(round(purchase_value, 2))
 
             if new_price:
                 current_value = new_price * qty
