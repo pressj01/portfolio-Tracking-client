@@ -18,6 +18,97 @@ function pctClass(v) {
   return v >= 0 ? 'pct-up' : 'pct-down'
 }
 
+function fmt(v) {
+  if (v == null) return '\u2014'
+  return '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function WatchlistTickerModal({ ticker, onClose }) {
+  const pf = useProfileFetch()
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!ticker) return
+    setLoading(true)
+    setError(null)
+    pf(`/api/ticker-return-1y/${ticker}`)
+      .then(r => {
+        if (!r.ok) throw new Error(`Could not load return data for ${ticker}`)
+        return r.json()
+      })
+      .then(d => {
+        if (d.error) throw new Error(d.error)
+        setData(d)
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [ticker, pf])
+
+  useEffect(() => {
+    const handleEsc = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handleEsc)
+    return () => window.removeEventListener('keydown', handleEsc)
+  }, [onClose])
+
+  useEffect(() => {
+    if (!data || !window.Plotly) return
+    const el = document.getElementById('wl-ticker-chart')
+    if (!el) return
+
+    const traces = [
+      {
+        x: data.dates, y: data.price_return,
+        mode: 'lines', name: 'Price Return %',
+        line: { color: '#7ecfff', width: 2 },
+        hovertemplate: '%{y:.2f}%<extra>Price</extra>',
+      },
+      {
+        x: data.dates, y: data.total_return,
+        mode: 'lines', name: 'Total Return %',
+        line: { color: '#4dff91', width: 2 },
+        fill: 'tonexty', fillcolor: 'rgba(77,255,145,0.08)',
+        hovertemplate: '%{y:.2f}%<extra>Total</extra>',
+      },
+    ]
+    const layout = {
+      template: 'plotly_dark',
+      paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
+      title: { text: `${data.ticker} — 1 Year Return`, font: { size: 16, color: '#e0e8f5' } },
+      xaxis: { title: '', gridcolor: '#1a2233' },
+      yaxis: { title: 'Return %', gridcolor: '#1a2233', ticksuffix: '%' },
+      legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'center', x: 0.5, font: { size: 12 } },
+      margin: { l: 50, r: 20, t: 60, b: 40 },
+      hovermode: 'x unified',
+      shapes: [{ type: 'line', x0: data.dates[0], x1: data.dates[data.dates.length - 1], y0: 0, y1: 0, line: { dash: 'dot', color: '#556677', width: 1 } }],
+    }
+    window.Plotly.newPlot(el, traces, layout, { responsive: true })
+    return () => { if (el) window.Plotly.purge(el) }
+  }, [data])
+
+  if (!ticker) return null
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <button className="modal-close" onClick={onClose}>&times;</button>
+        {loading && <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>}
+        {error && <div className="alert alert-error">{error}</div>}
+        {data && (
+          <>
+            <h2 style={{ color: '#7ecfff', marginBottom: '0.25rem' }}>{data.ticker} — {data.description}</h2>
+            <p style={{ color: '#8899aa', marginBottom: '1rem', fontSize: '0.9rem' }}>
+              1 Year Return starting at {fmt(data.start_price)}
+            </p>
+            <div id="wl-ticker-chart" style={{ height: '400px' }} />
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function Watchlist() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
@@ -30,6 +121,7 @@ export default function Watchlist() {
   const [notes, setNotes] = useState('')
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
+  const [modalTicker, setModalTicker] = useState(null)
   const initialLoad = useRef(true)
 
   const loadAnalysis = useCallback(() => {
@@ -242,7 +334,15 @@ export default function Watchlist() {
                 const a = analysisData ? getAnalysis(r.ticker) : null
                 return (
                   <tr key={r.ticker}>
-                    <td><strong>{r.ticker}</strong></td>
+                    <td>
+                      <a
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); setModalTicker(r.ticker) }}
+                        style={{ color: '#7ecfff', fontWeight: 600 }}
+                      >
+                        {r.ticker}
+                      </a>
+                    </td>
                     <td>{a?.price != null ? `$${a.price.toFixed(2)}` : '\u2014'}</td>
                     <td className={pctClass(a?.change_1d)}>{a?.change_1d != null ? fmtPct(a.change_1d) : '\u2014'}</td>
                     <td>{a?.div_yield != null ? a.div_yield.toFixed(2) + '%' : '\u2014'}</td>
@@ -282,6 +382,8 @@ export default function Watchlist() {
           </table>
         </div>
       )}
+
+      {modalTicker && <WatchlistTickerModal ticker={modalTicker} onClose={() => setModalTicker(null)} />}
     </div>
   )
 }

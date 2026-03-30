@@ -2865,6 +2865,79 @@ def ticker_return_chart(ticker):
         return jsonify({"error": f"Could not compute return data for {ticker}: {str(e)}"}), 500
 
 
+@app.route("/api/ticker-return-1y/<ticker>", methods=["GET"])
+def ticker_return_1y(ticker):
+    """Return 1-year price return % and total return % for any ticker (no portfolio required)."""
+    import warnings
+    import yfinance as yf
+    warnings.filterwarnings("ignore")
+
+    ticker = ticker.strip().upper()
+    start_date = (pd.Timestamp.now() - pd.DateOffset(years=1)).strftime("%Y-%m-%d")
+
+    dl_ticker = ticker
+    description = ticker
+    try:
+        _info = yf.Ticker(ticker).info or {}
+        description = _info.get("longName") or _info.get("shortName") or ticker
+        _new_sym = (_info.get("symbol") or "").upper()
+        if _new_sym and _new_sym != ticker:
+            dl_ticker = _new_sym
+    except Exception:
+        pass
+
+    try:
+        raw = yf.download(dl_ticker, start=start_date, progress=False, auto_adjust=False, actions=True)
+    except Exception as e:
+        return jsonify({"error": f"Yahoo Finance error for {ticker}: {str(e)}"}), 404
+
+    if raw.empty:
+        return jsonify({"error": f"No Yahoo Finance data for {ticker}"}), 404
+
+    try:
+        if isinstance(raw.columns, pd.MultiIndex):
+            close_col = raw["Close"][dl_ticker] if dl_ticker in raw["Close"].columns else raw["Close"].iloc[:, 0]
+            divs_col = raw["Dividends"][dl_ticker] if dl_ticker in raw["Dividends"].columns else raw["Dividends"].iloc[:, 0]
+        else:
+            close_col = raw["Close"]
+            divs_col = raw["Dividends"]
+
+        if not isinstance(close_col, pd.Series):
+            close_col = pd.Series(close_col) if hasattr(close_col, '__iter__') else pd.Series()
+        else:
+            close_col = close_col.squeeze()
+            if not isinstance(close_col, pd.Series):
+                return jsonify({"error": f"Not enough price history for {ticker}"}), 404
+        if not isinstance(divs_col, pd.Series):
+            divs_col = pd.Series(0, index=close_col.index)
+        else:
+            divs_col = divs_col.squeeze()
+            if not isinstance(divs_col, pd.Series):
+                divs_col = pd.Series(0, index=close_col.index)
+
+        if len(close_col) < 2:
+            return jsonify({"error": f"Not enough price history for {ticker}"}), 404
+
+        start_price = float(close_col.iloc[0])
+        if start_price <= 0:
+            return jsonify({"error": f"Invalid start price for {ticker}"}), 404
+
+        cum_divs = divs_col.reindex(close_col.index, fill_value=0).cumsum()
+        price_return = ((close_col - start_price) / start_price * 100).round(2)
+        total_return = ((close_col - start_price + cum_divs) / start_price * 100).round(2)
+
+        return jsonify({
+            "ticker": ticker,
+            "description": description,
+            "start_price": round(start_price, 2),
+            "dates": close_col.index.strftime("%Y-%m-%d").tolist(),
+            "price_return": price_return.tolist(),
+            "total_return": total_return.tolist(),
+        })
+    except Exception as e:
+        return jsonify({"error": f"Could not compute return data for {ticker}: {str(e)}"}), 500
+
+
 # ── Data Management ───────────────────────────────────────────────────────────
 
 @app.route("/api/data/clear-all", methods=["POST"])
