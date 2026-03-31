@@ -9381,7 +9381,7 @@ def builder_all_weather():
     conn = get_connection()
     h_ph = ",".join("?" * len(h_pids))
     existing = conn.execute(
-        f"SELECT ticker, current_value FROM holdings WHERE profile_id IN ({h_ph})", h_pids
+        f"SELECT ticker, SUM(current_value) as current_value FROM holdings WHERE profile_id IN ({h_ph}) GROUP BY ticker", h_pids
     ).fetchall()
     conn.close()
     existing_map = {r["ticker"].upper(): float(r["current_value"] or 0) for r in existing}
@@ -9530,7 +9530,7 @@ def builder_rebalance(pid):
     _, r_pids = get_profile_filter()
     r_ph = ",".join("?" * len(r_pids))
     existing = conn.execute(
-        f"SELECT ticker, current_value FROM holdings WHERE profile_id IN ({r_ph})", r_pids
+        f"SELECT ticker, SUM(current_value) as current_value FROM holdings WHERE profile_id IN ({r_ph}) GROUP BY ticker", r_pids
     ).fetchall()
     conn.close()
     existing_map = {r["ticker"].upper(): float(r["current_value"] or 0) for r in existing}
@@ -10474,7 +10474,22 @@ def consolidation_clusters():
     if not rows:
         return jsonify(error="No holdings found for this profile.")
 
-    holdings = {r["ticker"]: dict(r) for r in rows}
+    # Aggregate rows by ticker (same ticker may appear for multiple owners)
+    holdings = {}
+    for r in rows:
+        t = r["ticker"]
+        if t in holdings:
+            holdings[t]["quantity"] = (holdings[t]["quantity"] or 0) + (r["quantity"] or 0)
+            holdings[t]["current_value"] = (holdings[t]["current_value"] or 0) + (r["current_value"] or 0)
+            holdings[t]["approx_monthly_income"] = (holdings[t]["approx_monthly_income"] or 0) + (r["approx_monthly_income"] or 0)
+            # Keep current_price and current_annual_yield from existing entry (same ticker, same price)
+        else:
+            holdings[t] = dict(r)
+    # Recalculate yield from aggregated values
+    for t, h in holdings.items():
+        cv = h.get("current_value") or 0
+        mi = h.get("approx_monthly_income") or 0
+        h["current_annual_yield"] = (mi * 12 / cv * 100) if cv > 0 else 0
     tickers = list(holdings.keys())
 
     if len(tickers) < 2:
@@ -10725,33 +10740,45 @@ def consolidation_simulate():
     if period not in valid_periods:
         period = "1y"
 
-    # Get current holdings data
+    # Get current holdings data (aggregate across all owners in profile)
     _, pids = get_profile_filter()
     placeholders = ",".join("?" * len(pids))
     conn = get_connection()
-    sell_row = conn.execute(
+    sell_rows = conn.execute(
         f"SELECT ticker, description, quantity, current_value, current_price, "
         f"approx_monthly_income, current_annual_yield "
         f"FROM all_account_info WHERE ticker = ? AND profile_id IN ({placeholders}) "
         f"AND quantity > 0",
         [sell_ticker] + pids,
-    ).fetchone()
-    buy_row = conn.execute(
+    ).fetchall()
+    buy_rows = conn.execute(
         f"SELECT ticker, description, quantity, current_value, current_price, "
         f"approx_monthly_income, current_annual_yield "
         f"FROM all_account_info WHERE ticker = ? AND profile_id IN ({placeholders}) "
         f"AND quantity > 0",
         [buy_ticker] + pids,
-    ).fetchone()
+    ).fetchall()
     conn.close()
 
-    if not sell_row:
+    if not sell_rows:
         return jsonify(error=f"No holding found for {sell_ticker}."), 404
-    if not buy_row:
+    if not buy_rows:
         return jsonify(error=f"No holding found for {buy_ticker}."), 404
 
-    sell_data = dict(sell_row)
-    buy_data = dict(buy_row)
+    # Aggregate across owners
+    def _aggregate_rows(rows):
+        agg = dict(rows[0])
+        for r in rows[1:]:
+            agg["quantity"] = (agg["quantity"] or 0) + (r["quantity"] or 0)
+            agg["current_value"] = (agg["current_value"] or 0) + (r["current_value"] or 0)
+            agg["approx_monthly_income"] = (agg["approx_monthly_income"] or 0) + (r["approx_monthly_income"] or 0)
+        cv = agg.get("current_value") or 0
+        mi = agg.get("approx_monthly_income") or 0
+        agg["current_annual_yield"] = (mi * 12 / cv * 100) if cv > 0 else 0
+        return agg
+
+    sell_data = _aggregate_rows(sell_rows)
+    buy_data = _aggregate_rows(buy_rows)
 
     sell_value = float(sell_data.get("current_value") or 0)
     sell_income = float(sell_data.get("approx_monthly_income") or 0)
