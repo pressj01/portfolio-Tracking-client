@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import Plot from 'react-plotly.js'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { useLocation, Link } from 'react-router-dom'
 
 const SIM_PERIODS = [
   { label: '6mo', value: '6mo' },
@@ -359,6 +360,11 @@ function SimulatorTab({ pf, holdings, preselectedSell }) {
             {loading ? 'Simulating...' : 'Simulate'}
           </button>
         </div>
+      </div>
+
+      <div style={{ background: '#0d1b2a', border: '1px solid #1a3a5c', borderRadius: 6, padding: '0.5rem 1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <span style={{ color: '#90a4ae', fontSize: '0.8rem' }}>Check how macro conditions affect this trade:</span>
+        <Link to="/macro-dashboard" style={{ color: '#64b5f6', fontSize: '0.8rem', textDecoration: 'none', fontWeight: 600 }}>Macro Regime Dashboard →</Link>
       </div>
 
       {error && <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{error}</div>}
@@ -765,6 +771,11 @@ function RegimeTab({ pf, holdings }) {
         </div>
       )}
 
+      <div style={{ background: '#0d1b2a', border: '1px solid #1a3a5c', borderRadius: 6, padding: '0.5rem 1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <span style={{ color: '#90a4ae', fontSize: '0.8rem' }}>See how macro conditions affect your portfolio:</span>
+        <Link to="/macro-dashboard" style={{ color: '#64b5f6', fontSize: '0.8rem', textDecoration: 'none', fontWeight: 600 }}>Macro Regime Dashboard →</Link>
+      </div>
+
       {result && !loading && (
         <>
           {/* Regime timeline */}
@@ -897,9 +908,21 @@ const selectStyle = {
 export default function ConsolidationAnalysis() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
+  const location = useLocation()
   const [activeTab, setActiveTab] = useState('overlap')
   const [holdings, setHoldings] = useState([])
   const [preselectedSell, setPreselectedSell] = useState('')
+
+  // Read URL params for deep-linking (e.g. from Macro Dashboard)
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const tab = params.get('tab')
+    const sell = params.get('sell')
+    if (tab === 'simulator') {
+      setActiveTab('simulator')
+      if (sell) setPreselectedSell(sell.toUpperCase())
+    }
+  }, [location.search])
 
   // Fetch holdings for dropdowns
   useEffect(() => {

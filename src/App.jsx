@@ -26,6 +26,7 @@ import ManagePortfolios from './pages/ManagePortfolios'
 import Export from './pages/Export'
 import DividendCompare from './pages/DividendCompare'
 import ConsolidationAnalysis from './pages/ConsolidationAnalysis'
+import MacroRegimeDashboard from './pages/MacroRegimeDashboard'
 import Help from './pages/Help'
 
 function NavDropdown({ label, children }) {
@@ -90,6 +91,7 @@ function App() {
         <Route path="/export" element={<Export />} />
         <Route path="/div-compare" element={<DividendCompare />} />
         <Route path="/consolidation" element={<ConsolidationAnalysis />} />
+        <Route path="/macro-dashboard" element={<MacroRegimeDashboard />} />
         <Route path="/help" element={<Help />} />
       </Routes>
     </Router>
@@ -142,6 +144,7 @@ function Nav() {
         <NavLink to="/portfolio-builder">Portfolio Builder</NavLink>
         <NavLink to="/dist-compare">Distribution Compare</NavLink>
         <NavLink to="/consolidation">Consolidation Analysis</NavLink>
+        <NavLink to="/macro-dashboard">Macro Regime Dashboard</NavLink>
       </NavDropdown>
       <NavDropdown label="Admin">
         <NavLink to="/import">Import</NavLink>

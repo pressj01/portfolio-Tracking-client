@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 
 # Ensure backend directory is on the Python path so sibling imports work
 # regardless of the working directory (e.g. when launched from project root).
@@ -11129,6 +11130,876 @@ def consolidation_regimes():
         ticker_performance=ticker_performance,
         timeline=timeline,
         data_warnings=data_warnings,
+    )
+
+
+# ── Macro Regime Dashboard ─────────────────────────────────────────────────────
+
+# Macro proxy tickers fetched from yfinance
+MACRO_TICKERS = {
+    "tip":        "TIP",       # iShares TIPS ETF (inflation-linked)
+    "ief":        "IEF",       # 7-10yr Treasury ETF (nominal bonds)
+    "oil":        "CL=F",      # WTI Crude futures
+    "rates_10y":  "^TNX",      # 10-Year Treasury Yield
+    "rates_short":"^IRX",      # 13-Week T-Bill yield
+    "usd":        "DX-Y.NYB",  # US Dollar Index
+    "gold":       "GC=F",      # Gold futures
+    "vix":        "^VIX",      # Volatility Index
+    "spy":        "SPY",       # S&P 500 ETF
+}
+
+# Pillar classification -> macro sensitivity tags
+MACRO_SENSITIVITY_BY_PILLAR = {
+    "HA":  ["rate_sensitive_negative", "inflation_neutral"],
+    "A":   ["rate_sensitive_negative", "inflation_negative"],
+    "GS":  ["inflation_benefiting", "commodity_linked", "safe_haven"],
+    "B":   ["rate_sensitive_mild", "inflation_neutral"],
+    "J":   ["rate_sensitive_negative", "inflation_negative"],
+    "BDC": ["rate_sensitive_positive", "inflation_neutral"],
+    "G":   ["growth_equity", "rate_sensitive_negative"],
+}
+
+# yfinance sector -> macro sensitivity tags (Tier 2 fallback)
+MACRO_SENSITIVITY_BY_SECTOR = {
+    "Energy":                 ["commodity_linked", "inflation_benefiting"],
+    "Basic Materials":        ["commodity_linked", "inflation_benefiting"],
+    "Real Estate":            ["rate_sensitive_negative", "inflation_neutral"],
+    "Utilities":              ["rate_sensitive_negative", "inflation_negative"],
+    "Financial Services":     ["rate_sensitive_positive", "inflation_neutral"],
+    "Financials":             ["rate_sensitive_positive", "inflation_neutral"],
+    "Technology":             ["growth_equity", "rate_sensitive_negative"],
+    "Communication Services": ["growth_equity", "rate_sensitive_negative"],
+    "Consumer Cyclical":      ["growth_equity", "inflation_neutral"],
+    "Consumer Defensive":     ["inflation_neutral", "rate_sensitive_mild"],
+    "Healthcare":             ["inflation_neutral", "rate_sensitive_mild"],
+    "Industrials":            ["inflation_neutral", "rate_sensitive_mild"],
+}
+
+# yfinance fund category -> macro sensitivity tags (Tier 2 for ETFs/funds)
+MACRO_SENSITIVITY_BY_CATEGORY = {
+    "Inflation-Protected Bond":  ["inflation_benefiting", "rate_sensitive_mild"],
+    "Commodities Broad Basket":  ["commodity_linked", "inflation_benefiting"],
+    "Commodities Focused":       ["commodity_linked", "inflation_benefiting"],
+    "Equity Energy":             ["commodity_linked", "inflation_benefiting"],
+    "Equity Precious Metals":    ["safe_haven", "inflation_benefiting"],
+    "High Yield Bond":           ["rate_sensitive_negative", "inflation_negative"],
+    "Bank Loan":                 ["rate_sensitive_positive", "inflation_neutral"],
+    "Floating Rate":             ["rate_sensitive_positive", "inflation_neutral"],
+    "Long Government":           ["rate_sensitive_negative", "inflation_negative"],
+    "Long-Term Bond":            ["rate_sensitive_negative", "inflation_negative"],
+    "Short Government":          ["rate_sensitive_mild", "inflation_neutral"],
+    "Short-Term Bond":           ["rate_sensitive_mild", "inflation_neutral"],
+    "Ultrashort Bond":           ["rate_sensitive_mild", "inflation_neutral"],
+    "Real Estate":               ["rate_sensitive_negative", "inflation_neutral"],
+    "Large Growth":              ["growth_equity", "rate_sensitive_negative"],
+    "Large Blend":               ["growth_equity", "rate_sensitive_mild"],
+    "Large Value":               ["inflation_neutral", "rate_sensitive_mild"],
+    "Mid-Cap Growth":            ["growth_equity", "rate_sensitive_negative"],
+    "Small Growth":              ["growth_equity", "rate_sensitive_negative"],
+    "Diversified Emerging Mkts": ["growth_equity", "commodity_linked"],
+}
+
+# Macro score weights per sensitivity tag, keyed by regime component
+# Positive = favorable in that condition, negative = unfavorable
+MACRO_SCORE_WEIGHTS = {
+    "inflation_rising": {
+        "inflation_benefiting": 1.0, "inflation_negative": -1.0,
+        "inflation_neutral": 0.0, "commodity_linked": 0.5,
+        "safe_haven": 0.3, "rate_sensitive_positive": 0.3,
+        "rate_sensitive_negative": -0.3, "rate_sensitive_mild": -0.1,
+        "growth_equity": -0.5, "unclassified": 0.0,
+    },
+    "inflation_falling": {
+        "inflation_benefiting": -0.3, "inflation_negative": 0.5,
+        "inflation_neutral": 0.0, "commodity_linked": -0.3,
+        "safe_haven": -0.1, "rate_sensitive_positive": -0.3,
+        "rate_sensitive_negative": 0.5, "rate_sensitive_mild": 0.1,
+        "growth_equity": 0.7, "unclassified": 0.0,
+    },
+    "rates_rising": {
+        "rate_sensitive_positive": 1.0, "rate_sensitive_negative": -1.0,
+        "rate_sensitive_mild": -0.3, "inflation_benefiting": 0.2,
+        "inflation_negative": -0.3, "inflation_neutral": 0.0,
+        "commodity_linked": 0.1, "safe_haven": -0.2,
+        "growth_equity": -0.7, "unclassified": 0.0,
+    },
+    "rates_falling": {
+        "rate_sensitive_positive": -0.5, "rate_sensitive_negative": 0.8,
+        "rate_sensitive_mild": 0.2, "inflation_benefiting": 0.0,
+        "inflation_negative": 0.3, "inflation_neutral": 0.0,
+        "commodity_linked": 0.0, "safe_haven": 0.3,
+        "growth_equity": 0.8, "unclassified": 0.0,
+    },
+    "oil_rising": {
+        "commodity_linked": 1.0, "inflation_benefiting": 0.5,
+        "inflation_negative": -0.3, "inflation_neutral": 0.0,
+        "rate_sensitive_positive": 0.1, "rate_sensitive_negative": -0.2,
+        "rate_sensitive_mild": 0.0, "safe_haven": 0.2,
+        "growth_equity": -0.3, "unclassified": 0.0,
+    },
+    "oil_falling": {
+        "commodity_linked": -0.5, "inflation_benefiting": -0.2,
+        "inflation_negative": 0.3, "inflation_neutral": 0.0,
+        "rate_sensitive_positive": 0.0, "rate_sensitive_negative": 0.1,
+        "rate_sensitive_mild": 0.0, "safe_haven": -0.1,
+        "growth_equity": 0.5, "unclassified": 0.0,
+    },
+}
+
+# In-memory cache for macro conditions (TTL-based)
+# Candidate ETFs to suggest when user lacks exposure in a sensitivity category
+CANDIDATE_ETFS = {
+    "inflation_benefiting": [
+        {"ticker": "TIP",  "name": "iShares TIPS Bond ETF"},
+        {"ticker": "SCHP", "name": "Schwab U.S. TIPS ETF"},
+        {"ticker": "VTIP", "name": "Vanguard Short-Term Inflation-Protected Securities"},
+        {"ticker": "DJP",  "name": "iPath Bloomberg Commodity Index"},
+        {"ticker": "PDBC", "name": "Invesco Optimum Yield Diversified Commodity Strategy"},
+    ],
+    "commodity_linked": [
+        {"ticker": "DBC",  "name": "Invesco DB Commodity Index Tracking Fund"},
+        {"ticker": "GSG",  "name": "iShares S&P GSCI Commodity-Indexed Trust"},
+        {"ticker": "XLE",  "name": "State Street Energy Select Sector SPDR Fund"},
+        {"ticker": "XLEI", "name": "YieldMax XLE Option Income Strategy ETF"},
+        {"ticker": "MLPI", "name": "NEOS MLP & Energy Infrastructure High Income ETF"},
+        {"ticker": "USO",  "name": "United States Oil Fund"},
+        {"ticker": "PDBC", "name": "Invesco Optimum Yield Diversified Commodity Strategy"},
+    ],
+    "safe_haven": [
+        {"ticker": "GLD",  "name": "SPDR Gold Shares"},
+        {"ticker": "IAU",  "name": "iShares Gold Trust"},
+        {"ticker": "SLV",  "name": "iShares Silver Trust"},
+        {"ticker": "GLDM", "name": "SPDR Gold MiniShares Trust"},
+        {"ticker": "SGOL", "name": "Aberdeen Standard Physical Gold Shares ETF"},
+    ],
+    "rate_sensitive_positive": [
+        {"ticker": "SRLN", "name": "SPDR Blackstone Senior Loan ETF"},
+        {"ticker": "BKLN", "name": "Invesco Senior Loan ETF"},
+        {"ticker": "FLOT", "name": "iShares Floating Rate Bond ETF"},
+        {"ticker": "ARCC", "name": "Ares Capital Corporation"},
+        {"ticker": "MAIN", "name": "Main Street Capital"},
+        {"ticker": "BIZD", "name": "VanEck BDC Income ETF"},
+    ],
+    "rate_sensitive_negative": [
+        {"ticker": "TLT",  "name": "iShares 20+ Year Treasury Bond ETF"},
+        {"ticker": "IEF",  "name": "iShares 7-10 Year Treasury Bond ETF"},
+        {"ticker": "VGLT", "name": "Vanguard Long-Term Treasury ETF"},
+        {"ticker": "AGG",  "name": "iShares Core U.S. Aggregate Bond ETF"},
+        {"ticker": "BND",  "name": "Vanguard Total Bond Market ETF"},
+    ],
+    "growth_equity": [
+        {"ticker": "QQQ",  "name": "Invesco QQQ Trust"},
+        {"ticker": "SCHG", "name": "Schwab U.S. Large-Cap Growth ETF"},
+        {"ticker": "VUG",  "name": "Vanguard Growth ETF"},
+        {"ticker": "IWF",  "name": "iShares Russell 1000 Growth ETF"},
+        {"ticker": "MGK",  "name": "Vanguard Mega Cap Growth ETF"},
+    ],
+    "rate_sensitive_mild": [
+        {"ticker": "SCHD", "name": "Schwab U.S. Dividend Equity ETF"},
+        {"ticker": "VYM",  "name": "Vanguard High Dividend Yield ETF"},
+        {"ticker": "HDV",  "name": "iShares Core High Dividend ETF"},
+        {"ticker": "JEPI", "name": "JPMorgan Equity Premium Income ETF"},
+        {"ticker": "DIVO", "name": "Amplify CWP Enhanced Dividend Income ETF"},
+    ],
+    "inflation_neutral": [
+        {"ticker": "JEPI", "name": "JPMorgan Equity Premium Income ETF"},
+        {"ticker": "SCHD", "name": "Schwab U.S. Dividend Equity ETF"},
+        {"ticker": "VIG",  "name": "Vanguard Dividend Appreciation ETF"},
+    ],
+}
+
+_macro_cache = {"data": None, "timestamp": 0, "ttl": 1800}  # 30 min TTL
+
+# In-memory cache for yfinance ticker info (sector/category) — 24hr TTL
+_ticker_info_cache = {}
+
+
+def _get_ticker_sensitivity(ticker, classification_type, description=""):
+    """Determine macro sensitivity tags for a ticker using tiered fallback.
+    Tier 1: Pillar classification
+    Tier 2: yfinance sector/category
+    Tier 2.5: Name/description heuristics (yfinance name + DB description)
+    Tier 3: Neutral default
+    Returns (tags_list, source_label).
+    """
+    import yfinance as yf
+
+    # Tier 1: Pillar classification (skip generic values like "ETF", "Stock")
+    if classification_type:
+        ct = classification_type.strip().upper()
+        skip_values = {"ETF", "STOCK", "EQUITY", "FUND", "CEF", "BOND", ""}
+        if ct not in skip_values and ct in MACRO_SENSITIVITY_BY_PILLAR:
+            return MACRO_SENSITIVITY_BY_PILLAR[ct], "Pillar"
+
+    # Tier 2: yfinance metadata (cached)
+    cache_entry = _ticker_info_cache.get(ticker)
+    now = time.time()
+    if cache_entry and (now - cache_entry["ts"]) < 86400:
+        info = cache_entry["info"]
+    else:
+        try:
+            info = yf.Ticker(ticker).info or {}
+            _ticker_info_cache[ticker] = {"info": info, "ts": now}
+        except Exception:
+            info = {}
+            _ticker_info_cache[ticker] = {"info": info, "ts": now}
+
+    # Check fund category first (more specific for ETFs)
+    category = info.get("category") or ""
+    for cat_key, tags in MACRO_SENSITIVITY_BY_CATEGORY.items():
+        if cat_key.lower() in category.lower():
+            return tags, "Category"
+
+    # Check sector
+    sector = info.get("sector") or ""
+    if sector in MACRO_SENSITIVITY_BY_SECTOR:
+        return MACRO_SENSITIVITY_BY_SECTOR[sector], "Sector"
+
+    # Tier 2.5: Name heuristics — check BOTH yfinance name AND the DB description
+    long_name = (info.get("longName") or info.get("shortName") or "").lower()
+    db_desc = (description or "").lower()
+    # Combine both for broader matching
+    combined = long_name + " " + db_desc + " " + ticker.lower()
+
+    # Gold / Silver / Precious metals
+    if any(w in combined for w in ["gold", "silver", "precious", "mining"]):
+        return ["safe_haven", "inflation_benefiting", "commodity_linked"], "Name"
+    # Energy / Oil / MLP / Pipeline
+    if any(w in combined for w in ["oil", "energy", "petroleum", "crude", "mlp",
+                                    "pipeline", "infrastructure"]):
+        return ["commodity_linked", "inflation_benefiting"], "Name"
+    # Inflation-protected
+    if any(w in combined for w in ["treasury inflation", "tips", "inflation-protected",
+                                    "inflation protected"]):
+        return ["inflation_benefiting", "rate_sensitive_mild"], "Name"
+    # Floating rate / BDC / Senior loans
+    if any(w in combined for w in ["floating rate", "bank loan", "senior loan", "bdc",
+                                    "business development"]):
+        return ["rate_sensitive_positive", "inflation_neutral"], "Name"
+    # Credit / High yield
+    if any(w in combined for w in ["high yield", "credit opportunit", "junk bond"]):
+        return ["rate_sensitive_negative", "inflation_negative"], "Name"
+    # Preferred stock
+    if any(w in combined for w in ["preferred", "pffd", "pff"]):
+        return ["rate_sensitive_negative", "inflation_negative"], "Name"
+    # Real estate / REIT
+    if any(w in combined for w in ["real estate", "reit", "realty"]):
+        return ["rate_sensitive_negative", "inflation_neutral"], "Name"
+    # Utilities
+    if any(w in combined for w in ["utilit"]):
+        return ["rate_sensitive_negative", "inflation_negative"], "Name"
+    # Bitcoin / Crypto
+    if any(w in combined for w in ["bitcoin", "btc", "crypto", "ethereum"]):
+        return ["growth_equity", "inflation_neutral"], "Name"
+    # Nuclear
+    if any(w in combined for w in ["nuclear", "uranium"]):
+        return ["commodity_linked", "inflation_neutral"], "Name"
+    # Covered call / Option income on broad indices (S&P, Nasdaq, Russell)
+    if any(w in combined for w in ["s&p", "s & p", "spy", "500"]) and \
+       any(w in combined for w in ["income", "inc ", "option", "covered", "premium",
+                                    "yield", "dividend", "enhanced", "lift"]):
+        return ["rate_sensitive_negative", "inflation_negative"], "Name"
+    if any(w in combined for w in ["nasdaq", "qqq", "100", "tech", "innov"]) and \
+       any(w in combined for w in ["income", "inc ", "option", "covered", "premium",
+                                    "yield", "enhanced", "lift"]):
+        return ["rate_sensitive_negative", "inflation_negative"], "Name"
+    if any(w in combined for w in ["russell", "2000", "small"]) and \
+       any(w in combined for w in ["income", "inc ", "option", "covered", "premium",
+                                    "yield", "lift"]):
+        return ["rate_sensitive_negative", "inflation_negative"], "Name"
+    # Tesla / NVDA / single-stock option ETFs (juicer-like)
+    if any(w in combined for w in ["tesla", "tsla", "nvd", "amazon", "amzn", "google",
+                                    "goog", "netflix", "nflx", "apple", "aapl", "meta"]) and \
+       any(w in combined for w in ["income", "inc ", "option", "covered", "premium",
+                                    "yield", "lift"]):
+        return ["rate_sensitive_negative", "inflation_negative"], "Name"
+    # Generic option/income/dividend/yield ETFs (broad match — anchor-like)
+    if any(w in combined for w in ["option income", "high income", "premium income",
+                                    "covered call", "enhanced dividend", "enhanced div",
+                                    "equity premium", "yieldmax", "yield prem",
+                                    "tappalpha", "tapp alpha"]):
+        return ["rate_sensitive_negative", "inflation_negative"], "Name"
+    # Global equity funds
+    if any(w in combined for w in ["global equity", "world equity", "international equity",
+                                    "global fund", "eafe"]):
+        return ["growth_equity", "rate_sensitive_mild"], "Name"
+    # Generic dividend / equity income
+    if any(w in combined for w in ["dividend", "div income", "equity income"]):
+        return ["inflation_neutral", "rate_sensitive_mild"], "Name"
+    # Growth / large cap growth
+    if any(w in combined for w in ["growth", "large cap", "large-cap", "mega cap"]):
+        return ["growth_equity", "rate_sensitive_negative"], "Name"
+
+    # Tier 3: Unclassified
+    return ["unclassified"], "Unclassified"
+
+
+@app.route("/api/macro/conditions", methods=["POST"])
+def macro_conditions():
+    """Fetch current macro indicators and determine the macro regime."""
+    import math
+    import warnings
+    import numpy as np
+    import yfinance as yf
+    warnings.filterwarnings("ignore")
+
+    now = time.time()
+    if _macro_cache["data"] and (now - _macro_cache["timestamp"]) < _macro_cache["ttl"]:
+        return jsonify(_macro_cache["data"])
+
+    def _safe(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else round(f, 4)
+        except (TypeError, ValueError):
+            return None
+
+    # Download all macro proxy tickers
+    all_symbols = list(MACRO_TICKERS.values())
+    try:
+        raw = yf.download(" ".join(all_symbols), period="1y", auto_adjust=True, progress=False)
+        if raw.empty:
+            return jsonify(error="No macro data returned from Yahoo Finance.")
+    except Exception as e:
+        return jsonify(error=f"Failed to fetch macro data: {str(e)}")
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        close = raw["Close"].dropna(how="all")
+    else:
+        close = raw[["Close"]].dropna(how="all")
+        close.columns = [all_symbols[0]]
+
+    # Compute TIP/IEF spread as inflation proxy
+    has_tip = "TIP" in close.columns and close["TIP"].dropna().count() > 30
+    has_ief = "IEF" in close.columns and close["IEF"].dropna().count() > 30
+    if has_tip and has_ief:
+        close["INFLATION_SPREAD"] = close["TIP"] / close["IEF"]
+    else:
+        close["INFLATION_SPREAD"] = pd.Series(dtype=float)
+
+    # Compute 63-day (3-month) rolling percentage change for direction
+    LOOKBACK = 63
+    RISING_THRESHOLD = 3.0    # % change to qualify as "rising"
+    FALLING_THRESHOLD = -3.0  # % change to qualify as "falling"
+    # For rates/VIX use absolute point change thresholds
+    RATE_RISE_THRESH = 0.3    # 30 bps
+    RATE_FALL_THRESH = -0.3
+
+    def direction_pct(series, rise_thresh=RISING_THRESHOLD, fall_thresh=FALLING_THRESHOLD):
+        """Compute 3-month % change and return (current_value, change_pct, direction)."""
+        clean = series.dropna()
+        if len(clean) < LOOKBACK:
+            if len(clean) >= 5:
+                curr = float(clean.iloc[-1])
+                old = float(clean.iloc[0])
+                chg = ((curr - old) / abs(old) * 100) if old != 0 else 0
+                d = "rising" if chg > rise_thresh else ("falling" if chg < fall_thresh else "flat")
+                return _safe(curr), _safe(chg), d
+            return None, None, "flat"
+        curr = float(clean.iloc[-1])
+        old = float(clean.iloc[-LOOKBACK])
+        chg = ((curr - old) / abs(old) * 100) if old != 0 else 0
+        d = "rising" if chg > rise_thresh else ("falling" if chg < fall_thresh else "flat")
+        return _safe(curr), _safe(chg), d
+
+    def direction_abs(series, rise_thresh=RATE_RISE_THRESH, fall_thresh=RATE_FALL_THRESH):
+        """For yield-type data: use absolute change instead of percentage."""
+        clean = series.dropna()
+        if len(clean) < LOOKBACK:
+            if len(clean) >= 5:
+                curr = float(clean.iloc[-1])
+                old = float(clean.iloc[0])
+                chg = curr - old
+                d = "rising" if chg > rise_thresh else ("falling" if chg < fall_thresh else "flat")
+                return _safe(curr), _safe(chg), d
+            return None, None, "flat"
+        curr = float(clean.iloc[-1])
+        old = float(clean.iloc[-LOOKBACK])
+        chg = curr - old
+        d = "rising" if chg > rise_thresh else ("falling" if chg < fall_thresh else "flat")
+        return _safe(curr), _safe(chg), d
+
+    # Build indicator results
+    indicators = {}
+
+    # Inflation proxy (TIP/IEF spread)
+    val, chg, d = direction_pct(close.get("INFLATION_SPREAD", pd.Series(dtype=float)))
+    indicators["inflation_proxy"] = {"value": val, "direction": d, "change_3m": chg, "label": "Inflation Expectations"}
+
+    # Oil
+    sym = MACRO_TICKERS["oil"]
+    val, chg, d = direction_pct(close.get(sym, pd.Series(dtype=float)), rise_thresh=5.0, fall_thresh=-5.0)
+    indicators["oil"] = {"value": val, "direction": d, "change_3m": chg, "label": "Oil (WTI)"}
+
+    # 10-Year Rate
+    sym = MACRO_TICKERS["rates_10y"]
+    val, chg, d = direction_abs(close.get(sym, pd.Series(dtype=float)))
+    indicators["rates_10y"] = {"value": val, "direction": d, "change_3m": chg, "label": "10-Year Yield"}
+
+    # Short-term Rate
+    sym = MACRO_TICKERS["rates_short"]
+    val, chg, d = direction_abs(close.get(sym, pd.Series(dtype=float)))
+    indicators["rates_short"] = {"value": val, "direction": d, "change_3m": chg, "label": "Short-Term Rate"}
+
+    # USD
+    sym = MACRO_TICKERS["usd"]
+    val, chg, d = direction_pct(close.get(sym, pd.Series(dtype=float)))
+    indicators["usd"] = {"value": val, "direction": d, "change_3m": chg, "label": "US Dollar Index"}
+
+    # Gold
+    sym = MACRO_TICKERS["gold"]
+    val, chg, d = direction_pct(close.get(sym, pd.Series(dtype=float)))
+    indicators["gold"] = {"value": val, "direction": d, "change_3m": chg, "label": "Gold"}
+
+    # VIX
+    sym = MACRO_TICKERS["vix"]
+    val, chg, d = direction_abs(close.get(sym, pd.Series(dtype=float)), rise_thresh=5, fall_thresh=-5)
+    indicators["vix"] = {"value": val, "direction": d, "change_3m": chg, "label": "VIX"}
+
+    # SPY
+    sym = MACRO_TICKERS["spy"]
+    val, chg, d = direction_pct(close.get(sym, pd.Series(dtype=float)))
+    indicators["spy"] = {"value": val, "direction": d, "change_3m": chg, "label": "S&P 500"}
+
+    # Determine composite regime
+    infl_dir = indicators["inflation_proxy"]["direction"]
+    rate_dir = indicators["rates_10y"]["direction"]
+    oil_dir = indicators["oil"]["direction"]
+    vix_val = indicators["vix"]["value"]
+    vix_dir = indicators["vix"]["direction"]
+
+    regime_parts = []
+    if infl_dir == "rising":
+        regime_parts.append("Rising Inflation")
+    elif infl_dir == "falling":
+        regime_parts.append("Falling Inflation")
+    else:
+        regime_parts.append("Stable Inflation")
+
+    if rate_dir == "rising":
+        regime_parts.append("Rising Rates")
+    elif rate_dir == "falling":
+        regime_parts.append("Falling Rates")
+    else:
+        regime_parts.append("Stable Rates")
+
+    current_regime = " + ".join(regime_parts)
+
+    # Overlay flags
+    overlays = []
+    if oil_dir == "rising":
+        overlays.append("Oil Rising")
+    elif oil_dir == "falling":
+        overlays.append("Oil Falling")
+    if vix_val is not None and vix_val > 25:
+        overlays.append("High Volatility")
+    elif vix_dir == "rising":
+        overlays.append("Rising Volatility")
+
+    # Regime description
+    descriptions = {
+        "Rising Inflation + Rising Rates": "Inflation expectations are climbing and rates are moving higher. Floating-rate and commodity-linked assets tend to outperform. Fixed-rate bonds and growth stocks face headwinds.",
+        "Rising Inflation + Falling Rates": "A stagflationary environment — inflation is rising while rates are being cut. Commodities and real assets tend to shine. Growth may benefit from lower rates but inflation erodes returns.",
+        "Rising Inflation + Stable Rates": "Inflation is heating up but rates haven't moved yet. Inflation beneficiaries have an edge while rate-sensitive assets are in a holding pattern.",
+        "Falling Inflation + Rising Rates": "A tightening environment — inflation is easing but rates are still climbing. Defensive and high-quality income assets tend to hold up best.",
+        "Falling Inflation + Falling Rates": "An easing environment — both inflation and rates are declining. Growth equities and long-duration bonds typically rally. Risk-on positioning tends to be rewarded.",
+        "Falling Inflation + Stable Rates": "Inflation is cooling with rates holding steady. A benign environment for most asset classes. Quality growth and income tend to perform well.",
+        "Stable Inflation + Rising Rates": "Inflation is contained but rates are climbing. Floating-rate assets benefit while long-duration holdings face pressure.",
+        "Stable Inflation + Falling Rates": "Goldilocks territory — stable inflation with easing rates. Broad equity and bond markets tend to do well.",
+        "Stable Inflation + Stable Rates": "A calm macro environment. Focus on individual security selection and yield optimization rather than macro positioning.",
+    }
+    regime_description = descriptions.get(current_regime, "Mixed macro signals — diversification across asset classes remains important.")
+
+    # Build history arrays for sparklines
+    dates = [d.strftime("%Y-%m-%d") for d in close.index]
+    def _series_list(col):
+        if col not in close.columns:
+            return []
+        return [_safe(float(v)) if not math.isnan(v) else None for v in close[col].values]
+
+    indicator_history = {
+        "dates": dates,
+        "inflation_proxy": _series_list("INFLATION_SPREAD"),
+        "oil": _series_list(MACRO_TICKERS["oil"]),
+        "rates_10y": _series_list(MACRO_TICKERS["rates_10y"]),
+        "rates_short": _series_list(MACRO_TICKERS["rates_short"]),
+        "usd": _series_list(MACRO_TICKERS["usd"]),
+        "gold": _series_list(MACRO_TICKERS["gold"]),
+        "vix": _series_list(MACRO_TICKERS["vix"]),
+        "spy": _series_list(MACRO_TICKERS["spy"]),
+    }
+
+    # Determine active regime components for scoring
+    active_components = []
+    if infl_dir == "rising":
+        active_components.append("inflation_rising")
+    elif infl_dir == "falling":
+        active_components.append("inflation_falling")
+    if rate_dir == "rising":
+        active_components.append("rates_rising")
+    elif rate_dir == "falling":
+        active_components.append("rates_falling")
+    if oil_dir == "rising":
+        active_components.append("oil_rising")
+    elif oil_dir == "falling":
+        active_components.append("oil_falling")
+
+    result = {
+        "current_regime": current_regime,
+        "regime_description": regime_description,
+        "overlays": overlays,
+        "active_components": active_components,
+        "indicators": indicators,
+        "indicator_history": indicator_history,
+    }
+
+    # Cache it
+    _macro_cache["data"] = result
+    _macro_cache["timestamp"] = time.time()
+
+    return jsonify(result)
+
+
+PILLAR_DISPLAY_NAMES = {
+    "HA": "Hedged Anchor", "A": "Anchor", "GS": "Gold/Silver",
+    "B": "Booster", "J": "Juicer", "BDC": "BDC", "G": "Growth",
+}
+
+SENSITIVITY_DISPLAY_NAMES = {
+    "inflation_benefiting":     "Inflation Benefiting",
+    "inflation_negative":       "Inflation Negative",
+    "inflation_neutral":        "Inflation Neutral",
+    "rate_sensitive_positive":  "Rate Sensitive (Positive)",
+    "rate_sensitive_negative":  "Rate Sensitive (Negative)",
+    "rate_sensitive_mild":      "Rate Sensitive (Mild)",
+    "commodity_linked":         "Commodity Linked",
+    "safe_haven":               "Safe Haven",
+    "growth_equity":            "Growth Equity",
+    "unclassified":             "Unclassified",
+}
+
+
+@app.route("/api/macro/exposure", methods=["POST"])
+def macro_exposure():
+    """Analyze portfolio exposure relative to current macro conditions."""
+    import math
+    import warnings
+    warnings.filterwarnings("ignore")
+
+    def _safe(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else round(f, 4)
+        except (TypeError, ValueError):
+            return None
+
+    # Get current macro conditions (use cached if available)
+    now = time.time()
+    if _macro_cache["data"] and (now - _macro_cache["timestamp"]) < _macro_cache["ttl"]:
+        macro = _macro_cache["data"]
+    else:
+        # Trigger a fresh fetch
+        with app.test_request_context(method="POST", json={}):
+            resp = macro_conditions()
+            if hasattr(resp, "get_json"):
+                macro = resp.get_json()
+            else:
+                macro = resp
+
+    current_regime = macro.get("current_regime", "Unknown")
+    active_components = macro.get("active_components", [])
+
+    # Get portfolio holdings (aggregate by ticker across owners)
+    _, pids = get_profile_filter()
+    placeholders = ",".join("?" * len(pids))
+    conn = get_connection()
+    rows = conn.execute(
+        f"""SELECT ticker, description, classification_type, quantity,
+               current_value, approx_monthly_income, current_annual_yield
+           FROM all_account_info
+           WHERE profile_id IN ({placeholders}) AND quantity > 0 AND current_value > 0""",
+        pids,
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        return jsonify(error="No holdings found for this profile.")
+
+    # Aggregate by ticker
+    holdings = {}
+    for r in rows:
+        t = r["ticker"]
+        if t in holdings:
+            holdings[t]["quantity"] = (holdings[t]["quantity"] or 0) + (r["quantity"] or 0)
+            holdings[t]["current_value"] = (holdings[t]["current_value"] or 0) + (r["current_value"] or 0)
+            holdings[t]["approx_monthly_income"] = (holdings[t]["approx_monthly_income"] or 0) + (r["approx_monthly_income"] or 0)
+        else:
+            holdings[t] = dict(r)
+
+    total_value = sum(float(h.get("current_value") or 0) for h in holdings.values())
+    if total_value <= 0:
+        return jsonify(error="Portfolio has no value.")
+
+    # Classify each holding and compute macro scores
+    holdings_detail = []
+    by_sensitivity = {}
+    unclassified_value = 0.0
+
+    for ticker, h in holdings.items():
+        cv = float(h.get("current_value") or 0)
+        mi = float(h.get("approx_monthly_income") or 0)
+        ct = (h.get("classification_type") or "").strip()
+        tags, source = _get_ticker_sensitivity(ticker, ct, h.get("description") or "")
+
+        # Compute macro score for this holding
+        score = 0.0
+        n_components = 0
+        for component in active_components:
+            weights = MACRO_SCORE_WEIGHTS.get(component, {})
+            for tag in tags:
+                score += weights.get(tag, 0.0)
+            n_components += 1
+        if n_components > 0:
+            score /= n_components
+
+        # Clamp to [-1, 1]
+        score = max(-1.0, min(1.0, score))
+
+        if score > 0.3:
+            macro_label = "Favorable"
+        elif score > -0.3:
+            macro_label = "Neutral"
+        else:
+            macro_label = "Unfavorable"
+
+        if "unclassified" in tags:
+            unclassified_value += cv
+
+        # Track by sensitivity
+        for tag in tags:
+            if tag not in by_sensitivity:
+                by_sensitivity[tag] = {"value": 0.0, "tickers": [], "label": SENSITIVITY_DISPLAY_NAMES.get(tag, tag)}
+            by_sensitivity[tag]["value"] += cv
+            by_sensitivity[tag]["tickers"].append(ticker)
+
+        holdings_detail.append({
+            "ticker": ticker,
+            "description": h.get("description") or "",
+            "classification_type": ct,
+            "pillar_name": PILLAR_DISPLAY_NAMES.get(ct, ct or "—"),
+            "current_value": _safe(cv),
+            "monthly_income": _safe(mi),
+            "pct_of_portfolio": _safe(cv / total_value * 100),
+            "sensitivity_tags": tags,
+            "sensitivity_source": source,
+            "macro_score": _safe(score),
+            "macro_label": macro_label,
+        })
+
+    # Add percentages to by_sensitivity
+    for tag, data in by_sensitivity.items():
+        data["pct"] = _safe(data["value"] / total_value * 100)
+        data["value"] = _safe(data["value"])
+
+    # Compute portfolio alignment score (value-weighted average of holding scores)
+    alignment_score = 0.0
+    for h in holdings_detail:
+        cv = float(h.get("current_value") or 0)
+        s = float(h.get("macro_score") or 0)
+        alignment_score += cv * s
+    alignment_score = alignment_score / total_value if total_value > 0 else 0
+    alignment_score = max(-1.0, min(1.0, alignment_score))
+
+    if alignment_score > 0.3:
+        alignment_label = "Well Positioned"
+    elif alignment_score > 0.1:
+        alignment_label = "Slightly Favorable"
+    elif alignment_score > -0.1:
+        alignment_label = "Neutral"
+    elif alignment_score > -0.3:
+        alignment_label = "Slightly Unfavorable"
+    else:
+        alignment_label = "Poorly Positioned"
+
+    # Sort holdings: unfavorable first, then neutral, then favorable
+    order = {"Unfavorable": 0, "Neutral": 1, "Favorable": 2}
+    holdings_detail.sort(key=lambda h: (order.get(h["macro_label"], 1), -(h.get("current_value") or 0)))
+
+    favorable = [h for h in holdings_detail if h["macro_label"] == "Favorable"]
+    unfavorable = [h for h in holdings_detail if h["macro_label"] == "Unfavorable"]
+
+    unclassified_pct = _safe(unclassified_value / total_value * 100) if total_value > 0 else 0
+
+    return jsonify(
+        current_regime=current_regime,
+        active_components=active_components,
+        portfolio_alignment_score=_safe(alignment_score),
+        alignment_label=alignment_label,
+        total_value=_safe(total_value),
+        by_sensitivity=by_sensitivity,
+        holdings_detail=holdings_detail,
+        favorable_holdings=favorable,
+        unfavorable_holdings=unfavorable,
+        unclassified_pct=unclassified_pct,
+        unclassified_warning=f"{unclassified_pct}% of your portfolio couldn't be classified. Assign pillar types in Manage Holdings for more accurate results." if (unclassified_pct or 0) > 20 else None,
+    )
+
+
+@app.route("/api/macro/rebalance-suggestions", methods=["POST"])
+def macro_rebalance_suggestions():
+    """Generate rebalancing tilt suggestions based on macro conditions and portfolio exposure."""
+    import math
+    import warnings
+    warnings.filterwarnings("ignore")
+
+    def _safe(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else round(f, 4)
+        except (TypeError, ValueError):
+            return None
+
+    # Get exposure data by calling the exposure endpoint directly
+    # (we're already in a request context with the same query string)
+    resp = macro_exposure()
+    if hasattr(resp, "get_json"):
+        exposure = resp.get_json()
+    else:
+        exposure = resp
+
+    if "error" in exposure:
+        return jsonify(exposure)
+
+    current_regime = exposure.get("current_regime", "Unknown")
+    active_components = exposure.get("active_components", [])
+    by_sensitivity = exposure.get("by_sensitivity", {})
+    holdings_detail = exposure.get("holdings_detail", [])
+    alignment_score = float(exposure.get("portfolio_alignment_score") or 0)
+    total_value = float(exposure.get("total_value") or 0)
+
+    # Determine which sensitivity tags are favorable / unfavorable in current regime
+    tag_scores = {}
+    for component in active_components:
+        weights = MACRO_SCORE_WEIGHTS.get(component, {})
+        for tag, weight in weights.items():
+            if tag not in tag_scores:
+                tag_scores[tag] = 0.0
+            tag_scores[tag] += weight
+    # Average across active components
+    n = len(active_components) or 1
+    for tag in tag_scores:
+        tag_scores[tag] /= n
+
+    favorable_tags = sorted([(t, s) for t, s in tag_scores.items() if s > 0.2], key=lambda x: -x[1])
+    unfavorable_tags = sorted([(t, s) for t, s in tag_scores.items() if s < -0.2], key=lambda x: x[1])
+
+    suggestions = []
+
+    # Generate "increase" suggestions for favorable tags that are underweight
+    for tag, score in favorable_tags:
+        if tag == "unclassified":
+            continue
+        current_data = by_sensitivity.get(tag, {})
+        current_pct = float(current_data.get("pct") or 0)
+        current_tickers = current_data.get("tickers", [])
+
+        # Suggest increasing if below a reasonable threshold
+        suggested_increase = min(current_pct + 10, 40)  # don't suggest more than 40%
+        if suggested_increase > current_pct + 3:  # only suggest if meaningful increase
+            # Build candidate ETFs list (exclude ones already owned)
+            owned_upper = {t.upper() for t in current_tickers}
+            candidates = [
+                c for c in CANDIDATE_ETFS.get(tag, [])
+                if c["ticker"].upper() not in owned_upper
+            ]
+            suggestions.append({
+                "action": "increase",
+                "target_sensitivity": tag,
+                "target_label": SENSITIVITY_DISPLAY_NAMES.get(tag, tag),
+                "reason": f"Portfolio is underweight {SENSITIVITY_DISPLAY_NAMES.get(tag, tag).lower()} assets, which tend to outperform in the current regime ({current_regime}).",
+                "current_pct": _safe(current_pct),
+                "suggested_pct": _safe(suggested_increase),
+                "tickers_in_portfolio": current_tickers,
+                "candidate_etfs": candidates,
+                "macro_favorability": _safe(score),
+            })
+
+    # Generate "reduce" suggestions for unfavorable tags that are overweight
+    for tag, score in unfavorable_tags:
+        if tag == "unclassified":
+            continue
+        current_data = by_sensitivity.get(tag, {})
+        current_pct = float(current_data.get("pct") or 0)
+        current_tickers = current_data.get("tickers", [])
+
+        if current_pct > 15:  # only flag if meaningful allocation
+            suggested_pct = max(current_pct - 10, 5)  # don't suggest going below 5%
+            # Find the biggest unfavorable holdings for consolidation linking
+            unfavorable_in_tag = [
+                h for h in holdings_detail
+                if tag in h.get("sensitivity_tags", []) and h.get("macro_label") == "Unfavorable"
+            ]
+            unfavorable_in_tag.sort(key=lambda h: -(h.get("current_value") or 0))
+            reduce_tickers = [h["ticker"] for h in unfavorable_in_tag[:3]]
+
+            suggestions.append({
+                "action": "reduce",
+                "target_sensitivity": tag,
+                "target_label": SENSITIVITY_DISPLAY_NAMES.get(tag, tag),
+                "reason": f"Heavy {SENSITIVITY_DISPLAY_NAMES.get(tag, tag).lower()} exposure ({current_pct:.0f}%) faces headwinds in the current regime.",
+                "current_pct": _safe(current_pct),
+                "suggested_pct": _safe(suggested_pct),
+                "tickers_to_consider_reducing": reduce_tickers,
+                "all_tickers": current_tickers,
+                "consolidation_link": len(reduce_tickers) > 0,
+                "macro_favorability": _safe(score),
+            })
+
+    # Build "next dollar" allocation
+    next_dollar = {}
+    if favorable_tags:
+        total_fav_score = sum(s for _, s in favorable_tags if s > 0)
+        for tag, score in favorable_tags:
+            if tag == "unclassified" or score <= 0:
+                continue
+            pct = round(score / total_fav_score * 100) if total_fav_score > 0 else 0
+            next_dollar[SENSITIVITY_DISPLAY_NAMES.get(tag, tag)] = pct
+        # Normalize to 100
+        total_alloc = sum(next_dollar.values())
+        if total_alloc > 0 and total_alloc != 100:
+            factor = 100 / total_alloc
+            for k in next_dollar:
+                next_dollar[k] = round(next_dollar[k] * factor)
+            # Fix rounding to exactly 100
+            diff = 100 - sum(next_dollar.values())
+            if diff != 0 and next_dollar:
+                top_key = max(next_dollar, key=next_dollar.get)
+                next_dollar[top_key] += diff
+
+    # If no active components (everything flat), suggest balanced allocation
+    if not active_components:
+        suggestions.append({
+            "action": "hold",
+            "target_sensitivity": None,
+            "target_label": "Balanced",
+            "reason": "Macro conditions are stable across the board. No strong tilts are needed — continue with your current allocation strategy and focus on yield optimization.",
+            "current_pct": None,
+            "suggested_pct": None,
+            "tickers_in_portfolio": [],
+            "macro_favorability": 0,
+        })
+
+    return jsonify(
+        current_regime=current_regime,
+        alignment_score=_safe(alignment_score),
+        suggestions=suggestions,
+        next_dollar_allocation=next_dollar,
     )
 
 
