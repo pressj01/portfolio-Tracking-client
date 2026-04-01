@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 function GradeBadge({ grade, large }) {
@@ -20,6 +20,211 @@ function MetricCard({ label, value }) {
 const fmt = v => v != null ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'
 const fmtPct = v => v != null ? `${(Number(v) * 100).toFixed(2)}%` : '—'
 const fmtPctRaw = v => v != null ? `${Number(v).toFixed(2)}%` : '—'
+
+const METRIC_OPTIONS = [
+  { value: 'yield_pct', label: 'Yield (%)' },
+  { value: 'annual_payout', label: 'Annual payout ($)' },
+]
+const GROUP_OPTIONS = [
+  { value: 'holdings', label: 'Holdings' },
+  { value: 'categories', label: 'Categories' },
+]
+
+function YieldPayoutChart({ rows }) {
+  const chartRef = useRef(null)
+  const [metric, setMetric] = useState('yield_pct')
+  const [group, setGroup] = useState('holdings')
+  const [metricOpen, setMetricOpen] = useState(false)
+  const [groupOpen, setGroupOpen] = useState(false)
+  const metricRef = useRef(null)
+  const groupRef = useRef(null)
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (metricRef.current && !metricRef.current.contains(e.target)) setMetricOpen(false)
+      if (groupRef.current && !groupRef.current.contains(e.target)) setGroupOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const chartData = useMemo(() => {
+    if (!rows?.length) return null
+
+    const groupKey = {
+      holdings: 'ticker',
+      categories: 'category_name',
+    }[group]
+
+    // Aggregate by group
+    const grouped = {}
+    rows.forEach(r => {
+      const key = r[groupKey] || 'Other'
+      if (!grouped[key]) grouped[key] = { yield_sum: 0, yield_count: 0, annual_payout: 0, value: 0 }
+      const yld = (r.current_annual_yield || 0) * 100  // decimal to pct
+      grouped[key].yield_sum += yld
+      grouped[key].yield_count += 1
+      grouped[key].annual_payout += (r.estim_payment_per_year || 0)
+      grouped[key].value += (r.current_value || 0)
+    })
+
+    // Build arrays
+    let entries = Object.entries(grouped).map(([label, d]) => ({
+      label,
+      yield_pct: group === 'holdings' ? (rows.find(r => r.ticker === label)?.current_annual_yield || 0) * 100 : (d.yield_count > 0 ? d.yield_sum / d.yield_count : 0),
+      annual_payout: d.annual_payout,
+      value: d.value,
+    }))
+
+    // Sort descending by selected metric
+    const sortKey = metric === 'yield_pct' ? 'yield_pct' : 'annual_payout'
+    entries.sort((a, b) => b[sortKey] - a[sortKey])
+
+    return {
+      labels: entries.map(e => e.label),
+      primary: entries.map(e => e[metric === 'yield_pct' ? 'yield_pct' : 'annual_payout']),
+      secondary: entries.map(e => e[metric === 'yield_pct' ? 'annual_payout' : 'value']),
+      primaryLabel: metric === 'yield_pct' ? 'Yield (%)' : 'Annual Payout ($)',
+      secondaryLabel: metric === 'yield_pct' ? 'Annual Payout ($)' : 'Portfolio Value ($)',
+    }
+  }, [rows, metric, group])
+
+  useEffect(() => {
+    if (!chartData || !chartRef.current || !window.Plotly) return
+    const el = chartRef.current
+
+    const traces = [
+      {
+        x: chartData.labels,
+        y: chartData.primary,
+        type: 'bar',
+        name: chartData.primaryLabel,
+        marker: { color: '#38bdf8' },
+        text: chartData.primary.map(v => metric === 'yield_pct' ? `${v.toFixed(1)}%` : `$${v.toLocaleString(undefined, {maximumFractionDigits: 0})}`),
+        textposition: 'none',
+        hovertemplate: metric === 'yield_pct' ? '%{x}: %{y:.2f}%<extra></extra>' : '%{x}: $%{y:,.0f}<extra></extra>',
+      },
+      {
+        x: chartData.labels,
+        y: chartData.secondary,
+        type: 'scatter',
+        mode: 'markers',
+        name: chartData.secondaryLabel,
+        marker: { color: '#a855f7', size: 7, symbol: 'line-ew-open', line: { width: 2, color: '#a855f7' } },
+        yaxis: 'y2',
+        hovertemplate: '%{x}: $%{y:,.0f}<extra></extra>',
+      },
+    ]
+
+    const layout = {
+      template: 'plotly_dark',
+      paper_bgcolor: '#1a1f2e',
+      plot_bgcolor: 'rgba(255,255,255,0.03)',
+      font: { color: '#e0e8f5' },
+      margin: { t: 10, b: chartData.labels.length > 15 ? 120 : 80, l: 60, r: 60 },
+      xaxis: {
+        tickangle: chartData.labels.length > 10 ? -45 : 0,
+        tickfont: { size: chartData.labels.length > 30 ? 9 : 11 },
+        gridcolor: '#1a2233',
+      },
+      yaxis: {
+        title: chartData.primaryLabel,
+        titlefont: { color: '#38bdf8', size: 12 },
+        tickfont: { color: '#38bdf8' },
+        gridcolor: '#1a2233',
+        ticksuffix: metric === 'yield_pct' ? '%' : '',
+        tickprefix: metric === 'annual_payout' ? '$' : '',
+        separatethousands: true,
+      },
+      yaxis2: {
+        title: chartData.secondaryLabel,
+        titlefont: { color: '#a855f7', size: 12 },
+        tickfont: { color: '#a855f7' },
+        overlaying: 'y',
+        side: 'right',
+        showgrid: false,
+        tickprefix: '$',
+        separatethousands: true,
+      },
+      legend: { orientation: 'h', y: 1.12, x: 0.5, xanchor: 'center' },
+      bargap: 0.15,
+    }
+
+    window.Plotly.newPlot(el, traces, layout, { responsive: true })
+    return () => window.Plotly.purge(el)
+  }, [chartData, metric])
+
+  if (!rows?.length) return null
+
+  const metricLabel = METRIC_OPTIONS.find(o => o.value === metric)?.label
+  const groupLabel = GROUP_OPTIONS.find(o => o.value === group)?.label
+
+  const dropdownStyle = {
+    position: 'relative', display: 'inline-block',
+  }
+  const btnStyle = {
+    background: 'transparent', border: '1px solid #334155', color: '#e0e8f5',
+    padding: '0.3rem 0.7rem', borderRadius: '4px', cursor: 'pointer', fontSize: '0.85rem',
+    minWidth: '130px', textAlign: 'left',
+  }
+  const menuStyle = {
+    position: 'absolute', top: '100%', right: 0, zIndex: 20,
+    background: '#1e293b', border: '1px solid #334155', borderRadius: '4px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.5)', minWidth: '140px',
+  }
+  const itemStyle = (active) => ({
+    padding: '0.4rem 0.75rem', cursor: 'pointer', fontSize: '0.85rem',
+    color: active ? '#38bdf8' : '#e0e8f5',
+    background: active ? 'rgba(56,189,248,0.1)' : 'transparent',
+  })
+
+  return (
+    <div className="da-chart-panel" style={{ gridColumn: '1 / -1' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1rem 0.25rem' }}>
+        <div style={{ fontSize: '1rem', fontWeight: 600, color: '#e0e8f5' }}>
+          Yield/Payout <span style={{ fontSize: '0.75rem', color: '#8899aa', cursor: 'help' }} title="Compare yield and payout across your portfolio grouped by different dimensions">&#9432;</span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <div ref={metricRef} style={dropdownStyle}>
+            <button style={btnStyle} onClick={() => { setMetricOpen(o => !o); setGroupOpen(false) }}>
+              {metricLabel} <span style={{ float: 'right', marginLeft: '0.5rem', fontSize: '0.7em' }}>&#9662;</span>
+            </button>
+            {metricOpen && (
+              <div style={menuStyle}>
+                {METRIC_OPTIONS.map(o => (
+                  <div key={o.value} style={itemStyle(o.value === metric)}
+                    onMouseEnter={e => e.target.style.background = 'rgba(56,189,248,0.15)'}
+                    onMouseLeave={e => e.target.style.background = o.value === metric ? 'rgba(56,189,248,0.1)' : 'transparent'}
+                    onClick={() => { setMetric(o.value); setMetricOpen(false) }}>
+                    {o.label}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div ref={groupRef} style={dropdownStyle}>
+            <button style={btnStyle} onClick={() => { setGroupOpen(o => !o); setMetricOpen(false) }}>
+              {groupLabel} <span style={{ float: 'right', marginLeft: '0.5rem', fontSize: '0.7em' }}>&#9662;</span>
+            </button>
+            {groupOpen && (
+              <div style={menuStyle}>
+                {GROUP_OPTIONS.map(o => (
+                  <div key={o.value} style={itemStyle(o.value === group)}
+                    onMouseEnter={e => e.target.style.background = 'rgba(56,189,248,0.15)'}
+                    onMouseLeave={e => e.target.style.background = o.value === group ? 'rgba(56,189,248,0.1)' : 'transparent'}
+                    onClick={() => { setGroup(o.value); setGroupOpen(false) }}>
+                    {o.label}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      <div ref={chartRef} style={{ width: '100%', height: '400px' }} />
+    </div>
+  )
+}
 
 export default function DividendAnalysis() {
   const pf = useProfileFetch()
@@ -199,6 +404,11 @@ export default function DividendAnalysis() {
             <MetricCard label="Est. Monthly Income" value={fmt(data.totals?.approx_monthly_income)} />
             <MetricCard label={`Actual Income (${data.totals?.current_month_label || 'This Month'})`} value={fmt(data.totals?.actual_monthly_income)} />
             <MetricCard label="Est. Annual Income" value={fmt(data.totals?.estim_payment_per_year)} />
+          </div>
+
+          {/* Yield/Payout interactive chart */}
+          <div className="da-chart-grid">
+            <YieldPayoutChart rows={data.rows} />
           </div>
 
           {/* Charts */}

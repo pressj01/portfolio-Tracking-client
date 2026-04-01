@@ -153,6 +153,57 @@ def _estimate_ytd_income(holding):
     return sum(_estimate_month_income(holding, m) for m in range(1, cur_month + 1))
 
 
+def _calc_dividend_growth_batch(tickers):
+    """Calculate 3-year and 5-year dividend growth rates for a list of tickers.
+    Returns dict of ticker -> {"div_growth_3y": float|None, "div_growth_5y": float|None}.
+    Uses yfinance Ticker.dividends for accurate per-share dividend history.
+    Compares annual per-share dividends (excluding current partial year).
+    """
+    import yfinance as yf
+    import warnings
+    import datetime
+    warnings.filterwarnings("ignore")
+
+    result = {t: {"div_growth_3y": None, "div_growth_5y": None} for t in tickers}
+    if not tickers:
+        return result
+
+    current_year = datetime.date.today().year
+
+    for t in tickers:
+        try:
+            divs = yf.Ticker(t).dividends
+            if divs is None or len(divs) < 2:
+                continue
+            divs = divs[divs > 0]
+            divs.index = pd.to_datetime(divs.index)
+            # Exclude current partial year
+            divs = divs[divs.index.year < current_year]
+            if len(divs) < 2:
+                continue
+
+            yearly = divs.resample("YE").sum()
+            yearly = yearly[yearly > 0]
+            if len(yearly) < 2:
+                continue
+
+            recent = float(yearly.iloc[-1])
+
+            if len(yearly) >= 4:
+                past_3 = float(yearly.iloc[-4])
+                if past_3 > 0:
+                    result[t]["div_growth_3y"] = round(((recent / past_3) ** (1 / 3) - 1) * 100, 2)
+
+            if len(yearly) >= 6:
+                past_5 = float(yearly.iloc[-6])
+                if past_5 > 0:
+                    result[t]["div_growth_5y"] = round(((recent / past_5) ** (1 / 5) - 1) * 100, 2)
+        except Exception:
+            continue
+
+    return result
+
+
 def _auto_reconcile_owner():
     """Silently reconcile Owner (profile 1) from sub-profiles after any import.
 
@@ -3404,6 +3455,7 @@ def dividend_analysis_data():
             "annual_yield_on_cost": _clean(row.get("annual_yield_on_cost")),
             "current_annual_yield": _clean(row.get("current_annual_yield")),
             "gain_or_loss": _clean(row.get("gain_or_loss")),
+            "current_value": _clean(row.get("current_value")),
         })
 
     # ── Charts ──
@@ -10789,20 +10841,24 @@ def consolidation_simulate():
     buy_yield = float(buy_data.get("current_annual_yield") or 0)
     buy_price = float(buy_data.get("current_price") or 0)
 
+    # _aggregate_rows always returns yield as percentage (e.g. 8.59 = 8.59%)
+    # Convert to decimal for income calculations
+    sell_yield_dec = sell_yield / 100
+    buy_yield_dec = buy_yield / 100
+
     if buy_price <= 0:
         return jsonify(error=f"Cannot simulate: {buy_ticker} has no valid price."), 400
 
     # Calculate consolidation impact
     new_shares_added = sell_value / buy_price
     new_total_value = sell_value + buy_value  # value doesn't change at moment of swap
-    # New income from added shares: (sell_value / buy_price) * (buy annual yield * buy_price / 12)
-    # Simpler: sell_value * buy_yield / 12
-    new_monthly_from_added = (sell_value * buy_yield) / 12 if buy_yield else 0
+    # New income from added shares: sell_value * (buy annual yield as decimal) / 12
+    new_monthly_from_added = (sell_value * buy_yield_dec) / 12 if buy_yield_dec else 0
     new_monthly_income = buy_income + new_monthly_from_added
     old_combined_income = sell_income + buy_income
     income_change = new_monthly_income - old_combined_income
     income_change_pct = (income_change / old_combined_income * 100) if old_combined_income > 0 else 0
-    new_yield = (new_monthly_income * 12 / new_total_value) if new_total_value > 0 else 0
+    new_yield = (new_monthly_income * 12 / new_total_value * 100) if new_total_value > 0 else 0
 
     # Download historical data for performance comparison
     both_tickers = list(set([sell_ticker, buy_ticker]))
@@ -11314,8 +11370,9 @@ _macro_cache = {"data": None, "timestamp": 0, "ttl": 1800}  # 30 min TTL
 _ticker_info_cache = {}
 
 
-def _get_ticker_sensitivity(ticker, classification_type, description=""):
+def _get_ticker_sensitivity(ticker, classification_type, description="", overrides=None):
     """Determine macro sensitivity tags for a ticker using tiered fallback.
+    Tier 0: User override (macro_overrides table)
     Tier 1: Pillar classification
     Tier 2: yfinance sector/category
     Tier 2.5: Name/description heuristics (yfinance name + DB description)
@@ -11323,6 +11380,10 @@ def _get_ticker_sensitivity(ticker, classification_type, description=""):
     Returns (tags_list, source_label).
     """
     import yfinance as yf
+
+    # Tier 0: User override
+    if overrides and ticker in overrides:
+        return overrides[ticker], "Override"
 
     # Tier 1: Pillar classification (skip generic values like "ETF", "Stock")
     if classification_type:
@@ -11677,6 +11738,7 @@ SENSITIVITY_DISPLAY_NAMES = {
     "commodity_linked":         "Commodity Linked",
     "safe_haven":               "Safe Haven",
     "growth_equity":            "Growth Equity",
+    "excluded":                 "Excluded",
     "unclassified":             "Unclassified",
 }
 
@@ -11684,6 +11746,7 @@ SENSITIVITY_DISPLAY_NAMES = {
 @app.route("/api/macro/exposure", methods=["POST"])
 def macro_exposure():
     """Analyze portfolio exposure relative to current macro conditions."""
+    import json
     import math
     import warnings
     warnings.filterwarnings("ignore")
@@ -11724,7 +11787,16 @@ def macro_exposure():
            WHERE profile_id IN ({placeholders}) AND quantity > 0 AND current_value > 0""",
         pids,
     ).fetchall()
+
+    # Load user overrides for this profile
+    override_rows = conn.execute(
+        f"SELECT ticker, sensitivity_tags FROM macro_overrides WHERE profile_id IN ({placeholders})",
+        pids,
+    ).fetchall()
     conn.close()
+    overrides = {}
+    for ovr in override_rows:
+        overrides[ovr["ticker"]] = json.loads(ovr["sensitivity_tags"])
 
     if not rows:
         return jsonify(error="No holdings found for this profile.")
@@ -11749,42 +11821,51 @@ def macro_exposure():
     by_sensitivity = {}
     unclassified_value = 0.0
 
+    excluded_value = 0.0
     for ticker, h in holdings.items():
         cv = float(h.get("current_value") or 0)
         mi = float(h.get("approx_monthly_income") or 0)
         ct = (h.get("classification_type") or "").strip()
-        tags, source = _get_ticker_sensitivity(ticker, ct, h.get("description") or "")
+        tags, source = _get_ticker_sensitivity(ticker, ct, h.get("description") or "", overrides=overrides)
 
-        # Compute macro score for this holding
-        score = 0.0
-        n_components = 0
-        for component in active_components:
-            weights = MACRO_SCORE_WEIGHTS.get(component, {})
-            for tag in tags:
-                score += weights.get(tag, 0.0)
-            n_components += 1
-        if n_components > 0:
-            score /= n_components
+        is_excluded = "excluded" in tags
 
-        # Clamp to [-1, 1]
-        score = max(-1.0, min(1.0, score))
-
-        if score > 0.3:
-            macro_label = "Favorable"
-        elif score > -0.3:
-            macro_label = "Neutral"
+        if is_excluded:
+            excluded_value += cv
+            score = None
+            macro_label = "Excluded"
         else:
-            macro_label = "Unfavorable"
+            # Compute macro score for this holding
+            score = 0.0
+            n_components = 0
+            for component in active_components:
+                weights = MACRO_SCORE_WEIGHTS.get(component, {})
+                for tag in tags:
+                    score += weights.get(tag, 0.0)
+                n_components += 1
+            if n_components > 0:
+                score /= n_components
+
+            # Clamp to [-1, 1]
+            score = max(-1.0, min(1.0, score))
+
+            if score > 0.3:
+                macro_label = "Favorable"
+            elif score > -0.3:
+                macro_label = "Neutral"
+            else:
+                macro_label = "Unfavorable"
 
         if "unclassified" in tags:
             unclassified_value += cv
 
-        # Track by sensitivity
-        for tag in tags:
-            if tag not in by_sensitivity:
-                by_sensitivity[tag] = {"value": 0.0, "tickers": [], "label": SENSITIVITY_DISPLAY_NAMES.get(tag, tag)}
-            by_sensitivity[tag]["value"] += cv
-            by_sensitivity[tag]["tickers"].append(ticker)
+        # Track by sensitivity (skip excluded from breakdown)
+        if not is_excluded:
+            for tag in tags:
+                if tag not in by_sensitivity:
+                    by_sensitivity[tag] = {"value": 0.0, "tickers": [], "label": SENSITIVITY_DISPLAY_NAMES.get(tag, tag)}
+                by_sensitivity[tag]["value"] += cv
+                by_sensitivity[tag]["tickers"].append(ticker)
 
         holdings_detail.append({
             "ticker": ticker,
@@ -11805,13 +11886,16 @@ def macro_exposure():
         data["pct"] = _safe(data["value"] / total_value * 100)
         data["value"] = _safe(data["value"])
 
-    # Compute portfolio alignment score (value-weighted average of holding scores)
+    # Compute portfolio alignment score (value-weighted, excluding excluded holdings)
     alignment_score = 0.0
+    included_value = total_value - excluded_value
     for h in holdings_detail:
+        if h["macro_label"] == "Excluded":
+            continue
         cv = float(h.get("current_value") or 0)
         s = float(h.get("macro_score") or 0)
         alignment_score += cv * s
-    alignment_score = alignment_score / total_value if total_value > 0 else 0
+    alignment_score = alignment_score / included_value if included_value > 0 else 0
     alignment_score = max(-1.0, min(1.0, alignment_score))
 
     if alignment_score > 0.3:
@@ -11825,8 +11909,8 @@ def macro_exposure():
     else:
         alignment_label = "Poorly Positioned"
 
-    # Sort holdings: unfavorable first, then neutral, then favorable
-    order = {"Unfavorable": 0, "Neutral": 1, "Favorable": 2}
+    # Sort holdings: unfavorable first, then neutral, then favorable, excluded last
+    order = {"Unfavorable": 0, "Neutral": 1, "Favorable": 2, "Excluded": 3}
     holdings_detail.sort(key=lambda h: (order.get(h["macro_label"], 1), -(h.get("current_value") or 0)))
 
     favorable = [h for h in holdings_detail if h["macro_label"] == "Favorable"]
@@ -11883,6 +11967,24 @@ def macro_rebalance_suggestions():
     alignment_score = float(exposure.get("portfolio_alignment_score") or 0)
     total_value = float(exposure.get("total_value") or 0)
 
+    # Collect ALL portfolio tickers so candidate ETFs exclude anything already owned
+    all_portfolio_tickers = set()
+    for data in by_sensitivity.values():
+        for t in data.get("tickers", []):
+            all_portfolio_tickers.add(t.upper())
+
+    # Build a human-readable conditions string that includes active overlays
+    component_labels = {
+        "inflation_rising": "rising inflation", "inflation_falling": "falling inflation",
+        "rates_rising": "rising rates", "rates_falling": "falling rates",
+        "oil_rising": "rising oil prices", "oil_falling": "falling oil prices",
+    }
+    active_labels = [component_labels.get(c, c) for c in active_components]
+    if active_labels:
+        conditions_str = ", ".join(active_labels)
+    else:
+        conditions_str = "stable macro conditions"
+
     # Determine which sensitivity tags are favorable / unfavorable in current regime
     tag_scores = {}
     for component in active_components:
@@ -11912,17 +12014,16 @@ def macro_rebalance_suggestions():
         # Suggest increasing if below a reasonable threshold
         suggested_increase = min(current_pct + 10, 40)  # don't suggest more than 40%
         if suggested_increase > current_pct + 3:  # only suggest if meaningful increase
-            # Build candidate ETFs list (exclude ones already owned)
-            owned_upper = {t.upper() for t in current_tickers}
+            # Build candidate ETFs list (exclude ones already owned in ANY category)
             candidates = [
                 c for c in CANDIDATE_ETFS.get(tag, [])
-                if c["ticker"].upper() not in owned_upper
+                if c["ticker"].upper() not in all_portfolio_tickers
             ]
             suggestions.append({
                 "action": "increase",
                 "target_sensitivity": tag,
                 "target_label": SENSITIVITY_DISPLAY_NAMES.get(tag, tag),
-                "reason": f"Portfolio is underweight {SENSITIVITY_DISPLAY_NAMES.get(tag, tag).lower()} assets, which tend to outperform in the current regime ({current_regime}).",
+                "reason": f"Portfolio is underweight {SENSITIVITY_DISPLAY_NAMES.get(tag, tag).lower()} assets, which tend to outperform during {conditions_str}.",
                 "current_pct": _safe(current_pct),
                 "suggested_pct": _safe(suggested_increase),
                 "tickers_in_portfolio": current_tickers,
@@ -11946,13 +12047,13 @@ def macro_rebalance_suggestions():
                 if tag in h.get("sensitivity_tags", []) and h.get("macro_label") == "Unfavorable"
             ]
             unfavorable_in_tag.sort(key=lambda h: -(h.get("current_value") or 0))
-            reduce_tickers = [h["ticker"] for h in unfavorable_in_tag[:3]]
+            reduce_tickers = [h["ticker"] for h in unfavorable_in_tag[:10]]
 
             suggestions.append({
                 "action": "reduce",
                 "target_sensitivity": tag,
                 "target_label": SENSITIVITY_DISPLAY_NAMES.get(tag, tag),
-                "reason": f"Heavy {SENSITIVITY_DISPLAY_NAMES.get(tag, tag).lower()} exposure ({current_pct:.0f}%) faces headwinds in the current regime.",
+                "reason": f"Heavy {SENSITIVITY_DISPLAY_NAMES.get(tag, tag).lower()} exposure ({current_pct:.0f}%) faces headwinds during {conditions_str}.",
                 "current_pct": _safe(current_pct),
                 "suggested_pct": _safe(suggested_pct),
                 "tickers_to_consider_reducing": reduce_tickers,
@@ -11995,12 +12096,465 @@ def macro_rebalance_suggestions():
             "macro_favorability": 0,
         })
 
+    # ── Breakeven analysis: calculate how much needs to shift ──
+    # alignment_score is value-weighted avg of per-holding macro_scores in [-1, 1].
+    # To reach breakeven (score ≥ 0), we need to shift $ from unfavorable → favorable.
+    breakeven_target = {}
+    if alignment_score < 0 and total_value > 0:
+        # Current favorability breakdown by tag
+        fav_value = sum(float(h.get("current_value") or 0) for h in holdings_detail if h.get("macro_label") == "Favorable")
+        unfav_value = sum(float(h.get("current_value") or 0) for h in holdings_detail if h.get("macro_label") == "Unfavorable")
+        neutral_value = total_value - fav_value - unfav_value
+
+        # Avg macro_score for favorable and unfavorable holdings
+        fav_avg_score = 0
+        unfav_avg_score = 0
+        if fav_value > 0:
+            fav_avg_score = sum(float(h.get("current_value") or 0) * float(h.get("macro_score") or 0)
+                               for h in holdings_detail if h.get("macro_label") == "Favorable") / fav_value
+        if unfav_value > 0:
+            unfav_avg_score = sum(float(h.get("current_value") or 0) * float(h.get("macro_score") or 0)
+                                 for h in holdings_detail if h.get("macro_label") == "Unfavorable") / unfav_value
+
+        # To reach alignment 0: need shift_amount from unfav→fav such that
+        # (alignment_score * total_value + shift * (fav_avg - unfav_avg)) / total_value = 0
+        score_swing = (fav_avg_score - unfav_avg_score) if (fav_avg_score - unfav_avg_score) > 0 else 0.5
+        shift_needed = abs(alignment_score * total_value) / score_swing if score_swing > 0 else 0
+        shift_needed = min(shift_needed, unfav_value * 0.5)  # cap at 50% of unfavorable
+
+        # Distribute shift across favorable tags proportional to their score
+        shift_by_tag = []
+        for tag, score in favorable_tags:
+            if tag == "unclassified":
+                continue
+            current_data = by_sensitivity.get(tag, {})
+            current_pct = float(current_data.get("pct") or 0)
+            current_val = float(current_data.get("value") or 0)
+            tag_share = score / sum(s for _, s in favorable_tags if s > 0) if sum(s for _, s in favorable_tags if s > 0) > 0 else 0
+            tag_shift = shift_needed * tag_share
+            target_val = current_val + tag_shift
+            target_pct = target_val / total_value * 100 if total_value > 0 else 0
+
+            shift_by_tag.append({
+                "tag": tag,
+                "label": SENSITIVITY_DISPLAY_NAMES.get(tag, tag),
+                "current_pct": _safe(current_pct),
+                "target_pct": _safe(target_pct),
+                "gap_pct": _safe(target_pct - current_pct),
+                "gap_dollars": _safe(tag_shift),
+                "favorability_score": _safe(score),
+            })
+
+        breakeven_target = {
+            "total_shift_needed": _safe(shift_needed),
+            "total_shift_pct": _safe(shift_needed / total_value * 100) if total_value > 0 else 0,
+            "current_favorable_pct": _safe(fav_value / total_value * 100),
+            "current_unfavorable_pct": _safe(unfav_value / total_value * 100),
+            "current_neutral_pct": _safe(neutral_value / total_value * 100),
+            "tags": shift_by_tag,
+        }
+
     return jsonify(
         current_regime=current_regime,
+        conditions=conditions_str,
         alignment_score=_safe(alignment_score),
         suggestions=suggestions,
         next_dollar_allocation=next_dollar,
+        breakeven_target=breakeven_target,
     )
+
+
+# ── Income Benchmark ──────────────────────────────────────────────────────────
+
+INCOME_BENCHMARK_TARGETS = {
+    "Covered Call / Options Income": 25,
+    "BDCs": 15,
+    "CEFs": 10,
+    "REITs / Real Estate": 10,
+    "Preferred Stock / Credit": 10,
+    "Dividend Growth": 15,
+    "Commodities / Gold & Silver": 5,
+    "Bonds / Fixed Income": 10,
+}
+
+INCOME_BUCKET_BY_PILLAR = {
+    "BDC": "BDCs",
+    "GS": "Commodities / Gold & Silver",
+    "CEF": "CEFs",
+    "REIT": "REITs / Real Estate",
+    "HA": "Covered Call / Options Income",
+    "J": "Covered Call / Options Income",
+    "B": "Covered Call / Options Income",
+    "A": "Dividend Growth",
+    "G": "Dividend Growth",
+}
+
+INCOME_BUCKET_KEYWORDS = {
+    "Covered Call / Options Income": [
+        "covered call", "option income", "premium income", "buy-write",
+        "buywrite", "options-based", "nasdaq premium", "s&p 500 premium",
+        "high income etf", "high income fund",
+        "yieldmax", "tappalpha", "defiance", "kurv", "roundhill",
+        "neos", "boosted", "growth and da", "growth & daily",
+        "equity premium income", "enhanced div",
+        "lift etf", "leveraged",
+    ],
+    "BDCs": [
+        "business development", "bdc", "direct lending",
+    ],
+    "CEFs": [
+        "closed-end", "closed end", "adams diversified", "adams natural",
+        "blackrock science", "reaves utility", "saba closed",
+        "cohen steers", "aberdeen", "abrdn",
+        " cf", " cef",
+    ],
+    "REITs / Real Estate": [
+        "real estate", "reit", "mortgage", "rlty", "iyri",
+    ],
+    "Preferred Stock / Credit": [
+        "preferred", "pfd", "pffa", "pff ",
+        "senior secured", "high yield bond",
+        "floating rate", "bank loan", "leveraged loan",
+    ],
+    "Dividend Growth": [
+        "dividend growth", "dividend appreciation", "aristocrat",
+        "dividend achiever", "quality dividend",
+    ],
+    "Commodities / Gold & Silver": [
+        "gold", "silver", "commodity", "mining", "precious metal",
+        "energy", "oil", "natural gas", "copper", "mlp",
+    ],
+    "Bonds / Fixed Income": [
+        "treasury", "bond", "fixed income", "aggregate bond",
+        "investment grade", "tips", "municipal", "clo",
+        "tbll", "t-bill", "credit",
+    ],
+}
+
+
+def _get_income_bucket(ticker, classification_type, description="", overrides=None):
+    """Classify a holding into one of the income benchmark buckets.
+    Tier 0: User override (income_overrides table)
+    Tier 1: Name/description heuristics (most specific)
+    Tier 2: Pillar code mapping (for unambiguous codes like BDC, GS, CEF)
+    Tier 3: yfinance sector fallback
+    Tier 4: Unclassified
+    """
+    # Tier 0: User override
+    if overrides and ticker in overrides:
+        return overrides[ticker]
+    # Tier 1: Name-based heuristics (checked first — most specific)
+    cache_entry = _ticker_info_cache.get(ticker)
+    info = cache_entry.get("info", {}) if cache_entry else {}
+    yf_name = (info.get("longName") or info.get("shortName") or "").lower()
+    yf_category = (info.get("category") or "").lower()
+    yf_sector = (info.get("sector") or "").lower()
+    combined = f"{yf_name} {yf_category} {description.lower()} {ticker.lower()}"
+
+    # Check specific buckets FIRST (order matters — more specific before generic)
+    check_order = [
+        "REITs / Real Estate",
+        "Commodities / Gold & Silver",
+        "Bonds / Fixed Income",
+        "BDCs",
+        "CEFs",
+        "Preferred Stock / Credit",
+        "Dividend Growth",
+        "Covered Call / Options Income",  # catch-all last
+    ]
+    for bucket in check_order:
+        keywords = INCOME_BUCKET_KEYWORDS.get(bucket, [])
+        for kw in keywords:
+            if kw in combined:
+                return bucket
+
+    # Tier 2: Pillar classification (unambiguous codes only)
+    if classification_type:
+        ct = classification_type.strip().upper()
+        skip_values = {"ETF", "STOCK", "EQUITY", "FUND", ""}
+        if ct not in skip_values and ct in INCOME_BUCKET_BY_PILLAR:
+            return INCOME_BUCKET_BY_PILLAR[ct]
+
+    # Tier 3: Sector-based fallback
+    if "real estate" in yf_sector:
+        return "REITs / Real Estate"
+
+    return "Unclassified"
+
+
+@app.route("/api/macro/income-benchmark", methods=["POST"])
+def macro_income_benchmark():
+    """Compare portfolio allocation against an income-focused benchmark."""
+    import math
+
+    def _safe(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else round(f, 4)
+        except (TypeError, ValueError):
+            return None
+
+    _, pids = get_profile_filter()
+    placeholders = ",".join("?" * len(pids))
+    conn = get_connection()
+    rows = conn.execute(
+        f"SELECT ticker, description, classification_type, "
+        f"current_value, approx_monthly_income, current_annual_yield "
+        f"FROM all_account_info "
+        f"WHERE profile_id IN ({placeholders}) AND IFNULL(quantity, 0) > 0",
+        pids,
+    ).fetchall()
+
+    # Load income bucket overrides
+    inc_ovr_rows = conn.execute(
+        f"SELECT ticker, bucket FROM income_overrides WHERE profile_id IN ({placeholders})",
+        pids,
+    ).fetchall()
+    conn.close()
+    income_overrides = {r["ticker"]: r["bucket"] for r in inc_ovr_rows}
+
+    if not rows:
+        return jsonify(error="No holdings found.")
+
+    # Aggregate by ticker across profiles
+    holdings = {}
+    for r in rows:
+        t = r["ticker"]
+        if t not in holdings:
+            holdings[t] = {
+                "ticker": t,
+                "description": r["description"] or "",
+                "classification_type": r["classification_type"] or "",
+                "current_value": 0, "monthly_income": 0,
+            }
+        holdings[t]["current_value"] += float(r["current_value"] or 0)
+        holdings[t]["monthly_income"] += float(r["approx_monthly_income"] or 0)
+
+    total_value = sum(h["current_value"] for h in holdings.values())
+    total_monthly = sum(h["monthly_income"] for h in holdings.values())
+    if total_value <= 0:
+        return jsonify(error="Portfolio has no value.")
+
+    # Classify each holding into a bucket
+    buckets = {name: {"value": 0, "monthly_income": 0, "tickers": []}
+               for name in list(INCOME_BENCHMARK_TARGETS.keys()) + ["Unclassified"]}
+
+    holdings_detail = []
+    excluded_value = 0.0
+    for h in holdings.values():
+        bucket = _get_income_bucket(h["ticker"], h["classification_type"], h["description"], overrides=income_overrides)
+        cv = h["current_value"]
+        mi = h["monthly_income"]
+        yld = (mi * 12 / cv * 100) if cv > 0 else 0
+        is_overridden = h["ticker"] in income_overrides
+
+        if bucket == "Excluded":
+            excluded_value += cv
+        elif bucket not in buckets:
+            bucket = "Unclassified"
+        if bucket != "Excluded":
+            buckets[bucket]["value"] += cv
+            buckets[bucket]["monthly_income"] += mi
+            buckets[bucket]["tickers"].append(h["ticker"])
+
+        holdings_detail.append({
+            "ticker": h["ticker"],
+            "description": h["description"],
+            "bucket": bucket,
+            "current_value": _safe(cv),
+            "pct_of_portfolio": _safe(cv / total_value * 100),
+            "monthly_income": _safe(mi),
+            "annual_yield": _safe(yld),
+            "is_overridden": is_overridden,
+        })
+
+    # Build comparison table
+    comparison = []
+    for bucket_name, target_pct in INCOME_BENCHMARK_TARGETS.items():
+        data = buckets.get(bucket_name, {"value": 0, "monthly_income": 0, "tickers": []})
+        actual_pct = data["value"] / total_value * 100 if total_value > 0 else 0
+        diff_pct = actual_pct - target_pct
+        target_value = total_value * target_pct / 100
+        gap_dollars = target_value - data["value"]
+        bucket_yield = (data["monthly_income"] * 12 / data["value"] * 100) if data["value"] > 0 else 0
+
+        comparison.append({
+            "bucket": bucket_name,
+            "target_pct": target_pct,
+            "actual_pct": _safe(actual_pct),
+            "diff_pct": _safe(diff_pct),
+            "actual_value": _safe(data["value"]),
+            "target_value": _safe(target_value),
+            "gap_dollars": _safe(gap_dollars),
+            "monthly_income": _safe(data["monthly_income"]),
+            "bucket_yield": _safe(bucket_yield),
+            "tickers": data["tickers"],
+        })
+
+    # Unclassified
+    unclass = buckets.get("Unclassified", {"value": 0, "monthly_income": 0, "tickers": []})
+    unclassified_pct = unclass["value"] / total_value * 100 if total_value > 0 else 0
+
+    # Portfolio-level metrics
+    blended_yield = (total_monthly * 12 / total_value * 100) if total_value > 0 else 0
+    # Diversification score: 1 - HHI (Herfindahl index). Higher = more diversified.
+    bucket_shares = [(b["actual_pct"] or 0) / 100 for b in comparison if (b["actual_pct"] or 0) > 0]
+    hhi = sum(s ** 2 for s in bucket_shares)
+    diversification_score = round((1 - hhi) * 100)
+
+    return jsonify(
+        comparison=comparison,
+        holdings_detail=holdings_detail,
+        summary={
+            "total_value": _safe(total_value),
+            "total_monthly_income": _safe(total_monthly),
+            "total_annual_income": _safe(total_monthly * 12),
+            "blended_yield": _safe(blended_yield),
+            "diversification_score": diversification_score,
+        },
+        unclassified_pct=_safe(unclassified_pct),
+        unclassified_tickers=unclass["tickers"],
+    )
+
+
+# ── Macro Classification Overrides ─────────────────────────────────────────────
+
+@app.route("/api/macro/overrides", methods=["GET"])
+def macro_overrides_list():
+    """Return all macro sensitivity overrides for the current profile."""
+    import json
+    _, pids = get_profile_filter()
+    conn = get_connection()
+    placeholders = ",".join("?" * len(pids))
+    rows = conn.execute(
+        f"SELECT ticker, sensitivity_tags, updated_at FROM macro_overrides WHERE profile_id IN ({placeholders})",
+        pids,
+    ).fetchall()
+    conn.close()
+    valid_tags = {k: v for k, v in SENSITIVITY_DISPLAY_NAMES.items() if k not in ("unclassified",)}
+    return jsonify(
+        overrides={r["ticker"]: json.loads(r["sensitivity_tags"]) for r in rows},
+        sensitivity_options=valid_tags,
+    )
+
+
+@app.route("/api/macro/overrides", methods=["PUT"])
+def macro_overrides_save():
+    """Save a macro sensitivity override for a ticker."""
+    import json
+    data = request.get_json(force=True) or {}
+    ticker = (data.get("ticker") or "").strip().upper()
+    tags = data.get("sensitivity_tags") or []
+
+    if not ticker:
+        return jsonify(error="Ticker is required."), 400
+    valid_tags = set(SENSITIVITY_DISPLAY_NAMES.keys()) - {"unclassified"}
+    if not tags or not all(t in valid_tags for t in tags):
+        return jsonify(error=f"Invalid tags. Valid: {sorted(valid_tags)}"), 400
+
+    _, pids = get_profile_filter()
+    pid = pids[0]
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO macro_overrides (ticker, profile_id, sensitivity_tags, updated_at)
+           VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(ticker, profile_id) DO UPDATE SET sensitivity_tags = excluded.sensitivity_tags,
+                                                          updated_at = excluded.updated_at""",
+        (ticker, pid, json.dumps(tags)),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, ticker=ticker, sensitivity_tags=tags)
+
+
+@app.route("/api/macro/overrides", methods=["DELETE"])
+def macro_overrides_delete():
+    """Remove a macro sensitivity override (revert to auto-classification)."""
+    data = request.get_json(force=True) or {}
+    ticker = (data.get("ticker") or "").strip().upper()
+    if not ticker:
+        return jsonify(error="Ticker is required."), 400
+
+    _, pids = get_profile_filter()
+    conn = get_connection()
+    placeholders = ",".join("?" * len(pids))
+    conn.execute(
+        f"DELETE FROM macro_overrides WHERE ticker = ? AND profile_id IN ({placeholders})",
+        [ticker] + pids,
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, ticker=ticker)
+
+
+# ── Income Bucket Overrides ────────────────────────────────────────────────────
+
+@app.route("/api/income/overrides", methods=["GET"])
+def income_overrides_list():
+    """Return all income bucket overrides for the current profile."""
+    _, pids = get_profile_filter()
+    conn = get_connection()
+    placeholders = ",".join("?" * len(pids))
+    rows = conn.execute(
+        f"SELECT ticker, bucket FROM income_overrides WHERE profile_id IN ({placeholders})",
+        pids,
+    ).fetchall()
+    conn.close()
+    valid_buckets = list(INCOME_BENCHMARK_TARGETS.keys()) + ["Excluded"]
+    return jsonify(
+        overrides={r["ticker"]: r["bucket"] for r in rows},
+        bucket_options=valid_buckets,
+    )
+
+
+@app.route("/api/income/overrides", methods=["PUT"])
+def income_overrides_save():
+    """Save an income bucket override for a ticker."""
+    data = request.get_json(force=True) or {}
+    ticker = (data.get("ticker") or "").strip().upper()
+    bucket = (data.get("bucket") or "").strip()
+
+    if not ticker:
+        return jsonify(error="Ticker is required."), 400
+    valid = set(INCOME_BENCHMARK_TARGETS.keys()) | {"Excluded"}
+    if bucket not in valid:
+        return jsonify(error=f"Invalid bucket. Valid: {sorted(valid)}"), 400
+
+    _, pids = get_profile_filter()
+    pid = pids[0]
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO income_overrides (ticker, profile_id, bucket, updated_at)
+           VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(ticker, profile_id) DO UPDATE SET bucket = excluded.bucket,
+                                                          updated_at = excluded.updated_at""",
+        (ticker, pid, bucket),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, ticker=ticker, bucket=bucket)
+
+
+@app.route("/api/income/overrides", methods=["DELETE"])
+def income_overrides_delete():
+    """Remove an income bucket override (revert to auto-classification)."""
+    data = request.get_json(force=True) or {}
+    ticker = (data.get("ticker") or "").strip().upper()
+    if not ticker:
+        return jsonify(error="Ticker is required."), 400
+
+    _, pids = get_profile_filter()
+    conn = get_connection()
+    placeholders = ",".join("?" * len(pids))
+    conn.execute(
+        f"DELETE FROM income_overrides WHERE ticker = ? AND profile_id IN ({placeholders})",
+        [ticker] + pids,
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, ticker=ticker)
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────

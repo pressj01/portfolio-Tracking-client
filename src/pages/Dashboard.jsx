@@ -424,9 +424,10 @@ export default function Dashboard() {
           total_return_pct: pv ? ((gl + td) / pv) : 0,
           pct_of_account: totalCv ? (cv / totalCv) : 0,
           _coverage: tickerCoverage[h.ticker] ?? null,
+          _grade_sort: ({ 'A+': 13, 'A': 12, 'A-': 11, 'B+': 10, 'B': 9, 'B-': 8, 'C+': 7, 'C': 6, 'C-': 5, 'D+': 4, 'D': 3, 'D-': 2, 'F': 1 })[tickerGrades[h.ticker]?.grade] || 0,
         }
       })
-  }, [holdings, totals, tickerCoverage])
+  }, [holdings, totals, tickerCoverage, tickerGrades])
 
   // Sorting
   const sorted = useMemo(() => {
@@ -611,7 +612,7 @@ export default function Dashboard() {
               <SortHeader col="estim_payment_per_year" align="right" tip="Estimated annual dividend income">Yr$</SortHeader>
               <SortHeader col="paid_for_itself" align="right" tip="Percentage of original cost recovered through dividends">PFI%</SortHeader>
               <SortHeader col="_coverage" align="right" tip="Coverage ratio — above 1.0 sustainable, 0.8–1.0 borderline, below 0.8 likely NAV decay">Cov</SortHeader>
-              <th style={{ textAlign: 'center' }} title="Composite grade based on yield, growth, and risk metrics">Grd ⓘ</th>
+              <SortHeader col="_grade_sort" align="center" tip="Composite grade based on yield, growth, and risk metrics">Grd</SortHeader>
             </tr>
           </thead>
           <tbody>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import Plot from 'react-plotly.js'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useNavigate } from 'react-router-dom'
@@ -415,6 +415,15 @@ function TiltsTab({ pf }) {
           <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>Current Regime</div>
           <div style={{ fontSize: '1rem', fontWeight: 700, color: '#e0e8f0' }}>{data.current_regime}</div>
         </div>
+        {data.conditions && (
+          <div style={{
+            background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+            padding: '0.75rem 1.25rem',
+          }}>
+            <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>Active Conditions</div>
+            <div style={{ fontSize: '1rem', fontWeight: 700, color: '#ffca28' }}>{data.conditions}</div>
+          </div>
+        )}
         <div style={{
           background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
           padding: '0.75rem 1.25rem',
@@ -425,6 +434,64 @@ function TiltsTab({ pf }) {
           </div>
         </div>
       </div>
+
+      {/* Breakeven Rebalancing Target */}
+      {data.breakeven_target?.tags?.length > 0 && (
+        <div style={{
+          background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+          padding: '1rem 1.25rem', marginBottom: '1rem',
+        }}>
+          <h3 style={{ color: '#e0e8f0', margin: '0 0 0.5rem' }}>
+            Rebalance to Breakeven
+            <span style={{ fontSize: '0.75rem', color: '#90a4ae', fontWeight: 400, marginLeft: 8 }}>
+              Shift {fmtPct(data.breakeven_target.total_shift_pct)} ({fmt$(data.breakeven_target.total_shift_needed)}) from unfavorable → favorable to reach neutral alignment
+            </span>
+          </h3>
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+            <div style={{ background: 'rgba(239,83,80,0.1)', border: '1px solid #c62828', borderRadius: 6, padding: '0.4rem 0.75rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '0.65rem', color: '#ef9a9a' }}>Unfavorable</div>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: '#ef5350' }}>{fmtPct(data.breakeven_target.current_unfavorable_pct)}</div>
+            </div>
+            <div style={{ background: 'rgba(255,202,40,0.08)', border: '1px solid #f9a825', borderRadius: 6, padding: '0.4rem 0.75rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '0.65rem', color: '#fff59d' }}>Neutral</div>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: '#ffca28' }}>{fmtPct(data.breakeven_target.current_neutral_pct)}</div>
+            </div>
+            <div style={{ background: 'rgba(76,175,80,0.08)', border: '1px solid #2e7d32', borderRadius: 6, padding: '0.4rem 0.75rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '0.65rem', color: '#a5d6a7' }}>Favorable</div>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: '#4caf50' }}>{fmtPct(data.breakeven_target.current_favorable_pct)}</div>
+            </div>
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid #334155' }}>
+                <th style={{ ...thStyle, width: '30%' }}>Asset Class</th>
+                <th style={{ ...thStyle, textAlign: 'right' }}>Current %</th>
+                <th style={{ ...thStyle, textAlign: 'right' }}>Target %</th>
+                <th style={{ ...thStyle, textAlign: 'right' }}>Underweight</th>
+                <th style={{ ...thStyle, textAlign: 'right' }}>$ to Add</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.breakeven_target.tags.map((t, i) => (
+                <tr key={i} style={{ borderBottom: '1px solid #1a2233' }}>
+                  <td style={{ ...tdStyle, fontWeight: 600, color: '#81c784' }}>{t.label}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right' }}>{fmtPct(t.current_pct)}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right', color: '#4caf50' }}>{fmtPct(t.target_pct)}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right', color: '#ffca28', fontWeight: 600 }}>+{fmtPct(t.gap_pct)}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right', color: '#4caf50' }}>{fmt$(t.gap_dollars)}</td>
+                </tr>
+              ))}
+              <tr style={{ borderTop: '2px solid #334155' }}>
+                <td style={{ ...tdStyle, fontWeight: 700, color: '#e0e8f0' }}>Total Shift</td>
+                <td style={tdStyle}></td>
+                <td style={tdStyle}></td>
+                <td style={{ ...tdStyle, textAlign: 'right', color: '#ffca28', fontWeight: 700 }}>+{fmtPct(data.breakeven_target.total_shift_pct)}</td>
+                <td style={{ ...tdStyle, textAlign: 'right', color: '#4caf50', fontWeight: 700 }}>{fmt$(data.breakeven_target.total_shift_needed)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem' }}>
         {/* Next dollar pie chart */}
@@ -538,6 +605,596 @@ function TiltsTab({ pf }) {
   )
 }
 
+// ─── Income Benchmark Tab ────────────────────────────────────────────────────
+
+function IncomeBenchmarkTab({ pf }) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [data, setData] = useState(null)
+  const [expandedBucket, setExpandedBucket] = useState(null)
+  const [bucketOpts, setBucketOpts] = useState([])
+  const [saving, setSaving] = useState({})
+  const [ibSort, setIbSort] = useState({ col: null, asc: true })
+  const expandedRowRef = useRef(null)
+
+  // Auto-scroll to expanded bucket after sort changes
+  useEffect(() => {
+    if (expandedBucket && expandedRowRef.current) {
+      expandedRowRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [ibSort, expandedBucket])
+
+  const load = useCallback(() => {
+    setLoading(true)
+    setError(null)
+    Promise.all([
+      pf('/api/macro/income-benchmark', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }).then(r => r.json()),
+      pf('/api/income/overrides').then(r => r.json()),
+    ])
+      .then(([d, ovr]) => {
+        if (d.error) { setError(d.error); return }
+        setData(d)
+        setBucketOpts(ovr.bucket_options || [])
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [pf])
+
+  useEffect(() => { load() }, [load])
+
+  const handleBucketChange = useCallback((ticker, newBucket) => {
+    setSaving(s => ({ ...s, [ticker]: true }))
+    const isRevert = newBucket === '__revert__'
+    const endpoint = '/api/income/overrides'
+    const opts = isRevert
+      ? { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) }
+      : { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker, bucket: newBucket }) }
+
+    pf(endpoint, opts)
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          // Refresh data
+          pf('/api/macro/income-benchmark', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          }).then(r => r.json()).then(fresh => { if (!fresh.error) setData(fresh) })
+        } else { alert(d.error || 'Save failed') }
+      })
+      .catch(e => alert(e.message))
+      .finally(() => setSaving(s => ({ ...s, [ticker]: false })))
+  }, [pf])
+
+  if (loading) return <p style={{ color: '#90caf9' }}>Analyzing portfolio against income benchmark...</p>
+  if (error) return <p style={{ color: '#ef5350' }}>{error}</p>
+  if (!data) return null
+
+  const { comparison, holdings_detail, summary } = data
+  const barColors = ['#42a5f5', '#66bb6a', '#ab47bc', '#ff7043', '#ffca28', '#26a69a', '#ec407a', '#78909c']
+
+  return (
+    <div>
+      {/* Summary cards */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem' }}>
+        {[
+          { label: 'Portfolio Value', value: fmt$(summary.total_value) },
+          { label: 'Annual Income', value: fmt$(summary.total_annual_income) },
+          { label: 'Monthly Income', value: fmt$(summary.total_monthly_income) },
+          { label: 'Blended Yield', value: fmtPct(summary.blended_yield) },
+          { label: 'Diversification', value: summary.diversification_score + '/100' },
+        ].map((c, i) => (
+          <div key={i} style={{
+            background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+            padding: '0.6rem 1rem', minWidth: 130,
+          }}>
+            <div style={{ fontSize: '0.65rem', color: '#90a4ae', marginBottom: 3 }}>{c.label}</div>
+            <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#e0e8f0' }}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Horizontal bar comparison chart */}
+      <div style={{ marginBottom: '1rem' }}>
+        <Plot
+          data={[
+            {
+              type: 'bar',
+              y: comparison.map(c => c.bucket),
+              x: comparison.map(c => c.actual_pct),
+              orientation: 'h',
+              name: 'Actual %',
+              marker: { color: '#42a5f5' },
+              text: comparison.map(c => fmtPct(c.actual_pct)),
+              textposition: 'auto',
+              textfont: { color: '#fff', size: 11 },
+              hovertemplate: '%{y}: %{x:.1f}%<extra>Actual</extra>',
+            },
+            {
+              type: 'bar',
+              y: comparison.map(c => c.bucket),
+              x: comparison.map(c => c.target_pct),
+              orientation: 'h',
+              name: 'Target %',
+              marker: { color: 'rgba(255,255,255,0.15)', line: { color: '#ffca28', width: 2 } },
+              text: comparison.map(c => c.target_pct + '%'),
+              textposition: 'auto',
+              textfont: { color: '#ffca28', size: 11 },
+              hovertemplate: '%{y}: %{x:.1f}%<extra>Target</extra>',
+            },
+          ]}
+          layout={{
+            height: 340, barmode: 'group',
+            margin: { t: 10, b: 30, l: 200, r: 30 },
+            paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+            font: { color: '#ccc' },
+            xaxis: { title: '% of Portfolio', gridcolor: '#1a2233', ticksuffix: '%' },
+            yaxis: { autorange: 'reversed', gridcolor: '#1a2233' },
+            legend: { orientation: 'h', y: 1.1, x: 0.5, xanchor: 'center', font: { color: '#ccc' } },
+          }}
+          config={{ displayModeBar: false }}
+          style={{ width: '100%' }}
+        />
+      </div>
+
+      {/* Comparison table */}
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom: '2px solid #334155' }}>
+              {[
+                { key: 'bucket', label: 'Income Bucket', align: 'left', width: '22%' },
+                { key: 'target_pct', label: 'Target %', align: 'right' },
+                { key: 'actual_pct', label: 'Actual %', align: 'right' },
+                { key: 'diff_pct', label: 'Over/Under', align: 'right' },
+                { key: 'actual_value', label: 'Actual Value', align: 'right' },
+                { key: 'monthly_income', label: 'Monthly Income', align: 'right' },
+                { key: 'bucket_yield', label: 'Yield', align: 'right' },
+                { key: 'gap_dollars', label: '$ to Target', align: 'right' },
+              ].map(col => (
+                <th key={col.key}
+                  onClick={() => setIbSort(prev => ({ col: col.key, asc: prev.col === col.key ? !prev.asc : col.key === 'bucket' }))}
+                  style={{ ...ibTh, textAlign: col.align, width: col.width, cursor: 'pointer', userSelect: 'none' }}
+                >
+                  {col.label} {ibSort.col === col.key ? (ibSort.asc ? '↑' : '↓') : ''}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {[...comparison].sort((a, b) => {
+              if (!ibSort.col) return 0
+              const av = a[ibSort.col], bv = b[ibSort.col]
+              if (typeof av === 'string') return ibSort.asc ? av.localeCompare(bv) : bv.localeCompare(av)
+              return ibSort.asc ? (av || 0) - (bv || 0) : (bv || 0) - (av || 0)
+            }).map((c, i) => {
+              const diff = c.diff_pct || 0
+              const diffColor = diff > 2 ? '#4caf50' : diff < -2 ? '#ef5350' : '#ffca28'
+              const isExpanded = expandedBucket === c.bucket
+              const bucketHoldings = holdings_detail?.filter(h => h.bucket === c.bucket) || []
+
+              return (
+                <React.Fragment key={i}>
+                  <tr
+                    ref={isExpanded ? expandedRowRef : null}
+                    style={{ borderBottom: '1px solid #1a2233', cursor: bucketHoldings.length > 0 ? 'pointer' : 'default' }}
+                    onClick={() => bucketHoldings.length > 0 && setExpandedBucket(isExpanded ? null : c.bucket)}
+                  >
+                    <td style={{ ...ibTd, fontWeight: 600, color: barColors[i % barColors.length] }}>
+                      {bucketHoldings.length > 0 && <span style={{ fontSize: '0.7rem', marginRight: 4 }}>{isExpanded ? '▼' : '▶'}</span>}
+                      {c.bucket}
+                      <span style={{ color: '#666', fontSize: '0.7rem', marginLeft: 4 }}>({c.tickers?.length || 0})</span>
+                    </td>
+                    <td style={{ ...ibTd, textAlign: 'right' }}>{c.target_pct}%</td>
+                    <td style={{ ...ibTd, textAlign: 'right' }}>{fmtPct(c.actual_pct)}</td>
+                    <td style={{ ...ibTd, textAlign: 'right', color: diffColor, fontWeight: 600 }}>
+                      {diff > 0 ? '+' : ''}{fmtPct(diff)}
+                    </td>
+                    <td style={{ ...ibTd, textAlign: 'right' }}>{fmt$(c.actual_value)}</td>
+                    <td style={{ ...ibTd, textAlign: 'right' }}>{fmt$(c.monthly_income)}</td>
+                    <td style={{ ...ibTd, textAlign: 'right' }}>{fmtPct(c.bucket_yield)}</td>
+                    <td style={{ ...ibTd, textAlign: 'right', color: (c.gap_dollars || 0) > 0 ? '#ef5350' : '#4caf50', fontWeight: 600 }}>
+                      {(c.gap_dollars || 0) > 0 ? '-' : '+'}{fmt$(Math.abs(c.gap_dollars || 0))}
+                    </td>
+                  </tr>
+                  {isExpanded && bucketHoldings
+                    .sort((a, b) => (b.current_value || 0) - (a.current_value || 0))
+                    .map((h, hi) => (
+                    <tr key={`${i}-${hi}`} style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid #111' }}>
+                      <td style={{ ...ibTd, paddingLeft: 28, fontSize: '0.78rem' }}>
+                        <span style={{ color: '#90caf9', fontWeight: 600 }}>{h.ticker}</span>
+                        <span style={{ color: '#667', marginLeft: 6, fontSize: '0.72rem' }}>{h.description?.substring(0, 30)}</span>
+                        {h.is_overridden && <span style={{ color: '#64b5f6', marginLeft: 6, fontSize: '0.65rem', fontWeight: 600 }}>OVERRIDE</span>}
+                      </td>
+                      <td style={{ ...ibTd, textAlign: 'right', color: '#667' }}></td>
+                      <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmtPct(h.pct_of_portfolio)}</td>
+                      <td style={{ ...ibTd, textAlign: 'right' }}></td>
+                      <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmt$(h.current_value)}</td>
+                      <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmt$(h.monthly_income)}</td>
+                      <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmtPct(h.annual_yield)}</td>
+                      <td style={{ ...ibTd, textAlign: 'right' }}>
+                        <select
+                          value={h.bucket}
+                          disabled={saving[h.ticker]}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => handleBucketChange(h.ticker, e.target.value)}
+                          style={{
+                            background: '#0f172a', color: '#e0e0e0', border: '1px solid #334155',
+                            borderRadius: 4, padding: '2px 4px', fontSize: '0.7rem', cursor: 'pointer',
+                            opacity: saving[h.ticker] ? 0.5 : 1,
+                          }}
+                        >
+                          {bucketOpts.map(b => (
+                            <option key={b} value={b}>{b}</option>
+                          ))}
+                          {h.is_overridden && <option value="__revert__">↩ Auto-detect</option>}
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </React.Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Excluded holdings */}
+      {(() => {
+        const excluded = holdings_detail?.filter(h => h.bucket === 'Excluded') || []
+        if (!excluded.length) return null
+        return (
+          <div style={{
+            background: 'rgba(97,97,97,0.08)', border: '1px solid #424242',
+            borderRadius: 8, padding: '0.75rem 1rem', marginTop: '1rem',
+          }}>
+            <div style={{ color: '#90a4ae', fontWeight: 600, marginBottom: 8 }}>
+              Excluded Holdings ({excluded.length})
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <tbody>
+                {excluded.map((h, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #263238' }}>
+                    <td style={{ ...ibTd, fontSize: '0.78rem' }}>
+                      <span style={{ color: '#90caf9', fontWeight: 600 }}>{h.ticker}</span>
+                      <span style={{ color: '#667', marginLeft: 6, fontSize: '0.72rem' }}>{h.description?.substring(0, 30)}</span>
+                    </td>
+                    <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmt$(h.current_value)}</td>
+                    <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmt$(h.monthly_income)}</td>
+                    <td style={{ ...ibTd, textAlign: 'right' }}>
+                      <select
+                        value="Excluded"
+                        disabled={saving[h.ticker]}
+                        onChange={e => handleBucketChange(h.ticker, e.target.value)}
+                        style={{
+                          background: '#0f172a', color: '#e0e0e0', border: '1px solid #334155',
+                          borderRadius: 4, padding: '2px 4px', fontSize: '0.7rem', cursor: 'pointer',
+                          opacity: saving[h.ticker] ? 0.5 : 1,
+                        }}
+                      >
+                        {bucketOpts.map(b => (
+                          <option key={b} value={b}>{b}</option>
+                        ))}
+                        <option value="__revert__">↩ Auto-detect</option>
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      })()}
+
+      {/* Unclassified warning */}
+      {(data.unclassified_pct || 0) > 0 && (
+        <div style={{
+          background: 'rgba(255,202,40,0.08)', border: '1px solid #f9a825',
+          borderRadius: 8, padding: '0.75rem 1rem', marginTop: '1rem',
+        }}>
+          <div style={{ color: '#ffca28', fontWeight: 600, marginBottom: 4 }}>
+            {fmtPct(data.unclassified_pct)} Unclassified
+          </div>
+          <div style={{ color: '#b0bec5', fontSize: '0.8rem' }}>
+            These holdings couldn't be auto-classified: {(data.unclassified_tickers || []).join(', ')}.
+            Use the bucket dropdown when expanding a row to reclassify, or assign pillar types in Manage Holdings.
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Tab 5: Classifications ───────────────────────────────────────────────────
+
+function ClassificationsTab({ pf }) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [holdings, setHoldings] = useState([])       // from exposure endpoint
+  const [overrides, setOverrides] = useState({})      // ticker -> [tags]
+  const [sensOpts, setSensOpts] = useState({})         // tag -> display name
+  const [saving, setSaving] = useState({})             // ticker -> true while saving
+  const [editTicker, setEditTicker] = useState(null)   // which ticker is being edited
+  const [editTags, setEditTags] = useState([])         // tags being edited
+  const [filter, setFilter] = useState('all')          // all | overridden | auto | excluded
+
+  const load = useCallback(() => {
+    setLoading(true)
+    setError(null)
+    // Fetch exposure data and overrides in parallel
+    Promise.all([
+      pf('/api/macro/exposure', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }).then(r => r.json()),
+      pf('/api/macro/overrides').then(r => r.json()),
+    ])
+      .then(([exp, ovr]) => {
+        if (exp.error) { setError(exp.error); return }
+        setHoldings((exp.holdings_detail || []).sort((a, b) => a.ticker.localeCompare(b.ticker)))
+        setOverrides(ovr.overrides || {})
+        setSensOpts(ovr.sensitivity_options || {})
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [pf])
+
+  useEffect(() => { load() }, [load])
+
+  const handleSave = useCallback((ticker, tags) => {
+    setSaving(s => ({ ...s, [ticker]: true }))
+    pf('/api/macro/overrides', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker, sensitivity_tags: tags }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          setOverrides(prev => ({ ...prev, [ticker]: tags }))
+          setEditTicker(null)
+          setEditTags([])
+          // Refresh exposure data so scores update
+          pf('/api/macro/exposure', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          }).then(r => r.json()).then(exp => {
+            if (!exp.error) setHoldings((exp.holdings_detail || []).sort((a, b) => a.ticker.localeCompare(b.ticker)))
+          })
+        } else {
+          alert(d.error || 'Save failed')
+        }
+      })
+      .catch(e => alert(e.message))
+      .finally(() => setSaving(s => ({ ...s, [ticker]: false })))
+  }, [pf])
+
+  const handleRevert = useCallback((ticker) => {
+    setSaving(s => ({ ...s, [ticker]: true }))
+    pf('/api/macro/overrides', {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          setOverrides(prev => { const n = { ...prev }; delete n[ticker]; return n })
+          if (editTicker === ticker) { setEditTicker(null); setEditTags([]) }
+          // Refresh
+          pf('/api/macro/exposure', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          }).then(r => r.json()).then(exp => {
+            if (!exp.error) setHoldings((exp.holdings_detail || []).sort((a, b) => a.ticker.localeCompare(b.ticker)))
+          })
+        }
+      })
+      .catch(e => alert(e.message))
+      .finally(() => setSaving(s => ({ ...s, [ticker]: false })))
+  }, [pf, editTicker])
+
+  if (loading) return <p style={{ color: '#90caf9' }}>Loading classifications...</p>
+  if (error) return <p style={{ color: '#ef5350' }}>{error}</p>
+  if (!holdings.length) return <p style={{ color: '#90a4ae' }}>No holdings found.</p>
+
+  const tagKeys = Object.keys(sensOpts).filter(k => k !== 'excluded').sort()
+
+  const filtered = holdings.filter(h => {
+    if (filter === 'overridden') return h.sensitivity_source === 'Override'
+    if (filter === 'auto') return h.sensitivity_source !== 'Override' && h.macro_label !== 'Excluded'
+    if (filter === 'excluded') return h.macro_label === 'Excluded'
+    return true
+  })
+
+  const overrideCount = holdings.filter(h => h.sensitivity_source === 'Override').length
+  const excludedCount = holdings.filter(h => h.macro_label === 'Excluded').length
+
+  const barColors = {
+    inflation_benefiting: '#4caf50', inflation_negative: '#ef5350', inflation_neutral: '#90a4ae',
+    rate_sensitive_positive: '#66bb6a', rate_sensitive_negative: '#e57373', rate_sensitive_mild: '#ffb74d',
+    commodity_linked: '#ffca28', safe_haven: '#42a5f5', growth_equity: '#ab47bc',
+    excluded: '#616161', unclassified: '#555',
+  }
+
+  return (
+    <div>
+      {/* Summary */}
+      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+        <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '0.6rem 1rem', textAlign: 'center' }}>
+          <div style={{ fontSize: '0.7rem', color: '#90a4ae' }}>Total Holdings</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#e0e8f0' }}>{holdings.length}</div>
+        </div>
+        <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '0.6rem 1rem', textAlign: 'center' }}>
+          <div style={{ fontSize: '0.7rem', color: '#90a4ae' }}>Overridden</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#64b5f6' }}>{overrideCount}</div>
+        </div>
+        <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '0.6rem 1rem', textAlign: 'center' }}>
+          <div style={{ fontSize: '0.7rem', color: '#90a4ae' }}>Excluded</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#616161' }}>{excludedCount}</div>
+        </div>
+      </div>
+
+      {/* Filter */}
+      <div style={{ marginBottom: '0.75rem', display: 'flex', gap: '0.5rem' }}>
+        {[['all', 'All'], ['overridden', 'Overridden'], ['auto', 'Auto-classified'], ['excluded', 'Excluded']].map(([val, lbl]) => (
+          <button key={val}
+            onClick={() => setFilter(val)}
+            style={{
+              background: filter === val ? '#1a237e' : '#1e293b',
+              color: filter === val ? '#90caf9' : '#90a4ae',
+              border: `1px solid ${filter === val ? '#3949ab' : '#334155'}`,
+              borderRadius: 4, padding: '4px 12px', cursor: 'pointer', fontSize: '0.78rem',
+            }}
+          >{lbl}</button>
+        ))}
+      </div>
+
+      <p style={{ color: '#8899aa', fontSize: '0.78rem', marginBottom: '0.75rem' }}>
+        Override the auto-detected sensitivity classification for any holding, or exclude it from macro analysis entirely.
+      </p>
+
+      {/* Table */}
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+          <thead>
+            <tr style={{ borderBottom: '2px solid #334155' }}>
+              <th style={thStyle}>Ticker</th>
+              <th style={thStyle}>Description</th>
+              <th style={thStyle}>Source</th>
+              <th style={thStyle}>Current Classification</th>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Score</th>
+              <th style={{ ...thStyle, textAlign: 'center', minWidth: 260 }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((h, i) => {
+              const isEditing = editTicker === h.ticker
+              const hasOverride = h.sensitivity_source === 'Override'
+              const isSaving = saving[h.ticker]
+
+              return (
+                <tr key={i} style={{
+                  borderBottom: '1px solid #1e293b',
+                  background: hasOverride ? 'rgba(100,181,246,0.06)' :
+                    h.macro_label === 'Excluded' ? 'rgba(97,97,97,0.08)' : 'transparent',
+                }}>
+                  <td style={{ ...tdStyle, fontWeight: 600, color: '#90caf9' }}>{h.ticker}</td>
+                  <td style={{ ...tdStyle, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {h.description}
+                  </td>
+                  <td style={{ ...tdStyle }}>
+                    <span style={{
+                      background: hasOverride ? '#1a237e' : h.sensitivity_source === 'Unclassified' ? '#c62828' : '#263238',
+                      color: hasOverride ? '#90caf9' : h.sensitivity_source === 'Unclassified' ? '#ffcdd2' : '#b0bec5',
+                      borderRadius: 4, padding: '2px 8px', fontSize: '0.72rem', fontWeight: 600,
+                    }}>{h.sensitivity_source}</span>
+                  </td>
+                  <td style={tdStyle}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                      {h.sensitivity_tags?.map((tag, ti) => (
+                        <span key={ti} style={{
+                          background: barColors[tag] || '#555', color: '#000',
+                          borderRadius: 4, padding: '1px 6px', fontSize: '0.7rem', fontWeight: 600,
+                        }}>{(sensOpts[tag] || tag.replace(/_/g, ' '))}</span>
+                      ))}
+                    </div>
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: 'center' }}>
+                    {h.macro_score != null ? (
+                      <span style={{
+                        background: scoreBadgeColor(h.macro_score), color: '#fff',
+                        borderRadius: 4, padding: '2px 8px', fontWeight: 700, fontSize: '0.8rem',
+                      }}>{fmtNum(h.macro_score)}</span>
+                    ) : (
+                      <span style={{ color: '#616161', fontSize: '0.8rem' }}>—</span>
+                    )}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: 'center' }}>
+                    {isEditing ? (
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' }}>
+                        <select
+                          multiple
+                          value={editTags}
+                          onChange={e => setEditTags(Array.from(e.target.selectedOptions, o => o.value))}
+                          style={{
+                            background: '#0f172a', color: '#e0e0e0', border: '1px solid #334155',
+                            borderRadius: 4, padding: '2px 4px', fontSize: '0.75rem', minWidth: 140, minHeight: 60,
+                          }}
+                        >
+                          {tagKeys.map(k => (
+                            <option key={k} value={k}>{sensOpts[k]}</option>
+                          ))}
+                        </select>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                          <button
+                            disabled={!editTags.length || isSaving}
+                            onClick={() => handleSave(h.ticker, editTags)}
+                            style={{
+                              background: '#2e7d32', color: '#fff', border: 'none', borderRadius: 4,
+                              padding: '3px 10px', cursor: 'pointer', fontSize: '0.72rem',
+                              opacity: (!editTags.length || isSaving) ? 0.5 : 1,
+                            }}
+                          >{isSaving ? '...' : 'Save'}</button>
+                          <button
+                            onClick={() => handleSave(h.ticker, ['excluded'])}
+                            disabled={isSaving}
+                            style={{
+                              background: '#424242', color: '#bbb', border: 'none', borderRadius: 4,
+                              padding: '3px 10px', cursor: 'pointer', fontSize: '0.72rem',
+                              opacity: isSaving ? 0.5 : 1,
+                            }}
+                          >Exclude</button>
+                          <button
+                            onClick={() => { setEditTicker(null); setEditTags([]) }}
+                            style={{
+                              background: 'transparent', color: '#90a4ae', border: '1px solid #334155',
+                              borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: '0.72rem',
+                            }}
+                          >Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
+                        <button
+                          onClick={() => { setEditTicker(h.ticker); setEditTags(h.sensitivity_tags || []) }}
+                          style={{
+                            background: '#1a237e', color: '#90caf9', border: '1px solid #3949ab',
+                            borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: '0.72rem',
+                          }}
+                        >Edit</button>
+                        {hasOverride && (
+                          <button
+                            disabled={isSaving}
+                            onClick={() => handleRevert(h.ticker)}
+                            style={{
+                              background: '#4a1c1c', color: '#ef9a9a', border: '1px solid #6d2c2c',
+                              borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: '0.72rem',
+                              opacity: isSaving ? 0.5 : 1,
+                            }}
+                          >{isSaving ? '...' : 'Revert'}</button>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+const ibTh = {
+  textAlign: 'left', padding: '8px 10px', color: '#90a4ae',
+  fontSize: '0.75rem', fontWeight: 600, whiteSpace: 'nowrap',
+}
+const ibTd = {
+  padding: '8px 10px', color: '#e0e0e0', fontSize: '0.82rem',
+}
+
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const thStyle = {
@@ -575,11 +1232,21 @@ export default function MacroRegimeDashboard() {
           onClick={() => setActiveTab('tilts')}>
           Rebalancing Tilts
         </button>
+        <button className={`tab ${activeTab === 'income' ? 'active' : ''}`}
+          onClick={() => setActiveTab('income')}>
+          Income Benchmark
+        </button>
+        <button className={`tab ${activeTab === 'classifications' ? 'active' : ''}`}
+          onClick={() => setActiveTab('classifications')}>
+          Classifications
+        </button>
       </div>
 
       {activeTab === 'conditions' && <ConditionsTab pf={pf} key={selection?.id || 'cond'} />}
       {activeTab === 'exposure' && <ExposureTab pf={pf} key={selection?.id || 'exp'} />}
       {activeTab === 'tilts' && <TiltsTab pf={pf} key={selection?.id || 'tilts'} />}
+      {activeTab === 'income' && <IncomeBenchmarkTab pf={pf} key={selection?.id || 'income'} />}
+      {activeTab === 'classifications' && <ClassificationsTab pf={pf} key={selection?.id || 'class'} />}
     </div>
   )
 }

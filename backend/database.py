@@ -550,6 +550,30 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    # ── macro_overrides ────────────────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS macro_overrides (
+            ticker          TEXT NOT NULL,
+            profile_id      INTEGER NOT NULL DEFAULT 1,
+            sensitivity_tags TEXT NOT NULL,
+            updated_at       TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (ticker, profile_id),
+            FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+        )
+    """)
+
+    # ── income_overrides ────────────────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS income_overrides (
+            ticker          TEXT NOT NULL,
+            profile_id      INTEGER NOT NULL DEFAULT 1,
+            bucket          TEXT NOT NULL,
+            updated_at       TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (ticker, profile_id),
+            FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+        )
+    """)
+
     # ── settings ──────────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS settings (

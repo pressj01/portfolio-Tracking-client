@@ -484,13 +484,13 @@ function CompareCard({ label, before, after, format }) {
   const display = (v) => {
     if (v == null) return '—'
     if (format === '$') return fmt$(v)
-    if (format === 'yield') return (v * 100).toFixed(2) + '%'
+    if (format === 'yield') return v.toFixed(2) + '%'
     return fmtPct(v)
   }
   const diffDisplay = (d) => {
     if (d == null) return null
     if (format === '$') return fmt$(d)
-    if (format === 'yield') return (d >= 0 ? '+' : '') + (d * 100).toFixed(2) + '%'
+    if (format === 'yield') return (d >= 0 ? '+' : '') + d.toFixed(2) + '%'
     return fmtPct(d)
   }
   const diff = (before != null && after != null) ? after - before : null
