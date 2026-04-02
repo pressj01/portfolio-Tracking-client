@@ -27,6 +27,7 @@ import Export from './pages/Export'
 import DividendCompare from './pages/DividendCompare'
 import ConsolidationAnalysis from './pages/ConsolidationAnalysis'
 import MacroRegimeDashboard from './pages/MacroRegimeDashboard'
+import IncomeGrowthSim from './pages/IncomeGrowthSim'
 import Help from './pages/Help'
 
 function NavDropdown({ label, children }) {
@@ -83,6 +84,7 @@ function App() {
         <Route path="/nav-erosion" element={<NavErosion />} />
         <Route path="/nav-erosion-portfolio" element={<NavErosionPortfolio />} />
         <Route path="/income-sim" element={<PortfolioIncomeSim />} />
+        <Route path="/income-growth" element={<IncomeGrowthSim />} />
         <Route path="/correlation" element={<Correlation />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/portfolio-builder" element={<PortfolioBuilder />} />
@@ -139,6 +141,7 @@ function Nav() {
         <NavLink to="/nav-erosion">NAV Erosion</NavLink>
         <NavLink to="/nav-erosion-portfolio">NAV Erosion Screener</NavLink>
         <NavLink to="/income-sim">Income Simulator</NavLink>
+        <NavLink to="/income-growth">Income Growth</NavLink>
         <NavLink to="/correlation">Correlation Matrix</NavLink>
         <NavLink to="/analytics">Portfolio Analytics</NavLink>
         <NavLink to="/portfolio-builder">Portfolio Builder</NavLink>

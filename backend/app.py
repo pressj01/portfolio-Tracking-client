@@ -3732,11 +3732,14 @@ def dividend_analysis_data():
 def sync_drip_to_owner():
     """Copy reinvest flags from sub-profiles to Owner.
 
-    For each ticker in Owner (profile 1), use the reinvest flag from the
-    sub-profile that holds the largest position (by quantity).  This way the
-    account with the most shares drives the Owner DRIP setting.
+    For each ticker in Owner (profile 1):
+    - Set reinvest='Y' if ANY sub-profile has reinvest='Y' (only 'N' if all are 'N').
+    - Set drip_quantity = sum of shares from sub-profiles where reinvest='Y'.
+      This way DRIP income calculations use only the DRIP-eligible shares,
+      not the full aggregate quantity.
     """
     conn = get_connection()
+    ensure_tables_exist(conn)
     owner_id = 1
 
     # Get sub-profile ids that are included in owner
@@ -3749,37 +3752,46 @@ def sync_drip_to_owner():
     if not sub_ids:
         return jsonify({"message": "No sub-profiles found", "updated": 0})
 
-    # Build lookup: ticker -> reinvest flag from the sub-profile with the most shares
+    # Build lookup: ticker -> (any_drip, drip_shares)
     placeholders = ",".join("?" * len(sub_ids))
     sub_rows = conn.execute(
         f"SELECT ticker, reinvest, COALESCE(quantity, 0) as qty FROM all_account_info WHERE profile_id IN ({placeholders})",
         sub_ids,
     ).fetchall()
 
-    # drip_map: ticker -> (max_qty, reinvest_flag)
-    drip_map = {}
+    drip_map = {}  # ticker -> {"any_drip": bool, "all_drip": bool, "drip_qty": float, "total_qty": float}
     for r in sub_rows:
         t = r["ticker"] if isinstance(r, dict) else r[0]
         v = r["reinvest"] if isinstance(r, dict) else r[1]
         q = float(r["qty"] if isinstance(r, dict) else r[2] or 0)
-        if t not in drip_map or q > drip_map[t][0]:
-            drip_map[t] = (q, v)
+        if t not in drip_map:
+            drip_map[t] = {"any_drip": False, "all_drip": True, "drip_qty": 0.0, "total_qty": 0.0}
+        drip_map[t]["total_qty"] += q
+        if v == "Y":
+            drip_map[t]["any_drip"] = True
+            drip_map[t]["drip_qty"] += q
+        else:
+            drip_map[t]["all_drip"] = False
 
     # Update owner holdings
     updated = 0
-    for ticker, (_, reinvest_flag) in drip_map.items():
-        new_val = reinvest_flag if reinvest_flag in ("Y", "N") else "N"
+    for ticker, info in drip_map.items():
+        new_val = "Y" if info["any_drip"] else "N"
+        # If ALL accounts have DRIP on, use None (meaning use total shares).
+        # If only SOME have DRIP on, store the partial DRIP-eligible share count.
+        new_drip_qty = None if info["all_drip"] else (round(info["drip_qty"], 6) if info["any_drip"] else None)
         cur = conn.execute(
-            "SELECT reinvest FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+            "SELECT reinvest, drip_quantity FROM all_account_info WHERE ticker = ? AND profile_id = ?",
             (ticker, owner_id),
         ).fetchone()
         if cur is None:
             continue
         old_val = cur["reinvest"] if isinstance(cur, dict) else cur[0]
-        if old_val != new_val:
+        old_drip_qty = cur["drip_quantity"] if isinstance(cur, dict) else cur[1]
+        if old_val != new_val or old_drip_qty != new_drip_qty:
             conn.execute(
-                "UPDATE all_account_info SET reinvest = ? WHERE ticker = ? AND profile_id = ?",
-                (new_val, ticker, owner_id),
+                "UPDATE all_account_info SET reinvest = ?, drip_quantity = ? WHERE ticker = ? AND profile_id = ?",
+                (new_val, new_drip_qty, ticker, owner_id),
             )
             updated += 1
 
@@ -3791,6 +3803,110 @@ def sync_drip_to_owner():
     populate_dividends(owner_id)
 
     return jsonify({"message": f"Synced DRIP flags to Owner — {updated} tickers updated", "updated": updated})
+
+
+# ── DRIP Matrix ──────────────────────────────────────────────────────────────
+
+@app.route("/api/drip-matrix", methods=["GET"])
+def drip_matrix():
+    """Return DRIP status for every ticker across all sub-profiles included in Owner."""
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    owner_id = 1
+
+    # Get sub-profiles
+    profiles = conn.execute(
+        "SELECT id, name FROM profiles WHERE id != ? AND include_in_owner = 1 ORDER BY name",
+        (owner_id,),
+    ).fetchall()
+    profile_list = [{"id": r["id"], "name": r["name"]} for r in profiles]
+    sub_ids = [p["id"] for p in profile_list]
+
+    if not sub_ids:
+        conn.close()
+        return jsonify(profiles=[], tickers=[])
+
+    # Get all holdings across sub-profiles
+    placeholders = ",".join("?" * len(sub_ids))
+    rows = conn.execute(
+        f"""SELECT ticker, profile_id, reinvest, COALESCE(quantity, 0) as qty
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+            ORDER BY ticker""",
+        sub_ids,
+    ).fetchall()
+
+    # Build ticker -> {profile_id: {reinvest, qty}}
+    ticker_map = {}
+    for r in rows:
+        t = r["ticker"]
+        pid = r["profile_id"]
+        if t not in ticker_map:
+            ticker_map[t] = {}
+        ticker_map[t][pid] = {
+            "reinvest": r["reinvest"] == "Y",
+            "qty": round(float(r["qty"] or 0), 2),
+        }
+
+    # Get Owner totals
+    owner_rows = conn.execute(
+        "SELECT ticker, reinvest, COALESCE(quantity, 0) as qty, drip_quantity, "
+        "       COALESCE(estim_payment_per_year, 0) as annual_income "
+        "FROM all_account_info WHERE profile_id = ? ORDER BY ticker",
+        (owner_id,),
+    ).fetchall()
+    conn.close()
+
+    tickers = []
+    for r in owner_rows:
+        t = r["ticker"]
+        if t not in ticker_map:
+            continue
+        total_qty = round(float(r["qty"] or 0), 2)
+        drip_qty = round(float(r["drip_quantity"]), 2) if r["drip_quantity"] is not None else total_qty
+        owner_drip = r["reinvest"] == "Y"
+        annual_income = round(float(r["annual_income"] or 0), 2)
+        accounts = {}
+        for pid in sub_ids:
+            if pid in ticker_map.get(t, {}):
+                info = ticker_map[t][pid]
+                accounts[str(pid)] = {"reinvest": info["reinvest"], "qty": info["qty"]}
+        # Income proportional to DRIP shares vs total shares
+        drip_income = round(annual_income * drip_qty / total_qty, 2) if (owner_drip and total_qty > 0) else 0
+        tickers.append({
+            "ticker": t,
+            "total_qty": total_qty,
+            "drip_qty": drip_qty if owner_drip else 0,
+            "owner_drip": owner_drip,
+            "annual_income": annual_income,
+            "drip_income": drip_income,
+            "accounts": accounts,
+        })
+
+    return jsonify(profiles=profile_list, tickers=tickers)
+
+
+@app.route("/api/drip-matrix/toggle", methods=["POST"])
+def drip_matrix_toggle():
+    """Toggle DRIP for a specific ticker in a specific sub-profile."""
+    data = request.get_json(force=True) or {}
+    ticker = data.get("ticker")
+    profile_id = data.get("profile_id")
+    reinvest = data.get("reinvest")  # True/False
+
+    if not ticker or not profile_id:
+        return jsonify(error="Missing ticker or profile_id"), 400
+
+    conn = get_connection()
+    new_val = "Y" if reinvest else "N"
+    conn.execute(
+        "UPDATE all_account_info SET reinvest = ? WHERE ticker = ? AND profile_id = ?",
+        (new_val, ticker, profile_id),
+    )
+    conn.commit()
+    conn.close()
+
+    return jsonify(ok=True)
 
 
 # ── DRIP Settings & Projections ───────────────────────────────────────────────
@@ -4317,15 +4433,17 @@ def income_growth_sim():
             if shares <= 0 or price <= 0:
                 continue
             total_value += price * shares
+            is_reinvest = bool(ho.get("reinvest", False))
             holdings.append({
                 "ticker": (ho.get("ticker") or "").upper(),
                 "description": ho.get("description") or "",
                 "shares": shares,
+                "drip_shares": shares if is_reinvest else 0.0,
                 "price": price,
                 "div_per_share": dps,
                 "freq": freq,
                 "freq_str": (ho.get("freq_str") or "").strip(),
-                "reinvest": bool(ho.get("reinvest", False)),
+                "reinvest": is_reinvest,
             })
         if not holdings:
             return jsonify(error="No valid holdings in override.")
@@ -4336,7 +4454,8 @@ def income_growth_sim():
         rows = conn.execute(
             """SELECT ticker, description, classification_type,
                       quantity, current_price, div, div_frequency,
-                      current_annual_yield, estim_payment_per_year
+                      current_annual_yield, estim_payment_per_year,
+                      reinvest, drip_quantity
                FROM all_account_info
                WHERE purchase_value IS NOT NULL AND purchase_value > 0
                  AND IFNULL(quantity, 0) > 0
@@ -4362,8 +4481,19 @@ def income_growth_sim():
                     "div_per_share": float(r["div"] or 0),
                     "freq_str": (r["div_frequency"] or "").strip(),
                     "estim_payment_per_year": float(r["estim_payment_per_year"] or 0),
+                    "reinvest": False,
+                    "drip_quantity": 0.0,
                 }
             holdings_map[t]["quantity"] += float(r["quantity"] or 0)
+            # Per-ticker DRIP: 'Y' if any row has it on
+            if (r["reinvest"] if isinstance(r, dict) else "N") == "Y":
+                holdings_map[t]["reinvest"] = True
+            # drip_quantity: use stored value if available, else accumulate from rows with reinvest='Y'
+            dq = float(r["drip_quantity"] or 0) if r["drip_quantity"] is not None else None
+            if dq is not None and dq > 0:
+                holdings_map[t]["drip_quantity"] = max(holdings_map[t]["drip_quantity"], dq)
+            elif (r["reinvest"] if isinstance(r, dict) else "N") == "Y":
+                holdings_map[t]["drip_quantity"] += float(r["quantity"] or 0)
 
         holdings = []
         total_value = 0.0
@@ -4375,15 +4505,19 @@ def income_growth_sim():
                 if est > 0:
                     dps = est / (h["quantity"] * freq)
             total_value += h["current_price"] * h["quantity"]
+            has_drip = h["reinvest"] if reinvest_pct > 0 else False
+            # drip_shares: if drip_quantity is set, use it; else use all shares (all accounts have DRIP on)
+            drip_sh = h["drip_quantity"] if (has_drip and h["drip_quantity"] > 0) else (h["quantity"] if has_drip else 0.0)
             holdings.append({
                 "ticker": h["ticker"],
                 "description": h["description"],
                 "shares": h["quantity"],
+                "drip_shares": drip_sh,
                 "price": h["current_price"],
                 "div_per_share": dps,
                 "freq": freq,
                 "freq_str": h["freq_str"],
-                "reinvest": reinvest_pct > 0,
+                "reinvest": has_drip,
             })
 
     if total_value <= 0:
@@ -4414,8 +4548,9 @@ def income_growth_sim():
     def _run_deterministic():
         monthly_series = []
         annual_series = []
-        # Track per-holding state
+        # Track per-holding state: total shares and DRIP-eligible shares separately
         sim_shares = {h["ticker"]: h["shares"] for h in holdings}
+        sim_drip_shares = {h["ticker"]: h.get("drip_shares", h["shares"] if h.get("reinvest") else 0.0) for h in holdings}
         contrib_shares = {h["ticker"]: 0.0 for h in holdings}
         prev_income = None
 
@@ -4453,11 +4588,11 @@ def income_growth_sim():
                 month_income += monthly_inc
                 month_income_existing += monthly_inc_existing
                 month_income_contrib += (monthly_inc - monthly_inc_existing)
-                # DRIP still happens on actual pay months
+                # DRIP: only reinvest dividends from DRIP-eligible shares
                 pay_months = month_pay_map.get(freq, [])
                 if cal_month in pay_months and h.get("reinvest"):
                     ppm = payments_per_month.get(freq, 1)
-                    drip_amt = adj_dps * sim_shares[tk] * ppm
+                    drip_amt = adj_dps * sim_drip_shares[tk] * ppm
                     drip_buys[tk] = drip_amt
 
             # DRIP: reinvest dividends back into the same holdings
@@ -4468,6 +4603,7 @@ def income_growth_sim():
                     if adj_price > 0:
                         new_sh = drip_amt / adj_price
                         sim_shares[tk] += new_sh
+                        sim_drip_shares[tk] += new_sh
                         contrib_shares[tk] += new_sh
 
             monthly_series.append({
@@ -4563,6 +4699,7 @@ def income_growth_sim():
 
         for p in range(N_PATHS):
             sim_shares_p = {h["ticker"]: h["shares"] for h in holdings}
+            sim_drip_shares_p = {h["ticker"]: h.get("drip_shares", h["shares"] if h.get("reinvest") else 0.0) for h in holdings}
             cum_div_factor = {h["ticker"]: 1.0 for h in holdings}
             cum_price_factor = {h["ticker"]: 1.0 for h in holdings}
 
@@ -4604,11 +4741,11 @@ def income_growth_sim():
                     monthly_inc_existing = annual_inc_existing / 12
                     month_inc += monthly_inc
                     month_existing += monthly_inc_existing
-                    # DRIP still happens on actual pay months
+                    # DRIP: only reinvest dividends from DRIP-eligible shares
                     pay_months = month_pay_map.get(freq, [])
                     if cal_month in pay_months and h.get("reinvest"):
                         ppm = payments_per_month.get(freq, 1)
-                        drip_amt = adj_dps * sim_shares_p[tk] * ppm
+                        drip_amt = adj_dps * sim_drip_shares_p[tk] * ppm
                         mc_drip_buys[tk] = drip_amt
 
                 # DRIP reinvest
@@ -4617,7 +4754,9 @@ def income_growth_sim():
                         h_ref = next(h for h in holdings if h["ticker"] == tk)
                         adj_price = h_ref["price"] * cum_price_factor[tk]
                         if adj_price > 0:
-                            sim_shares_p[tk] += drip_amt / adj_price
+                            new_sh = drip_amt / adj_price
+                            sim_shares_p[tk] += new_sh
+                            sim_drip_shares_p[tk] += new_sh
 
                 path_monthly_income[p, m] = month_inc
                 path_monthly_existing[p, m] = month_existing
@@ -4718,6 +4857,8 @@ def income_growth_sim():
             "current_annual_income": _safe(start_ann),
             "projected_annual_income": _safe(end_ann),
             "growth_pct": _safe(growth_pct),
+            "drip": h.get("reinvest", False),
+            "drip_shares": _safe(h.get("drip_shares", 0)),
         })
 
     return jsonify(

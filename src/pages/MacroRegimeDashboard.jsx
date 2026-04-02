@@ -617,6 +617,13 @@ function IncomeBenchmarkTab({ pf }) {
   const [ibSort, setIbSort] = useState({ col: null, asc: true })
   const expandedRowRef = useRef(null)
 
+  // Target editing state
+  const [editingTargets, setEditingTargets] = useState(false)
+  const [draftTargets, setDraftTargets] = useState({})
+  const [defaults, setDefaults] = useState({})
+  const [isCustom, setIsCustom] = useState(false)
+  const [targetSaving, setTargetSaving] = useState(false)
+
   // Auto-scroll to expanded bucket after sort changes
   useEffect(() => {
     if (expandedBucket && expandedRowRef.current) {
@@ -633,11 +640,17 @@ function IncomeBenchmarkTab({ pf }) {
         body: JSON.stringify({}),
       }).then(r => r.json()),
       pf('/api/income/overrides').then(r => r.json()),
+      pf('/api/income/targets').then(r => r.json()),
     ])
-      .then(([d, ovr]) => {
+      .then(([d, ovr, tgt]) => {
         if (d.error) { setError(d.error); return }
         setData(d)
         setBucketOpts(ovr.bucket_options || [])
+        if (tgt.targets) {
+          setDraftTargets(tgt.targets)
+          setDefaults(tgt.defaults || {})
+          setIsCustom(tgt.is_custom || false)
+        }
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
@@ -668,6 +681,36 @@ function IncomeBenchmarkTab({ pf }) {
       .finally(() => setSaving(s => ({ ...s, [ticker]: false })))
   }, [pf])
 
+  const draftTotal = Object.values(draftTargets).reduce((s, v) => s + (parseFloat(v) || 0), 0)
+
+  const handleSaveTargets = useCallback(() => {
+    if (Math.abs(draftTotal - 100) > 0.5) { alert(`Targets must sum to 100% (currently ${draftTotal.toFixed(1)}%)`); return }
+    setTargetSaving(true)
+    pf('/api/income/targets', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targets: draftTargets }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) { setEditingTargets(false); setIsCustom(true); load() }
+        else alert(d.error || 'Save failed')
+      })
+      .catch(e => alert(e.message))
+      .finally(() => setTargetSaving(false))
+  }, [pf, draftTargets, draftTotal, load])
+
+  const handleResetTargets = useCallback(() => {
+    setTargetSaving(true)
+    pf('/api/income/targets', { method: 'DELETE' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) { setEditingTargets(false); setIsCustom(false); setDraftTargets(d.targets || defaults); load() }
+        else alert(d.error || 'Reset failed')
+      })
+      .catch(e => alert(e.message))
+      .finally(() => setTargetSaving(false))
+  }, [pf, defaults, load])
+
   if (loading) return <p style={{ color: '#90caf9' }}>Analyzing portfolio against income benchmark...</p>
   if (error) return <p style={{ color: '#ef5350' }}>{error}</p>
   if (!data) return null
@@ -695,6 +738,71 @@ function IncomeBenchmarkTab({ pf }) {
           </div>
         ))}
       </div>
+
+      {/* Edit Targets */}
+      {!editingTargets ? (
+        <div style={{ marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <button onClick={() => setEditingTargets(true)}
+            style={{ background: '#334155', color: '#90caf9', border: '1px solid #475569', borderRadius: 6,
+              padding: '0.35rem 0.75rem', fontSize: '0.75rem', cursor: 'pointer' }}>
+            Edit Targets
+          </button>
+          {isCustom && <span style={{ fontSize: '0.7rem', color: '#ffca28' }}>Custom targets active</span>}
+        </div>
+      ) : (
+        <div style={{
+          background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+          padding: '0.75rem 1rem', marginBottom: '0.75rem',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <span style={{ fontWeight: 600, color: '#e0e8f0', fontSize: '0.85rem' }}>Target Allocations</span>
+            <span style={{
+              fontSize: '0.75rem', fontWeight: 600,
+              color: Math.abs(draftTotal - 100) > 0.5 ? '#ef5350' : '#4caf50',
+            }}>
+              Total: {draftTotal.toFixed(1)}%
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.4rem' }}>
+            {Object.entries(draftTargets).map(([bucket, pct]) => (
+              <div key={bucket} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{ fontSize: '0.72rem', color: '#b0bec5', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{bucket}</span>
+                <input type="number" min="0" max="100" step="1" value={pct}
+                  onChange={e => setDraftTargets(prev => ({ ...prev, [bucket]: parseFloat(e.target.value) || 0 }))}
+                  style={{
+                    width: 56, textAlign: 'right', background: '#0f172a', color: '#e0e0e0',
+                    border: '1px solid #475569', borderRadius: 4, padding: '3px 6px', fontSize: '0.78rem',
+                  }}
+                />
+                <span style={{ fontSize: '0.72rem', color: '#667' }}>%</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem' }}>
+            <button onClick={handleSaveTargets} disabled={targetSaving || Math.abs(draftTotal - 100) > 0.5}
+              style={{
+                background: '#2e7d32', color: '#fff', border: 'none', borderRadius: 6,
+                padding: '0.35rem 0.75rem', fontSize: '0.75rem', cursor: 'pointer',
+                opacity: (targetSaving || Math.abs(draftTotal - 100) > 0.5) ? 0.5 : 1,
+              }}>
+              {targetSaving ? 'Saving...' : 'Save'}
+            </button>
+            <button onClick={() => { setEditingTargets(false); load() }}
+              style={{ background: '#455a64', color: '#ccc', border: 'none', borderRadius: 6,
+                padding: '0.35rem 0.75rem', fontSize: '0.75rem', cursor: 'pointer' }}>
+              Cancel
+            </button>
+            {isCustom && (
+              <button onClick={handleResetTargets} disabled={targetSaving}
+                style={{ background: 'transparent', color: '#ef5350', border: '1px solid #ef5350', borderRadius: 6,
+                  padding: '0.35rem 0.75rem', fontSize: '0.75rem', cursor: 'pointer',
+                  opacity: targetSaving ? 0.5 : 1 }}>
+                Reset to Defaults
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Horizontal bar comparison chart */}
       <div style={{ marginBottom: '1rem' }}>
@@ -745,10 +853,11 @@ function IncomeBenchmarkTab({ pf }) {
           <thead>
             <tr style={{ borderBottom: '2px solid #334155' }}>
               {[
-                { key: 'bucket', label: 'Income Bucket', align: 'left', width: '22%' },
+                { key: 'bucket', label: 'Income Bucket', align: 'left', width: '20%' },
                 { key: 'target_pct', label: 'Target %', align: 'right' },
                 { key: 'actual_pct', label: 'Actual %', align: 'right' },
                 { key: 'diff_pct', label: 'Over/Under', align: 'right' },
+                { key: 'quantity', label: 'Shares', align: 'right' },
                 { key: 'actual_value', label: 'Actual Value', align: 'right' },
                 { key: 'monthly_income', label: 'Monthly Income', align: 'right' },
                 { key: 'bucket_yield', label: 'Yield', align: 'right' },
@@ -792,6 +901,7 @@ function IncomeBenchmarkTab({ pf }) {
                     <td style={{ ...ibTd, textAlign: 'right', color: diffColor, fontWeight: 600 }}>
                       {diff > 0 ? '+' : ''}{fmtPct(diff)}
                     </td>
+                    <td style={{ ...ibTd, textAlign: 'right' }}>{c.quantity != null ? c.quantity.toLocaleString(undefined, { maximumFractionDigits: 2 }) : ''}</td>
                     <td style={{ ...ibTd, textAlign: 'right' }}>{fmt$(c.actual_value)}</td>
                     <td style={{ ...ibTd, textAlign: 'right' }}>{fmt$(c.monthly_income)}</td>
                     <td style={{ ...ibTd, textAlign: 'right' }}>{fmtPct(c.bucket_yield)}</td>
@@ -811,6 +921,7 @@ function IncomeBenchmarkTab({ pf }) {
                       <td style={{ ...ibTd, textAlign: 'right', color: '#667' }}></td>
                       <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmtPct(h.pct_of_portfolio)}</td>
                       <td style={{ ...ibTd, textAlign: 'right' }}></td>
+                      <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{h.quantity != null ? h.quantity.toLocaleString(undefined, { maximumFractionDigits: 2 }) : ''}</td>
                       <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmt$(h.current_value)}</td>
                       <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmt$(h.monthly_income)}</td>
                       <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmtPct(h.annual_yield)}</td>

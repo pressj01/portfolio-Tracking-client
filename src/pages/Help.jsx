@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 
-const APP_VERSION = '1.11.0'
+const APP_VERSION = '1.14.0'
 
 const GROUPS = [
   {
@@ -48,6 +48,8 @@ const GROUPS = [
       { id: 'portfolio-builder', label: 'Portfolio Builder' },
       { id: 'dist-compare', label: 'Dist Compare' },
       { id: 'consolidation', label: 'Consolidation' },
+      { id: 'macro-dashboard', label: 'Macro Dashboard' },
+      { id: 'income-growth', label: 'Income Growth' },
     ],
   },
 ]
@@ -67,7 +69,7 @@ function Overview() {
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
         <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation.</li>
         <li><strong>Dividends</strong> — Dividend analysis, calendar view, and comparison tools.</li>
-        <li><strong>Analysis</strong> — ETF screening, NAV erosion analysis, correlation matrix, income simulation, buy/sell signals, portfolio builder, and consolidation analysis.</li>
+        <li><strong>Analysis</strong> — ETF screening, NAV erosion analysis, correlation matrix, income simulation, buy/sell signals, portfolio builder, consolidation analysis, and macro regime dashboard.</li>
         <li><strong>Multi-Portfolio</strong> — Create multiple portfolios and view them individually or as an aggregate.</li>
         <li><strong>Market Data</strong> — Prices, dividends, and ex-div dates refresh automatically from Yahoo Finance.</li>
       </ul>
@@ -256,7 +258,18 @@ function HoldingsHelp() {
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Toolbar Buttons</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Refresh Prices & Divs</strong> — Fetches the latest prices, dividend amounts, and ex-div dates from Yahoo Finance for all holdings.</li>
-        <li><strong>Sync DRIP from Accounts</strong> — (Only for portfolio #1) Syncs DRIP settings from the owner spreadsheet data.</li>
+        <li><strong>DRIP Matrix</strong> — (Owner only) Opens a matrix view showing DRIP on/off status for every ticker across all sub-accounts.
+          You can toggle DRIP per ticker per account directly from this modal. Each cell shows a checkbox and the share count
+          held in that account. The Owner column shows the aggregate DRIP status and DRIP-eligible share count.
+          A stats bar at the top displays <strong>Total Annual Income</strong>, <strong>DRIP Income</strong> (the portion
+          being reinvested), and <strong>% Reinvested</strong> — these update live as you toggle checkboxes.
+          Use the filter box to search for specific tickers. Click "Sync to Owner" to push changes to the Owner portfolio.
+          When only some accounts have DRIP on for a ticker, the Owner uses only those accounts' shares for DRIP reinvestment
+          calculations — not the full aggregate share count.</li>
+        <li><strong>Sync DRIP from Accounts</strong> — (Owner only) Syncs DRIP flags from sub-accounts to the Owner portfolio.
+          DRIP is turned on if <em>any</em> sub-account has it on, and off only if <em>all</em> sub-accounts have it off.
+          Also calculates the DRIP-eligible share count for each ticker — if a ticker is held in multiple accounts
+          but only some have DRIP enabled, only those accounts' shares count toward DRIP reinvestment in simulations.</li>
         <li><strong>+ Add Holding</strong> — Opens the Add/Edit form to create a new position directly (no transaction).</li>
         <li><strong>+ Add/Edit via Transaction</strong> — Opens the Transaction modal to add a brand-new ticker by recording a BUY transaction.</li>
       </ul>
@@ -1737,7 +1750,8 @@ function IncomeSimHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Income Chart</strong> — Bars showing projected income per period, with a cumulative growth line overlay.</li>
         <li><strong>Comparison Charts</strong> — In comparison mode, separate lines per ticker show projected income and cumulative portfolio value.</li>
-        <li><strong>Results Table</strong> — Year-by-year or ticker-by-ticker breakdown with columns for Amount, Reinvest %, Price, Distributions, Reinvested, Final Value, Gain/Loss, Annualized Return, and Yield.</li>
+        <li><strong>Results Table</strong> — Year-by-year or ticker-by-ticker breakdown with columns for Amount, Reinvest %, Price, Distributions, Reinvested, Final Value, Gain/Loss, Annualized Return, and Yield. Hover over any column header for a tooltip explaining what that column measures (e.g., Hist &mu;% = historical mean monthly return, Hist &sigma;% = volatility, Skew = downside tail risk).</li>
+        <li><strong>Dividend Chart</strong> — Shows monthly dividend distributions with a trailing-3-month smoothing to eliminate pay-month spikes from quarterly or semi-annual payers.</li>
       </ul>
     </div>
   )
@@ -2214,6 +2228,122 @@ function SettingsHelp() {
   )
 }
 
+function MacroDashboardHelp() {
+  return (
+    <div>
+      <h2>Macro Regime Dashboard</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Macro Regime Dashboard shows current macroeconomic conditions, analyzes your portfolio's
+        sensitivity to macro factors, suggests rebalancing tilts, and benchmarks your income allocation.
+        It has five tabs.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: Macro Conditions</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Displays the current macro regime (e.g., Stable Inflation + Stable Rates) along with alert
+        badges for notable conditions like Oil Rising or Rising Volatility. Shows sparkline charts
+        for key indicators: Inflation Expectations, Oil (WTI), 10-Year Yield, Short-Term Rate, VIX,
+        Dollar Index, and Credit Spreads, each with 3-month trend direction and change.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 2: Portfolio Exposure</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Analyzes how each holding is classified by macro sensitivity (e.g., Rate Sensitive, Inflation Hedge,
+        Oil Linked, Volatility Linked). Shows a breakdown of your portfolio value across sensitivity
+        categories with an alignment score indicating how well-positioned your portfolio is for current
+        macro conditions.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Holdings are classified using a 4-tier fallback system: user overrides → classification type → description keywords → ticker-specific rules.</li>
+        <li>Click any sensitivity category to expand and see which holdings fall into it.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 3: Rebalancing Tilts</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Based on current macro conditions, suggests which sensitivity categories to overweight or
+        underweight. Provides per-holding action recommendations (increase, hold, reduce, sell)
+        to better align your portfolio with the macro environment.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 4: Income Benchmark</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Compares your portfolio's income allocation against a target benchmark split across 8 income
+        categories: Covered Call, BDCs, CEFs, REITs, Preferred Stock, Dividend Growth, Commodities/Gold,
+        and Bonds/Fixed Income.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Summary cards</strong> — Portfolio value, annual/monthly income, blended yield, and diversification score.</li>
+        <li><strong>Bar chart</strong> — Visual comparison of actual vs. target allocation for each bucket.</li>
+        <li><strong>Comparison table</strong> — Sortable columns for target %, actual %, over/under, shares, value, monthly income, yield, and $ to target. Click a bucket row to expand and see individual holdings.</li>
+        <li><strong>Edit Targets</strong> — Click to customize the target allocation percentages. Targets must sum to 100%. Custom targets are saved per-profile. Use "Reset to Defaults" to revert.</li>
+        <li><strong>Bucket reassignment</strong> — In an expanded bucket, use the dropdown on any holding to move it to a different bucket or exclude it from the benchmark.</li>
+        <li><strong>Excluded Holdings</strong> — Holdings excluded from the benchmark appear at the bottom with a dropdown to reassign them.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 5: Classifications</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Lets you override the system's automatic macro sensitivity classification for any holding.
+        The system classifies holdings using description keywords and classification types, but you
+        can manually set sensitivity tags or exclude a holding from macro analysis entirely.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Filter buttons</strong> — View All, Overridden only, Auto-classified only, or Excluded only.</li>
+        <li><strong>Edit</strong> — Opens a multi-select dropdown to choose sensitivity tags for a holding.</li>
+        <li><strong>Exclude</strong> — Removes a holding from macro exposure calculations.</li>
+        <li><strong>Revert</strong> — Removes the override and returns to auto-classification.</li>
+      </ul>
+    </div>
+  )
+}
+
+function IncomeGrowthHelp() {
+  return (
+    <div>
+      <h2>Income Growth Simulator</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Projects how your portfolio income changes over time using your actual holdings and their real
+        distribution yields. Unlike the Portfolio Income Simulator (which uses Monte Carlo on manually-entered
+        tickers), this page starts from your current portfolio and applies scenario-based growth rates.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Controls</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Scenario</strong> — Bullish (+5% annual div growth, +8% price drift), Neutral (flat), or Bearish (-20% div cut, -20% price decline). Bearish uses aggressive rates to realistically model income decline even with DRIP compounding.</li>
+        <li><strong>Timeframe</strong> — 1 to 20 years. Preset buttons or custom input.</li>
+        <li><strong>Monthly Investment</strong> — Additional dollars invested each month, allocated proportionally across holdings. Increases share count and future income.</li>
+        <li><strong>Reinvest All / DRIP toggle</strong> — Toggle DRIP on or off for all holdings at once, or use the per-holding checkboxes in the holdings table below. When DRIP is on, dividends are reinvested to buy more shares, compounding income over time.</li>
+        <li><strong>Deterministic / Monte Carlo toggle</strong> — Deterministic shows a single clean projection line. Monte Carlo runs 300 random paths and shows the median plus 10th/90th percentile range.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP and Partial Shares</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        When viewing the Owner (aggregate) portfolio, DRIP reinvestment calculations use only the shares from
+        sub-accounts that have DRIP enabled for each ticker — not the full aggregate share count. For example,
+        if you hold 500 shares of QQQI across four accounts but only one account (86 shares) has DRIP on,
+        the simulation reinvests dividends on those 86 shares only. This matches the real-world behavior where
+        DRIP is configured per brokerage account. Use the <strong>DRIP Matrix</strong> on the Holdings page
+        to see and control which accounts have DRIP enabled for each ticker.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Display</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Timeframe &le; 5 years</strong> — Monthly view: line chart and table showing month-by-month income with year subtotals. Income is smoothed evenly across months rather than spiking in pay months.</li>
+        <li><strong>Timeframe &gt; 5 years</strong> — Annual view: bar chart and table showing year-over-year income changes.</li>
+        <li><strong>Change columns</strong> — Green for income increases, red for decreases. Shows both dollar and percentage change.</li>
+        <li><strong>Monte Carlo columns</strong> — P10 (pessimistic 10th percentile) and P90 (optimistic 90th percentile) appear when Monte Carlo is enabled.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Breakdown</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Below the timeline, a sortable table shows each holding's starting shares, ending shares (after
+        DRIP and monthly contributions), frequency, current annual income, projected annual income, growth
+        percentage, and DRIP status. You can toggle DRIP per holding using the checkboxes in the DRIP column,
+        then re-run the simulation to see the impact.
+      </p>
+    </div>
+  )
+}
+
 const CONTENT_MAP = {
   overview: Overview,
   import: ImportHelp,
@@ -2238,6 +2368,8 @@ const CONTENT_MAP = {
   'portfolio-builder': PortfolioBuilderHelp,
   'dist-compare': DistCompareHelp,
   consolidation: ConsolidationHelp,
+  'macro-dashboard': MacroDashboardHelp,
+  'income-growth': IncomeGrowthHelp,
 }
 
 export default function Help() {

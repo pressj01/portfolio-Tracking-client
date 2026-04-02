@@ -670,6 +670,188 @@ const COLUMNS = [
   { key: 'realized_gains', label: 'Realized G/L', type: 'number' },
 ]
 
+function DripMatrixModal({ onClose, onSynced, pf }) {
+  const [profiles, setProfiles] = useState([])
+  const [tickers, setTickers] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [syncing, setSyncing] = useState(false)
+  const [filter, setFilter] = useState('')
+  const [dirty, setDirty] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const res = await pf('/api/drip-matrix')
+      const data = await res.json()
+      setProfiles(data.profiles || [])
+      setTickers(data.tickers || [])
+    } catch (e) { console.error(e) }
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [pf])
+
+  const handleToggle = async (ticker, profileId, currentVal) => {
+    const newVal = !currentVal
+    // Optimistic update
+    setTickers(prev => prev.map(t => {
+      if (t.ticker !== ticker) return t
+      const accounts = { ...t.accounts }
+      if (accounts[String(profileId)]) {
+        accounts[String(profileId)] = { ...accounts[String(profileId)], reinvest: newVal }
+      }
+      // Recalculate owner_drip and drip_qty
+      let anyDrip = false, allDrip = true, dripQty = 0
+      for (const p of profiles) {
+        const a = accounts[String(p.id)]
+        if (!a) continue
+        if (a.reinvest) { anyDrip = true; dripQty += a.qty }
+        else { allDrip = false }
+      }
+      const newDripQty = anyDrip ? (allDrip ? t.total_qty : dripQty) : 0
+      const newDripIncome = (anyDrip && t.total_qty > 0) ? t.annual_income * newDripQty / t.total_qty : 0
+      return {
+        ...t,
+        accounts,
+        owner_drip: anyDrip,
+        drip_qty: newDripQty,
+        drip_income: Math.round(newDripIncome * 100) / 100,
+      }
+    }))
+    setDirty(true)
+    try {
+      await pf('/api/drip-matrix/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker, profile_id: profileId, reinvest: newVal }),
+      })
+    } catch (e) { console.error(e) }
+  }
+
+  const handleSync = async () => {
+    setSyncing(true)
+    try {
+      const res = await pf('/api/sync-drip-to-owner', { method: 'POST' })
+      const data = await res.json()
+      await load()
+      setDirty(false)
+      if (onSynced) onSynced(data.message)
+    } catch (e) { console.error(e) }
+    setSyncing(false)
+  }
+
+  const filtered = filter
+    ? tickers.filter(t => t.ticker.toLowerCase().includes(filter.toLowerCase()))
+    : tickers
+
+  const thStyle = { padding: '6px 10px', textAlign: 'center', borderBottom: '2px solid #334155', position: 'sticky', top: 0, background: '#0a1929', zIndex: 2 }
+  const tdStyle = { padding: '5px 10px', borderBottom: '1px solid #1a2233' }
+
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      zIndex: 1000,
+    }}>
+      <div className="card" style={{ width: Math.min(900, 300 + profiles.length * 140), maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+          <h2 style={{ margin: 0 }}>DRIP Matrix</h2>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <input
+              type="text" placeholder="Filter ticker..." value={filter}
+              onChange={e => setFilter(e.target.value)}
+              style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #334155', background: '#0f1b2d', color: '#e0e0e0', fontSize: '0.8rem', width: 130 }}
+            />
+            <button className="btn btn-primary" onClick={handleSync} disabled={syncing}>
+              {syncing ? <><span className="spinner" /> Syncing...</> : 'Sync to Owner'}
+            </button>
+            <button className="btn btn-secondary" onClick={onClose}>Close</button>
+          </div>
+        </div>
+        <p style={{ fontSize: '0.75rem', color: '#888', margin: '0 0 0.5rem' }}>
+          Toggle DRIP per ticker per account. Click "Sync to Owner" to update Owner's DRIP flags and share counts.
+        </p>
+
+        {!loading && tickers.length > 0 && (() => {
+          const totalIncome = tickers.reduce((s, t) => s + (t.annual_income || 0), 0)
+          const dripIncome = tickers.reduce((s, t) => s + (t.drip_income || 0), 0)
+          const pct = totalIncome > 0 ? (dripIncome / totalIncome * 100) : 0
+          return (
+            <div style={{ display: 'flex', gap: '2rem', marginBottom: '0.75rem', padding: '0.6rem 1rem', background: '#0f1b2d', borderRadius: 6, fontSize: '0.85rem' }}>
+              <div>
+                <span style={{ color: '#888' }}>Total Annual Income: </span>
+                <span style={{ color: '#e0e0e0', fontWeight: 600 }}>${totalIncome.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+              </div>
+              <div>
+                <span style={{ color: '#888' }}>DRIP Income: </span>
+                <span style={{ color: '#66bb6a', fontWeight: 600 }}>${dripIncome.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+              </div>
+              <div>
+                <span style={{ color: '#888' }}>% Reinvested: </span>
+                <span style={{ color: '#7ecfff', fontWeight: 600 }}>{pct.toFixed(1)}%</span>
+              </div>
+            </div>
+          )
+        })()}
+
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '2rem' }}><span className="spinner" /> Loading...</div>
+        ) : (
+          <div style={{ overflow: 'auto', flex: 1 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+              <thead>
+                <tr>
+                  <th style={{ ...thStyle, textAlign: 'left', minWidth: 80 }}>Ticker</th>
+                  <th style={{ ...thStyle, minWidth: 80 }} title="Total shares across all accounts">Total</th>
+                  {profiles.map(p => (
+                    <th key={p.id} style={{ ...thStyle, minWidth: 110 }}>{p.name}</th>
+                  ))}
+                  <th style={{ ...thStyle, minWidth: 80 }} title="Owner aggregate DRIP status and DRIP-eligible shares">Owner</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(t => (
+                  <tr key={t.ticker}>
+                    <td style={{ ...tdStyle, fontWeight: 600, textAlign: 'left' }}>{t.ticker}</td>
+                    <td style={{ ...tdStyle, textAlign: 'center', color: '#aaa' }}>{t.total_qty.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                    {profiles.map(p => {
+                      const a = t.accounts[String(p.id)]
+                      if (!a) return <td key={p.id} style={{ ...tdStyle, textAlign: 'center', color: '#555' }}>—</td>
+                      return (
+                        <td key={p.id} style={{ ...tdStyle, textAlign: 'center' }}>
+                          <label style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <input
+                              type="checkbox" checked={a.reinvest}
+                              onChange={() => handleToggle(t.ticker, p.id, a.reinvest)}
+                              style={{ accentColor: '#4caf50', cursor: 'pointer' }}
+                            />
+                            <span style={{ color: a.reinvest ? '#66bb6a' : '#888', fontSize: '0.75rem' }}>
+                              {a.qty.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                            </span>
+                          </label>
+                        </td>
+                      )
+                    })}
+                    <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 600, color: t.owner_drip ? '#66bb6a' : '#888' }}>
+                      {t.owner_drip ? `✓ ${t.drip_qty.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {dirty && (
+          <div style={{ padding: '0.5rem 0 0', fontSize: '0.75rem', color: '#f9a825', textAlign: 'center' }}>
+            Changes made — click "Sync to Owner" to update Owner's DRIP flags
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function ManageHoldings() {
   const pf = useProfileFetch()
   const { profileId, isAggregate, selection } = useProfile()
@@ -684,6 +866,7 @@ export default function ManageHoldings() {
   const [sortKey, setSortKey] = useState('ticker')
   const [sortDir, setSortDir] = useState('asc')
   const [syncingDrip, setSyncingDrip] = useState(false)
+  const [showDripMatrix, setShowDripMatrix] = useState(false)
   const [txnTicker, setTxnTicker] = useState(null)    // ticker for transaction modal
   const [txnIsNew, setTxnIsNew] = useState(false)      // true = new ticker via transaction
   const [expandedTickers, setExpandedTickers] = useState({})  // { ticker: [txns] | 'loading' }
@@ -859,9 +1042,14 @@ export default function ManageHoldings() {
             {refreshing ? <><span className="spinner" /> Refreshing...</> : 'Refresh Prices & Divs'}
           </button>
           {profileId === 1 && (
-            <button className="btn btn-secondary" onClick={handleSyncDrip} disabled={syncingDrip || holdings.length === 0}>
-              {syncingDrip ? <><span className="spinner" /> Syncing...</> : 'Sync DRIP from Accounts'}
-            </button>
+            <>
+              <button className="btn btn-secondary" onClick={() => setShowDripMatrix(true)} disabled={holdings.length === 0}>
+                DRIP Matrix
+              </button>
+              <button className="btn btn-secondary" onClick={handleSyncDrip} disabled={syncingDrip || holdings.length === 0}>
+                {syncingDrip ? <><span className="spinner" /> Syncing...</> : 'Sync DRIP from Accounts'}
+              </button>
+            </>
           )}
           <button className="btn btn-success" onClick={handleAdd}>+ Add Holding</button>
           <button className="btn btn-success" style={{ background: '#2e7d32' }} onClick={() => { setTxnTicker(null); setTxnIsNew(true) }}>+ Add/Edit via Transaction</button>
@@ -1074,6 +1262,14 @@ export default function ManageHoldings() {
           isNew={txnIsNew}
           onClose={() => { setTxnTicker(null); setTxnIsNew(false) }}
           onSaved={fetchHoldings}
+          pf={pf}
+        />
+      )}
+
+      {showDripMatrix && (
+        <DripMatrixModal
+          onClose={() => setShowDripMatrix(false)}
+          onSynced={(msg) => { setMessage(msg); fetchHoldings() }}
           pf={pf}
         />
       )}

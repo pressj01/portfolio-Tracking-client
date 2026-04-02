@@ -100,6 +100,11 @@ def ensure_tables_exist(conn=None):
     except Exception:
         pass  # column already exists
 
+    try:
+        cur.execute("ALTER TABLE all_account_info ADD COLUMN drip_quantity REAL")
+    except Exception:
+        pass  # column already exists
+
     # ── holdings ───────────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS holdings (
@@ -570,6 +575,18 @@ def ensure_tables_exist(conn=None):
             bucket          TEXT NOT NULL,
             updated_at       TEXT DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (ticker, profile_id),
+            FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+        )
+    """)
+
+    # ── income_benchmark_targets ─────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS income_benchmark_targets (
+            bucket      TEXT NOT NULL,
+            profile_id  INTEGER NOT NULL DEFAULT 1,
+            target_pct  REAL NOT NULL,
+            updated_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (bucket, profile_id),
             FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
         )
     """)
