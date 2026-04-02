@@ -3732,8 +3732,9 @@ def dividend_analysis_data():
 def sync_drip_to_owner():
     """Copy reinvest flags from sub-profiles to Owner.
 
-    For each ticker in Owner (profile 1), if ANY sub-profile has reinvest='Y'
-    for that same ticker, set Owner's reinvest to 'Y'.  Otherwise set to 'N'.
+    For each ticker in Owner (profile 1), use the reinvest flag from the
+    sub-profile that holds the largest position (by quantity).  This way the
+    account with the most shares drives the Owner DRIP setting.
     """
     conn = get_connection()
     owner_id = 1
@@ -3748,26 +3749,26 @@ def sync_drip_to_owner():
     if not sub_ids:
         return jsonify({"message": "No sub-profiles found", "updated": 0})
 
-    # Build lookup: ticker -> 'Y' if any sub-profile has reinvest='Y'
+    # Build lookup: ticker -> reinvest flag from the sub-profile with the most shares
     placeholders = ",".join("?" * len(sub_ids))
     sub_rows = conn.execute(
-        f"SELECT ticker, reinvest FROM all_account_info WHERE profile_id IN ({placeholders})",
+        f"SELECT ticker, reinvest, COALESCE(quantity, 0) as qty FROM all_account_info WHERE profile_id IN ({placeholders})",
         sub_ids,
     ).fetchall()
 
-    drip_map = {}  # ticker -> bool (any sub has Y)
+    # drip_map: ticker -> (max_qty, reinvest_flag)
+    drip_map = {}
     for r in sub_rows:
         t = r["ticker"] if isinstance(r, dict) else r[0]
         v = r["reinvest"] if isinstance(r, dict) else r[1]
-        if v == "Y":
-            drip_map[t] = True
-        elif t not in drip_map:
-            drip_map[t] = False
+        q = float(r["qty"] if isinstance(r, dict) else r[2] or 0)
+        if t not in drip_map or q > drip_map[t][0]:
+            drip_map[t] = (q, v)
 
     # Update owner holdings
     updated = 0
-    for ticker, any_drip in drip_map.items():
-        new_val = "Y" if any_drip else "N"
+    for ticker, (_, reinvest_flag) in drip_map.items():
+        new_val = reinvest_flag if reinvest_flag in ("Y", "N") else "N"
         cur = conn.execute(
             "SELECT reinvest FROM all_account_info WHERE ticker = ? AND profile_id = ?",
             (ticker, owner_id),
@@ -4257,6 +4258,480 @@ def drip_projection():
         ticker_yearly=ticker_yearly,
         totals=totals,
         categories=categories_list,
+    )
+
+
+# ── Income Growth Simulator ───────────────────────────────────────────────────
+
+@app.route("/api/analytics/income-growth-sim", methods=["POST"])
+def income_growth_sim():
+    """Project how portfolio income changes over time with scenario growth rates."""
+    import math
+    from datetime import datetime, timedelta
+
+    def _safe(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else round(f, 2)
+        except (TypeError, ValueError):
+            return None
+
+    data = request.get_json(force=True) or {}
+    years = max(1, min(20, int(data.get("years", 5))))
+    market_type = data.get("market_type", "neutral")
+    monthly_contribution = max(0.0, float(data.get("monthly_contribution", 0)))
+    reinvest_pct = max(0.0, min(100.0, float(data.get("reinvest_pct", 0))))
+    use_monte_carlo = bool(data.get("monte_carlo", False))
+
+    holdings_override = data.get("holdings_override")  # optional [{ticker, shares, price, div_per_share, freq_str, description}]
+
+    # Scenario rates
+    div_growth_map = {"bullish": 0.05, "neutral": 0.0, "bearish": -0.20}
+    price_drift_map = {"bullish": 0.08, "neutral": 0.0, "bearish": -0.20}
+    annual_div_growth = div_growth_map.get(market_type, 0.0)
+    annual_price_drift = price_drift_map.get(market_type, 0.0)
+
+    # Frequency maps (same as drip_projection)
+    freq_map = {
+        "Monthly": 12, "M": 12, "Weekly": 52, "W": 52, "52": 52,
+        "Bi-Weekly": 26, "BW": 26, "Quarterly": 4, "Q": 4,
+        "Semi-Annual": 2, "SA": 2, "Annual": 1, "A": 1,
+    }
+    month_pay_map = {
+        12: list(range(1, 13)), 52: list(range(1, 13)), 26: list(range(1, 13)),
+        4: [3, 6, 9, 12], 2: [6, 12], 1: [12],
+    }
+    payments_per_month = {12: 1, 52: 52/12, 26: 26/12, 4: 1, 2: 1, 1: 1}
+
+    if holdings_override:
+        # Use caller-provided holdings instead of DB query
+        holdings = []
+        total_value = 0.0
+        for ho in holdings_override:
+            freq = freq_map.get((ho.get("freq_str") or "").strip(), 0)
+            shares = float(ho.get("shares") or 0)
+            price = float(ho.get("price") or 0)
+            dps = float(ho.get("div_per_share") or 0)
+            if shares <= 0 or price <= 0:
+                continue
+            total_value += price * shares
+            holdings.append({
+                "ticker": (ho.get("ticker") or "").upper(),
+                "description": ho.get("description") or "",
+                "shares": shares,
+                "price": price,
+                "div_per_share": dps,
+                "freq": freq,
+                "freq_str": (ho.get("freq_str") or "").strip(),
+                "reinvest": bool(ho.get("reinvest", False)),
+            })
+        if not holdings:
+            return jsonify(error="No valid holdings in override.")
+    else:
+        # Query holdings from DB
+        _, pids = get_profile_filter()
+        conn = get_connection()
+        rows = conn.execute(
+            """SELECT ticker, description, classification_type,
+                      quantity, current_price, div, div_frequency,
+                      current_annual_yield, estim_payment_per_year
+               FROM all_account_info
+               WHERE purchase_value IS NOT NULL AND purchase_value > 0
+                 AND IFNULL(quantity, 0) > 0
+                 AND profile_id IN ({})
+               ORDER BY ticker""".format(",".join("?" * len(pids))),
+            pids,
+        ).fetchall()
+        conn.close()
+
+        if not rows:
+            return jsonify(error="No holdings found.")
+
+        # Build holdings list (aggregate across profiles)
+        holdings_map = {}
+        for r in rows:
+            t = r["ticker"]
+            if t not in holdings_map:
+                holdings_map[t] = {
+                    "ticker": t,
+                    "description": r["description"] or "",
+                    "quantity": 0.0,
+                    "current_price": float(r["current_price"] or 0),
+                    "div_per_share": float(r["div"] or 0),
+                    "freq_str": (r["div_frequency"] or "").strip(),
+                    "estim_payment_per_year": float(r["estim_payment_per_year"] or 0),
+                }
+            holdings_map[t]["quantity"] += float(r["quantity"] or 0)
+
+        holdings = []
+        total_value = 0.0
+        for h in holdings_map.values():
+            freq = freq_map.get(h["freq_str"], 0)
+            dps = h["div_per_share"]
+            if dps == 0 and h["quantity"] > 0 and freq > 0:
+                est = h["estim_payment_per_year"]
+                if est > 0:
+                    dps = est / (h["quantity"] * freq)
+            total_value += h["current_price"] * h["quantity"]
+            holdings.append({
+                "ticker": h["ticker"],
+                "description": h["description"],
+                "shares": h["quantity"],
+                "price": h["current_price"],
+                "div_per_share": dps,
+                "freq": freq,
+                "freq_str": h["freq_str"],
+                "reinvest": reinvest_pct > 0,
+            })
+
+    if total_value <= 0:
+        return jsonify(error="Portfolio has no value.")
+
+    # Allocation weights for monthly contributions
+    weights = {}
+    eligible = [h for h in holdings if h["price"] >= 0.50 and h["freq"] > 0]
+    if eligible:
+        elig_value = sum(h["price"] * h["shares"] for h in eligible)
+        for h in eligible:
+            weights[h["ticker"]] = (h["price"] * h["shares"]) / elig_value if elig_value > 0 else 0
+
+    total_months = years * 12
+    now = datetime.now()
+    start_year = now.year
+    start_month = now.month
+
+    def _month_label(m):
+        """Return calendar month (1-12) and label string for simulation month m (1-based)."""
+        total_m = start_month + m
+        y = start_year + (total_m - 1) // 12
+        cm = ((total_m - 1) % 12) + 1
+        month_names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+        return cm, f"{month_names[cm - 1]} {y}"
+
+    # ── Deterministic simulation ──────────────────────────────────────────
+    def _run_deterministic():
+        monthly_series = []
+        annual_series = []
+        # Track per-holding state
+        sim_shares = {h["ticker"]: h["shares"] for h in holdings}
+        contrib_shares = {h["ticker"]: 0.0 for h in holdings}
+        prev_income = None
+
+        for m in range(1, total_months + 1):
+            cal_month, label = _month_label(m)
+            growth_factor = (1 + annual_div_growth) ** (m / 12)
+            price_factor = (1 + annual_price_drift) ** (m / 12)
+
+            # Monthly contribution: buy shares at drifted prices
+            if monthly_contribution > 0 and weights:
+                for tk, w in weights.items():
+                    alloc = monthly_contribution * w
+                    adj_price = next(h["price"] for h in holdings if h["ticker"] == tk) * price_factor
+                    if adj_price > 0:
+                        new_sh = alloc / adj_price
+                        sim_shares[tk] += new_sh
+                        contrib_shares[tk] += new_sh
+
+            # Calculate income for this month and DRIP reinvest
+            month_income = 0.0
+            month_income_existing = 0.0
+            month_income_contrib = 0.0
+            drip_buys = {}  # ticker -> dividend dollars to reinvest
+            for h in holdings:
+                tk = h["ticker"]
+                freq = h["freq"]
+                if freq <= 0 or h["div_per_share"] <= 0:
+                    continue
+                # Spread annual income evenly across 12 months for display
+                adj_dps = h["div_per_share"] * growth_factor
+                annual_inc = adj_dps * sim_shares[tk] * freq
+                monthly_inc = annual_inc / 12
+                annual_inc_existing = adj_dps * h["shares"] * freq
+                monthly_inc_existing = annual_inc_existing / 12
+                month_income += monthly_inc
+                month_income_existing += monthly_inc_existing
+                month_income_contrib += (monthly_inc - monthly_inc_existing)
+                # DRIP still happens on actual pay months
+                pay_months = month_pay_map.get(freq, [])
+                if cal_month in pay_months and h.get("reinvest"):
+                    ppm = payments_per_month.get(freq, 1)
+                    drip_amt = adj_dps * sim_shares[tk] * ppm
+                    drip_buys[tk] = drip_amt
+
+            # DRIP: reinvest dividends back into the same holdings
+            if drip_buys:
+                for tk, drip_amt in drip_buys.items():
+                    h_ref = next(h for h in holdings if h["ticker"] == tk)
+                    adj_price = h_ref["price"] * price_factor
+                    if adj_price > 0:
+                        new_sh = drip_amt / adj_price
+                        sim_shares[tk] += new_sh
+                        contrib_shares[tk] += new_sh
+
+            monthly_series.append({
+                "month": m,
+                "label": label,
+                "total_income": _safe(month_income),
+                "income_from_existing": _safe(month_income_existing),
+                "income_from_contributions": _safe(month_income_contrib),
+                "p10": None, "p90": None,
+            })
+
+        # Compute trailing-12-month annualized income and changes
+        for i, entry in enumerate(monthly_series):
+            if i >= 11:
+                t12 = sum(monthly_series[j]["total_income"] or 0 for j in range(i - 11, i + 1))
+            else:
+                # Not enough months yet — extrapolate from available
+                partial = sum(monthly_series[j]["total_income"] or 0 for j in range(0, i + 1))
+                t12 = partial / (i + 1) * 12
+            entry["annualized_income"] = _safe(t12)
+
+        prev_ann = None
+        for entry in monthly_series:
+            ann = entry["annualized_income"] or 0
+            if i < 12:
+                # Trailing window not yet full — suppress noisy changes
+                entry["change_dollar"] = None
+                entry["change_pct"] = None
+            elif prev_ann is not None:
+                entry["change_dollar"] = _safe(ann - prev_ann)
+                entry["change_pct"] = _safe((ann - prev_ann) / prev_ann * 100 if prev_ann > 0 else 0)
+            else:
+                entry["change_dollar"] = _safe(0)
+                entry["change_pct"] = _safe(0)
+            prev_ann = ann
+
+        # Build annual series
+        for yr in range(1, years + 1):
+            start_idx = (yr - 1) * 12
+            end_idx = yr * 12
+            yr_months = monthly_series[start_idx:end_idx]
+            yr_total = sum(m["total_income"] or 0 for m in yr_months)
+            yr_existing = sum(m["income_from_existing"] or 0 for m in yr_months)
+            yr_contrib = sum(m["income_from_contributions"] or 0 for m in yr_months)
+            if yr == 1:
+                prev_yr_total = sum(m["total_income"] or 0 for m in monthly_series[:12])
+                # For year 1, compare against current annual income
+                current_ann = sum(
+                    h["div_per_share"] * h["freq"] * h["shares"]
+                    for h in holdings if h["freq"] > 0
+                )
+                change_d = yr_total - current_ann
+                change_p = (change_d / current_ann * 100) if current_ann > 0 else 0
+            else:
+                prev_start = (yr - 2) * 12
+                prev_end = (yr - 1) * 12
+                prev_yr_total = sum(m["total_income"] or 0 for m in monthly_series[prev_start:prev_end])
+                change_d = yr_total - prev_yr_total
+                change_p = (change_d / prev_yr_total * 100) if prev_yr_total > 0 else 0
+
+            annual_series.append({
+                "year": yr,
+                "label": f"Year {yr}",
+                "total_income": _safe(yr_total),
+                "income_from_existing": _safe(yr_existing),
+                "income_from_contributions": _safe(yr_contrib),
+                "change_dollar": _safe(change_d),
+                "change_pct": _safe(change_p),
+                "p10": None, "p90": None,
+            })
+
+        return monthly_series, annual_series, sim_shares, contrib_shares
+
+    # ── Monte Carlo simulation ────────────────────────────────────────────
+    def _run_monte_carlo():
+        import numpy as np
+        N_PATHS = 300
+
+        # Base div growth noise: sigma ~1.5% monthly for div changes
+        div_sigma = 0.015
+        # Price noise: sigma ~5% monthly
+        price_sigma = 0.05
+
+        monthly_div_bias = annual_div_growth / 12
+        monthly_price_bias = annual_price_drift / 12
+
+        # Run N_PATHS simulations
+        # For each path, track monthly portfolio income
+        np.random.seed(None)
+        path_monthly_income = np.zeros((N_PATHS, total_months))
+        path_monthly_existing = np.zeros((N_PATHS, total_months))
+        path_monthly_contrib = np.zeros((N_PATHS, total_months))
+
+        for p in range(N_PATHS):
+            sim_shares_p = {h["ticker"]: h["shares"] for h in holdings}
+            cum_div_factor = {h["ticker"]: 1.0 for h in holdings}
+            cum_price_factor = {h["ticker"]: 1.0 for h in holdings}
+
+            for m in range(total_months):
+                cal_month, _ = _month_label(m + 1)
+
+                # Random walk for div and price factors
+                for h in holdings:
+                    tk = h["ticker"]
+                    div_noise = np.random.normal(monthly_div_bias, div_sigma)
+                    price_noise = np.random.normal(monthly_price_bias, price_sigma)
+                    cum_div_factor[tk] *= (1 + div_noise)
+                    cum_div_factor[tk] = max(cum_div_factor[tk], 0.1)  # floor at 10% of original
+                    cum_price_factor[tk] *= (1 + price_noise)
+                    cum_price_factor[tk] = max(cum_price_factor[tk], 0.1)
+
+                # Monthly contribution
+                if monthly_contribution > 0 and weights:
+                    for tk, w in weights.items():
+                        alloc = monthly_contribution * w
+                        h_ref = next(h for h in holdings if h["ticker"] == tk)
+                        adj_price = h_ref["price"] * cum_price_factor[tk]
+                        if adj_price > 0:
+                            sim_shares_p[tk] += alloc / adj_price
+
+                # Income for this month (spread evenly across 12 months)
+                month_inc = 0.0
+                month_existing = 0.0
+                mc_drip_buys = {}
+                for h in holdings:
+                    tk = h["ticker"]
+                    freq = h["freq"]
+                    if freq <= 0 or h["div_per_share"] <= 0:
+                        continue
+                    adj_dps = h["div_per_share"] * cum_div_factor[tk]
+                    annual_inc = adj_dps * sim_shares_p[tk] * freq
+                    monthly_inc = annual_inc / 12
+                    annual_inc_existing = adj_dps * h["shares"] * freq
+                    monthly_inc_existing = annual_inc_existing / 12
+                    month_inc += monthly_inc
+                    month_existing += monthly_inc_existing
+                    # DRIP still happens on actual pay months
+                    pay_months = month_pay_map.get(freq, [])
+                    if cal_month in pay_months and h.get("reinvest"):
+                        ppm = payments_per_month.get(freq, 1)
+                        drip_amt = adj_dps * sim_shares_p[tk] * ppm
+                        mc_drip_buys[tk] = drip_amt
+
+                # DRIP reinvest
+                if mc_drip_buys:
+                    for tk, drip_amt in mc_drip_buys.items():
+                        h_ref = next(h for h in holdings if h["ticker"] == tk)
+                        adj_price = h_ref["price"] * cum_price_factor[tk]
+                        if adj_price > 0:
+                            sim_shares_p[tk] += drip_amt / adj_price
+
+                path_monthly_income[p, m] = month_inc
+                path_monthly_existing[p, m] = month_existing
+                path_monthly_contrib[p, m] = month_inc - month_existing
+
+        # Calculate percentiles
+        median_income = np.median(path_monthly_income, axis=0)
+        p10_income = np.percentile(path_monthly_income, 10, axis=0)
+        p90_income = np.percentile(path_monthly_income, 90, axis=0)
+        median_existing = np.median(path_monthly_existing, axis=0)
+        median_contrib = np.median(path_monthly_contrib, axis=0)
+
+        # Build monthly series
+        monthly_series = []
+        prev_income = None
+        for m in range(total_months):
+            _, label = _month_label(m + 1)
+            inc = float(median_income[m])
+            change_dollar = (inc - prev_income) if prev_income is not None else 0.0
+            change_pct = (change_dollar / prev_income * 100) if prev_income and prev_income > 0 else 0.0
+            monthly_series.append({
+                "month": m + 1,
+                "label": label,
+                "total_income": _safe(inc),
+                "income_from_existing": _safe(float(median_existing[m])),
+                "income_from_contributions": _safe(float(median_contrib[m])),
+                "change_dollar": _safe(change_dollar),
+                "change_pct": _safe(change_pct),
+                "p10": _safe(float(p10_income[m])),
+                "p90": _safe(float(p90_income[m])),
+            })
+            prev_income = inc
+
+        # Build annual series
+        annual_series = []
+        current_ann = sum(h["div_per_share"] * h["freq"] * h["shares"] for h in holdings if h["freq"] > 0)
+        for yr in range(1, years + 1):
+            s, e = (yr - 1) * 12, yr * 12
+            yr_income = float(np.sum(median_income[s:e]))
+            yr_existing = float(np.sum(median_existing[s:e]))
+            yr_contrib = float(np.sum(median_contrib[s:e]))
+            yr_p10 = float(np.sum(p10_income[s:e]))
+            yr_p90 = float(np.sum(p90_income[s:e]))
+            if yr == 1:
+                change_d = yr_income - current_ann
+                change_p = (change_d / current_ann * 100) if current_ann > 0 else 0
+            else:
+                ps, pe = (yr - 2) * 12, (yr - 1) * 12
+                prev_yr = float(np.sum(median_income[ps:pe]))
+                change_d = yr_income - prev_yr
+                change_p = (change_d / prev_yr * 100) if prev_yr > 0 else 0
+
+            annual_series.append({
+                "year": yr,
+                "label": f"Year {yr}",
+                "total_income": _safe(yr_income),
+                "income_from_existing": _safe(yr_existing),
+                "income_from_contributions": _safe(yr_contrib),
+                "change_dollar": _safe(change_d),
+                "change_pct": _safe(change_p),
+                "p10": _safe(yr_p10),
+                "p90": _safe(yr_p90),
+            })
+
+        # Use deterministic for holdings end-state (MC median is complex per-ticker)
+        _, _, sim_shares_det, contrib_shares_det = _run_deterministic()
+        return monthly_series, annual_series, sim_shares_det, contrib_shares_det
+
+    # Run selected mode
+    if use_monte_carlo:
+        monthly_series, annual_series, final_shares, contrib_shares = _run_monte_carlo()
+    else:
+        monthly_series, annual_series, final_shares, contrib_shares = _run_deterministic()
+
+    # Current income
+    current_annual = sum(h["div_per_share"] * h["freq"] * h["shares"] for h in holdings if h["freq"] > 0)
+    current_monthly = current_annual / 12
+
+    # Projected income (from last year of annual series)
+    projected_annual = annual_series[-1]["total_income"] if annual_series else current_annual
+
+    # Holdings detail
+    holdings_out = []
+    for h in holdings:
+        tk = h["ticker"]
+        start_ann = h["div_per_share"] * h["freq"] * h["shares"]
+        end_shares = final_shares.get(tk, h["shares"])
+        growth_factor = (1 + annual_div_growth) ** years
+        end_ann = h["div_per_share"] * growth_factor * h["freq"] * end_shares
+        growth_pct = ((end_ann / start_ann - 1) * 100) if start_ann > 0 else 0
+        holdings_out.append({
+            "ticker": tk,
+            "description": h["description"],
+            "shares_start": _safe(h["shares"]),
+            "shares_end": _safe(end_shares),
+            "shares_added": _safe(contrib_shares.get(tk, 0)),
+            "frequency": h["freq_str"],
+            "current_annual_income": _safe(start_ann),
+            "projected_annual_income": _safe(end_ann),
+            "growth_pct": _safe(growth_pct),
+        })
+
+    return jsonify(
+        current_monthly_income=_safe(current_monthly),
+        current_annual_income=_safe(current_annual),
+        monthly_contribution=monthly_contribution,
+        total_contributed=_safe(monthly_contribution * total_months),
+        monte_carlo=use_monte_carlo,
+        monthly_series=monthly_series,
+        annual_series=annual_series,
+        holdings=holdings_out,
+        years=years,
+        market_type=market_type,
+        projected_annual_income=_safe(projected_annual),
     )
 
 
@@ -12166,16 +12641,33 @@ def macro_rebalance_suggestions():
 
 # ── Income Benchmark ──────────────────────────────────────────────────────────
 
-INCOME_BENCHMARK_TARGETS = {
-    "Covered Call / Options Income": 25,
-    "BDCs": 15,
+INCOME_BENCHMARK_DEFAULTS = {
+    "Covered Call / Options Income": 15,
+    "BDCs": 8,
     "CEFs": 10,
-    "REITs / Real Estate": 10,
-    "Preferred Stock / Credit": 10,
-    "Dividend Growth": 15,
+    "REITs / Real Estate": 15,
+    "Preferred Stock / Credit": 12,
+    "Dividend Growth": 20,
     "Commodities / Gold & Silver": 5,
-    "Bonds / Fixed Income": 10,
+    "Bonds / Fixed Income": 15,
 }
+
+# Kept for backward compat — points to defaults
+INCOME_BENCHMARK_TARGETS = INCOME_BENCHMARK_DEFAULTS
+
+
+def _load_income_targets(pids):
+    """Load custom income benchmark targets for profile, falling back to defaults."""
+    conn = get_connection()
+    placeholders = ",".join("?" * len(pids))
+    rows = conn.execute(
+        f"SELECT bucket, target_pct FROM income_benchmark_targets WHERE profile_id IN ({placeholders})",
+        pids,
+    ).fetchall()
+    conn.close()
+    if rows:
+        return {r["bucket"]: r["target_pct"] for r in rows}
+    return dict(INCOME_BENCHMARK_DEFAULTS)
 
 INCOME_BUCKET_BY_PILLAR = {
     "BDC": "BDCs",
@@ -12301,7 +12793,7 @@ def macro_income_benchmark():
     conn = get_connection()
     rows = conn.execute(
         f"SELECT ticker, description, classification_type, "
-        f"current_value, approx_monthly_income, current_annual_yield "
+        f"current_value, approx_monthly_income, current_annual_yield, quantity "
         f"FROM all_account_info "
         f"WHERE profile_id IN ({placeholders}) AND IFNULL(quantity, 0) > 0",
         pids,
@@ -12327,19 +12819,23 @@ def macro_income_benchmark():
                 "ticker": t,
                 "description": r["description"] or "",
                 "classification_type": r["classification_type"] or "",
-                "current_value": 0, "monthly_income": 0,
+                "current_value": 0, "monthly_income": 0, "quantity": 0,
             }
         holdings[t]["current_value"] += float(r["current_value"] or 0)
         holdings[t]["monthly_income"] += float(r["approx_monthly_income"] or 0)
+        holdings[t]["quantity"] += float(r["quantity"] or 0)
 
     total_value = sum(h["current_value"] for h in holdings.values())
     total_monthly = sum(h["monthly_income"] for h in holdings.values())
     if total_value <= 0:
         return jsonify(error="Portfolio has no value.")
 
+    # Load targets (custom or defaults)
+    targets = _load_income_targets(pids)
+
     # Classify each holding into a bucket
-    buckets = {name: {"value": 0, "monthly_income": 0, "tickers": []}
-               for name in list(INCOME_BENCHMARK_TARGETS.keys()) + ["Unclassified"]}
+    buckets = {name: {"value": 0, "monthly_income": 0, "quantity": 0, "tickers": []}
+               for name in list(targets.keys()) + ["Unclassified"]}
 
     holdings_detail = []
     excluded_value = 0.0
@@ -12347,6 +12843,7 @@ def macro_income_benchmark():
         bucket = _get_income_bucket(h["ticker"], h["classification_type"], h["description"], overrides=income_overrides)
         cv = h["current_value"]
         mi = h["monthly_income"]
+        qty = h["quantity"]
         yld = (mi * 12 / cv * 100) if cv > 0 else 0
         is_overridden = h["ticker"] in income_overrides
 
@@ -12357,6 +12854,7 @@ def macro_income_benchmark():
         if bucket != "Excluded":
             buckets[bucket]["value"] += cv
             buckets[bucket]["monthly_income"] += mi
+            buckets[bucket]["quantity"] += qty
             buckets[bucket]["tickers"].append(h["ticker"])
 
         holdings_detail.append({
@@ -12367,12 +12865,13 @@ def macro_income_benchmark():
             "pct_of_portfolio": _safe(cv / total_value * 100),
             "monthly_income": _safe(mi),
             "annual_yield": _safe(yld),
+            "quantity": _safe(qty),
             "is_overridden": is_overridden,
         })
 
     # Build comparison table
     comparison = []
-    for bucket_name, target_pct in INCOME_BENCHMARK_TARGETS.items():
+    for bucket_name, target_pct in targets.items():
         data = buckets.get(bucket_name, {"value": 0, "monthly_income": 0, "tickers": []})
         actual_pct = data["value"] / total_value * 100 if total_value > 0 else 0
         diff_pct = actual_pct - target_pct
@@ -12390,6 +12889,7 @@ def macro_income_benchmark():
             "gap_dollars": _safe(gap_dollars),
             "monthly_income": _safe(data["monthly_income"]),
             "bucket_yield": _safe(bucket_yield),
+            "quantity": _safe(data["quantity"]),
             "tickers": data["tickers"],
         })
 
@@ -12555,6 +13055,80 @@ def income_overrides_delete():
     conn.commit()
     conn.close()
     return jsonify(ok=True, ticker=ticker)
+
+
+# ── Income Benchmark Targets ──────────────────────────────────────────────────
+
+@app.route("/api/income/targets", methods=["GET"])
+def income_targets_list():
+    """Return current income benchmark targets (custom or defaults)."""
+    _, pids = get_profile_filter()
+    targets = _load_income_targets(pids)
+    # Check if custom targets exist
+    conn = get_connection()
+    placeholders = ",".join("?" * len(pids))
+    count = conn.execute(
+        f"SELECT COUNT(*) as cnt FROM income_benchmark_targets WHERE profile_id IN ({placeholders})",
+        pids,
+    ).fetchone()["cnt"]
+    conn.close()
+    return jsonify(
+        targets=targets,
+        is_custom=count > 0,
+        defaults=INCOME_BENCHMARK_DEFAULTS,
+    )
+
+
+@app.route("/api/income/targets", methods=["PUT"])
+def income_targets_save():
+    """Save custom income benchmark targets."""
+    data = request.get_json(force=True) or {}
+    targets = data.get("targets")
+    if not targets or not isinstance(targets, dict):
+        return jsonify(error="targets dict is required."), 400
+
+    # Validate all values are numbers and sum to ~100
+    total = 0
+    for bucket, pct in targets.items():
+        try:
+            pct = float(pct)
+        except (TypeError, ValueError):
+            return jsonify(error=f"Invalid percentage for {bucket}"), 400
+        if pct < 0:
+            return jsonify(error=f"Percentage for {bucket} cannot be negative"), 400
+        total += pct
+    if abs(total - 100) > 0.5:
+        return jsonify(error=f"Targets must sum to 100% (currently {total:.1f}%)"), 400
+
+    _, pids = get_profile_filter()
+    pid = pids[0]
+    conn = get_connection()
+    # Clear existing and insert fresh
+    conn.execute("DELETE FROM income_benchmark_targets WHERE profile_id = ?", (pid,))
+    for bucket, pct in targets.items():
+        conn.execute(
+            """INSERT INTO income_benchmark_targets (bucket, profile_id, target_pct, updated_at)
+               VALUES (?, ?, ?, CURRENT_TIMESTAMP)""",
+            (bucket, pid, float(pct)),
+        )
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, targets=targets)
+
+
+@app.route("/api/income/targets", methods=["DELETE"])
+def income_targets_reset():
+    """Reset income benchmark targets to defaults."""
+    _, pids = get_profile_filter()
+    conn = get_connection()
+    placeholders = ",".join("?" * len(pids))
+    conn.execute(
+        f"DELETE FROM income_benchmark_targets WHERE profile_id IN ({placeholders})",
+        pids,
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, targets=INCOME_BENCHMARK_DEFAULTS)
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────

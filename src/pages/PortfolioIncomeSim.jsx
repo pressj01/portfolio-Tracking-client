@@ -1317,14 +1317,21 @@ export default function PortfolioIncomeSim() {
     const dates = longest.date_labels || []
     const len = dates.length
     const totalVals = new Array(len).fill(0)
-    const totalDivs = new Array(len).fill(0)
+    const rawDivs = new Array(len).fill(0)
     items.forEach(r => {
       const vals = r.monthly_portfolio_vals || []
       const divs = r.monthly_dividends || []
       for (let i = 0; i < len; i++) {
         totalVals[i] += vals[i] || 0
-        totalDivs[i] += divs[i] || 0
+        rawDivs[i] += divs[i] || 0
       }
+    })
+    // Smooth dividends: annualize with trailing-12-month window, then divide by 12
+    const totalDivs = rawDivs.map((_, i) => {
+      const window = Math.min(i + 1, 12)
+      let sum = 0
+      for (let j = i - window + 1; j <= i; j++) sum += rawDivs[j]
+      return sum / window
     })
     return { dates, totalVals, totalDivs }
   }
@@ -1474,6 +1481,27 @@ export default function PortfolioIncomeSim() {
     return traces
   }, [chartLines])
 
+  const headerTips = {
+    'Ticker': 'ETF or stock symbol',
+    'Amount': 'Dollar amount invested in this position',
+    'Reinvest %': 'Percentage of dividends reinvested back into this holding',
+    'Start Price': 'Price per share at the beginning of the period',
+    'End Price': 'Price per share at the end of the period',
+    'Price \u0394%': 'Percentage change in share price from start to end',
+    'TTM Yield': 'Trailing 12-month dividend yield based on current price',
+    'Hist \u03BC%': 'Historical mean monthly return (annualized) — average expected return',
+    'Hist \u03C3%': 'Historical standard deviation of monthly returns — measures volatility',
+    'Skew': 'Skewness of historical returns — negative means more downside tail risk',
+    'Total Dist': 'Total dollar amount of dividends received over the period',
+    'Cum Yield': 'Cumulative yield — total distributions as a percentage of the amount invested',
+    'Reinvested': 'Dollar amount of dividends that were reinvested to buy more shares',
+    'Final Value': 'Total portfolio value of this position at the end of the period',
+    'Gain/Loss $': 'Dollar profit or loss (Final Value minus Amount invested)',
+    'Gain/Loss %': 'Percentage return on the amount invested',
+    'NAV Erosion': 'Whether the share price declined enough that dividends did not offset the loss',
+    'Deficit': 'Share deficit — how many more shares you would need to break even at the final price',
+    'Note': 'Warnings or additional information about this ticker',
+  }
   const headers = ['Ticker', 'Amount', 'Reinvest %', 'Start Price', 'End Price',
     'Price \u0394%', 'TTM Yield',
     ...(isSim ? ['Hist \u03BC%', 'Hist \u03C3%', 'Skew'] : []),
@@ -2054,7 +2082,7 @@ export default function PortfolioIncomeSim() {
               <thead>
                 <tr>
                   {headers.map((h, i) => (
-                    <th key={h} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }}>{h}{arrow(i)}</th>
+                    <th key={h} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }} title={headerTips[h] || ''}>{h}{arrow(i)}</th>
                   ))}
                 </tr>
               </thead>
