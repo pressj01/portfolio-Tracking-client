@@ -147,10 +147,11 @@ def _estimate_current_month_income(holding):
 
 
 def _estimate_ytd_income(holding):
-    """Estimate year-to-date income from a single holding (Jan through current month)."""
+    """Estimate year-to-date income from a single holding (Jan through last completed month).
+    Excludes current month since it's incomplete — avoids overcounting."""
     import datetime
     cur_month = datetime.date.today().month
-    return sum(_estimate_month_income(holding, m) for m in range(1, cur_month + 1))
+    return sum(_estimate_month_income(holding, m) for m in range(1, cur_month))
 
 
 def _calc_dividend_growth_batch(tickers):
@@ -1437,11 +1438,14 @@ def list_holdings():
         for r in results:
             r["percent_of_account"] = (r.get("current_value") or 0) / total_value
 
-    # Use stored actuals from refresh if available, otherwise estimate
+    # Use stored actuals from refresh if available, otherwise estimate.
+    # IMPORTANT: use "is None" not falsy check — 0 is a valid actual value
+    # (e.g. no dividends received yet this month) and should NOT trigger
+    # the full-month estimate fallback.
     for r in results:
-        if not r.get("current_month_income"):
+        if r.get("current_month_income") is None:
             r["current_month_income"] = _estimate_current_month_income(r)
-        if not r.get("ytd_divs"):
+        if r.get("ytd_divs") is None:
             r["ytd_divs"] = _estimate_ytd_income(r)
 
     conn.close()
@@ -3057,10 +3061,12 @@ def income_summary():
     total_ytd = 0.0
     for row in holdings:
         h = dict(row)
-        stored_month = h.get("current_month_income") or 0
-        stored_ytd = h.get("ytd_divs") or 0
-        total_month += stored_month if stored_month else _estimate_current_month_income(h)
-        total_ytd += stored_ytd if stored_ytd else _estimate_ytd_income(h)
+        stored_month = h.get("current_month_income")
+        stored_ytd = h.get("ytd_divs")
+        # Use "is None" not falsy — 0 means refresh ran and found no dividends
+        # yet this period, which is correct (not a reason to use the full estimate)
+        total_month += _estimate_current_month_income(h) if stored_month is None else stored_month
+        total_ytd += _estimate_ytd_income(h) if stored_ytd is None else stored_ytd
 
     conn.close()
     return jsonify({

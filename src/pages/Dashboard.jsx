@@ -389,10 +389,12 @@ export default function Dashboard() {
     const currentValue = sum('current_value')
     const gainLoss = sum('gain_or_loss')
     const totalDivs = sum('total_divs_received')
-    const ytdDivs = sum('ytd_divs') || (incomeSummary?.ytd_income ?? 0)
+    const rawYtd = sum('ytd_divs')
+    const ytdDivs = rawYtd != null && rawYtd > 0 ? rawYtd : (incomeSummary?.ytd_income ?? 0)
     const monthlyIncome = sum('approx_monthly_income')
     const annualIncome = sum('estim_payment_per_year')
-    const currentMonthIncome = sum('current_month_income') || (incomeSummary?.current_month_income ?? 0)
+    const rawMonthIncome = sum('current_month_income')
+    const currentMonthIncome = rawMonthIncome != null ? rawMonthIncome : (incomeSummary?.current_month_income ?? 0)
 
     let avgYoc = 0
     const valid = holdings.filter(h => h.purchase_value > 0 && h.annual_yield_on_cost != null)

@@ -2940,7 +2940,29 @@ export default function ETFScreen() {
           {tab === 'technical' ? (
             records.length > 0 ? (
               <div ref={plotRef}>
-                <div className="etf-chart-title">{ticker.trim().toUpperCase()}{tickerName && tickerName !== ticker.trim().toUpperCase() ? ` — ${tickerName}` : ''}</div>
+                <div className="etf-chart-title" style={{ display: 'flex', alignItems: 'center', gap: '1.2rem', flexWrap: 'wrap' }}>
+                  <span>{ticker.trim().toUpperCase()}{tickerName && tickerName !== ticker.trim().toUpperCase() ? ` — ${tickerName}` : ''}</span>
+                  {(() => {
+                    const last = records[records.length - 1]
+                    if (!last) return null
+                    const prev = records.length > 1 ? records[records.length - 2] : null
+                    const chg = prev ? last.close - prev.close : null
+                    const chgPct = prev && prev.close ? (chg / prev.close) * 100 : null
+                    const chgColor = chg >= 0 ? '#26A69A' : '#EF5350'
+                    return (
+                      <span style={{ fontSize: '0.82rem', fontWeight: 400, display: 'flex', gap: '0.8rem', alignItems: 'center' }}>
+                        <span style={{ color: '#90caf9' }}>H <span style={{ color: '#e0e0e0' }}>{last.high?.toFixed(2)}</span></span>
+                        <span style={{ color: '#90caf9' }}>L <span style={{ color: '#e0e0e0' }}>{last.low?.toFixed(2)}</span></span>
+                        <span style={{ color: '#90caf9' }}>C <span style={{ color: '#e0e0e0' }}>{last.close?.toFixed(2)}</span></span>
+                        {chg != null && (
+                          <span style={{ color: chgColor, fontWeight: 500 }}>
+                            {chg >= 0 ? '+' : ''}{chg.toFixed(2)} ({chgPct >= 0 ? '+' : ''}{chgPct.toFixed(2)}%)
+                          </span>
+                        )}
+                      </span>
+                    )
+                  })()}
+                </div>
                 {drawMode === 'fib' && (
                   <div style={{ color: '#FFD740', fontSize: '0.8rem', padding: '4px 8px', background: '#2a2a3d', borderRadius: 4, marginBottom: 4 }}>
                     {fibClicks.length === 0 ? 'Click the first point (swing high or low)' : 'Click the second point to complete Fibonacci retracement'}
