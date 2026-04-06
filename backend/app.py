@@ -1330,6 +1330,10 @@ def refresh_market_data():
         populate_dividends(pid)
 
     conn.close()
+
+    # Sync sub-account changes up to Owner so the aggregate view stays current
+    _auto_reconcile_owner()
+
     # Report count for the selected profile's tickers
     selected_count = sum(1 for t in tickers if (profile_id, t) in holding_map)
     return jsonify({"updated": updated, "message": f"Refreshed {selected_count} of {selected_count} holdings"})
@@ -1823,17 +1827,25 @@ def _rollup_transactions(ticker, profile_id, conn):
     avg_price = total_cost / total_shares if total_shares else 0
 
     from datetime import date as _date
-    conn.execute(
-        """UPDATE all_account_info
-           SET quantity = ?, price_paid = ?, purchase_value = ?,
-               purchase_date = ?, base_quantity = ?, import_date = ?,
-               realized_gains = ?
-           WHERE ticker = ? AND profile_id = ?""",
-        (round(total_shares, 6), round(avg_price, 4), round(total_cost, 2),
-         earliest_buy, round(total_shares, 6), _date.today().isoformat(),
-         round(total_realized, 2),
-         ticker, profile_id),
-    )
+
+    if total_shares == 0:
+        # Fully sold — remove the holding row entirely
+        conn.execute(
+            "DELETE FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+            (ticker, profile_id),
+        )
+    else:
+        conn.execute(
+            """UPDATE all_account_info
+               SET quantity = ?, price_paid = ?, purchase_value = ?,
+                   purchase_date = ?, base_quantity = ?, import_date = ?,
+                   realized_gains = ?
+               WHERE ticker = ? AND profile_id = ?""",
+            (round(total_shares, 6), round(avg_price, 4), round(total_cost, 2),
+             earliest_buy, round(total_shares, 6), _date.today().isoformat(),
+             round(total_realized, 2),
+             ticker, profile_id),
+        )
     conn.commit()
     populate_holdings(profile_id)
     populate_dividends(profile_id)
