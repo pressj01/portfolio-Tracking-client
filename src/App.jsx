@@ -28,6 +28,7 @@ import DividendCompare from './pages/DividendCompare'
 import ConsolidationAnalysis from './pages/ConsolidationAnalysis'
 import MacroRegimeDashboard from './pages/MacroRegimeDashboard'
 import IncomeGrowthSim from './pages/IncomeGrowthSim'
+import DividendHistory from './pages/DividendHistory'
 import Help from './pages/Help'
 
 function NavDropdown({ label, children }) {
@@ -94,6 +95,7 @@ function App() {
         <Route path="/div-compare" element={<DividendCompare />} />
         <Route path="/consolidation" element={<ConsolidationAnalysis />} />
         <Route path="/macro-dashboard" element={<MacroRegimeDashboard />} />
+        <Route path="/dividend-history" element={<DividendHistory />} />
         <Route path="/help" element={<Help />} />
       </Routes>
     </Router>
@@ -132,6 +134,7 @@ function Nav() {
         <NavLink to="/dividends">Dividends</NavLink>
         <NavLink to="/div-calendar">Dividend Calendar</NavLink>
         <NavLink to="/div-compare">Dividend Compare</NavLink>
+        <NavLink to="/dividend-history">Dividend History</NavLink>
         <NavLink to="/total-return">Total Return</NavLink>
       </NavDropdown>
       <NavDropdown label="Analysis">

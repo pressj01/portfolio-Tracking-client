@@ -237,6 +237,8 @@ export default function DividendAnalysis() {
   const catRef = useRef(null)
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
+  const [recalcMsg, setRecalcMsg] = useState(null)
+  const [recalcing, setRecalcing] = useState(false)
 
   useEffect(() => {
     const handler = (e) => { if (catRef.current && !catRef.current.contains(e.target)) setCatOpen(false) }
@@ -244,7 +246,7 @@ export default function DividendAnalysis() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  useEffect(() => {
+  const fetchData = useCallback(() => {
     setLoading(true)
     setError(null)
     const params = new URLSearchParams()
@@ -257,7 +259,25 @@ export default function DividendAnalysis() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [categories, selection])
+  }, [categories, selection, pf])
+
+  useEffect(() => { fetchData() }, [fetchData])
+
+  const handleRecalcPayouts = async () => {
+    setRecalcing(true)
+    setRecalcMsg(null)
+    try {
+      const res = await pf('/api/payouts/monthly/recalculate', { method: 'POST' })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error)
+      setRecalcMsg(d.message)
+      fetchData()
+    } catch (e) {
+      setRecalcMsg(`Error: ${e.message}`)
+    } finally {
+      setRecalcing(false)
+    }
+  }
 
   useEffect(() => {
     if (!data || !window.Plotly) return
@@ -415,7 +435,16 @@ export default function DividendAnalysis() {
           <div className="da-chart-grid">
             {data.charts.annual_income && <div className="da-chart-panel"><div id="da-chart-annual-income" className="da-chart-div" /></div>}
             {data.charts.projected_monthly && <div className="da-chart-panel"><div id="da-chart-projected-monthly" className="da-chart-div" /></div>}
-            {data.charts.monthly_received && <div className="da-chart-panel"><div id="da-chart-monthly-received" className="da-chart-div" /></div>}
+            {data.charts.monthly_received && <div className="da-chart-panel">
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.25rem' }}>
+                <button className="btn btn-sm" onClick={handleRecalcPayouts} disabled={recalcing}
+                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }}>
+                  {recalcing ? 'Recalculating...' : 'Recalculate from Holdings'}
+                </button>
+              </div>
+              {recalcMsg && <div style={{ fontSize: '0.8rem', color: '#7ecfff', marginBottom: '0.25rem' }}>{recalcMsg}</div>}
+              <div id="da-chart-monthly-received" className="da-chart-div" />
+            </div>}
             {data.charts.total_divs_ticker && <div className="da-chart-panel"><div id="da-chart-total-divs-ticker" className="da-chart-div" /></div>}
             {data.charts.paid_for_itself && <div className="da-chart-panel"><div id="da-chart-paid-for-itself" className="da-chart-div" /></div>}
             {data.charts.by_type && <div className="da-chart-panel"><div id="da-chart-by-type" className="da-chart-div" style={{ height: '420px' }} /></div>}

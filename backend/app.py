@@ -2145,6 +2145,89 @@ def list_monthly_payouts():
     return jsonify(rows_to_dicts(rows))
 
 
+@app.route("/api/payouts/monthly/recalculate", methods=["POST"])
+def recalculate_monthly_payouts():
+    """Recalculate monthly_payouts from current holdings data for the trailing 12 months."""
+    import datetime
+    from collections import defaultdict
+    profile_id = get_profile_id()
+    conn = get_connection()
+    cur = conn.cursor()
+    today_d = datetime.date.today()
+    month_start = today_d.replace(day=1)
+
+    def _add_m(d, n):
+        m = d.month - 1 + n
+        y = d.year + m // 12
+        m = m % 12 + 1
+        return d.replace(year=y, month=m)
+
+    window = [_add_m(month_start, i) for i in range(-11, 1)]
+
+    # Load holdings
+    rows = conn.execute(
+        "SELECT ticker, div_frequency, estim_payment_per_year, quantity "
+        "FROM all_account_info WHERE profile_id = ? AND quantity > 0",
+        (profile_id,),
+    ).fetchall()
+
+    # Load pay-month schedule
+    mpt_rows = conn.execute(
+        "SELECT ticker, pay_month FROM monthly_payout_tickers WHERE profile_id = ?",
+        (profile_id,),
+    ).fetchall()
+    ticker_pay_months = defaultdict(list)
+    for r in mpt_rows:
+        ticker_pay_months[r["ticker"]].append(int(r["pay_month"]))
+
+    # Build estimate by calendar month (1-12)
+    est_by_month = defaultdict(float)
+    for r in rows:
+        annual = float(r["estim_payment_per_year"] or 0)
+        if annual <= 0:
+            continue
+        freq = str(r["div_frequency"] or "").strip()
+        ticker = r["ticker"]
+        pay_months = ticker_pay_months.get(ticker, [])
+        if freq in ("M", "52", "W"):
+            for mo in range(1, 13):
+                est_by_month[mo] += annual / 12
+        elif pay_months:
+            n_pays = len(pay_months)
+            per_pay = annual / n_pays
+            for mo in pay_months:
+                est_by_month[mo] += per_pay
+        else:
+            for mo in range(1, 13):
+                est_by_month[mo] += annual / 12
+
+    # Upsert each month in the window
+    updated = 0
+    for m in window:
+        amount = round(est_by_month.get(m.month, 0), 2)
+        if amount <= 0:
+            continue
+        existing = cur.execute(
+            "SELECT 1 FROM monthly_payouts WHERE year = ? AND month = ? AND profile_id = ?",
+            (m.year, m.month, profile_id),
+        ).fetchone()
+        if existing is None:
+            cur.execute(
+                "INSERT INTO monthly_payouts (year, month, amount, profile_id) VALUES (?, ?, ?, ?)",
+                (m.year, m.month, amount, profile_id),
+            )
+        else:
+            cur.execute(
+                "UPDATE monthly_payouts SET amount = ? WHERE year = ? AND month = ? AND profile_id = ?",
+                (amount, m.year, m.month, profile_id),
+            )
+        updated += 1
+
+    conn.commit()
+    conn.close()
+    return jsonify({"updated": updated, "message": f"Recalculated {updated} months of payouts from current holdings."})
+
+
 @app.route("/api/payouts/weekly-tickers", methods=["GET"])
 def list_weekly_tickers():
     profile_id = get_profile_id()
@@ -13288,6 +13371,164 @@ def income_targets_reset():
     conn.commit()
     conn.close()
     return jsonify(ok=True, targets=INCOME_BENCHMARK_DEFAULTS)
+
+
+# ── Dividend History ───────────────────────────────────────────────────────────
+
+@app.route("/api/dividend-history/data", methods=["GET"])
+def dividend_history_data():
+    """Return dividend income time-series in yearly, monthly, or weekly granularity."""
+    import datetime
+    from collections import defaultdict
+
+    view = request.args.get("view", "monthly")  # yearly | monthly | weekly
+    months_back = int(request.args.get("months_back", 60 if view == "monthly" else 12))
+    cat_param = request.args.get("category", "").strip()
+    cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
+
+    is_agg, pids = get_profile_filter()
+    profile_id = pids[0]
+    conn = get_connection()
+
+    # Categories for filter dropdown
+    cats = conn.execute(
+        "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
+        (profile_id,),
+    ).fetchall()
+    categories = [{"id": c["id"], "name": c["name"]} for c in cats]
+
+    # Resolve category filter to ticker set
+    filtered_tickers = None
+    if cat_ids:
+        cat_names = [c["name"] for c in categories if str(c["id"]) in cat_ids]
+        if cat_names:
+            placeholders = ",".join("?" * len(pids))
+            cat_rows = conn.execute(
+                f"SELECT DISTINCT tc.ticker FROM ticker_categories tc "
+                f"JOIN categories c ON c.id = tc.category_id "
+                f"WHERE tc.profile_id IN ({placeholders}) AND c.name IN ({','.join('?' * len(cat_names))})",
+                pids + cat_names,
+            ).fetchall()
+            filtered_tickers = {r["ticker"] for r in cat_rows}
+            # Also include tickers mapped via classification_type
+            _CLASSIFICATION_NAMES_REV = {}
+            for ct_val, ct_name in _CLASSIFICATION_NAMES.items():
+                _CLASSIFICATION_NAMES_REV.setdefault(ct_name, []).append(ct_val)
+            ct_vals = []
+            for cn in cat_names:
+                ct_vals.extend(_CLASSIFICATION_NAMES_REV.get(cn, []))
+            if ct_vals:
+                ct_ph = ",".join("?" * len(ct_vals))
+                ct_rows = conn.execute(
+                    f"SELECT DISTINCT ticker FROM all_account_info "
+                    f"WHERE classification_type IN ({ct_ph}) AND profile_id IN ({placeholders})",
+                    ct_vals + pids,
+                ).fetchall()
+                filtered_tickers |= {r["ticker"] for r in ct_rows}
+
+    # Compute category ratio for proportional filtering on aggregate tables
+    cat_ratio = 1.0
+    if filtered_tickers is not None:
+        total_annual = conn.execute(
+            f"SELECT IFNULL(SUM(estim_payment_per_year), 0) as total FROM all_account_info "
+            f"WHERE profile_id IN ({','.join('?' * len(pids))}) AND IFNULL(quantity, 0) > 0",
+            pids,
+        ).fetchone()["total"]
+        if total_annual > 0:
+            ticker_ph = ",".join("?" * len(filtered_tickers))
+            cat_annual = conn.execute(
+                f"SELECT IFNULL(SUM(estim_payment_per_year), 0) as total FROM all_account_info "
+                f"WHERE profile_id IN ({','.join('?' * len(pids))}) AND IFNULL(quantity, 0) > 0 "
+                f"AND ticker IN ({ticker_ph})",
+                pids + list(filtered_tickers),
+            ).fetchone()["total"]
+            cat_ratio = cat_annual / total_annual
+        else:
+            cat_ratio = 0.0
+
+    today = datetime.date.today()
+    labels = []
+    values = []
+    placeholders = ",".join("?" * len(pids))
+
+    if view == "yearly":
+        rows = conn.execute(
+            f"SELECT year, SUM(amount) as total FROM monthly_payouts "
+            f"WHERE profile_id IN ({placeholders}) GROUP BY year ORDER BY year",
+            pids,
+        ).fetchall()
+        for r in rows:
+            labels.append(str(r["year"]))
+            values.append(round(float(r["total"]) * cat_ratio, 2))
+
+    elif view == "monthly":
+        # Compute start date
+        start_y = today.year
+        start_m = today.month - months_back
+        while start_m <= 0:
+            start_m += 12
+            start_y -= 1
+        start_key = start_y * 100 + start_m
+        end_key = today.year * 100 + today.month
+
+        rows = conn.execute(
+            f"SELECT year, month, amount FROM monthly_payouts "
+            f"WHERE profile_id IN ({placeholders}) AND (year * 100 + month) >= ? AND (year * 100 + month) <= ? "
+            f"ORDER BY year, month",
+            pids + [start_key, end_key],
+        ).fetchall()
+        for r in rows:
+            dt = datetime.date(int(r["year"]), int(r["month"]), 1)
+            labels.append(dt.strftime("%b '%y"))
+            values.append(round(float(r["amount"]) * cat_ratio, 2))
+
+    elif view == "weekly":
+        start_date = today - datetime.timedelta(days=months_back * 30)
+        rows = conn.execute(
+            f"SELECT pay_date, amount FROM weekly_payouts "
+            f"WHERE profile_id IN ({placeholders}) AND pay_date >= ? "
+            f"ORDER BY pay_date",
+            pids + [start_date.isoformat()],
+        ).fetchall()
+        for r in rows:
+            labels.append(r["pay_date"])
+            values.append(round(float(r["amount"]) * cat_ratio, 2))
+
+    conn.close()
+
+    # Summary stats
+    total = sum(values) if values else 0
+    avg = total / len(values) if values else 0
+    mn = min(values) if values else 0
+    mx = max(values) if values else 0
+    # Growth: compare last value to first
+    trend_pct = 0.0
+    if len(values) >= 2 and values[0] > 0:
+        trend_pct = round((values[-1] - values[0]) / values[0] * 100, 1)
+
+    # Cumulative
+    cumulative = []
+    running = 0
+    for v in values:
+        running += v
+        cumulative.append(round(running, 2))
+
+    return jsonify({
+        "categories": categories,
+        "view": view,
+        "series": {
+            "labels": labels,
+            "values": values,
+            "cumulative": cumulative,
+        },
+        "summary": {
+            "total": round(total, 2),
+            "average": round(avg, 2),
+            "min": round(mn, 2),
+            "max": round(mx, 2),
+            "trend_pct": trend_pct,
+        },
+    })
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────
