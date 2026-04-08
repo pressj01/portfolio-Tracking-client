@@ -591,6 +591,22 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    # ── regime_history (Markov chain quadrant tracking) ─────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS regime_history (
+            date               TEXT NOT NULL PRIMARY KEY,
+            quadrant           INTEGER NOT NULL,
+            growth_score       REAL,
+            inflation_score    REAL,
+            growth_direction   TEXT,
+            inflation_direction TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_regime_history_date
+        ON regime_history(date)
+    """)
+
     # ── settings ──────────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS settings (

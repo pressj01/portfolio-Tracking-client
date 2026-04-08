@@ -2235,7 +2235,7 @@ function MacroDashboardHelp() {
       <p style={{ marginBottom: '1rem' }}>
         The Macro Regime Dashboard shows current macroeconomic conditions, analyzes your portfolio's
         sensitivity to macro factors, suggests rebalancing tilts, and benchmarks your income allocation.
-        It has five tabs.
+        It has six tabs.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: Macro Conditions</h3>
@@ -2292,6 +2292,103 @@ function MacroDashboardHelp() {
         <li><strong>Exclude</strong> — Removes a holding from macro exposure calculations.</li>
         <li><strong>Revert</strong> — Removes the override and returns to auto-classification.</li>
       </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 6: Regime Quadrants</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Uses a Markov Chain transition model to classify the current macroeconomic regime into one of
+        four quadrants based on the direction of growth and inflation, then projects forward probabilities
+        of transitioning to other regimes. Data is sourced from FRED economic indicators and market proxies.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The Four Quadrants</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Q1 Goldilocks</strong> — Growth UP + Inflation DOWN. Favors equities, tech, and growth stocks.</li>
+        <li><strong>Q2 Reflation</strong> — Growth UP + Inflation UP. Favors commodities, energy, and equities.</li>
+        <li><strong>Q3 Stagflation</strong> — Growth DOWN + Inflation UP. Favors gold, TIPS, and utilities.</li>
+        <li><strong>Q4 Deflation</strong> — Growth DOWN + Inflation DOWN. Favors long-term bonds, cash, and defensives.</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How Classification Works</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The current quadrant is determined using real economic data from FRED (Federal Reserve Economic Data):
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Growth</strong> — Composite Z-score of Industrial Production (INDPRO) and Housing Starts (HOUST), using their 3-month rate of change.</li>
+        <li><strong>Inflation</strong> — Z-score of CPI (CPIAUCSL) 3-month rate of change.</li>
+        <li><strong>Z-score</strong> — Measures how far current values are from their historical average in standard deviations. Positive = above average (rising), negative = below average (falling).</li>
+        <li>If Growth Z {'>'} 0 and Inflation Z {'<'} 0 → Q1 Goldilocks. Growth Z {'>'} 0 and Inflation Z {'>'} 0 → Q2 Reflation. And so on.</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>FRED Economic Indicators Card</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Shows the raw Z-scores for each FRED series along with their direction (Rising/Falling) and
+        extremity level (Normal, Elevated, or Extreme). "Elevated" means the Z-score is above 1.0,
+        "Extreme" means above 2.0. These labels help gauge how far conditions have moved from normal
+        and whether mean-reversion is likely.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Regime Quadrant Map (Scatter Plot)</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A 2D scatter plot showing 5 years of weekly observations. The X-axis is the growth score
+        and the Y-axis is the inflation score. Each dot is color-coded by quadrant. The orange
+        diamond marked "Now" shows where current conditions sit. The quadrant lines cross at
+        the origin (0,0) — points in the upper-right are Q2 Reflation, upper-left are Q3 Stagflation, etc.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Transition Matrix (Heatmap)</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A 4×4 grid showing the historical probability of moving from one quadrant (row) to another
+        (column) in a single week. Read it as: "From this row, there is an X% chance of being in
+        this column next week."
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>▶ arrow</strong> — Marks the row for the current quadrant. This is the row that matters most — it shows where we might go next.</li>
+        <li><strong>Numbers in parentheses</strong> — The count of times that specific transition actually occurred in the historical data. Higher counts mean more confidence in that probability.</li>
+        <li><strong>Diagonal values</strong> — The "self-transition" or stickiness of each regime. High diagonal values (e.g., 85%) mean regimes tend to persist week-to-week.</li>
+        <li>The matrix uses a conditional approach: it filters historical data to weeks with similar momentum conditions and applies mean-reversion adjustments when Z-scores are elevated.</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>4-Week Outlook Cards</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Four cards above the forward projections chart showing the probability of being in each
+        quadrant at the 4-week horizon. The highest-probability quadrant is highlighted with
+        a colored border. This is the quick-read summary of where things are heading.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Forward Projections (Stacked Bar Chart)</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Shows the probability distribution across all four quadrants at 1, 2, 4, 8, and 13 week
+        horizons. Calculated using matrix exponentiation (raising the transition matrix to the
+        power of N weeks). Over longer horizons, probabilities tend to converge toward the
+        long-run equilibrium distribution as mean-reversion takes effect.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Markov Chain Transition Bars</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Horizontal bar chart showing 1-week transition probabilities from the current quadrant.
+        The "Stay in Q{'{n}'}'" bar shows persistence probability. Other bars show the chance of
+        transitioning to each alternative regime. The highest non-self transition is flagged as
+        "Primary Risk" if above 25%.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Interpretation Card</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A narrative summary that puts the numbers in context:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Regime Change indicator</strong> — GREEN (stable, high self-transition), YELLOW (moderate risk), or RED (regime shift likely).</li>
+        <li><strong>Growth/Inflation trends</strong> — Direction and 4-week rate of change for each factor.</li>
+        <li><strong>Primary Risk</strong> — The most likely alternative quadrant and its weekly probability.</li>
+        <li><strong>Likely Direction of Change</strong> — A paragraph explaining what FRED data suggests about where conditions are heading, including specific Z-scores and their implications.</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Asset Class Performance Table</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Shows how five asset classes (Tech/Growth, Commodities, Gold, Long-Treasuries, Healthcare/Staples)
+        historically perform in each quadrant, rated as Best, Good, Neutral, Underperform, or Avoid.
+        The current quadrant column is highlighted with a star (★). Use this to guide sector and asset
+        class tilts based on the current regime.
+      </p>
     </div>
   )
 }

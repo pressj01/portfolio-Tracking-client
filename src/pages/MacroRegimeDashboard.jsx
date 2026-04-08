@@ -1316,6 +1316,480 @@ const tdStyle = {
   padding: '6px 8px', color: '#e0e0e0', fontSize: '0.82rem',
 }
 
+// ─── Tab 6: Regime Quadrants (Markov Chain) ─────────────────────────────────
+
+const QUAD_COLORS = { 1: '#4caf50', 2: '#ff9800', 3: '#ef5350', 4: '#42a5f5' }
+const QUAD_BG     = { 1: 'rgba(76,175,80,0.08)', 2: 'rgba(255,152,0,0.08)', 3: 'rgba(239,83,80,0.08)', 4: 'rgba(66,165,245,0.08)' }
+const QUAD_LABELS = { 1: 'Q1 Goldilocks', 2: 'Q2 Reflation', 3: 'Q3 Stagflation', 4: 'Q4 Deflation' }
+const TILT_COLORS = { Best: '#4caf50', Good: '#81c784', Neutral: '#90a4ae', Avoid: '#ef5350', Underperform: '#ff9800' }
+
+function QuadrantTab({ pf }) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [data, setData] = useState(null)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    setError(null)
+    pf('/api/macro/quadrant', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+      .then(r => r.json())
+      .then(d => { if (d.error) setError(d.error); else setData(d) })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [pf])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <p style={{ color: '#90caf9' }}>Loading quadrant analysis (fetching 5 years of data)...</p>
+  if (error) return <p style={{ color: '#ef5350' }}>{error}</p>
+  if (!data) return null
+
+  const h = data.history || {}
+  const gScores = h.growth_scores || []
+  const iScores = h.inflation_scores || []
+  const quads = h.quadrants || []
+  const dates = h.dates || []
+  const tm = data.transition_matrix || []
+  const tc = data.transition_counts || []
+  const proj = data.projections || {}
+  const projKeys = ['1_week', '2_week', '4_week', '8_week', '13_week']
+  const projLabels = ['1 Week', '2 Weeks', '4 Weeks', '8 Weeks', '13 Weeks']
+
+  // Scatter chart bounds
+  const allG = gScores.filter(v => v != null)
+  const allI = iScores.filter(v => v != null)
+  const gPad = 2, iPad = 2
+  const gMin = Math.min(...allG) - gPad, gMax = Math.max(...allG) + gPad
+  const iMin = Math.min(...allI) - iPad, iMax = Math.max(...allI) + iPad
+
+  // Heatmap labels
+  const quadLabels = ['Q1 Goldilocks', 'Q2 Reflation', 'Q3 Stagflation', 'Q4 Deflation']
+
+  return (
+    <div>
+      {/* Header: Current Quadrant */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center', marginBottom: '1.25rem' }}>
+        <div style={{
+          background: `linear-gradient(135deg, ${QUAD_COLORS[data.current_quadrant]}22, ${QUAD_COLORS[data.current_quadrant]}44)`,
+          border: `2px solid ${QUAD_COLORS[data.current_quadrant]}`,
+          borderRadius: 10, padding: '0.75rem 1.5rem', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Current Quadrant</div>
+          <div style={{ fontSize: '1.4rem', fontWeight: 700, color: QUAD_COLORS[data.current_quadrant] }}>
+            Q{data.current_quadrant} — {data.current_quadrant_name}
+          </div>
+        </div>
+        <div style={{ background: '#16213e', border: '1px solid #0f3460', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
+          <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>Confidence (Self-Transition)</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: data.confidence_pct >= 50 ? '#4caf50' : data.confidence_pct >= 30 ? '#ff9800' : '#ef5350' }}>
+            {data.confidence_pct}%
+          </div>
+        </div>
+        <div style={{ background: '#16213e', border: '1px solid #0f3460', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
+          <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>
+            Growth {data.classification_source === 'FRED' ? 'Z-Score' : 'Momentum'}
+          </div>
+          <div style={{ fontSize: '1.1rem', fontWeight: 600, color: data.growth_score > 0 ? '#4caf50' : '#ef5350' }}>
+            {data.growth_score > 0 ? '▲' : '▼'} {data.growth_score.toFixed(2)}{data.classification_source !== 'FRED' ? '%' : ''}
+          </div>
+        </div>
+        <div style={{ background: '#16213e', border: '1px solid #0f3460', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
+          <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>
+            Inflation {data.classification_source === 'FRED' ? 'Z-Score' : 'Momentum'}
+          </div>
+          <div style={{ fontSize: '1.1rem', fontWeight: 600, color: data.inflation_score > 0 ? '#ef5350' : '#4caf50' }}>
+            {data.inflation_score > 0 ? '▲' : '▼'} {data.inflation_score.toFixed(2)}{data.classification_source !== 'FRED' ? '%' : ''}
+          </div>
+        </div>
+        <div style={{ flex: 1, minWidth: 200, background: '#16213e', border: '1px solid #0f3460', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
+          <div style={{ fontSize: '0.8rem', color: '#b0bec5' }}>{data.current_quadrant_description}</div>
+        </div>
+      </div>
+
+      {/* FRED Economic Indicators */}
+      {data.fred_indicators && (
+        <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <h3 style={{ color: '#90caf9', margin: 0, fontSize: '1rem' }}>FRED Economic Indicators (Z-Scores)</h3>
+            <span style={{ fontSize: '0.7rem', color: '#666', background: '#0e1525', padding: '2px 8px', borderRadius: 4 }}>
+              Source: {data.classification_source || 'FRED'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            {Object.entries(data.fred_indicators).map(([name, info]) => {
+              const extColor = info.extremity === 'Extreme' ? '#ef5350' : info.extremity === 'Elevated' ? '#ff9800' : '#4caf50'
+              return (
+                <div key={name} style={{
+                  flex: '1 1 200px', background: '#0e1525', borderRadius: 8, padding: '0.65rem 0.85rem',
+                  border: `1px solid ${extColor}33`,
+                }}>
+                  <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>{name}</div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '1.1rem', fontWeight: 700, color: '#e0e8f5' }}>
+                      {info.current_value}
+                    </span>
+                    <span style={{
+                      fontSize: '0.75rem', fontWeight: 600, padding: '1px 6px', borderRadius: 4,
+                      background: `${extColor}22`, color: extColor,
+                    }}>
+                      Z: {info.z_score?.toFixed(2)}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: '#666', marginTop: 2 }}>
+                    {info.direction} · {info.extremity} · as of {info.latest_date}
+                  </div>
+                </div>
+              )
+            })}
+            {data.fred_growth_z != null && (
+              <div style={{
+                flex: '1 1 200px', background: '#0e1525', borderRadius: 8, padding: '0.65rem 0.85rem',
+                border: '1px solid #42a5f533',
+              }}>
+                <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>Composite Growth Z</div>
+                <div style={{ fontSize: '1.1rem', fontWeight: 700, color: data.fred_growth_z > 0 ? '#4caf50' : '#ef5350' }}>
+                  {data.fred_growth_z.toFixed(2)}
+                </div>
+                <div style={{ fontSize: '0.7rem', color: '#666', marginTop: 2 }}>
+                  (IndProd + Housing) / 2
+                </div>
+              </div>
+            )}
+            {data.fred_inflation_z != null && (
+              <div style={{
+                flex: '1 1 200px', background: '#0e1525', borderRadius: 8, padding: '0.65rem 0.85rem',
+                border: '1px solid #42a5f533',
+              }}>
+                <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>Inflation Z (CPI)</div>
+                <div style={{ fontSize: '1.1rem', fontWeight: 700, color: data.fred_inflation_z > 0 ? '#ef5350' : '#4caf50' }}>
+                  {data.fred_inflation_z.toFixed(2)}
+                </div>
+                <div style={{ fontSize: '0.7rem', color: '#666', marginTop: 2 }}>
+                  CPI 3m ROC Z-score
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Interpretation & Likely Direction */}
+      {data.interpretation && (() => {
+        const interp = data.interpretation
+        const flagColors = { GREEN: '#4caf50', YELLOW: '#ff9800', RED: '#ef5350' }
+        const flagBg = { GREEN: 'rgba(76,175,80,0.12)', YELLOW: 'rgba(255,152,0,0.12)', RED: 'rgba(239,83,80,0.12)' }
+        return (
+          <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem', borderLeft: `4px solid ${flagColors[interp.regime_flag]}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+              <div style={{
+                background: flagBg[interp.regime_flag], border: `1px solid ${flagColors[interp.regime_flag]}`,
+                borderRadius: 6, padding: '0.4rem 0.75rem', fontWeight: 700,
+                color: flagColors[interp.regime_flag], fontSize: '0.85rem',
+              }}>
+                {interp.regime_flag === 'GREEN' ? '✅' : interp.regime_flag === 'YELLOW' ? '⚠️' : '🔴'} Regime Change: {interp.regime_flag}
+              </div>
+              <span style={{ color: '#b0bec5', fontSize: '0.82rem' }}>{interp.regime_flag_text}</span>
+            </div>
+
+            <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+              <div style={{ background: '#0e1525', borderRadius: 6, padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
+                <span style={{ color: '#90a4ae' }}>Growth Trend: </span>
+                <span style={{ color: interp.growth_trend === 'accelerating' ? '#4caf50' : interp.growth_trend === 'decelerating' ? '#ef5350' : '#ff9800', fontWeight: 600 }}>
+                  {interp.growth_trend.charAt(0).toUpperCase() + interp.growth_trend.slice(1)}
+                </span>
+                <span style={{ color: '#666', marginLeft: 6 }}>({interp.growth_delta_4w >= 0 ? '+' : ''}{interp.growth_delta_4w.toFixed(2)}% / 4wk)</span>
+              </div>
+              <div style={{ background: '#0e1525', borderRadius: 6, padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
+                <span style={{ color: '#90a4ae' }}>Inflation Trend: </span>
+                <span style={{ color: interp.inflation_trend === 'accelerating' ? '#ef5350' : interp.inflation_trend === 'decelerating' ? '#4caf50' : '#ff9800', fontWeight: 600 }}>
+                  {interp.inflation_trend.charAt(0).toUpperCase() + interp.inflation_trend.slice(1)}
+                </span>
+                <span style={{ color: '#666', marginLeft: 6 }}>({interp.inflation_delta_4w >= 0 ? '+' : ''}{interp.inflation_delta_4w.toFixed(2)}% / 4wk)</span>
+              </div>
+              <div style={{ background: '#0e1525', borderRadius: 6, padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
+                <span style={{ color: '#90a4ae' }}>Primary Risk: </span>
+                <span style={{ color: QUAD_COLORS[interp.primary_risk_quad], fontWeight: 600 }}>
+                  Q{interp.primary_risk_quad} {interp.primary_risk_name} ({interp.primary_risk_pct}%)
+                </span>
+              </div>
+            </div>
+
+            <div style={{ marginTop: '0.5rem' }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#90caf9', marginBottom: '0.35rem' }}>Likely Direction of Change</div>
+              <p style={{ color: '#cfd8dc', fontSize: '0.85rem', lineHeight: 1.6, margin: 0 }}>
+                {interp.direction_narrative}
+              </p>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* 2x2 Quadrant Scatter Chart */}
+      <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+        <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>Regime Quadrant Map (5-Year History)</h3>
+        <Plot
+          data={[
+            {
+              x: gScores, y: iScores,
+              mode: 'markers',
+              marker: { size: 5, color: quads.map(q => QUAD_COLORS[q]), opacity: 0.35 },
+              text: dates.map((d, i) => `${d}<br>${QUAD_LABELS[quads[i]]}<br>Growth: ${gScores[i]?.toFixed(2)}%<br>Inflation: ${iScores[i]?.toFixed(2)}%`),
+              hoverinfo: 'text', name: 'Historical',
+            },
+            {
+              x: [data.growth_score], y: [data.inflation_score],
+              mode: 'markers+text',
+              marker: { size: 18, color: QUAD_COLORS[data.current_quadrant], symbol: 'diamond', line: { width: 2, color: '#fff' } },
+              text: ['NOW'], textposition: 'top center', textfont: { color: '#fff', size: 12, family: 'monospace' },
+              hoverinfo: 'text',
+              hovertext: `Current: ${data.current_quadrant_name}<br>Growth: ${data.growth_score.toFixed(2)}%<br>Inflation: ${data.inflation_score.toFixed(2)}%`,
+              name: 'Current',
+            },
+          ]}
+          layout={{
+            template: 'plotly_dark',
+            paper_bgcolor: 'transparent', plot_bgcolor: '#0e1525',
+            margin: { l: 60, r: 30, t: 10, b: 50 },
+            height: 420,
+            xaxis: { title: 'Growth Momentum (%)', zeroline: true, zerolinecolor: '#556', zerolinewidth: 2, gridcolor: '#1a2233', range: [gMin, gMax] },
+            yaxis: { title: 'Inflation Momentum (%)', zeroline: true, zerolinecolor: '#556', zerolinewidth: 2, gridcolor: '#1a2233', range: [iMin, iMax] },
+            shapes: [
+              { type: 'rect', x0: 0, x1: gMax + 10, y0: iMin - 10, y1: 0, fillcolor: QUAD_BG[1], line: { width: 0 }, layer: 'below' },
+              { type: 'rect', x0: 0, x1: gMax + 10, y0: 0, y1: iMax + 10, fillcolor: QUAD_BG[2], line: { width: 0 }, layer: 'below' },
+              { type: 'rect', x0: gMin - 10, x1: 0, y0: 0, y1: iMax + 10, fillcolor: QUAD_BG[3], line: { width: 0 }, layer: 'below' },
+              { type: 'rect', x0: gMin - 10, x1: 0, y0: iMin - 10, y1: 0, fillcolor: QUAD_BG[4], line: { width: 0 }, layer: 'below' },
+            ],
+            annotations: [
+              { x: gMax * 0.7, y: iMin * 0.7, text: 'Q1 Goldilocks', showarrow: false, font: { color: QUAD_COLORS[1], size: 13, family: 'monospace' }, opacity: 0.7 },
+              { x: gMax * 0.7, y: iMax * 0.7, text: 'Q2 Reflation', showarrow: false, font: { color: QUAD_COLORS[2], size: 13, family: 'monospace' }, opacity: 0.7 },
+              { x: gMin * 0.7, y: iMax * 0.7, text: 'Q3 Stagflation', showarrow: false, font: { color: QUAD_COLORS[3], size: 13, family: 'monospace' }, opacity: 0.7 },
+              { x: gMin * 0.7, y: iMin * 0.7, text: 'Q4 Deflation', showarrow: false, font: { color: QUAD_COLORS[4], size: 13, family: 'monospace' }, opacity: 0.7 },
+            ],
+            showlegend: false,
+          }}
+          config={{ responsive: true, displayModeBar: false }}
+          style={{ width: '100%' }}
+        />
+      </div>
+
+      {/* Transition Matrix Heatmap + Forward Projections side by side */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+        {/* Transition Matrix */}
+        <div className="card" style={{ padding: '0.75rem 1rem' }}>
+          <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
+            Transition Matrix (Weekly Probabilities)
+          </h3>
+          <p style={{ color: '#8899aa', fontSize: '0.75rem', marginBottom: '0.5rem' }}>
+            Based on {data.total_observations} weekly observations — ▶ indicates current quadrant
+          </p>
+          <Plot
+            data={[{
+              z: tm.map(row => row.map(v => v * 100)),
+              x: quadLabels,
+              y: quadLabels.map((l, i) => i === data.current_quadrant - 1 ? `▶ ${l}` : l),
+              type: 'heatmap',
+              colorscale: [[0, '#0e1525'], [0.5, '#1a5276'], [1, '#4caf50']],
+              xgap: 3, ygap: 3,
+              hovertemplate: '%{z:.1f}%<extra></extra>',
+              showscale: false,
+            }]}
+            layout={{
+              template: 'plotly_dark',
+              paper_bgcolor: 'transparent', plot_bgcolor: '#0e1525',
+              margin: { l: 120, r: 20, t: 10, b: 80 },
+              height: 340,
+              xaxis: { title: 'To', side: 'bottom', tickangle: -30 },
+              yaxis: { title: 'From', autorange: 'reversed' },
+              annotations: tm.flatMap((row, ri) => row.map((v, ci) => ({
+                x: quadLabels[ci],
+                y: ri === data.current_quadrant - 1 ? `▶ ${quadLabels[ri]}` : quadLabels[ri],
+                text: ri === data.current_quadrant - 1
+                  ? `<b>${(v * 100).toFixed(1)}%</b><br><span style="font-size:9px">(${tc[ri]?.[ci] || 0})</span>`
+                  : `${(v * 100).toFixed(1)}%<br><span style="font-size:9px">(${tc[ri]?.[ci] || 0})</span>`,
+                showarrow: false,
+                font: {
+                  color: ri === data.current_quadrant - 1 ? '#fff' : '#b0bec5',
+                  size: ri === data.current_quadrant - 1 ? 13 : 11,
+                },
+              }))),
+            }}
+            config={{ responsive: true, displayModeBar: false }}
+            style={{ width: '100%' }}
+          />
+        </div>
+
+        {/* Forward Projections */}
+        <div className="card" style={{ padding: '0.75rem 1rem' }}>
+          <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
+            Forward Projections (from Q{data.current_quadrant})
+          </h3>
+          {/* 4-Week Outlook Summary */}
+          {proj['4_week'] && (
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+              {[1, 2, 3, 4].map(q => {
+                const pct = ((proj['4_week']?.[`Q${q}`] || 0) * 100).toFixed(0)
+                const isMax = pct === Math.max(...[1,2,3,4].map(qq => (proj['4_week']?.[`Q${qq}`] || 0) * 100)).toFixed(0)
+                return (
+                  <div key={q} style={{
+                    flex: 1, minWidth: 90, padding: '0.4rem 0.5rem', borderRadius: 6,
+                    background: isMax ? `${QUAD_COLORS[q]}30` : '#0e1525',
+                    border: isMax ? `2px solid ${QUAD_COLORS[q]}` : '1px solid #1a2233',
+                    textAlign: 'center',
+                  }}>
+                    <div style={{ fontSize: '0.7rem', color: QUAD_COLORS[q], fontWeight: 600, marginBottom: 2 }}>
+                      Q{q} {QUAD_LABELS[q]?.split(' ').slice(1).join(' ')}
+                    </div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: isMax ? '#fff' : '#90a4ae' }}>
+                      {pct}%
+                    </div>
+                    <div style={{ fontSize: '0.65rem', color: '#667' }}>4-week</div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          <Plot
+            data={[1, 2, 3, 4].map(q => ({
+              x: projLabels,
+              y: projKeys.map(k => (proj[k]?.[`Q${q}`] || 0) * 100),
+              type: 'bar', name: QUAD_LABELS[q],
+              marker: { color: QUAD_COLORS[q] },
+              hovertemplate: `${QUAD_LABELS[q]}: %{y:.1f}%<extra></extra>`,
+            }))}
+            layout={{
+              template: 'plotly_dark',
+              paper_bgcolor: 'transparent', plot_bgcolor: '#0e1525',
+              margin: { l: 50, r: 20, t: 10, b: 50 },
+              height: 340,
+              barmode: 'stack',
+              yaxis: { title: 'Probability (%)', range: [0, 100], gridcolor: '#1a2233' },
+              xaxis: { gridcolor: '#1a2233' },
+              legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'center', x: 0.5, font: { size: 11 } },
+            }}
+            config={{ responsive: true, displayModeBar: false }}
+            style={{ width: '100%' }}
+          />
+        </div>
+      </div>
+
+      {/* Current Transition Probabilities + Asset Tilts */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+        {/* Where We're Headed */}
+        <div className="card" style={{ padding: '0.75rem 1rem' }}>
+          <h3 style={{ color: '#90caf9', margin: '0 0 0.75rem', fontSize: '1rem' }}>
+            Markov Chain Transition (from Q{data.current_quadrant} {data.current_quadrant_name})
+          </h3>
+          {[1, 2, 3, 4].map(q => {
+            const prob = (tm[data.current_quadrant - 1]?.[q - 1] || 0) * 100
+            const count = tc[data.current_quadrant - 1]?.[q - 1] || 0
+            const isMax = prob === Math.max(...(tm[data.current_quadrant - 1] || []).map(v => v * 100))
+            const isSelf = q === data.current_quadrant
+            return (
+              <div key={q} style={{
+                display: 'flex', alignItems: 'center', gap: '0.75rem',
+                padding: '0.5rem 0.75rem', marginBottom: '0.35rem',
+                background: isSelf ? `${QUAD_COLORS[q]}18` : 'transparent',
+                borderLeft: `4px solid ${QUAD_COLORS[q]}`,
+                borderRadius: 4,
+              }}>
+                <div style={{ width: 140, fontWeight: 600, color: QUAD_COLORS[q], fontSize: '0.85rem' }}>
+                  {isSelf ? `Stay in Q${q}` : `→ Q${q} ${QUAD_LABELS[q].split(' ').slice(1).join(' ')}`}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ background: '#0e1525', borderRadius: 4, height: 20, position: 'relative', overflow: 'hidden' }}>
+                    <div style={{
+                      width: `${prob}%`, height: '100%', background: QUAD_COLORS[q],
+                      opacity: 0.7, borderRadius: 4, transition: 'width 0.3s',
+                    }} />
+                  </div>
+                </div>
+                <div style={{ width: 60, textAlign: 'right', fontWeight: 700, color: isMax && !isSelf ? '#ff9800' : '#e0e0e0', fontSize: '0.95rem' }}>
+                  {prob.toFixed(1)}%
+                </div>
+                <div style={{ width: 50, textAlign: 'right', color: '#666', fontSize: '0.75rem' }}>
+                  ({count})
+                </div>
+                {isMax && !isSelf && prob > 25 && (
+                  <span style={{ fontSize: '0.7rem', background: '#ff980033', color: '#ff9800', padding: '2px 6px', borderRadius: 4 }}>
+                    Primary Risk
+                  </span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Asset Class Tilts — All Quadrants */}
+        <div className="card" style={{ padding: '0.75rem 1rem' }}>
+          <h3 style={{ color: '#90caf9', margin: '0 0 0.75rem', fontSize: '1rem' }}>Asset Class Performance by Quadrant</h3>
+          <table style={{ width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid #1a2233' }}>
+                <th style={{ ...thStyle, textAlign: 'left' }}>Asset Class</th>
+                {[1, 2, 3, 4].map(q => (
+                  <th key={q} style={{
+                    ...thStyle, textAlign: 'center',
+                    color: q === data.current_quadrant ? QUAD_COLORS[q] : '#90a4ae',
+                    fontWeight: q === data.current_quadrant ? 700 : 600,
+                  }}>
+                    Q{q}{q === data.current_quadrant ? ' ★' : ''}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Object.keys(data.all_asset_tilts?.[1] || {}).map(asset => (
+                <tr key={asset} style={{ borderBottom: '1px solid #0a1628' }}>
+                  <td style={{ ...tdStyle, fontWeight: 600 }}>{asset}</td>
+                  {[1, 2, 3, 4].map(q => {
+                    const rating = data.all_asset_tilts?.[q]?.[asset] || '—'
+                    const isCurrentQ = q === data.current_quadrant
+                    return (
+                      <td key={q} style={{
+                        ...tdStyle, textAlign: 'center',
+                        color: TILT_COLORS[rating] || '#90a4ae',
+                        fontWeight: isCurrentQ ? 700 : 400,
+                        background: isCurrentQ ? `${QUAD_COLORS[q]}10` : 'transparent',
+                      }}>
+                        {rating}
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Regime Distribution */}
+      <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+        <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>Historical Regime Distribution</h3>
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+          {[1, 2, 3, 4].map(q => {
+            const d = data.regime_distribution?.[`Q${q}`] || {}
+            return (
+              <div key={q} style={{
+                flex: 1, minWidth: 150, background: `${QUAD_COLORS[q]}12`,
+                border: `1px solid ${QUAD_COLORS[q]}44`, borderRadius: 8, padding: '0.75rem',
+                textAlign: 'center',
+              }}>
+                <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>{QUAD_LABELS[q]}</div>
+                <div style={{ fontSize: '1.3rem', fontWeight: 700, color: QUAD_COLORS[q] }}>{d.pct || 0}%</div>
+                <div style={{ fontSize: '0.75rem', color: '#666' }}>{d.count || 0} weeks</div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function MacroRegimeDashboard() {
@@ -1351,6 +1825,10 @@ export default function MacroRegimeDashboard() {
           onClick={() => setActiveTab('classifications')}>
           Classifications
         </button>
+        <button className={`tab ${activeTab === 'quadrants' ? 'active' : ''}`}
+          onClick={() => setActiveTab('quadrants')}>
+          Regime Quadrants
+        </button>
       </div>
 
       {activeTab === 'conditions' && <ConditionsTab pf={pf} key={selection?.id || 'cond'} />}
@@ -1358,6 +1836,7 @@ export default function MacroRegimeDashboard() {
       {activeTab === 'tilts' && <TiltsTab pf={pf} key={selection?.id || 'tilts'} />}
       {activeTab === 'income' && <IncomeBenchmarkTab pf={pf} key={selection?.id || 'income'} />}
       {activeTab === 'classifications' && <ClassificationsTab pf={pf} key={selection?.id || 'class'} />}
+      {activeTab === 'quadrants' && <QuadrantTab pf={pf} key={selection?.id || 'quad'} />}
     </div>
   )
 }

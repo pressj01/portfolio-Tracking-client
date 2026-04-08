@@ -11919,6 +11919,26 @@ MACRO_TICKERS = {
     "gold":       "GC=F",      # Gold futures
     "vix":        "^VIX",      # Volatility Index
     "spy":        "SPY",       # S&P 500 ETF
+    "xli":        "XLI",       # Industrial Select Sector SPDR (growth proxy)
+}
+
+# ── 4-Quadrant regime model ──────────────────────────────────────────────────
+QUADRANT_NAMES = {1: "Goldilocks", 2: "Reflation", 3: "Stagflation", 4: "Deflation"}
+QUADRANT_DESCRIPTIONS = {
+    1: "Growth UP + Inflation DOWN: Favors equities, tech, growth stocks",
+    2: "Growth UP + Inflation UP: Favors commodities, energy, equities",
+    3: "Growth DOWN + Inflation UP: Favors gold, TIPS, utilities",
+    4: "Growth DOWN + Inflation DOWN: Favors long-term bonds, cash, defensives",
+}
+QUADRANT_ASSET_TILTS = {
+    1: {"Tech/Growth": "Best", "Commodities": "Avoid", "Gold": "Neutral",
+        "Long-Treasuries": "Neutral", "Healthcare/Staples": "Underperform"},
+    2: {"Tech/Growth": "Neutral", "Commodities": "Best", "Gold": "Good",
+        "Long-Treasuries": "Avoid", "Healthcare/Staples": "Neutral"},
+    3: {"Tech/Growth": "Avoid", "Commodities": "Good", "Gold": "Best",
+        "Long-Treasuries": "Avoid", "Healthcare/Staples": "Good"},
+    4: {"Tech/Growth": "Avoid", "Commodities": "Avoid", "Gold": "Neutral",
+        "Long-Treasuries": "Best", "Healthcare/Staples": "Good"},
 }
 
 # Pillar classification -> macro sensitivity tags
@@ -12082,6 +12102,7 @@ CANDIDATE_ETFS = {
 }
 
 _macro_cache = {"data": None, "timestamp": 0, "ttl": 1800}  # 30 min TTL
+_quadrant_cache = {"data": None, "timestamp": 0, "ttl": 1800}  # 30 min TTL
 
 # In-memory cache for yfinance ticker info (sector/category) — 24hr TTL
 _ticker_info_cache = {}
@@ -13529,6 +13550,529 @@ def dividend_history_data():
             "trend_pct": trend_pct,
         },
     })
+
+
+# ── 4-Quadrant Regime & Markov Chain ──────────────────────────────────────────
+
+def _fetch_fred_series(series_id, start="2000-01-01"):
+    """Fetch a FRED series as a DataFrame (no API key needed)."""
+    import requests as _req
+    from io import StringIO
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start}"
+    r = _req.get(url, timeout=15)
+    r.raise_for_status()
+    df = pd.read_csv(StringIO(r.text), parse_dates=["observation_date"])
+    df = df.replace(".", pd.NA).dropna()
+    df = df.rename(columns={"observation_date": "date", series_id: "value"})
+    df["value"] = df["value"].astype(float)
+    return df.set_index("date")
+
+
+@app.route("/api/macro/quadrant", methods=["POST"])
+def macro_quadrant():
+    """4-quadrant regime classification with Markov transition matrix.
+
+    Uses FRED economic data (CPI, Industrial Production, Housing Starts)
+    for current-state Z-score classification, and market proxies
+    (SPY, XLI, TIP, IEF) for the historical weekly transition matrix.
+    """
+    import numpy as np
+    import yfinance as yf
+
+    now = time.time()
+    if _quadrant_cache["data"] and (now - _quadrant_cache["timestamp"]) < _quadrant_cache["ttl"]:
+        return jsonify(_quadrant_cache["data"])
+
+    try:
+        # ── A. FRED economic data for current classification ──────────────
+        fred_ok = True
+        fred_indicators = {}
+        try:
+            cpi_df = _fetch_fred_series("CPIAUCSL")
+            indpro_df = _fetch_fred_series("INDPRO")
+            houst_df = _fetch_fred_series("HOUST")
+
+            for name, df in [("CPI", cpi_df), ("Industrial Production", indpro_df),
+                             ("Housing Starts", houst_df)]:
+                df["roc_3m"] = df["value"].pct_change(3) * 100
+                roc = df["roc_3m"].dropna()
+                latest_roc = float(roc.iloc[-1])
+                mean_roc = float(roc.mean())
+                std_roc = float(roc.std())
+                z = (latest_roc - mean_roc) / std_roc if std_roc > 0 else 0.0
+                extremity = ("Extreme" if abs(z) > 2 else
+                             "Elevated" if abs(z) > 1 else "Normal")
+                fred_indicators[name] = {
+                    "current_value": f"{latest_roc:.2f}% (3m ROC)",
+                    "z_score": round(z, 2),
+                    "extremity": extremity,
+                    "direction": "Rising" if latest_roc > 0 else "Falling",
+                    "latest_date": df.index[-1].strftime("%Y-%m-%d"),
+                    "history_mean": round(mean_roc, 2),
+                    "history_std": round(std_roc, 2),
+                }
+
+            # Composite Z-scores
+            indpro_z = fred_indicators["Industrial Production"]["z_score"]
+            houst_z = fred_indicators["Housing Starts"]["z_score"]
+            cpi_z = fred_indicators["CPI"]["z_score"]
+            fred_growth_z = round((indpro_z + houst_z) / 2, 2)
+            fred_inflation_z = cpi_z
+
+        except Exception:
+            fred_ok = False
+            fred_growth_z = None
+            fred_inflation_z = None
+
+        # ── B. Market proxy data for historical transition matrix ─────────
+        tickers = ["SPY", "XLI", "TIP", "IEF"]
+        raw = yf.download(tickers, period="5y", auto_adjust=True, progress=False)
+        close = raw["Close"].dropna(how="all")
+
+        # Resample to weekly (Friday close) for noise reduction
+        weekly = close.resample("W-FRI").last().dropna()
+
+        # Market-proxy axes (13-week lookback = ~1 quarter)
+        spy_mom = weekly["SPY"].pct_change(13) * 100
+        xli_mom = weekly["XLI"].pct_change(13) * 100
+        mkt_growth_score = (spy_mom + xli_mom) / 2
+
+        inflation_spread = weekly["TIP"] / weekly["IEF"]
+        mkt_inflation_score = inflation_spread.pct_change(13) * 100
+
+        # ── C. Classify each historical week (market proxies for history) ──
+        def classify(g, inf):
+            if g > 0 and inf <= 0:
+                return 1  # Goldilocks
+            if g > 0 and inf > 0:
+                return 2  # Reflation
+            if g <= 0 and inf > 0:
+                return 3  # Stagflation
+            return 4      # Deflation
+
+        valid = mkt_growth_score.notna() & mkt_inflation_score.notna()
+        dates = mkt_growth_score[valid].index
+        g_vals = mkt_growth_score[valid].values
+        i_vals = mkt_inflation_score[valid].values
+        regimes = [classify(g, i) for g, i in zip(g_vals, i_vals)]
+
+        # ── D. Current quadrant: prefer FRED Z-scores, fallback to market ──
+        if fred_ok and fred_growth_z is not None:
+            current_quad = classify(fred_growth_z, fred_inflation_z)
+            current_growth = fred_growth_z
+            current_inflation = fred_inflation_z
+            classification_source = "FRED"
+        else:
+            current_quad = regimes[-1] if regimes else 2
+            current_growth = round(float(g_vals[-1]), 4) if len(g_vals) else 0
+            current_inflation = round(float(i_vals[-1]), 4) if len(i_vals) else 0
+            classification_source = "Market Proxy"
+
+        if len(regimes) < 2:
+            return jsonify({"error": "Insufficient data for transition matrix"}), 502
+
+        # Step 4: Persist to regime_history
+        conn = get_connection()
+        for idx in range(len(dates)):
+            d_str = dates[idx].strftime("%Y-%m-%d")
+            g_dir = "up" if g_vals[idx] > 0 else "down"
+            i_dir = "up" if i_vals[idx] > 0 else "down"
+            conn.execute(
+                """INSERT OR REPLACE INTO regime_history
+                   (date, quadrant, growth_score, inflation_score,
+                    growth_direction, inflation_direction)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (d_str, regimes[idx],
+                 round(float(g_vals[idx]), 4),
+                 round(float(i_vals[idx]), 4),
+                 g_dir, i_dir),
+            )
+        conn.commit()
+        conn.close()
+
+        # Step 5: Compute 4x4 transition matrix
+        transition_counts = np.zeros((4, 4), dtype=int)
+        for idx in range(len(regimes) - 1):
+            fr = regimes[idx] - 1
+            to = regimes[idx + 1] - 1
+            transition_counts[fr][to] += 1
+
+        row_sums = transition_counts.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1
+        transition_matrix = (transition_counts / row_sums).tolist()
+
+        # Step 5b: Compute CONDITIONAL transition matrix
+        # The static matrix treats all weeks in a quadrant equally.
+        # We improve it by computing transitions only from weeks whose
+        # momentum conditions resemble the current state.
+        #
+        # For the current row, we filter historical transitions to those
+        # where growth and inflation momentum were trending in the same
+        # direction as now (both decelerating, both near boundary, etc.)
+
+        g_now_mkt = float(g_vals[-1])
+        i_now_mkt = float(i_vals[-1])
+        g_4w_mkt = float(g_vals[-5]) if len(g_vals) >= 5 else g_now_mkt
+        i_4w_mkt = float(i_vals[-5]) if len(i_vals) >= 5 else i_now_mkt
+        g_mom_dir = "decelerating" if (g_now_mkt - g_4w_mkt) < -0.3 else (
+            "accelerating" if (g_now_mkt - g_4w_mkt) > 0.3 else "stable")
+        i_mom_dir = "decelerating" if (i_now_mkt - i_4w_mkt) < -0.3 else (
+            "accelerating" if (i_now_mkt - i_4w_mkt) > 0.3 else "stable")
+
+        # Filter: find historical weeks in current_quad with similar momentum
+        conditional_counts = np.zeros(4, dtype=int)
+        lookback = 4  # compare 4-week delta
+        for idx in range(lookback, len(regimes) - 1):
+            if regimes[idx] != current_quad:
+                continue
+            hist_g_delta = float(g_vals[idx]) - float(g_vals[idx - lookback])
+            hist_i_delta = float(i_vals[idx]) - float(i_vals[idx - lookback])
+            hist_g_dir = "decelerating" if hist_g_delta < -0.3 else (
+                "accelerating" if hist_g_delta > 0.3 else "stable")
+            hist_i_dir = "decelerating" if hist_i_delta < -0.3 else (
+                "accelerating" if hist_i_delta > 0.3 else "stable")
+
+            # Match: same growth direction OR same inflation direction
+            # (relaxed to get enough observations)
+            if hist_g_dir == g_mom_dir or hist_i_dir == i_mom_dir:
+                next_q = regimes[idx + 1] - 1
+                conditional_counts[next_q] += 1
+
+        cond_total = conditional_counts.sum()
+        if cond_total >= 10:  # Only use conditional if enough observations
+            conditional_row = (conditional_counts / cond_total).tolist()
+            use_conditional = True
+        else:
+            conditional_row = transition_matrix[current_quad - 1]
+            use_conditional = False
+
+        # Further adjust conditional row using FRED Z-score mean-reversion
+        # If FRED growth Z is high (>1.0), increase probability of moving to
+        # quadrants where growth is DOWN (Q3, Q4) — mean reversion pressure
+        adjusted_row = list(conditional_row)
+        if fred_ok and fred_growth_z is not None:
+            # Mean-reversion adjustment factor
+            # Higher Z → stronger pull toward opposite-growth quadrants
+            if fred_growth_z > 1.0 and current_quad in (1, 2):
+                # Growth is elevated in a growth-UP quad → risk of Q3/Q4
+                reversion_strength = min((fred_growth_z - 1.0) * 0.15, 0.25)
+                # Move probability from self → growth-DOWN quads
+                if current_quad == 2:  # Reflation
+                    # Risk: Q3 (Stagflation) if inflation stays, Q4 if both fall
+                    shift_to_q3 = reversion_strength * 0.75
+                    shift_to_q4 = reversion_strength * 0.25
+                    adjusted_row[current_quad - 1] -= reversion_strength
+                    adjusted_row[2] += shift_to_q3  # Q3
+                    adjusted_row[3] += shift_to_q4  # Q4
+                elif current_quad == 1:  # Goldilocks
+                    shift_to_q4 = reversion_strength * 0.75
+                    shift_to_q2 = reversion_strength * 0.25
+                    adjusted_row[current_quad - 1] -= reversion_strength
+                    adjusted_row[3] += shift_to_q4
+                    adjusted_row[1] += shift_to_q2
+
+            if fred_inflation_z is not None and fred_inflation_z > 1.0 and current_quad in (1, 4):
+                # Inflation rising in a low-inflation quad → risk of Q2/Q3
+                reversion_strength = min((fred_inflation_z - 1.0) * 0.15, 0.25)
+                if current_quad == 1:
+                    adjusted_row[current_quad - 1] -= reversion_strength
+                    adjusted_row[1] += reversion_strength  # Q2
+                elif current_quad == 4:
+                    adjusted_row[current_quad - 1] -= reversion_strength
+                    adjusted_row[2] += reversion_strength  # Q3
+
+            if fred_growth_z < -1.0 and current_quad in (3, 4):
+                # Growth depressed → risk of recovery to Q1/Q2
+                reversion_strength = min((abs(fred_growth_z) - 1.0) * 0.15, 0.25)
+                if current_quad == 3:
+                    adjusted_row[current_quad - 1] -= reversion_strength
+                    adjusted_row[1] += reversion_strength  # Q2
+                elif current_quad == 4:
+                    adjusted_row[current_quad - 1] -= reversion_strength
+                    adjusted_row[0] += reversion_strength  # Q1
+
+        # Clamp to [0, 1] and renormalize
+        adjusted_row = [max(0.0, v) for v in adjusted_row]
+        adj_sum = sum(adjusted_row)
+        if adj_sum > 0:
+            adjusted_row = [v / adj_sum for v in adjusted_row]
+
+        # Build the adjusted transition matrix (only current row is modified)
+        adjusted_matrix = [list(r) for r in transition_matrix]
+        adjusted_matrix[current_quad - 1] = adjusted_row
+
+        # Step 6: Forward projections via matrix exponentiation
+        # Use adjusted matrix for projections
+        P_static = np.array(transition_matrix)
+        P_adj = np.array(adjusted_matrix)
+        current_vec = np.zeros(4)
+        current_vec[current_quad - 1] = 1.0
+
+        projections = {}
+        for n_weeks, label in [(1, "1_week"), (2, "2_week"),
+                                (4, "4_week"), (8, "8_week"),
+                                (13, "13_week")]:
+            Pn = np.linalg.matrix_power(P_adj, n_weeks)
+            probs = current_vec @ Pn
+            projections[label] = {
+                "Q1": round(float(probs[0]), 4),
+                "Q2": round(float(probs[1]), 4),
+                "Q3": round(float(probs[2]), 4),
+                "Q4": round(float(probs[3]), 4),
+            }
+
+        # Step 7: Confidence = adjusted self-transition probability
+        confidence = round(adjusted_row[current_quad - 1] * 100, 1)
+
+        # Step 8: Regime duration stats
+        regime_counts = {1: 0, 2: 0, 3: 0, 4: 0}
+        for r in regimes:
+            regime_counts[r] += 1
+        total_obs = len(regimes)
+
+        # Step 9: Momentum trend analysis & narrative interpretation
+        g_now = float(g_vals[-1])
+        i_now = float(i_vals[-1])
+        # Short-term momentum (4-week change in the market proxy scores)
+        g_4w_ago = float(g_vals[-5]) if len(g_vals) >= 5 else g_now
+        i_4w_ago = float(i_vals[-5]) if len(i_vals) >= 5 else i_now
+        g_delta = g_now - g_4w_ago
+        i_delta = i_now - i_4w_ago
+        g_accel = "accelerating" if g_delta > 0.3 else "decelerating" if g_delta < -0.3 else "stable"
+        i_accel = "accelerating" if i_delta > 0.3 else "decelerating" if i_delta < -0.3 else "stable"
+
+        # Find primary risk transition (highest prob excluding self)
+        # Use the adjusted (conditional) row, not the static one
+        row = adjusted_row
+        risk_probs = [(q + 1, row[q]) for q in range(4) if q != current_quad - 1]
+        risk_probs.sort(key=lambda x: -x[1])
+        primary_risk_quad = risk_probs[0][0]
+        primary_risk_pct = round(risk_probs[0][1] * 100, 1)
+        primary_risk_name = QUADRANT_NAMES[primary_risk_quad]
+
+        # Determine regime change flag — factor in FRED Z-score extremity
+        self_prob = confidence
+        # If FRED data shows extreme readings, downgrade the flag
+        fred_extreme_count = 0
+        if fred_ok:
+            for fi in fred_indicators.values():
+                if fi["extremity"] == "Extreme":
+                    fred_extreme_count += 1
+
+        if fred_extreme_count >= 2:
+            # Multiple extreme Z-scores override market-based confidence
+            regime_flag = "RED"
+            regime_flag_text = (
+                f"Regime Change IMMINENT. {fred_extreme_count} FRED indicators "
+                f"at Extreme Z-scores — historical mean reversion is likely."
+            )
+        elif fred_extreme_count == 1 or self_prob < 40:
+            regime_flag = "YELLOW" if self_prob >= 40 else "RED"
+            extreme_name = next(
+                (n for n, fi in fred_indicators.items() if fi["extremity"] == "Extreme"),
+                None,
+            ) if fred_ok else None
+            if extreme_name and self_prob >= 40:
+                regime_flag_text = (
+                    f"Regime Change POSSIBLE. {extreme_name} is at Extreme "
+                    f"Z-score ({fred_indicators[extreme_name]['z_score']:.2f}) "
+                    f"— mean reversion pressure building."
+                )
+            elif self_prob < 40:
+                regime_flag_text = "Regime Change IMMINENT. Current quadrant hold probability is low."
+            else:
+                regime_flag_text = "Regime Change POSSIBLE. Transition probabilities are elevated."
+        elif self_prob < 60:
+            regime_flag = "YELLOW"
+            regime_flag_text = "Regime Change POSSIBLE. Transition probabilities are elevated."
+        else:
+            regime_flag = "GREEN"
+            regime_flag_text = "Regime is STABLE. High probability of remaining in current quadrant."
+
+        # Build narrative about likely direction
+        direction_parts = []
+
+        # Lead with FRED Z-score analysis when available
+        if fred_ok:
+            cpi_info = fred_indicators.get("CPI", {})
+            indpro_info = fred_indicators.get("Industrial Production", {})
+            houst_info = fred_indicators.get("Housing Starts", {})
+
+            # Report Z-scores
+            z_parts = []
+            for name, info in fred_indicators.items():
+                z = info["z_score"]
+                ext = info["extremity"]
+                if ext in ("Extreme", "Elevated"):
+                    z_parts.append(f"{name} Z-score is {z:.2f} ({ext})")
+            if z_parts:
+                direction_parts.append(
+                    "FRED economic data: " + "; ".join(z_parts) + "."
+                )
+
+            # Growth mean-reversion risk
+            if fred_growth_z is not None and fred_growth_z > 1.5:
+                direction_parts.append(
+                    f"Growth composite Z-score ({fred_growth_z:.2f}) is elevated — "
+                    f"historical mean reversion suggests growth may decelerate."
+                )
+            elif fred_growth_z is not None and fred_growth_z < -1.0:
+                direction_parts.append(
+                    f"Growth composite Z-score ({fred_growth_z:.2f}) is depressed — "
+                    f"potential for recovery/bounce."
+                )
+
+            # Inflation persistence risk
+            if fred_inflation_z is not None and fred_inflation_z > 1.5:
+                direction_parts.append(
+                    f"CPI Z-score ({fred_inflation_z:.2f}) indicates persistent "
+                    f"inflation pressure well above historical norms."
+                )
+
+        # Quad-specific market proxy analysis
+        if current_quad == 1:  # Goldilocks
+            if g_accel == "decelerating":
+                direction_parts.append(f"Market growth momentum is decelerating ({g_delta:+.2f}% over 4 weeks), which could push toward Q4 (Deflation) if it turns negative.")
+            if i_accel == "accelerating":
+                direction_parts.append(f"Inflation momentum is accelerating ({i_delta:+.2f}%), risking a shift to Q2 (Reflation).")
+        elif current_quad == 2:  # Reflation
+            if g_accel == "decelerating":
+                direction_parts.append(f"Market growth momentum is decelerating ({g_delta:+.2f}% over 4 weeks). If growth turns negative while inflation persists, the market shifts to Q3 (Stagflation).")
+            if i_accel == "decelerating":
+                direction_parts.append(f"Inflation momentum is cooling ({i_delta:+.2f}%), which could mean a favorable shift to Q1 (Goldilocks) if growth holds.")
+            if fred_ok and fred_growth_z is not None and fred_growth_z > 0 and fred_growth_z < 0.5 and fred_inflation_z > 1.0:
+                direction_parts.append(
+                    f"Growth Z-score ({fred_growth_z:.2f}) is weakening while "
+                    f"inflation Z-score ({fred_inflation_z:.2f}) remains elevated — "
+                    f"high probability of a shift toward Q3 (Stagflation) if "
+                    f"growth continues to mean-revert."
+                )
+        elif current_quad == 3:  # Stagflation
+            if g_accel == "accelerating":
+                direction_parts.append(f"Growth is recovering ({g_delta:+.2f}% over 4 weeks), which could push toward Q2 (Reflation) if inflation stays elevated.")
+            if i_accel == "decelerating":
+                direction_parts.append(f"Inflation momentum is fading ({i_delta:+.2f}%), opening a path to Q4 (Deflation) if growth remains weak.")
+        else:  # Q4 Deflation
+            if g_accel == "accelerating":
+                direction_parts.append(f"Growth is recovering ({g_delta:+.2f}% over 4 weeks), which could push toward Q1 (Goldilocks).")
+            if i_accel == "accelerating":
+                direction_parts.append(f"Inflation momentum is rising ({i_delta:+.2f}%), which could shift to Q3 (Stagflation) if growth stays negative.")
+
+        # Always add the primary risk from the transition matrix
+        direction_parts.append(
+            f"Historical transition data suggests the primary risk is a shift to Q{primary_risk_quad} "
+            f"({primary_risk_name}) with {primary_risk_pct}% weekly probability."
+        )
+
+        # 4-week projection summary
+        p4 = projections.get("4_week", {})
+        p4_sorted = sorted(p4.items(), key=lambda x: -x[1])
+        top2 = p4_sorted[:2]
+        direction_parts.append(
+            f"At the 4-week horizon, the most likely states are "
+            f"{top2[0][0]} {QUADRANT_NAMES[int(top2[0][0][1])]} ({top2[0][1]*100:.1f}%) and "
+            f"{top2[1][0]} {QUADRANT_NAMES[int(top2[1][0][1])]} ({top2[1][1]*100:.1f}%)."
+        )
+
+        interpretation = {
+            "regime_flag": regime_flag,
+            "regime_flag_text": regime_flag_text,
+            "growth_trend": g_accel,
+            "growth_delta_4w": round(g_delta, 4),
+            "inflation_trend": i_accel,
+            "inflation_delta_4w": round(i_delta, 4),
+            "primary_risk_quad": primary_risk_quad,
+            "primary_risk_name": primary_risk_name,
+            "primary_risk_pct": primary_risk_pct,
+            "direction_narrative": " ".join(direction_parts),
+        }
+
+        result = {
+            "current_quadrant": current_quad,
+            "current_quadrant_name": QUADRANT_NAMES[current_quad],
+            "current_quadrant_description": QUADRANT_DESCRIPTIONS[current_quad],
+            "confidence_pct": confidence,
+            "classification_source": classification_source,
+            "growth_score": round(float(current_growth), 4),
+            "inflation_score": round(float(current_inflation), 4),
+            "market_growth_score": round(float(g_vals[-1]), 4),
+            "market_inflation_score": round(float(i_vals[-1]), 4),
+            "fred_indicators": fred_indicators if fred_ok else None,
+            "fred_growth_z": fred_growth_z,
+            "fred_inflation_z": fred_inflation_z,
+            "transition_matrix": adjusted_matrix,
+            "static_transition_matrix": transition_matrix,
+            "transition_counts": transition_counts.tolist(),
+            "conditional_observations": int(cond_total) if use_conditional else None,
+            "projections": projections,
+            "asset_tilts": QUADRANT_ASSET_TILTS[current_quad],
+            "all_asset_tilts": QUADRANT_ASSET_TILTS,
+            "interpretation": interpretation,
+            "regime_distribution": {
+                f"Q{k}": {"count": v, "pct": round(v / total_obs * 100, 1)}
+                for k, v in regime_counts.items()
+            },
+            "history": {
+                "dates": [d.strftime("%Y-%m-%d") for d in dates],
+                "quadrants": regimes,
+                "growth_scores": [round(float(v), 4) for v in g_vals],
+                "inflation_scores": [round(float(v), 4) for v in i_vals],
+            },
+            "total_observations": total_obs,
+        }
+
+        _quadrant_cache["data"] = result
+        _quadrant_cache["timestamp"] = time.time()
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+# ── S&P 500 Performance ───────────────────────────────────────────────────────
+
+@app.route("/api/sp500-performance")
+def sp500_performance():
+    """Return S&P 500 YTD and 1-day percent change from Yahoo Finance."""
+    import yfinance as yf
+    from datetime import datetime, timedelta
+    try:
+        spy = yf.Ticker("^GSPC")
+        today = datetime.now()
+        year_start = datetime(today.year, 1, 1)
+        hist = spy.history(start=year_start - timedelta(days=5), end=today + timedelta(days=1))
+        if hist.empty:
+            return jsonify({"error": "No S&P 500 data available"}), 502
+
+        # YTD: compare latest close to last close of prior year
+        first_of_year = hist.loc[hist.index >= str(year_start)]
+        if first_of_year.empty:
+            return jsonify({"error": "No YTD data"}), 502
+
+        # Use the close before Jan 1 as the baseline
+        prior = hist.loc[hist.index < str(year_start)]
+        if not prior.empty:
+            baseline = float(prior["Close"].iloc[-1])
+        else:
+            baseline = float(first_of_year["Close"].iloc[0])
+
+        latest = float(hist["Close"].iloc[-1])
+        ytd_pct = ((latest - baseline) / baseline) * 100
+
+        # 1-day change
+        if len(hist) >= 2:
+            prev_close = float(hist["Close"].iloc[-2])
+            day_pct = ((latest - prev_close) / prev_close) * 100
+        else:
+            day_pct = 0.0
+
+        return jsonify({
+            "price": round(latest, 2),
+            "ytd_pct": round(ytd_pct, 2),
+            "day_pct": round(day_pct, 2),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────

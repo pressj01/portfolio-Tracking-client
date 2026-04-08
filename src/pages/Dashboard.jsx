@@ -275,6 +275,18 @@ export default function Dashboard() {
   const [portfolioCoverage, setPortfolioCoverage] = useState(null)
   const [tickerCoverage, setTickerCoverage] = useState({})
   const [overviewGroups, setOverviewGroups] = useState(null)
+  const [sp500, setSp500] = useState(null)
+
+  useEffect(() => {
+    const fetchSp500 = () =>
+      fetch(`${API_BASE}/api/sp500-performance`)
+        .then(safeJson)
+        .then(setSp500)
+        .catch(() => {})
+    fetchSp500()
+    const interval = setInterval(fetchSp500, 60000)
+    return () => clearInterval(interval)
+  }, [])
 
   useEffect(() => {
     let stale = false
@@ -559,6 +571,23 @@ export default function Dashboard() {
           value={pct(totals.totalReturn)}
           color={gradeColor(totals.totalReturn)}
         />
+        {sp500 && (
+          <SummaryCard
+            label="S&P 500"
+            value={sp500.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            sub={
+              <span>
+                <span style={{ color: sp500.day_pct >= 0 ? '#4dff91' : '#ff6b6b' }}>
+                  Day: {sp500.day_pct >= 0 ? '+' : ''}{sp500.day_pct.toFixed(2)}%
+                </span>
+                {' · '}
+                <span style={{ color: sp500.ytd_pct >= 0 ? '#4dff91' : '#ff6b6b' }}>
+                  YTD: {sp500.ytd_pct >= 0 ? '+' : ''}{sp500.ytd_pct.toFixed(2)}%
+                </span>
+              </span>
+            }
+          />
+        )}
       </div>
 
       {/* Grade Thresholds (collapsible) */}
