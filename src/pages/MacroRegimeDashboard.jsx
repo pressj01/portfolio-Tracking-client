@@ -164,6 +164,7 @@ function ExposureTab({ pf }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [data, setData] = useState(null)
+  const [hoveredRow, setHoveredRow] = useState(-1)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -317,10 +318,17 @@ function ExposureTab({ pf }) {
           </thead>
           <tbody>
             {holdings.map((h, i) => (
-              <tr key={i} style={{
-                borderBottom: '1px solid #1e293b',
-                background: h.macro_label === 'Unfavorable' ? 'rgba(239,83,80,0.06)' :
-                  h.macro_label === 'Favorable' ? 'rgba(76,175,80,0.06)' : 'transparent',
+              <tr key={i}
+                onMouseEnter={() => setHoveredRow(i)}
+                onMouseLeave={() => setHoveredRow(-1)}
+                style={{
+                  borderBottom: '1px solid #1e293b',
+                  background: hoveredRow === i
+                    ? 'rgba(144,202,249,0.12)'
+                    : h.macro_label === 'Unfavorable' ? 'rgba(239,83,80,0.06)'
+                    : h.macro_label === 'Favorable' ? 'rgba(76,175,80,0.06)' : 'transparent',
+                  cursor: 'default',
+                  transition: 'background 0.15s ease',
               }}>
                 <td style={{ ...tdStyle, fontWeight: 600, color: '#90caf9' }}>{h.ticker}</td>
                 <td style={{ ...tdStyle, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1353,7 +1361,8 @@ function QuadrantTab({ pf }) {
   const iScores = h.inflation_scores || []
   const quads = h.quadrants || []
   const dates = h.dates || []
-  const tm = data.transition_matrix || []
+  const tm = data.transition_matrix || []       // adjusted (current-week-specific)
+  const stm = data.static_transition_matrix || tm // historical baseline
   const tc = data.transition_counts || []
   const proj = data.projections || {}
   const projKeys = ['1_week', '2_week', '4_week', '8_week', '13_week']
@@ -1576,19 +1585,77 @@ function QuadrantTab({ pf }) {
         />
       </div>
 
+      {/* This Week's Outlook — current-week-specific probabilities */}
+      <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+        <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
+          This Week's Outlook — Next Week Probabilities
+        </h3>
+        <p style={{ color: '#8899aa', fontSize: '0.75rem', marginBottom: '0.75rem' }}>
+          Adjusted for current momentum, FRED Z-scores & conditional matching
+          {data.conditional_observations != null && ` (${data.conditional_observations} similar historical weeks)`}
+        </p>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          {[1, 2, 3, 4].map(q => {
+            const adjProb = (tm[data.current_quadrant - 1]?.[q - 1] || 0) * 100
+            const histProb = (stm[data.current_quadrant - 1]?.[q - 1] || 0) * 100
+            const delta = adjProb - histProb
+            const isSelf = q === data.current_quadrant
+            const isMax = adjProb === Math.max(...[1,2,3,4].map(qq => (tm[data.current_quadrant - 1]?.[qq - 1] || 0) * 100))
+            return (
+              <div key={q} style={{
+                flex: '1 1 180px', padding: '0.75rem 1rem', borderRadius: 8,
+                background: isMax ? `${QUAD_COLORS[q]}20` : '#0e1525',
+                border: isMax ? `2px solid ${QUAD_COLORS[q]}` : '1px solid #1a2233',
+                textAlign: 'center', position: 'relative',
+              }}>
+                {isSelf && (
+                  <div style={{ position: 'absolute', top: 4, right: 8, fontSize: '0.6rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: 1 }}>
+                    Stay
+                  </div>
+                )}
+                <div style={{ fontSize: '0.8rem', color: QUAD_COLORS[q], fontWeight: 600, marginBottom: 4 }}>
+                  {isSelf ? `Stay Q${q}` : `→ Q${q}`} {QUAD_LABELS[q]?.split(' ').slice(1).join(' ')}
+                </div>
+                <div style={{ fontSize: '1.8rem', fontWeight: 700, color: isMax ? '#fff' : '#b0bec5' }}>
+                  {adjProb.toFixed(1)}%
+                </div>
+                <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginTop: 4 }}>
+                  Historical: {histProb.toFixed(1)}%
+                </div>
+                {Math.abs(delta) >= 0.1 && (
+                  <div style={{
+                    fontSize: '0.75rem', fontWeight: 600, marginTop: 2,
+                    color: delta > 0 ? (isSelf ? '#4caf50' : '#ff9800') : (isSelf ? '#ef5350' : '#4caf50'),
+                  }}>
+                    {delta > 0 ? '▲' : '▼'} {Math.abs(delta).toFixed(1)}pp
+                  </div>
+                )}
+                {/* Mini bar */}
+                <div style={{ marginTop: 6, height: 6, background: '#16213e', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{
+                    width: `${adjProb}%`, height: '100%', background: QUAD_COLORS[q],
+                    borderRadius: 3, opacity: 0.8,
+                  }} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
       {/* Transition Matrix Heatmap + Forward Projections side by side */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-        {/* Transition Matrix */}
+        {/* Transition Matrix (Historical Baseline) */}
         <div className="card" style={{ padding: '0.75rem 1rem' }}>
           <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
-            Transition Matrix (Weekly Probabilities)
+            Historical Transition Matrix (Weekly Probabilities)
           </h3>
           <p style={{ color: '#8899aa', fontSize: '0.75rem', marginBottom: '0.5rem' }}>
             Based on {data.total_observations} weekly observations — ▶ indicates current quadrant
           </p>
           <Plot
             data={[{
-              z: tm.map(row => row.map(v => v * 100)),
+              z: stm.map(row => row.map(v => v * 100)),
               x: quadLabels,
               y: quadLabels.map((l, i) => i === data.current_quadrant - 1 ? `▶ ${l}` : l),
               type: 'heatmap',
@@ -1604,7 +1671,7 @@ function QuadrantTab({ pf }) {
               height: 340,
               xaxis: { title: 'To', side: 'bottom', tickangle: -30 },
               yaxis: { title: 'From', autorange: 'reversed' },
-              annotations: tm.flatMap((row, ri) => row.map((v, ci) => ({
+              annotations: stm.flatMap((row, ri) => row.map((v, ci) => ({
                 x: quadLabels[ci],
                 y: ri === data.current_quadrant - 1 ? `▶ ${quadLabels[ri]}` : quadLabels[ri],
                 text: ri === data.current_quadrant - 1

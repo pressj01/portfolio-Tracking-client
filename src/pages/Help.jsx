@@ -2335,17 +2335,32 @@ function MacroDashboardHelp() {
         the origin (0,0) — points in the upper-right are Q2 Reflation, upper-left are Q3 Stagflation, etc.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Transition Matrix (Heatmap)</h4>
+      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>This Week's Outlook — Next Week Probabilities</h4>
       <p style={{ marginBottom: '0.75rem' }}>
-        A 4×4 grid showing the historical probability of moving from one quadrant (row) to another
-        (column) in a single week. Read it as: "From this row, there is an X% chance of being in
+        Four cards showing <strong>this week's specific</strong> probability of transitioning to each quadrant
+        next week. Unlike the historical transition matrix (which shows long-run averages), these probabilities
+        are adjusted for current conditions using three techniques:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Conditional matching</strong> — Filters historical transitions to only weeks with similar growth/inflation momentum direction, so the probabilities reflect periods that "looked like now."</li>
+        <li><strong>FRED Z-score mean reversion</strong> — When economic indicators (Industrial Production, Housing Starts, CPI) are at extreme Z-scores, the model increases the probability of reverting toward the opposite quadrant.</li>
+        <li><strong>Historical baseline</strong> — Shown below each probability for comparison. This is the long-run average from the full transition matrix.</li>
+        <li><strong>Delta arrows (▲/▼ Xpp)</strong> — The difference in percentage points between this week's adjusted probability and the historical baseline. For example, "▲ 4.0pp" means this week's probability is 4 percentage points higher than usual. On the "Stay" card, a green ▲ means conditions favor persistence; an orange ▲ on a transition card means elevated risk of moving to that quadrant.</li>
+        <li><strong>Similar historical weeks</strong> — The subtitle shows how many past weeks matched current momentum conditions. More matches mean higher confidence in the adjusted probabilities.</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Historical Transition Matrix (Heatmap)</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A 4×4 grid showing the <strong>long-run historical</strong> probability of moving from one quadrant (row) to another
+        (column) in a single week. These are unadjusted averages across all observations — they do not factor
+        in current conditions. Read it as: "Historically, from this row, there was an X% chance of being in
         this column next week."
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>▶ arrow</strong> — Marks the row for the current quadrant. This is the row that matters most — it shows where we might go next.</li>
         <li><strong>Numbers in parentheses</strong> — The count of times that specific transition actually occurred in the historical data. Higher counts mean more confidence in that probability.</li>
         <li><strong>Diagonal values</strong> — The "self-transition" or stickiness of each regime. High diagonal values (e.g., 85%) mean regimes tend to persist week-to-week.</li>
-        <li>The matrix uses a conditional approach: it filters historical data to weeks with similar momentum conditions and applies mean-reversion adjustments when Z-scores are elevated.</li>
+        <li>Compare this matrix to the "This Week's Outlook" cards above to see how current conditions shift the probabilities versus the long-run baseline.</li>
       </ul>
 
       <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>4-Week Outlook Cards</h4>
