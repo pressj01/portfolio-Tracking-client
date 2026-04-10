@@ -29,6 +29,7 @@ import ConsolidationAnalysis from './pages/ConsolidationAnalysis'
 import MacroRegimeDashboard from './pages/MacroRegimeDashboard'
 import IncomeGrowthSim from './pages/IncomeGrowthSim'
 import DividendHistory from './pages/DividendHistory'
+import GainsLosses from './pages/GainsLosses'
 import Help from './pages/Help'
 
 function NavDropdown({ label, children }) {
@@ -78,6 +79,7 @@ function App() {
         <Route path="/growth" element={<Growth />} />
         <Route path="/dividends" element={<DividendAnalysis />} />
         <Route path="/total-return" element={<TotalReturn />} />
+        <Route path="/gains-losses" element={<GainsLosses />} />
         <Route path="/etf-screen" element={<ETFScreen />} />
         <Route path="/div-calendar" element={<DividendCalendar />} />
         <Route path="/watchlist" element={<Watchlist />} />
@@ -136,6 +138,7 @@ function Nav() {
         <NavLink to="/div-compare">Dividend Compare</NavLink>
         <NavLink to="/dividend-history">Dividend History</NavLink>
         <NavLink to="/total-return">Total Return</NavLink>
+        <NavLink to="/gains-losses">Gains & Losses</NavLink>
       </NavDropdown>
       <NavDropdown label="Analysis">
         <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>

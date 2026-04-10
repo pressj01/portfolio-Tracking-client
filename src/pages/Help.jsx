@@ -31,6 +31,7 @@ const GROUPS = [
       { id: 'div-calendar', label: 'Div Calendar' },
       { id: 'div-compare', label: 'Div Compare' },
       { id: 'total-return', label: 'Total Return' },
+      { id: 'gains-losses', label: 'Gains & Losses' },
     ],
   },
   {
@@ -1349,6 +1350,180 @@ function TotalReturnHelp() {
   )
 }
 
+function GainsLossesHelp() {
+  return (
+    <div>
+      <h2>Gains & Losses</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Gains & Losses page provides a complete picture of your investment profit and loss
+        across both open (unrealized) and closed (realized) positions. It separates price-only
+        returns from total returns that include dividends, so you can see how much of your
+        performance comes from capital appreciation versus income collected.
+      </p>
+
+      {/* ── Category Filter ─────────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Category Filter</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        If you have categories defined, a dropdown appears at the top. Select one or more
+        categories to filter all summary cards, tables, and charts to just those holdings.
+        "All Holdings" is the default.
+      </p>
+
+      {/* ── Summary Cards ───────────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Two rows of metric cards show the high-level numbers:
+      </p>
+      <h4 style={{ marginBottom: '0.4rem' }}>Top Row — Unrealized (Open Positions)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Total Invested</strong> — Sum of all purchase values for positions you still hold.</li>
+        <li><strong>Current Value</strong> — Today's market value of those positions.</li>
+        <li><strong>Unrealized Price G/L</strong> — Capital gain or loss only (Current Value minus Total Invested). Does not include dividends. Red if negative, green if positive.</li>
+        <li><strong>Unrealized Total G/L</strong> — Price G/L plus all dividends received on open positions. This is your true unrealized profit. A position can be red on price but green on total if dividends more than offset the price decline.</li>
+      </ul>
+      <h4 style={{ marginBottom: '0.4rem' }}>Bottom Row — Realized & Combined</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Realized Price G/L</strong> — Capital gain or loss from positions you have sold (sell proceeds minus cost basis). Sourced from SELL transactions recorded via the Holdings transaction system.</li>
+        <li><strong>Realized Total G/L</strong> — Realized Price G/L plus all dividends collected on those tickers while you held them. Even a position sold at a price loss can show a positive Total G/L if enough dividends were collected.</li>
+        <li><strong>Combined Price G/L</strong> — Unrealized Price G/L + Realized Price G/L. Your overall capital-only profit/loss across all positions, open and closed.</li>
+        <li><strong>Combined Total G/L</strong> — Unrealized Total G/L + Realized Total G/L. Your true overall profit/loss including all dividends ever collected. This is the most comprehensive performance number on the page.</li>
+      </ul>
+
+      {/* ── Tabs ─────────────────────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Tabs</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Three tabs let you drill into the detail behind the summary numbers. All tables are sortable
+        by clicking any column header.
+      </p>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Unrealized Tab</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        One row per holding you currently own. Shows each position's cost basis, current value,
+        and gain/loss broken into price-only and total (with dividends).
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Ticker / Description</strong> — The holding and its name.</li>
+        <li><strong>Shares</strong> — Number of shares held.</li>
+        <li><strong>Price Paid</strong> — Average cost per share.</li>
+        <li><strong>Curr Price</strong> — Current market price per share.</li>
+        <li><strong>Invested</strong> — Total cost basis (Shares x Price Paid).</li>
+        <li><strong>Curr Value</strong> — Current market value (Shares x Curr Price).</li>
+        <li><strong>Price G/L</strong> — Unrealized capital gain/loss in dollars.</li>
+        <li><strong>Price G/L %</strong> — Price G/L as a percentage of Invested.</li>
+        <li><strong>Divs Rcvd</strong> — Total dividends received while holding this position.</li>
+        <li><strong>Total G/L</strong> — Price G/L + Dividends Received.</li>
+        <li><strong>Total G/L %</strong> — Total G/L as a percentage of Invested.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem', color: '#90a4ae', fontSize: '0.9rem' }}>
+        A Portfolio Total footer row sums key columns across all holdings.
+      </p>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Realized Tab</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        One row per sell event, sourced from SELL transactions recorded in the Holdings page.
+        Shows the cost basis, sale proceeds, and gain/loss for each sale.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Ticker</strong> — The symbol sold.</li>
+        <li><strong>Sell Date</strong> — Date the sale was executed.</li>
+        <li><strong>Buy Price</strong> — Average cost per share at time of purchase.</li>
+        <li><strong>Sell Price</strong> — Price per share received on sale.</li>
+        <li><strong>Shares</strong> — Number of shares sold.</li>
+        <li><strong>Cost Basis</strong> — Total cost (Buy Price x Shares).</li>
+        <li><strong>Proceeds</strong> — Total received (Sell Price x Shares).</li>
+        <li><strong>Price G/L</strong> — Capital gain or loss (Proceeds minus Cost Basis).</li>
+        <li><strong>Price G/L %</strong> — Price G/L as a percentage of Cost Basis.</li>
+        <li><strong>Divs Rcvd</strong> — Total dividends collected on this ticker while you held it.</li>
+        <li><strong>Total G/L</strong> — Price G/L + Dividends Received. Shows your true profit including income.</li>
+        <li><strong>Total G/L %</strong> — Total G/L as a percentage of Cost Basis.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Combined Tab</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        One row per ticker across both open and closed positions. Shows unrealized, realized, and
+        net figures side by side so you can see the full history of each ticker.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Ticker / Description</strong> — The symbol and name.</li>
+        <li><strong>Status</strong> — "Open" (still held), "Closed" (fully sold), or "Open + Closed" (partially sold).</li>
+        <li><strong>Unreal. Price G/L</strong> — Unrealized capital gain/loss on remaining shares.</li>
+        <li><strong>Unreal. Divs</strong> — Dividends received on remaining shares.</li>
+        <li><strong>Unreal. Total G/L</strong> — Unrealized price G/L + unrealized dividends.</li>
+        <li><strong>Real. Price G/L</strong> — Realized capital gain/loss from sold shares.</li>
+        <li><strong>Real. Divs</strong> — Dividends collected while holding the sold shares.</li>
+        <li><strong>Real. Total G/L</strong> — Realized price G/L + realized dividends.</li>
+        <li><strong>Net Price G/L</strong> — Unrealized + Realized price G/L combined.</li>
+        <li><strong>Net Divs</strong> — Total dividends across open and closed positions.</li>
+        <li><strong>Net Total G/L</strong> — The bottom line: total profit/loss from this ticker including all capital gains and dividends, open and closed.</li>
+      </ul>
+
+      {/* ── Charts ───────────────────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Below the table, a set of charts visualize your gains and losses over time. Use the period
+        buttons (3M, 6M, 1Y, 2Y, 3Y, 5Y) to change the time range. All chart data is fetched
+        live from Yahoo Finance.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Cumulative G/L Over Time</strong> — Two area lines showing your portfolio's running
+          Price G/L (blue) and Total G/L including dividends (green) over the selected period. A dashed
+          zero line marks breakeven. Hover for exact dollar values at any date.</li>
+        <li><strong>Price G/L vs Total G/L by Ticker</strong> — Horizontal grouped bar chart comparing
+          each ticker's price-only and total gain/loss side by side. Makes it easy to spot which
+          holdings are being "saved" by their dividends (large gap between the two bars).</li>
+        <li><strong>Winners vs Losers</strong> — Vertical bar chart ranking every ticker by Total G/L.
+          Green bars are winners, red bars are losers. Sorted from highest to lowest so your best
+          and worst performers are immediately visible.</li>
+        <li><strong>Realized Gains Timeline</strong> — Appears only if you have sold positions. Shows
+          each sale as a bar on a timeline, colored green for gains and red for losses. Useful for
+          tracking when you locked in profits or took losses.</li>
+      </ul>
+
+      {/* ── How to Use ──────────────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
+        <li>
+          <strong>Check the summary cards first</strong> — Compare Price G/L to Total G/L in each
+          row. If Total G/L is significantly higher, dividends are a major contributor to your returns.
+        </li>
+        <li>
+          <strong>Use the Combined tab</strong> to see each ticker's full history across both open
+          and closed positions. The Net Total G/L column is the definitive profit/loss figure.
+        </li>
+        <li>
+          <strong>Sort the Unrealized table by Total G/L %</strong> to find your best and worst
+          performing open positions when dividends are included.
+        </li>
+        <li>
+          <strong>Compare the two bar chart types</strong> — if a ticker has a red Price G/L bar
+          but a green Total G/L bar, the dividends earned more than offset the price decline.
+        </li>
+        <li>
+          <strong>Record sales via transactions</strong> in the Holdings page to populate the
+          Realized tab. Without SELL transactions recorded, the Realized section will show $0.
+        </li>
+        <li>
+          <strong>Use category filters</strong> to compare gains/losses across different segments
+          of your portfolio (e.g., equity ETFs vs. income ETFs).
+        </li>
+      </ol>
+
+      {/* ── Key Concepts ────────────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Key Concepts</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Price G/L vs Total G/L</strong> — Price G/L is capital appreciation only. Total G/L
+          adds dividends received. For income-focused portfolios, the difference can be dramatic — a
+          position down 10% on price might be up 15% on total return after years of dividends.</li>
+        <li><strong>Unrealized vs Realized</strong> — Unrealized is paper profit/loss on positions
+          you still hold. Realized is locked-in profit/loss from positions you have sold. Combined
+          gives you the full picture.</li>
+        <li><strong>Owner profile</strong> — When viewing the Owner profile, realized gains include
+          SELL transactions from all sub-profiles (individual accounts), giving you the consolidated view.</li>
+      </ul>
+    </div>
+  )
+}
+
 function ETFScreenHelp() {
   return (
     <div>
@@ -2469,6 +2644,7 @@ const CONTENT_MAP = {
   'div-calendar': DivCalendarHelp,
   'div-compare': DivCompareHelp,
   'total-return': TotalReturnHelp,
+  'gains-losses': GainsLossesHelp,
   'etf-screen': ETFScreenHelp,
   watchlist: WatchlistHelp,
   'buy-sell': BuySellHelp,

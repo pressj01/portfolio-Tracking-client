@@ -5463,6 +5463,528 @@ def total_return_compare():
         return jsonify({"error": str(e), "detail": traceback.format_exc(limit=3)}), 500
 
 
+# ── Gains & Losses ─────────────────────────────────────────────────────────────
+
+@app.route("/api/gains-losses/summary", methods=["GET"])
+def gains_losses_summary():
+    """Unified unrealized + realized gains/losses with price-only and total (price+divs) columns."""
+    import math
+
+    profile_id = get_profile_id()
+    conn = get_connection()
+
+    cats = conn.execute(
+        "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
+        (profile_id,),
+    ).fetchall()
+    categories = [{"id": c["id"], "name": c["name"]} for c in cats]
+
+    cat_param = request.args.get("category", "").strip()
+    cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
+
+    # ── Unrealized (current holdings) ──
+    rows = conn.execute(
+        """SELECT ticker, description, classification_type,
+                  price_paid, current_price, quantity,
+                  purchase_value, current_value,
+                  gain_or_loss, total_divs_received, purchase_date
+           FROM all_account_info
+           WHERE purchase_value IS NOT NULL AND purchase_value > 0
+             AND profile_id = ?
+           ORDER BY ticker""",
+        (profile_id,),
+    ).fetchall()
+    udf = pd.DataFrame([dict(r) for r in rows])
+
+    # Enrich category names
+    if not udf.empty:
+        try:
+            cat_map_rows = conn.execute(
+                "SELECT tc.ticker, c.name AS category_name "
+                "FROM ticker_categories tc JOIN categories c ON c.id = tc.category_id "
+                "WHERE tc.profile_id = ?", (profile_id,)
+            ).fetchall()
+            cat_map = pd.DataFrame([dict(r) for r in cat_map_rows])
+            if not cat_map.empty:
+                udf = udf.merge(cat_map, on="ticker", how="left")
+            else:
+                udf["category_name"] = None
+        except Exception:
+            udf["category_name"] = None
+
+        if "classification_type" in udf.columns:
+            mask = udf["category_name"].isna() | (udf["category_name"] == "")
+            udf.loc[mask, "category_name"] = udf.loc[mask, "classification_type"].map(
+                lambda c: _CLASSIFICATION_NAMES.get(str(c).strip(), str(c).strip()) if pd.notna(c) else "Other"
+            )
+        udf["category_name"] = udf["category_name"].fillna("Other")
+
+        if cat_ids:
+            cat_names = [c["name"] for c in categories if str(c["id"]) in cat_ids]
+            if cat_names:
+                udf = udf[udf["category_name"].isin(cat_names)]
+
+    # ── Realized (sold positions) ──
+    # 1) Legacy watchlist_sold table
+    sold_rows = conn.execute(
+        "SELECT ticker, buy_price, sell_price, shares_sold, sell_date, divs_received, notes "
+        "FROM watchlist_sold ORDER BY sell_date DESC, id DESC"
+    ).fetchall()
+    rdf = pd.DataFrame([dict(r) for r in sold_rows]) if sold_rows else pd.DataFrame()
+
+    # 2) Transactions-based SELL records
+    # Owner (profile 1) is the master combined view — show sells from all profiles
+    if profile_id == 1:
+        txn_sell_rows = conn.execute(
+            """SELECT t.ticker, t.profile_id, t.price_per_share AS sell_price,
+                      t.shares AS shares_sold, t.transaction_date AS sell_date,
+                      t.realized_gain, t.fees, t.notes
+               FROM transactions t
+               WHERE t.transaction_type = 'SELL'
+               ORDER BY t.transaction_date DESC, t.id DESC"""
+        ).fetchall()
+    else:
+        txn_sell_rows = conn.execute(
+            """SELECT t.ticker, t.profile_id, t.price_per_share AS sell_price,
+                      t.shares AS shares_sold, t.transaction_date AS sell_date,
+                      t.realized_gain, t.fees, t.notes
+               FROM transactions t
+               WHERE t.transaction_type = 'SELL' AND t.profile_id = ?
+               ORDER BY t.transaction_date DESC, t.id DESC""",
+            (profile_id,),
+        ).fetchall()
+    if txn_sell_rows:
+        # Look up total_divs_received per ticker/profile from dividends table
+        div_lookup = {}
+        div_rows = conn.execute(
+            "SELECT ticker, profile_id, total_divs_received FROM dividends"
+        ).fetchall()
+        for dr in div_rows:
+            dr = dict(dr)
+            div_lookup[(dr["ticker"], dr["profile_id"])] = float(dr.get("total_divs_received") or 0)
+
+        txn_rows = []
+        for tr in txn_sell_rows:
+            tr = dict(tr)
+            sp = float(tr.get("sell_price") or 0)
+            sh = float(tr.get("shares_sold") or 0)
+            rg = float(tr.get("realized_gain") or 0)
+            fees = float(tr.get("fees") or 0)
+            proceeds = sp * sh
+            cost = proceeds - rg + fees
+            bp = cost / sh if sh else 0
+            divs = div_lookup.get((tr["ticker"], tr["profile_id"]), 0)
+            txn_rows.append({
+                "ticker": tr["ticker"],
+                "buy_price": bp,
+                "sell_price": sp,
+                "shares_sold": sh,
+                "sell_date": tr.get("sell_date", ""),
+                "divs_received": divs,
+                "notes": tr.get("notes") or "",
+            })
+        txn_df = pd.DataFrame(txn_rows)
+        rdf = pd.concat([rdf, txn_df], ignore_index=True) if not rdf.empty else txn_df
+
+    conn.close()
+
+    def _safe(v):
+        if v is None or (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else round(f, 2)
+        except (TypeError, ValueError):
+            return None
+
+    def _safe_str(v):
+        """Sanitize string/date values — return None for NaN/NaT."""
+        if v is None:
+            return None
+        if isinstance(v, float) and math.isnan(v):
+            return None
+        if pd.isna(v):
+            return None
+        return str(v)
+
+    # ── Build unrealized rows ──
+    unrealized = []
+    u_totals = {"invested": 0, "value": 0, "price_gl": 0, "divs": 0, "total_gl": 0}
+
+    if not udf.empty:
+        for c in ["price_paid", "current_price", "quantity", "purchase_value",
+                   "current_value", "gain_or_loss", "total_divs_received"]:
+            if c in udf.columns:
+                udf[c] = pd.to_numeric(udf[c], errors="coerce")
+
+        udf["gain_or_loss"] = udf["gain_or_loss"].fillna(0)
+        udf["total_divs_received"] = udf["total_divs_received"].fillna(0)
+        udf["total_gl"] = udf["gain_or_loss"] + udf["total_divs_received"]
+        udf["price_gl_pct"] = (udf["gain_or_loss"] / udf["purchase_value"].replace(0, float("nan"))) * 100
+        udf["total_gl_pct"] = (udf["total_gl"] / udf["purchase_value"].replace(0, float("nan"))) * 100
+
+        for _, row in udf.sort_values("total_gl", ascending=False).iterrows():
+            pv = float(row.get("purchase_value") or 0)
+            cv = float(row.get("current_value") or 0)
+            pgl = float(row.get("gain_or_loss") or 0)
+            dvs = float(row.get("total_divs_received") or 0)
+            tgl = pgl + dvs
+            u_totals["invested"] += pv
+            u_totals["value"] += cv
+            u_totals["price_gl"] += pgl
+            u_totals["divs"] += dvs
+            u_totals["total_gl"] += tgl
+            unrealized.append({
+                "ticker": row["ticker"],
+                "description": row.get("description", ""),
+                "category_name": row.get("category_name", ""),
+                "quantity": _safe(row.get("quantity")),
+                "price_paid": _safe(row.get("price_paid")),
+                "current_price": _safe(row.get("current_price")),
+                "purchase_value": _safe(pv),
+                "current_value": _safe(cv),
+                "price_gl": _safe(pgl),
+                "price_gl_pct": _safe(row.get("price_gl_pct")),
+                "divs_received": _safe(dvs),
+                "total_gl": _safe(tgl),
+                "total_gl_pct": _safe(row.get("total_gl_pct")),
+                "purchase_date": _safe_str(row.get("purchase_date")),
+            })
+
+    # ── Build realized rows ──
+    realized = []
+    r_totals = {"cost": 0, "proceeds": 0, "price_gl": 0, "divs": 0, "total_gl": 0}
+
+    if not rdf.empty:
+        for c in ["buy_price", "sell_price", "shares_sold", "divs_received"]:
+            if c in rdf.columns:
+                rdf[c] = pd.to_numeric(rdf[c], errors="coerce").fillna(0)
+
+        for _, row in rdf.iterrows():
+            bp = float(row.get("buy_price") or 0)
+            sp = float(row.get("sell_price") or 0)
+            sh = float(row.get("shares_sold") or 0)
+            dv = float(row.get("divs_received") or 0)
+            cost = bp * sh
+            proceeds = sp * sh
+            pgl = proceeds - cost
+            tgl = pgl + dv
+            pgl_pct = (pgl / cost * 100) if cost else 0
+            tgl_pct = (tgl / cost * 100) if cost else 0
+            r_totals["cost"] += cost
+            r_totals["proceeds"] += proceeds
+            r_totals["price_gl"] += pgl
+            r_totals["divs"] += dv
+            r_totals["total_gl"] += tgl
+            realized.append({
+                "ticker": row["ticker"],
+                "buy_price": _safe(bp),
+                "sell_price": _safe(sp),
+                "shares_sold": _safe(sh),
+                "sell_date": _safe_str(row.get("sell_date")) or "",
+                "cost_basis": _safe(cost),
+                "proceeds": _safe(proceeds),
+                "price_gl": _safe(pgl),
+                "price_gl_pct": _safe(pgl_pct),
+                "divs_received": _safe(dv),
+                "total_gl": _safe(tgl),
+                "total_gl_pct": _safe(tgl_pct),
+                "notes": row.get("notes", ""),
+            })
+
+    # ── Combined (one row per ticker across unrealized + realized) ──
+    combined_map = {}
+    for r in unrealized:
+        t = r["ticker"]
+        combined_map[t] = {
+            "ticker": t, "description": r["description"],
+            "unrealized_price_gl": r["price_gl"] or 0,
+            "unrealized_divs": r["divs_received"] or 0,
+            "unrealized_total_gl": r["total_gl"] or 0,
+            "realized_price_gl": 0, "realized_divs": 0, "realized_total_gl": 0,
+            "status": "Open",
+        }
+    for r in realized:
+        t = r["ticker"]
+        if t not in combined_map:
+            combined_map[t] = {
+                "ticker": t, "description": "",
+                "unrealized_price_gl": 0, "unrealized_divs": 0, "unrealized_total_gl": 0,
+                "realized_price_gl": 0, "realized_divs": 0, "realized_total_gl": 0,
+                "status": "Closed",
+            }
+        entry = combined_map[t]
+        entry["realized_price_gl"] += (r["price_gl"] or 0)
+        entry["realized_divs"] += (r["divs_received"] or 0)
+        entry["realized_total_gl"] += (r["total_gl"] or 0)
+        if entry["unrealized_total_gl"]:
+            entry["status"] = "Open + Closed"
+
+    combined = []
+    for t, entry in combined_map.items():
+        entry["net_price_gl"] = _safe(entry["unrealized_price_gl"] + entry["realized_price_gl"])
+        entry["net_divs"] = _safe(entry["unrealized_divs"] + entry["realized_divs"])
+        entry["net_total_gl"] = _safe(entry["unrealized_total_gl"] + entry["realized_total_gl"])
+        entry["unrealized_price_gl"] = _safe(entry["unrealized_price_gl"])
+        entry["unrealized_total_gl"] = _safe(entry["unrealized_total_gl"])
+        entry["realized_price_gl"] = _safe(entry["realized_price_gl"])
+        entry["realized_total_gl"] = _safe(entry["realized_total_gl"])
+        entry["unrealized_divs"] = _safe(entry["unrealized_divs"])
+        entry["realized_divs"] = _safe(entry["realized_divs"])
+        combined.append(entry)
+    combined.sort(key=lambda x: x["net_total_gl"] or 0, reverse=True)
+
+    totals = {
+        "unrealized_invested": _safe(u_totals["invested"]),
+        "unrealized_value": _safe(u_totals["value"]),
+        "unrealized_price_gl": _safe(u_totals["price_gl"]),
+        "unrealized_divs": _safe(u_totals["divs"]),
+        "unrealized_total_gl": _safe(u_totals["total_gl"]),
+        "realized_cost": _safe(r_totals["cost"]),
+        "realized_proceeds": _safe(r_totals["proceeds"]),
+        "realized_price_gl": _safe(r_totals["price_gl"]),
+        "realized_divs": _safe(r_totals["divs"]),
+        "realized_total_gl": _safe(r_totals["total_gl"]),
+        "combined_price_gl": _safe(u_totals["price_gl"] + r_totals["price_gl"]),
+        "combined_divs": _safe(u_totals["divs"] + r_totals["divs"]),
+        "combined_total_gl": _safe(u_totals["total_gl"] + r_totals["total_gl"]),
+    }
+
+    return jsonify(
+        unrealized=unrealized, realized=realized, combined=combined,
+        totals=totals, categories=categories,
+    )
+
+
+@app.route("/api/gains-losses/chart", methods=["GET"])
+def gains_losses_chart():
+    """Cumulative portfolio G/L over time using yfinance, plus realized events."""
+    import math, warnings
+    from datetime import date as date_type
+    import yfinance as yf
+    warnings.filterwarnings("ignore")
+
+    period = request.args.get("period", "1y")
+    profile_id = get_profile_id()
+    conn = get_connection()
+
+    cat_param = request.args.get("category", "").strip()
+    cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
+
+    rows = conn.execute(
+        """SELECT ticker, quantity, price_paid, purchase_value, total_divs_received,
+                  classification_type
+           FROM all_account_info
+           WHERE purchase_value IS NOT NULL AND purchase_value > 0 AND profile_id = ?
+           ORDER BY ticker""",
+        (profile_id,),
+    ).fetchall()
+    hdf = pd.DataFrame([dict(r) for r in rows])
+
+    if hdf.empty:
+        conn.close()
+        return jsonify({"error": "No portfolio data"}), 404
+
+    # Category filter
+    if cat_ids:
+        try:
+            cat_map_rows = conn.execute(
+                "SELECT tc.ticker, c.name AS category_name "
+                "FROM ticker_categories tc JOIN categories c ON c.id = tc.category_id "
+                "WHERE tc.profile_id = ?", (profile_id,)
+            ).fetchall()
+            cat_map = pd.DataFrame([dict(r) for r in cat_map_rows])
+            if not cat_map.empty:
+                hdf = hdf.merge(cat_map, on="ticker", how="left")
+            else:
+                hdf["category_name"] = None
+            if "classification_type" in hdf.columns:
+                mask = hdf["category_name"].isna() | (hdf["category_name"] == "")
+                hdf.loc[mask, "category_name"] = hdf.loc[mask, "classification_type"].map(
+                    lambda c: _CLASSIFICATION_NAMES.get(str(c).strip(), str(c).strip()) if pd.notna(c) else "Other"
+                )
+            hdf["category_name"] = hdf["category_name"].fillna("Other")
+
+            cats = conn.execute(
+                "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
+                (profile_id,),
+            ).fetchall()
+            cat_names = [c["name"] for c in cats if str(c["id"]) in cat_ids]
+            if cat_names:
+                hdf = hdf[hdf["category_name"].isin(cat_names)]
+        except Exception:
+            pass
+
+    # Realized events (from watchlist_sold + transactions)
+    sold_rows = conn.execute(
+        "SELECT ticker, buy_price, sell_price, shares_sold, sell_date, divs_received "
+        "FROM watchlist_sold WHERE sell_date IS NOT NULL AND sell_date != '' ORDER BY sell_date"
+    ).fetchall()
+
+    realized_events = []
+    for sr in sold_rows:
+        sr = dict(sr)
+        try:
+            bp = float(sr.get("buy_price") or 0)
+            sp = float(sr.get("sell_price") or 0)
+            sh = float(sr.get("shares_sold") or 0)
+            dv = float(sr.get("divs_received") or 0)
+            pgl = (sp - bp) * sh
+            tgl = pgl + dv
+            realized_events.append({
+                "date": sr["sell_date"], "ticker": sr["ticker"],
+                "price_gl": round(pgl, 2), "total_gl": round(tgl, 2),
+            })
+        except (TypeError, ValueError):
+            pass
+
+    # Also include SELL transactions
+    # Owner (profile 1) is the master combined view — show sells from all profiles
+    if profile_id == 1:
+        txn_sell = conn.execute(
+            """SELECT t.ticker, t.profile_id, t.price_per_share, t.shares,
+                      t.transaction_date, t.realized_gain
+               FROM transactions t
+               WHERE t.transaction_type = 'SELL'
+                 AND t.transaction_date IS NOT NULL AND t.transaction_date != ''
+               ORDER BY t.transaction_date"""
+        ).fetchall()
+    else:
+        txn_sell = conn.execute(
+            """SELECT t.ticker, t.profile_id, t.price_per_share, t.shares,
+                      t.transaction_date, t.realized_gain
+               FROM transactions t
+               WHERE t.transaction_type = 'SELL' AND t.profile_id = ?
+                 AND t.transaction_date IS NOT NULL AND t.transaction_date != ''
+               ORDER BY t.transaction_date""",
+            (profile_id,),
+        ).fetchall()
+    # Look up dividends for total G/L
+    chart_div_lookup = {}
+    chart_div_rows = conn.execute(
+        "SELECT ticker, profile_id, total_divs_received FROM dividends"
+    ).fetchall()
+    for dr in chart_div_rows:
+        dr = dict(dr)
+        chart_div_lookup[(dr["ticker"], dr["profile_id"])] = float(dr.get("total_divs_received") or 0)
+
+    for tr in txn_sell:
+        tr = dict(tr)
+        try:
+            rg = float(tr.get("realized_gain") or 0)
+            divs = chart_div_lookup.get((tr["ticker"], tr["profile_id"]), 0)
+            realized_events.append({
+                "date": tr["transaction_date"], "ticker": tr["ticker"],
+                "price_gl": round(rg, 2), "total_gl": round(rg + divs, 2),
+            })
+        except (TypeError, ValueError):
+            pass
+    realized_events.sort(key=lambda x: x["date"])
+
+    conn.close()
+
+    if hdf.empty:
+        return jsonify({"error": "No holdings in selected categories"}), 404
+
+    for c in ["quantity", "price_paid", "purchase_value", "total_divs_received"]:
+        hdf[c] = pd.to_numeric(hdf[c], errors="coerce").fillna(0)
+
+    period_map = {
+        "3mo": dict(period="3mo"), "6mo": dict(period="6mo"),
+        "1y":  dict(period="1y"),  "2y":  dict(period="2y"),
+        "3y":  dict(period="3y"),  "5y":  dict(period="5y"),
+    }
+    yf_kwargs = period_map.get(period, dict(period="1y"))
+    period_labels = {
+        "3mo": "3 Months", "6mo": "6 Months", "1y": "1 Year",
+        "2y": "2 Years", "3y": "3 Years", "5y": "5 Years",
+    }
+    period_label = period_labels.get(period, period)
+
+    def _safe(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else round(f, 2)
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        tickers_list = hdf["ticker"].tolist()
+        raw = yf.download(
+            " ".join(tickers_list), **yf_kwargs, interval="1d",
+            progress=False, auto_adjust=True,
+        )
+
+        if raw.empty or "Close" not in (raw.columns.get_level_values(0) if isinstance(raw.columns, pd.MultiIndex) else raw.columns):
+            return jsonify({"error": "No price data from Yahoo Finance"}), 500
+
+        if isinstance(raw.columns, pd.MultiIndex):
+            close = raw["Close"]
+        else:
+            close = raw[["Close"]]
+            close.columns = [tickers_list[0]]
+
+        # Build portfolio cost basis and shares vectors
+        total_cost = hdf["purchase_value"].sum()
+
+        # Cumulative portfolio value over time
+        dates = close.index
+        port_values = pd.Series(0.0, index=dates)
+        for _, h in hdf.iterrows():
+            t = h["ticker"]
+            if t in close.columns:
+                port_values += close[t].ffill().fillna(0) * h["quantity"]
+
+        price_gl = (port_values - total_cost).round(2)
+
+        # For total G/L, prorate total_divs_received linearly across the period
+        total_divs = hdf["total_divs_received"].sum()
+        n_days = len(dates)
+        div_series = pd.Series(
+            [total_divs * (i + 1) / n_days for i in range(n_days)],
+            index=dates,
+        )
+        total_gl = (price_gl + div_series).round(2)
+
+        # Downsample for performance
+        step = max(1, n_days // 250)
+        sampled_dates = [dates[i].strftime("%Y-%m-%d") for i in range(0, n_days, step)]
+        sampled_price_gl = [_safe(price_gl.iloc[i]) for i in range(0, n_days, step)]
+        sampled_total_gl = [_safe(total_gl.iloc[i]) for i in range(0, n_days, step)]
+
+        # Per-ticker G/L for bar chart
+        ticker_gl = []
+        for _, h in hdf.iterrows():
+            t = h["ticker"]
+            if t in close.columns:
+                last = close[t].dropna()
+                if len(last) > 0:
+                    cv = float(last.iloc[-1]) * h["quantity"]
+                    pv = h["purchase_value"]
+                    dv = h["total_divs_received"]
+                    ticker_gl.append({
+                        "ticker": t,
+                        "price_gl": _safe(cv - pv),
+                        "total_gl": _safe(cv - pv + dv),
+                    })
+        ticker_gl.sort(key=lambda x: x["total_gl"] or 0, reverse=True)
+
+        return jsonify(
+            dates=sampled_dates,
+            price_gl=sampled_price_gl,
+            total_gl=sampled_total_gl,
+            period_label=period_label,
+            realized_events=realized_events,
+            ticker_gl=ticker_gl,
+        )
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "detail": traceback.format_exc(limit=3)}), 500
+
+
 # ── Growth ─────────────────────────────────────────────────────────────────────
 
 @app.route("/api/growth/data", methods=["GET"])
@@ -12990,15 +13512,27 @@ INCOME_BUCKET_KEYWORDS = {
 def _get_income_bucket(ticker, classification_type, description="", overrides=None):
     """Classify a holding into one of the income benchmark buckets.
     Tier 0: User override (income_overrides table)
-    Tier 1: Name/description heuristics (most specific)
-    Tier 2: Pillar code mapping (for unambiguous codes like BDC, GS, CEF)
-    Tier 3: yfinance sector fallback
-    Tier 4: Unclassified
+    Tier 1: Specific pillar codes that map 1:1 to income buckets (GS, BDC)
+    Tier 2: Name/description heuristics
+    Tier 3: Pillar code mapping (for remaining codes like CEF, HA, J, B, A, G)
+    Tier 4: yfinance sector fallback
+    Tier 5: Unclassified
     """
     # Tier 0: User override
     if overrides and ticker in overrides:
         return overrides[ticker]
-    # Tier 1: Name-based heuristics (checked first — most specific)
+
+    # Tier 1: Specific pillar codes — these take priority over keyword guessing
+    # so that income benchmark percentages stay consistent with the dashboard.
+    SPECIFIC_PILLAR_BUCKETS = {
+        "GS": "Commodities / Gold & Silver",
+        "BDC": "BDCs",
+    }
+    ct = classification_type.strip().upper() if classification_type else ""
+    if ct in SPECIFIC_PILLAR_BUCKETS:
+        return SPECIFIC_PILLAR_BUCKETS[ct]
+
+    # Tier 2: Name-based heuristics
     cache_entry = _ticker_info_cache.get(ticker)
     info = cache_entry.get("info", {}) if cache_entry else {}
     yf_name = (info.get("longName") or info.get("shortName") or "").lower()
@@ -13006,7 +13540,7 @@ def _get_income_bucket(ticker, classification_type, description="", overrides=No
     yf_sector = (info.get("sector") or "").lower()
     combined = f"{yf_name} {yf_category} {description.lower()} {ticker.lower()}"
 
-    # Check specific buckets FIRST (order matters — more specific before generic)
+    # Check specific buckets (order matters — more specific before generic)
     check_order = [
         "REITs / Real Estate",
         "Commodities / Gold & Silver",
@@ -13018,19 +13552,26 @@ def _get_income_bucket(ticker, classification_type, description="", overrides=No
         "Covered Call / Options Income",  # catch-all last
     ]
     for bucket in check_order:
+        # Skip Commodities for holdings the user explicitly classified into
+        # a different pillar — prevents broad keywords like "energy"/"mlp"
+        # from pulling non-GS holdings into Commodities.
+        if bucket == "Commodities / Gold & Silver" and ct and ct != "GS":
+            continue
+        # Same for BDCs — trust the user's pillar classification.
+        if bucket == "BDCs" and ct and ct != "BDC":
+            continue
         keywords = INCOME_BUCKET_KEYWORDS.get(bucket, [])
         for kw in keywords:
             if kw in combined:
                 return bucket
 
-    # Tier 2: Pillar classification (unambiguous codes only)
-    if classification_type:
-        ct = classification_type.strip().upper()
+    # Tier 3: Pillar classification (remaining codes)
+    if ct:
         skip_values = {"ETF", "STOCK", "EQUITY", "FUND", ""}
         if ct not in skip_values and ct in INCOME_BUCKET_BY_PILLAR:
             return INCOME_BUCKET_BY_PILLAR[ct]
 
-    # Tier 3: Sector-based fallback
+    # Tier 4: Sector-based fallback
     if "real estate" in yf_sector:
         return "REITs / Real Estate"
 

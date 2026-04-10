@@ -3005,7 +3005,14 @@ export default function ETFScreen() {
             )
           ) : (
             returnData?.series ? (
-              <Plot data={returnPlotData} layout={returnPlotLayout} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} />
+              <>
+                {(returnData.mode === 'all3' || returnData.mode === 'all4') && returnData.reinvest_pct === 100 && (
+                  <div style={{ background: 'rgba(255,152,0,0.1)', border: '1px solid rgba(255,152,0,0.3)', borderRadius: 6, padding: '0.4rem 0.75rem', marginBottom: '0.5rem', fontSize: '0.8rem', color: '#ff9800' }}>
+                    Reinvest is 100% — the Custom and DRIP lines are identical and overlap. Adjust the slider below 100% to see them diverge.
+                  </div>
+                )}
+                <Plot data={returnPlotData} layout={returnPlotLayout} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} />
+              </>
             ) : (
               !returnLoading && <div className="etf-placeholder">Select a return mode and click Load to compare returns.</div>
             )
