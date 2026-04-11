@@ -139,7 +139,7 @@ export default function ManagePortfolios() {
   const reconcileOwner = async () => {
     const included = summary.filter(p => p.id !== 1 && p.include_in_owner)
     if (included.length === 0) {
-      await dialog.alert('No sub-portfolios are marked "Include in Owner". Check the box for each portfolio you want included.')
+      await dialog.alert('No sub-portfolios are marked under "Owner". Check the Owner box for each portfolio you want included.')
       return
     }
     const ok = await dialog.confirm(
@@ -179,7 +179,8 @@ export default function ManagePortfolios() {
         <thead>
           <tr>
             <th>Name</th>
-            <th style={{ textAlign: 'center' }} title="Include this portfolio in Owner reconciliation and aggregate">Include</th>
+            <th style={{ textAlign: 'center' }} title="Include this portfolio in the Owner aggregate">Owner</th>
+            <th style={{ textAlign: 'center' }} title="Include this portfolio in the Combined aggregate">Combined</th>
             <th style={{ textAlign: 'right' }}>Holdings</th>
             <th style={{ textAlign: 'right' }}>Total Value</th>
             <th style={{ textAlign: 'right' }}>Created</th>
@@ -218,7 +219,19 @@ export default function ManagePortfolios() {
                     type="checkbox"
                     checked={!!p.include_in_owner}
                     onChange={() => toggleIncludeInOwner(p)}
-                    title="Include in Owner reconciliation and aggregate"
+                    title="Include in Owner aggregate"
+                  />
+                )}
+              </td>
+              <td style={{ textAlign: 'center' }}>
+                {p.id === 1 ? (
+                  <span style={{ color: '#556' }}>—</span>
+                ) : (
+                  <input
+                    type="checkbox"
+                    checked={aggMembers.includes(p.id)}
+                    onChange={() => toggleAggMember(p.id)}
+                    title="Include in Combined aggregate"
                   />
                 )}
               </td>
@@ -246,8 +259,8 @@ export default function ManagePortfolios() {
           </h3>
           <p style={{ color: '#aaa', marginBottom: '1rem', fontSize: '0.9rem' }}>
             {aggregateConfig.length > 0
-              ? 'Edit the name, members, or delete the aggregate portfolio.'
-              : 'Create an aggregate portfolio to view combined data from multiple portfolios.'}
+              ? 'Edit the name or delete the aggregate portfolio. Use the "Combined" checkboxes above to manage members.'
+              : 'Create an aggregate portfolio to view combined data. Use the "Combined" checkboxes above to select members.'}
           </p>
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.9rem', color: '#ccc' }}>Aggregate Name</label>
@@ -258,18 +271,6 @@ export default function ManagePortfolios() {
               onChange={(e) => setAggNameInput(e.target.value)}
               placeholder="Aggregate"
             />
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
-            {profiles.map(p => (
-              <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={aggMembers.includes(p.id)}
-                  onChange={() => toggleAggMember(p.id)}
-                />
-                {p.name}
-              </label>
-            ))}
           </div>
           <div style={{ display: 'flex', gap: '0.75rem' }}>
             <button className="btn btn-primary" onClick={saveAggregateConfig}>
@@ -284,7 +285,7 @@ export default function ManagePortfolios() {
             <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid #333' }}>
               <h3 style={{ marginBottom: '0.5rem' }}>Reconcile Owner</h3>
               <p style={{ color: '#aaa', marginBottom: '1rem', fontSize: '0.9rem' }}>
-                Compare Owner (profile 1) against the combined totals of portfolios with "Include" checked above.
+                Compare Owner (profile 1) against the combined totals of portfolios with "Owner" checked above.
                 Only checked portfolios will be included. Missing tickers will be added;
                 tickers no longer in any included sub-portfolio will be removed.
               </p>

@@ -352,9 +352,20 @@ def create_profile():
     if not name:
         return jsonify({"error": "Name is required"}), 400
     conn = get_connection()
-    cur = conn.execute("INSERT INTO profiles (name) VALUES (?)", (name,))
-    conn.commit()
+    cur = conn.execute(
+        "INSERT INTO profiles (name, include_in_owner) VALUES (?, 1)", (name,)
+    )
     pid = cur.lastrowid
+    # Auto-add to Combined aggregate if one exists
+    has_agg = conn.execute(
+        "SELECT 1 FROM aggregate_config LIMIT 1"
+    ).fetchone()
+    if has_agg:
+        conn.execute(
+            "INSERT OR IGNORE INTO aggregate_config (member_profile_id) VALUES (?)",
+            (pid,),
+        )
+    conn.commit()
     conn.close()
     return jsonify({"id": pid, "name": name}), 201
 
@@ -1459,12 +1470,12 @@ def list_holdings():
     if not is_agg or len(pids) <= 1:
         pid = pids[0]
         if pid == 1:
-            # Owner: derive split from sub-account DRIP flags
+            # Owner: derive split from sub-accounts flagged as part of Owner
             member_rows = conn.execute(
-                "SELECT member_profile_id FROM aggregate_config"
+                "SELECT id FROM profiles WHERE include_in_owner = 1 AND id != 1"
             ).fetchall()
-            member_ids = [r["member_profile_id"] if isinstance(r, dict)
-                          else r[0] for r in member_rows]
+            member_ids = [r["id"] if isinstance(r, dict) else r[0]
+                          for r in member_rows]
 
             if member_ids:
                 mph = ",".join("?" * len(member_ids))

@@ -24,6 +24,7 @@ const GROUPS = [
     id: 'portfolio',
     label: 'Portfolio',
     sections: [
+      { id: 'dashboard', label: 'Dashboard' },
       { id: 'holdings', label: 'Holdings' },
       { id: 'categories', label: 'Categories' },
       { id: 'growth', label: 'Growth' },
@@ -230,6 +231,87 @@ function ImportHelp() {
         <li>CSV files are imported as a single portfolio (multi-tab is only for .xlsx files).</li>
         <li>The "Import as Transactions" option is ideal when you want to track individual purchase lots and calculate realized gains on sells.</li>
       </ul>
+    </div>
+  )
+}
+
+function DashboardHelp() {
+  return (
+    <div>
+      <h2>Dashboard</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Dashboard is the main landing page showing a summary of your portfolio at a glance —
+        value, income, returns, risk grades, and upcoming dividends.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The top section displays key metrics as cards:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Portfolio Grade</strong> — composite grade based on yield, growth, and risk metrics.</li>
+        <li><strong>Ulcer / Calmar / Omega / Sortino / Sharpe</strong> — risk-adjusted performance ratios.</li>
+        <li><strong>YTD Dividends</strong> — total dividends received year-to-date.</li>
+        <li><strong>Current Month Income</strong> — dividends received (or estimated) for the current calendar month.</li>
+        <li><strong>Est. Monthly Income</strong> — estimated monthly dividend income across all holdings.</li>
+        <li><strong>Mo$ Reinvested</strong> — portion of monthly income being reinvested via DRIP (shown in blue).</li>
+        <li><strong>Mo$ Not Reinvested</strong> — portion of monthly income taken as cash (shown in amber).</li>
+        <li><strong>Est. Annual Income</strong> — estimated annual dividend income.</li>
+        <li><strong>Portfolio Value</strong> — total current market value.</li>
+        <li><strong>Avg Yield on Cost / Current Yield</strong> — dividend yield based on cost basis vs current price.</li>
+        <li><strong>Price Return / Total Return</strong> — portfolio returns excluding and including dividends.</li>
+        <li><strong>Coverage Ratio</strong> — sustainability metric for income-focused ETFs.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP$ and Cash$ Columns</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The holdings table includes two columns that split estimated monthly income by reinvestment status:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>DRIP$</strong> (blue) — the portion of monthly income being reinvested. This reflects shares held in accounts where DRIP is enabled for that ticker.</li>
+        <li><strong>Cash$</strong> (amber) — the portion of monthly income <em>not</em> being reinvested. This reflects shares held in accounts where DRIP is off.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The split is calculated per-account, so if you hold a ticker in multiple accounts with different DRIP settings,
+        only the shares in DRIP-enabled accounts contribute to the DRIP$ column. The amounts are proportional
+        to the actual share count in each account.
+      </p>
+      <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>How it works by view:</strong>
+        <ul style={{ paddingLeft: '1.5rem', marginTop: '0.5rem', lineHeight: '1.8' }}>
+          <li><strong>Individual accounts</strong> (e.g. IRA, Roth IRA) — uses that account's own DRIP flag. If DRIP is on, all income goes to DRIP$; if off, all goes to Cash$.</li>
+          <li><strong>Owner</strong> — uses the DRIP flags from sub-accounts marked under the "Owner" column in Manage Portfolios. The income is split proportionally based on sub-account ratios.</li>
+          <li><strong>Combined Portfolios</strong> — aggregates per-account income directly, splitting by each account's DRIP flag.</li>
+        </ul>
+      </div>
+      <p style={{ marginBottom: '0.75rem' }}>
+        To change a ticker's DRIP setting, go to the Holdings page and toggle the DRIP checkbox, or use
+        the DRIP Matrix to manage DRIP across all accounts at once.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The main table lists all holdings with sortable columns. Click any column header to sort.
+        Key columns include:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Ticker</strong> — click to open a detailed ticker modal with charts and dividend history.</li>
+        <li><strong>Freq</strong> — dividend payment frequency (W=Weekly, M=Monthly, Q=Quarterly, SA=Semi-Annual, A=Annual).</li>
+        <li><strong>%Acct</strong> — percentage of total portfolio value.</li>
+        <li><strong>G/L%</strong> — unrealized gain/loss percentage.</li>
+        <li><strong>PrRtn / TotRtn</strong> — price-only return and total return (including dividends).</li>
+        <li><strong>YTD</strong> — year-to-date dividends received.</li>
+        <li><strong>Mo$ / Yr$</strong> — estimated monthly and annual dividend income.</li>
+        <li><strong>PFI%</strong> — "Paid For Itself" — percentage of original cost recovered through dividends.</li>
+        <li><strong>Cov</strong> — coverage ratio. Below 0.8 is highlighted red as a warning.</li>
+        <li><strong>Grd</strong> — composite grade for the holding.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Upcoming Dividends</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Below the summary cards, a card shows dividends expected this week based on ex-dividend dates,
+        with estimated payout amounts per holding.
+      </p>
     </div>
   )
 }
@@ -2319,26 +2401,34 @@ function PortfoliosHelp() {
         <li><strong>Select</strong> — switches the active portfolio in the navbar without leaving the page.</li>
         <li><strong>Clear</strong> — removes all holdings and data from the portfolio but keeps the portfolio itself. Useful before a clean reimport.</li>
         <li><strong>Delete</strong> — permanently deletes the portfolio and all its data. The default portfolio (ID 1) cannot be deleted.</li>
-        <li><strong>Include checkbox</strong> — marks a portfolio for inclusion in the Owner reconciliation and the aggregate.</li>
-        <li><strong>+ New Portfolio</strong> button (top-right) — creates a new empty portfolio with a name you enter.</li>
+        <li><strong>Owner checkbox</strong> — marks a portfolio for inclusion in the Owner aggregate. Portfolios checked here are used for Owner reconciliation and for calculating the DRIP/Cash income split on the Dashboard.</li>
+        <li><strong>Combined checkbox</strong> — marks a portfolio for inclusion in the Combined Portfolios aggregate. This can include accounts not part of Owner (e.g. a separate brokerage account).</li>
+        <li><strong>+ New Portfolio</strong> button (top-right) — creates a new empty portfolio. New portfolios are automatically included in both Owner and Combined.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Aggregate Portfolio</h3>
+      <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>Owner vs Combined:</strong> These are independent configurations. Owner typically represents your primary
+        brokerage accounts, while Combined includes everything across all brokerages. For example, you might have
+        four accounts in Owner but five in Combined (adding an account at a different brokerage). The Dashboard's
+        DRIP$/Cash$ columns use the Owner configuration to determine which accounts' DRIP flags to consider.
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Combined Portfolios (Aggregate)</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        An aggregate is a read-only combined view of multiple portfolios. It appears in the navbar dropdown
-        when configured. You can use it to see total portfolio values and income across all selected portfolios.
+        The Combined Portfolios aggregate is a read-only combined view of multiple portfolios. It appears in the navbar dropdown
+        when configured. Use the "Combined" checkboxes in the table above to select which portfolios are included.
       </p>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
+        <li>Check the "Combined" boxes for the portfolios you want included.</li>
         <li>Enter a name for the aggregate in the <strong>Aggregate Name</strong> field.</li>
-        <li>Check the portfolios you want included.</li>
-        <li>Click <strong>"Create Aggregate"</strong> (or "Save Aggregate Config" to update an existing one).</li>
+        <li>Click <strong>"Save Aggregate Config"</strong> (or "Create Aggregate" for the first time).</li>
         <li>To remove the aggregate entirely, click <strong>"Delete Aggregate"</strong>.</li>
       </ol>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Reconcile Owner</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         This feature is available when the Owner-format import has been used. It updates the Owner portfolio
-        (profile 1) to match the combined holdings of all portfolios with <strong>Include</strong> checked.
+        (profile 1) to match the combined holdings of all portfolios with <strong>Owner</strong> checked.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>Tickers present in sub-portfolios but missing from Owner are <strong>added</strong>.</li>
@@ -2637,6 +2727,7 @@ const CONTENT_MAP = {
   export: ExportHelp,
   portfolios: PortfoliosHelp,
   settings: SettingsHelp,
+  dashboard: DashboardHelp,
   holdings: HoldingsHelp,
   categories: CategoriesHelp,
   growth: GrowthHelp,
