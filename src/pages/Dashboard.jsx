@@ -404,6 +404,8 @@ export default function Dashboard() {
     const rawYtd = sum('ytd_divs')
     const ytdDivs = rawYtd != null && rawYtd > 0 ? rawYtd : (incomeSummary?.ytd_income ?? 0)
     const monthlyIncome = sum('approx_monthly_income')
+    const monthlyReinvested = sum('monthly_income_reinvested')
+    const monthlyNotReinvested = sum('monthly_income_not_reinvested')
     const annualIncome = sum('estim_payment_per_year')
     const rawMonthIncome = sum('current_month_income')
     const currentMonthIncome = rawMonthIncome != null ? rawMonthIncome : (incomeSummary?.current_month_income ?? 0)
@@ -419,7 +421,7 @@ export default function Dashboard() {
     const priceReturn = purchaseValue ? (gainLoss / purchaseValue) : 0
     const totalReturn = purchaseValue ? ((gainLoss + totalDivs) / purchaseValue) : 0
 
-    return { ytdDivs, monthlyIncome, annualIncome, currentValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, currentMonthIncome }
+    return { ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, annualIncome, currentValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, currentMonthIncome }
   }, [holdings, incomeSummary])
 
   // Enrich holdings with computed fields
@@ -535,6 +537,8 @@ export default function Dashboard() {
         <SummaryCard label="YTD Dividends" value={fmt(totals.ytdDivs)} color="#4dff91" />
         <SummaryCard label={`${currentMonth} Income`} value={fmt(totals.currentMonthIncome)} color="#4dff91" />
         <SummaryCard label="Est. Monthly Income" value={fmt(totals.monthlyIncome)} color="#4dff91" />
+        <SummaryCard label="Mo$ Reinvested" value={fmt(totals.monthlyReinvested)} color="#7ecfff" />
+        <SummaryCard label="Mo$ Not Reinvested" value={fmt(totals.monthlyNotReinvested)} color="#ffb300" />
         <SummaryCard label="Est. Annual Income" value={fmt(totals.annualIncome)} color="#4dff91" />
         <SummaryCard label="Portfolio Value" value={fmt(totals.currentValue)} color="#7ecfff" />
         <SummaryCard label="Avg Yield on Cost" value={pct(totals.avgYoc)} />
@@ -640,6 +644,8 @@ export default function Dashboard() {
               <SortHeader col="ytd_divs" align="right" tip="Year-to-date dividends received">YTD</SortHeader>
               <SortHeader col="current_month_income" align="right" tip={`Dividend income received in ${currentMonth}`}>{currentMonth}</SortHeader>
               <SortHeader col="approx_monthly_income" align="right" tip="Estimated monthly dividend income">Mo$</SortHeader>
+              <SortHeader col="monthly_income_reinvested" align="right" tip="Monthly income being reinvested (DRIP)">DRIP$</SortHeader>
+              <SortHeader col="monthly_income_not_reinvested" align="right" tip="Monthly income NOT being reinvested (cash)">Cash$</SortHeader>
               <SortHeader col="estim_payment_per_year" align="right" tip="Estimated annual dividend income">Yr$</SortHeader>
               <SortHeader col="paid_for_itself" align="right" tip="Percentage of original cost recovered through dividends">PFI%</SortHeader>
               <SortHeader col="_coverage" align="right" tip="Coverage ratio — above 1.0 sustainable, 0.8–1.0 borderline, below 0.8 likely NAV decay">Cov</SortHeader>
@@ -678,6 +684,8 @@ export default function Dashboard() {
                   <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(h.ytd_divs)}</td>
                   <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(h.current_month_income)}</td>
                   <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(h.approx_monthly_income)}</td>
+                  <td style={{ textAlign: 'right', color: '#7ecfff' }}>{fmt(h.monthly_income_reinvested)}</td>
+                  <td style={{ textAlign: 'right', color: '#ffb300' }}>{fmt(h.monthly_income_not_reinvested)}</td>
                   <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(h.estim_payment_per_year)}</td>
                   <td style={{ textAlign: 'right', color: pfiColor(h.paid_for_itself), fontWeight: pfiVal(h.paid_for_itself) >= 100 ? 700 : 400 }}>
                     {h.paid_for_itself == null ? '—' : (h.paid_for_itself * 100).toFixed(2) + '%'}
@@ -699,6 +707,8 @@ export default function Dashboard() {
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.ytdDivs)}</td>
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.currentMonthIncome)}</td>
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.monthlyIncome)}</td>
+              <td style={{ textAlign: 'right', color: '#7ecfff' }}>{fmt(totals.monthlyReinvested)}</td>
+              <td style={{ textAlign: 'right', color: '#ffb300' }}>{fmt(totals.monthlyNotReinvested)}</td>
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.annualIncome)}</td>
               <td colSpan={3} />
             </tr>

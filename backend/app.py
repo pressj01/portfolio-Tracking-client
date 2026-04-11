@@ -1392,6 +1392,8 @@ def list_holdings():
                    SUM(a.dividend_paid) as dividend_paid,
                    SUM(a.estim_payment_per_year) as estim_payment_per_year,
                    SUM(a.approx_monthly_income) as approx_monthly_income,
+                   SUM(CASE WHEN a.reinvest = 'Y' THEN a.approx_monthly_income ELSE 0 END) as monthly_income_reinvested,
+                   SUM(CASE WHEN a.reinvest != 'Y' OR a.reinvest IS NULL THEN a.approx_monthly_income ELSE 0 END) as monthly_income_not_reinvested,
                    SUM(a.withdraw_8pct_cost_annually) as withdraw_8pct_cost_annually,
                    SUM(a.withdraw_8pct_per_month) as withdraw_8pct_per_month,
                    SUM(a.cash_not_reinvested) as cash_not_reinvested,
@@ -1451,6 +1453,60 @@ def list_holdings():
             r["current_month_income"] = _estimate_current_month_income(r)
         if r.get("ytd_divs") is None:
             r["ytd_divs"] = _estimate_ytd_income(r)
+    # For single-profile queries, compute reinvested/not-reinvested splits.
+    # Owner (profile_id=1) uses sub-account DRIP ratios since the Owner
+    # flag may be stale.  Sub-accounts use their own flag directly.
+    if not is_agg or len(pids) <= 1:
+        pid = pids[0]
+        if pid == 1:
+            # Owner: derive split from sub-account DRIP flags
+            member_rows = conn.execute(
+                "SELECT member_profile_id FROM aggregate_config"
+            ).fetchall()
+            member_ids = [r["member_profile_id"] if isinstance(r, dict)
+                          else r[0] for r in member_rows]
+
+            if member_ids:
+                mph = ",".join("?" * len(member_ids))
+                drip_rows = conn.execute(
+                    f"""SELECT ticker,
+                           SUM(CASE WHEN reinvest = 'Y' THEN approx_monthly_income ELSE 0 END) as ri,
+                           SUM(approx_monthly_income) as ti
+                        FROM all_account_info
+                        WHERE profile_id IN ({mph})
+                        GROUP BY ticker""",
+                    member_ids,
+                ).fetchall()
+                drip_map = {}
+                for dr in drip_rows:
+                    t = dr["ticker"] if isinstance(dr, dict) else dr[0]
+                    ri = (dr["ri"] if isinstance(dr, dict) else dr[1]) or 0
+                    ti = (dr["ti"] if isinstance(dr, dict) else dr[2]) or 0
+                    drip_map[t] = ri / ti if ti > 0 else 0
+
+                for r in results:
+                    if r.get("monthly_income_reinvested") is None:
+                        mi = r.get("approx_monthly_income") or 0
+                        pct = drip_map.get(r["ticker"], 0)
+                        r["monthly_income_reinvested"] = round(mi * pct, 2)
+                        r["monthly_income_not_reinvested"] = round(mi * (1 - pct), 2)
+            else:
+                for r in results:
+                    if r.get("monthly_income_reinvested") is None:
+                        mi = r.get("approx_monthly_income") or 0
+                        r["monthly_income_reinvested"] = 0
+                        r["monthly_income_not_reinvested"] = mi
+        else:
+            # Sub-account: use its own DRIP flag directly
+            for r in results:
+                if r.get("monthly_income_reinvested") is None:
+                    mi = r.get("approx_monthly_income") or 0
+                    if r.get("reinvest") == "Y":
+                        r["monthly_income_reinvested"] = mi
+                        r["monthly_income_not_reinvested"] = 0
+                    else:
+                        r["monthly_income_reinvested"] = 0
+                        r["monthly_income_not_reinvested"] = mi
 
     conn.close()
     return jsonify(results)
