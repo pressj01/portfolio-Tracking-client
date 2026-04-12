@@ -376,6 +376,16 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    # ── scanner_tickers ──────────────────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS scanner_tickers (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker     TEXT NOT NULL UNIQUE,
+            added_date TEXT NOT NULL DEFAULT (date('now')),
+            sort_order INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
     # ── watchlist_sold ─────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS watchlist_sold (
@@ -612,6 +622,21 @@ def ensure_tables_exist(conn=None):
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT
+        )
+    """)
+
+    # ── regime_predictions (Brier score tracking) ─────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS regime_predictions (
+            prediction_date TEXT NOT NULL,
+            horizon         TEXT NOT NULL,
+            target_date     TEXT NOT NULL,
+            prob_q1         REAL NOT NULL,
+            prob_q2         REAL NOT NULL,
+            prob_q3         REAL NOT NULL,
+            prob_q4         REAL NOT NULL,
+            actual_quadrant INTEGER,
+            PRIMARY KEY (prediction_date, horizon)
         )
     """)
 

@@ -9,6 +9,9 @@ import shutil
 _db_dir = os.environ.get("PORTFOLIO_DB_DIR") or os.path.dirname(__file__)
 DB_PATH = os.path.join(_db_dir, "portfolio.db")
 
+# FRED API key — free from https://fred.stlouisfed.org/docs/api/api_key.html
+FRED_API_KEY = os.environ.get("FRED_API_KEY", "671ceb29bc5f990efc7171faf23088e6")
+
 # One-time migration: if the database exists in the old location (inside the
 # app bundle) but not yet in the user-data folder, copy it over so existing
 # data is preserved after the first update.

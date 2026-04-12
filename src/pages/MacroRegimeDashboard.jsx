@@ -1420,71 +1420,121 @@ function QuadrantTab({ pf }) {
       </div>
 
       {/* FRED Economic Indicators */}
-      {data.fred_indicators && (
-        <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-            <h3 style={{ color: '#90caf9', margin: 0, fontSize: '1rem' }}>FRED Economic Indicators (Z-Scores)</h3>
-            <span style={{ fontSize: '0.7rem', color: '#666', background: '#0e1525', padding: '2px 8px', borderRadius: 4 }}>
-              Source: {data.classification_source || 'FRED'}
-            </span>
-          </div>
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            {Object.entries(data.fred_indicators).map(([name, info]) => {
-              const extColor = info.extremity === 'Extreme' ? '#ef5350' : info.extremity === 'Elevated' ? '#ff9800' : '#4caf50'
+      {data.fred_indicators && (() => {
+        const categories = [
+          { key: 'growth', label: 'Growth', color: '#4caf50' },
+          { key: 'inflation', label: 'Inflation', color: '#ff9800' },
+          { key: 'financial', label: 'Financial Conditions', color: '#42a5f5' },
+          { key: 'sentiment', label: 'Sentiment', color: '#b39ddb' },
+        ]
+        const entries = Object.entries(data.fred_indicators)
+        const growthCount = entries.filter(([, v]) => v.category === 'growth').length
+        const inflationCount = entries.filter(([, v]) => v.category === 'inflation').length
+        return (
+          <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <h3 style={{ color: '#90caf9', margin: 0, fontSize: '1rem' }}>FRED Economic Indicators (Z-Scores)</h3>
+              <span style={{ fontSize: '0.7rem', color: '#666', background: '#0e1525', padding: '2px 8px', borderRadius: 4 }}>
+                Source: {data.classification_source || 'FRED'} · {entries.length} indicators via FRED API
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.6rem', padding: '0.4rem 0.6rem', background: '#0e1525', borderRadius: 6, fontSize: '0.65rem', color: '#90a4ae', alignItems: 'center' }}>
+              <span style={{ fontWeight: 600, color: '#e0e8f5' }}>Z-Score Guide:</span>
+              <span>A Z-score measures how far a value is from its historical average in standard deviations.</span>
+              <span style={{ color: '#4caf50' }}>● Normal (&lt;1.0)</span>
+              <span style={{ color: '#ff9800' }}>● Elevated (1.0–2.0)</span>
+              <span style={{ color: '#ef5350' }}>● Extreme (&gt;2.0)</span>
+              <span style={{ color: '#90a4ae' }}>| + positive = above avg | − negative = below avg</span>
+            </div>
+            {categories.map(cat => {
+              const catEntries = entries.filter(([, v]) => v.category === cat.key)
+              if (catEntries.length === 0) return null
               return (
-                <div key={name} style={{
-                  flex: '1 1 200px', background: '#0e1525', borderRadius: 8, padding: '0.65rem 0.85rem',
-                  border: `1px solid ${extColor}33`,
-                }}>
-                  <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>{name}</div>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
-                    <span style={{ fontSize: '1.1rem', fontWeight: 700, color: '#e0e8f5' }}>
-                      {info.current_value}
-                    </span>
-                    <span style={{
-                      fontSize: '0.75rem', fontWeight: 600, padding: '1px 6px', borderRadius: 4,
-                      background: `${extColor}22`, color: extColor,
-                    }}>
-                      Z: {info.z_score?.toFixed(2)}
-                    </span>
+                <div key={cat.key} style={{ marginBottom: '0.75rem' }}>
+                  <div style={{ fontSize: '0.7rem', color: cat.color, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1, marginBottom: '0.35rem', borderBottom: `1px solid ${cat.color}33`, paddingBottom: 3 }}>
+                    {cat.label}
                   </div>
-                  <div style={{ fontSize: '0.7rem', color: '#666', marginTop: 2 }}>
-                    {info.direction} · {info.extremity} · as of {info.latest_date}
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {catEntries.map(([name, info]) => {
+                      const extColor = info.extremity === 'Extreme' ? '#ef5350' : info.extremity === 'Elevated' ? '#ff9800' : '#4caf50'
+                      const zChg = info.z_change || 0
+                      const zArrow = zChg > 0.01 ? '▲' : zChg < -0.01 ? '▼' : '→'
+                      const zChgColor = zChg > 0.01 ? '#4caf50' : zChg < -0.01 ? '#ef5350' : '#666'
+                      return (
+                        <div key={name} style={{
+                          flex: '1 1 210px', background: '#0e1525', borderRadius: 8, padding: '0.55rem 0.75rem',
+                          border: `1px solid ${extColor}33`,
+                        }}>
+                          <div style={{ fontSize: '0.72rem', color: '#90a4ae', marginBottom: 3 }}>{name}</div>
+                          <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', flexWrap: 'wrap' }}>
+                            {info.previous_value != null && (
+                              <span style={{ fontSize: '0.72rem', color: '#666', textDecoration: 'line-through' }}>
+                                {info.previous_value}
+                              </span>
+                            )}
+                            {info.previous_value != null && (
+                              <span style={{ fontSize: '0.72rem', color: '#666' }}>→</span>
+                            )}
+                            <span style={{ fontSize: '1rem', fontWeight: 700, color: '#e0e8f5' }}>
+                              {info.current_value}
+                            </span>
+                            <span style={{
+                              fontSize: '0.72rem', fontWeight: 600, padding: '1px 5px', borderRadius: 4,
+                              background: `${extColor}22`, color: extColor,
+                            }}>
+                              Z: {info.z_score?.toFixed(2)}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.65rem', color: '#666', marginTop: 2 }}>
+                            <span>{info.direction} · {info.extremity}</span>
+                            {info.previous_z != null && (
+                              <span style={{ color: zChgColor, fontWeight: 600 }}>
+                                {zArrow} {Math.abs(zChg).toFixed(2)}
+                              </span>
+                            )}
+                            <span>· {info.latest_date}</span>
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )
             })}
-            {data.fred_growth_z != null && (
-              <div style={{
-                flex: '1 1 200px', background: '#0e1525', borderRadius: 8, padding: '0.65rem 0.85rem',
-                border: '1px solid #42a5f533',
-              }}>
-                <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>Composite Growth Z</div>
-                <div style={{ fontSize: '1.1rem', fontWeight: 700, color: data.fred_growth_z > 0 ? '#4caf50' : '#ef5350' }}>
-                  {data.fred_growth_z.toFixed(2)}
+            {/* Composite Z-scores */}
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem', borderTop: '1px solid #1a2233', paddingTop: '0.5rem' }}>
+              {data.fred_growth_z != null && (
+                <div style={{
+                  flex: '1 1 200px', background: '#0e1525', borderRadius: 8, padding: '0.55rem 0.75rem',
+                  border: '1px solid #4caf5033',
+                }}>
+                  <div style={{ fontSize: '0.72rem', color: '#90a4ae', marginBottom: 3 }}>Composite Growth Z</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: data.fred_growth_z > 0 ? '#4caf50' : '#ef5350' }}>
+                    {data.fred_growth_z.toFixed(2)}
+                  </div>
+                  <div style={{ fontSize: '0.65rem', color: '#666', marginTop: 2 }}>
+                    Average of {growthCount} growth indicators
+                  </div>
                 </div>
-                <div style={{ fontSize: '0.7rem', color: '#666', marginTop: 2 }}>
-                  (IndProd + Housing) / 2
+              )}
+              {data.fred_inflation_z != null && (
+                <div style={{
+                  flex: '1 1 200px', background: '#0e1525', borderRadius: 8, padding: '0.55rem 0.75rem',
+                  border: '1px solid #ff980033',
+                }}>
+                  <div style={{ fontSize: '0.72rem', color: '#90a4ae', marginBottom: 3 }}>Composite Inflation Z</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: data.fred_inflation_z > 0 ? '#ef5350' : '#4caf50' }}>
+                    {data.fred_inflation_z.toFixed(2)}
+                  </div>
+                  <div style={{ fontSize: '0.65rem', color: '#666', marginTop: 2 }}>
+                    Average of {inflationCount} inflation indicators
+                  </div>
                 </div>
-              </div>
-            )}
-            {data.fred_inflation_z != null && (
-              <div style={{
-                flex: '1 1 200px', background: '#0e1525', borderRadius: 8, padding: '0.65rem 0.85rem',
-                border: '1px solid #42a5f533',
-              }}>
-                <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>Inflation Z (CPI)</div>
-                <div style={{ fontSize: '1.1rem', fontWeight: 700, color: data.fred_inflation_z > 0 ? '#ef5350' : '#4caf50' }}>
-                  {data.fred_inflation_z.toFixed(2)}
-                </div>
-                <div style={{ fontSize: '0.7rem', color: '#666', marginTop: 2 }}>
-                  CPI 3m ROC Z-score
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* Interpretation & Likely Direction */}
       {data.interpretation && (() => {
@@ -1694,29 +1744,80 @@ function QuadrantTab({ pf }) {
           <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
             Forward Projections (from Q{data.current_quadrant})
           </h3>
-          {/* 4-Week Outlook Summary */}
-          {proj['4_week'] && (
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-              {[1, 2, 3, 4].map(q => {
-                const pct = ((proj['4_week']?.[`Q${q}`] || 0) * 100).toFixed(0)
-                const isMax = pct === Math.max(...[1,2,3,4].map(qq => (proj['4_week']?.[`Q${qq}`] || 0) * 100)).toFixed(0)
+          {/* 2-Month Forecast Hero */}
+          {proj['8_week'] && (
+            <div style={{ marginBottom: '0.75rem' }}>
+              <div style={{ fontSize: '0.75rem', color: '#b0bec5', fontWeight: 600, marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: 1 }}>
+                2-Month Forecast (8 Weeks)
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {[1, 2, 3, 4].map(q => {
+                  const pct8 = ((proj['8_week']?.[`Q${q}`] || 0) * 100)
+                  const pct1 = ((proj['1_week']?.[`Q${q}`] || 0) * 100)
+                  const delta = pct8 - pct1
+                  const isMax = pct8.toFixed(0) === Math.max(...[1,2,3,4].map(qq => (proj['8_week']?.[`Q${qq}`] || 0) * 100)).toFixed(0)
+                  return (
+                    <div key={q} style={{
+                      flex: 1, minWidth: 140, padding: '0.6rem 0.75rem', borderRadius: 8,
+                      background: isMax ? `${QUAD_COLORS[q]}30` : '#0e1525',
+                      border: isMax ? `2px solid ${QUAD_COLORS[q]}` : '1px solid #1a2233',
+                      textAlign: 'center',
+                    }}>
+                      <div style={{ fontSize: '0.72rem', color: QUAD_COLORS[q], fontWeight: 600, marginBottom: 4 }}>
+                        Q{q} {QUAD_LABELS[q]?.split(' ').slice(1).join(' ')}
+                      </div>
+                      <div style={{ fontSize: '1.5rem', fontWeight: 700, color: isMax ? '#fff' : '#90a4ae' }}>
+                        {pct8.toFixed(0)}%
+                      </div>
+                      <div style={{ fontSize: '0.65rem', color: delta > 0.5 ? '#ff9800' : delta < -0.5 ? '#4caf50' : '#666', marginTop: 2 }}>
+                        {delta > 0.5 ? `▲ ${delta.toFixed(1)}pp from 1wk` : delta < -0.5 ? `▼ ${Math.abs(delta).toFixed(1)}pp from 1wk` : `→ stable vs 1wk`}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+              {(() => {
+                const maxQ = [1,2,3,4].reduce((best, q) => (proj['8_week']?.[`Q${q}`] || 0) > (proj['8_week']?.[`Q${best}`] || 0) ? q : best, 1)
+                const maxPct = ((proj['8_week']?.[`Q${maxQ}`] || 0) * 100).toFixed(0)
+                const stagPct = ((proj['8_week']?.Q3 || 0) * 100).toFixed(0)
                 return (
-                  <div key={q} style={{
-                    flex: 1, minWidth: 90, padding: '0.4rem 0.5rem', borderRadius: 6,
-                    background: isMax ? `${QUAD_COLORS[q]}30` : '#0e1525',
-                    border: isMax ? `2px solid ${QUAD_COLORS[q]}` : '1px solid #1a2233',
-                    textAlign: 'center',
-                  }}>
-                    <div style={{ fontSize: '0.7rem', color: QUAD_COLORS[q], fontWeight: 600, marginBottom: 2 }}>
-                      Q{q} {QUAD_LABELS[q]?.split(' ').slice(1).join(' ')}
-                    </div>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: isMax ? '#fff' : '#90a4ae' }}>
-                      {pct}%
-                    </div>
-                    <div style={{ fontSize: '0.65rem', color: '#667' }}>4-week</div>
+                  <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#b0bec5', background: '#0e1525', padding: '0.4rem 0.75rem', borderRadius: 6 }}>
+                    Most likely regime in 2 months: <strong style={{ color: QUAD_COLORS[maxQ] }}>Q{maxQ} {QUAD_LABELS[maxQ]?.split(' ').slice(1).join(' ')}</strong> at {maxPct}%
+                    {maxQ !== 3 && Number(stagPct) >= 20 && (
+                      <span> · <span style={{ color: '#ef5350' }}>Stagflation risk: {stagPct}%</span></span>
+                    )}
                   </div>
                 )
-              })}
+              })()}
+            </div>
+          )}
+          {/* 4-Week Outlook Summary */}
+          {proj['4_week'] && (
+            <div style={{ marginBottom: '0.75rem' }}>
+              <div style={{ fontSize: '0.7rem', color: '#90a4ae', fontWeight: 600, marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: 1 }}>
+                1-Month Outlook (4 Weeks)
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {[1, 2, 3, 4].map(q => {
+                  const pct = ((proj['4_week']?.[`Q${q}`] || 0) * 100).toFixed(0)
+                  const isMax = pct === Math.max(...[1,2,3,4].map(qq => (proj['4_week']?.[`Q${qq}`] || 0) * 100)).toFixed(0)
+                  return (
+                    <div key={q} style={{
+                      flex: 1, minWidth: 90, padding: '0.4rem 0.5rem', borderRadius: 6,
+                      background: isMax ? `${QUAD_COLORS[q]}30` : '#0e1525',
+                      border: isMax ? `2px solid ${QUAD_COLORS[q]}` : '1px solid #1a2233',
+                      textAlign: 'center',
+                    }}>
+                      <div style={{ fontSize: '0.7rem', color: QUAD_COLORS[q], fontWeight: 600, marginBottom: 2 }}>
+                        Q{q} {QUAD_LABELS[q]?.split(' ').slice(1).join(' ')}
+                      </div>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 700, color: isMax ? '#fff' : '#90a4ae' }}>
+                        {pct}%
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           )}
           <Plot
@@ -1852,6 +1953,72 @@ function QuadrantTab({ pf }) {
             )
           })}
         </div>
+      </div>
+
+      {/* Brier Score — Model Accuracy Tracker */}
+      <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+        <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
+          Model Accuracy — Brier Score
+        </h3>
+        <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: '0.75rem', lineHeight: 1.5, background: '#0e1525', padding: '0.5rem 0.75rem', borderRadius: 6 }}>
+          <p style={{ margin: '0 0 0.4rem' }}>
+            The <strong style={{ color: '#e0e8f5' }}>Brier Score</strong> measures how accurate the model's probability forecasts are over time.
+            Each week, the model predicts the probability of landing in each of the 4 quadrants. When the target date arrives,
+            we compare the prediction to what actually happened.
+          </p>
+          <p style={{ margin: '0 0 0.4rem' }}>
+            <strong style={{ color: '#e0e8f5' }}>How it works:</strong> For each prediction, we compute (predicted probability − actual outcome)²
+            across all 4 quadrants, then average over all predictions. A perfect forecast scores <strong style={{ color: '#4caf50' }}>0.0</strong>,
+            and a completely wrong forecast scores close to <strong style={{ color: '#ef5350' }}>2.0</strong>.
+          </p>
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginTop: '0.3rem' }}>
+            <span><span style={{ color: '#4caf50', fontWeight: 600 }}>● Excellent (&lt;0.10)</span> — Very well calibrated</span>
+            <span><span style={{ color: '#66bb6a', fontWeight: 600 }}>● Good (&lt;0.25)</span> — Useful predictions</span>
+            <span><span style={{ color: '#ff9800', fontWeight: 600 }}>● Fair (&lt;0.50)</span> — Some predictive value</span>
+            <span><span style={{ color: '#ef5350', fontWeight: 600 }}>● Poor (≥0.50)</span> — No better than random</span>
+          </div>
+        </div>
+        {data.brier_scores ? (
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            {[
+              { key: '1_week', label: '1-Week Forecast' },
+              { key: '4_week', label: '1-Month Forecast' },
+              { key: '8_week', label: '2-Month Forecast' },
+            ].map(({ key, label }) => {
+              const bs = data.brier_scores[key]
+              if (!bs) return (
+                <div key={key} style={{
+                  flex: 1, minWidth: 180, background: '#0e1525', borderRadius: 8,
+                  padding: '0.75rem', border: '1px solid #1a2233', textAlign: 'center',
+                }}>
+                  <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>{label}</div>
+                  <div style={{ fontSize: '1rem', color: '#666' }}>Collecting data...</div>
+                  <div style={{ fontSize: '0.65rem', color: '#555', marginTop: 4 }}>Needs ≥2 resolved predictions</div>
+                </div>
+              )
+              const scoreColor = bs.rating === 'Excellent' ? '#4caf50' : bs.rating === 'Good' ? '#66bb6a' : bs.rating === 'Fair' ? '#ff9800' : '#ef5350'
+              return (
+                <div key={key} style={{
+                  flex: 1, minWidth: 180, background: '#0e1525', borderRadius: 8,
+                  padding: '0.75rem', border: `1px solid ${scoreColor}44`, textAlign: 'center',
+                }}>
+                  <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>{label}</div>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 700, color: scoreColor }}>{bs.score.toFixed(3)}</div>
+                  <div style={{ fontSize: '0.72rem', color: scoreColor, fontWeight: 600, marginTop: 2 }}>{bs.rating}</div>
+                  <div style={{ fontSize: '0.65rem', color: '#666', marginTop: 4 }}>{bs.n_predictions} predictions scored</div>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '1rem', color: '#666' }}>
+            <div style={{ fontSize: '1rem', marginBottom: '0.3rem' }}>Tracking started — collecting predictions</div>
+            <div style={{ fontSize: '0.75rem' }}>
+              Brier scores will appear once enough time has passed for predictions to be verified against actual outcomes.
+              The 1-week score will populate first (after ~2 weeks), followed by 1-month and 2-month scores.
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

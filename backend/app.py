@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pandas as pd
 from flask import Flask, request, jsonify, session, send_file
 from flask_cors import CORS
-from config import get_connection
+from config import get_connection, FRED_API_KEY
 from database import ensure_tables_exist
 from import_data import (
     import_from_excel, import_from_upload,
@@ -1906,7 +1906,9 @@ def _rollup_transactions(ticker, profile_id, conn):
             """UPDATE all_account_info
                SET quantity = ?, price_paid = ?, purchase_value = ?,
                    purchase_date = ?, base_quantity = ?, import_date = ?,
-                   realized_gains = ?
+                   realized_gains = ?,
+                   current_value = NULL, gain_or_loss = NULL,
+                   gain_or_loss_percentage = NULL, percent_change = NULL
                WHERE ticker = ? AND profile_id = ?""",
             (round(total_shares, 6), round(avg_price, 4), round(total_cost, 2),
              earliest_buy, round(total_shares, 6), _date.today().isoformat(),
@@ -6812,6 +6814,23 @@ def _bss_sma(close, period):
     if price_f < sma_f * 0.99:
         return "SELL", sma_f, pct
     return "NEUTRAL", sma_f, pct
+
+
+def _slow_stochastic(high, low, close, k_period=14, k_smooth=3, d_period=3):
+    """Slow Stochastic. Returns (slow_k, slow_d) latest values."""
+    needed = k_period + k_smooth + d_period
+    if len(close) < needed:
+        return None, None
+    lowest_low = low.rolling(k_period).min()
+    highest_high = high.rolling(k_period).max()
+    denom = highest_high - lowest_low
+    denom = denom.replace(0, float("nan"))
+    raw_k = (close - lowest_low) / denom * 100
+    slow_k = raw_k.rolling(k_smooth).mean()
+    slow_d = slow_k.rolling(d_period).mean()
+    k_val = float(slow_k.iloc[-1]) if not pd.isna(slow_k.iloc[-1]) else None
+    d_val = float(slow_d.iloc[-1]) if not pd.isna(slow_d.iloc[-1]) else None
+    return k_val, d_val
 
 
 def _bss_vote(signals):
@@ -14162,16 +14181,46 @@ def dividend_history_data():
 
 # ── 4-Quadrant Regime & Markov Chain ──────────────────────────────────────────
 
+# FRED series configuration for regime classification
+# transform: "roc_3m" = 3-month rate-of-change then Z-score; "level" = Z-score raw value
+# invert: True = negate Z-score (higher raw value = worse for that category)
+FRED_SERIES_CONFIG = {
+    # Growth indicators
+    "Industrial Production": {"id": "INDPRO",        "category": "growth",    "transform": "roc_3m"},
+    "Housing Starts":        {"id": "HOUST",         "category": "growth",    "transform": "roc_3m"},
+    "Nonfarm Payrolls":      {"id": "PAYEMS",        "category": "growth",    "transform": "roc_3m"},
+    "Jobless Claims":        {"id": "ICSA",          "category": "growth",    "transform": "level", "invert": True},
+    "Unemployment Rate":     {"id": "UNRATE",        "category": "growth",    "transform": "level", "invert": True},
+    # Inflation indicators
+    "CPI":                   {"id": "CPIAUCSL",      "category": "inflation", "transform": "roc_3m"},
+    "Core CPI":              {"id": "CPILFESL",      "category": "inflation", "transform": "roc_3m"},
+    "Breakeven Inflation":   {"id": "T10YIE",        "category": "inflation", "transform": "level"},
+    # Financial conditions
+    "HY Credit Spread":     {"id": "BAMLH0A0HYM2",  "category": "financial", "transform": "level", "invert": True},
+    "Yield Curve (10Y-2Y)":  {"id": "T10Y2Y",       "category": "financial", "transform": "level"},
+    # Sentiment
+    "Consumer Sentiment":    {"id": "UMCSENT",       "category": "sentiment", "transform": "level"},
+}
+
+
 def _fetch_fred_series(series_id, start="2000-01-01"):
-    """Fetch a FRED series as a DataFrame (no API key needed)."""
+    """Fetch a FRED series as a DataFrame via the official FRED JSON API."""
     import requests as _req
-    from io import StringIO
-    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start}"
-    r = _req.get(url, timeout=15)
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    params = {
+        "series_id": series_id,
+        "api_key": FRED_API_KEY,
+        "file_type": "json",
+        "observation_start": start,
+        "sort_order": "asc",
+    }
+    r = _req.get(url, params=params, timeout=15)
     r.raise_for_status()
-    df = pd.read_csv(StringIO(r.text), parse_dates=["observation_date"])
-    df = df.replace(".", pd.NA).dropna()
-    df = df.rename(columns={"observation_date": "date", series_id: "value"})
+    data = r.json()
+    obs = data.get("observations", [])
+    records = [(o["date"], o["value"]) for o in obs if o["value"] != "."]
+    df = pd.DataFrame(records, columns=["date", "value"])
+    df["date"] = pd.to_datetime(df["date"])
     df["value"] = df["value"].astype(float)
     return df.set_index("date")
 
@@ -14193,39 +14242,101 @@ def macro_quadrant():
 
     try:
         # ── A. FRED economic data for current classification ──────────────
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         fred_ok = True
         fred_indicators = {}
         try:
-            cpi_df = _fetch_fred_series("CPIAUCSL")
-            indpro_df = _fetch_fred_series("INDPRO")
-            houst_df = _fetch_fred_series("HOUST")
+            # Fetch all series in parallel for speed
+            fred_dfs = {}
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                futures = {
+                    pool.submit(_fetch_fred_series, cfg["id"]): name
+                    for name, cfg in FRED_SERIES_CONFIG.items()
+                }
+                for future in as_completed(futures):
+                    name = futures[future]
+                    try:
+                        fred_dfs[name] = future.result()
+                    except Exception:
+                        pass  # Skip failed series, continue with the rest
 
-            for name, df in [("CPI", cpi_df), ("Industrial Production", indpro_df),
-                             ("Housing Starts", houst_df)]:
-                df["roc_3m"] = df["value"].pct_change(3) * 100
-                roc = df["roc_3m"].dropna()
-                latest_roc = float(roc.iloc[-1])
-                mean_roc = float(roc.mean())
-                std_roc = float(roc.std())
-                z = (latest_roc - mean_roc) / std_roc if std_roc > 0 else 0.0
+            if len(fred_dfs) < 3:
+                raise ValueError("Too few FRED series returned")
+
+            for name, df in fred_dfs.items():
+                cfg = FRED_SERIES_CONFIG[name]
+                if cfg["transform"] == "roc_3m":
+                    df["roc_3m"] = df["value"].pct_change(3) * 100
+                    series = df["roc_3m"].dropna()
+                    latest_val = float(series.iloc[-1])
+                    display_val = f"{latest_val:.2f}% (3m ROC)"
+                else:
+                    series = df["value"].dropna()
+                    latest_val = float(series.iloc[-1])
+                    # Format display based on series type
+                    if name == "Jobless Claims":
+                        display_val = f"{latest_val:,.0f}"
+                    elif name == "Nonfarm Payrolls":
+                        display_val = f"{latest_val:,.0f}K"
+                    else:
+                        display_val = f"{latest_val:.2f}"
+
+                mean_val = float(series.mean())
+                std_val = float(series.std())
+                z = (latest_val - mean_val) / std_val if std_val > 0 else 0.0
+
+                # Previous value and Z-score for trend comparison
+                prev_val = float(series.iloc[-2]) if len(series) >= 2 else latest_val
+                prev_z = (prev_val - mean_val) / std_val if std_val > 0 else 0.0
+
+                # Invert Z-score for indicators where higher = worse
+                if cfg.get("invert"):
+                    z = -z
+                    prev_z = -prev_z
+
                 extremity = ("Extreme" if abs(z) > 2 else
                              "Elevated" if abs(z) > 1 else "Normal")
+
+                # Format previous display value
+                if cfg["transform"] == "roc_3m":
+                    prev_display = f"{prev_val:.2f}%"
+                elif name == "Jobless Claims":
+                    prev_display = f"{prev_val:,.0f}"
+                elif name == "Nonfarm Payrolls":
+                    prev_display = f"{prev_val:,.0f}K"
+                else:
+                    prev_display = f"{prev_val:.2f}"
+
+                # Direction logic
+                raw_change = latest_val - prev_val
+                if cfg["transform"] == "roc_3m":
+                    direction = "Rising" if latest_val > 0 else "Falling"
+                else:
+                    if cfg.get("invert"):
+                        direction = "Improving" if raw_change < 0 else ("Worsening" if raw_change > 0 else "Stable")
+                    else:
+                        direction = "Rising" if raw_change > 0 else ("Falling" if raw_change < 0 else "Stable")
+
                 fred_indicators[name] = {
-                    "current_value": f"{latest_roc:.2f}% (3m ROC)",
+                    "current_value": display_val,
+                    "previous_value": prev_display,
+                    "previous_date": series.index[-2].strftime("%Y-%m-%d") if len(series) >= 2 else None,
                     "z_score": round(z, 2),
+                    "previous_z": round(prev_z, 2),
+                    "z_change": round(z - prev_z, 2),
                     "extremity": extremity,
-                    "direction": "Rising" if latest_roc > 0 else "Falling",
+                    "direction": direction,
                     "latest_date": df.index[-1].strftime("%Y-%m-%d"),
-                    "history_mean": round(mean_roc, 2),
-                    "history_std": round(std_roc, 2),
+                    "history_mean": round(mean_val, 2),
+                    "history_std": round(std_val, 2),
+                    "category": cfg["category"],
                 }
 
-            # Composite Z-scores
-            indpro_z = fred_indicators["Industrial Production"]["z_score"]
-            houst_z = fred_indicators["Housing Starts"]["z_score"]
-            cpi_z = fred_indicators["CPI"]["z_score"]
-            fred_growth_z = round((indpro_z + houst_z) / 2, 2)
-            fred_inflation_z = cpi_z
+            # Composite Z-scores — average all available indicators per category
+            growth_zs = [v["z_score"] for v in fred_indicators.values() if v["category"] == "growth"]
+            inflation_zs = [v["z_score"] for v in fred_indicators.values() if v["category"] == "inflation"]
+            fred_growth_z = round(sum(growth_zs) / len(growth_zs), 2) if growth_zs else None
+            fred_inflation_z = round(sum(inflation_zs) / len(inflation_zs), 2) if inflation_zs else None
 
         except Exception:
             fred_ok = False
@@ -14399,6 +14510,67 @@ def macro_quadrant():
                     adjusted_row[current_quad - 1] -= reversion_strength
                     adjusted_row[0] += reversion_strength  # Q1
 
+        # ── Financial conditions adjustments ──
+        # HY credit spreads widening → stress building → favor downside quadrants
+        hy_z = fred_indicators.get("HY Credit Spread", {}).get("z_score")
+        if hy_z is not None and hy_z < -1.0:
+            # Inverted Z: negative = spreads widening = stress
+            stress_strength = min((abs(hy_z) - 1.0) * 0.12, 0.20)
+            if current_quad in (1, 2):
+                # Growth-UP quads → risk of moving to growth-DOWN
+                if fred_inflation_z is not None and fred_inflation_z > 0.5:
+                    # Inflation still elevated → Stagflation risk
+                    adjusted_row[current_quad - 1] -= stress_strength
+                    adjusted_row[2] += stress_strength * 0.7   # Q3 Stagflation
+                    adjusted_row[3] += stress_strength * 0.3   # Q4 Deflation
+                else:
+                    # Inflation low → Deflation risk
+                    adjusted_row[current_quad - 1] -= stress_strength
+                    adjusted_row[3] += stress_strength * 0.7   # Q4 Deflation
+                    adjusted_row[2] += stress_strength * 0.3   # Q3 Stagflation
+
+        # Yield curve inversion → recession signal → favor deflation/stagflation
+        yc_z = fred_indicators.get("Yield Curve (10Y-2Y)", {}).get("z_score")
+        if yc_z is not None and yc_z < -1.0:
+            # Deeply inverted/flat curve
+            yc_strength = min((abs(yc_z) - 1.0) * 0.10, 0.15)
+            if current_quad in (1, 2):
+                adjusted_row[current_quad - 1] -= yc_strength
+                adjusted_row[3] += yc_strength * 0.6   # Q4 Deflation
+                adjusted_row[2] += yc_strength * 0.4   # Q3 Stagflation
+
+        # ── Sentiment adjustments ──
+        # Consumer sentiment deeply depressed → economic weakness ahead
+        sent_z = fred_indicators.get("Consumer Sentiment", {}).get("z_score")
+        if sent_z is not None and sent_z < -1.0:
+            # Depressed sentiment → headwind for growth-UP quadrants
+            sent_strength = min((abs(sent_z) - 1.0) * 0.10, 0.20)
+            if current_quad in (1, 2):
+                adjusted_row[current_quad - 1] -= sent_strength
+                if fred_inflation_z is not None and fred_inflation_z > 0.5:
+                    # Weak sentiment + elevated inflation → Stagflation
+                    adjusted_row[2] += sent_strength * 0.65  # Q3 Stagflation
+                    adjusted_row[3] += sent_strength * 0.35  # Q4 Deflation
+                else:
+                    adjusted_row[3] += sent_strength * 0.65  # Q4 Deflation
+                    adjusted_row[2] += sent_strength * 0.35  # Q3 Stagflation
+            elif current_quad == 3:
+                # Already in Stagflation with bad sentiment → more sticky
+                adjusted_row[current_quad - 1] += sent_strength * 0.3
+                adjusted_row[0] -= sent_strength * 0.15  # Less likely to escape to Q1
+                adjusted_row[1] -= sent_strength * 0.15  # Less likely to escape to Q2
+
+        # ── Combined stress signal ──
+        # When multiple stress indicators align, amplify the shift
+        stress_count = sum(1 for z_val in [hy_z, yc_z, sent_z]
+                           if z_val is not None and z_val < -1.0)
+        if stress_count >= 2 and current_quad in (1, 2):
+            # Multiple stress signals → additional shift away from growth-UP
+            combo_strength = 0.05 * stress_count
+            adjusted_row[current_quad - 1] -= combo_strength
+            adjusted_row[2] += combo_strength * 0.5   # Q3
+            adjusted_row[3] += combo_strength * 0.5   # Q4
+
         # Clamp to [0, 1] and renormalize
         adjusted_row = [max(0.0, v) for v in adjusted_row]
         adj_sum = sum(adjusted_row)
@@ -14502,11 +14674,7 @@ def macro_quadrant():
 
         # Lead with FRED Z-score analysis when available
         if fred_ok:
-            cpi_info = fred_indicators.get("CPI", {})
-            indpro_info = fred_indicators.get("Industrial Production", {})
-            houst_info = fred_indicators.get("Housing Starts", {})
-
-            # Report Z-scores
+            # Report elevated/extreme Z-scores
             z_parts = []
             for name, info in fred_indicators.items():
                 z = info["z_score"]
@@ -14518,23 +14686,47 @@ def macro_quadrant():
                     "FRED economic data: " + "; ".join(z_parts) + "."
                 )
 
-            # Growth mean-reversion risk
+            # Growth composite analysis
+            n_growth = len([v for v in fred_indicators.values() if v["category"] == "growth"])
             if fred_growth_z is not None and fred_growth_z > 1.5:
                 direction_parts.append(
-                    f"Growth composite Z-score ({fred_growth_z:.2f}) is elevated — "
+                    f"Growth composite Z-score ({fred_growth_z:.2f}, avg of {n_growth} indicators) is elevated — "
                     f"historical mean reversion suggests growth may decelerate."
                 )
             elif fred_growth_z is not None and fred_growth_z < -1.0:
                 direction_parts.append(
-                    f"Growth composite Z-score ({fred_growth_z:.2f}) is depressed — "
+                    f"Growth composite Z-score ({fred_growth_z:.2f}, avg of {n_growth} indicators) is depressed — "
                     f"potential for recovery/bounce."
                 )
 
-            # Inflation persistence risk
+            # Inflation composite analysis
+            n_inflation = len([v for v in fred_indicators.values() if v["category"] == "inflation"])
             if fred_inflation_z is not None and fred_inflation_z > 1.5:
                 direction_parts.append(
-                    f"CPI Z-score ({fred_inflation_z:.2f}) indicates persistent "
+                    f"Inflation composite Z-score ({fred_inflation_z:.2f}, avg of {n_inflation} indicators) indicates persistent "
                     f"inflation pressure well above historical norms."
+                )
+
+            # Financial conditions warning
+            hy_info = fred_indicators.get("HY Credit Spread", {})
+            yc_info = fred_indicators.get("Yield Curve (10Y-2Y)", {})
+            if hy_info.get("extremity") in ("Extreme", "Elevated"):
+                direction_parts.append(
+                    f"High-yield credit spreads are {hy_info['extremity'].lower()} (Z: {hy_info['z_score']:.2f}) — "
+                    f"financial stress is building."
+                )
+            if yc_info and yc_info.get("z_score", 0) < -1.0:
+                direction_parts.append(
+                    f"Yield curve (10Y-2Y) Z-score is {yc_info['z_score']:.2f} — "
+                    f"flat/inverted curve signals recession risk."
+                )
+
+            # Consumer sentiment warning
+            sent_info = fred_indicators.get("Consumer Sentiment", {})
+            if sent_info.get("z_score", 0) < -1.5:
+                direction_parts.append(
+                    f"Consumer Sentiment is very depressed (Z: {sent_info['z_score']:.2f}) — "
+                    f"historically precedes or accompanies economic weakness."
                 )
 
         # Quad-specific market proxy analysis
@@ -14595,6 +14787,65 @@ def macro_quadrant():
             "direction_narrative": " ".join(direction_parts),
         }
 
+        # Step 10: Log predictions & compute Brier score
+        from datetime import timedelta as _td
+        _today_str = dates[-1].strftime("%Y-%m-%d")
+        _pred_conn = get_connection()
+
+        # Save predictions for each horizon
+        for n_weeks, label in [(1, "1_week"), (4, "4_week"), (8, "8_week")]:
+            target_d = (dates[-1] + _td(weeks=n_weeks)).strftime("%Y-%m-%d")
+            p = projections[label]
+            _pred_conn.execute(
+                """INSERT OR REPLACE INTO regime_predictions
+                   (prediction_date, horizon, target_date,
+                    prob_q1, prob_q2, prob_q3, prob_q4)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (_today_str, label, target_d,
+                 p["Q1"], p["Q2"], p["Q3"], p["Q4"]),
+            )
+
+        # Back-fill actuals: find past predictions whose target_date has arrived
+        _pred_conn.execute(
+            """UPDATE regime_predictions SET actual_quadrant = (
+                   SELECT rh.quadrant FROM regime_history rh
+                   WHERE rh.date = regime_predictions.target_date
+               )
+               WHERE actual_quadrant IS NULL
+                 AND target_date <= ?""",
+            (_today_str,),
+        )
+        _pred_conn.commit()
+
+        # Compute Brier scores per horizon
+        brier_scores = {}
+        for label in ["1_week", "4_week", "8_week"]:
+            rows = _pred_conn.execute(
+                """SELECT prob_q1, prob_q2, prob_q3, prob_q4, actual_quadrant
+                   FROM regime_predictions
+                   WHERE horizon = ? AND actual_quadrant IS NOT NULL""",
+                (label,),
+            ).fetchall()
+            if len(rows) >= 2:
+                total_bs = 0.0
+                for row in rows:
+                    probs = [row["prob_q1"], row["prob_q2"],
+                             row["prob_q3"], row["prob_q4"]]
+                    actual = row["actual_quadrant"]
+                    # Brier score: sum of (predicted - actual)^2 across classes
+                    for qi in range(4):
+                        outcome = 1.0 if (qi + 1) == actual else 0.0
+                        total_bs += (probs[qi] - outcome) ** 2
+                total_bs /= len(rows)
+                brier_scores[label] = {
+                    "score": round(total_bs, 4),
+                    "n_predictions": len(rows),
+                    "rating": ("Excellent" if total_bs < 0.1 else
+                               "Good" if total_bs < 0.25 else
+                               "Fair" if total_bs < 0.5 else "Poor"),
+                }
+        _pred_conn.close()
+
         result = {
             "current_quadrant": current_quad,
             "current_quadrant_name": QUADRANT_NAMES[current_quad],
@@ -14613,6 +14864,7 @@ def macro_quadrant():
             "transition_counts": transition_counts.tolist(),
             "conditional_observations": int(cond_total) if use_conditional else None,
             "projections": projections,
+            "brier_scores": brier_scores if brier_scores else None,
             "asset_tilts": QUADRANT_ASSET_TILTS[current_quad],
             "all_asset_tilts": QUADRANT_ASSET_TILTS,
             "interpretation": interpretation,
@@ -14681,6 +14933,237 @@ def sp500_performance():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 502
+
+
+# ── Technical Scanner ─────────────────────────────────────────────────────────
+
+@app.route("/api/scanner/tickers", methods=["GET", "POST"])
+def scanner_tickers_list():
+    """GET: return saved scanner tickers.  POST: bulk-replace list."""
+    conn = get_connection()
+
+    if request.method == "POST":
+        data = request.get_json(force=True)
+        rows = data.get("rows", [])
+        conn.execute("DELETE FROM scanner_tickers")
+        for i, r in enumerate(rows):
+            ticker = str(r.get("ticker", "")).strip().upper()
+            if not ticker:
+                continue
+            conn.execute(
+                "INSERT OR IGNORE INTO scanner_tickers (ticker, sort_order) VALUES (?, ?)",
+                (ticker, i),
+            )
+        conn.commit()
+        conn.close()
+        return jsonify(ok=True)
+
+    # GET
+    rows = conn.execute(
+        "SELECT ticker, added_date FROM scanner_tickers ORDER BY sort_order, id"
+    ).fetchall()
+    conn.close()
+    return jsonify(rows=[{"ticker": r["ticker"], "added_date": r["added_date"] or ""} for r in rows])
+
+
+@app.route("/api/scanner/scan")
+def scanner_scan():
+    """Run technical scan on saved tickers."""
+    import yfinance as yf
+    import warnings
+    warnings.filterwarnings("ignore")
+
+    timeframe = request.args.get("timeframe", "daily")
+    period = request.args.get("period", "1y" if timeframe == "daily" else "5y")
+    interval = "1d" if timeframe == "daily" else "1wk"
+    sma_pct = float(request.args.get("sma_pct", 5)) / 100
+    stoch_min = float(request.args.get("stoch_min", 19))
+    stoch_max = float(request.args.get("stoch_max", 21))
+
+    conn = get_connection()
+    ticker_rows = conn.execute("SELECT ticker FROM scanner_tickers ORDER BY sort_order, id").fetchall()
+    conn.close()
+    tickers = [r["ticker"] for r in ticker_rows]
+    if not tickers:
+        return jsonify(rows=[], error=None)
+
+    try:
+        df = yf.download(tickers, period=period, interval=interval,
+                         auto_adjust=True, progress=False)
+    except Exception as e:
+        return jsonify(rows=[], error=str(e))
+
+    multi = len(tickers) > 1
+    results = []
+    for t in tickers:
+        try:
+            if multi:
+                close = df["Close"][t].dropna()
+                high = df["High"][t].dropna()
+                low = df["Low"][t].dropna()
+            else:
+                close = df["Close"].dropna()
+                high = df["High"].dropna()
+                low = df["Low"].dropna()
+
+            if len(close) < 20:
+                results.append({"ticker": t, "price": None, "sma_50": None,
+                                "sma_175": None, "slow_k": None, "slow_d": None,
+                                "buy_signal": False, "error": "Insufficient data"})
+                continue
+
+            price = float(close.iloc[-1])
+
+            sma_50_raw = close.rolling(50).mean().iloc[-1] if len(close) >= 50 else None
+            sma_50_val = float(sma_50_raw) if sma_50_raw is not None and not pd.isna(sma_50_raw) else None
+
+            sma_175_raw = close.rolling(175).mean().iloc[-1] if len(close) >= 175 else None
+            sma_175_val = float(sma_175_raw) if sma_175_raw is not None and not pd.isna(sma_175_raw) else None
+
+            slow_k, slow_d = _slow_stochastic(high, low, close)
+
+            # Evaluate conditions (all must be computable for BUY)
+            cond_sma_cross = sma_50_val is not None and sma_175_val is not None and sma_50_val >= sma_175_val
+            cond_near_175 = sma_175_val is not None and abs(price - sma_175_val) / sma_175_val <= sma_pct
+            cond_stoch = slow_k is not None and stoch_min <= slow_k <= stoch_max
+            buy_signal = cond_sma_cross and cond_near_175 and cond_stoch
+
+            results.append({
+                "ticker": t,
+                "price": round(price, 2),
+                "sma_50": round(sma_50_val, 2) if sma_50_val is not None else None,
+                "sma_175": round(sma_175_val, 2) if sma_175_val is not None else None,
+                "slow_k": round(slow_k, 2) if slow_k is not None else None,
+                "slow_d": round(slow_d, 2) if slow_d is not None else None,
+                "buy_signal": buy_signal,
+                "error": None,
+            })
+        except Exception:
+            results.append({"ticker": t, "price": None, "sma_50": None,
+                            "sma_175": None, "slow_k": None, "slow_d": None,
+                            "buy_signal": False, "error": "Failed"})
+
+    return jsonify(rows=results, error=None)
+
+
+@app.route("/api/scanner/chart/<ticker>")
+def scanner_chart(ticker):
+    """Return Plotly chart JSON for a single ticker with scanner indicators."""
+    import yfinance as yf
+    import warnings
+    warnings.filterwarnings("ignore")
+    from plotly.subplots import make_subplots
+    import plotly.graph_objects as go
+    import json, plotly
+
+    timeframe = request.args.get("timeframe", "daily")
+    period = request.args.get("period", "1y" if timeframe == "daily" else "5y")
+    interval = "1d" if timeframe == "daily" else "1wk"
+
+    # Fetch extra history to warm up the 175 SMA so it spans the full display range
+    warmup_map = {"1mo": "1y", "3mo": "2y", "6mo": "2y", "1y": "2y",
+                  "2y": "5y", "3y": "5y", "5y": "10y", "10y": "max", "max": "max"}
+    fetch_period = warmup_map.get(period, "max")
+
+    try:
+        df = yf.download(ticker, period=fetch_period, interval=interval,
+                         auto_adjust=True, progress=False)
+    except Exception as e:
+        return jsonify(error=str(e)), 502
+
+    if df.empty or len(df) < 50:
+        return jsonify(error="Insufficient data for " + ticker), 400
+
+    # Flatten MultiIndex columns if present
+    if hasattr(df.columns, "levels"):
+        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+
+    # Compute indicators on full dataset (including warmup)
+    close_full = df["Close"]
+    high_full = df["High"]
+    low_full = df["Low"]
+
+    sma_50_full = close_full.rolling(50).mean()
+    sma_175_full = close_full.rolling(175).mean()
+
+    k_period, k_smooth, d_period = 14, 3, 3
+    lowest_low = low_full.rolling(k_period).min()
+    highest_high = high_full.rolling(k_period).max()
+    denom = highest_high - lowest_low
+    denom = denom.replace(0, float("nan"))
+    raw_k = (close_full - lowest_low) / denom * 100
+    slow_k_full = raw_k.rolling(k_smooth).mean()
+    slow_d_full = slow_k_full.rolling(d_period).mean()
+
+    # Trim to display period — find the cutoff date
+    from dateutil.relativedelta import relativedelta
+    import re
+    display_start = None
+    if period != "max":
+        m = re.match(r"(\d+)(mo|y)", period)
+        if m:
+            n, unit = int(m.group(1)), m.group(2)
+            if unit == "y":
+                display_start = df.index[-1] - relativedelta(years=n)
+            else:
+                display_start = df.index[-1] - relativedelta(months=n)
+
+    if display_start is not None:
+        mask = df.index >= display_start
+        df = df[mask]
+        sma_50_full = sma_50_full[mask]
+        sma_175_full = sma_175_full[mask]
+        slow_k_full = slow_k_full[mask]
+        slow_d_full = slow_d_full[mask]
+
+    dates = list(df.index)
+    close = df["Close"].tolist()
+    high = df["High"].tolist()
+    low = df["Low"].tolist()
+    op = df["Open"].tolist()
+    sma_50_list = sma_50_full.tolist()
+    sma_175_list = sma_175_full.tolist()
+    slow_k_list = slow_k_full.tolist()
+    slow_d_list = slow_d_full.tolist()
+
+    tf_label = "Daily" if timeframe == "daily" else "Weekly"
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        row_heights=[0.7, 0.3], vertical_spacing=0.04,
+                        subplot_titles=[f"{ticker} ({tf_label} {period})", "Slow Stochastic (14,3)"])
+
+    fig.add_trace(go.Candlestick(x=dates, open=op, high=high, low=low, close=close,
+                                  name="Price", increasing_line_color="#4dff91",
+                                  decreasing_line_color="#ff6b6b"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=dates, y=sma_50_list, mode="lines",
+                              name="50 SMA", line=dict(color="#7ecfff", width=1.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=dates, y=sma_175_list, mode="lines",
+                              name="175 SMA", line=dict(color="#ff9800", width=1.5)), row=1, col=1)
+
+    fig.add_trace(go.Scatter(x=dates, y=slow_k_list, mode="lines",
+                              name="%K", line=dict(color="#7ecfff", width=1.2)), row=2, col=1)
+    fig.add_trace(go.Scatter(x=dates, y=slow_d_list, mode="lines",
+                              name="%D", line=dict(color="#ff9800", width=1.2)), row=2, col=1)
+
+    # Overbought/oversold reference lines
+    fig.add_hline(y=80, line_dash="dot", line_color="#8899aa", line_width=0.8, row=2, col=1)
+    fig.add_hline(y=20, line_dash="dot", line_color="#8899aa", line_width=0.8, row=2, col=1)
+
+    fig.update_layout(
+        paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
+        font=dict(color="#e0e8f5", size=12),
+        xaxis_rangeslider_visible=False,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                    font=dict(size=10)),
+        margin=dict(l=50, r=20, t=50, b=30),
+        height=560,
+    )
+    for ax in ["xaxis", "xaxis2", "yaxis", "yaxis2"]:
+        fig.update_layout(**{ax: dict(gridcolor="#1a2233", zerolinecolor="#1a2233")})
+
+    fig_json = json.loads(json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder))
+
+    return jsonify(fig_data=fig_json["data"], fig_layout=fig_json["layout"], error=None)
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────

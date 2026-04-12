@@ -1866,3 +1866,23 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
   .dc-charts { grid-template-columns:1fr; }
   .dc-funds { flex-direction:column; }
 }
+
+/* ── Technical Scanner ─────────────────────────────────────────────────────── */
+.scanner-controls { display:flex; gap:0.75rem; align-items:center; margin-bottom:0.75rem; flex-wrap:wrap; }
+.scanner-tf-toggle { display:inline-flex; gap:0; }
+.scanner-tf-toggle button { padding:0.35rem 1rem; border:1px solid #3a3a5c; background:#111124; color:#ccc; cursor:pointer; font-size:0.85rem; transition:background 0.15s,color 0.15s; }
+.scanner-tf-toggle button:first-child { border-radius:4px 0 0 4px; }
+.scanner-tf-toggle button:last-child { border-radius:0 4px 4px 0; }
+.scanner-tf-toggle button.active { background:#1a3a6a; color:#7ecfff; border-color:#2a5a9a; }
+.scanner-tf-toggle button:hover:not(.active) { background:#1a1a3a; }
+.scanner-chip-list { display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:0.75rem; }
+.scanner-chip { display:inline-flex; align-items:center; gap:0.3rem; background:#1a1a3a; border:1px solid #2a2a4e; border-radius:4px; padding:0.2rem 0.5rem; font-size:0.82rem; color:#ccc; }
+.scanner-chip button { background:none; border:none; color:#e05555; cursor:pointer; font-size:1rem; line-height:1; padding:0 0.15rem; }
+.scanner-chip button:hover { color:#ff9999; }
+.btn-scan { background:#00c853; color:#000; font-weight:700; border:none; }
+.btn-scan:hover:not(:disabled) { background:#00e676; }
+.btn-scan:disabled { background:#1a3a2a; color:#555; }
+.sst-wrap::-webkit-scrollbar { width:8px; height:8px; }
+.sst-wrap::-webkit-scrollbar-track { background:#0e1117; }
+.sst-wrap::-webkit-scrollbar-thumb { background:#3a3a5c; border-radius:4px; }
+.sst-wrap::-webkit-scrollbar-thumb:hover { background:#5a5a8c; }

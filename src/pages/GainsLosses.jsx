@@ -251,48 +251,48 @@ export default function GainsLosses() {
   const t = data?.totals || {}
 
   const unrealizedCols = [
-    { key: 'ticker', label: 'Ticker' },
-    { key: 'description', label: 'Description' },
-    { key: 'quantity', label: 'Shares', fmt: v => v != null ? Number(v).toFixed(3) : '\u2014' },
-    { key: 'price_paid', label: 'Price Paid', fmt: v => v != null ? `$${Number(v).toFixed(4)}` : '\u2014' },
-    { key: 'current_price', label: 'Curr Price', fmt: v => v != null ? `$${Number(v).toFixed(4)}` : '\u2014' },
-    { key: 'purchase_value', label: 'Invested', fmt },
-    { key: 'current_value', label: 'Curr Value', fmt },
-    { key: 'price_gl', label: 'Price G/L', fmt, gl: true },
-    { key: 'price_gl_pct', label: 'Price G/L %', fmt: fmtPct, gl: true },
-    { key: 'divs_received', label: 'Divs Rcvd', fmt },
-    { key: 'total_gl', label: 'Total G/L', fmt, gl: true },
-    { key: 'total_gl_pct', label: 'Total G/L %', fmt: fmtPct, gl: true },
+    { key: 'ticker', label: 'Ticker', tip: 'Stock or ETF ticker symbol' },
+    { key: 'description', label: 'Description', tip: 'Full name of the holding' },
+    { key: 'quantity', label: 'Shares', tip: 'Number of shares currently held', fmt: v => v != null ? Number(v).toFixed(3) : '\u2014', numeric: true },
+    { key: 'price_paid', label: 'Price Paid', tip: 'Average cost per share at time of purchase', fmt: v => v != null ? `$${Number(v).toFixed(4)}` : '\u2014', numeric: true },
+    { key: 'current_price', label: 'Curr Price', tip: 'Latest market price per share', fmt: v => v != null ? `$${Number(v).toFixed(4)}` : '\u2014', numeric: true },
+    { key: 'purchase_value', label: 'Invested', tip: 'Total amount invested (price paid \u00d7 shares)', fmt, numeric: true },
+    { key: 'current_value', label: 'Curr Value', tip: 'Current market value (current price \u00d7 shares)', fmt, numeric: true },
+    { key: 'price_gl', label: 'Price G/L', tip: 'Gain or loss based on price change only (current value \u2212 invested)', fmt, gl: true },
+    { key: 'price_gl_pct', label: 'Price G/L %', tip: 'Price gain/loss as a percentage of amount invested', fmt: fmtPct, gl: true },
+    { key: 'divs_received', label: 'Divs Rcvd', tip: 'Total lifetime dividends received from this holding', fmt, numeric: true },
+    { key: 'total_gl', label: 'Total G/L', tip: 'Total gain or loss including dividends (price G/L + dividends received)', fmt, gl: true },
+    { key: 'total_gl_pct', label: 'Total G/L %', tip: 'Total gain/loss as a percentage of amount invested', fmt: fmtPct, gl: true },
   ]
 
   const realizedCols = [
-    { key: 'ticker', label: 'Ticker' },
-    { key: 'sell_date', label: 'Sell Date' },
-    { key: 'buy_price', label: 'Buy Price', fmt },
-    { key: 'sell_price', label: 'Sell Price', fmt },
-    { key: 'shares_sold', label: 'Shares', fmt: v => v != null ? Number(v).toFixed(3) : '\u2014' },
-    { key: 'cost_basis', label: 'Cost Basis', fmt },
-    { key: 'proceeds', label: 'Proceeds', fmt },
-    { key: 'price_gl', label: 'Price G/L', fmt, gl: true },
-    { key: 'price_gl_pct', label: 'Price G/L %', fmt: fmtPct, gl: true },
-    { key: 'divs_received', label: 'Divs Rcvd', fmt },
-    { key: 'total_gl', label: 'Total G/L', fmt, gl: true },
-    { key: 'total_gl_pct', label: 'Total G/L %', fmt: fmtPct, gl: true },
+    { key: 'ticker', label: 'Ticker', tip: 'Stock or ETF ticker symbol' },
+    { key: 'sell_date', label: 'Sell Date', tip: 'Date the shares were sold' },
+    { key: 'buy_price', label: 'Buy Price', tip: 'Price per share when originally purchased', fmt, numeric: true },
+    { key: 'sell_price', label: 'Sell Price', tip: 'Price per share when sold', fmt, numeric: true },
+    { key: 'shares_sold', label: 'Shares', tip: 'Number of shares sold in this transaction', fmt: v => v != null ? Number(v).toFixed(3) : '\u2014', numeric: true },
+    { key: 'cost_basis', label: 'Cost Basis', tip: 'Total cost of shares sold (buy price \u00d7 shares)', fmt, numeric: true },
+    { key: 'proceeds', label: 'Proceeds', tip: 'Total sale amount received (sell price \u00d7 shares)', fmt, numeric: true },
+    { key: 'price_gl', label: 'Price G/L', tip: 'Gain or loss based on price change only (proceeds \u2212 cost basis)', fmt, gl: true },
+    { key: 'price_gl_pct', label: 'Price G/L %', tip: 'Price gain/loss as a percentage of cost basis', fmt: fmtPct, gl: true },
+    { key: 'divs_received', label: 'Divs Rcvd', tip: 'Dividends received while holding the shares before selling', fmt, numeric: true },
+    { key: 'total_gl', label: 'Total G/L', tip: 'Total gain or loss including dividends (price G/L + dividends received)', fmt, gl: true },
+    { key: 'total_gl_pct', label: 'Total G/L %', tip: 'Total gain/loss as a percentage of cost basis', fmt: fmtPct, gl: true },
   ]
 
   const combinedCols = [
-    { key: 'ticker', label: 'Ticker' },
-    { key: 'description', label: 'Description' },
-    { key: 'status', label: 'Status' },
-    { key: 'unrealized_price_gl', label: 'Unreal. Price G/L', fmt, gl: true },
-    { key: 'unrealized_divs', label: 'Unreal. Divs', fmt },
-    { key: 'unrealized_total_gl', label: 'Unreal. Total G/L', fmt, gl: true },
-    { key: 'realized_price_gl', label: 'Real. Price G/L', fmt, gl: true },
-    { key: 'realized_divs', label: 'Real. Divs', fmt },
-    { key: 'realized_total_gl', label: 'Real. Total G/L', fmt, gl: true },
-    { key: 'net_price_gl', label: 'Net Price G/L', fmt, gl: true },
-    { key: 'net_divs', label: 'Net Divs', fmt },
-    { key: 'net_total_gl', label: 'Net Total G/L', fmt, gl: true },
+    { key: 'ticker', label: 'Ticker', tip: 'Stock or ETF ticker symbol' },
+    { key: 'description', label: 'Description', tip: 'Full name of the holding' },
+    { key: 'status', label: 'Status', tip: 'Open = currently held, Closed = fully sold, Open + Closed = partially sold' },
+    { key: 'unrealized_price_gl', label: 'Unreal. Price G/L', tip: 'Unrealized gain/loss on shares still held (price change only)', fmt, gl: true },
+    { key: 'unrealized_divs', label: 'Unreal. Divs', tip: 'Dividends received on shares still held', fmt, numeric: true },
+    { key: 'unrealized_total_gl', label: 'Unreal. Total G/L', tip: 'Unrealized gain/loss including dividends on shares still held', fmt, gl: true },
+    { key: 'realized_price_gl', label: 'Real. Price G/L', tip: 'Realized gain/loss from sold shares (price change only)', fmt, gl: true },
+    { key: 'realized_divs', label: 'Real. Divs', tip: 'Dividends received on shares that were sold', fmt, numeric: true },
+    { key: 'realized_total_gl', label: 'Real. Total G/L', tip: 'Realized gain/loss including dividends from sold shares', fmt, gl: true },
+    { key: 'net_price_gl', label: 'Net Price G/L', tip: 'Combined unrealized + realized price gain/loss', fmt, gl: true },
+    { key: 'net_divs', label: 'Net Divs', tip: 'Total dividends received (unrealized + realized)', fmt, numeric: true },
+    { key: 'net_total_gl', label: 'Net Total G/L', tip: 'Combined total gain/loss across all open and closed positions', fmt, gl: true },
   ]
 
   const tabConfig = {
@@ -316,7 +316,7 @@ export default function GainsLosses() {
           <thead>
             <tr>
               {activeCols.map(col => (
-                <th key={col.key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} onClick={() => handleSort(col.key)}>
+                <th key={col.key} title={col.tip} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: (col.numeric || col.gl) ? 'right' : undefined }} onClick={() => handleSort(col.key)}>
                   {col.label}
                   <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === col.key ? '#7ecfff' : '#8899aa' }}>
                     {sortIcon(col.key)}
@@ -330,9 +330,8 @@ export default function GainsLosses() {
               <tr key={`${row.ticker}-${i}`}>
                 {activeCols.map(col => {
                   const val = row[col.key]
-                  const isNum = typeof val === 'number'
                   let display = col.fmt ? col.fmt(val) : (val ?? '')
-                  let style = isNum ? { textAlign: 'right' } : {}
+                  let style = (col.numeric || col.gl) ? { textAlign: 'right' } : {}
                   if (col.key === 'ticker') display = <strong>{val}</strong>
                   if (col.gl) style = { textAlign: 'right', color: glColor(val) }
                   return <td key={col.key} style={style}>{display}</td>

@@ -30,7 +30,9 @@ import MacroRegimeDashboard from './pages/MacroRegimeDashboard'
 import IncomeGrowthSim from './pages/IncomeGrowthSim'
 import DividendHistory from './pages/DividendHistory'
 import GainsLosses from './pages/GainsLosses'
+import SafeWithdrawal from './pages/SafeWithdrawal'
 import Help from './pages/Help'
+import TechnicalScanner from './pages/TechnicalScanner'
 
 function NavDropdown({ label, children }) {
   const [open, setOpen] = useState(false)
@@ -80,6 +82,7 @@ function App() {
         <Route path="/dividends" element={<DividendAnalysis />} />
         <Route path="/total-return" element={<TotalReturn />} />
         <Route path="/gains-losses" element={<GainsLosses />} />
+        <Route path="/safe-withdrawal" element={<SafeWithdrawal />} />
         <Route path="/etf-screen" element={<ETFScreen />} />
         <Route path="/div-calendar" element={<DividendCalendar />} />
         <Route path="/watchlist" element={<Watchlist />} />
@@ -98,6 +101,7 @@ function App() {
         <Route path="/consolidation" element={<ConsolidationAnalysis />} />
         <Route path="/macro-dashboard" element={<MacroRegimeDashboard />} />
         <Route path="/dividend-history" element={<DividendHistory />} />
+        <Route path="/scanner" element={<TechnicalScanner />} />
         <Route path="/help" element={<Help />} />
       </Routes>
     </Router>
@@ -139,6 +143,7 @@ function Nav() {
         <NavLink to="/dividend-history">Dividend History</NavLink>
         <NavLink to="/total-return">Total Return</NavLink>
         <NavLink to="/gains-losses">Gains & Losses</NavLink>
+        <NavLink to="/safe-withdrawal">Safe Withdrawal</NavLink>
       </NavDropdown>
       <NavDropdown label="Analysis">
         <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>
@@ -154,6 +159,7 @@ function Nav() {
         <NavLink to="/dist-compare">Distribution Compare</NavLink>
         <NavLink to="/consolidation">Consolidation Analysis</NavLink>
         <NavLink to="/macro-dashboard">Macro Regime Dashboard</NavLink>
+        <NavLink to="/scanner">Technical Scanner</NavLink>
       </NavDropdown>
       <NavDropdown label="Admin">
         <NavLink to="/import">Import</NavLink>
