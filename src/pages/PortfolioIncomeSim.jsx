@@ -1551,11 +1551,11 @@ export default function PortfolioIncomeSim() {
         <div className="ne-form" style={{ marginBottom: '1rem' }}>
           <div className="ne-field">
             <label className="ne-label">Start Date</label>
-            <input className="ne-input" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
+            <input className="ne-input" type="date" min="1900-01-01" max="2099-12-31" value={startDate} onChange={e => setStartDate(e.target.value)} />
           </div>
           <div className="ne-field">
             <label className="ne-label">End Date</label>
-            <input className="ne-input" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
+            <input className="ne-input" type="date" min="1900-01-01" max="2099-12-31" value={endDate} onChange={e => setEndDate(e.target.value)} />
           </div>
         </div>
       ) : (

@@ -1,0 +1,9 @@
+Account Summary
+Account,Net Account Value,Day's Gain,Day's Gain %,Market Value,Total Gain,Total Gain %,Cash Purchasing Power
+<E*TRADE Account Name>,37796.82,0.00,0.00%,36963.37,-3000.98,-7.51%,833.45
+
+View Summary - Dividends
+Symbol,Price Paid $,Last Price $,Change %,Day's Gain $,Qty #,Total Gain $,Total Gain %,Value $,Ex-Div Date,Dividend Pay Date,Dividend Yield %,Dividend,Annual Dividend,Total Cost
+<SYMBOL>,55.5000,57.2000,0.45%,25.00,100.0000,170.00,3.06%,5720.00,04/01/2026,04/05/2026,7.50%,0.55,6.60,5550.00
+CASH,,,,,,,,833.45,,,,,,
+TOTAL,,,,,,,,37796.82,,,,,,

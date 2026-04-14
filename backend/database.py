@@ -16,6 +16,7 @@ def ensure_tables_exist(conn=None):
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             name             TEXT NOT NULL,
             include_in_owner INTEGER NOT NULL DEFAULT 0,
+            positions_managed INTEGER NOT NULL DEFAULT 0,
             created_at       TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -24,8 +25,10 @@ def ensure_tables_exist(conn=None):
     if "include_in_owner" not in cols:
         cur.execute("ALTER TABLE profiles ADD COLUMN include_in_owner INTEGER NOT NULL DEFAULT 0")
         cur.execute("UPDATE profiles SET include_in_owner = 1 WHERE id = 1")
+    if "positions_managed" not in cols:
+        cur.execute("ALTER TABLE profiles ADD COLUMN positions_managed INTEGER NOT NULL DEFAULT 0")
     cur.execute("""
-        INSERT OR IGNORE INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 1)
+        INSERT OR IGNORE INTO profiles (id, name, include_in_owner, positions_managed) VALUES (1, 'Owner', 1, 0)
     """)
 
     # ── all_account_info ───────────────────────────────────────────────────────
@@ -557,6 +560,41 @@ def ensure_tables_exist(conn=None):
         ON transactions (ticker, profile_id)
     """)
 
+    # ── transaction_lot_allocations ───────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS transaction_lot_allocations (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            sell_txn_id     INTEGER NOT NULL,
+            buy_txn_id      INTEGER NOT NULL,
+            shares          REAL NOT NULL,
+            FOREIGN KEY (sell_txn_id) REFERENCES transactions(id) ON DELETE CASCADE,
+            FOREIGN KEY (buy_txn_id) REFERENCES transactions(id) ON DELETE CASCADE
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_lot_alloc_sell
+        ON transaction_lot_allocations (sell_txn_id)
+    """)
+
+    # ── dividend_payments ───────────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS dividend_payments (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker          TEXT NOT NULL,
+            profile_id      INTEGER NOT NULL DEFAULT 1,
+            payment_date    TEXT NOT NULL,
+            amount          REAL NOT NULL,
+            source          TEXT DEFAULT 'manual',
+            notes           TEXT,
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (ticker, profile_id, payment_date)
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_div_payments_ticker_profile
+        ON dividend_payments (ticker, profile_id)
+    """)
+
     # ── aggregate_config ────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS aggregate_config (
@@ -637,6 +675,76 @@ def ensure_tables_exist(conn=None):
             prob_q4         REAL NOT NULL,
             actual_quadrant INTEGER,
             PRIMARY KEY (prediction_date, horizon)
+        )
+    """)
+
+    # ── general_scanner_cache ────────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS general_scanner_cache (
+            ticker          TEXT PRIMARY KEY,
+            name            TEXT,
+            sector          TEXT,
+            industry        TEXT,
+            country         TEXT,
+            market_cap      REAL,
+            price           REAL,
+            pe_ratio        REAL,
+            forward_pe      REAL,
+            peg_ratio       REAL,
+            ps_ratio        REAL,
+            pb_ratio        REAL,
+            dividend_yield  REAL,
+            eps             REAL,
+            revenue         REAL,
+            profit_margin   REAL,
+            roe             REAL,
+            debt_to_equity  REAL,
+            current_ratio   REAL,
+            beta            REAL,
+            week52_high     REAL,
+            week52_low      REAL,
+            avg_volume      REAL,
+            sma_20          REAL,
+            sma_50          REAL,
+            sma_200         REAL,
+            rsi_14          REAL,
+            change_pct      REAL,
+            volume          REAL,
+            asset_type      TEXT,
+            expense_ratio   REAL,
+            aum             REAL,
+            etf_category    TEXT,
+            etf_strategy    TEXT,
+            etf_cap_size    TEXT,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Migration: add columns if missing
+    cache_cols = [r[1] for r in cur.execute("PRAGMA table_info(general_scanner_cache)").fetchall()]
+    for col in ["etf_category", "etf_strategy", "etf_cap_size"]:
+        if col not in cache_cols:
+            cur.execute(f"ALTER TABLE general_scanner_cache ADD COLUMN {col} TEXT")
+    for col in ["macd_line", "macd_signal", "macd_hist", "stoch_k", "stoch_d",
+                "prev_sma_20", "prev_sma_50", "prev_sma_200"]:
+        if col not in cache_cols:
+            cur.execute(f"ALTER TABLE general_scanner_cache ADD COLUMN {col} REAL")
+
+    # One-time fix: clear ETF columns that had timestamps (from earlier column-order bug)
+    cur.execute("""
+        UPDATE general_scanner_cache
+        SET etf_category = NULL, etf_strategy = NULL, etf_cap_size = NULL
+        WHERE etf_category LIKE '20__-%'
+           OR etf_strategy LIKE '20__-%'
+           OR etf_cap_size LIKE '20__-%'
+    """)
+
+    # ── general_scanner_universe ──────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS general_scanner_universe (
+            ticker     TEXT PRIMARY KEY,
+            asset_type TEXT DEFAULT 'Stock',
+            added_date TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
 

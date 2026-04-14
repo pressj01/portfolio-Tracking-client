@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import time
 
@@ -23,6 +24,7 @@ from normalize import (
     populate_income_tracking,
     populate_pillar_weights,
 )
+from transaction_import import PARSERS as TXN_PARSERS
 
 app = Flask(__name__)
 app.secret_key = "portfolio-tracking-client-secret-key"
@@ -92,6 +94,147 @@ def rows_to_dicts(rows):
     return [dict(r) for r in rows]
 
 
+_ACCOUNT_MATCH_IGNORED_TOKENS = {
+    "account", "acct", "portfolio",
+    "etrade", "e", "trade",
+    "schwab", "charles", "fidelity",
+    "snowball", "analytics",
+    "traditional",
+}
+
+
+def _normalize_account_tokens(label):
+    text = re.sub(r"[^a-z0-9]+", " ", (label or "").strip().lower())
+    return [tok for tok in text.split() if tok]
+
+
+def _account_match_info(account_name, profile_name, source_format=None):
+    """Return whether an import file account appears to match the target profile."""
+    if not account_name:
+        return {"matched": True, "reason": "missing_account_name"}
+
+    account_tokens = _normalize_account_tokens(account_name)
+    profile_tokens = _normalize_account_tokens(profile_name)
+    source_format = (source_format or "").strip().lower()
+
+    account_core = {
+        tok for tok in account_tokens
+        if not tok.isdigit() and tok not in _ACCOUNT_MATCH_IGNORED_TOKENS
+    }
+    profile_core = {
+        tok for tok in profile_tokens
+        if not tok.isdigit() and tok not in _ACCOUNT_MATCH_IGNORED_TOKENS
+    }
+
+    if not account_core:
+        return {"matched": True, "reason": "no_core_tokens"}
+
+    matched = account_core == profile_core
+    reason = "exact_core_match" if matched else "core_token_mismatch"
+    message = None
+    if matched and source_format == "etrade" and "etrade" not in profile_tokens:
+        matched = False
+        reason = "broker_profile_mismatch"
+        message = (
+            f"E*TRADE files can only be imported into an E*TRADE portfolio. "
+            f"'{profile_name}' is not marked as E*TRADE."
+        )
+    elif not matched:
+        message = (
+            f"File account '{account_name}' does not match selected portfolio "
+            f"'{profile_name}'. Switch portfolios before importing."
+        )
+
+    return {
+        "matched": matched,
+        "reason": reason,
+        "message": message,
+    }
+
+
+def _get_profile_name(profile_id):
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT name FROM profiles WHERE id = ?", (profile_id,)).fetchone()
+        if not row:
+            return "Portfolio"
+        return row["name"] if isinstance(row, dict) else row[0]
+    finally:
+        conn.close()
+
+
+def _profile_is_positions_managed(profile_id, conn=None):
+    close = False
+    if conn is None:
+        conn = get_connection()
+        close = True
+    try:
+        row = conn.execute(
+            "SELECT positions_managed FROM profiles WHERE id = ?",
+            (profile_id,),
+        ).fetchone()
+        if not row:
+            return False
+        return bool(row["positions_managed"] if isinstance(row, dict) else row[0])
+    finally:
+        if close:
+            conn.close()
+
+
+def _set_profile_positions_managed(profile_id, managed, conn=None):
+    close = False
+    if conn is None:
+        conn = get_connection()
+        close = True
+    try:
+        conn.execute(
+            "UPDATE profiles SET positions_managed = ? WHERE id = ?",
+            (1 if managed else 0, profile_id),
+        )
+        if close:
+            conn.commit()
+    finally:
+        if close:
+            conn.close()
+
+
+def _get_owner_source_profile_ids(conn):
+    """Return profile ids that feed Owner reconciliation/DRIP sync."""
+    rows = conn.execute(
+        "SELECT id FROM profiles WHERE id != 1 AND include_in_owner = 1 ORDER BY id"
+    ).fetchall()
+    return [r["id"] if isinstance(r, dict) else r[0] for r in rows]
+
+
+def _get_refresh_target_info(conn):
+    """Resolve which profiles a holdings refresh should update."""
+    if request.args.get("aggregate") == "true":
+        rows = conn.execute(
+            "SELECT member_profile_id FROM aggregate_config ORDER BY member_profile_id"
+        ).fetchall()
+        pids = [r["member_profile_id"] if isinstance(r, dict) else r[0] for r in rows]
+        return {
+            "scope": "aggregate",
+            "source_profile_ids": pids or [1],
+            "selected_profile_id": None,
+        }
+
+    profile_id = get_profile_id()
+    if profile_id == 1:
+        source_ids = _get_owner_source_profile_ids(conn)
+        return {
+            "scope": "owner",
+            "source_profile_ids": source_ids or [1],
+            "selected_profile_id": 1,
+        }
+
+    return {
+        "scope": "profile",
+        "source_profile_ids": [profile_id],
+        "selected_profile_id": profile_id,
+    }
+
+
 def _estimate_month_income(holding, month):
     """Estimate income for a specific month (1-12) from a single holding.
 
@@ -152,6 +295,68 @@ def _estimate_ytd_income(holding):
     import datetime
     cur_month = datetime.date.today().month
     return sum(_estimate_month_income(holding, m) for m in range(1, cur_month))
+
+
+def _frequency_to_payments_per_year(freq):
+    return {
+        "W": 52,
+        "52": 52,
+        "M": 12,
+        "Q": 4,
+        "SA": 2,
+        "A": 1,
+    }.get((freq or "").strip().upper(), 0)
+
+
+def _recompute_position_income_fields(conn, profile_id, ticker, broker_dividend_yield=None):
+    row = conn.execute(
+        """SELECT quantity, purchase_value, current_value, div, div_frequency, ex_div_date
+           FROM all_account_info
+           WHERE ticker = ? AND profile_id = ?""",
+        (ticker, profile_id),
+    ).fetchone()
+    if not row:
+        return
+
+    quantity = float(row["quantity"] or 0)
+    purchase_value = float(row["purchase_value"] or 0)
+    current_value = float(row["current_value"] or 0)
+    div = float(row["div"] or 0)
+    div_frequency = row["div_frequency"] or ""
+    payments_per_year = _frequency_to_payments_per_year(div_frequency)
+
+    annual = 0.0
+    if quantity > 0 and div > 0 and payments_per_year > 0:
+        annual = quantity * div * payments_per_year
+    elif quantity > 0 and current_value > 0 and broker_dividend_yield:
+        annual = current_value * (float(broker_dividend_yield) / 100.0)
+
+    monthly = annual / 12.0 if annual > 0 else 0.0
+    yoc = (annual / purchase_value * 100.0) if annual > 0 and purchase_value > 0 else 0.0
+    cur_yield = (annual / current_value * 100.0) if annual > 0 and current_value > 0 else 0.0
+    current_month_income = _estimate_current_month_income({
+        "quantity": quantity,
+        "div": div,
+        "div_frequency": div_frequency,
+        "ex_div_date": row["ex_div_date"],
+    }) if quantity > 0 else 0.0
+
+    conn.execute(
+        """UPDATE all_account_info
+           SET estim_payment_per_year = ?, approx_monthly_income = ?,
+               annual_yield_on_cost = ?, current_annual_yield = ?,
+               current_month_income = ?
+           WHERE ticker = ? AND profile_id = ?""",
+        (
+            round(annual, 2),
+            round(monthly, 2),
+            round(yoc, 4),
+            round(cur_yield, 4),
+            round(current_month_income, 2),
+            ticker,
+            profile_id,
+        ),
+    )
 
 
 def _calc_dividend_growth_batch(tickers):
@@ -842,6 +1047,353 @@ def api_import_monthly_tickers():
             pass
 
 
+# ── Transaction History Import ────────────────────────────────────────────────
+
+@app.route("/api/import/transactions/preview", methods=["POST"])
+def api_import_transactions_preview():
+    """Parse a transaction history CSV and return a preview (no DB writes)."""
+    profile_id = get_profile_id()
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    f = request.files["file"]
+    fmt = request.form.get("format", "snowball")
+    if fmt not in TXN_PARSERS:
+        return jsonify({"error": f"Unknown format: {fmt}"}), 400
+
+    import uuid
+    path = os.path.join(UPLOAD_FOLDER, f"txn_{uuid.uuid4().hex}_{f.filename}")
+    f.save(path)
+    try:
+        result = TXN_PARSERS[fmt](path, f.filename)
+        if result.get("account_name"):
+            result["target_profile_name"] = _get_profile_name(profile_id)
+            result["account_match"] = _account_match_info(
+                result.get("account_name"),
+                result["target_profile_name"],
+                fmt,
+            )
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Failed to parse file: {e}"}), 400
+    finally:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+
+
+def _import_positions(parsed, profile_id):
+    """Import holdings from a positions-based file (e.g. Schwab Positions CSV).
+
+    Writes directly to all_account_info — sets quantity, cost basis, price,
+    and current value. Existing holdings for the profile are updated; new
+    tickers are inserted. Holdings not in the import are zeroed out.
+    """
+    from datetime import date as _date
+    conn = get_connection()
+
+    positions = parsed["positions"]
+    positions_by_ticker = {pos["ticker"]: pos for pos in positions}
+    imported_tickers = set()
+    updated = 0
+    inserted = 0
+
+    try:
+        _set_profile_positions_managed(profile_id, True, conn)
+
+        for pos in positions:
+            ticker = pos["ticker"]
+            imported_tickers.add(ticker)
+
+            existing = conn.execute(
+                "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+                (ticker, profile_id),
+            ).fetchone()
+
+            if existing:
+                conn.execute(
+                    """UPDATE all_account_info SET
+                        quantity = ?, price_paid = ?, current_price = ?,
+                        purchase_value = ?, current_value = ?, gain_or_loss = ?,
+                        base_quantity = ?, import_date = ?,
+                        description = CASE WHEN description IS NULL OR description = ''
+                                       THEN ? ELSE description END
+                    WHERE ticker = ? AND profile_id = ?""",
+                    (
+                        pos["quantity"], pos["cost_per_share"], pos["current_price"],
+                        pos["purchase_value"], pos["current_value"], pos["gain_or_loss"],
+                        pos["quantity"], _date.today().isoformat(),
+                        pos["description"],
+                        ticker, profile_id,
+                    ),
+                )
+                updated += 1
+            else:
+                conn.execute(
+                    """INSERT INTO all_account_info
+                        (ticker, profile_id, quantity, base_quantity, price_paid, current_price,
+                         purchase_value, current_value, gain_or_loss,
+                         description, import_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        ticker, profile_id, pos["quantity"], pos["quantity"],
+                        pos["cost_per_share"], pos["current_price"],
+                        pos["purchase_value"], pos["current_value"], pos["gain_or_loss"],
+                        pos["description"], _date.today().isoformat(),
+                    ),
+                )
+                inserted += 1
+
+        # Zero out holdings not in the positions file
+        zeroed = 0
+        stale_rows = conn.execute(
+            "SELECT ticker FROM all_account_info WHERE profile_id = ? AND quantity > 0",
+            (profile_id,),
+        ).fetchall()
+        for row in stale_rows:
+            if row["ticker"] not in imported_tickers:
+                conn.execute(
+                    """UPDATE all_account_info SET quantity = 0, current_value = 0,
+                       purchase_value = 0, gain_or_loss = 0,
+                       base_quantity = 0, import_date = ?
+                    WHERE ticker = ? AND profile_id = ?""",
+                    (_date.today().isoformat(), row["ticker"], profile_id),
+                )
+                zeroed += 1
+
+        touched_tickers = set(imported_tickers)
+        touched_tickers.update(
+            row["ticker"] if isinstance(row, dict) else row[0]
+            for row in stale_rows
+            if (row["ticker"] if isinstance(row, dict) else row[0]) not in imported_tickers
+        )
+        for ticker in touched_tickers:
+            broker_yield = None
+            if ticker in positions_by_ticker:
+                broker_yield = positions_by_ticker[ticker].get("dividend_yield")
+            _recompute_position_income_fields(conn, profile_id, ticker, broker_yield)
+
+        conn.commit()
+
+        # Run normalize passes
+        populate_holdings(profile_id)
+        populate_dividends(profile_id)
+        populate_income_tracking(profile_id)
+
+        msg = f"Imported {updated + inserted} positions ({updated} updated, {inserted} new)."
+        if zeroed:
+            msg += f" {zeroed} stale holdings zeroed out."
+        return jsonify({"message": msg, "updated": updated, "inserted": inserted, "zeroed": zeroed})
+
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": f"Import failed: {e}"}), 500
+    finally:
+        conn.close()
+
+
+@app.route("/api/import/transactions", methods=["POST"])
+def api_import_transactions():
+    """Import transaction history from a CSV into the transactions + dividend_payments tables."""
+    profile_id = get_profile_id()
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    f = request.files["file"]
+    fmt = request.form.get("format", "snowball")
+    if fmt not in TXN_PARSERS:
+        return jsonify({"error": f"Unknown format: {fmt}"}), 400
+
+    import uuid
+    path = os.path.join(UPLOAD_FOLDER, f"txn_{uuid.uuid4().hex}_{f.filename}")
+    f.save(path)
+    try:
+        parsed = TXN_PARSERS[fmt](path, f.filename)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Failed to parse file: {e}"}), 400
+    finally:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+
+    from datetime import date as _date, datetime as _dt
+
+    if parsed.get("account_name"):
+        profile_name = _get_profile_name(profile_id)
+        account_match = _account_match_info(parsed.get("account_name"), profile_name, fmt)
+        if not account_match["matched"]:
+            return jsonify({"error": account_match["message"]}), 400
+
+    # ── Positions-based import (e.g. Schwab) ─────────────────────────────────
+    if parsed.get("format_type") == "positions":
+        return _import_positions(parsed, profile_id)
+
+    # ── Transaction-based import (e.g. Snowball) ─────────────────────────────
+    conn = get_connection()
+    preserve_positions = _profile_is_positions_managed(profile_id, conn)
+    inserted_buys = 0
+    inserted_sells = 0
+    dividends_applied = 0
+    duplicates_skipped = 0
+    tickers_with_txns = set()
+    tickers_with_divs = set()
+
+    from collections import Counter
+
+    # Pre-aggregate dividends by (ticker, date) so multiple distribution types
+    # on the same day (Cash Div + Non-Qual Div, etc.) become a single row.
+    from collections import defaultdict
+    div_agg = defaultdict(lambda: {"amount": 0.0, "notes_parts": []})
+    non_div_txns = []
+    for txn in parsed["transactions"]:
+        if txn["type"] == "DIVIDEND":
+            key = (txn["ticker"], txn["date"])
+            div_agg[key]["amount"] += txn["dividend_amount"] or 0
+            if txn.get("notes"):
+                div_agg[key]["notes_parts"].append(txn["notes"])
+        else:
+            non_div_txns.append(txn)
+
+    try:
+        # Insert aggregated dividends
+        for (ticker, date_str), info in div_agg.items():
+            dup = conn.execute(
+                "SELECT 1 FROM dividend_payments WHERE ticker = ? AND profile_id = ? AND payment_date = ?",
+                (ticker, profile_id, date_str),
+            ).fetchone()
+            if dup:
+                duplicates_skipped += 1
+                continue
+
+            notes = "; ".join(dict.fromkeys(info["notes_parts"]))  # dedupe note parts
+            conn.execute(
+                "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (ticker, profile_id, date_str, round(info["amount"], 2), fmt, notes),
+            )
+            dividends_applied += 1
+            tickers_with_divs.add(ticker)
+
+        # Insert BUY/SELL transactions
+        for txn in non_div_txns:
+            ticker = txn["ticker"]
+            # Count-based duplicate check so legitimate identical transactions
+            # (same day/qty/price) are preserved while re-imports are deduped.
+            # DB count includes uncommitted inserts from this batch (same conn).
+            existing_count = conn.execute(
+                "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
+                "AND transaction_type = ? AND transaction_date = ? "
+                "AND ABS(shares - ?) < 0.0001 AND price_per_share = ?",
+                (ticker, profile_id, txn["type"], txn["date"],
+                 txn["shares"], txn["price_per_share"] or 0),
+            ).fetchone()[0]
+            import_count = sum(1 for t in non_div_txns
+                               if t["type"] == txn["type"] and t["ticker"] == ticker
+                               and t["date"] == txn["date"]
+                               and t["shares"] is not None
+                               and abs(t["shares"] - txn["shares"]) < 0.0001
+                               and (t["price_per_share"] or 0) == (txn["price_per_share"] or 0))
+            if existing_count >= import_count:
+                duplicates_skipped += 1
+                continue
+
+            # Ensure holding exists in all_account_info
+            existing = conn.execute(
+                "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+                (ticker, profile_id),
+            ).fetchone()
+            if not existing and not preserve_positions:
+                conn.execute(
+                    "INSERT INTO all_account_info (ticker, profile_id, description, import_date) "
+                    "VALUES (?, ?, ?, ?)",
+                    (ticker, profile_id, "", _date.today().isoformat()),
+                )
+
+            conn.execute(
+                "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, "
+                "shares, price_per_share, fees, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (ticker, profile_id, txn["type"], txn["date"],
+                 txn["shares"], txn["price_per_share"], txn["fees"], txn.get("notes", "")),
+            )
+
+            if txn["type"] == "BUY":
+                inserted_buys += 1
+            else:
+                inserted_sells += 1
+            tickers_with_txns.add(ticker)
+
+        conn.commit()
+
+        # Rollup each ticker that had BUY/SELL inserts
+        if not preserve_positions:
+            for ticker in tickers_with_txns:
+                _rollup_transactions(ticker, profile_id, conn)
+
+        # Recompute dividend totals from dividend_payments for affected tickers
+        current_year = str(_date.today().year)
+        for ticker in tickers_with_divs:
+            # Ensure holding exists (might only have dividend records, no buy/sell)
+            existing = conn.execute(
+                "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+                (ticker, profile_id),
+            ).fetchone()
+            if not existing:
+                continue
+
+            total = conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) FROM dividend_payments "
+                "WHERE ticker = ? AND profile_id = ?",
+                (ticker, profile_id),
+            ).fetchone()[0]
+
+            ytd = conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) FROM dividend_payments "
+                "WHERE ticker = ? AND profile_id = ? AND payment_date LIKE ?",
+                (ticker, profile_id, f"{current_year}%"),
+            ).fetchone()[0]
+
+            conn.execute(
+                "UPDATE all_account_info SET total_divs_received = ?, ytd_divs = ?, "
+                "paid_for_itself = CASE WHEN purchase_value > 0 THEN ? / purchase_value ELSE 0 END "
+                "WHERE ticker = ? AND profile_id = ?",
+                (total, ytd, total, ticker, profile_id),
+            )
+
+        conn.commit()
+
+        # Run standard post-import chain
+        populate_holdings(profile_id)
+        populate_dividends(profile_id)
+        populate_income_tracking(profile_id)
+
+    except Exception as e:
+        conn.close()
+        return jsonify({"error": f"Import failed: {e}"}), 500
+    finally:
+        conn.close()
+
+    return jsonify({
+        "inserted_buys": inserted_buys,
+        "inserted_sells": inserted_sells,
+        "dividends_applied": dividends_applied,
+        "duplicates_skipped": duplicates_skipped,
+        "message": (
+            f"Imported {inserted_buys} buys, {inserted_sells} sells, "
+            f"{dividends_applied} dividends. {duplicates_skipped} duplicates skipped."
+            + (
+                " Current holdings were preserved from the broker positions import for this portfolio."
+                if preserve_positions else ""
+            )
+        ),
+    })
+
+
 # ── Ticker Lookup (yfinance) ────────────────────────────────────────────────────
 
 @app.route("/api/lookup/<ticker>", methods=["GET"])
@@ -962,6 +1514,186 @@ def lookup_ticker(ticker):
     return jsonify(result)
 
 
+def _parse_timestamp_value(value):
+    """Best-effort conversion of a date-like value to pandas.Timestamp."""
+    if value in (None, ""):
+        return None
+    try:
+        ts = pd.Timestamp(value)
+        if ts.tzinfo is not None:
+            ts = ts.tz_localize(None)
+        return ts
+    except Exception:
+        return None
+
+
+def _format_mdy_date(value):
+    """Format a date-like value as MM/DD/YY, or None when unavailable."""
+    ts = _parse_timestamp_value(value)
+    return ts.strftime("%m/%d/%y") if ts is not None else None
+
+
+def _infer_dividend_frequency_from_count(count):
+    """Infer dividend frequency code from the number of positive payments in ~1 year."""
+    if count >= 45:
+        return "W"
+    if count >= 10:
+        return "M"
+    if count >= 3:
+        return "Q"
+    if count >= 2:
+        return "SA"
+    if count >= 1:
+        return "A"
+    return None
+
+
+def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
+    """Fetch dividend metadata for refresh when the batch download is incomplete."""
+    from datetime import timezone as _timezone
+
+    snapshot = {
+        "known": True,
+        "has_dividend": False,
+        "div": 0.0,
+        "ex_div_date": None,
+        "div_pay_date": None,
+        "freq": None,
+        "history": pd.Series(dtype=float),
+    }
+
+    preferred = (preferred_freq or "").strip().upper() or None
+    info = {}
+    try:
+        info = yf_ticker.info or {}
+    except Exception:
+        info = {}
+
+    try:
+        hist = yf_ticker.dividends
+    except Exception:
+        hist = None
+
+    recent = pd.Series(dtype=float)
+    if hist is not None and len(hist) > 0:
+        try:
+            if getattr(hist.index, "tz", None) is not None:
+                one_year_ago = pd.Timestamp.now(tz=hist.index.tz) - pd.Timedelta(days=365)
+            else:
+                one_year_ago = pd.Timestamp.now() - pd.Timedelta(days=365)
+            recent = hist[hist.index >= one_year_ago]
+            recent = recent[recent > 0].dropna()
+        except Exception:
+            recent = pd.Series(dtype=float)
+
+    if not recent.empty:
+        snapshot["has_dividend"] = True
+        snapshot["div"] = float(recent.iloc[-1])
+        snapshot["ex_div_date"] = _format_mdy_date(recent.index[-1])
+        snapshot["freq"] = _infer_dividend_frequency_from_count(len(recent))
+        snapshot["history"] = recent
+    else:
+        annual_rate = info.get("dividendRate") or 0
+        ex_ts = info.get("exDividendDate")
+        if annual_rate and annual_rate > 0:
+            freq = preferred or "Q"
+            mult = {"W": 52, "52": 52, "M": 12, "Q": 4, "SA": 2, "A": 1}.get(freq, 4)
+            snapshot["has_dividend"] = True
+            snapshot["freq"] = freq
+            snapshot["div"] = float(annual_rate) / mult if mult else float(annual_rate)
+        if ex_ts:
+            snapshot["has_dividend"] = True
+            if isinstance(ex_ts, (int, float)):
+                ex_ts = pd.Timestamp(ex_ts, unit="s", tz=_timezone.utc)
+            snapshot["ex_div_date"] = _format_mdy_date(ex_ts)
+
+    try:
+        cal = yf_ticker.calendar
+        pay_date = None
+        if isinstance(cal, dict):
+            pay_date = cal.get("Dividend Date") or cal.get("Payment Date")
+        elif hasattr(cal, "loc"):
+            for key in ["Dividend Date", "Payment Date"]:
+                if key in cal.index:
+                    pay_date = cal.loc[key].iloc[0] if hasattr(cal.loc[key], "iloc") else cal.loc[key]
+                    break
+        if isinstance(pay_date, (int, float)):
+            pay_date = pd.Timestamp(pay_date, unit="s", tz=_timezone.utc)
+        snapshot["div_pay_date"] = _format_mdy_date(pay_date)
+    except Exception:
+        pass
+
+    if not snapshot["div_pay_date"] and snapshot["ex_div_date"]:
+        ex_ts = _parse_timestamp_value(snapshot["ex_div_date"])
+        if ex_ts is not None:
+            snapshot["div_pay_date"] = (ex_ts + pd.Timedelta(days=21)).strftime("%m/%d/%y")
+
+    if snapshot["has_dividend"] and not snapshot["freq"]:
+        snapshot["freq"] = preferred or "Q"
+
+    return snapshot
+
+
+def _simulate_drip_refresh(div_series, close_series, base_qty, start_date=None, today=None):
+    """Simulate post-start DRIP activity and actual dividend cash by dividend date."""
+    if div_series is None or div_series.empty or close_series is None or close_series.empty:
+        return {
+            "quantity": float(base_qty or 0),
+            "drip_shares": 0.0,
+            "drip_total_divs": 0.0,
+            "ytd_divs": 0.0,
+            "current_month_income": 0.0,
+            "event_count": 0,
+        }
+
+    today_ts = _parse_timestamp_value(today) or pd.Timestamp.now().normalize()
+    start_ts = _parse_timestamp_value(start_date)
+    jan1 = pd.Timestamp(today_ts.year, 1, 1)
+    first_of_month = pd.Timestamp(today_ts.year, today_ts.month, 1)
+    ytd_floor = max(jan1, start_ts) if start_ts is not None else jan1
+    month_floor = max(first_of_month, ytd_floor)
+
+    eligible = div_series[div_series.index <= today_ts]
+    if start_ts is not None:
+        eligible = eligible[eligible.index > start_ts]
+
+    running_qty = float(base_qty or 0)
+    drip_shares = 0.0
+    drip_total_divs = 0.0
+    ytd_total = 0.0
+    current_total = 0.0
+    event_count = 0
+
+    for div_date, div_amt in eligible.items():
+        prices_on_or_before = close_series[close_series.index <= div_date]
+        if prices_on_or_before.empty:
+            continue
+        reinvest_price = float(prices_on_or_before.iloc[-1])
+        if reinvest_price <= 0:
+            continue
+
+        div_income = float(div_amt) * running_qty
+        if div_date >= ytd_floor:
+            ytd_total += div_income
+        if div_date >= month_floor:
+            current_total += div_income
+
+        new_shares = div_income / reinvest_price
+        drip_shares += new_shares
+        drip_total_divs += div_income
+        running_qty += new_shares
+        event_count += 1
+
+    return {
+        "quantity": running_qty,
+        "drip_shares": drip_shares,
+        "drip_total_divs": drip_total_divs,
+        "ytd_divs": ytd_total,
+        "current_month_income": current_total,
+        "event_count": event_count,
+    }
+
+
 # ── Refresh Market Data ─────────────────────────────────────────────────────────
 
 @app.route("/api/refresh", methods=["POST"])
@@ -970,20 +1702,20 @@ def refresh_market_data():
     import yfinance as yf
     from datetime import datetime as _dt
 
-    profile_id = get_profile_id()
     conn = get_connection()
+    refresh_info = _get_refresh_target_info(conn)
+    scope = refresh_info["scope"]
+    source_pids = refresh_info["source_profile_ids"]
+    selected_profile_id = refresh_info["selected_profile_id"]
 
-    # Refresh ALL profiles (including aggregate members) so div/income
-    # values stay consistent across Owner and sub-profiles
-    all_pids = [r[0] for r in conn.execute(
-        "SELECT id FROM profiles"
-    ).fetchall()] or [profile_id]
-
-    # Collect unique tickers and per-profile holdings across ALL profiles
+    # Refresh only the profiles relevant to the current holdings view:
+    # - single profile: just that profile
+    # - Owner: source accounts that feed Owner
+    # - Aggregate: aggregate member profiles
     all_rows = conn.execute(
         "SELECT profile_id, ticker, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date FROM all_account_info WHERE profile_id IN ({})".format(
-            ",".join("?" * len(all_pids))
-        ), all_pids,
+            ",".join("?" * len(source_pids))
+        ), source_pids,
     ).fetchall()
 
     if not all_rows:
@@ -1012,6 +1744,8 @@ def refresh_market_data():
     freq_map = {}
     div_history = {}    # ticker -> pandas Series of positive dividends (index=dates)
     close_history = {}  # ticker -> pandas Series of close prices (index=dates)
+    div_snapshot_map = {}
+    raw = pd.DataFrame()
 
     try:
         raw = yf.download(ticker_str, period="1y", progress=False, auto_adjust=False, actions=True)
@@ -1079,6 +1813,7 @@ def refresh_market_data():
                             s = close[new_sym].dropna()
                             if len(s):
                                 price_map[t] = float(s.iloc[-1])
+                                close_history[t] = s
                         divs = raw["Dividends"] if "Dividends" in raw.columns.get_level_values(0) else None
                         if divs is not None and not isinstance(divs, pd.Series) and new_sym in divs.columns:
                             d = divs[new_sym][divs[new_sym] > 0].dropna()
@@ -1098,6 +1833,7 @@ def refresh_market_data():
                                     s2 = c2.squeeze().dropna()
                                     if len(s2):
                                         price_map[t] = float(s2.iloc[-1])
+                                        close_history[t] = s2
                                 d2 = r2["Dividends"] if "Dividends" in r2.columns else (r2["Dividends"][new_sym] if isinstance(r2.columns, pd.MultiIndex) else None)
                                 if d2 is not None:
                                     d2s = d2.squeeze()
@@ -1116,7 +1852,7 @@ def refresh_market_data():
                             new_info = yf.Ticker(new_sym).info or {}
                             new_desc = new_info.get("longName") or new_info.get("shortName")
                             if new_desc:
-                                for pid in all_pids:
+                                for pid in source_pids:
                                     conn.execute(
                                         "UPDATE all_account_info SET description = ? WHERE ticker = ? AND profile_id = ? AND (description = ? OR description IS NULL OR description = '')",
                                         (new_desc[:200], t, pid, t),
@@ -1150,30 +1886,96 @@ def refresh_market_data():
     freq_rank = {'W': 6, '52': 6, 'M': 5, 'Q': 4, 'SA': 3, 'A': 2, None: 0}
     effective_freq = {}
     for t in tickers:
-        nf = freq_map.get(t)
-        if t in weekly_set:
-            nf = 'W'
+        if t in div_history and div_map.get(t) is not None:
+            div_snapshot_map[t] = {
+                "known": True,
+                "has_dividend": True,
+                "div": div_map.get(t) or 0.0,
+                "ex_div_date": exdiv_map.get(t),
+                "div_pay_date": _format_mdy_date(
+                    (_parse_timestamp_value(exdiv_map.get(t)) + pd.Timedelta(days=21))
+                    if exdiv_map.get(t) else None
+                ),
+                "freq": freq_map.get(t),
+                "history": div_history.get(t, pd.Series(dtype=float)),
+            }
+        elif t in close_history:
+            # Batch download returned valid market data for this ticker and
+            # showed no positive dividends in the period, so treat that as a
+            # definitive "no current dividend" signal instead of leaving stale
+            # dividend metadata behind due to a flaky per-ticker fallback call.
+            div_snapshot_map[t] = {
+                "known": True,
+                "has_dividend": False,
+                "div": 0.0,
+                "ex_div_date": None,
+                "div_pay_date": None,
+                "freq": None,
+                "history": pd.Series(dtype=float),
+            }
         else:
-            db_rank = freq_rank.get(db_freq_map.get(t), 0)
-            new_rank = freq_rank.get(nf, 0)
-            if new_rank < db_rank:
-                nf = db_freq_map.get(t)
-        effective_freq[t] = nf
+            preferred_freq = 'W' if t in weekly_set else db_freq_map.get(t)
+            lookup_symbol = rename_map.get(t, t)
+            try:
+                div_snapshot_map[t] = _fetch_refresh_dividend_snapshot(
+                    yf.Ticker(lookup_symbol),
+                    preferred_freq=preferred_freq,
+                )
+            except Exception:
+                div_snapshot_map[t] = {
+                    "known": False,
+                    "has_dividend": False,
+                    "div": 0.0,
+                    "ex_div_date": None,
+                    "div_pay_date": None,
+                    "freq": None,
+                    "history": pd.Series(dtype=float),
+                }
+
+        snapshot = div_snapshot_map[t]
+        if snapshot.get("has_dividend"):
+            nf = snapshot.get("freq")
+            if t in weekly_set:
+                nf = 'W'
+            else:
+                db_rank = freq_rank.get(db_freq_map.get(t), 0)
+                new_rank = freq_rank.get(nf, 0)
+                if new_rank < db_rank:
+                    nf = db_freq_map.get(t)
+            effective_freq[t] = nf
+        else:
+            effective_freq[t] = None
 
     updated = 0
     updated_pids = set()
-    for pid in all_pids:
+    refreshed_owner_source = False
+    owner_source_ids = set(_get_owner_source_profile_ids(conn))
+    for pid in source_pids:
+        if pid in owner_source_ids:
+            refreshed_owner_source = True
         for t in tickers:
             key = (pid, t)
             if key not in holding_map:
                 continue
 
+            snapshot = div_snapshot_map.get(t, {
+                "known": False,
+                "has_dividend": False,
+                "div": 0.0,
+                "ex_div_date": None,
+                "div_pay_date": None,
+                "freq": None,
+                "history": pd.Series(dtype=float),
+            })
+            snapshot_known = bool(snapshot.get("known"))
+            has_dividend = bool(snapshot.get("has_dividend"))
             new_price = price_map.get(t)
-            new_div = div_map.get(t)
-            new_exdiv = exdiv_map.get(t)
+            new_div = snapshot.get("div") if has_dividend else None
+            new_exdiv = snapshot.get("ex_div_date") if has_dividend else None
+            new_pay_date = snapshot.get("div_pay_date") if has_dividend else None
             new_freq = effective_freq.get(t)
 
-            if not new_price and not new_div:
+            if not new_price and not snapshot_known:
                 continue
 
             h = holding_map[key]
@@ -1201,41 +2003,30 @@ def refresh_market_data():
             # only add shares for dividends received AFTER that date.
             drip_shares = 0.0
             drip_total_divs = 0.0
-            div_series = div_history.get(t)
+            ytd_divs = 0.0
+            current_month_income = 0.0
+            div_series = snapshot.get("history")
             close_series = close_history.get(t)
 
-            if is_drip and div_series is not None and not div_series.empty and close_series is not None:
-                drip_start = None
-                if import_date:
-                    try:
-                        drip_start = pd.Timestamp(import_date)
-                    except Exception:
-                        pass
-                if drip_start is None and purchase_date:
-                    try:
-                        drip_start = pd.Timestamp(purchase_date)
-                    except Exception:
-                        pass
-                # Only include dividends AFTER the import/entry date
-                eligible = div_series
-                if drip_start is not None:
-                    eligible = eligible[eligible.index > drip_start]
-                if not eligible.empty:
-                    running_qty = base_qty
-                    for div_date, div_amt in eligible.items():
-                        prices_on_or_before = close_series[close_series.index <= div_date]
-                        if prices_on_or_before.empty:
-                            continue
-                        reinvest_price = float(prices_on_or_before.iloc[-1])
-                        if reinvest_price <= 0:
-                            continue
-                        div_income = div_amt * running_qty
-                        new_shares = div_income / reinvest_price
-                        drip_shares += new_shares
-                        drip_total_divs += div_income
-                        running_qty += new_shares
-                    qty = running_qty
-
+            if (
+                is_drip
+                and div_series is not None
+                and not div_series.empty
+                and close_series is not None
+            ):
+                drip_start = import_date or purchase_date or None
+                drip_result = _simulate_drip_refresh(
+                    div_series,
+                    close_series,
+                    base_qty,
+                    start_date=drip_start,
+                )
+                qty = drip_result["quantity"]
+                drip_shares = drip_result["drip_shares"]
+                drip_total_divs = drip_result["drip_total_divs"]
+                ytd_divs = drip_result["ytd_divs"]
+                current_month_income = drip_result["current_month_income"]
+                if drip_result["event_count"] > 0:
                     sets.extend(["quantity = ?", "base_quantity = ?",
                                  "shares_bought_from_dividend = ?",
                                  "total_cash_reinvested = ?"])
@@ -1273,38 +2064,36 @@ def refresh_market_data():
                              "gain_or_loss_percentage = ?", "percent_change = ?"])
                 vals.extend([new_price, current_value, gain, gain_pct, gain_pct])
 
-            if new_div:
-                freq_mult = {'W': 52, '52': 52, 'M': 12, 'Q': 4, 'SA': 2, 'A': 1}
-                cur_freq = (new_freq or 'Q').upper()
-                mult = freq_mult.get(cur_freq, 4)
-                annual_div = new_div * mult
-                yoc = (annual_div / price_paid) if price_paid else 0
-                cur_yield = (annual_div / new_price) if new_price else 0
-                estim_annual = new_div * qty * mult
-                estim_monthly = estim_annual / 12 if estim_annual else 0
-                sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?",
-                             "estim_payment_per_year = ?", "approx_monthly_income = ?"])
-                vals.extend([new_div, yoc, cur_yield, estim_annual, estim_monthly])
+            if snapshot_known:
+                if new_div:
+                    freq_mult = {'W': 52, '52': 52, 'M': 12, 'Q': 4, 'SA': 2, 'A': 1}
+                    cur_freq = (new_freq or 'Q').upper()
+                    mult = freq_mult.get(cur_freq, 4)
+                    annual_div = new_div * mult
+                    yoc = (annual_div / price_paid) if price_paid else 0
+                    cur_yield = (annual_div / new_price) if new_price else 0
+                    estim_annual = new_div * qty * mult
+                    estim_monthly = estim_annual / 12 if estim_annual else 0
+                    sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?",
+                                 "estim_payment_per_year = ?", "approx_monthly_income = ?"])
+                    vals.extend([new_div, yoc, cur_yield, estim_annual, estim_monthly])
+                else:
+                    sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?",
+                                 "estim_payment_per_year = ?", "approx_monthly_income = ?"])
+                    vals.extend([0, 0, 0, 0, 0])
 
-            if new_exdiv:
                 sets.append("ex_div_date = ?")
                 vals.append(new_exdiv)
-                try:
-                    ex_dt = _dt.strptime(new_exdiv, "%m/%d/%y")
-                    est_pay = ex_dt + pd.Timedelta(days=21)
-                    sets.append("div_pay_date = ?")
-                    vals.append(est_pay.strftime("%m/%d/%y"))
-                except Exception:
-                    pass
+                sets.append("div_pay_date = ?")
+                vals.append(new_pay_date)
 
-            if new_freq:
                 sets.append("div_frequency = ?")
                 vals.append(new_freq)
 
             # Actual YTD and current-month dividends from yfinance history,
             # filtered to only include dividends on or after purchase_date.
             # Uses DRIP-adjusted qty for accurate income calculation.
-            if div_series is not None and not div_series.empty:
+            if snapshot_known and div_series is not None and not div_series.empty and not is_drip:
                 jan1 = pd.Timestamp(_dt.now().year, 1, 1)
                 today = pd.Timestamp(_dt.now().date())
                 first_of_month = pd.Timestamp(today.year, today.month, 1)
@@ -1319,10 +2108,14 @@ def refresh_market_data():
                 ytd = div_series[(div_series.index >= start) & (div_series.index <= today)]
                 curmo_start = max(first_of_month, start)
                 curmo = div_series[(div_series.index >= curmo_start) & (div_series.index <= today)]
+                ytd_divs = round(float(ytd.sum()) * qty, 2) if not ytd.empty else 0
+                current_month_income = round(float(curmo.sum()) * qty, 2) if not curmo.empty else 0
+
+            if snapshot_known:
                 sets.append("ytd_divs = ?")
-                vals.append(round(float(ytd.sum()) * qty, 2) if not ytd.empty else 0)
+                vals.append(round(ytd_divs, 2))
                 sets.append("current_month_income = ?")
-                vals.append(round(float(curmo.sum()) * qty, 2) if not curmo.empty else 0)
+                vals.append(round(current_month_income, 2))
 
             if sets:
                 vals.extend([t, pid])
@@ -1342,12 +2135,19 @@ def refresh_market_data():
 
     conn.close()
 
-    # Sync sub-account changes up to Owner so the aggregate view stays current
-    _auto_reconcile_owner()
+    # Sync Owner only when the refresh touched an Owner source account,
+    # or when the Owner page itself initiated the refresh.
+    if scope == "owner" or refreshed_owner_source:
+        _auto_reconcile_owner()
 
-    # Report count for the selected profile's tickers
-    selected_count = sum(1 for t in tickers if (profile_id, t) in holding_map)
-    return jsonify({"updated": updated, "message": f"Refreshed {selected_count} of {selected_count} holdings"})
+    refreshed_rows = sum(1 for key in holding_map if key[0] in source_pids)
+    if scope == "owner":
+        msg = f"Refreshed {refreshed_rows} holdings across {len(source_pids)} Owner source portfolios."
+    elif scope == "aggregate":
+        msg = f"Refreshed {refreshed_rows} holdings across {len(source_pids)} Aggregate member portfolios."
+    else:
+        msg = f"Refreshed {refreshed_rows} holdings in {_get_profile_name(selected_profile_id)}."
+    return jsonify({"updated": updated, "message": msg})
 
 
 # ── Holdings CRUD ──────────────────────────────────────────────────────────────
@@ -1704,6 +2504,9 @@ def _rerollup_after_import(profile_id):
     """After an import, re-rollup any tickers that have transactions so the
     transaction-managed position data overrides whatever the spreadsheet had."""
     conn = get_connection()
+    if _profile_is_positions_managed(profile_id, conn):
+        conn.close()
+        return
     rows = conn.execute(
         "SELECT DISTINCT ticker FROM transactions WHERE profile_id = ?",
         (profile_id,),
@@ -1829,10 +2632,11 @@ def _import_as_transactions(profile_id, pre_snapshot):
 
 
 def _rollup_transactions(ticker, profile_id, conn):
-    """Recalculate all_account_info from transactions using FIFO for sells.
+    """Recalculate all_account_info from transactions.
 
-    BUY transactions add to a FIFO lot queue.
-    SELL transactions consume lots oldest-first, computing realized gains.
+    BUY transactions add to a lot queue.
+    SELL transactions consume lots using specific-lot allocations when stored
+    in transaction_lot_allocations, otherwise falling back to FIFO.
     The remaining lots determine quantity, weighted-average price_paid, and
     purchase_value.  Realized gains are stored per-sell transaction and summed.
     """
@@ -1847,8 +2651,17 @@ def _rollup_transactions(ticker, profile_id, conn):
     def _val(r, key, idx):
         return r[key] if isinstance(r, dict) else r[idx]
 
-    # Build FIFO lot queue and compute realized gains
-    lots = []  # each lot: { shares, cost_per_share (incl. fees), date }
+    # Pre-load lot allocations for all sells in this ticker
+    all_sell_ids = [
+        _val(r, "id", 0)
+        for r in rows
+        if (_val(r, "transaction_type", 1) or "BUY").upper() == "SELL"
+    ]
+    alloc_map = _load_lot_alloc_map(conn, all_sell_ids)
+
+    # Build lot queue and compute realized gains
+    lots = []  # each lot: { id, shares, cost_per_share (incl. fees), date }
+    share_deficit = 0.0
     total_realized = 0
     earliest_buy = None
 
@@ -1861,58 +2674,65 @@ def _rollup_transactions(ticker, profile_id, conn):
         tdate = _val(r, "transaction_date", 5)
 
         if txn_type == "BUY":
-            lot_cost = (shares * price) + fees
-            cost_per = lot_cost / shares if shares else 0
-            lots.append({"shares": shares, "cost_per_share": cost_per, "date": tdate})
-            if tdate and (earliest_buy is None or tdate < earliest_buy):
+            if share_deficit > 1e-9:
+                covered = min(share_deficit, shares)
+                share_deficit -= covered
+                shares -= covered
+            _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id, txn_date=tdate)
+            if shares > 1e-9 and tdate and (earliest_buy is None or tdate < earliest_buy):
                 earliest_buy = tdate
             # Clear any realized_gain on BUY rows
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
         else:  # SELL
             sell_proceeds = (shares * price) - fees  # fees reduce proceeds
-            sell_remaining = shares
-            cost_of_sold = 0
-            # Consume lots FIFO
-            while sell_remaining > 0 and lots:
-                lot = lots[0]
-                if lot["shares"] <= sell_remaining:
-                    cost_of_sold += lot["shares"] * lot["cost_per_share"]
-                    sell_remaining -= lot["shares"]
-                    lots.pop(0)
-                else:
-                    cost_of_sold += sell_remaining * lot["cost_per_share"]
-                    lot["shares"] -= sell_remaining
-                    sell_remaining = 0
+            cost_of_sold, sell_remaining = _consume_sell_lots(
+                lots,
+                shares,
+                alloc_map.get(txn_id),
+            )
+            share_deficit += sell_remaining
+
             realized = sell_proceeds - cost_of_sold
             total_realized += realized
             conn.execute("UPDATE transactions SET realized_gain = ? WHERE id = ?",
                          (round(realized, 2), txn_id))
 
     # Remaining lots = current position
-    total_shares = sum(lot["shares"] for lot in lots)
+    total_shares = sum(lot["shares"] for lot in lots) - share_deficit
     total_cost = sum(lot["shares"] * lot["cost_per_share"] for lot in lots)
     avg_price = total_cost / total_shares if total_shares else 0
 
     from datetime import date as _date
 
-    if total_shares == 0:
+    if total_shares <= 1e-9:
         # Fully sold — remove the holding row entirely
         conn.execute(
             "DELETE FROM all_account_info WHERE ticker = ? AND profile_id = ?",
             (ticker, profile_id),
         )
     else:
+        # Get current_price so we can recompute value and G/L immediately
+        cp_row = conn.execute(
+            "SELECT current_price FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+            (ticker, profile_id),
+        ).fetchone()
+        cp = (cp_row["current_price"] if isinstance(cp_row, dict) else cp_row[0]) if cp_row else None
+        cur_val = round(total_shares * cp, 2) if cp else None
+        gl = round(cur_val - total_cost, 2) if cur_val is not None else None
+        gl_pct = round(gl / total_cost, 6) if gl is not None and total_cost > 0 else None
+
         conn.execute(
             """UPDATE all_account_info
                SET quantity = ?, price_paid = ?, purchase_value = ?,
                    purchase_date = ?, base_quantity = ?, import_date = ?,
                    realized_gains = ?,
-                   current_value = NULL, gain_or_loss = NULL,
-                   gain_or_loss_percentage = NULL, percent_change = NULL
+                   current_value = ?, gain_or_loss = ?,
+                   gain_or_loss_percentage = ?, percent_change = ?
                WHERE ticker = ? AND profile_id = ?""",
             (round(total_shares, 6), round(avg_price, 4), round(total_cost, 2),
              earliest_buy, round(total_shares, 6), _date.today().isoformat(),
              round(total_realized, 2),
+             cur_val, gl, gl_pct, gl_pct,
              ticker, profile_id),
         )
     conn.commit()
@@ -1951,6 +2771,247 @@ def _seed_transaction_if_needed(ticker, profile_id, conn):
     conn.commit()
 
 
+def _load_lot_alloc_map(conn, sell_ids):
+    """Return {sell_txn_id: [{buy_txn_id, shares}, ...]} for the given sells."""
+    alloc_map = {}
+    if not sell_ids:
+        return alloc_map
+
+    placeholders = ",".join("?" * len(sell_ids))
+    alloc_rows = conn.execute(
+        f"SELECT sell_txn_id, buy_txn_id, shares FROM transaction_lot_allocations "
+        f"WHERE sell_txn_id IN ({placeholders}) ORDER BY id",
+        sell_ids,
+    ).fetchall()
+    for ar in alloc_rows:
+        sid = ar["sell_txn_id"] if isinstance(ar, dict) else ar[0]
+        bid = ar["buy_txn_id"] if isinstance(ar, dict) else ar[1]
+        sh = ar["shares"] if isinstance(ar, dict) else ar[2]
+        alloc_map.setdefault(sid, []).append({
+            "buy_txn_id": bid,
+            "shares": float(sh or 0),
+        })
+    return alloc_map
+
+
+def _consume_sell_lots(lots, sell_shares, allocations=None):
+    """Consume lots for a sell and return (cost_of_sold, remaining_sell_shares)."""
+    cost_of_sold = 0.0
+    sell_remaining = float(sell_shares or 0)
+
+    if allocations:
+        for alloc in allocations:
+            buy_id = alloc["buy_txn_id"]
+            alloc_shares = float(alloc["shares"] or 0)
+            for lot in lots:
+                if lot["id"] != buy_id:
+                    continue
+                take = min(alloc_shares, lot["shares"])
+                cost_of_sold += take * lot["cost_per_share"]
+                lot["shares"] -= take
+                sell_remaining -= take
+                break
+    else:
+        while sell_remaining > 1e-9 and lots:
+            lot = lots[0]
+            if lot["shares"] <= sell_remaining + 1e-9:
+                cost_of_sold += lot["shares"] * lot["cost_per_share"]
+                sell_remaining -= lot["shares"]
+                lots.pop(0)
+            else:
+                cost_of_sold += sell_remaining * lot["cost_per_share"]
+                lot["shares"] -= sell_remaining
+                sell_remaining = 0
+
+    lots[:] = [lot for lot in lots if lot["shares"] > 1e-9]
+    return cost_of_sold, max(0.0, sell_remaining)
+
+
+def _apply_buy_to_lots(lots, shares, price, fees, txn_id=None, txn_date=None):
+    """Append a BUY lot and return its weighted cost per share."""
+    shares = float(shares or 0)
+    price = float(price or 0)
+    fees = float(fees or 0)
+    lot_cost = (shares * price) + fees
+    cost_per = lot_cost / shares if shares else 0
+    if shares > 1e-9:
+        lot = {"shares": shares, "cost_per_share": cost_per}
+        if txn_id is not None:
+            lot["id"] = txn_id
+        if txn_date is not None:
+            lot["date"] = txn_date
+        lots.append(lot)
+    return cost_per
+
+
+def _get_open_lots(conn, ticker, profile_ids, exclude_txn_id=None):
+    """Return open BUY lots for a ticker after applying sells and allocations."""
+    placeholders = ",".join("?" * len(profile_ids))
+    rows = conn.execute(
+        f"SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
+        f"FROM transactions WHERE ticker = ? AND profile_id IN ({placeholders}) "
+        f"ORDER BY transaction_date, id",
+        [ticker] + profile_ids,
+    ).fetchall()
+
+    sell_ids = []
+    for row in rows:
+        txn_id = row["id"] if isinstance(row, dict) else row[0]
+        txn_type = ((row["transaction_type"] if isinstance(row, dict) else row[1]) or "BUY").upper()
+        if txn_id == exclude_txn_id:
+            continue
+        if txn_type == "SELL":
+            sell_ids.append(txn_id)
+    alloc_map = _load_lot_alloc_map(conn, sell_ids)
+
+    lots = []
+    share_deficit = 0.0
+    for row in rows:
+        txn_id = row["id"] if isinstance(row, dict) else row[0]
+        if txn_id == exclude_txn_id:
+            continue
+
+        txn_type = ((row["transaction_type"] if isinstance(row, dict) else row[1]) or "BUY").upper()
+        shares = float((row["shares"] if isinstance(row, dict) else row[2]) or 0)
+        price = float((row["price_per_share"] if isinstance(row, dict) else row[3]) or 0)
+        fees = float((row["fees"] if isinstance(row, dict) else row[4]) or 0)
+        txn_date = row["transaction_date"] if isinstance(row, dict) else row[5]
+
+        if txn_type == "BUY":
+            if share_deficit > 1e-9:
+                covered = min(share_deficit, shares)
+                share_deficit -= covered
+                shares -= covered
+            cost_per = _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id, txn_date=txn_date)
+            if shares > 1e-9:
+                lots[-1]["price_per_share"] = price
+                lots[-1]["cost_per_share"] = cost_per
+                lots[-1]["fees"] = fees
+                lots[-1]["transaction_date"] = txn_date
+        else:
+            _, sell_remaining = _consume_sell_lots(lots, shares, alloc_map.get(txn_id))
+            share_deficit += sell_remaining
+
+    result = []
+    for lot in lots:
+        if lot["shares"] <= 1e-9:
+            continue
+        result.append({
+            "id": lot["id"],
+            "shares_remaining": round(lot["shares"], 6),
+            "price_per_share": lot["price_per_share"],
+            "cost_per_share": round(lot["cost_per_share"], 4),
+            "fees": lot["fees"],
+            "transaction_date": lot["transaction_date"],
+        })
+    return result
+
+
+def _normalize_lot_allocations(conn, ticker, profile_id, shares, lot_allocations, exclude_txn_id=None):
+    """Validate specific-lot allocations and return a clean list."""
+    if not lot_allocations:
+        return []
+
+    try:
+        shares = float(shares or 0)
+    except (TypeError, ValueError):
+        raise ValueError("Shares is required")
+
+    open_lots = _get_open_lots(conn, ticker, [profile_id], exclude_txn_id=exclude_txn_id)
+    available_by_id = {lot["id"]: float(lot["shares_remaining"] or 0) for lot in open_lots}
+    cleaned = {}
+
+    for alloc in lot_allocations:
+        try:
+            buy_id = int(alloc["buy_txn_id"])
+            alloc_shares = float(alloc["shares"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("Each lot allocation must include buy_txn_id and shares")
+
+        if alloc_shares <= 0:
+            continue
+        if buy_id not in available_by_id:
+            raise ValueError("One or more selected lots are no longer available")
+        cleaned[buy_id] = cleaned.get(buy_id, 0.0) + alloc_shares
+
+    if not cleaned:
+        raise ValueError("Specific-lot mode requires at least one lot allocation")
+
+    for buy_id, alloc_shares in cleaned.items():
+        available = available_by_id[buy_id]
+        if alloc_shares - available > 1e-6:
+            raise ValueError(
+                f"Allocated shares exceed what is available for lot {buy_id} "
+                f"({alloc_shares:.6f} > {available:.6f})"
+            )
+
+    total_alloc = sum(cleaned.values())
+    if abs(total_alloc - shares) > 1e-6:
+        raise ValueError(
+            f"Specific-lot allocations must add up to shares sold "
+            f"({total_alloc:.6f} allocated vs {shares:.6f} entered)"
+        )
+
+    return [
+        {"buy_txn_id": buy_id, "shares": round(alloc_shares, 6)}
+        for buy_id, alloc_shares in cleaned.items()
+    ]
+
+
+def _annotate_transaction_rows(rows, alloc_map):
+    """Attach lot metadata and running position/cost info to transaction rows."""
+    annotated = []
+    lots = []
+    share_deficit = 0.0
+
+    for row in rows:
+        txn = dict(row) if isinstance(row, dict) else dict(zip(row.keys(), row))
+        txn_id = txn["id"]
+        txn_type = (txn.get("transaction_type") or "BUY").upper()
+        shares = float(txn.get("shares") or 0)
+        price = float(txn.get("price_per_share") or 0)
+        fees = float(txn.get("fees") or 0)
+
+        txn_allocs = alloc_map.get(txn_id, [])
+        txn["lot_allocations"] = [
+            {"buy_txn_id": alloc["buy_txn_id"], "shares": round(float(alloc["shares"] or 0), 6)}
+            for alloc in txn_allocs
+        ]
+        txn["cost_basis_method"] = "SPECIFIC" if txn_allocs else "FIFO"
+
+        if txn_type == "BUY":
+            if share_deficit > 1e-9:
+                covered = min(share_deficit, shares)
+                share_deficit -= covered
+                shares -= covered
+            _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id)
+        else:
+            _, sell_remaining = _consume_sell_lots(lots, shares, txn_allocs)
+            share_deficit += sell_remaining
+
+        total_shares = sum(lot["shares"] for lot in lots) - share_deficit
+        total_cost = sum(lot["shares"] * lot["cost_per_share"] for lot in lots)
+        avg_cost = total_cost / total_shares if total_shares else 0
+        txn["position_after"] = round(total_shares, 6)
+        txn["total_cost_after"] = round(total_cost, 2)
+        txn["avg_cost_after"] = round(avg_cost, 4) if total_shares else 0
+        annotated.append(txn)
+
+    return annotated
+
+
+@app.route("/api/holdings/<ticker>/open-lots", methods=["GET"])
+def open_lots(ticker):
+    """Return open (unsold) BUY lots for a ticker, computed via FIFO of existing sells."""
+    is_agg, pids = get_profile_filter()
+    ticker = ticker.upper()
+    conn = get_connection()
+    exclude_txn_id = request.args.get("exclude_txn_id", type=int)
+    result = _get_open_lots(conn, ticker, pids, exclude_txn_id=exclude_txn_id)
+    conn.close()
+    return jsonify(result)
+
+
 @app.route("/api/holdings/<ticker>/transactions", methods=["GET"])
 def list_transactions(ticker):
     """List all transactions for a ticker."""
@@ -1959,11 +3020,17 @@ def list_transactions(ticker):
     conn = get_connection()
     placeholders = ",".join("?" * len(pids))
     rows = conn.execute(
-        f"SELECT * FROM transactions WHERE ticker = ? AND profile_id IN ({placeholders}) ORDER BY transaction_date",
+        f"SELECT * FROM transactions WHERE ticker = ? AND profile_id IN ({placeholders}) ORDER BY transaction_date, id",
         [ticker] + pids,
     ).fetchall()
+    sell_ids = [
+        row["id"] if isinstance(row, dict) else row[0]
+        for row in rows
+        if ((row["transaction_type"] if isinstance(row, dict) else row[1]) or "BUY").upper() == "SELL"
+    ]
+    alloc_map = _load_lot_alloc_map(conn, sell_ids)
     conn.close()
-    return jsonify(rows_to_dicts(rows))
+    return jsonify(_annotate_transaction_rows(rows, alloc_map))
 
 
 @app.route("/api/holdings/<ticker>/transactions", methods=["POST"])
@@ -2022,19 +3089,55 @@ def add_transaction(ticker):
         # Auto-seed existing holding's current data as the first transaction
         _seed_transaction_if_needed(ticker, profile_id, conn)
 
+    # Validate date year if provided
+    txn_date = data.get("transaction_date")
+    if txn_date:
+        try:
+            year = int(str(txn_date).split("-")[0])
+            if year < 1900 or year > 2099:
+                conn.close()
+                return jsonify({"error": f"Invalid year {year} — must be between 1900 and 2099"}), 400
+        except (ValueError, IndexError):
+            conn.close()
+            return jsonify({"error": "Invalid date format"}), 400
+
     # Insert the new transaction
     txn_type = (data.get("transaction_type") or "BUY").upper()
     if txn_type not in ("BUY", "SELL"):
         conn.close()
         return jsonify({"error": "transaction_type must be BUY or SELL"}), 400
 
-    conn.execute(
+    try:
+        normalized_allocs = []
+        if txn_type == "SELL":
+            normalized_allocs = _normalize_lot_allocations(
+                conn,
+                ticker,
+                profile_id,
+                shares,
+                data.get("lot_allocations"),
+            )
+    except ValueError as e:
+        conn.close()
+        return jsonify({"error": str(e)}), 400
+
+    cur = conn.execute(
         "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (ticker, profile_id, txn_type, data.get("transaction_date"), float(shares),
          data.get("price_per_share"), data.get("fees", 0), data.get("notes")),
     )
+    new_txn_id = cur.lastrowid
     conn.commit()
+
+    # Store specific-lot allocations if provided
+    if txn_type == "SELL" and normalized_allocs:
+        for alloc in normalized_allocs:
+            conn.execute(
+                "INSERT INTO transaction_lot_allocations (sell_txn_id, buy_txn_id, shares) VALUES (?, ?, ?)",
+                (new_txn_id, alloc["buy_txn_id"], float(alloc["shares"])),
+            )
+        conn.commit()
 
     # Rollup into all_account_info
     _rollup_transactions(ticker, profile_id, conn)
@@ -2053,12 +3156,67 @@ def update_transaction(ticker, txn_id):
         profile_id = pids[0]
 
     data = request.get_json()
+
+    # Validate date year if provided
+    txn_date = data.get("transaction_date")
+    if txn_date:
+        try:
+            year = int(str(txn_date).split("-")[0])
+            if year < 1900 or year > 2099:
+                return jsonify({"error": f"Invalid year {year} — must be between 1900 and 2099"}), 400
+        except (ValueError, IndexError):
+            return jsonify({"error": "Invalid date format"}), 400
+
     conn = get_connection()
 
-    existing = conn.execute("SELECT 1 FROM transactions WHERE id = ?", (txn_id,)).fetchone()
+    existing = conn.execute(
+        "SELECT id, ticker, profile_id, transaction_type, shares FROM transactions WHERE id = ?",
+        (txn_id,),
+    ).fetchone()
     if not existing:
         conn.close()
         return jsonify({"error": "Transaction not found"}), 404
+    existing_ticker = (existing["ticker"] if isinstance(existing, dict) else existing[1]).upper()
+    existing_profile_id = existing["profile_id"] if isinstance(existing, dict) else existing[2]
+    existing_type = ((existing["transaction_type"] if isinstance(existing, dict) else existing[3]) or "BUY").upper()
+    existing_shares = existing["shares"] if isinstance(existing, dict) else existing[4]
+    if existing_ticker != ticker or existing_profile_id != profile_id:
+        conn.close()
+        return jsonify({"error": "Transaction does not belong to this holding/profile"}), 404
+
+    existing_allocs = _load_lot_alloc_map(conn, [txn_id]).get(txn_id, [])
+
+    new_type = (data.get("transaction_type") or existing_type).upper()
+    new_shares = data.get("shares", existing_shares)
+    if new_type not in ("BUY", "SELL"):
+        conn.close()
+        return jsonify({"error": "transaction_type must be BUY or SELL"}), 400
+
+    try:
+        normalized_allocs = []
+        if new_type == "SELL":
+            if "lot_allocations" in data:
+                normalized_allocs = _normalize_lot_allocations(
+                    conn,
+                    ticker,
+                    profile_id,
+                    new_shares,
+                    data.get("lot_allocations"),
+                    exclude_txn_id=txn_id,
+                )
+            elif existing_allocs:
+                existing_alloc_total = sum(float(alloc["shares"] or 0) for alloc in existing_allocs)
+                if abs(float(new_shares or 0) - existing_alloc_total) > 1e-6:
+                    raise ValueError(
+                        "This sell uses specific lots. Re-select the lots when changing the share count."
+                    )
+                normalized_allocs = [
+                    {"buy_txn_id": alloc["buy_txn_id"], "shares": float(alloc["shares"] or 0)}
+                    for alloc in existing_allocs
+                ]
+    except ValueError as e:
+        conn.close()
+        return jsonify({"error": str(e)}), 400
 
     updates = []
     vals = []
@@ -2073,6 +3231,13 @@ def update_transaction(ticker, txn_id):
 
     vals.append(txn_id)
     conn.execute(f"UPDATE transactions SET {', '.join(updates)} WHERE id = ?", vals)
+    conn.execute("DELETE FROM transaction_lot_allocations WHERE sell_txn_id = ?", (txn_id,))
+    if new_type == "SELL" and normalized_allocs:
+        for alloc in normalized_allocs:
+            conn.execute(
+                "INSERT INTO transaction_lot_allocations (sell_txn_id, buy_txn_id, shares) VALUES (?, ?, ?)",
+                (txn_id, alloc["buy_txn_id"], float(alloc["shares"])),
+            )
     conn.commit()
 
     _rollup_transactions(ticker, profile_id, conn)
@@ -2334,6 +3499,20 @@ def download_template():
         as_attachment=True,
         download_name='portfolio_upload_template.xlsx',
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+
+
+@app.route("/api/template/etrade-download", methods=["GET"])
+def download_etrade_template():
+    template_path = os.path.join(os.path.dirname(__file__), '..', 'templates', 'etrade_positions_template.csv')
+    if not os.path.exists(template_path):
+        from create_template import create_etrade_template
+        create_etrade_template()
+    return send_file(
+        os.path.abspath(template_path),
+        as_attachment=True,
+        download_name='etrade_positions_template.csv',
+        mimetype='text/csv',
     )
 
 
@@ -5575,6 +6754,7 @@ def gains_losses_summary():
             ).fetchall()
             cat_map = pd.DataFrame([dict(r) for r in cat_map_rows])
             if not cat_map.empty:
+                cat_map = cat_map.drop_duplicates(subset="ticker", keep="first")
                 udf = udf.merge(cat_map, on="ticker", how="left")
             else:
                 udf["category_name"] = None
@@ -14375,17 +15555,25 @@ def macro_quadrant():
         i_vals = mkt_inflation_score[valid].values
         regimes = [classify(g, i) for g, i in zip(g_vals, i_vals)]
 
-        # ── D. Current quadrant: prefer FRED Z-scores, fallback to market ──
+        # ── D. Current quadrant: keep FRED as the macro "now" view, but anchor
+        # the Markov engine to the market-proxy state it was trained on.
+        market_current_quad = regimes[-1] if regimes else 2
+        market_current_growth = round(float(g_vals[-1]), 4) if len(g_vals) else 0
+        market_current_inflation = round(float(i_vals[-1]), 4) if len(i_vals) else 0
+
         if fred_ok and fred_growth_z is not None:
             current_quad = classify(fred_growth_z, fred_inflation_z)
             current_growth = fred_growth_z
             current_inflation = fred_inflation_z
             classification_source = "FRED"
         else:
-            current_quad = regimes[-1] if regimes else 2
-            current_growth = round(float(g_vals[-1]), 4) if len(g_vals) else 0
-            current_inflation = round(float(i_vals[-1]), 4) if len(i_vals) else 0
+            current_quad = market_current_quad
+            current_growth = market_current_growth
+            current_inflation = market_current_inflation
             classification_source = "Market Proxy"
+
+        transition_anchor_quad = market_current_quad
+        states_aligned = current_quad == transition_anchor_quad
 
         if len(regimes) < 2:
             return jsonify({"error": "Insufficient data for transition matrix"}), 502
@@ -14416,9 +15604,11 @@ def macro_quadrant():
             to = regimes[idx + 1] - 1
             transition_counts[fr][to] += 1
 
-        row_sums = transition_counts.sum(axis=1, keepdims=True)
+        smoothing_alpha = 0.35
+        smoothed_counts = transition_counts.astype(float) + smoothing_alpha
+        row_sums = smoothed_counts.sum(axis=1, keepdims=True)
         row_sums[row_sums == 0] = 1
-        transition_matrix = (transition_counts / row_sums).tolist()
+        transition_matrix = (smoothed_counts / row_sums).tolist()
 
         # Step 5b: Compute CONDITIONAL transition matrix
         # The static matrix treats all weeks in a quadrant equally.
@@ -14438,11 +15628,12 @@ def macro_quadrant():
         i_mom_dir = "decelerating" if (i_now_mkt - i_4w_mkt) < -0.3 else (
             "accelerating" if (i_now_mkt - i_4w_mkt) > 0.3 else "stable")
 
-        # Filter: find historical weeks in current_quad with similar momentum
+        # Filter: find historical weeks in the transition anchor state with
+        # similar momentum.
         conditional_counts = np.zeros(4, dtype=int)
         lookback = 4  # compare 4-week delta
         for idx in range(lookback, len(regimes) - 1):
-            if regimes[idx] != current_quad:
+            if regimes[idx] != transition_anchor_quad:
                 continue
             hist_g_delta = float(g_vals[idx]) - float(g_vals[idx - lookback])
             hist_i_delta = float(i_vals[idx]) - float(i_vals[idx - lookback])
@@ -14457,12 +15648,19 @@ def macro_quadrant():
                 next_q = regimes[idx + 1] - 1
                 conditional_counts[next_q] += 1
 
-        cond_total = conditional_counts.sum()
-        if cond_total >= 10:  # Only use conditional if enough observations
-            conditional_row = (conditional_counts / cond_total).tolist()
+        cond_total = int(conditional_counts.sum())
+        static_anchor_row = np.array(transition_matrix[transition_anchor_quad - 1], dtype=float)
+        conditional_weight = 0.0
+        if cond_total > 0:
+            conditional_empirical = conditional_counts / cond_total
+            conditional_weight = min(cond_total / 24.0, 1.0)
+            conditional_row = (
+                conditional_empirical * conditional_weight
+                + static_anchor_row * (1.0 - conditional_weight)
+            ).tolist()
             use_conditional = True
         else:
-            conditional_row = transition_matrix[current_quad - 1]
+            conditional_row = static_anchor_row.tolist()
             use_conditional = False
 
         # Further adjust conditional row using FRED Z-score mean-reversion
@@ -14472,42 +15670,42 @@ def macro_quadrant():
         if fred_ok and fred_growth_z is not None:
             # Mean-reversion adjustment factor
             # Higher Z → stronger pull toward opposite-growth quadrants
-            if fred_growth_z > 1.0 and current_quad in (1, 2):
+            if fred_growth_z > 1.0 and transition_anchor_quad in (1, 2):
                 # Growth is elevated in a growth-UP quad → risk of Q3/Q4
                 reversion_strength = min((fred_growth_z - 1.0) * 0.15, 0.25)
                 # Move probability from self → growth-DOWN quads
-                if current_quad == 2:  # Reflation
+                if transition_anchor_quad == 2:  # Reflation
                     # Risk: Q3 (Stagflation) if inflation stays, Q4 if both fall
                     shift_to_q3 = reversion_strength * 0.75
                     shift_to_q4 = reversion_strength * 0.25
-                    adjusted_row[current_quad - 1] -= reversion_strength
+                    adjusted_row[transition_anchor_quad - 1] -= reversion_strength
                     adjusted_row[2] += shift_to_q3  # Q3
                     adjusted_row[3] += shift_to_q4  # Q4
-                elif current_quad == 1:  # Goldilocks
+                elif transition_anchor_quad == 1:  # Goldilocks
                     shift_to_q4 = reversion_strength * 0.75
                     shift_to_q2 = reversion_strength * 0.25
-                    adjusted_row[current_quad - 1] -= reversion_strength
+                    adjusted_row[transition_anchor_quad - 1] -= reversion_strength
                     adjusted_row[3] += shift_to_q4
                     adjusted_row[1] += shift_to_q2
 
-            if fred_inflation_z is not None and fred_inflation_z > 1.0 and current_quad in (1, 4):
+            if fred_inflation_z is not None and fred_inflation_z > 1.0 and transition_anchor_quad in (1, 4):
                 # Inflation rising in a low-inflation quad → risk of Q2/Q3
                 reversion_strength = min((fred_inflation_z - 1.0) * 0.15, 0.25)
-                if current_quad == 1:
-                    adjusted_row[current_quad - 1] -= reversion_strength
+                if transition_anchor_quad == 1:
+                    adjusted_row[transition_anchor_quad - 1] -= reversion_strength
                     adjusted_row[1] += reversion_strength  # Q2
-                elif current_quad == 4:
-                    adjusted_row[current_quad - 1] -= reversion_strength
+                elif transition_anchor_quad == 4:
+                    adjusted_row[transition_anchor_quad - 1] -= reversion_strength
                     adjusted_row[2] += reversion_strength  # Q3
 
-            if fred_growth_z < -1.0 and current_quad in (3, 4):
+            if fred_growth_z < -1.0 and transition_anchor_quad in (3, 4):
                 # Growth depressed → risk of recovery to Q1/Q2
                 reversion_strength = min((abs(fred_growth_z) - 1.0) * 0.15, 0.25)
-                if current_quad == 3:
-                    adjusted_row[current_quad - 1] -= reversion_strength
+                if transition_anchor_quad == 3:
+                    adjusted_row[transition_anchor_quad - 1] -= reversion_strength
                     adjusted_row[1] += reversion_strength  # Q2
-                elif current_quad == 4:
-                    adjusted_row[current_quad - 1] -= reversion_strength
+                elif transition_anchor_quad == 4:
+                    adjusted_row[transition_anchor_quad - 1] -= reversion_strength
                     adjusted_row[0] += reversion_strength  # Q1
 
         # ── Financial conditions adjustments ──
@@ -14516,16 +15714,16 @@ def macro_quadrant():
         if hy_z is not None and hy_z < -1.0:
             # Inverted Z: negative = spreads widening = stress
             stress_strength = min((abs(hy_z) - 1.0) * 0.12, 0.20)
-            if current_quad in (1, 2):
+            if transition_anchor_quad in (1, 2):
                 # Growth-UP quads → risk of moving to growth-DOWN
                 if fred_inflation_z is not None and fred_inflation_z > 0.5:
                     # Inflation still elevated → Stagflation risk
-                    adjusted_row[current_quad - 1] -= stress_strength
+                    adjusted_row[transition_anchor_quad - 1] -= stress_strength
                     adjusted_row[2] += stress_strength * 0.7   # Q3 Stagflation
                     adjusted_row[3] += stress_strength * 0.3   # Q4 Deflation
                 else:
                     # Inflation low → Deflation risk
-                    adjusted_row[current_quad - 1] -= stress_strength
+                    adjusted_row[transition_anchor_quad - 1] -= stress_strength
                     adjusted_row[3] += stress_strength * 0.7   # Q4 Deflation
                     adjusted_row[2] += stress_strength * 0.3   # Q3 Stagflation
 
@@ -14534,8 +15732,8 @@ def macro_quadrant():
         if yc_z is not None and yc_z < -1.0:
             # Deeply inverted/flat curve
             yc_strength = min((abs(yc_z) - 1.0) * 0.10, 0.15)
-            if current_quad in (1, 2):
-                adjusted_row[current_quad - 1] -= yc_strength
+            if transition_anchor_quad in (1, 2):
+                adjusted_row[transition_anchor_quad - 1] -= yc_strength
                 adjusted_row[3] += yc_strength * 0.6   # Q4 Deflation
                 adjusted_row[2] += yc_strength * 0.4   # Q3 Stagflation
 
@@ -14545,8 +15743,8 @@ def macro_quadrant():
         if sent_z is not None and sent_z < -1.0:
             # Depressed sentiment → headwind for growth-UP quadrants
             sent_strength = min((abs(sent_z) - 1.0) * 0.10, 0.20)
-            if current_quad in (1, 2):
-                adjusted_row[current_quad - 1] -= sent_strength
+            if transition_anchor_quad in (1, 2):
+                adjusted_row[transition_anchor_quad - 1] -= sent_strength
                 if fred_inflation_z is not None and fred_inflation_z > 0.5:
                     # Weak sentiment + elevated inflation → Stagflation
                     adjusted_row[2] += sent_strength * 0.65  # Q3 Stagflation
@@ -14554,9 +15752,9 @@ def macro_quadrant():
                 else:
                     adjusted_row[3] += sent_strength * 0.65  # Q4 Deflation
                     adjusted_row[2] += sent_strength * 0.35  # Q3 Stagflation
-            elif current_quad == 3:
+            elif transition_anchor_quad == 3:
                 # Already in Stagflation with bad sentiment → more sticky
-                adjusted_row[current_quad - 1] += sent_strength * 0.3
+                adjusted_row[transition_anchor_quad - 1] += sent_strength * 0.3
                 adjusted_row[0] -= sent_strength * 0.15  # Less likely to escape to Q1
                 adjusted_row[1] -= sent_strength * 0.15  # Less likely to escape to Q2
 
@@ -14564,10 +15762,10 @@ def macro_quadrant():
         # When multiple stress indicators align, amplify the shift
         stress_count = sum(1 for z_val in [hy_z, yc_z, sent_z]
                            if z_val is not None and z_val < -1.0)
-        if stress_count >= 2 and current_quad in (1, 2):
+        if stress_count >= 2 and transition_anchor_quad in (1, 2):
             # Multiple stress signals → additional shift away from growth-UP
             combo_strength = 0.05 * stress_count
-            adjusted_row[current_quad - 1] -= combo_strength
+            adjusted_row[transition_anchor_quad - 1] -= combo_strength
             adjusted_row[2] += combo_strength * 0.5   # Q3
             adjusted_row[3] += combo_strength * 0.5   # Q4
 
@@ -14579,14 +15777,14 @@ def macro_quadrant():
 
         # Build the adjusted transition matrix (only current row is modified)
         adjusted_matrix = [list(r) for r in transition_matrix]
-        adjusted_matrix[current_quad - 1] = adjusted_row
+        adjusted_matrix[transition_anchor_quad - 1] = adjusted_row
 
         # Step 6: Forward projections via matrix exponentiation
         # Use adjusted matrix for projections
         P_static = np.array(transition_matrix)
         P_adj = np.array(adjusted_matrix)
         current_vec = np.zeros(4)
-        current_vec[current_quad - 1] = 1.0
+        current_vec[transition_anchor_quad - 1] = 1.0
 
         projections = {}
         for n_weeks, label in [(1, "1_week"), (2, "2_week"),
@@ -14602,7 +15800,7 @@ def macro_quadrant():
             }
 
         # Step 7: Confidence = adjusted self-transition probability
-        confidence = round(adjusted_row[current_quad - 1] * 100, 1)
+        confidence = round(adjusted_row[transition_anchor_quad - 1] * 100, 1)
 
         # Step 8: Regime duration stats
         regime_counts = {1: 0, 2: 0, 3: 0, 4: 0}
@@ -14624,7 +15822,7 @@ def macro_quadrant():
         # Find primary risk transition (highest prob excluding self)
         # Use the adjusted (conditional) row, not the static one
         row = adjusted_row
-        risk_probs = [(q + 1, row[q]) for q in range(4) if q != current_quad - 1]
+        risk_probs = [(q + 1, row[q]) for q in range(4) if q != transition_anchor_quad - 1]
         risk_probs.sort(key=lambda x: -x[1])
         primary_risk_quad = risk_probs[0][0]
         primary_risk_pct = round(risk_probs[0][1] * 100, 1)
@@ -14671,6 +15869,15 @@ def macro_quadrant():
 
         # Build narrative about likely direction
         direction_parts = []
+
+        if classification_source == "FRED" and not states_aligned:
+            direction_parts.append(
+                f"Current FRED macro classification is Q{current_quad} "
+                f"({QUADRANT_NAMES[current_quad]}), while the transition engine is "
+                f"anchored to market proxy Q{transition_anchor_quad} "
+                f"({QUADRANT_NAMES[transition_anchor_quad]}) for consistency with "
+                f"the historical Markov training data."
+            )
 
         # Lead with FRED Z-score analysis when available
         if fred_ok:
@@ -14730,12 +15937,12 @@ def macro_quadrant():
                 )
 
         # Quad-specific market proxy analysis
-        if current_quad == 1:  # Goldilocks
+        if transition_anchor_quad == 1:  # Goldilocks
             if g_accel == "decelerating":
                 direction_parts.append(f"Market growth momentum is decelerating ({g_delta:+.2f}% over 4 weeks), which could push toward Q4 (Deflation) if it turns negative.")
             if i_accel == "accelerating":
                 direction_parts.append(f"Inflation momentum is accelerating ({i_delta:+.2f}%), risking a shift to Q2 (Reflation).")
-        elif current_quad == 2:  # Reflation
+        elif transition_anchor_quad == 2:  # Reflation
             if g_accel == "decelerating":
                 direction_parts.append(f"Market growth momentum is decelerating ({g_delta:+.2f}% over 4 weeks). If growth turns negative while inflation persists, the market shifts to Q3 (Stagflation).")
             if i_accel == "decelerating":
@@ -14747,7 +15954,7 @@ def macro_quadrant():
                     f"high probability of a shift toward Q3 (Stagflation) if "
                     f"growth continues to mean-revert."
                 )
-        elif current_quad == 3:  # Stagflation
+        elif transition_anchor_quad == 3:  # Stagflation
             if g_accel == "accelerating":
                 direction_parts.append(f"Growth is recovering ({g_delta:+.2f}% over 4 weeks), which could push toward Q2 (Reflation) if inflation stays elevated.")
             if i_accel == "decelerating":
@@ -14781,6 +15988,9 @@ def macro_quadrant():
             "growth_delta_4w": round(g_delta, 4),
             "inflation_trend": i_accel,
             "inflation_delta_4w": round(i_delta, 4),
+            "states_aligned": states_aligned,
+            "transition_anchor_quad": transition_anchor_quad,
+            "transition_anchor_name": QUADRANT_NAMES[transition_anchor_quad],
             "primary_risk_quad": primary_risk_quad,
             "primary_risk_name": primary_risk_name,
             "primary_risk_pct": primary_risk_pct,
@@ -14856,6 +16066,9 @@ def macro_quadrant():
             "inflation_score": round(float(current_inflation), 4),
             "market_growth_score": round(float(g_vals[-1]), 4),
             "market_inflation_score": round(float(i_vals[-1]), 4),
+            "transition_anchor_quadrant": transition_anchor_quad,
+            "transition_anchor_name": QUADRANT_NAMES[transition_anchor_quad],
+            "states_aligned": states_aligned,
             "fred_indicators": fred_indicators if fred_ok else None,
             "fred_growth_z": fred_growth_z,
             "fred_inflation_z": fred_inflation_z,
@@ -14863,6 +16076,8 @@ def macro_quadrant():
             "static_transition_matrix": transition_matrix,
             "transition_counts": transition_counts.tolist(),
             "conditional_observations": int(cond_total) if use_conditional else None,
+            "conditional_weight": round(float(conditional_weight), 3),
+            "transition_smoothing_alpha": smoothing_alpha,
             "projections": projections,
             "brier_scores": brier_scores if brier_scores else None,
             "asset_tilts": QUADRANT_ASSET_TILTS[current_quad],
@@ -14993,7 +16208,7 @@ def scanner_scan():
     except Exception as e:
         return jsonify(rows=[], error=str(e))
 
-    multi = len(tickers) > 1
+    multi = isinstance(df.columns, pd.MultiIndex)
     results = []
     for t in tickers:
         try:
@@ -15164,6 +16379,913 @@ def scanner_chart(ticker):
     fig_json = json.loads(json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder))
 
     return jsonify(fig_data=fig_json["data"], fig_layout=fig_json["layout"], error=None)
+
+
+@app.route("/api/general-scanner/chart/<ticker>")
+def general_scanner_chart(ticker):
+    """Return Plotly chart JSON with SMA 20/50/200, MACD, RSI, and Slow Stochastic."""
+    import yfinance as yf
+    import warnings
+    warnings.filterwarnings("ignore")
+    from plotly.subplots import make_subplots
+    import plotly.graph_objects as go
+    import json, plotly
+    import numpy as np
+
+    period = request.args.get("period", "1y")
+
+    # Extra history for SMA warm-up
+    warmup_map = {"1mo": "1y", "3mo": "2y", "6mo": "2y", "1y": "2y",
+                  "2y": "5y", "3y": "5y", "5y": "10y", "10y": "max", "max": "max"}
+    fetch_period = warmup_map.get(period, "max")
+
+    try:
+        df = yf.download(ticker, period=fetch_period, interval="1d",
+                         auto_adjust=True, progress=False)
+    except Exception as e:
+        return jsonify(error=str(e)), 502
+
+    if df.empty or len(df) < 30:
+        return jsonify(error="Insufficient data for " + ticker), 400
+
+    if hasattr(df.columns, "levels"):
+        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+
+    close_full = df["Close"]
+    high_full = df["High"]
+    low_full = df["Low"]
+
+    # SMAs
+    sma_20_full = close_full.rolling(20).mean()
+    sma_50_full = close_full.rolling(50).mean()
+    sma_200_full = close_full.rolling(200).mean()
+
+    # MACD (12, 26, 9)
+    ema_12 = close_full.ewm(span=12, adjust=False).mean()
+    ema_26 = close_full.ewm(span=26, adjust=False).mean()
+    macd_line = ema_12 - ema_26
+    macd_signal = macd_line.ewm(span=9, adjust=False).mean()
+    macd_hist = macd_line - macd_signal
+
+    # RSI (14)
+    delta = close_full.diff()
+    gain = delta.where(delta > 0, 0.0).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean()
+    rs = gain / loss.replace(0, float("nan"))
+    rsi_full = 100 - (100 / (1 + rs))
+
+    # Slow Stochastic (14, 3, 3)
+    lowest_low = low_full.rolling(14).min()
+    highest_high = high_full.rolling(14).max()
+    denom = (highest_high - lowest_low).replace(0, float("nan"))
+    raw_k = (close_full - lowest_low) / denom * 100
+    slow_k_full = raw_k.rolling(3).mean()
+    slow_d_full = slow_k_full.rolling(3).mean()
+
+    # Trim to display period
+    from dateutil.relativedelta import relativedelta
+    import re
+    display_start = None
+    if period != "max":
+        m = re.match(r"(\d+)(mo|y)", period)
+        if m:
+            n, unit = int(m.group(1)), m.group(2)
+            if unit == "y":
+                display_start = df.index[-1] - relativedelta(years=n)
+            else:
+                display_start = df.index[-1] - relativedelta(months=n)
+
+    if display_start is not None:
+        mask = df.index >= display_start
+        df = df[mask]
+        sma_20_full = sma_20_full[mask]
+        sma_50_full = sma_50_full[mask]
+        sma_200_full = sma_200_full[mask]
+        macd_line = macd_line[mask]
+        macd_signal = macd_signal[mask]
+        macd_hist = macd_hist[mask]
+        rsi_full = rsi_full[mask]
+        slow_k_full = slow_k_full[mask]
+        slow_d_full = slow_d_full[mask]
+
+    dates = list(df.index)
+
+    fig = make_subplots(
+        rows=4, cols=1, shared_xaxes=True,
+        row_heights=[0.45, 0.18, 0.18, 0.19], vertical_spacing=0.03,
+        subplot_titles=[f"{ticker} (Daily {period})", "MACD (12,26,9)",
+                        "RSI (14)", "Slow Stochastic (14,3,3)"],
+    )
+
+    # Row 1: Candlestick + SMAs
+    fig.add_trace(go.Candlestick(
+        x=dates, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+        name="Price", increasing_line_color="#4dff91", decreasing_line_color="#ff6b6b",
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(x=dates, y=sma_20_full, mode="lines",
+        name="SMA 20", line=dict(color="#ffeb3b", width=1.2)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=dates, y=sma_50_full, mode="lines",
+        name="SMA 50", line=dict(color="#7ecfff", width=1.2)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=dates, y=sma_200_full, mode="lines",
+        name="SMA 200", line=dict(color="#ff9800", width=1.5)), row=1, col=1)
+
+    # Row 2: MACD
+    hist_colors = ["#4dff91" if v >= 0 else "#ff6b6b" for v in macd_hist.fillna(0)]
+    fig.add_trace(go.Bar(x=dates, y=macd_hist, name="Histogram",
+        marker_color=hist_colors, showlegend=False), row=2, col=1)
+    fig.add_trace(go.Scatter(x=dates, y=macd_line, mode="lines",
+        name="MACD", line=dict(color="#7ecfff", width=1.2)), row=2, col=1)
+    fig.add_trace(go.Scatter(x=dates, y=macd_signal, mode="lines",
+        name="Signal", line=dict(color="#ff9800", width=1.2)), row=2, col=1)
+    fig.add_hline(y=0, line_dash="dot", line_color="#555", line_width=0.6, row=2, col=1)
+
+    # Row 3: RSI
+    fig.add_trace(go.Scatter(x=dates, y=rsi_full, mode="lines",
+        name="RSI 14", line=dict(color="#b388ff", width=1.2)), row=3, col=1)
+    fig.add_hline(y=70, line_dash="dot", line_color="#ff6b6b", line_width=0.7, row=3, col=1)
+    fig.add_hline(y=30, line_dash="dot", line_color="#4dff91", line_width=0.7, row=3, col=1)
+    fig.add_hline(y=50, line_dash="dot", line_color="#555", line_width=0.5, row=3, col=1)
+
+    # Row 4: Slow Stochastic
+    fig.add_trace(go.Scatter(x=dates, y=slow_k_full, mode="lines",
+        name="%K", line=dict(color="#7ecfff", width=1.2)), row=4, col=1)
+    fig.add_trace(go.Scatter(x=dates, y=slow_d_full, mode="lines",
+        name="%D", line=dict(color="#ff9800", width=1.2)), row=4, col=1)
+    fig.add_hline(y=80, line_dash="dot", line_color="#ff6b6b", line_width=0.7, row=4, col=1)
+    fig.add_hline(y=20, line_dash="dot", line_color="#4dff91", line_width=0.7, row=4, col=1)
+
+    fig.update_layout(
+        paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
+        font=dict(color="#e0e8f5", size=11),
+        xaxis_rangeslider_visible=False,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                    font=dict(size=10)),
+        margin=dict(l=50, r=20, t=50, b=30),
+        height=780,
+    )
+    for ax in ["xaxis", "xaxis2", "xaxis3", "xaxis4",
+               "yaxis", "yaxis2", "yaxis3", "yaxis4"]:
+        fig.update_layout(**{ax: dict(gridcolor="#1a2233", zerolinecolor="#1a2233")})
+
+    fig_json = json.loads(json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder))
+    return jsonify(fig_data=fig_json["data"], fig_layout=fig_json["layout"], error=None)
+
+
+# ── General Scanner ────────────────────────────────────────────────────────────
+
+@app.route("/api/general-scanner/universe", methods=["GET", "POST", "DELETE"])
+def general_scanner_universe():
+    """Manage the ticker universe for the general scanner."""
+    conn = get_connection()
+
+    if request.method == "POST":
+        data = request.get_json(force=True)
+        tickers = data.get("tickers", [])
+        asset_type = data.get("asset_type", "Stock")
+        added = 0
+        for t in tickers:
+            t = str(t).strip().upper()
+            if not t:
+                continue
+            conn.execute(
+                "INSERT OR IGNORE INTO general_scanner_universe (ticker, asset_type) VALUES (?, ?)",
+                (t, asset_type),
+            )
+            added += 1
+        conn.commit()
+        conn.close()
+        return jsonify(ok=True, added=added)
+
+    if request.method == "DELETE":
+        data = request.get_json(force=True)
+        tickers = data.get("tickers", [])
+        if tickers:
+            placeholders = ",".join("?" for _ in tickers)
+            conn.execute(f"DELETE FROM general_scanner_universe WHERE ticker IN ({placeholders})",
+                         [t.upper() for t in tickers])
+            conn.execute(f"DELETE FROM general_scanner_cache WHERE ticker IN ({placeholders})",
+                         [t.upper() for t in tickers])
+        conn.commit()
+        conn.close()
+        return jsonify(ok=True)
+
+    # GET
+    rows = conn.execute(
+        "SELECT ticker, asset_type, added_date FROM general_scanner_universe ORDER BY ticker"
+    ).fetchall()
+    conn.close()
+    return jsonify(rows=[{"ticker": r["ticker"], "asset_type": r["asset_type"]} for r in rows])
+
+
+@app.route("/api/general-scanner/refresh", methods=["POST"])
+def general_scanner_refresh():
+    """Fetch/refresh data from yfinance for all universe tickers. Uses ThreadPoolExecutor."""
+    import yfinance as yf
+    import warnings
+    warnings.filterwarnings("ignore")
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import numpy as np
+
+    conn = get_connection()
+    rows = conn.execute("SELECT ticker, asset_type FROM general_scanner_universe ORDER BY ticker").fetchall()
+    # Find tickers that already have cached info (name is not null/empty)
+    cached = conn.execute("SELECT ticker FROM general_scanner_cache WHERE name IS NOT NULL AND name != ''").fetchall()
+    cached_set = {r["ticker"] for r in cached}
+    conn.close()
+    tickers = [r["ticker"] for r in rows]
+    type_map = {r["ticker"]: r["asset_type"] for r in rows}
+    # Only fetch .info for tickers not yet cached (or use force param to refetch all)
+    force_info = request.args.get("force", "false").lower() == "true"
+    info_tickers = tickers if force_info else [t for t in tickers if t not in cached_set]
+
+    if not tickers:
+        return jsonify(ok=True, refreshed=0, errors=[])
+
+    import time as _time
+
+    # ── 1. Bulk download price history in batches to avoid rate limits ────────
+    BATCH_SIZE = 50
+    all_hist = {}  # ticker -> {Close: Series, Volume: Series}
+
+    for i in range(0, len(tickers), BATCH_SIZE):
+        batch = tickers[i:i + BATCH_SIZE]
+        try:
+            hist = yf.download(batch, period="1y", interval="1d",
+                               auto_adjust=True, progress=False, threads=True)
+            multi = len(batch) > 1
+            for t in batch:
+                try:
+                    if multi:
+                        close = hist["Close"][t].dropna()
+                        vol = hist["Volume"][t].dropna()
+                        high = hist["High"][t].dropna()
+                        low = hist["Low"][t].dropna()
+                    else:
+                        close = hist["Close"].dropna()
+                        vol = hist["Volume"].dropna()
+                        high = hist["High"].dropna()
+                        low = hist["Low"].dropna()
+                    all_hist[t] = {"Close": close, "Volume": vol, "High": high, "Low": low}
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        if i + BATCH_SIZE < len(tickers):
+            _time.sleep(2)  # pause between batches to avoid rate limits
+
+    def _compute_technicals(t):
+        """Compute SMA-20/50/200, RSI-14, MACD, Slow Stochastic, change% from downloaded price data."""
+        try:
+            data = all_hist.get(t)
+            if not data:
+                return t, {}
+            close = data["Close"]
+            vol = data["Volume"]
+
+            if len(close) < 2:
+                return t, {}
+
+            price = float(close.iloc[-1])
+            prev = float(close.iloc[-2])
+            change_pct = round((price - prev) / prev * 100, 2) if prev else None
+
+            sma_20 = round(float(close.rolling(20).mean().iloc[-1]), 2) if len(close) >= 20 else None
+            sma_50 = round(float(close.rolling(50).mean().iloc[-1]), 2) if len(close) >= 50 else None
+            sma_200 = round(float(close.rolling(200).mean().iloc[-1]), 2) if len(close) >= 200 else None
+
+            # Previous-day SMAs (for cross detection)
+            prev_sma_20 = round(float(close.rolling(20).mean().iloc[-2]), 2) if len(close) >= 21 else None
+            prev_sma_50 = round(float(close.rolling(50).mean().iloc[-2]), 2) if len(close) >= 51 else None
+            prev_sma_200 = round(float(close.rolling(200).mean().iloc[-2]), 2) if len(close) >= 201 else None
+
+            # RSI 14
+            rsi_14 = None
+            if len(close) >= 15:
+                delta = close.diff()
+                gain = delta.where(delta > 0, 0.0).rolling(14).mean().iloc[-1]
+                loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean().iloc[-1]
+                if loss != 0:
+                    rs = gain / loss
+                    rsi_14 = round(100 - (100 / (1 + rs)), 2)
+
+            # MACD (12, 26, 9)
+            macd_line = macd_signal = macd_hist = None
+            if len(close) >= 35:
+                ema_12 = close.ewm(span=12, adjust=False).mean()
+                ema_26 = close.ewm(span=26, adjust=False).mean()
+                macd_series = ema_12 - ema_26
+                signal_series = macd_series.ewm(span=9, adjust=False).mean()
+                hist_series = macd_series - signal_series
+                macd_line = round(float(macd_series.iloc[-1]), 4)
+                macd_signal = round(float(signal_series.iloc[-1]), 4)
+                macd_hist = round(float(hist_series.iloc[-1]), 4)
+                # Previous day for cross detection
+                prev_macd = round(float(macd_series.iloc[-2]), 4)
+                prev_signal = round(float(signal_series.iloc[-2]), 4)
+
+            # Slow Stochastic (14, 3, 3)
+            stoch_k = stoch_d = None
+            if len(close) >= 17 and "High" in data and "Low" in data:
+                high = data["High"]
+                low = data["Low"]
+                low_14 = low.rolling(14).min()
+                high_14 = high.rolling(14).max()
+                fast_k = 100 * (close - low_14) / (high_14 - low_14)
+                slow_k = fast_k.rolling(3).mean()  # %K (smoothed)
+                slow_d = slow_k.rolling(3).mean()  # %D
+                stoch_k = round(float(slow_k.iloc[-1]), 2) if not np.isnan(slow_k.iloc[-1]) else None
+                stoch_d = round(float(slow_d.iloc[-1]), 2) if not np.isnan(slow_d.iloc[-1]) else None
+
+            avg_volume = round(float(vol.tail(50).mean()), 0) if len(vol) >= 5 else None
+            volume = float(vol.iloc[-1]) if len(vol) > 0 else None
+            week52_high = round(float(close.tail(252).max()), 2) if len(close) >= 20 else None
+            week52_low = round(float(close.tail(252).min()), 2) if len(close) >= 20 else None
+
+            return t, {
+                "price": round(price, 2), "change_pct": change_pct,
+                "sma_20": sma_20, "sma_50": sma_50, "sma_200": sma_200,
+                "prev_sma_20": prev_sma_20, "prev_sma_50": prev_sma_50, "prev_sma_200": prev_sma_200,
+                "rsi_14": rsi_14,
+                "macd_line": macd_line, "macd_signal": macd_signal, "macd_hist": macd_hist,
+                "stoch_k": stoch_k, "stoch_d": stoch_d,
+                "avg_volume": avg_volume, "volume": volume,
+                "week52_high": week52_high, "week52_low": week52_low,
+            }
+        except Exception:
+            return t, {}
+
+    tech_data = {}
+    for t in tickers:
+        ticker, vals = _compute_technicals(t)
+        tech_data[ticker] = vals
+
+    # ── 2. Fetch fundamentals via Ticker.info (batched + threaded) ───────────
+    errors = []
+    fund_data = {}
+
+    # Ticker-based overrides for ETFs that yfinance doesn't classify well
+    _TICKER_STRATEGY_OVERRIDES = {
+        # Options / Covered Call Income
+        **{t: "Options Income" for t in [
+            "JEPI", "JEPQ", "QYLD", "XYLD", "RYLD", "DJIA", "SPYI", "QQQI",
+            "IWMI", "GPIQ", "GPIX", "FTQI", "SVOL", "TLTW", "KLIP", "YMAX", "YMAG",
+            "CONY", "TSLY", "NVDY", "AMZY", "APLY", "MSFO", "GOOY", "FBY", "OARK",
+            "JEPY", "AIPI", "FEPI", "GIAX", "USOI", "QQQY", "XDTE", "QDTE", "RDTE",
+            "WDTE", "ULTY", "BALI", "ISPY", "JEPX", "SPXX", "QQXX", "IWMW",
+            "DIVO", "NUSI", "PUTW",
+        ]},
+        # CEF Income
+        **{t: "CEF" for t in [
+            "PCEF", "CEFS", "YYY", "XMPT", "FCEF", "ADX", "ASGI", "BST",
+        ]},
+        # BDC
+        **{t: "BDC" for t in [
+            "BIZD", "PBDC",
+            "MAIN", "ARCC", "HTGC", "GBDC", "BXSL", "TPVG", "GSBD", "OBDC", "ORCC", "FSK",
+            "NEWT", "GAIN", "GLAD", "PSEC", "SLRC", "OCSL", "CGBD", "FDUS", "MFIC", "CSWC",
+        ]},
+        # Leveraged Loans / Senior Loans
+        **{t: "Loans" for t in [
+            "BKLN", "SRLN", "FLBL", "FTSL",
+        ]},
+        # Preferred Stock
+        **{t: "Preferred" for t in [
+            "PFF", "PFFD", "PGX", "PSK", "FPE", "PFFV", "VRP", "FPEI",
+            "SPFF", "PREF", "EPRF",
+        ]},
+    }
+
+    def _classify_etf(category, ticker=""):
+        """Derive strategy and cap size from yfinance ETF category string."""
+        # Check ticker-based override first
+        override = _TICKER_STRATEGY_OVERRIDES.get(ticker, "")
+
+        if not category and not override:
+            return "", override or "", ""
+        cat = (category or "").lower()
+
+        # ── Strategy ──
+        strategy = ""
+        if override:
+            strategy = override
+        elif any(w in cat for w in ["derivative income", "covered call", "option"]):
+            strategy = "Options Income"
+        elif "preferred" in cat:
+            strategy = "Preferred"
+        elif any(w in cat for w in ["income", "dividend", "yield", "high yield equity"]):
+            strategy = "Dividend"
+        elif "bond" in cat or "government" in cat or "treasury" in cat or "fixed" in cat or "inflation" in cat or "mortgage" in cat:
+            strategy = "Bonds"
+        elif "growth" in cat:
+            strategy = "Growth"
+        elif "value" in cat:
+            strategy = "Value"
+        elif "blend" in cat:
+            strategy = "Blend"
+        elif any(w in cat for w in ["commodit", "precious", "gold", "silver", "metal"]):
+            strategy = "Commodity"
+        elif "real estate" in cat or "reit" in cat:
+            strategy = "Real Estate"
+        elif any(w in cat for w in ["emerging", "international", "foreign", "world", "global", "china", "europe", "japan", "pacific"]):
+            strategy = "International"
+        elif any(w in cat for w in ["technology", "health", "energy", "financial", "utilities", "consumer", "industrial", "communication"]):
+            strategy = "Sector"
+        elif "target" in cat:
+            strategy = "Target Date"
+        else:
+            strategy = "Other"
+
+        # ── Cap size ──
+        cap_size = ""
+        if "large" in cat:
+            cap_size = "Large Cap"
+        elif "mid" in cat:
+            cap_size = "Mid Cap"
+        elif "small" in cat:
+            cap_size = "Small Cap"
+        elif "micro" in cat:
+            cap_size = "Micro Cap"
+        elif any(w in cat for w in ["total market", "all cap", "blend"]) and strategy in ("Growth", "Value", "Blend"):
+            cap_size = "All Cap"
+
+        return category or "", strategy, cap_size
+
+    def _fetch_info(t):
+        try:
+            info = yf.Ticker(t).info or {}
+            etf_cat = info.get("category", "")
+            etf_category, etf_strategy, etf_cap_size = _classify_etf(etf_cat, t)
+            return t, {
+                "name": info.get("shortName") or info.get("longName", ""),
+                "sector": info.get("sector", ""),
+                "industry": info.get("industry", ""),
+                "country": info.get("country", ""),
+                "market_cap": info.get("marketCap"),
+                "pe_ratio": info.get("trailingPE"),
+                "forward_pe": info.get("forwardPE"),
+                "peg_ratio": info.get("trailingPegRatio"),
+                "ps_ratio": info.get("priceToSalesTrailing12Months"),
+                "pb_ratio": info.get("priceToBook"),
+                "dividend_yield": round(info.get("dividendYield", 0) * 100, 2) if info.get("dividendYield") else None,
+                "eps": info.get("trailingEps"),
+                "revenue": info.get("totalRevenue"),
+                "profit_margin": round(info.get("profitMargins", 0) * 100, 2) if info.get("profitMargins") else None,
+                "roe": round(info.get("returnOnEquity", 0) * 100, 2) if info.get("returnOnEquity") else None,
+                "debt_to_equity": info.get("debtToEquity"),
+                "current_ratio": info.get("currentRatio"),
+                "beta": info.get("beta"),
+                "expense_ratio": round(info.get("annualReportExpenseRatio", 0) * 100, 4) if info.get("annualReportExpenseRatio") else None,
+                "aum": info.get("totalAssets"),
+                "etf_category": etf_category,
+                "etf_strategy": etf_strategy,
+                "etf_cap_size": etf_cap_size,
+            }
+        except Exception as exc:
+            return t, {"_error": str(exc)}
+
+    INFO_BATCH = 10
+    for i in range(0, len(info_tickers), INFO_BATCH):
+        batch = info_tickers[i:i + INFO_BATCH]
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {pool.submit(_fetch_info, t): t for t in batch}
+            for fut in as_completed(futures):
+                t, result = fut.result()
+                if "_error" in result:
+                    errors.append({"ticker": t, "error": result["_error"]})
+                else:
+                    fund_data[t] = result
+        if i + INFO_BATCH < len(info_tickers):
+            _time.sleep(1)  # pause between info batches to avoid rate limits
+
+    # ── 3. Merge and upsert into cache ───────────────────────────────────────
+    conn = get_connection()
+    refreshed = 0
+    for t in tickers:
+        tech = tech_data.get(t, {})
+        fund = fund_data.get(t, {})
+        if not tech and not fund:
+            continue
+        # Apply ticker-based strategy override if info wasn't fetched
+        if "etf_strategy" not in fund and t in _TICKER_STRATEGY_OVERRIDES:
+            fund["etf_strategy"] = _TICKER_STRATEGY_OVERRIDES[t]
+        merged = {**tech, **fund, "asset_type": type_map.get(t, "Stock")}
+        cols = ["ticker"] + list(merged.keys()) + ["updated_at"]
+        vals = [t] + list(merged.values()) + [pd.Timestamp.now().isoformat()]
+        placeholders = ",".join("?" for _ in cols)
+        upsert_cols = ",".join(cols)
+        update_set = ",".join(f"{c}=excluded.{c}" for c in cols if c != "ticker")
+        conn.execute(
+            f"INSERT INTO general_scanner_cache ({upsert_cols}) VALUES ({placeholders}) "
+            f"ON CONFLICT(ticker) DO UPDATE SET {update_set}",
+            vals,
+        )
+        refreshed += 1
+
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, refreshed=refreshed, errors=errors,
+                   info_fetched=len(fund_data), info_skipped=len(cached_set) if not force_info else 0)
+
+
+@app.route("/api/general-scanner/scan")
+def general_scanner_scan():
+    """Return cached scanner data with server-side filtering, sorting, and pagination."""
+    conn = get_connection()
+
+    # Filters
+    asset_type = request.args.get("asset_type", "")
+    sector = request.args.get("sector", "")
+    industry = request.args.get("industry", "")
+    country = request.args.get("country", "")
+    etf_strategy = request.args.get("etf_strategy", "")
+    etf_cap_size = request.args.get("etf_cap_size", "")
+
+    # Range filters: param_min / param_max
+    range_cols = [
+        "market_cap", "price", "pe_ratio", "forward_pe", "peg_ratio", "ps_ratio",
+        "pb_ratio", "dividend_yield", "eps", "profit_margin", "roe",
+        "debt_to_equity", "current_ratio", "beta", "rsi_14", "change_pct",
+        "volume", "avg_volume", "expense_ratio", "sma_20", "sma_50", "sma_200",
+    ]
+
+    where = []
+    params = []
+
+    if asset_type:
+        where.append("c.asset_type = ?")
+        params.append(asset_type)
+    if sector:
+        where.append("c.sector = ?")
+        params.append(sector)
+    if industry:
+        where.append("c.industry = ?")
+        params.append(industry)
+    if country:
+        where.append("c.country = ?")
+        params.append(country)
+    if etf_strategy:
+        where.append("c.etf_strategy = ?")
+        params.append(etf_strategy)
+    if etf_cap_size:
+        where.append("c.etf_cap_size = ?")
+        params.append(etf_cap_size)
+
+    for col in range_cols:
+        lo = request.args.get(f"{col}_min")
+        hi = request.args.get(f"{col}_max")
+        if lo is not None and lo != "":
+            where.append(f"c.{col} >= ?")
+            params.append(float(lo))
+        if hi is not None and hi != "":
+            where.append(f"c.{col} <= ?")
+            params.append(float(hi))
+
+    # ── 20-Day SMA filter ──
+    sma20_f = request.args.get("sma20_filter", "")
+    _sma_map_20 = {
+        "price_above":       "c.price > c.sma_20 AND c.sma_20 IS NOT NULL",
+        "price_below":       "c.price < c.sma_20 AND c.sma_20 IS NOT NULL",
+        "price_crossed_above": "c.price > c.sma_20 AND c.prev_sma_20 IS NOT NULL AND c.price - c.sma_20 >= 0 AND (SELECT c2.price FROM general_scanner_cache c2 WHERE c2.ticker = c.ticker) IS NOT NULL AND c.prev_sma_20 IS NOT NULL",
+        "price_10pct_above": "c.sma_20 IS NOT NULL AND c.price > c.sma_20 * 1.10",
+        "price_10pct_below": "c.sma_20 IS NOT NULL AND c.price < c.sma_20 * 0.90",
+        "price_20pct_above": "c.sma_20 IS NOT NULL AND c.price > c.sma_20 * 1.20",
+        "price_20pct_below": "c.sma_20 IS NOT NULL AND c.price < c.sma_20 * 0.80",
+        "price_30pct_below": "c.sma_20 IS NOT NULL AND c.price < c.sma_20 * 0.70",
+        "price_50pct_above": "c.sma_20 IS NOT NULL AND c.price > c.sma_20 * 1.50",
+        "price_50pct_below": "c.sma_20 IS NOT NULL AND c.price < c.sma_20 * 0.50",
+    }
+    if sma20_f in _sma_map_20:
+        where.append(_sma_map_20[sma20_f])
+
+    # ── 50-Day SMA filter ──
+    sma50_f = request.args.get("sma50_filter", "")
+    _sma_map_50 = {
+        "price_above":       "c.price > c.sma_50 AND c.sma_50 IS NOT NULL",
+        "price_below":       "c.price < c.sma_50 AND c.sma_50 IS NOT NULL",
+        "price_10pct_above": "c.sma_50 IS NOT NULL AND c.price > c.sma_50 * 1.10",
+        "price_10pct_below": "c.sma_50 IS NOT NULL AND c.price < c.sma_50 * 0.90",
+        "price_20pct_above": "c.sma_50 IS NOT NULL AND c.price > c.sma_50 * 1.20",
+        "price_20pct_below": "c.sma_50 IS NOT NULL AND c.price < c.sma_50 * 0.80",
+        "price_30pct_below": "c.sma_50 IS NOT NULL AND c.price < c.sma_50 * 0.70",
+        "price_50pct_above": "c.sma_50 IS NOT NULL AND c.price > c.sma_50 * 1.50",
+        "price_50pct_below": "c.sma_50 IS NOT NULL AND c.price < c.sma_50 * 0.50",
+        "sma20_above":       "c.sma_20 IS NOT NULL AND c.sma_50 IS NOT NULL AND c.sma_20 > c.sma_50",
+        "sma20_below":       "c.sma_20 IS NOT NULL AND c.sma_50 IS NOT NULL AND c.sma_20 < c.sma_50",
+        "sma20_cross_above": "c.sma_20 IS NOT NULL AND c.sma_50 IS NOT NULL AND c.prev_sma_20 IS NOT NULL AND c.prev_sma_50 IS NOT NULL AND c.sma_20 > c.sma_50 AND c.prev_sma_20 <= c.prev_sma_50",
+        "sma20_cross_below": "c.sma_20 IS NOT NULL AND c.sma_50 IS NOT NULL AND c.prev_sma_20 IS NOT NULL AND c.prev_sma_50 IS NOT NULL AND c.sma_20 < c.sma_50 AND c.prev_sma_20 >= c.prev_sma_50",
+    }
+    if sma50_f in _sma_map_50:
+        where.append(_sma_map_50[sma50_f])
+
+    # ── 200-Day SMA filter ──
+    sma200_f = request.args.get("sma200_filter", "")
+    _sma_map_200 = {
+        "price_above":       "c.price > c.sma_200 AND c.sma_200 IS NOT NULL",
+        "price_below":       "c.price < c.sma_200 AND c.sma_200 IS NOT NULL",
+        "price_10pct_above": "c.sma_200 IS NOT NULL AND c.price > c.sma_200 * 1.10",
+        "price_10pct_below": "c.sma_200 IS NOT NULL AND c.price < c.sma_200 * 0.90",
+        "price_20pct_above": "c.sma_200 IS NOT NULL AND c.price > c.sma_200 * 1.20",
+        "price_20pct_below": "c.sma_200 IS NOT NULL AND c.price < c.sma_200 * 0.80",
+        "price_30pct_below": "c.sma_200 IS NOT NULL AND c.price < c.sma_200 * 0.70",
+        "price_50pct_above": "c.sma_200 IS NOT NULL AND c.price > c.sma_200 * 1.50",
+        "price_50pct_below": "c.sma_200 IS NOT NULL AND c.price < c.sma_200 * 0.50",
+        "sma50_above":       "c.sma_50 IS NOT NULL AND c.sma_200 IS NOT NULL AND c.sma_50 > c.sma_200",
+        "sma50_below":       "c.sma_50 IS NOT NULL AND c.sma_200 IS NOT NULL AND c.sma_50 < c.sma_200",
+        "sma50_cross_above": "c.sma_50 IS NOT NULL AND c.sma_200 IS NOT NULL AND c.prev_sma_50 IS NOT NULL AND c.prev_sma_200 IS NOT NULL AND c.sma_50 > c.sma_200 AND c.prev_sma_50 <= c.prev_sma_200",
+        "sma50_cross_below": "c.sma_50 IS NOT NULL AND c.sma_200 IS NOT NULL AND c.prev_sma_50 IS NOT NULL AND c.prev_sma_200 IS NOT NULL AND c.sma_50 < c.sma_200 AND c.prev_sma_50 >= c.prev_sma_200",
+        "sma20_above":       "c.sma_20 IS NOT NULL AND c.sma_200 IS NOT NULL AND c.sma_20 > c.sma_200",
+        "sma20_below":       "c.sma_20 IS NOT NULL AND c.sma_200 IS NOT NULL AND c.sma_20 < c.sma_200",
+    }
+    if sma200_f in _sma_map_200:
+        where.append(_sma_map_200[sma200_f])
+
+    # ── Combined SMA alignment filters ──
+    sma_align = request.args.get("sma_alignment", "")
+    if sma_align == "20_above_50_above_200":
+        where.append("c.sma_20 IS NOT NULL AND c.sma_50 IS NOT NULL AND c.sma_200 IS NOT NULL AND c.sma_20 > c.sma_50 AND c.sma_50 > c.sma_200")
+    elif sma_align == "20_below_50_below_200":
+        where.append("c.sma_20 IS NOT NULL AND c.sma_50 IS NOT NULL AND c.sma_200 IS NOT NULL AND c.sma_20 < c.sma_50 AND c.sma_50 < c.sma_200")
+    elif sma_align == "price_above_all":
+        where.append("c.sma_20 IS NOT NULL AND c.sma_50 IS NOT NULL AND c.sma_200 IS NOT NULL AND c.price > c.sma_20 AND c.price > c.sma_50 AND c.price > c.sma_200")
+    elif sma_align == "price_below_all":
+        where.append("c.sma_20 IS NOT NULL AND c.sma_50 IS NOT NULL AND c.sma_200 IS NOT NULL AND c.price < c.sma_20 AND c.price < c.sma_50 AND c.price < c.sma_200")
+
+    # ── MACD filter ──
+    macd_f = request.args.get("macd_filter", "")
+    _macd_map = {
+        "bullish":           "c.macd_line IS NOT NULL AND c.macd_line > c.macd_signal",
+        "bearish":           "c.macd_line IS NOT NULL AND c.macd_line < c.macd_signal",
+        "bullish_cross":     "c.macd_line IS NOT NULL AND c.macd_hist > 0 AND c.macd_hist IS NOT NULL",
+        "bearish_cross":     "c.macd_line IS NOT NULL AND c.macd_hist < 0 AND c.macd_hist IS NOT NULL",
+        "positive":          "c.macd_line IS NOT NULL AND c.macd_line > 0",
+        "negative":          "c.macd_line IS NOT NULL AND c.macd_line < 0",
+    }
+    if macd_f in _macd_map:
+        where.append(_macd_map[macd_f])
+
+    # ── Stochastic filter ──
+    stoch_f = request.args.get("stoch_filter", "")
+    _stoch_map = {
+        "overbought":    "c.stoch_k IS NOT NULL AND c.stoch_k > 80",
+        "oversold":      "c.stoch_k IS NOT NULL AND c.stoch_k < 20",
+        "bullish":       "c.stoch_k IS NOT NULL AND c.stoch_d IS NOT NULL AND c.stoch_k > c.stoch_d",
+        "bearish":       "c.stoch_k IS NOT NULL AND c.stoch_d IS NOT NULL AND c.stoch_k < c.stoch_d",
+        "neutral":       "c.stoch_k IS NOT NULL AND c.stoch_k >= 20 AND c.stoch_k <= 80",
+    }
+    if stoch_f in _stoch_map:
+        where.append(_stoch_map[stoch_f])
+
+    # Keep backwards compatibility with old checkbox filters
+    if request.args.get("above_sma_20") == "true":
+        where.append("c.price > c.sma_20 AND c.sma_20 IS NOT NULL")
+    if request.args.get("below_sma_20") == "true":
+        where.append("c.price < c.sma_20 AND c.sma_20 IS NOT NULL")
+    if request.args.get("above_sma_50") == "true":
+        where.append("c.price > c.sma_50 AND c.sma_50 IS NOT NULL")
+    if request.args.get("below_sma_50") == "true":
+        where.append("c.price < c.sma_50 AND c.sma_50 IS NOT NULL")
+    if request.args.get("above_sma_200") == "true":
+        where.append("c.price > c.sma_200 AND c.sma_200 IS NOT NULL")
+    if request.args.get("below_sma_200") == "true":
+        where.append("c.price < c.sma_200 AND c.sma_200 IS NOT NULL")
+
+    # 52-week filters
+    pct_52hi = request.args.get("pct_from_52high")
+    if pct_52hi:
+        where.append("c.week52_high > 0 AND ((c.week52_high - c.price) / c.week52_high * 100) <= ?")
+        params.append(float(pct_52hi))
+    pct_52lo = request.args.get("pct_from_52low")
+    if pct_52lo:
+        where.append("c.week52_low > 0 AND ((c.price - c.week52_low) / c.week52_low * 100) <= ?")
+        params.append(float(pct_52lo))
+
+    # Sorting
+    sort_col = request.args.get("sort", "ticker")
+    sort_dir = "DESC" if request.args.get("dir", "asc").lower() == "desc" else "ASC"
+    allowed_sort = {
+        "ticker", "name", "sector", "industry", "country", "market_cap", "price",
+        "pe_ratio", "forward_pe", "peg_ratio", "ps_ratio", "pb_ratio",
+        "dividend_yield", "eps", "revenue", "profit_margin", "roe",
+        "debt_to_equity", "current_ratio", "beta", "week52_high", "week52_low",
+        "avg_volume", "sma_20", "sma_50", "sma_200", "rsi_14", "change_pct",
+        "volume", "asset_type", "expense_ratio", "aum",
+        "etf_category", "etf_strategy", "etf_cap_size",
+        "macd_line", "macd_signal", "macd_hist", "stoch_k", "stoch_d",
+    }
+    if sort_col not in allowed_sort:
+        sort_col = "ticker"
+
+    # Pagination
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = min(200, max(10, int(request.args.get("per_page", 50))))
+    offset = (page - 1) * per_page
+
+    where_clause = (" WHERE " + " AND ".join(where)) if where else ""
+
+    count_sql = f"SELECT COUNT(*) FROM general_scanner_cache c{where_clause}"
+    total = conn.execute(count_sql, params).fetchone()[0]
+
+    data_sql = (
+        f"SELECT * FROM general_scanner_cache c{where_clause} "
+        f"ORDER BY c.{sort_col} {sort_dir} LIMIT ? OFFSET ?"
+    )
+    rows = conn.execute(data_sql, params + [per_page, offset]).fetchall()
+
+    # Also get distinct values for dropdown filters
+    sectors = [r[0] for r in conn.execute(
+        "SELECT DISTINCT sector FROM general_scanner_cache WHERE sector != '' ORDER BY sector"
+    ).fetchall()]
+    industries = [r[0] for r in conn.execute(
+        "SELECT DISTINCT industry FROM general_scanner_cache WHERE industry != '' ORDER BY industry"
+    ).fetchall()]
+    countries = [r[0] for r in conn.execute(
+        "SELECT DISTINCT country FROM general_scanner_cache WHERE country != '' ORDER BY country"
+    ).fetchall()]
+    etf_strategies = [r[0] for r in conn.execute(
+        "SELECT DISTINCT etf_strategy FROM general_scanner_cache WHERE etf_strategy IS NOT NULL AND etf_strategy != '' ORDER BY etf_strategy"
+    ).fetchall()]
+    etf_cap_sizes = [r[0] for r in conn.execute(
+        "SELECT DISTINCT etf_cap_size FROM general_scanner_cache WHERE etf_cap_size IS NOT NULL AND etf_cap_size != '' ORDER BY etf_cap_size"
+    ).fetchall()]
+
+    conn.close()
+
+    results = [dict(r) for r in rows]
+
+    return jsonify(
+        rows=results, total=total, page=page, per_page=per_page,
+        pages=(total + per_page - 1) // per_page,
+        filters={
+            "sectors": sectors, "industries": industries, "countries": countries,
+            "etf_strategies": etf_strategies, "etf_cap_sizes": etf_cap_sizes,
+        },
+    )
+
+
+@app.route("/api/general-scanner/presets")
+def general_scanner_presets():
+    """Return preset ticker lists the user can load into the universe."""
+    presets = {
+        "sp500_top50": [
+            "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "BRK-B", "LLY", "AVGO", "JPM",
+            "TSLA", "UNH", "V", "XOM", "MA", "PG", "COST", "JNJ", "HD", "ABBV",
+            "MRK", "WMT", "BAC", "KO", "PEP", "NFLX", "ORCL", "CRM", "AMD", "TMO",
+            "CVX", "LIN", "ADBE", "MCD", "ACN", "CSCO", "ABT", "WFC", "DHR", "TXN",
+            "NEE", "PM", "CMCSA", "AMGN", "IBM", "RTX", "INTC", "HON", "UNP", "QCOM",
+        ],
+        "popular_etfs": [
+            "SPY", "QQQ", "VTI", "VOO", "IWM", "DIA", "ARKK", "XLF", "XLE", "XLK",
+            "XLV", "XLI", "XLP", "XLU", "XLY", "XLB", "XLRE", "VNQ", "GLD", "SLV",
+            "TLT", "HYG", "LQD", "BND", "EMB", "VWO", "EFA", "IEMG", "VEA", "SCHD",
+            "JEPI", "JEPQ", "VIG", "DVY", "HDV", "DGRO", "VYM", "SPHD", "PFF", "QYLD",
+        ],
+        "dividend_kings": [
+            "ABT", "ABBV", "ADM", "AFL", "APD", "AWR", "BDX", "BKH", "CAH", "CBU",
+            "CL", "CINF", "CTAS", "CWT", "DOV", "ED", "EMR", "FRT", "GD", "GPC",
+            "HRL", "ITW", "JNJ", "KMB", "KO", "LANC", "LEG", "LOW", "MCD", "MMM",
+            "MKC", "NDSN", "NFG", "NWN", "PEP", "PG", "PH", "PPG", "SEIC", "SJW",
+            "SWK", "SYY", "TGT", "TR", "UVV", "VFC", "WAB",
+        ],
+        "growth_stocks": [
+            "NVDA", "AMD", "AVGO", "TSLA", "META", "NFLX", "AMZN", "CRM", "NOW", "SNOW",
+            "PANW", "CRWD", "DDOG", "NET", "SHOP", "SQ", "MELI", "SE", "UBER", "ABNB",
+            "COIN", "PLTR", "ENPH", "SEDG", "RIVN", "LCID", "SOFI", "ARM", "SMCI", "MSTR",
+        ],
+    }
+    return jsonify(presets=presets)
+
+
+# ── Default universe: ~400 tickers across all sectors + ETFs ─────────────────
+_DEFAULT_STOCKS = [
+    # Technology
+    "AAPL", "MSFT", "NVDA", "AVGO", "AMD", "INTC", "CRM", "ORCL", "ADBE", "NOW",
+    "TXN", "QCOM", "AMAT", "MU", "LRCX", "KLAC", "SNPS", "CDNS", "MRVL", "ADI",
+    "PANW", "CRWD", "FTNT", "PLTR", "INTU", "PYPL", "IBM", "ACN", "CSCO", "DELL",
+    # Healthcare
+    "UNH", "JNJ", "LLY", "ABBV", "MRK", "PFE", "TMO", "ABT", "DHR", "BMY",
+    "AMGN", "GILD", "VRTX", "REGN", "ISRG", "MDT", "SYK", "BDX", "ZTS", "CI",
+    # Financial Services
+    "JPM", "BAC", "WFC", "GS", "MS", "C", "BLK", "SCHW", "SPGI", "ICE",
+    "CME", "AON", "PNC", "USB", "AXP", "COF", "MET", "PRU", "AFL", "PGR",
+    # Consumer Cyclical
+    "AMZN", "TSLA", "HD", "MCD", "NKE", "LOW", "SBUX", "TJX", "BKNG", "MAR",
+    "CMG", "ORLY", "ROST", "DHI", "LEN", "F", "GM", "ABNB", "UBER", "YUM",
+    # Consumer Defensive
+    "PG", "KO", "PEP", "COST", "WMT", "PM", "MO", "CL", "KMB", "GIS",
+    "HSY", "KHC", "MDLZ", "STZ", "TSN", "ADM", "SYY", "KR", "TGT", "CLX",
+    # Energy
+    "XOM", "CVX", "COP", "EOG", "SLB", "MPC", "PSX", "VLO", "OXY",
+    "DVN", "FANG", "HES", "BKR", "KMI", "WMB", "OKE", "TRGP", "ET", "EPD",
+    # Industrials
+    "HON", "UNP", "UPS", "RTX", "CAT", "DE", "GE", "BA", "LMT", "NOC",
+    "GD", "EMR", "ITW", "ETN", "PH", "CMI", "FDX", "CSX", "WM", "RSG",
+    # Utilities
+    "NEE", "DUK", "SO", "D", "AEP", "SRE", "EXC", "XEL", "ED", "WEC",
+    # Real Estate
+    "PLD", "AMT", "CCI", "EQIX", "PSA", "SPG", "O", "WELL", "DLR", "AVB",
+    "STAG", "NNN", "OHI", "MPW",
+    # Communication Services
+    "GOOGL", "META", "NFLX", "DIS", "CMCSA", "T", "VZ", "TMUS", "CHTR", "EA",
+    # Basic Materials
+    "LIN", "APD", "SHW", "ECL", "DD", "NEM", "FCX", "NUE", "STLD", "CF",
+]
+
+_DEFAULT_ETFS = [
+    # Broad Market
+    "SPY", "QQQ", "VTI", "VOO", "IWM", "DIA", "MDY", "RSP", "VTV", "VUG",
+    # Mid & Small Cap
+    "IJH", "VO", "IJR", "VB", "SCHA", "VBK", "VBR",
+    # Sector ETFs
+    "XLF", "XLE", "XLK", "XLV", "XLI", "XLP", "XLU", "XLY", "XLB", "XLRE", "XLC",
+    "KRE", "XBI", "IBB", "IYR", "SOXX", "SMH",
+    # Dividend / Income - Equity
+    "SCHD", "VYM", "HDV", "DVY", "DGRO", "VIG", "SPHD", "SPYD", "NOBL", "SDY",
+    "FDVV", "DGRW", "FDL", "DHS", "FVD", "OVL", "OUSA", "LVHD", "SDOG", "GCOW",
+    # Covered Call / Options Income
+    "JEPI", "JEPQ", "QYLD", "XYLD", "DIVO", "NUSI", "RYLD", "SPYI", "QQQI",
+    "SVOL", "TLTW", "YMAX", "YMAG", "CONY", "TSLY", "NVDY",
+    "JEPY", "AIPI", "FEPI", "QQQY", "XDTE", "QDTE",
+    # Preferred Stock
+    "PFF", "PFFD", "PGX", "FPE", "VRP",
+    # BDC
+    "MAIN", "ARCC", "HTGC", "GBDC", "BXSL", "TPVG", "GSBD", "OBDC", "FSK", "BIZD",
+    "NEWT", "GAIN", "GLAD", "CSWC", "PBDC",
+    # CEF Income
+    "PCEF", "CEFS", "YYY", "XMPT", "FCEF", "ADX", "ASGI", "BST",
+    # Loans
+    "BKLN", "SRLN",
+    # International Dividend
+    "IDV", "VYMI", "DWX", "SCHY",
+    # Bond
+    "TLT", "BND", "AGG", "SHY", "IEF", "TIP", "BNDX", "LQD", "HYG", "JNK",
+    "VCSH", "VCIT", "MUB", "EMB", "GOVT", "SGOV",
+    # International Equity
+    "VWO", "EFA", "IEMG", "VEA", "EEM", "FXI", "VXUS",
+    # Commodity
+    "GLD", "SLV", "GDX", "USO", "PDBC", "GLDM", "IAU",
+    # Real Estate
+    "VNQ", "VNQI", "SCHH", "REM",
+    # Thematic
+    "ARKK", "TAN", "ICLN", "LIT",
+    # Leveraged (popular)
+    "TQQQ", "SQQQ", "SOXL",
+    # Crypto
+    "BITO", "IBIT",
+]
+
+
+@app.route("/api/general-scanner/auto-load", methods=["POST"])
+def general_scanner_auto_load():
+    """Load the default universe. If force=true, clears and reloads. Otherwise only loads if empty."""
+    force = request.args.get("force", "false").lower() == "true"
+    conn = get_connection()
+
+    if not force:
+        count = conn.execute("SELECT COUNT(*) FROM general_scanner_universe").fetchone()[0]
+        if count > 0:
+            conn.close()
+            return jsonify(ok=True, loaded=0, message="Universe already populated")
+
+    if force:
+        conn.execute("DELETE FROM general_scanner_universe")
+        conn.execute("DELETE FROM general_scanner_cache")
+
+    loaded = 0
+    for t in _DEFAULT_STOCKS:
+        conn.execute("INSERT OR IGNORE INTO general_scanner_universe (ticker, asset_type) VALUES (?, 'Stock')", (t,))
+        loaded += 1
+    for t in _DEFAULT_ETFS:
+        conn.execute("INSERT OR IGNORE INTO general_scanner_universe (ticker, asset_type) VALUES (?, 'ETF')", (t,))
+        loaded += 1
+    # Also load from saved defaults JSON if it exists
+    import json as _json
+    defaults_path = os.path.join(os.path.dirname(__file__), "scanner_defaults.json")
+    if os.path.exists(defaults_path):
+        with open(defaults_path, "r") as f:
+            saved = _json.load(f)
+        for item in saved:
+            conn.execute("INSERT OR IGNORE INTO general_scanner_universe (ticker, asset_type) VALUES (?, ?)",
+                         (item["ticker"], item["asset_type"]))
+            loaded += 1
+
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, loaded=loaded)
+
+
+@app.route("/api/general-scanner/save-defaults", methods=["POST"])
+def general_scanner_save_defaults():
+    """Save current universe as defaults JSON file so all users get them."""
+    import json as _json
+    conn = get_connection()
+    rows = conn.execute("SELECT ticker, asset_type FROM general_scanner_universe ORDER BY ticker").fetchall()
+    conn.close()
+    data = [{"ticker": r["ticker"], "asset_type": r["asset_type"]} for r in rows]
+    defaults_path = os.path.join(os.path.dirname(__file__), "scanner_defaults.json")
+    with open(defaults_path, "w") as f:
+        _json.dump(data, f, indent=2)
+    return jsonify(ok=True, count=len(data))
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────

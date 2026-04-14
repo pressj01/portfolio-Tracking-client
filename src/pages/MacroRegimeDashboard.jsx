@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import Plot from 'react-plotly.js'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useNavigate } from 'react-router-dom'
@@ -6,22 +6,22 @@ import { useNavigate } from 'react-router-dom'
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmt$(v) {
-  if (v == null) return '—'
+  if (v == null) return '--'
   return '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 function fmtPct(v) {
-  if (v == null) return '—'
+  if (v == null) return '--'
   return Number(v).toFixed(1) + '%'
 }
 function fmtNum(v, dec = 2) {
-  if (v == null) return '—'
+  if (v == null) return '--'
   return Number(v).toFixed(dec)
 }
 
 function directionArrow(d) {
-  if (d === 'rising') return { symbol: '▲', color: '#4caf50' }
-  if (d === 'falling') return { symbol: '▼', color: '#ef5350' }
-  return { symbol: '►', color: '#90a4ae' }
+  if (d === 'rising') return { symbol: '^', color: '#4caf50' }
+  if (d === 'falling') return { symbol: 'v', color: '#ef5350' }
+  return { symbol: '->', color: '#90a4ae' }
 }
 
 function scoreBadgeColor(score) {
@@ -128,7 +128,7 @@ function ConditionsTab({ pf }) {
                   color: ind.change_3m > 0 ? '#4caf50' : ind.change_3m < 0 ? '#ef5350' : '#90a4ae',
                 }}>
                   {ind.change_3m != null ? ((ind.change_3m > 0 ? '+' : '') + fmtNum(ind.change_3m) +
-                    (key === 'rates_10y' || key === 'rates_short' || key === 'vix' ? ' pts' : '%')) : '—'}
+                    (key === 'rates_10y' || key === 'rates_short' || key === 'vix' ? ' pts' : '%')) : '--'}
                   <span style={{ color: '#607d8b', marginLeft: 4 }}>3mo</span>
                 </span>
               </div>
@@ -237,7 +237,7 @@ function ExposureTab({ pf }) {
           background: '#4a3510', border: '1px solid #f9a825', borderRadius: 6,
           padding: '0.6rem 1rem', marginBottom: '1rem', color: '#ffca28', fontSize: '0.85rem',
         }}>
-          ⚠ {data.unclassified_warning}
+          Warning: {data.unclassified_warning}
         </div>
       )}
 
@@ -452,7 +452,7 @@ function TiltsTab({ pf }) {
           <h3 style={{ color: '#e0e8f0', margin: '0 0 0.5rem' }}>
             Rebalance to Breakeven
             <span style={{ fontSize: '0.75rem', color: '#90a4ae', fontWeight: 400, marginLeft: 8 }}>
-              Shift {fmtPct(data.breakeven_target.total_shift_pct)} ({fmt$(data.breakeven_target.total_shift_needed)}) from unfavorable → favorable to reach neutral alignment
+              Shift {fmtPct(data.breakeven_target.total_shift_pct)} ({fmt$(data.breakeven_target.total_shift_needed)}) from unfavorable {'->'} favorable to reach neutral alignment
             </span>
           </h3>
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
@@ -553,7 +553,7 @@ function TiltsTab({ pf }) {
                     </span>
                     {s.current_pct != null && (
                       <span style={{ fontSize: '0.8rem', color: '#90a4ae' }}>
-                        {fmtPct(s.current_pct)} → {fmtPct(s.suggested_pct)}
+                        {fmtPct(s.current_pct)} {'->'} {fmtPct(s.suggested_pct)}
                       </span>
                     )}
                   </div>
@@ -600,7 +600,7 @@ function TiltsTab({ pf }) {
                       }}
                       onClick={() => navigate(`/consolidation?tab=simulator&sell=${s.tickers_to_consider_reducing[0]}`)}
                     >
-                      View in Consolidation Simulator →
+                      View in Consolidation Simulator {'->'}
                     </button>
                   )}
                 </div>
@@ -875,7 +875,7 @@ function IncomeBenchmarkTab({ pf }) {
                   onClick={() => setIbSort(prev => ({ col: col.key, asc: prev.col === col.key ? !prev.asc : col.key === 'bucket' }))}
                   style={{ ...ibTh, textAlign: col.align, width: col.width, cursor: 'pointer', userSelect: 'none' }}
                 >
-                  {col.label} {ibSort.col === col.key ? (ibSort.asc ? '↑' : '↓') : ''}
+                  {col.label} {ibSort.col === col.key ? (ibSort.asc ? '^' : 'v') : ''}
                 </th>
               ))}
             </tr>
@@ -900,7 +900,7 @@ function IncomeBenchmarkTab({ pf }) {
                     onClick={() => bucketHoldings.length > 0 && setExpandedBucket(isExpanded ? null : c.bucket)}
                   >
                     <td style={{ ...ibTd, fontWeight: 600, color: barColors[i % barColors.length] }}>
-                      {bucketHoldings.length > 0 && <span style={{ fontSize: '0.7rem', marginRight: 4 }}>{isExpanded ? '▼' : '▶'}</span>}
+                      {bucketHoldings.length > 0 && <span style={{ fontSize: '0.7rem', marginRight: 4 }}>{isExpanded ? 'v' : '>'}</span>}
                       {c.bucket}
                       <span style={{ color: '#666', fontSize: '0.7rem', marginLeft: 4 }}>({c.tickers?.length || 0})</span>
                     </td>
@@ -948,7 +948,7 @@ function IncomeBenchmarkTab({ pf }) {
                           {bucketOpts.map(b => (
                             <option key={b} value={b}>{b}</option>
                           ))}
-                          {h.is_overridden && <option value="__revert__">↩ Auto-detect</option>}
+                          {h.is_overridden && <option value="__revert__">Reset to Auto-detect</option>}
                         </select>
                       </td>
                     </tr>
@@ -996,7 +996,7 @@ function IncomeBenchmarkTab({ pf }) {
                         {bucketOpts.map(b => (
                           <option key={b} value={b}>{b}</option>
                         ))}
-                        <option value="__revert__">↩ Auto-detect</option>
+                        <option value="__revert__">Reset to Auto-detect</option>
                       </select>
                     </td>
                   </tr>
@@ -1226,7 +1226,7 @@ function ClassificationsTab({ pf }) {
                         borderRadius: 4, padding: '2px 8px', fontWeight: 700, fontSize: '0.8rem',
                       }}>{fmtNum(h.macro_score)}</span>
                     ) : (
-                      <span style={{ color: '#616161', fontSize: '0.8rem' }}>—</span>
+                      <span style={{ color: '#616161', fontSize: '0.8rem' }}>--</span>
                     )}
                   </td>
                   <td style={{ ...tdStyle, textAlign: 'center' }}>
@@ -1330,6 +1330,38 @@ const QUAD_COLORS = { 1: '#4caf50', 2: '#ff9800', 3: '#ef5350', 4: '#42a5f5' }
 const QUAD_BG     = { 1: 'rgba(76,175,80,0.08)', 2: 'rgba(255,152,0,0.08)', 3: 'rgba(239,83,80,0.08)', 4: 'rgba(66,165,245,0.08)' }
 const QUAD_LABELS = { 1: 'Q1 Goldilocks', 2: 'Q2 Reflation', 3: 'Q3 Stagflation', 4: 'Q4 Deflation' }
 const TILT_COLORS = { Best: '#4caf50', Good: '#81c784', Neutral: '#90a4ae', Avoid: '#ef5350', Underperform: '#ff9800' }
+const QUAD_IDS = [1, 2, 3, 4]
+const PROJECTION_KEYS = ['1_week', '2_week', '4_week', '8_week', '13_week']
+const PROJECTION_LABELS = ['1 Week', '2 Weeks', '4 Weeks', '8 Weeks', '13 Weeks']
+const FRED_CATEGORIES = [
+  { key: 'growth', label: 'Growth', color: '#4caf50' },
+  { key: 'inflation', label: 'Inflation', color: '#ff9800' },
+  { key: 'financial', label: 'Financial Conditions', color: '#42a5f5' },
+  { key: 'sentiment', label: 'Sentiment', color: '#b39ddb' },
+]
+const BRIER_HORIZONS = [
+  { key: '1_week', label: '1-Week Forecast' },
+  { key: '4_week', label: '1-Month Forecast' },
+  { key: '8_week', label: '2-Month Forecast' },
+]
+const RESPONSIVE_PLOT_CONFIG = { responsive: true, displayModeBar: false }
+
+function classifyQuadrant(growth, inflation) {
+  if (growth > 0 && inflation <= 0) return 1
+  if (growth > 0 && inflation > 0) return 2
+  if (growth <= 0 && inflation > 0) return 3
+  return 4
+}
+
+function getQuadrantShortName(q) {
+  return QUAD_LABELS[q]?.split(' ').slice(1).join(' ') || `Q${q}`
+}
+
+function getMaxProjectionQuadrant(projection = {}) {
+  return QUAD_IDS.reduce((best, q) => (
+    (projection[`Q${q}`] || 0) > (projection[`Q${best}`] || 0) ? q : best
+  ), 1)
+}
 
 function QuadrantTab({ pf }) {
   const [loading, setLoading] = useState(false)
@@ -1352,36 +1384,156 @@ function QuadrantTab({ pf }) {
 
   useEffect(() => { load() }, [load])
 
-  if (loading) return <p style={{ color: '#90caf9' }}>Loading quadrant analysis (fetching 5 years of data)...</p>
-  if (error) return <p style={{ color: '#ef5350' }}>{error}</p>
-  if (!data) return null
-
-  const h = data.history || {}
+  const safeData = data || {}
+  const h = safeData.history || {}
   const gScores = h.growth_scores || []
   const iScores = h.inflation_scores || []
   const quads = h.quadrants || []
   const dates = h.dates || []
-  const tm = data.transition_matrix || []       // adjusted (current-week-specific)
-  const stm = data.static_transition_matrix || tm // historical baseline
-  const tc = data.transition_counts || []
-  const proj = data.projections || {}
-  const projKeys = ['1_week', '2_week', '4_week', '8_week', '13_week']
-  const projLabels = ['1 Week', '2 Weeks', '4 Weeks', '8 Weeks', '13 Weeks']
+  const tm = safeData.transition_matrix || []       // adjusted (current-week-specific)
+  const stm = safeData.static_transition_matrix || tm // historical baseline
+  const tc = safeData.transition_counts || []
+  const proj = safeData.projections || {}
+  const currentQuadrant = safeData.current_quadrant || 1
+  const transitionAnchorQuadrant = safeData.transition_anchor_quadrant || currentQuadrant
+  const transitionAnchorName = safeData.transition_anchor_name || safeData.current_quadrant_name || QUAD_LABELS[transitionAnchorQuadrant]
+  const statesAligned = safeData.states_aligned !== false
+  const quadLabels = useMemo(() => QUAD_IDS.map(q => QUAD_LABELS[q]), [])
+  const currentTransitionRow = tm[transitionAnchorQuadrant - 1] || []
+  const maxAdjustedTransitionProb = useMemo(
+    () => Math.max(0, ...currentTransitionRow.map(v => (v || 0) * 100)),
+    [currentTransitionRow]
+  )
 
-  // Scatter chart bounds
-  const allG = gScores.filter(v => v != null)
-  const allI = iScores.filter(v => v != null)
-  const gPad = 2, iPad = 2
-  const gMin = Math.min(...allG) - gPad, gMax = Math.max(...allG) + gPad
-  const iMin = Math.min(...allI) - iPad, iMax = Math.max(...allI) + iPad
+  const scatterMeta = useMemo(() => {
+    const allG = gScores.filter(v => v != null)
+    const allI = iScores.filter(v => v != null)
+    const currentMarketGrowth = safeData.market_growth_score ?? safeData.growth_score ?? 0
+    const currentMarketInflation = safeData.market_inflation_score ?? safeData.inflation_score ?? 0
+    const paddedGrowth = [...allG, currentMarketGrowth]
+    const paddedInflation = [...allI, currentMarketInflation]
+    const gMin = Math.min(...paddedGrowth) - 2
+    const gMax = Math.max(...paddedGrowth) + 2
+    const iMin = Math.min(...paddedInflation) - 2
+    const iMax = Math.max(...paddedInflation) + 2
+    const marketCurrentQuadrant = classifyQuadrant(currentMarketGrowth, currentMarketInflation)
 
-  // Heatmap labels
-  const quadLabels = ['Q1 Goldilocks', 'Q2 Reflation', 'Q3 Stagflation', 'Q4 Deflation']
+    return {
+      currentMarketGrowth,
+      currentMarketInflation,
+      marketCurrentQuadrant,
+      gMin,
+      gMax,
+      iMin,
+      iMax,
+      traces: [
+        {
+          x: gScores,
+          y: iScores,
+          mode: 'markers',
+          marker: { size: 5, color: quads.map(q => QUAD_COLORS[q]), opacity: 0.35 },
+          text: dates.map((d, i) => `${d}<br>${QUAD_LABELS[quads[i]]}<br>Growth: ${gScores[i]?.toFixed(2)}%<br>Inflation: ${iScores[i]?.toFixed(2)}%`),
+          hoverinfo: 'text',
+          name: 'Historical',
+        },
+        {
+          x: [currentMarketGrowth],
+          y: [currentMarketInflation],
+          mode: 'markers+text',
+          marker: { size: 18, color: QUAD_COLORS[marketCurrentQuadrant], symbol: 'diamond', line: { width: 2, color: '#fff' } },
+          text: ['NOW'],
+          textposition: 'top center',
+          textfont: { color: '#fff', size: 12, family: 'monospace' },
+          hoverinfo: 'text',
+          hovertext: `Current market-proxy state: ${QUAD_LABELS[marketCurrentQuadrant]}<br>Growth: ${currentMarketGrowth.toFixed(2)}%<br>Inflation: ${currentMarketInflation.toFixed(2)}%`,
+          name: 'Current Market Proxy',
+        },
+      ],
+      annotations: [
+        { x: gMax * 0.7, y: iMin * 0.7, text: 'Q1 Goldilocks', showarrow: false, font: { color: QUAD_COLORS[1], size: 13, family: 'monospace' }, opacity: 0.7 },
+        { x: gMax * 0.7, y: iMax * 0.7, text: 'Q2 Reflation', showarrow: false, font: { color: QUAD_COLORS[2], size: 13, family: 'monospace' }, opacity: 0.7 },
+        { x: gMin * 0.7, y: iMax * 0.7, text: 'Q3 Stagflation', showarrow: false, font: { color: QUAD_COLORS[3], size: 13, family: 'monospace' }, opacity: 0.7 },
+        { x: gMin * 0.7, y: iMin * 0.7, text: 'Q4 Deflation', showarrow: false, font: { color: QUAD_COLORS[4], size: 13, family: 'monospace' }, opacity: 0.7 },
+      ],
+    }
+  }, [safeData.growth_score, safeData.inflation_score, safeData.market_growth_score, safeData.market_inflation_score, dates, gScores, iScores, quads])
+
+  const fredDisplay = useMemo(() => {
+    if (!safeData.fred_indicators) return null
+    const entries = Object.entries(safeData.fred_indicators)
+    return {
+      entries,
+      growthCount: entries.filter(([, value]) => value.category === 'growth').length,
+      inflationCount: entries.filter(([, value]) => value.category === 'inflation').length,
+      groupedEntries: FRED_CATEGORIES.map(category => ({
+        ...category,
+        entries: entries.filter(([, value]) => value.category === category.key),
+      })).filter(category => category.entries.length > 0),
+    }
+  }, [safeData.fred_indicators])
+  const entries = fredDisplay?.entries || []
+  const growthCount = fredDisplay?.growthCount || 0
+  const inflationCount = fredDisplay?.inflationCount || 0
+  const categories = fredDisplay?.groupedEntries || []
+
+  const adjustedTransitionCards = useMemo(() => (
+    QUAD_IDS.map(q => {
+      const adjustedProb = (tm[transitionAnchorQuadrant - 1]?.[q - 1] || 0) * 100
+      const historicalProb = (stm[transitionAnchorQuadrant - 1]?.[q - 1] || 0) * 100
+      return {
+        q,
+        adjustedProb,
+        historicalProb,
+        delta: adjustedProb - historicalProb,
+        isSelf: q === transitionAnchorQuadrant,
+        isMax: adjustedProb === maxAdjustedTransitionProb,
+      }
+    })
+  ), [maxAdjustedTransitionProb, stm, tm, transitionAnchorQuadrant])
+
+  const heatmapAnnotations = useMemo(() => (
+    stm.flatMap((row, ri) => row.map((value, ci) => ({
+      x: quadLabels[ci],
+      y: ri === transitionAnchorQuadrant - 1 ? `> ${quadLabels[ri]}` : quadLabels[ri],
+      text: ri === transitionAnchorQuadrant - 1
+        ? `<b>${(value * 100).toFixed(1)}%</b><br><span style="font-size:9px">(${tc[ri]?.[ci] || 0})</span>`
+        : `${(value * 100).toFixed(1)}%<br><span style="font-size:9px">(${tc[ri]?.[ci] || 0})</span>`,
+      showarrow: false,
+      font: {
+        color: ri === transitionAnchorQuadrant - 1 ? '#fff' : '#b0bec5',
+        size: ri === transitionAnchorQuadrant - 1 ? 13 : 11,
+      },
+    })))
+  ), [quadLabels, stm, tc, transitionAnchorQuadrant])
+
+  const projectionDisplay = useMemo(() => ({
+    eightWeekMaxQ: getMaxProjectionQuadrant(proj['8_week']),
+    fourWeekMaxQ: getMaxProjectionQuadrant(proj['4_week']),
+    projectionSeries: QUAD_IDS.map(q => ({
+      x: PROJECTION_LABELS,
+      y: PROJECTION_KEYS.map(key => (proj[key]?.[`Q${q}`] || 0) * 100),
+      type: 'bar',
+      name: QUAD_LABELS[q],
+      marker: { color: QUAD_COLORS[q] },
+      hovertemplate: `${QUAD_LABELS[q]}: %{y:.1f}%<extra></extra>`,
+    })),
+  }), [proj])
+
+  const marketHistoryNote = safeData.classification_source === 'FRED'
+    ? `Quadrant classification currently uses FRED Z-scores, but this map stays in market-proxy momentum space for apples-to-apples comparison with the 5-year Markov history. Current market-proxy state: Q${scatterMeta.marketCurrentQuadrant} ${getQuadrantShortName(scatterMeta.marketCurrentQuadrant)}.`
+    : 'This map and the current classification are both using market-proxy momentum data.'
+  const transitionEngineNote = statesAligned
+    ? `Transition engine is anchored to Q${transitionAnchorQuadrant} ${getQuadrantShortName(transitionAnchorQuadrant)} using market-proxy history.`
+    : `FRED classifies the current macro state as Q${currentQuadrant} ${getQuadrantShortName(currentQuadrant)}, while the transition engine is anchored to market-proxy Q${transitionAnchorQuadrant} ${getQuadrantShortName(transitionAnchorQuadrant)} for consistency with the Markov training data.`
+
+  if (loading) return <p style={{ color: '#90caf9' }}>Loading quadrant analysis (fetching 5 years of data)...</p>
+  if (error) return <p style={{ color: '#ef5350' }}>{error}</p>
+  if (!data) return null
 
   return (
     <div>
       {/* Header: Current Quadrant */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center', marginBottom: '1.25rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', alignItems: 'center', marginBottom: '1.25rem' }}>
         <div style={{
           background: `linear-gradient(135deg, ${QUAD_COLORS[data.current_quadrant]}22, ${QUAD_COLORS[data.current_quadrant]}44)`,
           border: `2px solid ${QUAD_COLORS[data.current_quadrant]}`,
@@ -1389,7 +1541,7 @@ function QuadrantTab({ pf }) {
         }}>
           <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Current Quadrant</div>
           <div style={{ fontSize: '1.4rem', fontWeight: 700, color: QUAD_COLORS[data.current_quadrant] }}>
-            Q{data.current_quadrant} — {data.current_quadrant_name}
+            Q{data.current_quadrant} - {data.current_quadrant_name}
           </div>
         </div>
         <div style={{ background: '#16213e', border: '1px solid #0f3460', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
@@ -1403,7 +1555,7 @@ function QuadrantTab({ pf }) {
             Growth {data.classification_source === 'FRED' ? 'Z-Score' : 'Momentum'}
           </div>
           <div style={{ fontSize: '1.1rem', fontWeight: 600, color: data.growth_score > 0 ? '#4caf50' : '#ef5350' }}>
-            {data.growth_score > 0 ? '▲' : '▼'} {data.growth_score.toFixed(2)}{data.classification_source !== 'FRED' ? '%' : ''}
+            {data.growth_score > 0 ? 'Up' : 'Down'} {data.growth_score.toFixed(2)}{data.classification_source !== 'FRED' ? '%' : ''}
           </div>
         </div>
         <div style={{ background: '#16213e', border: '1px solid #0f3460', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
@@ -1411,7 +1563,7 @@ function QuadrantTab({ pf }) {
             Inflation {data.classification_source === 'FRED' ? 'Z-Score' : 'Momentum'}
           </div>
           <div style={{ fontSize: '1.1rem', fontWeight: 600, color: data.inflation_score > 0 ? '#ef5350' : '#4caf50' }}>
-            {data.inflation_score > 0 ? '▲' : '▼'} {data.inflation_score.toFixed(2)}{data.classification_source !== 'FRED' ? '%' : ''}
+            {data.inflation_score > 0 ? 'Up' : 'Down'} {data.inflation_score.toFixed(2)}{data.classification_source !== 'FRED' ? '%' : ''}
           </div>
         </div>
         <div style={{ flex: 1, minWidth: 200, background: '#16213e', border: '1px solid #0f3460', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
@@ -1419,32 +1571,46 @@ function QuadrantTab({ pf }) {
         </div>
       </div>
 
+      <div className="card" style={{ padding: '0.7rem 1rem', marginBottom: '1rem', background: '#10192b', border: '1px solid #1d3357' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
+          <div>
+            <div style={{ fontSize: '0.68rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Macro Classification</div>
+            <div style={{ fontSize: '0.9rem', color: '#e0e8f5', fontWeight: 600 }}>
+              Q{currentQuadrant} {data.current_quadrant_name} via {data.classification_source}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: '0.68rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Transition Engine</div>
+            <div style={{ fontSize: '0.9rem', color: '#e0e8f5', fontWeight: 600 }}>
+              Q{transitionAnchorQuadrant} {getQuadrantShortName(transitionAnchorQuadrant)} market anchor
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: '0.68rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>State Alignment</div>
+            <div style={{ fontSize: '0.9rem', color: statesAligned ? '#4caf50' : '#ff9800', fontWeight: 600 }}>
+              {statesAligned ? 'Aligned' : 'Mixed Signal'}
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* FRED Economic Indicators */}
-      {data.fred_indicators && (() => {
-        const categories = [
-          { key: 'growth', label: 'Growth', color: '#4caf50' },
-          { key: 'inflation', label: 'Inflation', color: '#ff9800' },
-          { key: 'financial', label: 'Financial Conditions', color: '#42a5f5' },
-          { key: 'sentiment', label: 'Sentiment', color: '#b39ddb' },
-        ]
-        const entries = Object.entries(data.fred_indicators)
-        const growthCount = entries.filter(([, v]) => v.category === 'growth').length
-        const inflationCount = entries.filter(([, v]) => v.category === 'inflation').length
+      {fredDisplay && (() => {
         return (
           <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
               <h3 style={{ color: '#90caf9', margin: 0, fontSize: '1rem' }}>FRED Economic Indicators (Z-Scores)</h3>
               <span style={{ fontSize: '0.7rem', color: '#666', background: '#0e1525', padding: '2px 8px', borderRadius: 4 }}>
-                Source: {data.classification_source || 'FRED'} · {entries.length} indicators via FRED API
+                Source: {data.classification_source || 'FRED'} | {entries.length} indicators via FRED API
               </span>
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.6rem', padding: '0.4rem 0.6rem', background: '#0e1525', borderRadius: 6, fontSize: '0.65rem', color: '#90a4ae', alignItems: 'center' }}>
               <span style={{ fontWeight: 600, color: '#e0e8f5' }}>Z-Score Guide:</span>
               <span>A Z-score measures how far a value is from its historical average in standard deviations.</span>
-              <span style={{ color: '#4caf50' }}>● Normal (&lt;1.0)</span>
-              <span style={{ color: '#ff9800' }}>● Elevated (1.0–2.0)</span>
-              <span style={{ color: '#ef5350' }}>● Extreme (&gt;2.0)</span>
-              <span style={{ color: '#90a4ae' }}>| + positive = above avg | − negative = below avg</span>
+              <span style={{ color: '#4caf50' }}>* Normal (&lt;1.0)</span>
+              <span style={{ color: '#ff9800' }}>* Elevated (1.0-2.0)</span>
+              <span style={{ color: '#ef5350' }}>* Extreme (&gt;2.0)</span>
+              <span style={{ color: '#90a4ae' }}>| + positive = above avg | - negative = below avg</span>
             </div>
             {categories.map(cat => {
               const catEntries = entries.filter(([, v]) => v.category === cat.key)
@@ -1458,7 +1624,7 @@ function QuadrantTab({ pf }) {
                     {catEntries.map(([name, info]) => {
                       const extColor = info.extremity === 'Extreme' ? '#ef5350' : info.extremity === 'Elevated' ? '#ff9800' : '#4caf50'
                       const zChg = info.z_change || 0
-                      const zArrow = zChg > 0.01 ? '▲' : zChg < -0.01 ? '▼' : '→'
+                      const zArrow = zChg > 0.01 ? '^' : zChg < -0.01 ? 'v' : '->'
                       const zChgColor = zChg > 0.01 ? '#4caf50' : zChg < -0.01 ? '#ef5350' : '#666'
                       return (
                         <div key={name} style={{
@@ -1473,7 +1639,7 @@ function QuadrantTab({ pf }) {
                               </span>
                             )}
                             {info.previous_value != null && (
-                              <span style={{ fontSize: '0.72rem', color: '#666' }}>→</span>
+                              <span style={{ fontSize: '0.72rem', color: '#666' }}>-&gt;</span>
                             )}
                             <span style={{ fontSize: '1rem', fontWeight: 700, color: '#e0e8f5' }}>
                               {info.current_value}
@@ -1486,13 +1652,13 @@ function QuadrantTab({ pf }) {
                             </span>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.65rem', color: '#666', marginTop: 2 }}>
-                            <span>{info.direction} · {info.extremity}</span>
+                            <span>{info.direction} | {info.extremity}</span>
                             {info.previous_z != null && (
                               <span style={{ color: zChgColor, fontWeight: 600 }}>
                                 {zArrow} {Math.abs(zChg).toFixed(2)}
                               </span>
                             )}
-                            <span>· {info.latest_date}</span>
+                            <span>| {info.latest_date}</span>
                           </div>
                         </div>
                       )
@@ -1549,7 +1715,7 @@ function QuadrantTab({ pf }) {
                 borderRadius: 6, padding: '0.4rem 0.75rem', fontWeight: 700,
                 color: flagColors[interp.regime_flag], fontSize: '0.85rem',
               }}>
-                {interp.regime_flag === 'GREEN' ? '✅' : interp.regime_flag === 'YELLOW' ? '⚠️' : '🔴'} Regime Change: {interp.regime_flag}
+                {interp.regime_flag === 'GREEN' ? 'OK' : interp.regime_flag === 'YELLOW' ? 'WATCH' : 'ALERT'} Regime Change: {interp.regime_flag}
               </div>
               <span style={{ color: '#b0bec5', fontSize: '0.82rem' }}>{interp.regime_flag_text}</span>
             </div>
@@ -1590,67 +1756,46 @@ function QuadrantTab({ pf }) {
       {/* 2x2 Quadrant Scatter Chart */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>Regime Quadrant Map (5-Year History)</h3>
+        <p style={{ color: '#8899aa', fontSize: '0.75rem', margin: '0 0 0.75rem' }}>
+          {marketHistoryNote}
+        </p>
         <Plot
-          data={[
-            {
-              x: gScores, y: iScores,
-              mode: 'markers',
-              marker: { size: 5, color: quads.map(q => QUAD_COLORS[q]), opacity: 0.35 },
-              text: dates.map((d, i) => `${d}<br>${QUAD_LABELS[quads[i]]}<br>Growth: ${gScores[i]?.toFixed(2)}%<br>Inflation: ${iScores[i]?.toFixed(2)}%`),
-              hoverinfo: 'text', name: 'Historical',
-            },
-            {
-              x: [data.growth_score], y: [data.inflation_score],
-              mode: 'markers+text',
-              marker: { size: 18, color: QUAD_COLORS[data.current_quadrant], symbol: 'diamond', line: { width: 2, color: '#fff' } },
-              text: ['NOW'], textposition: 'top center', textfont: { color: '#fff', size: 12, family: 'monospace' },
-              hoverinfo: 'text',
-              hovertext: `Current: ${data.current_quadrant_name}<br>Growth: ${data.growth_score.toFixed(2)}%<br>Inflation: ${data.inflation_score.toFixed(2)}%`,
-              name: 'Current',
-            },
-          ]}
+          data={scatterMeta.traces}
           layout={{
             template: 'plotly_dark',
             paper_bgcolor: 'transparent', plot_bgcolor: '#0e1525',
             margin: { l: 60, r: 30, t: 10, b: 50 },
             height: 420,
-            xaxis: { title: 'Growth Momentum (%)', zeroline: true, zerolinecolor: '#556', zerolinewidth: 2, gridcolor: '#1a2233', range: [gMin, gMax] },
-            yaxis: { title: 'Inflation Momentum (%)', zeroline: true, zerolinecolor: '#556', zerolinewidth: 2, gridcolor: '#1a2233', range: [iMin, iMax] },
+            xaxis: { title: 'Market Proxy Growth Momentum (%)', zeroline: true, zerolinecolor: '#556', zerolinewidth: 2, gridcolor: '#1a2233', range: [scatterMeta.gMin, scatterMeta.gMax] },
+            yaxis: { title: 'Market Proxy Inflation Momentum (%)', zeroline: true, zerolinecolor: '#556', zerolinewidth: 2, gridcolor: '#1a2233', range: [scatterMeta.iMin, scatterMeta.iMax] },
             shapes: [
-              { type: 'rect', x0: 0, x1: gMax + 10, y0: iMin - 10, y1: 0, fillcolor: QUAD_BG[1], line: { width: 0 }, layer: 'below' },
-              { type: 'rect', x0: 0, x1: gMax + 10, y0: 0, y1: iMax + 10, fillcolor: QUAD_BG[2], line: { width: 0 }, layer: 'below' },
-              { type: 'rect', x0: gMin - 10, x1: 0, y0: 0, y1: iMax + 10, fillcolor: QUAD_BG[3], line: { width: 0 }, layer: 'below' },
-              { type: 'rect', x0: gMin - 10, x1: 0, y0: iMin - 10, y1: 0, fillcolor: QUAD_BG[4], line: { width: 0 }, layer: 'below' },
+              { type: 'rect', x0: 0, x1: scatterMeta.gMax + 10, y0: scatterMeta.iMin - 10, y1: 0, fillcolor: QUAD_BG[1], line: { width: 0 }, layer: 'below' },
+              { type: 'rect', x0: 0, x1: scatterMeta.gMax + 10, y0: 0, y1: scatterMeta.iMax + 10, fillcolor: QUAD_BG[2], line: { width: 0 }, layer: 'below' },
+              { type: 'rect', x0: scatterMeta.gMin - 10, x1: 0, y0: 0, y1: scatterMeta.iMax + 10, fillcolor: QUAD_BG[3], line: { width: 0 }, layer: 'below' },
+              { type: 'rect', x0: scatterMeta.gMin - 10, x1: 0, y0: scatterMeta.iMin - 10, y1: 0, fillcolor: QUAD_BG[4], line: { width: 0 }, layer: 'below' },
             ],
-            annotations: [
-              { x: gMax * 0.7, y: iMin * 0.7, text: 'Q1 Goldilocks', showarrow: false, font: { color: QUAD_COLORS[1], size: 13, family: 'monospace' }, opacity: 0.7 },
-              { x: gMax * 0.7, y: iMax * 0.7, text: 'Q2 Reflation', showarrow: false, font: { color: QUAD_COLORS[2], size: 13, family: 'monospace' }, opacity: 0.7 },
-              { x: gMin * 0.7, y: iMax * 0.7, text: 'Q3 Stagflation', showarrow: false, font: { color: QUAD_COLORS[3], size: 13, family: 'monospace' }, opacity: 0.7 },
-              { x: gMin * 0.7, y: iMin * 0.7, text: 'Q4 Deflation', showarrow: false, font: { color: QUAD_COLORS[4], size: 13, family: 'monospace' }, opacity: 0.7 },
-            ],
+            annotations: scatterMeta.annotations,
             showlegend: false,
           }}
-          config={{ responsive: true, displayModeBar: false }}
+          config={RESPONSIVE_PLOT_CONFIG}
           style={{ width: '100%' }}
         />
       </div>
 
-      {/* This Week's Outlook — current-week-specific probabilities */}
+      {/* This Week's Outlook - current-week-specific probabilities */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
-          This Week's Outlook — Next Week Probabilities
+          This Week's Outlook - Next Week Probabilities
         </h3>
         <p style={{ color: '#8899aa', fontSize: '0.75rem', marginBottom: '0.75rem' }}>
-          Adjusted for current momentum, FRED Z-scores & conditional matching
-          {data.conditional_observations != null && ` (${data.conditional_observations} similar historical weeks)`}
+          {transitionEngineNote}
+        </p>
+        <p style={{ color: '#8899aa', fontSize: '0.75rem', marginBottom: '0.75rem' }}>
+          Adjusted for current momentum, FRED Z-scores, and conditional matching
+          {data.conditional_observations != null && ` (${data.conditional_observations} similar historical weeks, weight ${(safeData.conditional_weight || 0).toFixed(2)})`}
         </p>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-          {[1, 2, 3, 4].map(q => {
-            const adjProb = (tm[data.current_quadrant - 1]?.[q - 1] || 0) * 100
-            const histProb = (stm[data.current_quadrant - 1]?.[q - 1] || 0) * 100
-            const delta = adjProb - histProb
-            const isSelf = q === data.current_quadrant
-            const isMax = adjProb === Math.max(...[1,2,3,4].map(qq => (tm[data.current_quadrant - 1]?.[qq - 1] || 0) * 100))
+          {adjustedTransitionCards.map(({ q, adjustedProb: adjProb, historicalProb: histProb, delta, isSelf, isMax }) => {
             return (
               <div key={q} style={{
                 flex: '1 1 180px', padding: '0.75rem 1rem', borderRadius: 8,
@@ -1664,20 +1809,20 @@ function QuadrantTab({ pf }) {
                   </div>
                 )}
                 <div style={{ fontSize: '0.8rem', color: QUAD_COLORS[q], fontWeight: 600, marginBottom: 4 }}>
-                  {isSelf ? `Stay Q${q}` : `→ Q${q}`} {QUAD_LABELS[q]?.split(' ').slice(1).join(' ')}
+                  {isSelf ? `Stay Q${q}` : `-> Q${q}`} {QUAD_LABELS[q]?.split(' ').slice(1).join(' ')}
                 </div>
                 <div style={{ fontSize: '1.8rem', fontWeight: 700, color: isMax ? '#fff' : '#b0bec5' }}>
                   {adjProb.toFixed(1)}%
                 </div>
-                <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginTop: 4 }}>
-                  Historical: {histProb.toFixed(1)}%
-                </div>
+                 <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginTop: 4 }}>
+                   Baseline: {histProb.toFixed(1)}%
+                 </div>
                 {Math.abs(delta) >= 0.1 && (
                   <div style={{
                     fontSize: '0.75rem', fontWeight: 600, marginTop: 2,
                     color: delta > 0 ? (isSelf ? '#4caf50' : '#ff9800') : (isSelf ? '#ef5350' : '#4caf50'),
                   }}>
-                    {delta > 0 ? '▲' : '▼'} {Math.abs(delta).toFixed(1)}pp
+                    {delta > 0 ? '^' : 'v'} {Math.abs(delta).toFixed(1)}pp
                   </div>
                 )}
                 {/* Mini bar */}
@@ -1694,20 +1839,20 @@ function QuadrantTab({ pf }) {
       </div>
 
       {/* Transition Matrix Heatmap + Forward Projections side by side */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
         {/* Transition Matrix (Historical Baseline) */}
         <div className="card" style={{ padding: '0.75rem 1rem' }}>
           <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
             Historical Transition Matrix (Weekly Probabilities)
           </h3>
           <p style={{ color: '#8899aa', fontSize: '0.75rem', marginBottom: '0.5rem' }}>
-            Based on {data.total_observations} weekly observations — ▶ indicates current quadrant
+            Based on {data.total_observations} weekly observations - {'>'} indicates the transition anchor state
           </p>
           <Plot
             data={[{
               z: stm.map(row => row.map(v => v * 100)),
               x: quadLabels,
-              y: quadLabels.map((l, i) => i === data.current_quadrant - 1 ? `▶ ${l}` : l),
+              y: quadLabels.map((l, i) => i === transitionAnchorQuadrant - 1 ? `> ${l}` : l),
               type: 'heatmap',
               colorscale: [[0, '#0e1525'], [0.5, '#1a5276'], [1, '#4caf50']],
               xgap: 3, ygap: 3,
@@ -1721,20 +1866,9 @@ function QuadrantTab({ pf }) {
               height: 340,
               xaxis: { title: 'To', side: 'bottom', tickangle: -30 },
               yaxis: { title: 'From', autorange: 'reversed' },
-              annotations: stm.flatMap((row, ri) => row.map((v, ci) => ({
-                x: quadLabels[ci],
-                y: ri === data.current_quadrant - 1 ? `▶ ${quadLabels[ri]}` : quadLabels[ri],
-                text: ri === data.current_quadrant - 1
-                  ? `<b>${(v * 100).toFixed(1)}%</b><br><span style="font-size:9px">(${tc[ri]?.[ci] || 0})</span>`
-                  : `${(v * 100).toFixed(1)}%<br><span style="font-size:9px">(${tc[ri]?.[ci] || 0})</span>`,
-                showarrow: false,
-                font: {
-                  color: ri === data.current_quadrant - 1 ? '#fff' : '#b0bec5',
-                  size: ri === data.current_quadrant - 1 ? 13 : 11,
-                },
-              }))),
+              annotations: heatmapAnnotations,
             }}
-            config={{ responsive: true, displayModeBar: false }}
+            config={RESPONSIVE_PLOT_CONFIG}
             style={{ width: '100%' }}
           />
         </div>
@@ -1742,7 +1876,7 @@ function QuadrantTab({ pf }) {
         {/* Forward Projections */}
         <div className="card" style={{ padding: '0.75rem 1rem' }}>
           <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
-            Forward Projections (from Q{data.current_quadrant})
+            Forward Projections (from Q{transitionAnchorQuadrant})
           </h3>
           {/* 2-Month Forecast Hero */}
           {proj['8_week'] && (
@@ -1751,11 +1885,11 @@ function QuadrantTab({ pf }) {
                 2-Month Forecast (8 Weeks)
               </div>
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                {[1, 2, 3, 4].map(q => {
+                {QUAD_IDS.map(q => {
                   const pct8 = ((proj['8_week']?.[`Q${q}`] || 0) * 100)
                   const pct1 = ((proj['1_week']?.[`Q${q}`] || 0) * 100)
                   const delta = pct8 - pct1
-                  const isMax = pct8.toFixed(0) === Math.max(...[1,2,3,4].map(qq => (proj['8_week']?.[`Q${qq}`] || 0) * 100)).toFixed(0)
+                  const isMax = q === projectionDisplay.eightWeekMaxQ
                   return (
                     <div key={q} style={{
                       flex: 1, minWidth: 140, padding: '0.6rem 0.75rem', borderRadius: 8,
@@ -1764,27 +1898,27 @@ function QuadrantTab({ pf }) {
                       textAlign: 'center',
                     }}>
                       <div style={{ fontSize: '0.72rem', color: QUAD_COLORS[q], fontWeight: 600, marginBottom: 4 }}>
-                        Q{q} {QUAD_LABELS[q]?.split(' ').slice(1).join(' ')}
+                        Q{q} {getQuadrantShortName(q)}
                       </div>
                       <div style={{ fontSize: '1.5rem', fontWeight: 700, color: isMax ? '#fff' : '#90a4ae' }}>
                         {pct8.toFixed(0)}%
                       </div>
                       <div style={{ fontSize: '0.65rem', color: delta > 0.5 ? '#ff9800' : delta < -0.5 ? '#4caf50' : '#666', marginTop: 2 }}>
-                        {delta > 0.5 ? `▲ ${delta.toFixed(1)}pp from 1wk` : delta < -0.5 ? `▼ ${Math.abs(delta).toFixed(1)}pp from 1wk` : `→ stable vs 1wk`}
+                        {delta > 0.5 ? `^ ${delta.toFixed(1)}pp from 1wk` : delta < -0.5 ? `v ${Math.abs(delta).toFixed(1)}pp from 1wk` : `-> stable vs 1wk`}
                       </div>
                     </div>
                   )
                 })}
               </div>
               {(() => {
-                const maxQ = [1,2,3,4].reduce((best, q) => (proj['8_week']?.[`Q${q}`] || 0) > (proj['8_week']?.[`Q${best}`] || 0) ? q : best, 1)
+                const maxQ = projectionDisplay.eightWeekMaxQ
                 const maxPct = ((proj['8_week']?.[`Q${maxQ}`] || 0) * 100).toFixed(0)
                 const stagPct = ((proj['8_week']?.Q3 || 0) * 100).toFixed(0)
                 return (
                   <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#b0bec5', background: '#0e1525', padding: '0.4rem 0.75rem', borderRadius: 6 }}>
-                    Most likely regime in 2 months: <strong style={{ color: QUAD_COLORS[maxQ] }}>Q{maxQ} {QUAD_LABELS[maxQ]?.split(' ').slice(1).join(' ')}</strong> at {maxPct}%
+                    Most likely regime in 2 months: <strong style={{ color: QUAD_COLORS[maxQ] }}>Q{maxQ} {getQuadrantShortName(maxQ)}</strong> at {maxPct}%
                     {maxQ !== 3 && Number(stagPct) >= 20 && (
-                      <span> · <span style={{ color: '#ef5350' }}>Stagflation risk: {stagPct}%</span></span>
+                      <span> | <span style={{ color: '#ef5350' }}>Stagflation risk: {stagPct}%</span></span>
                     )}
                   </div>
                 )
@@ -1798,9 +1932,9 @@ function QuadrantTab({ pf }) {
                 1-Month Outlook (4 Weeks)
               </div>
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                {[1, 2, 3, 4].map(q => {
+                {QUAD_IDS.map(q => {
                   const pct = ((proj['4_week']?.[`Q${q}`] || 0) * 100).toFixed(0)
-                  const isMax = pct === Math.max(...[1,2,3,4].map(qq => (proj['4_week']?.[`Q${qq}`] || 0) * 100)).toFixed(0)
+                  const isMax = q === projectionDisplay.fourWeekMaxQ
                   return (
                     <div key={q} style={{
                       flex: 1, minWidth: 90, padding: '0.4rem 0.5rem', borderRadius: 6,
@@ -1809,7 +1943,7 @@ function QuadrantTab({ pf }) {
                       textAlign: 'center',
                     }}>
                       <div style={{ fontSize: '0.7rem', color: QUAD_COLORS[q], fontWeight: 600, marginBottom: 2 }}>
-                        Q{q} {QUAD_LABELS[q]?.split(' ').slice(1).join(' ')}
+                        Q{q} {getQuadrantShortName(q)}
                       </div>
                       <div style={{ fontSize: '1.1rem', fontWeight: 700, color: isMax ? '#fff' : '#90a4ae' }}>
                         {pct}%
@@ -1821,13 +1955,7 @@ function QuadrantTab({ pf }) {
             </div>
           )}
           <Plot
-            data={[1, 2, 3, 4].map(q => ({
-              x: projLabels,
-              y: projKeys.map(k => (proj[k]?.[`Q${q}`] || 0) * 100),
-              type: 'bar', name: QUAD_LABELS[q],
-              marker: { color: QUAD_COLORS[q] },
-              hovertemplate: `${QUAD_LABELS[q]}: %{y:.1f}%<extra></extra>`,
-            }))}
+            data={projectionDisplay.projectionSeries}
             layout={{
               template: 'plotly_dark',
               paper_bgcolor: 'transparent', plot_bgcolor: '#0e1525',
@@ -1838,24 +1966,24 @@ function QuadrantTab({ pf }) {
               xaxis: { gridcolor: '#1a2233' },
               legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'center', x: 0.5, font: { size: 11 } },
             }}
-            config={{ responsive: true, displayModeBar: false }}
+            config={RESPONSIVE_PLOT_CONFIG}
             style={{ width: '100%' }}
           />
         </div>
       </div>
 
       {/* Current Transition Probabilities + Asset Tilts */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
         {/* Where We're Headed */}
         <div className="card" style={{ padding: '0.75rem 1rem' }}>
           <h3 style={{ color: '#90caf9', margin: '0 0 0.75rem', fontSize: '1rem' }}>
-            Markov Chain Transition (from Q{data.current_quadrant} {data.current_quadrant_name})
+            Markov Chain Transition (from Q{transitionAnchorQuadrant} {transitionAnchorName})
           </h3>
-          {[1, 2, 3, 4].map(q => {
-            const prob = (tm[data.current_quadrant - 1]?.[q - 1] || 0) * 100
-            const count = tc[data.current_quadrant - 1]?.[q - 1] || 0
-            const isMax = prob === Math.max(...(tm[data.current_quadrant - 1] || []).map(v => v * 100))
-            const isSelf = q === data.current_quadrant
+          {QUAD_IDS.map(q => {
+            const prob = (tm[transitionAnchorQuadrant - 1]?.[q - 1] || 0) * 100
+            const count = tc[transitionAnchorQuadrant - 1]?.[q - 1] || 0
+            const isMax = prob === maxAdjustedTransitionProb
+            const isSelf = q === transitionAnchorQuadrant
             return (
               <div key={q} style={{
                 display: 'flex', alignItems: 'center', gap: '0.75rem',
@@ -1865,7 +1993,7 @@ function QuadrantTab({ pf }) {
                 borderRadius: 4,
               }}>
                 <div style={{ width: 140, fontWeight: 600, color: QUAD_COLORS[q], fontSize: '0.85rem' }}>
-                  {isSelf ? `Stay in Q${q}` : `→ Q${q} ${QUAD_LABELS[q].split(' ').slice(1).join(' ')}`}
+                  {isSelf ? `Stay in Q${q}` : `-> Q${q} ${QUAD_LABELS[q].split(' ').slice(1).join(' ')}`}
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ background: '#0e1525', borderRadius: 4, height: 20, position: 'relative', overflow: 'hidden' }}>
@@ -1891,7 +2019,7 @@ function QuadrantTab({ pf }) {
           })}
         </div>
 
-        {/* Asset Class Tilts — All Quadrants */}
+        {/* Asset Class Tilts - All Quadrants */}
         <div className="card" style={{ padding: '0.75rem 1rem' }}>
           <h3 style={{ color: '#90caf9', margin: '0 0 0.75rem', fontSize: '1rem' }}>Asset Class Performance by Quadrant</h3>
           <table style={{ width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse' }}>
@@ -1901,10 +2029,10 @@ function QuadrantTab({ pf }) {
                 {[1, 2, 3, 4].map(q => (
                   <th key={q} style={{
                     ...thStyle, textAlign: 'center',
-                    color: q === data.current_quadrant ? QUAD_COLORS[q] : '#90a4ae',
-                    fontWeight: q === data.current_quadrant ? 700 : 600,
+                    color: q === currentQuadrant ? QUAD_COLORS[q] : '#90a4ae',
+                    fontWeight: q === currentQuadrant ? 700 : 600,
                   }}>
-                    Q{q}{q === data.current_quadrant ? ' ★' : ''}
+                    Q{q}{q === data.current_quadrant ? ' *' : ''}
                   </th>
                 ))}
               </tr>
@@ -1914,8 +2042,8 @@ function QuadrantTab({ pf }) {
                 <tr key={asset} style={{ borderBottom: '1px solid #0a1628' }}>
                   <td style={{ ...tdStyle, fontWeight: 600 }}>{asset}</td>
                   {[1, 2, 3, 4].map(q => {
-                    const rating = data.all_asset_tilts?.[q]?.[asset] || '—'
-                    const isCurrentQ = q === data.current_quadrant
+                    const rating = data.all_asset_tilts?.[q]?.[asset] || '--'
+                    const isCurrentQ = q === currentQuadrant
                     return (
                       <td key={q} style={{
                         ...tdStyle, textAlign: 'center',
@@ -1938,7 +2066,7 @@ function QuadrantTab({ pf }) {
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>Historical Regime Distribution</h3>
         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-          {[1, 2, 3, 4].map(q => {
+          {QUAD_IDS.map(q => {
             const d = data.regime_distribution?.[`Q${q}`] || {}
             return (
               <div key={q} style={{
@@ -1955,10 +2083,10 @@ function QuadrantTab({ pf }) {
         </div>
       </div>
 
-      {/* Brier Score — Model Accuracy Tracker */}
+      {/* Brier Score - Model Accuracy Tracker */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
-          Model Accuracy — Brier Score
+          Model Accuracy - Brier Score
         </h3>
         <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: '0.75rem', lineHeight: 1.5, background: '#0e1525', padding: '0.5rem 0.75rem', borderRadius: 6 }}>
           <p style={{ margin: '0 0 0.4rem' }}>
@@ -1967,24 +2095,20 @@ function QuadrantTab({ pf }) {
             we compare the prediction to what actually happened.
           </p>
           <p style={{ margin: '0 0 0.4rem' }}>
-            <strong style={{ color: '#e0e8f5' }}>How it works:</strong> For each prediction, we compute (predicted probability − actual outcome)²
+            <strong style={{ color: '#e0e8f5' }}>How it works:</strong> For each prediction, we compute (predicted probability - actual outcome)^2
             across all 4 quadrants, then average over all predictions. A perfect forecast scores <strong style={{ color: '#4caf50' }}>0.0</strong>,
             and a completely wrong forecast scores close to <strong style={{ color: '#ef5350' }}>2.0</strong>.
           </p>
           <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginTop: '0.3rem' }}>
-            <span><span style={{ color: '#4caf50', fontWeight: 600 }}>● Excellent (&lt;0.10)</span> — Very well calibrated</span>
-            <span><span style={{ color: '#66bb6a', fontWeight: 600 }}>● Good (&lt;0.25)</span> — Useful predictions</span>
-            <span><span style={{ color: '#ff9800', fontWeight: 600 }}>● Fair (&lt;0.50)</span> — Some predictive value</span>
-            <span><span style={{ color: '#ef5350', fontWeight: 600 }}>● Poor (≥0.50)</span> — No better than random</span>
+            <span><span style={{ color: '#4caf50', fontWeight: 600 }}>* Excellent (&lt;0.10)</span> - Very well calibrated</span>
+            <span><span style={{ color: '#66bb6a', fontWeight: 600 }}>* Good (&lt;0.25)</span> - Useful predictions</span>
+            <span><span style={{ color: '#ff9800', fontWeight: 600 }}>* Fair (&lt;0.50)</span> - Some predictive value</span>
+            <span><span style={{ color: '#ef5350', fontWeight: 600 }}>* Poor (&gt;=0.50)</span> - No better than random</span>
           </div>
         </div>
         {data.brier_scores ? (
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            {[
-              { key: '1_week', label: '1-Week Forecast' },
-              { key: '4_week', label: '1-Month Forecast' },
-              { key: '8_week', label: '2-Month Forecast' },
-            ].map(({ key, label }) => {
+            {BRIER_HORIZONS.map(({ key, label }) => {
               const bs = data.brier_scores[key]
               if (!bs) return (
                 <div key={key} style={{
@@ -1993,7 +2117,7 @@ function QuadrantTab({ pf }) {
                 }}>
                   <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>{label}</div>
                   <div style={{ fontSize: '1rem', color: '#666' }}>Collecting data...</div>
-                  <div style={{ fontSize: '0.65rem', color: '#555', marginTop: 4 }}>Needs ≥2 resolved predictions</div>
+                  <div style={{ fontSize: '0.65rem', color: '#555', marginTop: 4 }}>Needs {'>='}2 resolved predictions</div>
                 </div>
               )
               const scoreColor = bs.rating === 'Excellent' ? '#4caf50' : bs.rating === 'Good' ? '#66bb6a' : bs.rating === 'Fair' ? '#ff9800' : '#ef5350'
@@ -2012,7 +2136,7 @@ function QuadrantTab({ pf }) {
           </div>
         ) : (
           <div style={{ textAlign: 'center', padding: '1rem', color: '#666' }}>
-            <div style={{ fontSize: '1rem', marginBottom: '0.3rem' }}>Tracking started — collecting predictions</div>
+            <div style={{ fontSize: '1rem', marginBottom: '0.3rem' }}>Tracking started - collecting predictions</div>
             <div style={{ fontSize: '0.75rem' }}>
               Brier scores will appear once enough time has passed for predictions to be verified against actual outcomes.
               The 1-week score will populate first (after ~2 weeks), followed by 1-month and 2-month scores.

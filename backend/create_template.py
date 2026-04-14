@@ -1,9 +1,11 @@
-"""Generate the downloadable Excel template for generic users."""
+"""Generate downloadable import templates."""
+import csv
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import os
 
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'portfolio_upload_template.xlsx')
+ETRADE_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'etrade_positions_template.csv')
 
 
 def create_template():
@@ -147,6 +149,63 @@ def create_template():
     return TEMPLATE_PATH
 
 
+def create_etrade_template():
+    """Create a CSV template that matches the exact E*TRADE positions import shape."""
+    os.makedirs(os.path.dirname(ETRADE_TEMPLATE_PATH), exist_ok=True)
+
+    rows = [
+        ["Account Summary"],
+        ["Account", "Net Account Value", "Day's Gain", "Day's Gain %", "Market Value", "Total Gain", "Total Gain %", "Cash Purchasing Power"],
+        ["<E*TRADE Account Name>", "37796.82", "0.00", "0.00%", "36963.37", "-3000.98", "-7.51%", "833.45"],
+        [],
+        ["View Summary - Dividends"],
+        [
+            "Symbol",
+            "Price Paid $",
+            "Last Price $",
+            "Change %",
+            "Day's Gain $",
+            "Qty #",
+            "Total Gain $",
+            "Total Gain %",
+            "Value $",
+            "Ex-Div Date",
+            "Dividend Pay Date",
+            "Dividend Yield %",
+            "Dividend",
+            "Annual Dividend",
+            "Total Cost",
+        ],
+        [
+            "<SYMBOL>",
+            "55.5000",
+            "57.2000",
+            "0.45%",
+            "25.00",
+            "100.0000",
+            "170.00",
+            "3.06%",
+            "5720.00",
+            "04/01/2026",
+            "04/05/2026",
+            "7.50%",
+            "0.55",
+            "6.60",
+            "5550.00",
+        ],
+        ["CASH", "", "", "", "", "", "", "", "833.45", "", "", "", "", "", ""],
+        ["TOTAL", "", "", "", "", "", "", "", "37796.82", "", "", "", "", "", ""],
+    ]
+
+    with open(ETRADE_TEMPLATE_PATH, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerows(rows)
+
+    return ETRADE_TEMPLATE_PATH
+
+
 if __name__ == "__main__":
     path = create_template()
     print(f"Template created at: {path}")
+    etrade_path = create_etrade_template()
+    print(f"E*TRADE template created at: {etrade_path}")

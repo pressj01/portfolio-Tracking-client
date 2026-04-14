@@ -229,7 +229,9 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
             </div>
             <div className="form-group">
               <label>Purchase Date</label>
-              <input type="date" value={form.purchase_date || ''} onChange={(e) => set('purchase_date', e.target.value)} style={{ width: '100%', ...(hasTxns ? { opacity: 0.6 } : {}) }} disabled={hasTxns} />
+              <input type="date" min="1900-01-01" max="2099-12-31" value={form.purchase_date || ''}
+                onChange={(e) => set('purchase_date', e.target.value)}
+                style={{ width: '100%', ...(hasTxns ? { opacity: 0.6 } : {}) }} disabled={hasTxns} />
             </div>
           </div>
 
@@ -345,6 +347,10 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
   const [editId, setEditId] = useState(null)
   const [error, setError] = useState(null)
   const [successMsg, setSuccessMsg] = useState(null)
+  const [openLots, setOpenLots] = useState([])
+  const [lotAlloc, setLotAlloc] = useState({})   // {buy_txn_id: shares_to_sell}
+  const [lotMode, setLotMode] = useState('FIFO') // 'FIFO' or 'SPECIFIC'
+  const lotTotal = Object.values(lotAlloc).reduce((sum, value) => sum + (parseFloat(value) || 0), 0)
 
   useEffect(() => {
     if (isNew) {
@@ -391,11 +397,53 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
     } finally { setLooking(false) }
   }
 
+  const resetTransactionEditor = () => {
+    setForm(prev => ({
+      ...prev,
+      transaction_type: 'BUY',
+      shares: '',
+      price_per_share: '',
+      fees: '',
+      transaction_date: '',
+      notes: '',
+    }))
+    setEditId(null)
+    setOpenLots([])
+    setLotAlloc({})
+    setLotMode('FIFO')
+  }
+
+  const fetchOpenLots = async (excludeTxnId = null, initialAlloc = null) => {
+    if (!ticker) return
+    try {
+      const suffix = excludeTxnId ? `?exclude_txn_id=${excludeTxnId}` : ''
+      const res = await pf(`/api/holdings/${ticker}/open-lots${suffix}`)
+      const data = await res.json()
+      setOpenLots(data)
+      if (initialAlloc) {
+        setLotAlloc(initialAlloc)
+        setLotMode(Object.keys(initialAlloc).length > 0 ? 'SPECIFIC' : 'FIFO')
+      } else {
+        setLotAlloc({})
+        setLotMode('FIFO')
+      }
+    } catch { setOpenLots([]) }
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError(null)
     const effectiveTicker = (ticker || form.ticker).trim().toUpperCase()
     if (!effectiveTicker) return
+
+    // Validate date year if provided
+    if (form.transaction_date) {
+      const year = parseInt(form.transaction_date.split('-')[0], 10)
+      if (year < 1900 || year > 2099) {
+        setError(`Invalid year ${year} — must be between 1900 and 2099`)
+        return
+      }
+    }
 
     const payload = {
       transaction_type: form.transaction_type || 'BUY',
@@ -404,6 +452,23 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
       fees: form.fees ? parseFloat(form.fees) : 0,
       transaction_date: form.transaction_date || null,
       notes: form.notes || null,
+    }
+    // Include lot allocations for SELL with specific lots
+    if (payload.transaction_type === 'SELL' && lotMode === 'SPECIFIC') {
+      const allocs = Object.entries(lotAlloc)
+        .filter(([, sh]) => parseFloat(sh) > 0)
+        .map(([buyId, sh]) => ({ buy_txn_id: parseInt(buyId), shares: parseFloat(sh) }))
+      if (allocs.length === 0) {
+        setError('Choose one or more lots, or switch back to FIFO')
+        return
+      }
+      if (Math.abs(lotTotal - payload.shares) > 0.000001) {
+        setError(`Specific-lot shares must add up to the sell quantity (${lotTotal.toFixed(6)} allocated vs ${payload.shares.toFixed(6)} entered)`)
+        return
+      }
+      payload.lot_allocations = allocs
+    } else if (payload.transaction_type === 'SELL' && editId) {
+      payload.lot_allocations = []
     }
     // For new tickers, include lookup data
     if (isNew) {
@@ -434,14 +499,13 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
       const action = isEdit ? 'updated' : 'added'
       setSuccessMsg(`${payload.transaction_type} ${payload.shares} shares @ $${payload.price_per_share ?? 0} ${action} successfully`)
       setTimeout(() => setSuccessMsg(null), 4000)
-      setForm(prev => ({ ...prev, transaction_type: 'BUY', shares: '', price_per_share: '', fees: '', transaction_date: '', notes: '' }))
-      setEditId(null)
+      resetTransactionEditor()
       await fetchTxns()
       onSaved()
     } catch (e) { setError(e.message) }
   }
 
-  const handleEditTxn = (txn) => {
+  const handleEditTxn = async (txn) => {
     setEditId(txn.id)
     setForm(prev => ({
       ...prev,
@@ -452,6 +516,16 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
       transaction_date: txn.transaction_date || '',
       notes: txn.notes || '',
     }))
+    if ((txn.transaction_type || 'BUY') === 'SELL') {
+      const initialAlloc = Object.fromEntries(
+        (txn.lot_allocations || []).map(alloc => [alloc.buy_txn_id, String(alloc.shares)])
+      )
+      await fetchOpenLots(txn.id, initialAlloc)
+    } else {
+      setOpenLots([])
+      setLotAlloc({})
+      setLotMode('FIFO')
+    }
   }
 
   const handleDeleteTxn = async (txnId) => {
@@ -494,6 +568,9 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
                   <th>Fees</th>
                   <th>Cost/Proceeds</th>
                   <th>Realized G/L</th>
+                  <th style={{ borderLeft: '1px solid #1a3a5c' }}>Position</th>
+                  <th>Avg Cost</th>
+                  <th>Total Cost</th>
                   <th>Notes</th>
                   <th>Actions</th>
                 </tr>
@@ -518,6 +595,9 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
                     <td style={{ color: txn.realized_gain > 0 ? '#81c784' : txn.realized_gain < 0 ? '#ef9a9a' : undefined }}>
                       {txn.realized_gain != null ? '$' + fmt(txn.realized_gain) : '-'}
                     </td>
+                    <td style={{ borderLeft: '1px solid #1a3a5c', fontWeight: 600 }}>{fmt(txn.position_after, 3)}</td>
+                    <td>${fmt(txn.avg_cost_after)}</td>
+                    <td>${fmt(txn.total_cost_after)}</td>
                     <td style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{txn.notes || '-'}</td>
                     <td>
                       <div style={{ display: 'flex', gap: '0.3rem' }}>
@@ -593,16 +673,86 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
                       : 'rgba(255,255,255,0.1)',
                     color: form.transaction_type === t ? '#fff' : '#90a4ae',
                   }}
-                  onClick={() => setForm(prev => ({ ...prev, transaction_type: t }))}
+                  onClick={() => {
+                    setForm(prev => ({ ...prev, transaction_type: t }))
+                    if (t === 'SELL') fetchOpenLots(editId || null)
+                    else { setOpenLots([]); setLotAlloc({}); setLotMode('FIFO') }
+                  }}
                 >{t}</button>
               ))}
+            </div>
+          )}
+
+          {/* Lot picker for SELL */}
+          {!isNew && form.transaction_type === 'SELL' && openLots.length > 0 && (
+            <div style={{ marginBottom: '0.75rem', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', border: '1px solid #1a3a5c' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.5rem' }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#90a4ae' }}>Cost Basis Method:</span>
+                {['FIFO', 'SPECIFIC'].map(m => (
+                  <button key={m} type="button"
+                    style={{
+                      padding: '0.25rem 0.8rem', fontSize: '0.8rem', fontWeight: 600, border: 'none', borderRadius: '4px', cursor: 'pointer',
+                      background: lotMode === m ? '#1565c0' : 'rgba(255,255,255,0.1)',
+                      color: lotMode === m ? '#fff' : '#90a4ae',
+                    }}
+                    onClick={() => { setLotMode(m); if (m === 'FIFO') setLotAlloc({}) }}
+                  >{m === 'FIFO' ? 'FIFO (default)' : 'Specific Lots'}</button>
+                ))}
+              </div>
+              {lotMode === 'SPECIFIC' && (
+                <>
+                  <table style={{ width: '100%', fontSize: '0.82rem', marginBottom: '0.5rem' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid #1a3a5c' }}>
+                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: '#90a4ae', textAlign: 'left' }}>Buy Date</th>
+                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: '#90a4ae', textAlign: 'right' }}>Price</th>
+                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: '#90a4ae', textAlign: 'right' }}>Cost/Share</th>
+                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: '#90a4ae', textAlign: 'right' }}>Available</th>
+                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: '#90a4ae', textAlign: 'right' }}>Sell Qty</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {openLots.map(lot => (
+                        <tr key={lot.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                          <td style={{ padding: '0.3rem 0.5rem' }}>{lot.transaction_date || '-'}</td>
+                          <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>${fmt(lot.price_per_share)}</td>
+                          <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>${fmt(lot.cost_per_share)}</td>
+                          <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>{fmt(lot.shares_remaining, 3)}</td>
+                          <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>
+                            <input type="number" step="any" min="0" max={lot.shares_remaining}
+                              value={lotAlloc[lot.id] || ''}
+                              onChange={(e) => {
+                                const v = e.target.value
+                                setLotAlloc(prev => ({ ...prev, [lot.id]: v }))
+                                // Auto-sum shares into the main shares field
+                                const newAlloc = { ...lotAlloc, [lot.id]: v }
+                                const total = Object.values(newAlloc).reduce((s, x) => s + (parseFloat(x) || 0), 0)
+                                if (total > 0) setForm(prev => ({ ...prev, shares: total.toString() }))
+                              }}
+                              placeholder="0"
+                              style={{ width: '80px', textAlign: 'right', padding: '0.2rem 0.4rem', fontSize: '0.82rem' }}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div style={{ fontSize: '0.8rem', color: '#90a4ae' }}>
+                    Total to sell: <span style={{ color: '#e0e8f0', fontWeight: 600 }}>
+                      {fmt(lotTotal, 3)}
+                    </span> shares
+                  </div>
+                </>
+              )}
             </div>
           )}
 
           <div className="form-row">
             <div className="form-group">
               <label>Date</label>
-              <input type="date" value={form.transaction_date} onChange={(e) => setForm(prev => ({ ...prev, transaction_date: e.target.value }))} style={{ width: '100%' }} />
+              <input type="date" min="1900-01-01" max="2099-12-31" value={form.transaction_date}
+                onChange={(e) => setForm(prev => ({ ...prev, transaction_date: e.target.value }))}
+                style={{ width: '100%' }} />
             </div>
             <div className="form-group">
               <label>{form.transaction_type === 'SELL' ? 'Shares Sold *' : 'Shares *'}</label>
@@ -625,7 +775,7 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
           </div>
           <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
             <button type="submit" className="btn btn-success">{editId ? 'Edit via Transaction' : 'Add via Transaction'}</button>
-            {editId && <button type="button" className="btn btn-secondary" onClick={() => { setEditId(null); setForm(prev => ({ ...prev, transaction_type: 'BUY', shares: '', price_per_share: '', fees: '', transaction_date: '', notes: '' })) }}>Cancel Edit</button>}
+            {editId && <button type="button" className="btn btn-secondary" onClick={resetTransactionEditor}>Cancel Edit</button>}
             <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>
           </div>
         </form>
@@ -1200,6 +1350,9 @@ export default function ManageHoldings() {
                                 <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Cost/Proceeds</th>
                                 <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Unrealized G/L</th>
                                 <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Realized G/L</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', borderLeft: '1px solid #1a3a5c' }}>Position</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Avg Cost</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Total Cost</th>
                                 <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Notes</th>
                               </tr>
                             </thead>
@@ -1228,6 +1381,9 @@ export default function ManageHoldings() {
                                     <td style={{ padding: '0.3rem 0.75rem', color: txn.realized_gain != null ? (txn.realized_gain >= 0 ? '#81c784' : '#ef9a9a') : undefined }}>
                                       {txn.realized_gain != null ? '$' + fmt(txn.realized_gain) : '-'}
                                     </td>
+                                    <td style={{ padding: '0.3rem 0.75rem', borderLeft: '1px solid #1a3a5c', fontWeight: 600 }}>{fmt(txn.position_after, 3)}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(txn.avg_cost_after)}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(txn.total_cost_after)}</td>
                                     <td style={{ padding: '0.3rem 0.75rem', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{txn.notes || '-'}</td>
                                   </tr>
                                 )
