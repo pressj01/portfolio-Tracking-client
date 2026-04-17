@@ -3,6 +3,32 @@ import { API_BASE } from '../config'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
+const DASHBOARD_CACHE_TTL_MS = 15 * 60 * 1000
+const SP500_CACHE_KEY = 'portfolio_dashboard_sp500'
+
+function readDashboardCache(key) {
+  try {
+    const raw = sessionStorage.getItem(key)
+    if (!raw) return null
+    const cached = JSON.parse(raw)
+    if (!cached?.ts || Date.now() - cached.ts > DASHBOARD_CACHE_TTL_MS) {
+      sessionStorage.removeItem(key)
+      return null
+    }
+    return cached.data || null
+  } catch {
+    return null
+  }
+}
+
+function writeDashboardCache(key, data) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }))
+  } catch {
+    // Cache writes are best-effort; rendering should never depend on storage.
+  }
+}
+
 const fmt = (v, d = 2) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
 const pct = (v) => (v == null ? '—' : (Number(v) * 100).toFixed(2) + '%')
 
@@ -276,12 +302,18 @@ export default function Dashboard() {
   const [tickerCoverage, setTickerCoverage] = useState({})
   const [overviewGroups, setOverviewGroups] = useState(null)
   const [sp500, setSp500] = useState(null)
+  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_${selection}`, [selection])
 
   useEffect(() => {
+    const cached = readDashboardCache(SP500_CACHE_KEY)
+    if (cached) setSp500(cached)
     const fetchSp500 = () =>
       fetch(`${API_BASE}/api/sp500-performance`)
         .then(safeJson)
-        .then(setSp500)
+        .then(d => {
+          setSp500(d)
+          writeDashboardCache(SP500_CACHE_KEY, d)
+        })
         .catch(() => {})
     fetchSp500()
     const interval = setInterval(fetchSp500, 60000)
@@ -290,13 +322,28 @@ export default function Dashboard() {
 
   useEffect(() => {
     let stale = false
-    setIncomeSummary(null)
-    setUpcomingDivs([])
-    setTickerGrades({})
-    setPortfolioGrade({})
-    setPortfolioCoverage(null)
-    setTickerCoverage({})
-    setOverviewGroups(null)
+    const cached = readDashboardCache(dashboardCacheKey)
+    if (cached) {
+      setHoldings(cached.holdings || [])
+      setIncomeSummary(cached.incomeSummary || null)
+      setUpcomingDivs(cached.upcomingDivs || [])
+      setTickerGrades(cached.tickerGrades || {})
+      setPortfolioGrade(cached.portfolioGrade || {})
+      setPortfolioCoverage(cached.portfolioCoverage ?? null)
+      setTickerCoverage(cached.tickerCoverage || {})
+      setOverviewGroups(cached.overviewGroups || null)
+      setLoading(false)
+    } else {
+      setHoldings([])
+      setIncomeSummary(null)
+      setUpcomingDivs([])
+      setTickerGrades({})
+      setPortfolioGrade({})
+      setPortfolioCoverage(null)
+      setTickerCoverage({})
+      setOverviewGroups(null)
+      setLoading(true)
+    }
     setRefreshStatus(null)
     setGradeStatus(null)
     pf('/api/holdings')
@@ -362,6 +409,14 @@ export default function Dashboard() {
               }
             })
             .catch(() => {})
+          pf('/api/portfolio-summary/data')
+            .then(safeJson)
+            .then(g => {
+              if (stale || !g) return
+              if (g.ticker_grades) setTickerGrades(g.ticker_grades)
+              if (g.portfolio_grade) setPortfolioGrade(g.portfolio_grade)
+            })
+            .catch(() => {})
 
           setRefreshStatus('Updating prices & dividends...')
           pf('/api/refresh', { method: 'POST' })
@@ -397,7 +452,32 @@ export default function Dashboard() {
       })
       .catch(() => { if (!stale) setLoading(false) })
     return () => { stale = true }
-  }, [pf, selection])
+  }, [pf, selection, dashboardCacheKey])
+
+  useEffect(() => {
+    if (loading || !holdings.length) return
+    writeDashboardCache(dashboardCacheKey, {
+      holdings,
+      incomeSummary,
+      upcomingDivs,
+      tickerGrades,
+      portfolioGrade,
+      portfolioCoverage,
+      tickerCoverage,
+      overviewGroups,
+    })
+  }, [
+    dashboardCacheKey,
+    loading,
+    holdings,
+    incomeSummary,
+    upcomingDivs,
+    tickerGrades,
+    portfolioGrade,
+    portfolioCoverage,
+    tickerCoverage,
+    overviewGroups,
+  ])
 
   // Derived totals
   const totals = useMemo(() => {

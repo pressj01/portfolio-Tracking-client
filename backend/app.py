@@ -56,6 +56,8 @@ CORS(app)
 app.config["PROPAGATE_EXCEPTIONS"] = False
 
 _PORTFOLIO_SUMMARY_CACHE = {}
+_PORTFOLIO_COVERAGE_CACHE = {}
+_PORTFOLIO_SUMMARY_TTL_SEC = 30 * 60
 
 
 @app.errorhandler(500)
@@ -5193,6 +5195,15 @@ def portfolio_coverage():
                 ticker_info[tk]["current_price"] = cur_price
 
     tickers = list(ticker_info.keys())
+
+    # Cache keyed on profile + ticker set; TTL matches portfolio-summary (30 min).
+    # Intraday price movement doesn't invalidate — weights/coverage are only re-
+    # computed on a buy/sell (ticker set change) or after the TTL expires.
+    coverage_cache_key = (pid, tuple(sorted(tickers)))
+    _ccache = _PORTFOLIO_COVERAGE_CACHE.get(coverage_cache_key)
+    if _ccache and (time.time() - _ccache[0]) < _PORTFOLIO_SUMMARY_TTL_SEC:
+        return jsonify(_ccache[1])
+
     one_year_ago = (_dt.now() - _td(days=365)).strftime("%Y-%m-%d")
 
     results = []
@@ -5259,7 +5270,9 @@ def portfolio_coverage():
     else:
         agg_coverage = None
 
-    return jsonify(results=results, aggregate_coverage=agg_coverage)
+    payload = {"results": results, "aggregate_coverage": agg_coverage}
+    _PORTFOLIO_COVERAGE_CACHE[coverage_cache_key] = (time.time(), payload)
+    return jsonify(payload)
 
 
 @app.route("/api/portfolio-summary/data", methods=["GET"])
@@ -5284,12 +5297,17 @@ def portfolio_summary_data():
         return jsonify({"error": "No data"}), 400
 
     tickers = [r["ticker"] for r in rows]
-    cache_key = (
-        tuple(pids),
-        tuple(sorted((r["ticker"], round(float(r["current_value"] or 0), 2)) for r in rows)),
-    )
+    # Key on ticker set + profile so intraday price movement doesn't bust the cache.
+    # Weights within the 30-min window will be slightly stale if prices move, which
+    # is acceptable for grade/ratio display; a buy/sell changes the ticker set and
+    # naturally invalidates.
+    cache_key = (tuple(pids), tuple(sorted(r["ticker"] for r in rows)))
     default_ticker_grades = {t: {"grade": "N/A", "score": None} for t in tickers}
-    cached = _PORTFOLIO_SUMMARY_CACHE.get(cache_key)
+    cache_entry = _PORTFOLIO_SUMMARY_CACHE.get(cache_key)
+    cached_ts, cached = cache_entry if cache_entry else (0, None)
+    now = time.time()
+    if cached and (now - cached_ts) < _PORTFOLIO_SUMMARY_TTL_SEC:
+        return jsonify(cached)
     all_dl = list(set(tickers + ["SPY"]))
 
     # Detect renamed tickers and include both old and new in download
@@ -5373,7 +5391,7 @@ def portfolio_summary_data():
             portfolio_grade_info = cached.get("portfolio_grade", {}) if cached else {}
 
     response = {"ticker_grades": ticker_grades, "portfolio_grade": portfolio_grade_info}
-    _PORTFOLIO_SUMMARY_CACHE[cache_key] = response
+    _PORTFOLIO_SUMMARY_CACHE[cache_key] = (time.time(), response)
     return jsonify(response)
 
 

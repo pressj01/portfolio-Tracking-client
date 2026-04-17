@@ -350,9 +350,16 @@ const SCORE_METRICS = [
   { key: 'mar',             label: 'MAR / Calmar',    fmt: (v) => fmtNum(v), higherIsBetter: true  },
 ]
 
-function ScoreCards({ portfolios, colors }) {
+function ScoreCards({ portfolios, colors, includeDiv }) {
   // Compare head-to-head. If only one portfolio, no winner concept.
   const [a, b] = portfolios
+  const metrics = useMemo(() => {
+    if (!includeDiv) return SCORE_METRICS
+    return [
+      ...SCORE_METRICS,
+      { key: 'total_income', label: 'Total Dividends', fmt: (v) => fmtMoney(v), higherIsBetter: true },
+    ]
+  }, [includeDiv])
   const winnerFor = (key, higherIsBetter) => {
     if (!b) return null
     const va = a?.metrics?.[key]; const vb = b?.metrics?.[key]
@@ -364,7 +371,7 @@ function ScoreCards({ portfolios, colors }) {
   }
   // Overall winner = side with more metric wins
   let aWins = 0, bWins = 0
-  SCORE_METRICS.forEach(m => {
+  metrics.forEach(m => {
     const w = winnerFor(m.key, m.higherIsBetter)
     if (w === 'a') aWins++; else if (w === 'b') bWins++
   })
@@ -390,7 +397,7 @@ function ScoreCards({ portfolios, colors }) {
                     display: 'inline-block', width: 10, height: 10, borderRadius: 2,
                     background: overall === 'a' ? colors[0] : colors[1], marginRight: 6,
                   }} />
-                  {overall === 'a' ? a.name : b.name} · {overall === 'a' ? aWins : bWins} / {SCORE_METRICS.length} metrics
+                  {overall === 'a' ? a.name : b.name} · {overall === 'a' ? aWins : bWins} / {metrics.length} metrics
                 </span>
               </>
             )}
@@ -402,7 +409,7 @@ function ScoreCards({ portfolios, colors }) {
         gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
         gap: '0.6rem',
       }}>
-        {SCORE_METRICS.map(m => {
+        {metrics.map(m => {
           const win = winnerFor(m.key, m.higherIsBetter)
           const aWon = win === 'a'
           const bWon = win === 'b'
@@ -962,7 +969,7 @@ export default function PortfolioTester() {
       {result && (
         <>
           {/* Score cards */}
-          <ScoreCards portfolios={result.portfolios} colors={colors} />
+          <ScoreCards portfolios={result.portfolios} colors={colors} includeDiv={result.include_div} />
 
           {/* Metrics table */}
           <div className="card" style={{ padding: '0.75rem', marginBottom: '1rem', overflowX: 'auto' }}>
