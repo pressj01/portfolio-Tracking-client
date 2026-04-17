@@ -2,10 +2,32 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 
 const TABS = [
-  { key: 'overview', label: 'Overview' },
+  { key: 'overview', label: 'Descriptive' },
   { key: 'fundamental', label: 'Fundamental' },
   { key: 'technical', label: 'Technical' },
   { key: 'etf', label: 'ETF' },
+]
+
+const REFRESH_CHUNK_SIZE = 40
+const REFRESH_LOCK_RETRY_LIMIT = 3
+const REFRESH_LOCK_RETRY_DELAY_MS = 1500
+
+const SIGNAL_OPTIONS = [
+  { value: '', label: 'None' },
+  { value: 'top_gainers', label: 'Top Gainers' },
+  { value: 'top_losers', label: 'Top Losers' },
+  { value: 'new_high', label: 'New High' },
+  { value: 'new_low', label: 'New Low' },
+  { value: 'most_volatile', label: 'Most Volatile' },
+  { value: 'most_active', label: 'Most Active' },
+  { value: 'unusual_volume', label: 'Unusual Volume' },
+  { value: 'overbought', label: 'Overbought' },
+  { value: 'oversold', label: 'Oversold' },
+  { value: 'price_above_sma20', label: 'Price Above SMA20' },
+  { value: 'price_above_sma50', label: 'Price Above SMA50' },
+  { value: 'price_above_sma200', label: 'Price Above SMA200' },
+  { value: 'golden_cross_setup', label: 'SMA50 Above SMA200' },
+  { value: 'death_cross_setup', label: 'SMA50 Below SMA200' },
 ]
 
 const TAB_COLUMNS = {
@@ -91,6 +113,10 @@ function fmtVal(v, fmt) {
   if (fmt === 'dec2') return Number(v).toFixed(2)
   if (fmt === 'dec4') return Number(v).toFixed(4)
   return String(v)
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 const RANGE_FILTERS = [
@@ -296,6 +322,7 @@ export default function GeneralScanner() {
   const [smaAlignment, setSmaAlignment] = useState('')
   const [macdFilter, setMacdFilter] = useState('')
   const [stochFilter, setStochFilter] = useState('')
+  const [signal, setSignal] = useState('')
   const [filterOptions, setFilterOptions] = useState({ sectors: [], industries: [], countries: [], etf_strategies: [], etf_cap_sizes: [] })
 
   // Universe management
@@ -303,6 +330,9 @@ export default function GeneralScanner() {
   const [universeInput, setUniverseInput] = useState('')
   const [universeType, setUniverseType] = useState('Stock')
   const [universe, setUniverse] = useState([])
+  const [pullInput, setPullInput] = useState('')
+  const [pullType, setPullType] = useState('Stock')
+  const [activeTickers, setActiveTickers] = useState([])
   const [presets, setPresets] = useState({})
   const [showFilters, setShowFilters] = useState(true)
   const [refreshProgress, setRefreshProgress] = useState('')
@@ -325,11 +355,14 @@ export default function GeneralScanner() {
     })
   }, [pf])
 
-  const fetchData = useCallback(() => {
+  const fetchData = useCallback((options = {}) => {
+    const tickersToUse = Array.isArray(options.tickers) ? options.tickers : activeTickers
+    const pageToUse = options.page ?? page
+    const isEtfContext = tab === 'etf' || assetType === 'ETF'
     setLoading(true)
     setError(null)
     const params = new URLSearchParams()
-    params.set('page', page)
+    params.set('page', pageToUse)
     params.set('per_page', perPage)
     params.set('sort', sortCol)
     params.set('dir', sortDir)
@@ -339,7 +372,10 @@ export default function GeneralScanner() {
     if (country) params.set('country', country)
     if (etfStrategy) params.set('etf_strategy', etfStrategy)
     if (etfCapSize) params.set('etf_cap_size', etfCapSize)
+    if (signal) params.set('signal', signal)
+    if (tickersToUse.length) params.set('tickers', tickersToUse.join(','))
     for (const [k, v] of Object.entries(rangeFilters)) {
+      if (isEtfContext && k === 'market_cap') continue
       if (v.min !== '' && v.min !== undefined) params.set(`${k}_min`, v.min)
       if (v.max !== '' && v.max !== undefined) params.set(`${k}_max`, v.max)
     }
@@ -359,7 +395,7 @@ export default function GeneralScanner() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [pf, page, perPage, sortCol, sortDir, assetType, sector, industry, country, etfStrategy, etfCapSize, rangeFilters, sma20Filter, sma50Filter, sma200Filter, smaAlignment, macdFilter, stochFilter])
+  }, [pf, page, perPage, sortCol, sortDir, tab, assetType, sector, industry, country, etfStrategy, etfCapSize, signal, activeTickers, rangeFilters, sma20Filter, sma50Filter, sma200Filter, smaAlignment, macdFilter, stochFilter])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -373,40 +409,154 @@ export default function GeneralScanner() {
     setPage(1)
   }
 
-  const handleRefresh = (force = false) => {
+  const handleRefresh = async (force = false) => {
+    const wasAdHoc = activeTickers.length > 0
     setRefreshing(true)
-    setRefreshProgress(force ? 'Force refreshing all data from Yahoo Finance...' : 'Fetching data from Yahoo Finance...')
-    pf(`/api/general-scanner/refresh${force ? '?force=true' : ''}`, { method: 'POST' })
-      .then(r => r.json())
-      .then(d => {
-        if (d.ok) {
-          let msg = `Refreshed ${d.refreshed} tickers`
-          if (d.info_fetched) msg += `, ${d.info_fetched} info loaded`
-          if (d.info_skipped) msg += ` (${d.info_skipped} cached)`
-          if (d.errors?.length) msg += ` (${d.errors.length} errors)`
-          setRefreshProgress(msg)
-          fetchData()
-        } else {
-          setRefreshProgress(`Error: ${d.error}`)
+    setRefreshProgress(
+      wasAdHoc
+        ? (force ? 'Returning to saved universe and force refreshing data in batches...' : 'Returning to saved universe and refreshing data in batches...')
+        : (force ? 'Force refreshing data from Yahoo Finance in batches...' : 'Fetching data from Yahoo Finance in batches...')
+    )
+    try {
+      let offset = 0
+      let total = null
+      const summary = { refreshed: 0, info_fetched: 0, info_skipped: 0, errors: 0 }
+
+      while (true) {
+        const totalLabel = total == null ? universe.length || '...' : total
+        const start = offset + 1
+        const end = Math.min(offset + REFRESH_CHUNK_SIZE, Number(totalLabel) || offset + REFRESH_CHUNK_SIZE)
+        setRefreshProgress(`Refreshing tickers ${start}-${end} of ${totalLabel}...`)
+
+        const params = new URLSearchParams()
+        params.set('offset', offset)
+        params.set('limit', REFRESH_CHUNK_SIZE)
+        if (force) params.set('force', 'true')
+
+        let d = null
+        for (let attempt = 0; attempt <= REFRESH_LOCK_RETRY_LIMIT; attempt += 1) {
+          const response = await pf(`/api/general-scanner/refresh?${params.toString()}`, { method: 'POST' })
+          const text = await response.text()
+          try {
+            d = text ? JSON.parse(text) : {}
+          } catch {
+            const isLockPage = text?.toLowerCase().includes('sqlite3.operationalerror: database is locked')
+            if (isLockPage && attempt < REFRESH_LOCK_RETRY_LIMIT) {
+              setRefreshProgress(`Database is busy. Retrying tickers ${start}-${end}...`)
+              await sleep(REFRESH_LOCK_RETRY_DELAY_MS)
+              continue
+            }
+            throw new Error(text?.slice(0, 200) || `HTTP ${response.status}`)
+          }
+          const lockMessage = `${d.error || ''} ${d.detail || ''}`.toLowerCase()
+          const shouldRetry = response.status === 503 && lockMessage.includes('database') && lockMessage.includes('busy')
+          if (response.ok && d.ok) break
+          if (shouldRetry && attempt < REFRESH_LOCK_RETRY_LIMIT) {
+            setRefreshProgress(`Database is busy. Retrying tickers ${start}-${end}...`)
+            await sleep(REFRESH_LOCK_RETRY_DELAY_MS)
+            continue
+          }
+          throw new Error(d.error || d.detail || `HTTP ${response.status}`)
         }
-      })
-      .catch(e => setRefreshProgress(`Error: ${e.message}`))
-      .finally(() => setRefreshing(false))
+
+        total = d.total ?? total ?? 0
+        summary.refreshed += d.refreshed || 0
+        summary.info_fetched += d.info_fetched || 0
+        summary.info_skipped += d.info_skipped || 0
+        summary.errors += d.errors?.length || 0
+
+        const processed = d.processed || REFRESH_CHUNK_SIZE
+        offset += processed
+        if (!d.has_more || processed === 0) break
+      }
+
+      let msg = `Refreshed ${summary.refreshed} tickers`
+      if (summary.info_fetched) msg += `, ${summary.info_fetched} info loaded`
+      if (summary.info_skipped) msg += ` (${summary.info_skipped} cached)`
+      if (summary.errors) msg += ` (${summary.errors} errors)`
+      if (wasAdHoc) {
+        setActiveTickers([])
+        setPage(1)
+        msg += '. Switched back to saved universe'
+      }
+      setRefreshProgress(msg)
+      fetchData({ tickers: [], page: wasAdHoc ? 1 : page })
+    } catch (e) {
+      setRefreshProgress(`Error: ${e.message}`)
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   const addTickers = () => {
     const tickers = universeInput.split(/[\s,;]+/).filter(Boolean)
     if (!tickers.length) return
+    setRefreshProgress(`Adding ${tickers.length} ticker${tickers.length !== 1 ? 's' : ''} to universe...`)
     pf('/api/general-scanner/universe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers, asset_type: universeType }),
     })
-      .then(r => r.json())
-      .then(() => {
-        setUniverseInput('')
-        pf('/api/general-scanner/universe').then(r => r.json()).then(d => setUniverse(d.rows || []))
+      .then(async r => {
+        if (!r.ok) {
+          const text = await r.text()
+          const snippet = text.slice(0, 200).replace(/\s+/g, ' ').trim()
+          throw new Error(`HTTP ${r.status} ${r.statusText}${snippet ? ` — ${snippet}` : ''}`)
+        }
+        const ct = r.headers.get('content-type') || ''
+        if (!ct.includes('application/json')) {
+          const text = await r.text()
+          const snippet = text.slice(0, 200).replace(/\s+/g, ' ').trim()
+          throw new Error(`Expected JSON but got ${ct || 'unknown content-type'}${snippet ? ` — ${snippet}` : ''}`)
+        }
+        return r.json()
       })
+      .then(d => {
+        if (d && d.ok === false) {
+          throw new Error(d.error || 'Server returned ok=false')
+        }
+        setUniverseInput('')
+        setActiveTickers([])
+        setRefreshProgress(`Added ${d?.added ?? tickers.length} ticker${tickers.length !== 1 ? 's' : ''} to universe`)
+        return pf('/api/general-scanner/universe')
+          .then(async r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status} while reloading universe`)
+            return r.json()
+          })
+          .then(d2 => setUniverse(d2.rows || []))
+      })
+      .catch(e => {
+        console.error('addTickers failed:', e)
+        setRefreshProgress(`Error adding tickers: ${e.message}`)
+      })
+  }
+
+  const pullTickersNow = (force = false) => {
+    const tickers = pullInput.split(/[\s,;]+/).filter(Boolean).map(t => t.toUpperCase())
+    if (!tickers.length) return
+    setRefreshing(true)
+    setRefreshProgress(`Pulling ${tickers.length} ticker${tickers.length !== 1 ? 's' : ''} from Yahoo Finance...`)
+    pf('/api/general-scanner/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tickers, asset_type: pullType, force }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          setActiveTickers(tickers)
+          setPullInput('')
+          let msg = `Pulled ${d.refreshed} ticker${d.refreshed !== 1 ? 's' : ''} for ad hoc scan`
+          if (d.errors?.length) msg += ` (${d.errors.length} errors)`
+          setRefreshProgress(msg)
+          setPage(1)
+          fetchData()
+        } else {
+          setRefreshProgress(`Error: ${d.error || 'Unable to pull tickers'}`)
+        }
+      })
+      .catch(e => setRefreshProgress(`Error: ${e.message}`))
+      .finally(() => setRefreshing(false))
   }
 
   const loadPreset = (key) => {
@@ -441,6 +591,11 @@ export default function GeneralScanner() {
   }
 
   const resetToDefaults = () => {
+    const confirmed = window.prompt(
+      'Reset the General Scanner to defaults?\n\nThis will remove your current saved scanner universe and clear cached scanner data before reloading the default list.\n\nType RESET to continue.'
+    )
+    if ((confirmed || '').trim().toUpperCase() !== 'RESET') return
+
     pf('/api/general-scanner/auto-load?force=true', { method: 'POST' })
       .then(r => r.json())
       .then(d => {
@@ -484,6 +639,7 @@ export default function GeneralScanner() {
     setCountry('')
     setEtfStrategy('')
     setEtfCapSize('')
+    setSignal('')
     setRangeFilters({})
     setSma20Filter('')
     setSma50Filter('')
@@ -522,15 +678,161 @@ export default function GeneralScanner() {
   }, [chartTicker, chartPeriod, pf])
 
   const columns = TAB_COLUMNS[tab] || TAB_COLUMNS.overview
+  const activeFilterChips = []
+
+  if (assetType) activeFilterChips.push({ key: 'assetType', label: `Type: ${assetType}` })
+  if (sector) activeFilterChips.push({ key: 'sector', label: `Sector: ${sector}` })
+  if (industry) activeFilterChips.push({ key: 'industry', label: `Industry: ${industry}` })
+  if (country) activeFilterChips.push({ key: 'country', label: `Country: ${country}` })
+  if (etfStrategy) activeFilterChips.push({ key: 'etfStrategy', label: `ETF Strategy: ${etfStrategy}` })
+  if (etfCapSize) activeFilterChips.push({ key: 'etfCapSize', label: `ETF Cap: ${etfCapSize}` })
+  if (signal) activeFilterChips.push({ key: 'signal', label: `Signal: ${SIGNAL_OPTIONS.find(o => o.value === signal)?.label || signal}` })
+  if (sma20Filter) activeFilterChips.push({ key: 'sma20Filter', label: `20D SMA: ${SMA20_OPTIONS.find(o => o.value === sma20Filter)?.label || sma20Filter}` })
+  if (sma50Filter) activeFilterChips.push({ key: 'sma50Filter', label: `50D SMA: ${SMA50_OPTIONS.find(o => o.value === sma50Filter)?.label || sma50Filter}` })
+  if (sma200Filter) activeFilterChips.push({ key: 'sma200Filter', label: `200D SMA: ${SMA200_OPTIONS.find(o => o.value === sma200Filter)?.label || sma200Filter}` })
+  if (smaAlignment) activeFilterChips.push({ key: 'smaAlignment', label: `SMA Align: ${SMA_ALIGNMENT_OPTIONS.find(o => o.value === smaAlignment)?.label || smaAlignment}` })
+  if (macdFilter) activeFilterChips.push({ key: 'macdFilter', label: `MACD: ${MACD_OPTIONS.find(o => o.value === macdFilter)?.label || macdFilter}` })
+  if (stochFilter) activeFilterChips.push({ key: 'stochFilter', label: `Stoch: ${STOCH_OPTIONS.find(o => o.value === stochFilter)?.label || stochFilter}` })
+  for (const rf of RANGE_FILTERS) {
+    const range = rangeFilters[rf.key]
+    if (!range) continue
+    const hasMin = range.min !== '' && range.min !== undefined
+    const hasMax = range.max !== '' && range.max !== undefined
+    if (hasMin || hasMax) {
+      activeFilterChips.push({
+        key: `range:${rf.key}`,
+        label: `${rf.label}: ${hasMin ? range.min : 'min'} - ${hasMax ? range.max : 'max'}`,
+      })
+    }
+  }
+
+  const clearChip = (key) => {
+    if (key === 'assetType') setAssetType('')
+    else if (key === 'sector') setSector('')
+    else if (key === 'industry') setIndustry('')
+    else if (key === 'country') setCountry('')
+    else if (key === 'etfStrategy') setEtfStrategy('')
+    else if (key === 'etfCapSize') setEtfCapSize('')
+    else if (key === 'signal') setSignal('')
+    else if (key === 'sma20Filter') setSma20Filter('')
+    else if (key === 'sma50Filter') setSma50Filter('')
+    else if (key === 'sma200Filter') setSma200Filter('')
+    else if (key === 'smaAlignment') setSmaAlignment('')
+    else if (key === 'macdFilter') setMacdFilter('')
+    else if (key === 'stochFilter') setStochFilter('')
+    else if (key.startsWith('range:')) {
+      const rangeKey = key.split(':')[1]
+      setRangeFilters(prev => {
+        const next = { ...prev }
+        delete next[rangeKey]
+        return next
+      })
+    }
+    setPage(1)
+  }
 
   return (
     <div className="page-container">
-      <h2>General Scanner</h2>
+      <div style={{
+        marginBottom: '1rem',
+        padding: '1rem 1.1rem',
+        border: '1px solid #30363d',
+        borderRadius: '8px',
+        background: 'linear-gradient(135deg, #111827 0%, #0f1724 55%, #121a2a 100%)',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div>
+            <h2 style={{ margin: 0 }}>General Scanner</h2>
+            <div style={{ marginTop: '0.35rem', color: '#8b949e', fontSize: '0.9rem' }}>
+              Finviz-style market screener for your custom universe or one-off ticker pulls, with descriptive, fundamental, technical, and ETF views.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', color: '#9fb0c3', fontSize: '0.85rem' }}>
+            <span>{activeTickers.length ? 'Ad Hoc' : 'Universe'}: <strong style={{ color: '#e6edf3' }}>{activeTickers.length || universe.length}</strong></span>
+            <span>Results: <strong style={{ color: '#e6edf3' }}>{total}</strong></span>
+            <span>View: <strong style={{ color: '#e6edf3' }}>{TABS.find(t => t.key === tab)?.label}</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <div style={{
+        marginBottom: '1rem',
+        padding: '0.9rem',
+        border: '1px solid #30363d',
+        borderRadius: '8px',
+        background: '#11161f',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.55rem' }}>
+          <div style={{ color: '#c9d1d9', fontWeight: 600 }}>Pull Stocks or ETFs Without Saving Them</div>
+          {activeTickers.length > 0 && (
+            <button className="btn btn-sm" onClick={() => { setActiveTickers([]); setPage(1) }}>
+              Back to Saved Universe
+            </button>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          <input
+            value={pullInput}
+            onChange={e => setPullInput(e.target.value.toUpperCase())}
+            placeholder="Enter tickers to pull now, e.g. AAPL MSFT QQQ SPYI"
+            style={{ flex: 1, minWidth: '280px' }}
+            onKeyDown={e => e.key === 'Enter' && pullTickersNow(false)}
+          />
+          <select value={pullType} onChange={e => setPullType(e.target.value)}>
+            <option value="Stock">Stock</option>
+            <option value="ETF">ETF</option>
+          </select>
+          <button className="btn btn-sm btn-primary" onClick={() => pullTickersNow(false)} disabled={refreshing}>
+            Pull Now
+          </button>
+          <button className="btn btn-sm" onClick={() => pullTickersNow(true)} disabled={refreshing}>
+            Force Pull
+          </button>
+        </div>
+        <div style={{ marginTop: '0.45rem', color: '#8b949e', fontSize: '0.8rem' }}>
+          This fetches data into scanner cache for a one-off screen without adding those tickers to the saved universe.
+        </div>
+      </div>
+
+      <div style={{
+        marginBottom: '1rem',
+        padding: '0.75rem 0.9rem',
+        border: '1px solid #2c3440',
+        borderRadius: '8px',
+        background: '#11161f',
+      }}>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ color: '#8b949e', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Filters</span>
+          {TABS.map(t => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              style={{
+                padding: '0.4rem 0.8rem',
+                borderRadius: '999px',
+                border: tab === t.key ? '1px solid #58a6ff' : '1px solid #30363d',
+                background: tab === t.key ? '#17263e' : '#0f141c',
+                color: tab === t.key ? '#8ec5ff' : '#9aa7b4',
+                fontSize: '0.82rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+          <span style={{ marginLeft: 'auto', color: '#8b949e', fontSize: '0.82rem' }}>
+            {signal
+              ? <>Signal <strong style={{ color: '#d0d7de' }}>{SIGNAL_OPTIONS.find(o => o.value === signal)?.label || signal}</strong></>
+              : <>Order by <strong style={{ color: '#d0d7de' }}>{(TAB_COLUMNS[tab] || []).find(c => c.key === sortCol)?.label || sortCol}</strong> {sortDir === 'asc' ? 'asc' : 'desc'}</>}
+          </span>
+        </div>
+      </div>
 
       {/* Universe Management Toggle */}
-      <div style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ marginBottom: '0.75rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
         <button className="btn btn-sm" onClick={() => setShowUniverse(u => !u)}>
-          {showUniverse ? 'Hide' : 'Manage'} Universe ({universe.length} tickers)
+          {showUniverse ? 'Hide' : 'Universe'} ({universe.length})
         </button>
         <button className="btn btn-sm" onClick={() => setShowFilters(f => !f)}>
           {showFilters ? 'Hide' : 'Show'} Filters
@@ -545,6 +847,44 @@ export default function GeneralScanner() {
         </button>
         {!refreshing && refreshProgress && <span style={{ fontSize: '0.85rem', color: '#8899aa' }}>{refreshProgress}</span>}
       </div>
+
+      {activeFilterChips.length > 0 && (
+        <div style={{
+          marginBottom: '1rem',
+          padding: '0.75rem 0.9rem',
+          border: '1px solid #30363d',
+          borderRadius: '8px',
+          background: '#0f141c',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+            <div style={{ color: '#c9d1d9', fontSize: '0.9rem' }}>Active filters</div>
+            <button className="btn btn-sm" onClick={resetFilters}>Clear All Filters</button>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+            {activeFilterChips.map(chip => (
+              <span key={chip.key} style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                padding: '0.28rem 0.55rem',
+                borderRadius: '999px',
+                background: '#17202d',
+                border: '1px solid #30435a',
+                color: '#c7d3e0',
+                fontSize: '0.8rem',
+              }}>
+                {chip.label}
+                <button
+                  onClick={() => clearChip(chip.key)}
+                  style={{ background: 'none', border: 'none', color: '#ff8a8a', cursor: 'pointer', padding: 0, fontSize: '0.95rem', lineHeight: 1 }}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Refresh overlay with spinner */}
       {refreshing && (
@@ -621,12 +961,26 @@ export default function GeneralScanner() {
       {showFilters && (
         <div style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: '6px', padding: '1rem', marginBottom: '1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-            <h4 style={{ margin: 0 }}>Filters</h4>
+            <div>
+              <h4 style={{ margin: 0 }}>Screen Filters</h4>
+              <div style={{ color: '#8b949e', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+                Descriptive, fundamental, technical, and ETF fields organized in a tighter Finviz-style layout.
+              </div>
+            </div>
             <button className="btn btn-sm" onClick={resetFilters}>Reset All</button>
           </div>
 
           {/* Dropdown filters */}
+          <div style={{ color: '#7d8590', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.45rem' }}>
+            Descriptive
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '0.5rem', marginBottom: '0.75rem' }}>
+            <label style={{ fontSize: '0.8rem' }}>
+              Signal
+              <select value={signal} onChange={e => { setSignal(e.target.value); setPage(1) }} style={{ width: '100%' }}>
+                {SIGNAL_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </label>
             <label style={{ fontSize: '0.8rem' }}>
               Type
               <select value={assetType} onChange={e => { setAssetType(e.target.value); setPage(1) }} style={{ width: '100%' }}>
@@ -673,6 +1027,9 @@ export default function GeneralScanner() {
           </div>
 
           {/* Range filters */}
+          <div style={{ color: '#7d8590', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.45rem' }}>
+            Fundamental
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.5rem', marginBottom: '0.75rem' }}>
             {RANGE_FILTERS.map(rf => (
               <div key={rf.key} style={{ fontSize: '0.8rem' }}>
@@ -712,6 +1069,9 @@ export default function GeneralScanner() {
           </div>
 
           {/* Technical indicator filters (Finviz-style dropdowns) */}
+          <div style={{ color: '#7d8590', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.45rem' }}>
+            Technical
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.5rem' }}>
             <label style={{ fontSize: '0.8rem' }}>
               20-Day SMA
@@ -754,38 +1114,63 @@ export default function GeneralScanner() {
       )}
 
       {/* Tab bar */}
-      <div style={{ display: 'flex', gap: '0', marginBottom: '0.5rem', borderBottom: '1px solid #30363d' }}>
-        {TABS.map(t => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            style={{
-              padding: '0.5rem 1.25rem', cursor: 'pointer', border: 'none',
-              borderBottom: tab === t.key ? '2px solid #58a6ff' : '2px solid transparent',
-              background: 'transparent', color: tab === t.key ? '#58a6ff' : '#8b949e',
-              fontWeight: tab === t.key ? 600 : 400, fontSize: '0.9rem',
-            }}
-          >{t.label}</button>
-        ))}
-        <div style={{ marginLeft: 'auto', alignSelf: 'center', fontSize: '0.85rem', color: '#8899aa' }}>
-          {total > 0 && `${total} result${total !== 1 ? 's' : ''}`}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: '1rem',
+        marginBottom: '0.5rem',
+        padding: '0.7rem 0.9rem',
+        border: '1px solid #30363d',
+        borderRadius: '8px 8px 0 0',
+        background: '#121923',
+        flexWrap: 'wrap',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <div style={{ color: '#c9d1d9', fontSize: '0.9rem', fontWeight: 600 }}>
+            {TABS.find(t => t.key === tab)?.label} View
+          </div>
+          {TABS.map(t => (
+            <button
+              key={`results-tab-${t.key}`}
+              onClick={() => { setTab(t.key); setPage(1) }}
+              style={{
+                padding: '0.35rem 0.7rem',
+                borderRadius: '999px',
+                border: tab === t.key ? '1px solid #58a6ff' : '1px solid #30363d',
+                background: tab === t.key ? '#17263e' : '#0f141c',
+                color: tab === t.key ? '#8ec5ff' : '#9aa7b4',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.82rem', color: '#8b949e' }}>
+          <span>{total > 0 ? `${total} result${total !== 1 ? 's' : ''}` : 'No results'}</span>
+          <span>Page {page} / {pages}</span>
+          <span>{perPage} per page</span>
         </div>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
 
       {/* Results Table */}
-      <div style={{ overflowX: 'auto' }}>
+      <div style={{ overflow: 'auto', maxHeight: '70vh', border: '1px solid #30363d', borderTop: 'none', borderRadius: '0 0 8px 8px' }}>
         <table className="data-table" style={{ width: '100%', fontSize: '0.85rem' }}>
           <thead>
             <tr>
-              <th style={{ width: '40px', textAlign: 'right' }}>#</th>
+              <th style={{ width: '40px', textAlign: 'right', position: 'sticky', top: 0, zIndex: 3, background: '#13203a' }}>#</th>
               {columns.map(col => (
                 <th
                   key={col.key}
                   style={{
                     cursor: col.sortable ? 'pointer' : 'default', whiteSpace: 'nowrap', userSelect: 'none',
                     textAlign: col.fmt ? 'right' : undefined,
+                    position: 'sticky', top: 0, zIndex: 3, background: '#13203a',
                   }}
                   onClick={() => col.sortable && handleSort(col.key)}
                 >

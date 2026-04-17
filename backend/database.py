@@ -595,6 +595,24 @@ def ensure_tables_exist(conn=None):
         ON dividend_payments (ticker, profile_id)
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS dividend_schedule_history (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker       TEXT NOT NULL,
+            profile_id   INTEGER NOT NULL DEFAULT 1,
+            ex_div_date  TEXT NOT NULL,
+            pay_date     TEXT NOT NULL,
+            frequency    TEXT,
+            source       TEXT DEFAULT 'refresh',
+            created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (ticker, profile_id, ex_div_date, pay_date)
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_div_schedule_history_ticker
+        ON dividend_schedule_history (ticker, profile_id)
+    """)
+
     # ── aggregate_config ────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS aggregate_config (

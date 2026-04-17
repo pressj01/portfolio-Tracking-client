@@ -1,0 +1,6 @@
+Date,Action,Symbol,Description,Quantity,Price,Fees & Comm,Amount
+03/06/2026,Buy,SCHD,Schwab U.S. Dividend Equity ETF,25,$82.15,$0.00,"($2,053.75)"
+03/20/2026,Cash Dividend,SCHD,Schwab U.S. Dividend Equity ETF,,,$0.00,$31.00
+03/20/2026,Reinvest Shares,JEPI,JPMorgan Equity Premium Income ETF,0.9621,$57.20,$0.00,($55.05)
+03/27/2026,Sell,DIVO,Amplify CWP Enhanced Dividend Income ETF,10,$41.25,$0.00,$412.50
+03/31/2026,Reinvestment Adj,JEPI,JPMorgan Equity Premium Income ETF,-0.0100,$57.20,$0.00,$0.00

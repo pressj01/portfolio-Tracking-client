@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 
-const APP_VERSION = '1.19.0'
+const APP_VERSION = '1.20.0'
 
 const GROUPS = [
   {
@@ -31,23 +31,28 @@ const GROUPS = [
       { id: 'dividends', label: 'Dividends' },
       { id: 'div-calendar', label: 'Div Calendar' },
       { id: 'div-compare', label: 'Div Compare' },
+      { id: 'dividend-history', label: 'Dividend History' },
       { id: 'total-return', label: 'Total Return' },
       { id: 'gains-losses', label: 'Gains & Losses' },
+      { id: 'safe-withdrawal', label: 'Safe Withdrawal' },
     ],
   },
   {
     id: 'analysis',
     label: 'Analysis',
     sections: [
+      { id: 'general-scanner', label: 'General Scanner' },
       { id: 'etf-screen', label: 'ETF/Stock Screen' },
       { id: 'watchlist', label: 'Watchlist' },
       { id: 'buy-sell', label: 'Buy/Sell Signals' },
       { id: 'nav-erosion', label: 'NAV Erosion' },
       { id: 'nav-screener', label: 'NAV Screener' },
+      { id: 'single-strategy', label: 'Single Strategy' },
       { id: 'income-sim', label: 'Income Sim' },
       { id: 'correlation', label: 'Correlation' },
       { id: 'analytics', label: 'Analytics' },
       { id: 'portfolio-builder', label: 'Portfolio Builder' },
+      { id: 'portfolio-tester', label: 'Portfolio Tester' },
       { id: 'dist-compare', label: 'Dist Compare' },
       { id: 'consolidation', label: 'Consolidation' },
       { id: 'macro-dashboard', label: 'Macro Dashboard' },
@@ -67,11 +72,11 @@ function Overview() {
       </p>
       <h3 style={{ marginBottom: '0.5rem' }}>Key Capabilities</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
-        <li><strong>Import</strong> — Bulk-load holdings from your own Excel spreadsheet or a generic template. Supports merge mode so you can re-import without losing app-only data.</li>
+        <li><strong>Import</strong> — Bulk-load brokerage positions and transaction history from your own spreadsheet, a generic template, or brokerage exports. Supports Schwab (Positions &amp; Transactions), E*TRADE (Positions, Buys &amp; Sells, Dividends), Fidelity (Positions &amp; Transactions), and Snowball (Holdings Migration &amp; Transactions). Automatic database backups before every import with one-click restore.</li>
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
         <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation.</li>
         <li><strong>Dividends</strong> — Dividend analysis, calendar view, and comparison tools.</li>
-        <li><strong>Analysis</strong> — ETF screening, NAV erosion analysis, correlation matrix, income simulation, buy/sell signals, portfolio builder, consolidation analysis, and macro regime dashboard.</li>
+        <li><strong>Analysis</strong> — General Scanner, Single Strategy Scanner, ETF screening, NAV erosion analysis, correlation matrix, income simulation, buy/sell signals, portfolio builder, consolidation analysis, and macro regime dashboard.</li>
         <li><strong>Multi-Portfolio</strong> — Create multiple portfolios and view them individually or as an aggregate.</li>
         <li><strong>Market Data</strong> — Prices, dividends, and ex-div dates refresh automatically from Yahoo Finance.</li>
       </ul>
@@ -82,13 +87,137 @@ function Overview() {
 function ImportHelp() {
   return (
     <div>
-      <h2>Import</h2>
+      <h2>Import Brokerage Positions and Snowball Data</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The Import page lets you bulk-load holdings into a portfolio from an Excel file. There are two import modes,
-        each on its own tab: <strong>My Spreadsheet</strong> (owner format) and <strong>Generic Upload</strong>.
+        The <strong>Import Brokerage Positions and Snowball Data</strong> page lets you bulk-load holdings into a portfolio from an Excel or CSV file.
+        There are two main import modes, each on its own tab: <strong>My Spreadsheet</strong> (owner format) and <strong>Generic Upload</strong>.
         Both support merge mode — if the portfolio already has data, existing tickers are updated and new tickers are added,
         while app-only fields (like DRIP toggles or pay dates you edited manually) are preserved unless the spreadsheet provides them.
       </p>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+        <strong>Brokerage templates:</strong> The Generic Upload area also includes downloadable brokerage-position templates.
+        Use the matching template if you want to paste or export positions from a broker first, then import them into the app.
+        The app currently provides templates for <strong>E*TRADE</strong>, <strong>Charles Schwab</strong>, and <strong>Fidelity</strong>, plus a generic template and Snowball holdings migration template.
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Brokerage Position Templates</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>E*TRADE template</strong> — use this when you want a worksheet laid out for E*TRADE position data before importing.</li>
+        <li><strong>Charles Schwab (Positions) template</strong> — use this when preparing Schwab position exports or copy/paste data for import.</li>
+        <li><strong>Fidelity (Positions) template</strong> — use this when preparing a Fidelity positions workbook with the exact columns the importer reads.</li>
+        <li><strong>Snowball Holdings template</strong> — use this for a migration-style holdings snapshot when moving from Snowball into the app.</li>
+        <li><strong>Generic template</strong> — use this when your source does not match a brokerage template and you want the broadest flexible import format.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>What Broker Position Imports Populate</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Included:</strong> ticker, shares, cost basis / price paid, current price, current value, gain/loss, and dividend yield when the broker file provides it.</li>
+        <li><strong>Schwab and Fidelity also include:</strong> description from the broker positions export.</li>
+        <li><strong>Fidelity may also include:</strong> ex-dividend date, pay date, dividend-per-share, and estimated annual income when those columns are present in the workbook.</li>
+        <li><strong>After import:</strong> the app recalculates derived income fields from the imported holdings data.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>What Position Imports Do Not Fully Populate</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>transaction history and tax lots</li>
+        <li>dividend payment history</li>
+        <li>DRIP history</li>
+        <li>broker-supplied ex-dividend and pay-date history</li>
+        <li>all custom categories, notes, and app-only fields</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Snowball Holdings (Migration)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Use this when migrating from Snowball and you want to bring over a holdings snapshot, dividend metadata, and categories.</li>
+        <li>It keeps only the fields the app already supports and discards Snowball-only analytics columns.</li>
+        <li>For the most accurate broker-current holdings, use a broker Positions import instead of treating Snowball as the final source of truth.</li>
+      </ul>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+        <strong>Recommended workflow:</strong>
+        <ol style={{ paddingLeft: '1.5rem', marginTop: '0.5rem', marginBottom: 0 }}>
+          <li>Import a <strong>Positions</strong> file first (Schwab, E*TRADE, or Fidelity) to set accurate current holdings, share counts, and cost basis.</li>
+          <li>Then import <strong>Transaction History</strong> (Schwab Transactions, E*TRADE Buys &amp; Sells / Dividends, Fidelity Transactions, or Snowball Transactions) for dividend tracking and realized gain records.</li>
+          <li>Run <strong>Refresh Prices &amp; Divs</strong> to update market data, dividend fields, and pay-date estimates.</li>
+        </ol>
+        When a Positions import has been done first, transaction imports store history without overwriting your holdings data.
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Transaction History Imports</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The import page includes several transaction-history importers. These are different from position imports:
+        they record individual BUY, SELL, and DIVIDEND events rather than setting current holdings directly.
+      </p>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        <strong>Partial history warning:</strong> If a transaction export does not cover the full account history
+        (e.g. only the last 1–2 years), imported buy/sell transactions may recalculate your share counts and cost
+        basis from the transactions alone — which may not match your actual holdings. To avoid this, import a
+        Positions file first (see recommended workflow above). A database backup is created automatically before
+        every import so you can restore if needed.
+      </div>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Charles Schwab (Transactions)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>In Schwab, go to <strong>Accounts &gt; History</strong>, set the date range, then export to CSV.</li>
+        <li>Set the format selector to <strong>Charles Schwab (Transactions)</strong>.</li>
+        <li>Imports: BUY, SELL, DRIP reinvestment shares, cash dividends, reinvested dividends, capital gain distributions, return of capital, and dividend adjustments.</li>
+        <li>DRIP reinvestments are tagged as <code>[DRIP]</code> buys.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>E*TRADE (Buys &amp; Sells)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>In E*TRADE, go to <strong>Accounts &gt; Transaction History</strong>, filter to "Buys &amp; Sells", then download the XLSX.</li>
+        <li>Set the format selector to <strong>E*TRADE (Buys &amp; Sells)</strong>.</li>
+        <li>Imports: BUY and SELL transactions with date, shares, price, and commission.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>E*TRADE (Dividends)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>In E*TRADE, go to <strong>Accounts &gt; Transaction History</strong>, filter to "Dividends", then download the XLSX.</li>
+        <li>Set the format selector to <strong>E*TRADE (Dividends)</strong>.</li>
+        <li>Imports: cash dividend payments and DRIP reinvestment buys. Positive amounts are recorded as dividends; negative amounts with shares are recorded as <code>[DRIP]</code> buys.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Fidelity (Transactions)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>In Fidelity, export the <strong>Transactions XLSX</strong> workbook for a single account.</li>
+        <li>Set the format selector to <strong>Fidelity (Transactions)</strong>.</li>
+        <li>Imports: BUY, SELL, cash dividend receipts, and DRIP reinvestment rows.</li>
+        <li>If the portfolio already has holdings from a positions import, the transaction import preserves those holdings and stores the Fidelity history for recordkeeping.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Snowball Transactions</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Set the format selector to <strong>Snowball Transactions</strong>.</li>
+        <li>Upload a <strong>single-account CSV export</strong>. Combined or merged exports are rejected.</li>
+        <li>Imports: BUY, SELL, and DIVIDEND transactions. Stock splits are applied to pre-split lots automatically.</li>
+        <li>Snowball exports may not exactly match the broker's live positions — use Positions imports for accurate current holdings.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Common Steps (All Transaction Formats)</h4>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2', marginBottom: '1rem' }}>
+        <li>Select the correct portfolio from the navbar dropdown.</li>
+        <li>Open the <strong>Import Brokerage Positions and Snowball Data</strong> tab.</li>
+        <li>Choose the format from the dropdown and upload the file.</li>
+        <li>Click <strong>Preview</strong> to parse and review the data before committing.</li>
+        <li>Click <strong>Import into &lt;Portfolio&gt;</strong> to load the data.</li>
+        <li>Duplicate transactions (same ticker, date, shares, price) are automatically skipped on re-import.</li>
+      </ol>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Import Backups &amp; Restore</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A database backup is created automatically before every import (positions, transactions, and spreadsheet imports).
+        The last 5 backups are kept; older ones are pruned automatically.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Backups appear in the <strong>Import Backups</strong> section at the bottom of the Import page.</li>
+        <li>Each backup shows the date/time and file size.</li>
+        <li>Click <strong>Restore</strong> on any backup to replace the current database with that snapshot. A confirmation dialog appears first.</li>
+        <li>After restoring, refresh your browser to see the restored data.</li>
+        <li>You can navigate away and come back — backups persist across sessions.</li>
+      </ul>
 
       {/* ── My Spreadsheet ──────────────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: My Spreadsheet (Owner Format)</h3>
@@ -148,7 +277,7 @@ function ImportHelp() {
       <p style={{ marginBottom: '0.75rem' }}>
         This mode accepts any Excel file with at minimum a <strong>Ticker</strong> and <strong>Shares</strong> column.
         Missing data (prices, dividends, descriptions) is automatically enriched from Yahoo Finance.
-        A downloadable template with all 32 supported columns and up to 12 portfolio tabs is available.
+        A downloadable generic template is available, along with brokerage templates for accounts such as E*TRADE, Schwab, and Fidelity.
       </p>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Step-by-Step</h4>
@@ -160,8 +289,9 @@ function ImportHelp() {
           <strong>Click the "Generic Upload" tab.</strong>
         </li>
         <li>
-          <strong>(Optional) Download the template</strong> — click "Download Template" to get a pre-formatted .xlsx
-          with all supported column headers. Fill in at least the Ticker and Shares columns. Optional columns include:
+          <strong>(Optional) Download a template</strong> — click the download button that matches your import type.
+          The generic template gives you a pre-formatted .xlsx with all supported column headers, and the brokerage templates
+          give you matching columns for supported broker export/paste workflows. Fill in at least the Ticker and Shares columns. Optional columns include:
           Price Paid, Current Price, Dividend, Frequency, Ex-Div Date, Pay Date, DRIP, Category, Purchase Date,
           Dividends Paid, YTD Divs, Total Divs Received, and more.
         </li>
@@ -230,6 +360,7 @@ function ImportHelp() {
         <li>If Yahoo Finance can't find a ticker, the row is still imported with whatever data you provided — you can fill in the rest manually on the Holdings page.</li>
         <li>CSV files are imported as a single portfolio (multi-tab is only for .xlsx files).</li>
         <li>The "Import as Transactions" option is ideal when you want to track individual purchase lots and calculate realized gains on sells.</li>
+        <li>Refresh Prices & Divs after a large import if you want the latest prices, dividend fields, and estimated pay dates recalculated immediately.</li>
       </ul>
     </div>
   )
@@ -334,13 +465,13 @@ function HoldingsHelp() {
         <li><strong>Sorting</strong> — Click any column header to sort ascending/descending. An arrow indicates the active sort.</li>
         <li><strong>Frozen columns</strong> — Ticker, Description, Category, and Shares stay visible as you scroll horizontally.</li>
         <li><strong>DRIP checkbox</strong> — Toggle dividend reinvestment directly in the table without opening the edit form.</li>
-        <li><strong>Expand transactions</strong> — Click the small arrow (&#9654;) next to a ticker to expand and see its transaction lots inline.</li>
+        <li><strong>Expand transactions</strong> — Click the small arrow (&#9654;) next to a ticker to expand and see its transaction lots inline. This section reflects transactions recorded for that ticker only.</li>
       </ul>
 
       {/* ── Toolbar Buttons ─────────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Toolbar Buttons</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Refresh Prices & Divs</strong> — Fetches the latest prices, dividend amounts, and ex-div dates from Yahoo Finance for all holdings.</li>
+        <li><strong>Refresh Prices & Divs</strong> — Fetches the latest prices, dividend amounts, and ex-div dates from Yahoo Finance for the currently selected portfolio scope. Individual accounts refresh only themselves; Owner refreshes its included source accounts; Aggregate refreshes its configured member accounts.</li>
         <li><strong>DRIP Matrix</strong> — (Owner only) Opens a matrix view showing DRIP on/off status for every ticker across all sub-accounts.
           You can toggle DRIP per ticker per account directly from this modal. Each cell shows a checkbox and the share count
           held in that account. The Owner column shows the aggregate DRIP status and DRIP-eligible share count.
@@ -491,7 +622,8 @@ function HoldingsHelp() {
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Click "SELL" (red button) to switch the form to sell mode.</li>
         <li>Enter Shares Sold (required), Price Per Share, Fees, and Notes.</li>
-        <li>Click "Add via Transaction". The position recalculates (shares decrease). A realized gain/loss is calculated using FIFO cost basis.</li>
+        <li>Leave the lot mode on <strong>FIFO</strong> to let the app consume your oldest open buy lots automatically, or switch to <strong>Specific Lots</strong> to choose exactly which buy lots are being sold.</li>
+        <li>Click "Add via Transaction". The position recalculates (shares decrease). A realized gain/loss is calculated using the selected lot allocation, or FIFO if no specific lots are chosen.</li>
       </ol>
 
       <h4 style={{ marginTop: '0.75rem', marginBottom: '0.4rem' }}>Editing a Transaction</h4>
@@ -528,6 +660,11 @@ function HoldingsHelp() {
         of any ticker to expand an inline sub-table showing all transaction lots for that holding — including Type,
         Date, Shares, Price, Fees, Cost/Proceeds, Unrealized G/L, Realized G/L, and Notes.
         Click the triangle again (&#9660;) to collapse.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        If a ticker was loaded by a positions import but does not yet have matching transaction lots recorded,
+        the inline area shows a message that no transaction lots are recorded yet. History-only imports for other
+        tickers do not appear under unrelated holdings.
       </p>
     </div>
   )
@@ -623,7 +760,7 @@ function CategoriesHelp() {
         </li>
         <li>
           <strong>Select tickers</strong> in the Unallocated panel by clicking their pills. Selected pills
-          highlight with a blue border. Use "Select all" or "Clear" links at the top of the panel for convenience.
+          highlight with a blue border. Use "Select all" or "Deselect" links at the top of the panel for convenience.
         </li>
         <li>
           A row of <strong>category buttons</strong> appears below the selection:
@@ -698,6 +835,10 @@ function CategoriesHelp() {
         If the category is empty, a hint message appears: <em>"Click a ticker on the right to assign it here"</em>,
         directing you to the Unallocated Assets panel.
       </p>
+      <div className="alert alert-info" style={{ marginTop: '1rem' }}>
+        <strong>Active holdings only:</strong> the Unallocated Assets panel shows only current holdings with active shares.
+        Old zero-share tickers are cleaned out automatically instead of lingering in the picker.
+      </div>
 
       {/* ── Dashboard Overview ────────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Dashboard Overview</h3>
@@ -974,7 +1115,7 @@ function DividendsHelp() {
         <li><strong>Total Divs</strong> — Lifetime total dividends received (shown in bold).</li>
         <li><strong>Paid For Itself</strong> — Percentage of cost recovered through dividends.
           Colored <span style={{ color: '#4dff91' }}>green</span> at 100%+ and <span style={{ color: '#ffd700' }}>gold</span> at 50%+.</li>
-        <li><strong>Div Paid</strong> — Last dividend amount paid per share.</li>
+        <li><strong>Div Paid</strong> — Estimated cash amount of one dividend payment for your current share count.</li>
         <li><strong>Est. Annual</strong> — Estimated annual dividend income from this holding.</li>
         <li><strong>Est. Monthly</strong> — Estimated monthly dividend income.</li>
         <li><strong>Yield on Cost</strong> — Annual dividend yield based on your purchase price (what you're earning on your original investment).</li>
@@ -1276,6 +1417,39 @@ function DivCompareHelp() {
           your records.
         </li>
       </ol>
+    </div>
+  )
+}
+
+function DividendHistoryHelp() {
+  return (
+    <div>
+      <h2>Dividend History</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Dividend History page plots actual dividends received over time from your recorded dividend payments.
+        It is designed for looking backward at what you were paid, not projecting future income.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Views and Ranges</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Yearly</strong> — shows annual totals as a bar chart.</li>
+        <li><strong>Monthly</strong> — shows monthly dividends as an area chart with an optional 3-month moving average.</li>
+        <li><strong>Weekly</strong> — shows weekly dividend history for shorter lookbacks.</li>
+        <li><strong>Range buttons</strong> — Monthly and Weekly views include preset lookback ranges so you can quickly zoom in or out.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters and Overlay</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Category filter</strong> — limit the history to selected portfolio categories.</li>
+        <li><strong>Show Cumulative</strong> — overlays a cumulative dividends line on a second axis.</li>
+        <li><strong>Weekly category note</strong> — when filtering weekly history by category, values are estimated proportionally for the selected slice.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Strip</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The cards above the chart show total dividends, average period amount, min, max, and trend/growth
+        for the currently selected view and filters.
+      </p>
     </div>
   )
 }
@@ -1601,6 +1775,91 @@ function GainsLossesHelp() {
           gives you the full picture.</li>
         <li><strong>Owner profile</strong> — When viewing the Owner profile, realized gains include
           SELL transactions from all sub-profiles (individual accounts), giving you the consolidated view.</li>
+      </ul>
+    </div>
+  )
+}
+
+function SafeWithdrawalHelp() {
+  return (
+    <div>
+      <h2>Safe Withdrawal Amount</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        This page compares your current estimated monthly dividend income to a simple 8%-of-cost withdrawal rule.
+        It is a quick planning view, not a Monte Carlo retirement model.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What It Shows</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>8% of Cost / Month</strong> — monthly withdrawal amount based on 8% of original cost basis.</li>
+        <li><strong>Est Monthly Dividends</strong> — current estimated monthly income from the selected holdings.</li>
+        <li><strong>Yield on Cost / Current Yield</strong> — side-by-side context for each holding.</li>
+        <li><strong>Sustainable flag</strong> — highlights holdings where current income meets or exceeds the 8%-of-cost target.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters and Table</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Category filter</strong> — focus the view on one or more categories.</li>
+        <li><strong>Holdings table</strong> — shows each ticker's cost basis, estimated monthly dividends, yield on cost, current yield, sustainability status, and 8%-rule comparison.</li>
+        <li><strong>Totals row</strong> — rolls up the selected holdings so you can compare your portfolio-level income vs. the 8% benchmark.</li>
+      </ul>
+    </div>
+  )
+}
+
+function GeneralScannerHelp() {
+  return (
+    <div>
+      <h2>General Scanner</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The General Scanner is a Finviz-style screener for stocks and ETFs. It lets you work from a saved universe,
+        pull in one-off tickers without saving them, switch between descriptive, fundamental, technical, and ETF views,
+        and then filter or sort the cached data server-side.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Saved Universe vs Ad Hoc Pulls</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li><strong>Saved Universe</strong> — this is your persistent scanner list. Refresh Data and Force Refresh work against this saved universe.</li>
+        <li><strong>Pull Stocks or ETFs Without Saving Them</strong> — use this box to type tickers such as <code>AAPL MSFT QQQ SPYI</code> and screen them temporarily without adding them to the saved universe.</li>
+        <li><strong>Pull Now</strong> fetches scanner data for just the tickers you entered and shows that temporary subset.</li>
+        <li><strong>Back to Saved Universe</strong> returns the page to your normal saved scanner universe.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Views</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li><strong>Descriptive</strong> — basic company or ETF identity fields such as ticker, company, sector, industry, country, market cap, price, and volume.</li>
+        <li><strong>Fundamental</strong> — valuation and quality fields such as P/E, forward P/E, PEG, dividend yield, margin, ROE, debt/equity, and beta.</li>
+        <li><strong>Technical</strong> — price, change, moving averages, RSI, MACD, stochastic, 52-week levels, and volume.</li>
+        <li><strong>ETF</strong> — ETF-specific fields such as strategy, cap size, category, expense ratio, AUM, and dividend yield.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Refresh Buttons</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li><strong>Refresh Data</strong> updates scanner prices and cached fields for the saved universe using the existing cache where possible.</li>
+        <li><strong>Force Refresh</strong> re-fetches ticker info from Yahoo Finance and is the best choice after adding a lot of new tickers or when classifications look stale.</li>
+        <li>If you were on a temporary ad hoc pull, refresh switches you back to the saved universe so you do not stay stuck on a tiny temporary subset.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Filters and Signals</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li><strong>Signal</strong> presets include Top Gainers, Top Losers, New High, New Low, Most Active, Unusual Volume, Overbought, Oversold, and several SMA-based setups.</li>
+        <li><strong>Active filter chips</strong> appear above the results table and can be removed one at a time.</li>
+        <li><strong>Market Cap</strong> is mainly meaningful for stocks. In ETF context, the scanner ignores the stock market-cap range filter so ETF screens are not accidentally narrowed by stock-only sizing rules.</li>
+        <li><strong>ETF Strategy</strong> lets you screen option-income, bonds, preferred, BDC, CEF, and other ETF groups from the ETF classification data in cache.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Universe Management</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li><strong>Universe</strong> opens the saved ticker list so you can add or remove names manually.</li>
+        <li><strong>Reset to Defaults</strong> replaces your current saved scanner universe with the built-in default stock and ETF list and clears cached scanner data. The app now requires typed confirmation before it runs.</li>
+        <li><strong>Save as Defaults</strong> writes the current universe to the local defaults file so that universe can be reused later.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Tips</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li>If a screen looks unexpectedly small, check the active filter chips first. A leftover Type, ETF Strategy, Signal, or Market Cap filter is usually the reason.</li>
+        <li>For large updates to the universe, use <strong>Force Refresh</strong> after adding the new names.</li>
+        <li>The results table header is fixed while you scroll so you can keep column labels visible on long result sets.</li>
       </ul>
     </div>
   )
@@ -1939,6 +2198,39 @@ function NavScreenerHelp() {
   )
 }
 
+function SingleStrategyHelp() {
+  return (
+    <div>
+      <h2>Single Strategy Scanner</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Single Strategy Scanner runs a focused technical setup across a saved list of tickers.
+        It is built for quick repeat scans using the same rules over and over.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Ticker List and Saved Settings</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Ticker chips</strong> — add tickers one at a time, then remove them with the × button.</li>
+        <li><strong>Saved list</strong> — the page loads and saves your scanner ticker list to the backend, so it is ready next time you open it.</li>
+        <li><strong>Saved thresholds</strong> — SMA proximity and stochastic settings are remembered locally.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Scan Rules</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Trend filter</strong> — 50 SMA must be at or above the 175 SMA.</li>
+        <li><strong>SMA proximity</strong> — price must be within the selected percentage band around the 175 SMA.</li>
+        <li><strong>Stochastic band</strong> — Slow Stochastic %K must fall within your selected range.</li>
+        <li><strong>Daily or Weekly</strong> — switching timeframe changes the available lookback periods and reruns the scan after your first manual run.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Sortable table</strong> — shows ticker, signal, close, SMAs, stochastic reading, and distance from the 175 SMA.</li>
+        <li><strong>Chart modal</strong> — click a ticker in the results to open a chart with the scanner indicators for the selected timeframe and period.</li>
+      </ul>
+    </div>
+  )
+}
+
 function IncomeSimHelp() {
   return (
     <div>
@@ -1994,6 +2286,11 @@ function IncomeSimHelp() {
         with individual investment amounts and reinvestment percentages. Run to see a multi-line
         chart comparing projected income growth and cumulative value across all tickers.
         Use this to decide between alternative income ETFs or strategies.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        You can also turn on <strong>Compare Reinvestment Impact</strong> to show baseline vs. reinvested
+        results for the same holdings. In that mode, the charts and results table split each holding into
+        paired rows so you can see exactly what reinvestment changes.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Saved Scenarios</h3>
@@ -2201,6 +2498,133 @@ function PortfolioBuilderHelp() {
         (income-focused or growth-focused), enter a total budget, and toggle between auto or manual
         fund selection. The app generates a full allocation you can load into a portfolio and analyze.
       </p>
+    </div>
+  )
+}
+
+function PortfolioTesterHelp() {
+  return (
+    <div>
+      <h2>Portfolio Tester</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Portfolio Tester runs a head-to-head historical backtest between <strong>two portfolios</strong>
+        (A and B) — up to <strong>75 tickers each</strong> — with an optional benchmark, over any
+        Yahoo Finance date range from <strong>6 months to 25 years</strong>. It produces a full suite of
+        financial metrics, a head-to-head score card that calls out the winner, and interactive
+        growth, drawdown, annual-return, rolling-CAGR, and monthly-income charts.
+      </p>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
+        <strong>How it differs from Portfolio Builder:</strong> Portfolio Builder is for designing and
+        grading a single hypothetical allocation against a benchmark. Portfolio Tester is purely for
+        <em> head-to-head backtesting</em>: two fully-defined portfolios run side-by-side on the same
+        dates with the same settings so you can see which one would have done better.
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Building Portfolio A and B</h3>
+      <p style={{ marginBottom: '0.5rem' }}>Each portfolio card lets you build the allocation four different ways:</p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Type a ticker + optional weight %</strong> and click <strong>Add</strong> (or press Enter). If no weight is given, it's added at 0% and you can click Equal or Normalize to distribute.</li>
+        <li><strong>Load All Current</strong> — replaces the portfolio with every current holding, weighted by current dollar value. Useful when you want to benchmark your real portfolio against a hypothetical alternative.</li>
+        <li><strong>Pick Tickers…</strong> — opens an inline picker showing every current holding with checkboxes. Search by ticker, use <strong>Select All</strong> / <strong>Select None</strong>, then apply:
+          <ul style={{ paddingLeft: '1.25rem', marginTop: '0.25rem' }}>
+            <li><strong>Replace Portfolio</strong> — overwrites this portfolio with exactly the selected tickers, weighted by current value.</li>
+            <li><strong>Add to Portfolio</strong> — keeps existing holdings at their weights and merges in only the newly-picked tickers, then renormalizes to 100%.</li>
+          </ul>
+        </li>
+        <li><strong>Load Filtered</strong> — pick a category from the dropdown (disabled if no categories are defined) to load only the subset of current holdings in that category.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Weights must sum to <strong>100%</strong> before you can run. The <strong>Equal</strong> button splits
+        weight evenly across all tickers in the portfolio; <strong>Normalize</strong> rescales whatever
+        weights you already entered so they sum to 100%. <strong>Clear</strong> empties the portfolio.
+        The row footer shows the running total in green (at 100%) or amber (off).
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Run Settings</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Start / End</strong> date inputs, plus <strong>preset buttons</strong>: 6M, 1Y, 3Y, 5Y, 10Y, 15Y, 20Y, 25Y. Presets set end to today and start to N years before.</li>
+        <li><strong>Initial</strong> — starting investment for the backtest (default $10,000). Applied equally to both portfolios and the benchmark.</li>
+        <li><strong>Benchmark checkbox + ticker</strong> — uncheck the <strong>Benchmark</strong> box to run <em>Portfolio A vs Portfolio B only</em> with no benchmark line. Check it to include a reference ticker (default <code>SPY</code>; change to <code>QQQ</code>, <code>VTI</code>, etc. as needed).</li>
+        <li><strong>Rebalance</strong> — None, Monthly, Quarterly, or Annually. If set, each portfolio is rebalanced back to its target weights at that frequency.</li>
+        <li><strong>Include dividends</strong> — when off, the backtest runs on pure price-only returns. When on, dividends are paid through the simulation.</li>
+        <li><strong>Reinvest dividends</strong> — only meaningful if Include Dividends is on. When on (DRIP), distributions buy more shares at the pay date; when off, they accumulate as cash drag and are tallied as "total distributions paid."</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Coverage Validation (Hard Stop)</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Before simulating, the app verifies that <strong>every ticker in both portfolios has price history
+        on or before the requested start date</strong>. If any are missing, the run is rejected with a red
+        error banner listing each invalid ticker and the earliest date its data actually begins.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>You get two one-click fixes in the error banner:</p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Remove N from Portfolio A</strong> — strips the flagged tickers from A only and renormalizes A's weights.</li>
+        <li><strong>Remove N from Portfolio B</strong> — same, but for B.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Each button is disabled when the corresponding portfolio has no flagged tickers. The banner
+        auto-clears when neither portfolio contains any invalid ticker. You can also simply shorten
+        the backtest start date so every ticker has coverage.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Head-to-Head Score Card</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        At the top of the results, eight key metrics are shown as side-by-side score cards with the
+        winning value <strong>bolded in green with a ✓</strong>:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>CAGR</strong>, <strong>Total Return</strong>, <strong>Final Value</strong> — higher wins.</li>
+        <li><strong>Std Dev</strong> — lower (less volatile) wins.</li>
+        <li><strong>Max Drawdown</strong> — higher (less negative) wins.</li>
+        <li><strong>Sharpe</strong>, <strong>Sortino</strong>, <strong>MAR / Calmar</strong> — higher wins.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        A header badge calls out the <strong>overall winner</strong> — the portfolio that won the most
+        metrics — or "Tied" if they match. The score card is only meaningful when two portfolios are
+        present; with one portfolio, it shows its values without a winner concept.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Performance Summary Table</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Full metrics table with one row per portfolio plus (optionally) the benchmark:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>CAGR, Total Return, Std Dev, Peak Monthly DD, Max DD, Recovery Months</strong> — core return & risk.</li>
+        <li><strong>Sharpe, Sortino, MAR/Calmar, Ulcer Index</strong> — risk-adjusted return ratios.</li>
+        <li><strong>Beta, Alpha, Up Capture, Down Capture, Correlation</strong> — measured vs. the benchmark (shown as "—" if no benchmark is included).</li>
+        <li><strong>Best Year / Worst Year</strong> — computed from complete calendar years only (partial stub years are excluded).</li>
+        <li><strong>+ Months %</strong> — share of monthly returns that were positive.</li>
+        <li><strong>Final $</strong> — ending portfolio value.</li>
+        <li><strong>Divs Paid $</strong> — total distributions received across the run.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Growth & Drawdown</strong> — Dual-panel chart. The top panel shows portfolio value over time starting at your Initial amount. The bottom panel shows <strong>drawdown from peak</strong> (% below the running all-time high; 0% = at peak, −20% = 20% below prior peak and not yet recovered). A gray zero-reference line anchors the drawdown panel.</li>
+        <li><strong>Annual Returns</strong> — Grouped bar chart by calendar year. <strong>Only complete Jan–Dec years</strong> are shown — partial-year stubs are excluded so short runs don't get misleading bars. If your range doesn't cover a full year, the panel shows a note telling you to extend the range.</li>
+        <li><strong>Rolling 1-Year CAGR</strong> — Rolling trailing-12-month return for each portfolio, useful for spotting which regime periods each strategy excelled in.</li>
+        <li><strong>Monthly Dividend Income</strong> — Grouped bars of cash distributions received per month. Only shown when Include Dividends is on. Bars are anchored to the month-start so labels line up cleanly with the calendar. A caption under the chart totals the distributions for each portfolio.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem', color: '#8899aa', fontSize: '0.88rem' }}>
+        All chart values are formatted to two decimal places on both hover tooltips and axis ticks.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Coverage Footer</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Below the charts, a small gray footer lists every ticker used in the run and the earliest
+        Yahoo Finance date available for it. This helps you spot tickers that silently shortened the
+        effective window (e.g., an ETF that launched partway through a 10-year range).
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tips</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>To compare your <strong>real portfolio</strong> against a single-fund alternative, click <strong>Load All Current</strong> on A and add a single ticker at 100% weight on B.</li>
+        <li>To compare <strong>two subsets</strong> of your portfolio (e.g., income sleeve vs. growth sleeve), use <strong>Pick Tickers…</strong> on each side to cherry-pick what goes where.</li>
+        <li>Use <strong>Load Filtered</strong> if you've tagged your holdings on the Categories page — e.g., compare all "Covered Call" holdings against all "Core Equity" holdings with two clicks.</li>
+        <li>If a run fails validation, don't panic — use the one-click remove button or shorten the start date to get inside every ticker's coverage window.</li>
+        <li>Toggle the <strong>Benchmark</strong> checkbox off when you only want a clean A-vs-B comparison without a third line cluttering the chart.</li>
+      </ul>
     </div>
   )
 }
@@ -2734,17 +3158,22 @@ const CONTENT_MAP = {
   dividends: DividendsHelp,
   'div-calendar': DivCalendarHelp,
   'div-compare': DivCompareHelp,
+  'dividend-history': DividendHistoryHelp,
   'total-return': TotalReturnHelp,
   'gains-losses': GainsLossesHelp,
+  'safe-withdrawal': SafeWithdrawalHelp,
+  'general-scanner': GeneralScannerHelp,
   'etf-screen': ETFScreenHelp,
   watchlist: WatchlistHelp,
   'buy-sell': BuySellHelp,
   'nav-erosion': NavErosionHelp,
   'nav-screener': NavScreenerHelp,
+  'single-strategy': SingleStrategyHelp,
   'income-sim': IncomeSimHelp,
   correlation: CorrelationHelp,
   analytics: AnalyticsHelp,
   'portfolio-builder': PortfolioBuilderHelp,
+  'portfolio-tester': PortfolioTesterHelp,
   'dist-compare': DistCompareHelp,
   consolidation: ConsolidationHelp,
   'macro-dashboard': MacroDashboardHelp,

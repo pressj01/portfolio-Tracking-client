@@ -32,11 +32,21 @@ def populate_holdings(profile_id=1):
                purchase_date
         FROM all_account_info
         WHERE profile_id = ?
+          AND COALESCE(quantity, 0) > 1e-9
     """, (profile_id,))
     row_count = cur.rowcount
+
+    # Remove stale holdings rows that no longer exist in all_account_info
+    cur.execute("""
+        DELETE FROM holdings
+        WHERE profile_id = ?
+          AND ticker NOT IN (SELECT ticker FROM all_account_info WHERE profile_id = ?)
+    """, (profile_id, profile_id))
+    stale_removed = cur.rowcount
+
     conn.commit()
     conn.close()
-    return row_count, f"Holdings populated: {row_count} rows affected."
+    return row_count, f"Holdings populated: {row_count} rows affected, {stale_removed} stale removed."
 
 
 def populate_dividends(profile_id=1):
@@ -56,8 +66,17 @@ def populate_dividends(profile_id=1):
                ytd_divs, total_divs_received, paid_for_itself
         FROM all_account_info
         WHERE profile_id = ?
+          AND COALESCE(quantity, 0) > 1e-9
     """, (profile_id,))
     row_count = cur.rowcount
+
+    # Remove stale dividends rows that no longer exist in all_account_info
+    cur.execute("""
+        DELETE FROM dividends
+        WHERE profile_id = ?
+          AND ticker NOT IN (SELECT ticker FROM all_account_info WHERE profile_id = ?)
+    """, (profile_id, profile_id))
+
     conn.commit()
     conn.close()
     return row_count, f"Dividends populated: {row_count} rows affected."

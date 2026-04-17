@@ -377,16 +377,22 @@ export default function Dashboard() {
               setHoldings(updated)
               setGradeStatus('Loading risk grades...')
               return pf('/api/portfolio-summary/data')
+                .then(safeJson)
+                .then(g => {
+                  if (stale || !g) return
+                  if (g.ticker_grades) setTickerGrades(g.ticker_grades)
+                  if (g.portfolio_grade) setPortfolioGrade(g.portfolio_grade)
+                  setGradeStatus('Grades loaded.')
+                  setTimeout(() => { if (!stale) setGradeStatus(null) }, 3000)
+                })
+                .catch(() => { if (!stale) setGradeStatus('Grade loading failed.') })
             })
-            .then(r => { if (!stale && r) return safeJson(r) })
-            .then(g => {
-              if (stale || !g) return
-              if (g.ticker_grades) setTickerGrades(g.ticker_grades)
-              if (g.portfolio_grade) setPortfolioGrade(g.portfolio_grade)
-              setGradeStatus('Grades loaded.')
-              setTimeout(() => { if (!stale) setGradeStatus(null) }, 3000)
+            .catch(() => {
+              if (!stale) {
+                setRefreshStatus('Refresh failed.')
+                setGradeStatus(null)
+              }
             })
-            .catch(() => { if (!stale) setGradeStatus('Grade loading failed.') })
         }
       })
       .catch(() => { if (!stale) setLoading(false) })

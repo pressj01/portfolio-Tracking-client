@@ -323,7 +323,7 @@ export default function Categories() {
                   <button
                     style={{ background: 'none', border: 'none', color: '#64b5f6', fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}
                     onClick={() => setSelectedUnalloc(new Set())}
-                  >Clear</button>
+                  >Deselect</button>
                 </div>
 
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', maxHeight: '55vh', overflow: 'auto' }}>

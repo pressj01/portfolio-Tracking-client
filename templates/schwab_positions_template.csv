@@ -1,0 +1,7 @@
+Positions for account <Charles Schwab Account Name>
+
+Symbol,Description,Qty (Quantity),Price,Price Change $,Price Change %,Mkt Val (Market Value),Day Change $,Day Change %,Cost Basis,Gain $ (Gain/Loss $),Gain % (Gain/Loss %),Reinvest?,Capital Gains?,% Of Account,Div Yld (Dividend Yield),Last Dividend,Ex-Div Date,P/E Ratio,52 Week Low,52 Week High,Volume,Intrinsic Value,In The Money,Security Type,Asset Type,Cost/Share
+SCHD,Schwab U.S. Dividend Equity ETF,50,$82.50,$0.35,0.43%,"$4,125.00",$17.50,0.43%,"$3,910.00",$215.00,5.50%,No,No,10.92%,3.01%,$0.62,03/27/2026,,$68.53,$87.00,1234567,,,ETF,ETF,$78.20
+JEPI,JPMorgan Equity Premium Income ETF,100,$57.20,$0.18,0.32%,"$5,720.00",$18.00,0.32%,"$5,550.00",$170.00,3.06%,Yes,No,15.15%,7.50%,$0.55,04/01/2026,,$49.00,$60.88,2345678,,,ETF,ETF,$55.50
+Cash & Cash Investments,,,,,,$833.45,,,,,,,,,,,,,,,,,,Cash,Cash,
+Positions Total,,,,,,"$10,678.45",,,,,,,,,,,,,,,,,,,,

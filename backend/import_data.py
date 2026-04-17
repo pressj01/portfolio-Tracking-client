@@ -50,6 +50,46 @@ _VALID_TICKER = re.compile(r'^[A-Z][A-Z0-9.\-/]{0,10}$')
 _EXCLUDED_TICKERS = {"TOTALS", "TOTAL", "GRAND", "SUMMARY"}
 
 
+def _next_business_day(ts):
+    if ts is None:
+        return None
+    while ts.weekday() >= 5:
+        ts += pd.Timedelta(days=1)
+    return ts
+
+
+def _family_dividend_lag_days(ticker=None, description=None, freq=None):
+    freq = str(freq or "").strip().upper()
+    text = f"{ticker or ''} {description or ''}".lower()
+    if "kurv" in text:
+        return 1
+    if freq == "M" and "neos" in text:
+        ticker_norm = str(ticker or "").strip().lower()
+        if ticker_norm in {"kqqq", "kgld"}:
+            return 1
+        if ticker_norm in {"qqqi"}:
+            return 2
+    return None
+
+
+def _estimate_div_pay_date(ex_div_date, freq, ticker=None, description=None):
+    ts = pd.to_datetime(ex_div_date, errors="coerce")
+    if pd.isna(ts):
+        return None
+    freq = str(freq or "").strip().upper()
+    lag_days = _family_dividend_lag_days(ticker=ticker, description=description, freq=freq)
+    if lag_days is None:
+        lag_days = {
+        "W": 1,
+        "52": 1,
+        "M": 7,
+        "Q": 24,
+        "SA": 30,
+        "A": 32,
+        }.get(freq, 21)
+    return _next_business_day(ts + pd.Timedelta(days=lag_days)).strftime("%m/%d/%y")
+
+
 # ── Owner Excel import ─────────────────────────────────────────────────────────
 
 def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
@@ -878,7 +918,12 @@ def import_from_upload(df, profile_id):
             'div_frequency':              div_frequency,
             'reinvest':                   reinvest,
             'ex_div_date':                ex_div_date,
-            'div_pay_date':               _val(row, 'div_pay_date') or ((_dt.strptime(ex_div_date, "%m/%d/%y") + pd.Timedelta(days=21)).strftime("%m/%d/%y") if ex_div_date else None),
+            'div_pay_date':               _val(row, 'div_pay_date') or _estimate_div_pay_date(
+                ex_div_date,
+                div_frequency,
+                ticker=t,
+                description=description,
+            ),
             'div':                        div,
             'dividend_paid':              _fval(row, 'dividend_paid'),
             'estim_payment_per_year':     estim,

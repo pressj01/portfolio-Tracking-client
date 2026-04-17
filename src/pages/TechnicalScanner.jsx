@@ -170,7 +170,7 @@ export default function TechnicalScanner() {
   return (
     <div className="page-container" style={{ maxWidth: 1100, margin: '0 auto', padding: '1.5rem' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem' }}>
-        <h1 style={{ margin: 0, color: '#7ecfff' }}>Technical Scanner</h1>
+          <h1 style={{ margin: 0, color: '#7ecfff' }}>Single Strategy Scanner</h1>
         <button className="btn btn-xs btn-outline" onClick={() => setShowHelp(h => !h)}>
           {showHelp ? 'Hide Help' : 'Help'}
         </button>

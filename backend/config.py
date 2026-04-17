@@ -28,8 +28,19 @@ if (
 
 def get_connection():
     """Return a SQLite connection with WAL mode and foreign keys enabled."""
-    conn = sqlite3.connect(DB_PATH)
+    # timeout= tells the sqlite3 driver how long to wait when the DB file
+    # itself is locked before raising OperationalError.  Combined with the
+    # busy_timeout PRAGMA below (which governs SQLite's internal lock waits),
+    # this prevents "database is locked" errors when long-running writes
+    # (e.g. the general-scanner force refresh) overlap with concurrent reads
+    # or writes from the scan/universe endpoints.
+    conn = sqlite3.connect(DB_PATH, timeout=60.0)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=60000")  # wait up to 60s for locks
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError as exc:
+        if "database is locked" not in str(exc).lower():
+            raise
     conn.execute("PRAGMA foreign_keys=ON")
     return conn

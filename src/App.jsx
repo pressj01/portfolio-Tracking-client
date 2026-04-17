@@ -34,6 +34,7 @@ import SafeWithdrawal from './pages/SafeWithdrawal'
 import Help from './pages/Help'
 import TechnicalScanner from './pages/TechnicalScanner'
 import GeneralScanner from './pages/GeneralScanner'
+import PortfolioTester from './pages/PortfolioTester'
 
 function NavDropdown({ label, children }) {
   const [open, setOpen] = useState(false)
@@ -104,6 +105,7 @@ function App() {
         <Route path="/dividend-history" element={<DividendHistory />} />
         <Route path="/scanner" element={<TechnicalScanner />} />
         <Route path="/general-scanner" element={<GeneralScanner />} />
+        <Route path="/portfolio-tester" element={<PortfolioTester />} />
         <Route path="/help" element={<Help />} />
       </Routes>
     </Router>
@@ -158,10 +160,11 @@ function Nav() {
         <NavLink to="/correlation">Correlation Matrix</NavLink>
         <NavLink to="/analytics">Portfolio Analytics</NavLink>
         <NavLink to="/portfolio-builder">Portfolio Builder</NavLink>
+        <NavLink to="/portfolio-tester">Portfolio Tester</NavLink>
         <NavLink to="/dist-compare">Distribution Compare</NavLink>
         <NavLink to="/consolidation">Consolidation Analysis</NavLink>
         <NavLink to="/macro-dashboard">Macro Regime Dashboard</NavLink>
-        <NavLink to="/scanner">Technical Scanner</NavLink>
+          <NavLink to="/scanner">Single Strategy Scanner</NavLink>
         <NavLink to="/general-scanner">General Scanner</NavLink>
       </NavDropdown>
       <NavDropdown label="Admin">

@@ -549,30 +549,30 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
       background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center',
       zIndex: 1000,
     }}>
-      <div className="card" style={{ width: '95vw', maxWidth: '1200px', maxHeight: '85vh', overflow: 'auto' }}>
-        <h2>{isNew ? 'Add Ticker via Transaction' : `Transactions — ${ticker}`}</h2>
+      <div className="card" style={{ width: '95vw', maxWidth: '1200px', maxHeight: '85vh', overflow: 'auto', paddingTop: 0 }}>
+        <h2 style={{ marginTop: '1.5rem' }}>{isNew ? 'Add Ticker via Transaction' : `Transactions — ${ticker}`}</h2>
 
         {error && <div className="alert alert-error" style={{ marginBottom: '0.75rem' }}>{error}</div>}
         {successMsg && <div className="alert alert-success" style={{ marginBottom: '0.75rem' }}>{successMsg}</div>}
 
         {/* Existing transactions list */}
         {!isNew && transactions.length > 0 && (
-          <div style={{ marginBottom: '1rem', overflowX: 'auto' }}>
+          <div style={{ marginBottom: '1rem' }}>
             <table style={{ width: '100%', fontSize: '0.85rem', minWidth: '900px' }}>
               <thead>
                 <tr>
-                  <th>Type</th>
-                  <th>Date</th>
-                  <th>Shares</th>
-                  <th>Price</th>
-                  <th>Fees</th>
-                  <th>Cost/Proceeds</th>
-                  <th>Realized G/L</th>
-                  <th style={{ borderLeft: '1px solid #1a3a5c' }}>Position</th>
-                  <th>Avg Cost</th>
-                  <th>Total Cost</th>
-                  <th>Notes</th>
-                  <th>Actions</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Type</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Date</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Shares</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Price</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Fees</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Cost/Proceeds</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Realized G/L</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2, borderLeft: '1px solid #1a3a5c' }}>Position</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Avg Cost</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Total Cost</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Notes</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1342,18 +1342,18 @@ export default function ManageHoldings() {
                           <table style={{ width: 'auto', fontSize: '0.82rem', marginBottom: 0 }}>
                             <thead>
                               <tr style={{ borderBottom: '1px solid #1a3a5c' }}>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Type</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Date</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Shares</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Price</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Fees</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Cost/Proceeds</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Unrealized G/L</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Realized G/L</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', borderLeft: '1px solid #1a3a5c' }}>Position</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Avg Cost</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Total Cost</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae' }}>Notes</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Type</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Date</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Shares</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Price</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Fees</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Cost/Proceeds</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Unrealized G/L</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Realized G/L</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2, borderLeft: '1px solid #1a3a5c' }}>Position</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Avg Cost</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Total Cost</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Notes</th>
                               </tr>
                             </thead>
                             <tbody>
