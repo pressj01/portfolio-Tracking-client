@@ -108,6 +108,12 @@ def ensure_tables_exist(conn=None):
     except Exception:
         pass  # column already exists
 
+    # Repair yield-on-cost rows stored as percent (e.g. 17.68) instead of ratio
+    # (0.1768). Values > 1 are almost always legacy percent-form and get divided
+    # by 100 to match the rest of the codebase.
+    cur.execute("UPDATE all_account_info SET annual_yield_on_cost = annual_yield_on_cost / 100.0 WHERE annual_yield_on_cost > 1")
+    cur.execute("UPDATE all_account_info SET current_annual_yield = current_annual_yield / 100.0 WHERE current_annual_yield > 1")
+
     # ── holdings ───────────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS holdings (
@@ -193,6 +199,10 @@ def ensure_tables_exist(conn=None):
                 UNIQUE (ticker, profile_id)
             )
         """)
+
+    # Same YoC percent→ratio repair for the dividends mirror table.
+    cur.execute("UPDATE dividends SET annual_yield_on_cost = annual_yield_on_cost / 100.0 WHERE annual_yield_on_cost > 1")
+    cur.execute("UPDATE dividends SET current_annual_yield = current_annual_yield / 100.0 WHERE current_annual_yield > 1")
 
     # ── income_tracking ────────────────────────────────────────────────────────
     cur.execute("""

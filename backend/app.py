@@ -447,8 +447,8 @@ def _recompute_position_income_fields(conn, profile_id, ticker, broker_dividend_
     monthly = annual / 12.0 if annual > 0 else 0.0
     if preserve_existing_income and imported_monthly > 0 and annual > 0:
         monthly = imported_monthly
-    yoc = (annual / purchase_value * 100.0) if annual > 0 and purchase_value > 0 else 0.0
-    cur_yield = (annual / current_value * 100.0) if annual > 0 and current_value > 0 else 0.0
+    yoc = (annual / purchase_value) if annual > 0 and purchase_value > 0 else 0.0
+    cur_yield = (annual / current_value) if annual > 0 and current_value > 0 else 0.0
     current_month_income = _estimate_current_month_income({
         "quantity": quantity,
         "div": div,
