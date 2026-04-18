@@ -80,6 +80,7 @@ def ensure_tables_exist(conn=None):
             import_date                TEXT,
             purchase_date              TEXT,
             current_month_income       REAL,
+            dividend_actuals_source    TEXT,
             UNIQUE (ticker, profile_id)
         )
     """)
@@ -105,6 +106,11 @@ def ensure_tables_exist(conn=None):
 
     try:
         cur.execute("ALTER TABLE all_account_info ADD COLUMN drip_quantity REAL")
+    except Exception:
+        pass  # column already exists
+
+    try:
+        cur.execute("ALTER TABLE all_account_info ADD COLUMN dividend_actuals_source TEXT")
     except Exception:
         pass  # column already exists
 
@@ -773,6 +779,38 @@ def ensure_tables_exist(conn=None):
             ticker     TEXT PRIMARY KEY,
             asset_type TEXT DEFAULT 'Stock',
             added_date TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # ── option_strategies ─────────────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS option_strategies (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT NOT NULL,
+            underlying   TEXT NOT NULL,
+            model        TEXT DEFAULT 'black-scholes',
+            rate         REAL DEFAULT 0.0375,
+            notes        TEXT,
+            created_date TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_date TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS option_strategy_legs (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id  INTEGER NOT NULL,
+            group_id     INTEGER DEFAULT 0,
+            included     INTEGER DEFAULT 1,
+            side         TEXT NOT NULL,
+            qty          INTEGER NOT NULL,
+            opt_type     TEXT NOT NULL,
+            strike       REAL NOT NULL,
+            expiration   TEXT NOT NULL,
+            entry_price  REAL,
+            iv_override  REAL,
+            sort_order   INTEGER DEFAULT 0,
+            FOREIGN KEY (strategy_id) REFERENCES option_strategies(id) ON DELETE CASCADE
         )
     """)
 

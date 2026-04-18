@@ -35,6 +35,10 @@ import Help from './pages/Help'
 import TechnicalScanner from './pages/TechnicalScanner'
 import GeneralScanner from './pages/GeneralScanner'
 import PortfolioTester from './pages/PortfolioTester'
+// Option Trading Tools and Option Education are intentionally excluded from
+// deployed builds — still in development, not ready for production.
+// import OptionTradingTools from './pages/OptionTradingTools'
+// import OptionEducation from './pages/OptionEducation'
 
 function NavDropdown({ label, children }) {
   const [open, setOpen] = useState(false)
@@ -106,6 +110,7 @@ function App() {
         <Route path="/scanner" element={<TechnicalScanner />} />
         <Route path="/general-scanner" element={<GeneralScanner />} />
         <Route path="/portfolio-tester" element={<PortfolioTester />} />
+        {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
         <Route path="/help" element={<Help />} />
       </Routes>
     </Router>
@@ -167,6 +172,7 @@ function Nav() {
           <NavLink to="/scanner">Single Strategy Scanner</NavLink>
         <NavLink to="/general-scanner">General Scanner</NavLink>
       </NavDropdown>
+      {/* Option Trading Tools and Option Education hidden from deployed build — not ready */}
       <NavDropdown label="Admin">
         <NavLink to="/import">Import</NavLink>
         <NavLink to="/export">Export</NavLink>

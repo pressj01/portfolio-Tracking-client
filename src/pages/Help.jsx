@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 
-const APP_VERSION = '1.20.0'
+const APP_VERSION = '1.22.2'
 
 const GROUPS = [
   {
@@ -472,6 +472,15 @@ function HoldingsHelp() {
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Toolbar Buttons</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Refresh Prices & Divs</strong> — Fetches the latest prices, dividend amounts, and ex-div dates from Yahoo Finance for the currently selected portfolio scope. Individual accounts refresh only themselves; Owner refreshes its included source accounts; Aggregate refreshes its configured member accounts.</li>
+        <li><strong>Div Src filter</strong> (dropdown, left of Refresh) — Filters the holdings table by the source of each row's dividend actuals. Options: <em>All</em>, <em>Imported actuals</em> (any broker-sourced payment data — Schwab, Fidelity, E*Trade, Snowball, or generic imports), individual brokers, <em>Snapshot</em> (lifetime totals preserved from a Snowball migration), <em>Yahoo</em> (fallback filled from Yahoo history), <em>Mixed</em> (aggregate rows whose members have different sources), and <em>No source</em> (holdings with no dividend data yet). The selected source is also shown in the new <strong>Div Src</strong> column in the table.</li>
+        <li><strong>Dividend repair mode</strong> (dropdown, right of Refresh) — Chooses which data sources the next repair run is allowed to use:
+          <ul style={{ paddingLeft: '1.25rem', lineHeight: '1.7', marginTop: '0.25rem' }}>
+            <li><em>Imported actuals + Yahoo</em> (default) — Use imported broker dividend payments where available; fall back to Yahoo history for tickers with no imported payments. Snowball snapshots are preserved.</li>
+            <li><em>Imported actuals only</em> — Use only imported broker payments. Tickers with no imported payments get their dividend fields cleared to "No source". Snowball snapshots are preserved.</li>
+            <li><em>Yahoo only</em> — Ignore imported broker payments and rebuild every row from Yahoo history. Snowball snapshots are <strong>not</strong> preserved in this mode.</li>
+          </ul>
+        </li>
+        <li><strong>Preview Div Repair</strong> — Runs the selected repair mode in dry-run form and opens a preview modal showing, per sub-account, how many holdings would be updated from each source (Schwab / Fidelity / Snowball / E*Trade / Other / Snapshot / Yahoo / No source) plus totals. Nothing is written until you confirm with <strong>Apply Repair</strong>; a database backup is taken automatically before writes. Closing the modal (Escape, clicking outside, the × button, or Cancel) discards the preview. Switching the active portfolio also clears any in-flight preview so you can't apply it against a different scope by accident.</li>
         <li><strong>DRIP Matrix</strong> — (Owner only) Opens a matrix view showing DRIP on/off status for every ticker across all sub-accounts.
           You can toggle DRIP per ticker per account directly from this modal. Each cell shows a checkbox and the share count
           held in that account. The Owner column shows the aggregate DRIP status and DRIP-eligible share count.

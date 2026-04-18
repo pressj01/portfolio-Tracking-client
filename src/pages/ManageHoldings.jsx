@@ -816,8 +816,54 @@ const COLUMNS = [
   { key: 'ytd_divs', label: 'YTD Divs', type: 'number' },
   { key: 'total_divs_received', label: 'Total Divs', type: 'number' },
   { key: 'paid_for_itself', label: 'Paid For Itself', type: 'number' },
+  { key: 'dividend_actuals_source', label: 'Div Src', type: 'string' },
   { key: '_shares_if_reinvested', label: 'Shares if Reinvested', type: 'number' },
   { key: 'realized_gains', label: 'Realized G/L', type: 'number' },
+]
+
+const DIV_SOURCE_OPTIONS = [
+  { value: 'all', label: 'All Div Src' },
+  { value: 'imported', label: 'Imported actuals' },
+  { value: 'schwab', label: 'Schwab' },
+  { value: 'fidelity', label: 'Fidelity' },
+  { value: 'snowball', label: 'Snowball' },
+  { value: 'etrade', label: 'E*Trade' },
+  { value: 'snapshot', label: 'Snapshot' },
+  { value: 'yahoo', label: 'Yahoo' },
+  { value: 'mixed', label: 'Mixed' },
+  { value: 'none', label: 'No source' },
+]
+
+const DIV_REPAIR_MODES = [
+  { value: 'mixed', label: 'Imported actuals + Yahoo' },
+  { value: 'broker', label: 'Imported actuals only' },
+  { value: 'yahoo', label: 'Yahoo only' },
+]
+
+const IMPORTED_DIV_SOURCES = ['broker', 'schwab', 'fidelity', 'snowball', 'etrade', 'imported']
+
+const DIV_SOURCE_META = {
+  broker: { label: 'Imported', color: '#81c784' },
+  schwab: { label: 'Schwab', color: '#81c784' },
+  fidelity: { label: 'Fidelity', color: '#a5d6a7' },
+  snowball: { label: 'Snowball', color: '#4db6ac' },
+  etrade: { label: 'E*Trade', color: '#80cbc4' },
+  imported: { label: 'Imported', color: '#81c784' },
+  snapshot: { label: 'Snapshot', color: '#ce93d8' },
+  yahoo: { label: 'Yahoo', color: '#64b5f6' },
+  mixed: { label: 'Mixed', color: '#ffd54f' },
+  none: { label: '-', color: '#78909c' },
+}
+
+const PREVIEW_SOURCE_COLUMNS = [
+  { key: 'schwab', label: 'Schwab' },
+  { key: 'fidelity', label: 'Fidelity' },
+  { key: 'snowball', label: 'Snowball' },
+  { key: 'etrade', label: 'E*Trade' },
+  { key: 'imported', label: 'Other' },
+  { key: 'snapshot', label: 'Snapshot' },
+  { key: 'yahoo', label: 'Yahoo' },
+  { key: 'none', label: 'No source' },
 ]
 
 function DripMatrixModal({ onClose, onSynced, pf }) {
@@ -1009,6 +1055,7 @@ export default function ManageHoldings() {
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [repairingDivs, setRepairingDivs] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [editHolding, setEditHolding] = useState(null)
   const [message, setMessage] = useState(null)
@@ -1017,6 +1064,10 @@ export default function ManageHoldings() {
   const [sortDir, setSortDir] = useState('asc')
   const [syncingDrip, setSyncingDrip] = useState(false)
   const [showDripMatrix, setShowDripMatrix] = useState(false)
+  const [divSourceFilter, setDivSourceFilter] = useState('all')
+  const [repairMode, setRepairMode] = useState('mixed')
+  const [repairPreview, setRepairPreview] = useState(null)
+  const [applyingRepair, setApplyingRepair] = useState(false)
   const [txnTicker, setTxnTicker] = useState(null)    // ticker for transaction modal
   const [txnIsNew, setTxnIsNew] = useState(false)      // true = new ticker via transaction
   const [expandedTickers, setExpandedTickers] = useState({})  // { ticker: [txns] | 'loading' }
@@ -1035,6 +1086,18 @@ export default function ManageHoldings() {
 
   useEffect(() => { fetchHoldings() }, [selection])
 
+  // Clear any stale repair preview when the selected portfolio changes,
+  // so an Apply can't target a scope the preview wasn't built against.
+  useEffect(() => { setRepairPreview(null) }, [selection])
+
+  // Close the repair preview modal on Escape.
+  useEffect(() => {
+    if (!repairPreview) return
+    const onKey = (e) => { if (e.key === 'Escape' && !applyingRepair) setRepairPreview(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [repairPreview, applyingRepair])
+
   const handleSort = (key) => {
     if (sortKey === key) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -1052,7 +1115,14 @@ export default function ManageHoldings() {
     return h[key]
   }
 
-  const sortedHoldings = [...holdings].sort((a, b) => {
+  const filteredHoldings = holdings.filter(h => {
+    if (divSourceFilter === 'all') return true
+    const source = h.dividend_actuals_source || 'none'
+    if (divSourceFilter === 'imported') return IMPORTED_DIV_SOURCES.includes(source)
+    return source === divSourceFilter
+  })
+
+  const sortedHoldings = [...filteredHoldings].sort((a, b) => {
     const col = COLUMNS.find(c => c.key === sortKey)
     const av = getSortValue(a, sortKey)
     const bv = getSortValue(b, sortKey)
@@ -1082,6 +1152,49 @@ export default function ManageHoldings() {
       setError(e.message)
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  const handleRepairDividendsFromTransactions = async () => {
+    setRepairingDivs(true)
+    setError(null)
+    setMessage(null)
+    setRepairPreview(null)
+    try {
+      const res = await pf('/api/repair-dividends-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: repairMode }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setRepairPreview(data)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setRepairingDivs(false)
+    }
+  }
+
+  const handleApplyDividendRepair = async () => {
+    setApplyingRepair(true)
+    setError(null)
+    setMessage(null)
+    try {
+      const res = await pf('/api/repair-dividends-from-transactions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: repairPreview?.mode || repairMode }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setRepairPreview(null)
+      setMessage(data.message)
+      await fetchHoldings()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setApplyingRepair(false)
     }
   }
 
@@ -1173,10 +1286,22 @@ export default function ManageHoldings() {
     return (Number(v) * 100).toFixed(2) + '%'
   }
 
+  const sourceBadge = (source) => {
+    const value = source || 'none'
+    const meta = DIV_SOURCE_META[value]
+    const label = meta ? meta.label : value
+    const color = meta ? meta.color : DIV_SOURCE_META.none.color
+    return <span title={`Dividend actuals source: ${value}`} style={{ color, fontWeight: value === 'none' ? 400 : 700 }}>{label}</span>
+  }
+
   const sortArrow = (key) => {
     if (sortKey !== key) return ' \u2195'
     return sortDir === 'asc' ? ' \u25B2' : ' \u25BC'
   }
+
+  const activeRepairModeLabel = DIV_REPAIR_MODES.find(opt => opt.value === (repairPreview?.mode || repairMode))?.label || DIV_REPAIR_MODES[0].label
+  const previewTotals = repairPreview?.source_totals || {}
+  const previewImportedTotal = repairPreview?.broker_updated ?? IMPORTED_DIV_SOURCES.reduce((sum, key) => sum + (previewTotals[key] || 0), 0)
 
   return (
     <div className="page">
@@ -1185,11 +1310,33 @@ export default function ManageHoldings() {
           Aggregate view — edits will apply to the portfolio with the largest position for each ticker.
         </div>
       )}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
         <h1>Manage Holdings</h1>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <select
+            value={divSourceFilter}
+            onChange={(e) => setDivSourceFilter(e.target.value)}
+            title="Filter dividend actuals source"
+            aria-label="Filter holdings by dividend actuals source"
+            style={{ minWidth: 120, padding: '0.55rem 0.65rem' }}
+          >
+            {DIV_SOURCE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+          </select>
           <button className="btn btn-primary" onClick={handleRefresh} disabled={refreshing || holdings.length === 0}>
             {refreshing ? <><span className="spinner" /> Refreshing...</> : 'Refresh Prices & Divs'}
+          </button>
+          <select
+            value={repairMode}
+            onChange={(e) => setRepairMode(e.target.value)}
+            title="Dividend repair mode"
+            aria-label="Dividend repair source mode"
+            disabled={repairingDivs || applyingRepair}
+            style={{ minWidth: 170, padding: '0.55rem 0.65rem' }}
+          >
+            {DIV_REPAIR_MODES.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+          </select>
+          <button className="btn btn-secondary" onClick={handleRepairDividendsFromTransactions} disabled={repairingDivs || applyingRepair || holdings.length === 0}>
+            {repairingDivs ? <><span className="spinner" /> Previewing...</> : 'Preview Div Repair'}
           </button>
           {profileId === 1 && (
             <>
@@ -1312,6 +1459,7 @@ export default function ManageHoldings() {
                   <td>${fmt(h.ytd_divs)}</td>
                   <td>${fmt(h.total_divs_received)}</td>
                   <td>{fmtPct(h.paid_for_itself)}</td>
+                  <td>{sourceBadge(h.dividend_actuals_source)}</td>
                   <td>
                     {h.reinvest === 'Y' && h.estim_payment_per_year && h.current_price
                       ? fmt(h.estim_payment_per_year / h.current_price, 3)
@@ -1399,6 +1547,64 @@ export default function ManageHoldings() {
               ))}
             </tbody>
           </table>
+          {sortedHoldings.length === 0 && (
+            <div style={{ padding: '1.25rem', textAlign: 'center', color: '#90a4ae' }}>
+              No holdings match the selected Div Src filter.
+            </div>
+          )}
+        </div>
+      )}
+
+      {repairPreview && (
+        <div
+          className="modal-overlay"
+          onClick={(e) => { if (e.target === e.currentTarget && !applyingRepair) setRepairPreview(null) }}
+        >
+          <div className="modal-content" style={{ maxWidth: 980 }}>
+            <button
+              className="modal-close"
+              onClick={() => setRepairPreview(null)}
+              disabled={applyingRepair}
+              aria-label="Close"
+            >
+              &times;
+            </button>
+            <h2>Dividend Repair Preview</h2>
+            <p style={{ color: '#cfd8dc', marginTop: 0 }}>{repairPreview.message}</p>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', margin: '1rem 0' }}>
+              <div style={{ color: '#81c784', fontWeight: 700 }}>Imported: {previewImportedTotal}</div>
+              <div style={{ color: '#64b5f6', fontWeight: 700 }}>Yahoo: {previewTotals.yahoo ?? repairPreview.yahoo_updated}</div>
+              <div style={{ color: '#ce93d8', fontWeight: 700 }}>Snapshot: {previewTotals.snapshot ?? repairPreview.snapshot_updated ?? 0}</div>
+              <div style={{ color: '#90a4ae', fontWeight: 700 }}>No source: {repairPreview.none_updated}</div>
+              <div style={{ color: '#e0e0e0', fontWeight: 700 }}>Mode: {activeRepairModeLabel}</div>
+            </div>
+            <table style={{ width: '100%', fontSize: '0.86rem', marginBottom: '1rem' }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left' }}>Account</th>
+                  {PREVIEW_SOURCE_COLUMNS.map(col => <th key={col.key}>{col.label}</th>)}
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(repairPreview.accounts || []).map(account => (
+                  <tr key={account.profile_id}>
+                    <td style={{ textAlign: 'left', fontWeight: 600 }}>{account.name}</td>
+                    {PREVIEW_SOURCE_COLUMNS.map(col => <td key={col.key}>{account[col.key] || 0}</td>)}
+                    <td>{account.total}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button className="btn btn-secondary" onClick={() => setRepairPreview(null)} disabled={applyingRepair}>
+                Cancel
+              </button>
+              <button className="btn btn-primary" onClick={handleApplyDividendRepair} disabled={applyingRepair || refreshing || repairingDivs}>
+                {applyingRepair ? <><span className="spinner" /> Applying...</> : 'Apply Repair'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

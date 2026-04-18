@@ -48,6 +48,7 @@ from normalize import (
     populate_pillar_weights,
 )
 from transaction_import import PARSERS as TXN_PARSERS
+from options_api import register_routes as register_options_routes
 
 app = Flask(__name__)
 app.json = NanSafeJSONProvider(app)
@@ -1408,6 +1409,9 @@ def _import_positions(parsed, profile_id):
                     if pos_key in pos and pos[pos_key] is not None:
                         update_sets.append(f"{db_field} = ?")
                         update_values.append(pos[pos_key])
+                if preserve_existing_income and "total_divs_received" in pos:
+                    update_sets.append("dividend_actuals_source = ?")
+                    update_values.append("snapshot")
                 if "reinvest_dividends" in pos and pos["reinvest_dividends"] is not None:
                     update_sets.append("reinvest = ?")
                     update_values.append("Y" if pos["reinvest_dividends"] else "N")
@@ -1443,6 +1447,9 @@ def _import_positions(parsed, profile_id):
                     if pos_key in pos and pos[pos_key] is not None:
                         columns.append(db_field)
                         values.append(pos[pos_key])
+                if preserve_existing_income and "total_divs_received" in pos:
+                    columns.append("dividend_actuals_source")
+                    values.append("snapshot")
                 if "reinvest_dividends" in pos and pos["reinvest_dividends"] is not None:
                     columns.append("reinvest")
                     values.append("Y" if pos["reinvest_dividends"] else "N")
@@ -1715,6 +1722,175 @@ def api_import_transactions():
     })
 
 
+def _normalise_dividend_repair_mode(raw_mode):
+    mode = str(raw_mode or "mixed").strip().lower().replace("_", "-")
+    if mode in {"broker", "broker-only", "actuals", "actuals-only", "imported", "imported-only"}:
+        return "broker"
+    if mode in {"yahoo", "yahoo-only", "yhoo", "yhoo-only"}:
+        return "yahoo"
+    return "mixed"
+
+
+def _dividend_repair_scope_label(scope, source_pids, selected_profile_id):
+    if scope == "owner":
+        return f"{len(source_pids)} Owner source portfolio{'s' if len(source_pids) != 1 else ''}"
+    if scope == "aggregate":
+        return f"{len(source_pids)} Aggregate member portfolio{'s' if len(source_pids) != 1 else ''}"
+    return _get_profile_name(selected_profile_id)
+
+
+def _dividend_repair_message(result, scope_label, mode, owner_actuals_updated=0, preview=False):
+    action = "Would repair" if preview else "Repaired"
+    if mode == "broker":
+        mode_label = "imported actuals only"
+    elif mode == "yahoo":
+        mode_label = "Yahoo only"
+    else:
+        mode_label = "imported actuals + Yahoo"
+    source_totals = result.get("source_totals") or {}
+    imported_count = result.get("broker_updated", 0)
+    yahoo_count = source_totals.get("yahoo", result.get("yahoo_updated", 0))
+    snapshot_count = source_totals.get("snapshot", 0)
+    none_count = source_totals.get("none", result.get("none_updated", 0))
+    message = f"{action} dividend fields for {result['updated']} holding{'' if result['updated'] == 1 else 's'} in {scope_label} using {mode_label} mode: "
+    if mode == "yahoo":
+        message += f"{yahoo_count} Yahoo, {none_count} no-source."
+    else:
+        message += f"{imported_count} imported actuals, {yahoo_count} Yahoo fallback, {none_count} no-source."
+    if snapshot_count:
+        message += f" Preserved {snapshot_count} Snowball snapshot row{'' if snapshot_count == 1 else 's'}."
+    if result["payment_rows"] and mode == "yahoo":
+        message += (
+            f" Ignored {result['payment_rows']} imported dividend payment"
+            f"{'' if result['payment_rows'] == 1 else 's'} for this Yahoo-only run."
+        )
+    elif result["payment_rows"]:
+        message += (
+            f" Found {result['payment_rows']} imported dividend payment"
+            f"{'' if result['payment_rows'] == 1 else 's'}."
+        )
+    if owner_actuals_updated:
+        message += f" Owner dividend actuals updated for {owner_actuals_updated} ticker{'' if owner_actuals_updated == 1 else 's'}."
+    return message
+
+
+@app.route("/api/repair-dividends-preview", methods=["POST"])
+def api_preview_repair_dividends_from_transactions():
+    """Preview source-aware dividend repair counts without writing changes."""
+    conn = get_connection()
+    try:
+        ensure_tables_exist(conn)
+        payload = request.get_json(silent=True) or {}
+        mode = _normalise_dividend_repair_mode(payload.get("mode"))
+        refresh_info = _get_refresh_target_info(conn)
+        scope = refresh_info["scope"]
+        source_pids = refresh_info["source_profile_ids"]
+        selected_profile_id = refresh_info["selected_profile_id"]
+        result = _recompute_dividend_fields_from_payments(
+            conn,
+            source_pids,
+            use_yahoo_fallback=(mode != "broker"),
+            use_imported_actuals=(mode != "yahoo"),
+            preserve_snapshots=(mode != "yahoo"),
+            dry_run=True,
+        )
+        scope_label = _dividend_repair_scope_label(scope, source_pids, selected_profile_id)
+        return jsonify({
+            "mode": mode,
+            "scope": scope,
+            "scope_label": scope_label,
+            "updated": result["updated"],
+            "payment_rows": result["payment_rows"],
+            "broker_updated": result["broker_updated"],
+            "yahoo_updated": result["yahoo_updated"],
+            "none_updated": result["none_updated"],
+            "snapshot_updated": result["snapshot_updated"],
+            "source_totals": result["source_totals"],
+            "accounts": result["accounts"],
+            "message": _dividend_repair_message(result, scope_label, mode, preview=True),
+        })
+    except Exception as e:
+        return jsonify({"error": f"Dividend repair preview failed: {e}"}), 500
+    finally:
+        conn.close()
+
+
+@app.route("/api/repair-dividends-from-transactions", methods=["POST"])
+def api_repair_dividends_from_transactions():
+    """Repair dividend fields from imported Schwab/broker dividend payments."""
+    backup_path = _create_import_backup()
+    conn = get_connection()
+    try:
+        ensure_tables_exist(conn)
+        payload = request.get_json(silent=True) or {}
+        mode = _normalise_dividend_repair_mode(payload.get("mode"))
+        refresh_info = _get_refresh_target_info(conn)
+        scope = refresh_info["scope"]
+        source_pids = refresh_info["source_profile_ids"]
+        selected_profile_id = refresh_info["selected_profile_id"]
+        result = _recompute_dividend_fields_from_payments(
+            conn,
+            source_pids,
+            use_yahoo_fallback=(mode != "broker"),
+            use_imported_actuals=(mode != "yahoo"),
+            preserve_snapshots=(mode != "yahoo"),
+        )
+        updated_pids = set(result["updated_profile_ids"])
+        conn.commit()
+
+        for pid in updated_pids:
+            populate_dividends(pid)
+            populate_income_tracking(pid)
+
+        conn.close()
+        conn = None
+
+        owner_lookup_conn = get_connection()
+        try:
+            owner_source_ids = set(_get_owner_source_profile_ids(owner_lookup_conn))
+        finally:
+            owner_lookup_conn.close()
+
+        owner_actuals_updated = 0
+        if scope == "owner" or any(pid in owner_source_ids for pid in source_pids):
+            _auto_reconcile_owner()
+            owner_conn = get_connection()
+            try:
+                owner_actuals_updated = _sync_owner_dividend_actuals_from_sources(owner_conn, source_pids)
+                owner_conn.commit()
+                if owner_actuals_updated:
+                    populate_dividends(1)
+                    populate_income_tracking(1)
+            finally:
+                owner_conn.close()
+
+        scope_label = _dividend_repair_scope_label(scope, source_pids, selected_profile_id)
+        message = _dividend_repair_message(result, scope_label, mode, owner_actuals_updated)
+
+        return jsonify({
+            "mode": mode,
+            "scope": scope,
+            "scope_label": scope_label,
+            "updated": result["updated"],
+            "payment_rows": result["payment_rows"],
+            "broker_updated": result["broker_updated"],
+            "yahoo_updated": result["yahoo_updated"],
+            "none_updated": result["none_updated"],
+            "snapshot_updated": result["snapshot_updated"],
+            "source_totals": result["source_totals"],
+            "accounts": result["accounts"],
+            "owner_actuals_updated": owner_actuals_updated,
+            "backup_created": bool(backup_path),
+            "message": message,
+        })
+    except Exception as e:
+        if conn is not None:
+            conn.rollback()
+        return jsonify({"error": f"Dividend repair failed: {e}"}), 500
+    finally:
+        if conn is not None:
+            conn.close()
+
 # ── Ticker Lookup (yfinance) ────────────────────────────────────────────────────
 
 @app.route("/api/lookup/<ticker>", methods=["GET"])
@@ -1908,6 +2084,448 @@ def _infer_dividend_frequency_from_history(history):
         return _infer_dividend_frequency_from_count(len(idx))
     except Exception:
         return _infer_dividend_frequency_from_count(len(history))
+
+
+def _fetch_yahoo_dividend_history_for_tickers(tickers):
+    """Return ticker -> per-share dividend Series for the last year."""
+    import yfinance as yf
+
+    tickers = sorted({(t or "").strip().upper() for t in tickers if t})
+    if not tickers:
+        return {}
+
+    histories = {}
+    try:
+        raw = yf.download(
+            " ".join(tickers),
+            period="1y",
+            progress=False,
+            auto_adjust=False,
+            actions=True,
+        )
+    except Exception:
+        raw = pd.DataFrame()
+
+    if not raw.empty:
+        try:
+            if isinstance(raw.columns, pd.MultiIndex):
+                if "Dividends" in raw.columns.get_level_values(0):
+                    divs = raw["Dividends"]
+                    for ticker in tickers:
+                        if ticker in divs.columns:
+                            series = divs[ticker][divs[ticker] > 0].dropna()
+                            if not series.empty:
+                                histories[ticker] = _ensure_naive_datetime_index(series)
+            elif "Dividends" in raw.columns and len(tickers) == 1:
+                series = raw["Dividends"][raw["Dividends"] > 0].dropna()
+                if not series.empty:
+                    histories[tickers[0]] = _ensure_naive_datetime_index(series)
+        except Exception:
+            pass
+
+    missing = [ticker for ticker in tickers if ticker not in histories]
+    for ticker in missing:
+        try:
+            series = yf.Ticker(ticker).dividends
+            if series is not None and len(series) > 0:
+                cutoff = pd.Timestamp.now(tz=getattr(series.index, "tz", None)) - pd.Timedelta(days=365)
+                recent = series[series.index >= cutoff]
+                recent = recent[recent > 0].dropna()
+                if not recent.empty:
+                    histories[ticker] = _ensure_naive_datetime_index(recent)
+        except Exception:
+            pass
+
+    return histories
+
+
+def _build_repair_metrics_from_series(
+    series,
+    holding,
+    source,
+    today,
+    jan1,
+    first_of_month,
+    trailing_start,
+):
+    quantity = float(holding["quantity"] or 0)
+    purchase_value = float(holding["purchase_value"] or 0)
+    current_value = float(holding["current_value"] or 0)
+    existing_total = float(holding["total_divs_received"] or 0)
+    purchase_ts = _parse_timestamp_value(holding["purchase_date"])
+
+    series = series.sort_index()
+    if purchase_ts is not None:
+        series = series[series.index >= purchase_ts]
+    series = series[series.index <= today]
+
+    if series.empty:
+        return None
+
+    ytd_divs = float(series[(series.index >= jan1) & (series.index <= today)].sum())
+    current_month = float(series[(series.index >= first_of_month) & (series.index <= today)].sum())
+    positive = series[series > 0]
+    trailing_positive = positive[(positive.index >= trailing_start) & (positive.index <= today)]
+    latest_payment = float(positive.iloc[-1]) if not positive.empty else 0.0
+
+    if source not in {"yahoo", "snapshot"}:
+        total_divs = float(series.sum())
+        latest_per_share = (latest_payment / quantity) if latest_payment > 0 and quantity > 0 else None
+    else:
+        # Yahoo history is only a market fallback; preserve imported/manual
+        # lifetime totals unless the position was purchased inside the history.
+        total_from_history = float(series.sum())
+        total_divs = total_from_history if purchase_ts is not None and purchase_ts >= series.index.min() else max(existing_total, ytd_divs)
+        latest_per_share = latest_payment / quantity if latest_payment > 0 and quantity > 0 else None
+
+    inferred_freq = None
+    annual_estimate = 0.0
+    if not trailing_positive.empty:
+        inferred_freq = _infer_dividend_frequency_from_history(trailing_positive)
+        freq_mult = {"W": 52, "52": 52, "M": 12, "Q": 4, "SA": 2, "A": 1}
+        mult = freq_mult.get(inferred_freq, 0)
+        trailing_count = len(pd.DatetimeIndex(trailing_positive.index).unique())
+        trailing_sum = float(trailing_positive.sum())
+        if mult and trailing_count < (mult * 0.75):
+            annual_estimate = latest_payment * mult
+        else:
+            annual_estimate = trailing_sum
+
+    monthly_estimate = annual_estimate / 12.0 if annual_estimate > 0 else 0.0
+    paid_for_itself = (total_divs / purchase_value) if purchase_value > 0 else 0.0
+    yoc = (annual_estimate / purchase_value) if annual_estimate > 0 and purchase_value > 0 else 0.0
+    cur_yield = (annual_estimate / current_value) if annual_estimate > 0 and current_value > 0 else 0.0
+
+    return {
+        "source": source,
+        "total_divs_received": round(total_divs, 2),
+        "ytd_divs": round(ytd_divs, 2),
+        "current_month_income": round(current_month, 2),
+        "paid_for_itself": round(paid_for_itself, 6),
+        "dividend_paid": round(latest_payment, 6) if latest_payment > 0 else None,
+        "div": round(latest_per_share, 6) if latest_per_share is not None else None,
+        "estim_payment_per_year": round(annual_estimate, 2) if annual_estimate > 0 else None,
+        "approx_monthly_income": round(monthly_estimate, 2) if monthly_estimate > 0 else None,
+        "annual_yield_on_cost": round(yoc, 4) if annual_estimate > 0 else None,
+        "current_annual_yield": round(cur_yield, 4) if annual_estimate > 0 else None,
+        "div_frequency": inferred_freq,
+    }
+
+
+def _apply_dividend_repair_metrics(conn, profile_id, ticker, metrics, existing_freq=None):
+    sets = [
+        "total_divs_received = ?",
+        "ytd_divs = ?",
+        "current_month_income = ?",
+        "paid_for_itself = ?",
+        "dividend_actuals_source = ?",
+    ]
+    vals = [
+        metrics["total_divs_received"],
+        metrics["ytd_divs"],
+        metrics["current_month_income"],
+        metrics["paid_for_itself"],
+        metrics["source"],
+    ]
+
+    optional_fields = [
+        "dividend_paid",
+        "div",
+        "estim_payment_per_year",
+        "approx_monthly_income",
+        "annual_yield_on_cost",
+        "current_annual_yield",
+    ]
+    for field in optional_fields:
+        if metrics.get(field) is not None:
+            sets.append(f"{field} = ?")
+            vals.append(metrics[field])
+
+    if metrics.get("div_frequency") and not existing_freq:
+        sets.append("div_frequency = ?")
+        vals.append(metrics["div_frequency"])
+
+    vals.extend([ticker, profile_id])
+    conn.execute(
+        f"UPDATE all_account_info SET {', '.join(sets)} WHERE ticker = ? AND profile_id = ?",
+        vals,
+    )
+
+
+def _clear_dividend_actuals(conn, profile_id, ticker):
+    conn.execute(
+        """UPDATE all_account_info
+           SET total_divs_received = 0,
+               ytd_divs = 0,
+               current_month_income = 0,
+               paid_for_itself = 0,
+               dividend_actuals_source = 'none'
+           WHERE ticker = ? AND profile_id = ?""",
+        (ticker, profile_id),
+    )
+
+
+DIVIDEND_REPAIR_SOURCE_KEYS = ("schwab", "fidelity", "snowball", "etrade", "imported", "snapshot", "yahoo", "none")
+IMPORTED_DIVIDEND_SOURCES = {"schwab", "fidelity", "snowball", "etrade", "imported"}
+
+
+def _normalise_dividend_payment_source(source):
+    value = str(source or "").strip().lower()
+    if value.startswith("schwab"):
+        return "schwab"
+    if value.startswith("fidelity"):
+        return "fidelity"
+    if value.startswith("snowball"):
+        return "snowball"
+    if value.startswith("etrade") or value.startswith("e*trade") or value.startswith("e-trade"):
+        return "etrade"
+    return "imported"
+
+
+def _source_count_template():
+    return {source: 0 for source in DIVIDEND_REPAIR_SOURCE_KEYS}
+
+
+def _holding_payment_source(rows):
+    sources = {_normalise_dividend_payment_source(row[2]) for row in rows}
+    if len(sources) == 1:
+        return next(iter(sources))
+    return "imported"
+
+
+def _recompute_dividend_fields_from_payments(
+    conn,
+    profile_ids,
+    use_yahoo_fallback=True,
+    use_imported_actuals=True,
+    preserve_snapshots=True,
+    dry_run=False,
+):
+    """Rebuild dividend actuals with broker-first, Yahoo-fallback priority."""
+    from collections import defaultdict
+    from datetime import date as _date
+
+    profile_ids = [int(pid) for pid in profile_ids if pid is not None]
+    if not profile_ids:
+        return {
+            "updated": 0,
+            "payment_rows": 0,
+            "broker_updated": 0,
+            "yahoo_updated": 0,
+            "none_updated": 0,
+            "snapshot_updated": 0,
+            "source_totals": _source_count_template(),
+            "accounts": [],
+            "updated_profile_ids": set(),
+        }
+
+    placeholders = ",".join("?" * len(profile_ids))
+    profile_rows = conn.execute(
+        f"SELECT id, name FROM profiles WHERE id IN ({placeholders})",
+        profile_ids,
+    ).fetchall()
+    profile_names = {int(row["id"]): row["name"] for row in profile_rows}
+    account_counts = {
+        pid: {
+            "profile_id": pid,
+            "name": profile_names.get(pid, f"Profile {pid}"),
+            **_source_count_template(),
+            "total": 0,
+        }
+        for pid in profile_ids
+    }
+
+    holdings = conn.execute(
+        f"""SELECT ticker, profile_id, quantity, purchase_value, current_value,
+                  purchase_date, div_frequency, total_divs_received,
+                  ytd_divs, current_month_income, paid_for_itself,
+                  dividend_actuals_source
+           FROM all_account_info
+           WHERE profile_id IN ({placeholders})
+             AND COALESCE(quantity, 0) > 0
+           ORDER BY profile_id, ticker""",
+        profile_ids,
+    ).fetchall()
+
+    payment_rows = conn.execute(
+        f"""SELECT ticker, profile_id, payment_date, amount, source
+            FROM dividend_payments
+            WHERE profile_id IN ({placeholders})
+            ORDER BY profile_id, ticker, payment_date""",
+        profile_ids,
+    ).fetchall()
+
+    broker_grouped = defaultdict(list)
+    for row in payment_rows:
+        try:
+            ts = pd.Timestamp(row["payment_date"]).normalize()
+        except Exception:
+            continue
+        if pd.isna(ts):
+            continue
+        broker_grouped[(row["profile_id"], row["ticker"])].append((ts, float(row["amount"] or 0), row["source"]))
+
+    if use_imported_actuals:
+        missing_broker_tickers = {
+            row["ticker"]
+            for row in holdings
+            if (row["profile_id"], row["ticker"]) not in broker_grouped
+        }
+    else:
+        missing_broker_tickers = {row["ticker"] for row in holdings}
+    yahoo_histories = _fetch_yahoo_dividend_history_for_tickers(missing_broker_tickers) if use_yahoo_fallback else {}
+
+    today = pd.Timestamp(_date.today())
+    jan1 = pd.Timestamp(today.year, 1, 1)
+    first_of_month = pd.Timestamp(today.year, today.month, 1)
+    trailing_start = today - pd.Timedelta(days=365)
+
+    updated = 0
+    broker_updated = 0
+    yahoo_updated = 0
+    none_updated = 0
+    snapshot_updated = 0
+    source_totals = _source_count_template()
+    updated_profile_ids = set()
+
+    def count_source(profile_id, source):
+        if source not in DIVIDEND_REPAIR_SOURCE_KEYS:
+            source = "imported"
+        account = account_counts.setdefault(
+            profile_id,
+            {
+                "profile_id": profile_id,
+                "name": profile_names.get(profile_id, f"Profile {profile_id}"),
+                **_source_count_template(),
+                "total": 0,
+            },
+        )
+        account[source] += 1
+        account["total"] += 1
+        source_totals[source] += 1
+
+    for holding in holdings:
+        profile_id = holding["profile_id"]
+        ticker = holding["ticker"]
+        key = (profile_id, ticker)
+        metrics = None
+
+        if use_imported_actuals and key in broker_grouped:
+            series = pd.Series(
+                [amount for _, amount, _ in broker_grouped[key]],
+                index=pd.DatetimeIndex([ts for ts, _, _ in broker_grouped[key]]),
+                dtype=float,
+            )
+            payment_source = _holding_payment_source(broker_grouped[key])
+            metrics = _build_repair_metrics_from_series(
+                series, holding, payment_source, today, jan1, first_of_month, trailing_start
+            )
+        elif ticker in yahoo_histories:
+            per_share = yahoo_histories[ticker]
+            quantity = float(holding["quantity"] or 0)
+            series = per_share * quantity
+            metrics = _build_repair_metrics_from_series(
+                series, holding, "yahoo", today, jan1, first_of_month, trailing_start
+            )
+        elif preserve_snapshots and (holding["dividend_actuals_source"] or "").lower() == "snapshot":
+            metrics = {
+                "source": "snapshot",
+                "total_divs_received": float(holding["total_divs_received"] or 0),
+                "ytd_divs": float(holding["ytd_divs"] or 0),
+                "current_month_income": float(holding["current_month_income"] or 0),
+                "paid_for_itself": float(holding["paid_for_itself"] or 0),
+            }
+
+        if metrics:
+            if not dry_run:
+                _apply_dividend_repair_metrics(
+                    conn,
+                    profile_id,
+                    ticker,
+                    metrics,
+                    existing_freq=holding["div_frequency"],
+                )
+            updated += 1
+            broker_updated += 1 if metrics["source"] in IMPORTED_DIVIDEND_SOURCES else 0
+            yahoo_updated += 1 if metrics["source"] == "yahoo" else 0
+            snapshot_updated += 1 if metrics["source"] == "snapshot" else 0
+            count_source(profile_id, metrics["source"])
+            updated_profile_ids.add(profile_id)
+        else:
+            if not dry_run:
+                _clear_dividend_actuals(conn, profile_id, ticker)
+            updated += 1
+            none_updated += 1
+            count_source(profile_id, "none")
+            updated_profile_ids.add(profile_id)
+
+    return {
+        "updated": updated,
+        "payment_rows": len(payment_rows),
+        "broker_updated": broker_updated,
+        "yahoo_updated": yahoo_updated,
+        "none_updated": none_updated,
+        "snapshot_updated": snapshot_updated,
+        "source_totals": source_totals,
+        "accounts": list(account_counts.values()),
+        "updated_profile_ids": updated_profile_ids,
+    }
+
+
+def _sync_owner_dividend_actuals_from_sources(conn, source_ids, owner_id=1):
+    """For repair flows, rebuild Owner dividend actuals from repaired source rows."""
+    source_ids = [int(pid) for pid in source_ids if pid is not None and int(pid) != owner_id]
+    if not source_ids:
+        return 0
+
+    placeholders = ",".join("?" * len(source_ids))
+    rows = conn.execute(
+        f"""SELECT ticker,
+                  SUM(total_divs_received) as total_divs_received,
+                  SUM(ytd_divs) as ytd_divs,
+                  SUM(current_month_income) as current_month_income,
+                  GROUP_CONCAT(DISTINCT COALESCE(dividend_actuals_source, 'none')) as sources
+           FROM all_account_info
+           WHERE profile_id IN ({placeholders})
+             AND COALESCE(quantity, 0) > 0
+           GROUP BY ticker""",
+        source_ids,
+    ).fetchall()
+
+    updated = 0
+    for row in rows:
+        source_set = {
+            s for s in (row["sources"] or "none").split(",")
+            if s and s != "none"
+        }
+        source = "none"
+        if len(source_set) == 1:
+            source = next(iter(source_set))
+        elif len(source_set) > 1:
+            source = "mixed"
+
+        before = conn.total_changes
+        conn.execute(
+            """UPDATE all_account_info
+               SET total_divs_received = ?,
+                   ytd_divs = ?,
+                   current_month_income = ?,
+                   paid_for_itself = CASE WHEN purchase_value > 0 THEN ? / purchase_value ELSE 0 END,
+                   dividend_actuals_source = ?
+               WHERE ticker = ? AND profile_id = ?""",
+            (
+                row["total_divs_received"] or 0,
+                row["ytd_divs"] or 0,
+                row["current_month_income"] or 0,
+                row["total_divs_received"] or 0,
+                source,
+                row["ticker"],
+                owner_id,
+            ),
+        )
+        if conn.total_changes > before:
+            updated += 1
+    return updated
 
 
 def _add_months_preserving_day(ts, months):
@@ -2716,7 +3334,7 @@ def refresh_market_data():
     # - Owner: source accounts that feed Owner
     # - Aggregate: aggregate member profiles
     all_rows = conn.execute(
-        "SELECT profile_id, ticker, description, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date, ex_div_date, div_pay_date, div_frequency, div, estim_payment_per_year, approx_monthly_income, current_value FROM all_account_info WHERE profile_id IN ({})".format(
+        "SELECT profile_id, ticker, description, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date, ex_div_date, div_pay_date, div_frequency, div, estim_payment_per_year, approx_monthly_income, current_value, ytd_divs, current_month_income FROM all_account_info WHERE profile_id IN ({})".format(
             ",".join("?" * len(source_pids))
         ) + " AND quantity > 0",
         source_pids,
@@ -2746,11 +3364,27 @@ def refresh_market_data():
             "estim_payment_per_year": r["estim_payment_per_year"] or 0,
             "approx_monthly_income": r["approx_monthly_income"] or 0,
             "current_value": r["current_value"] or 0,
+            "ytd_divs": r["ytd_divs"] or 0,
+            "current_month_income": r["current_month_income"] or 0,
         }
     description_map = {}
+    existing_dividend_hint = {}
     for r in all_rows:
         if r["ticker"] not in description_map and r["description"]:
             description_map[r["ticker"]] = r["description"]
+        if r["ticker"] not in existing_dividend_hint:
+            existing_dividend_hint[r["ticker"]] = False
+        if (
+            (r["div"] or 0) > 0
+            or (r["estim_payment_per_year"] or 0) > 0
+            or (r["approx_monthly_income"] or 0) > 0
+            or (r["ytd_divs"] or 0) > 0
+            or (r["current_month_income"] or 0) > 0
+            or bool(r["div_frequency"])
+            or bool(r["ex_div_date"])
+            or bool(r["div_pay_date"])
+        ):
+            existing_dividend_hint[r["ticker"]] = True
 
     # Batch download prices + dividends (one yfinance call for all tickers)
     ticker_str = " ".join(tickers)
@@ -2924,18 +3558,43 @@ def refresh_market_data():
             }
         elif t in close_history:
             # Batch download returned valid market data for this ticker and
-            # showed no positive dividends in the period, so treat that as a
-            # definitive "no current dividend" signal instead of leaving stale
-            # dividend metadata behind due to a flaky per-ticker fallback call.
-            div_snapshot_map[t] = {
-                "known": True,
-                "has_dividend": False,
-                "div": 0.0,
-                "ex_div_date": None,
-                "div_pay_date": None,
-                "freq": None,
-                "history": pd.Series(dtype=float),
-            }
+            # showed no positive dividends in the period. If this ticker already
+            # had dividend data, preserve those fields unless a fallback source
+            # positively returns replacement dividend data; Yahoo often returns
+            # prices while omitting actions for income funds.
+            if existing_dividend_hint.get(t):
+                preferred_freq = 'W' if t in weekly_set else db_freq_map.get(t)
+                lookup_symbol = rename_map.get(t, t)
+                try:
+                    fallback_snapshot = _fetch_refresh_dividend_snapshot(
+                        yf.Ticker(lookup_symbol),
+                        preferred_freq=preferred_freq,
+                    )
+                except Exception:
+                    fallback_snapshot = None
+
+                if fallback_snapshot and fallback_snapshot.get("has_dividend"):
+                    div_snapshot_map[t] = fallback_snapshot
+                else:
+                    div_snapshot_map[t] = {
+                        "known": False,
+                        "has_dividend": False,
+                        "div": 0.0,
+                        "ex_div_date": None,
+                        "div_pay_date": None,
+                        "freq": None,
+                        "history": pd.Series(dtype=float),
+                    }
+            else:
+                div_snapshot_map[t] = {
+                    "known": True,
+                    "has_dividend": False,
+                    "div": 0.0,
+                    "ex_div_date": None,
+                    "div_pay_date": None,
+                    "freq": None,
+                    "history": pd.Series(dtype=float),
+                }
         else:
             preferred_freq = 'W' if t in weekly_set else db_freq_map.get(t)
             lookup_symbol = rename_map.get(t, t)
@@ -3052,11 +3711,11 @@ def refresh_market_data():
             current_month_income = 0.0
             div_series = snapshot.get("history")
             close_series = close_history.get(t)
+            has_dividend_history = div_series is not None and not div_series.empty
 
             if (
                 is_drip
-                and div_series is not None
-                and not div_series.empty
+                and has_dividend_history
                 and close_series is not None
             ):
                 drip_start = import_date or purchase_date or None
@@ -3176,7 +3835,7 @@ def refresh_market_data():
             # Actual YTD and current-month dividends from yfinance history,
             # filtered to only include dividends on or after purchase_date.
             # Uses DRIP-adjusted qty for accurate income calculation.
-            if snapshot_known and div_series is not None and not div_series.empty and not is_drip:
+            if snapshot_known and has_dividend_history and not is_drip:
                 div_series = _ensure_naive_datetime_index(div_series)
                 jan1 = pd.Timestamp(_dt.now().year, 1, 1)
                 today = pd.Timestamp(_dt.now().date())
@@ -3195,7 +3854,10 @@ def refresh_market_data():
                 ytd_divs = round(float(ytd.sum()) * qty, 2) if not ytd.empty else 0
                 current_month_income = round(float(curmo.sum()) * qty, 2) if not curmo.empty else 0
 
-            if snapshot_known:
+            if snapshot_known and (
+                has_dividend_history
+                or (not has_dividend and not existing_dividend_hint.get(t))
+            ):
                 sets.append("ytd_divs = ?")
                 vals.append(round(ytd_divs, 2))
                 sets.append("current_month_income = ?")
@@ -3309,6 +3971,7 @@ def list_holdings():
                    MAX(a.import_date) as import_date,
                    MIN(a.purchase_date) as purchase_date,
                    {cur_mo} as current_month_income,
+                   GROUP_CONCAT(DISTINCT COALESCE(a.dividend_actuals_source, 'none')) as dividend_actuals_sources,
                    (SELECT c2.name FROM ticker_categories tc2
                     JOIN categories c2 ON tc2.category_id = c2.id
                     WHERE tc2.ticker = a.ticker AND tc2.profile_id = (
@@ -3350,6 +4013,14 @@ def list_holdings():
     # (e.g. no dividends received yet this month) and should NOT trigger
     # the full-month estimate fallback.
     for r in results:
+        raw_sources = r.pop("dividend_actuals_sources", None)
+        if raw_sources is not None:
+            source_set = {s for s in str(raw_sources).split(",") if s and s != "none"}
+            r["dividend_actuals_source"] = (
+                next(iter(source_set)) if len(source_set) == 1
+                else "mixed" if len(source_set) > 1
+                else "none"
+            )
         if r.get("current_month_income") is None:
             r["current_month_income"] = _estimate_current_month_income(r)
         if r.get("ytd_divs") is None:
@@ -18874,6 +19545,9 @@ def general_scanner_save_defaults():
     with open(defaults_path, "w") as f:
         _json.dump(data, f, indent=2)
     return jsonify(ok=True, count=len(data))
+
+
+register_options_routes(app)
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────

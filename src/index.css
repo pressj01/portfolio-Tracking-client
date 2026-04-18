@@ -1886,3 +1886,62 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
 .sst-wrap::-webkit-scrollbar-track { background:#0e1117; }
 .sst-wrap::-webkit-scrollbar-thumb { background:#3a3a5c; border-radius:4px; }
 .sst-wrap::-webkit-scrollbar-thumb:hover { background:#5a5a8c; }
+
+/* ── Option Trading Tools ──────────────────────────────────────────── */
+.otp-ticker-input {
+  background:#0e1117; border:1px solid #334; color:#e0e0e0;
+  padding:0.55rem 0.75rem; border-radius:6px; font-size:1.1rem;
+  font-weight:600; letter-spacing:0.05em; width:120px; text-transform:uppercase;
+}
+.otp-ticker-input:focus { outline:none; border-color:#64b5f6; }
+
+.otp-quote-row {
+  display:flex; align-items:center; gap:2rem; flex-wrap:wrap;
+  padding-top:0.25rem; border-top:1px solid #0f3460;
+  margin-top:0.5rem; padding-top:0.75rem;
+}
+.otp-quote-ticker { display:flex; flex-direction:column; min-width:140px; }
+.otp-sym { font-size:1.4rem; font-weight:700; color:#64b5f6; }
+.otp-name { font-size:0.78rem; color:#8aa; }
+.otp-quote-item { display:flex; flex-direction:column; min-width:72px; }
+.otp-quote-label { font-size:0.7rem; color:#7a8; text-transform:uppercase; letter-spacing:0.05em; }
+.otp-quote-val { font-size:1rem; font-weight:600; color:#e0e0e0; }
+
+.otp-controls-row {
+  display:flex; align-items:center; gap:1.5rem; flex-wrap:wrap;
+  margin-bottom:1rem;
+}
+.otp-ctrl { display:flex; flex-direction:column; gap:0.25rem; }
+.otp-ctrl > span {
+  font-size:0.7rem; color:#7a8; text-transform:uppercase; letter-spacing:0.05em;
+}
+.otp-ctrl select {
+  background:#0e1117; border:1px solid #334; color:#e0e0e0;
+  padding:0.4rem 0.6rem; border-radius:4px; font-size:0.9rem;
+}
+.otp-dte { font-size:0.85rem; color:#90caf9; align-self:flex-end; padding-bottom:0.2rem; }
+
+.otp-chain-wrap { overflow-x:auto; }
+.otp-chain {
+  width:100%; border-collapse:collapse; font-size:0.82rem;
+  font-family: 'Consolas', 'Menlo', monospace;
+}
+.otp-chain th, .otp-chain td {
+  padding:0.28rem 0.5rem; text-align:right; border-bottom:1px solid #1a2744;
+}
+.otp-chain thead th {
+  position:sticky; top:0; background:#16213e; z-index:2;
+  font-weight:600; text-transform:uppercase; font-size:0.72rem; letter-spacing:0.04em;
+}
+.otp-side-call { color:#66bb6a; background:#0d2e1a !important; border-bottom:2px solid #2e5c3a; }
+.otp-side-put  { color:#ef5350; background:#2e1010 !important; border-bottom:2px solid #5c2e2e; }
+.otp-strike-head { background:#0f3460 !important; color:#64b5f6; text-align:center !important; }
+.otp-col-head th { color:#7a8; font-size:0.68rem !important; }
+.otp-strike-cell {
+  background:#0f3460; color:#90caf9; font-weight:700; text-align:center !important;
+  border-left:1px solid #1a4480; border-right:1px solid #1a4480;
+}
+.otp-chain tbody tr:hover { background:#1a2744; }
+.otp-itm { background:rgba(100,181,246,0.06); }
+.otp-row-atm td { border-top:1px dashed #64b5f6; border-bottom:1px dashed #64b5f6; }
+.otp-row-atm .otp-strike-cell { background:#1a4480; color:#fff; }
