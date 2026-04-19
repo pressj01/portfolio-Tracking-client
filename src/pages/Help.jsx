@@ -1794,23 +1794,25 @@ function SafeWithdrawalHelp() {
     <div>
       <h2>Safe Withdrawal Amount</h2>
       <p style={{ marginBottom: '1rem' }}>
-        This page compares your current estimated monthly dividend income to a simple 8%-of-cost withdrawal rule.
-        It is a quick planning view, not a Monte Carlo retirement model.
+        This page compares your current estimated monthly dividend income to a configurable percent-of-cost withdrawal rule
+        (default 8%). It is a quick planning view, not a Monte Carlo retirement model.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What It Shows</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>8% of Cost / Month</strong> — monthly withdrawal amount based on 8% of original cost basis.</li>
+        <li><strong>N% of Cost / Week, Month, Year</strong> — withdrawal amounts at the selected percent of original cost basis.</li>
         <li><strong>Est Monthly Dividends</strong> — current estimated monthly income from the selected holdings.</li>
+        <li><strong>Break-even % (Portfolio YoC)</strong> — aggregate yield on cost for the selected holdings. Any withdrawal rate above this eats into principal. The card turns <span style={{ color: '#4ade80' }}>green</span> when your selected percent is below break-even and <span style={{ color: '#ff6b6b' }}>red</span> when it exceeds it.</li>
         <li><strong>Yield on Cost / Current Yield</strong> — side-by-side context for each holding.</li>
-        <li><strong>Sustainable flag</strong> — highlights holdings where current income meets or exceeds the 8%-of-cost target.</li>
+        <li><strong>Sustainable flag</strong> — highlights holdings where current income meets or exceeds the selected percent-of-cost target.</li>
       </ul>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters and Table</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Category filter</strong> — focus the view on one or more categories.</li>
-        <li><strong>Holdings table</strong> — shows each ticker's cost basis, estimated monthly dividends, yield on cost, current yield, sustainability status, and 8%-rule comparison.</li>
-        <li><strong>Totals row</strong> — rolls up the selected holdings so you can compare your portfolio-level income vs. the 8% benchmark.</li>
+        <li><strong>Percent of Cost dropdown</strong> — pick any rate from 1% to 30% (default 8%). All column labels, row amounts, totals, and the break-even comparison recalculate live.</li>
+        <li><strong>Category filter</strong> — focus the view on one or more categories. Break-even % reflects only the filtered holdings.</li>
+        <li><strong>Holdings table</strong> — shows each ticker's cost basis, estimated monthly dividends, yield on cost, current yield, sustainability status, and the percent-of-cost comparison.</li>
+        <li><strong>Totals row</strong> — rolls up the selected holdings so you can compare your portfolio-level income vs. the chosen benchmark.</li>
       </ul>
     </div>
   )

@@ -4,11 +4,11 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 const fmt = v => v != null ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '\u2014'
 const fmtDate = v => v || '\u2014'
 
-function MetricCard({ label, value }) {
+function MetricCard({ label, value, valueColor }) {
   return (
     <div className="summary-card">
       <div className="summary-label">{label}</div>
-      <div className="summary-value">{value ?? '\u2014'}</div>
+      <div className="summary-value" style={valueColor ? { color: valueColor } : undefined}>{value ?? '\u2014'}</div>
     </div>
   )
 }
@@ -23,6 +23,7 @@ export default function SafeWithdrawal() {
   const [sortAsc, setSortAsc] = useState(false)
   const [selCats, setSelCats] = useState([])
   const [catOpen, setCatOpen] = useState(false)
+  const [pct, setPct] = useState(8)
   const catRef = useRef(null)
 
   // Close dropdown on outside click
@@ -50,7 +51,8 @@ export default function SafeWithdrawal() {
     const monthlyDiv = r.approx_monthly_income || 0
     const hasDividend = monthlyDiv > 0
     const yieldOnCost = cost > 0 ? ((r.estim_payment_per_year || 0) / cost) * 100 : 0
-    const sustainable = hasDividend && yieldOnCost >= 8
+    const sustainable = hasDividend && yieldOnCost >= pct
+    const rate = pct / 100
     return {
       ticker: r.ticker,
       category: r.category || r.classification_type || '',
@@ -60,14 +62,16 @@ export default function SafeWithdrawal() {
       current_price: r.current_price || 0,
       quantity: r.quantity || 0,
       est_monthly_div: monthlyDiv,
+      cost,
+      annual_div: r.estim_payment_per_year || 0,
       yield_on_cost: yieldOnCost,
       current_yield: (r.current_annual_yield || 0) * 100,
-      w8_weekly: hasDividend ? cost * 0.08 / 52 : 0,
-      w8_monthly: hasDividend ? cost * 0.08 / 12 : 0,
-      w8_annually: hasDividend ? cost * 0.08 : 0,
+      w8_weekly: hasDividend ? cost * rate / 52 : 0,
+      w8_monthly: hasDividend ? cost * rate / 12 : 0,
+      w8_annually: hasDividend ? cost * rate : 0,
       status: !hasDividend ? 'No Distribution' : !sustainable ? 'Distribution rate too low' : '',
     }
-  }), [rows])
+  }), [rows, pct])
 
   const categoryList = useMemo(() => {
     const names = [...new Set(allComputed.map(r => r.category).filter(Boolean))].sort()
@@ -79,12 +83,17 @@ export default function SafeWithdrawal() {
     return allComputed.filter(r => selCats.includes(r.category))
   }, [allComputed, selCats])
 
-  const totals = useMemo(() => ({
-    est_monthly_div: computed.reduce((s, r) => s + r.est_monthly_div, 0),
-    w8_weekly: computed.reduce((s, r) => s + r.w8_weekly, 0),
-    w8_monthly: computed.reduce((s, r) => s + r.w8_monthly, 0),
-    w8_annually: computed.reduce((s, r) => s + r.w8_annually, 0),
-  }), [computed])
+  const totals = useMemo(() => {
+    const totalCost = computed.reduce((s, r) => s + r.cost, 0)
+    const totalAnnualDiv = computed.reduce((s, r) => s + r.annual_div, 0)
+    return {
+      est_monthly_div: computed.reduce((s, r) => s + r.est_monthly_div, 0),
+      w8_weekly: computed.reduce((s, r) => s + r.w8_weekly, 0),
+      w8_monthly: computed.reduce((s, r) => s + r.w8_monthly, 0),
+      w8_annually: computed.reduce((s, r) => s + r.w8_annually, 0),
+      break_even_pct: totalCost > 0 ? (totalAnnualDiv / totalCost) * 100 : 0,
+    }
+  }, [computed])
 
   const handleSort = key => {
     if (sortCol === key) setSortAsc(a => !a)
@@ -114,9 +123,9 @@ export default function SafeWithdrawal() {
     { key: 'est_monthly_div',label: 'Est Monthly Div', fmt, align: 'right' },
     { key: 'yield_on_cost',  label: 'Yield on Cost',  fmt: v => `${Number(v).toFixed(2)}%`, align: 'right' },
     { key: 'current_yield',  label: 'Current Yield',  fmt: v => `${Number(v).toFixed(2)}%`, align: 'right' },
-    { key: 'w8_weekly',      label: '8% Cost / Week',  fmt, align: 'right' },
-    { key: 'w8_monthly',     label: '8% Cost / Month', fmt, align: 'right' },
-    { key: 'w8_annually',    label: '8% Cost / Year',  fmt, align: 'right' },
+    { key: 'w8_weekly',      label: `${pct}% Cost / Week`,  fmt, align: 'right' },
+    { key: 'w8_monthly',     label: `${pct}% Cost / Month`, fmt, align: 'right' },
+    { key: 'w8_annually',    label: `${pct}% Cost / Year`,  fmt, align: 'right' },
     { key: 'status',         label: 'Status', fmt: v => v || '', color: v => v ? '#ff6b6b' : undefined },
   ]
 
@@ -126,7 +135,7 @@ export default function SafeWithdrawal() {
     <div className="page">
       <h1>Safe Withdrawal Amount</h1>
       <p style={{ color: '#8899aa', marginTop: '-1rem', marginBottom: '1.25rem', fontSize: '0.85rem' }}>
-        Estimates safe spending from dividends using 8% of purchase cost as a benchmark.
+        Estimates safe spending from dividends using {pct}% of purchase cost as a benchmark.
       </p>
 
       {loading && <p>Loading...</p>}
@@ -162,14 +171,26 @@ export default function SafeWithdrawal() {
                   </div>
                 )}
               </div>
+              <div className="growth-filter-group">
+                <label>Percent of Cost</label>
+                <select className="btn btn-secondary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem' }}
+                  value={pct} onChange={e => setPct(Number(e.target.value))}>
+                  {Array.from({ length: 30 }, (_, i) => i + 1).map(n => (
+                    <option key={n} value={n}>{n}%</option>
+                  ))}
+                </select>
+              </div>
             </div>
           )}
 
           <div className="summary-strip">
-            <MetricCard label="8% of Cost / Week" value={fmt(totals.w8_weekly)} />
-            <MetricCard label="8% of Cost / Month" value={fmt(totals.w8_monthly)} />
-            <MetricCard label="8% of Cost / Year" value={fmt(totals.w8_annually)} />
+            <MetricCard label={`${pct}% of Cost / Week`} value={fmt(totals.w8_weekly)} />
+            <MetricCard label={`${pct}% of Cost / Month`} value={fmt(totals.w8_monthly)} />
+            <MetricCard label={`${pct}% of Cost / Year`} value={fmt(totals.w8_annually)} />
             <MetricCard label="Est Monthly Dividends" value={fmt(totals.est_monthly_div)} />
+            <MetricCard label="Break-even % (Portfolio YoC)"
+              value={`${totals.break_even_pct.toFixed(2)}%`}
+              valueColor={pct > totals.break_even_pct ? '#ff6b6b' : '#4ade80'} />
           </div>
 
           <div className="sticky-table-wrap" style={{ marginTop: '1rem' }}>
