@@ -35,6 +35,7 @@ import Help from './pages/Help'
 import TechnicalScanner from './pages/TechnicalScanner'
 import GeneralScanner from './pages/GeneralScanner'
 import PortfolioTester from './pages/PortfolioTester'
+import SecurityResearch from './pages/SecurityResearch'
 // Option Trading Tools and Option Education are intentionally excluded from
 // deployed builds — still in development, not ready for production.
 // import OptionTradingTools from './pages/OptionTradingTools'
@@ -110,6 +111,7 @@ function App() {
         <Route path="/scanner" element={<TechnicalScanner />} />
         <Route path="/general-scanner" element={<GeneralScanner />} />
         <Route path="/portfolio-tester" element={<PortfolioTester />} />
+        <Route path="/security-research" element={<SecurityResearch />} />
         {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
         <Route path="/help" element={<Help />} />
       </Routes>
@@ -156,6 +158,7 @@ function Nav() {
       </NavDropdown>
       <NavDropdown label="Analysis">
         <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>
+        <NavLink to="/security-research">Security Research</NavLink>
         <NavLink to="/watchlist">Watchlist</NavLink>
         <NavLink to="/buy-sell-signals">Buy / Sell Signals</NavLink>
         <NavLink to="/nav-erosion">NAV Erosion</NavLink>

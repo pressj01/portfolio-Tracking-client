@@ -7665,6 +7665,549 @@ def ticker_return_1y(ticker):
         return jsonify({"error": f"Could not compute return data for {ticker}: {str(e)}"}), 500
 
 
+def _research_clean_value(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if isinstance(value, (int, float)):
+        if math.isnan(float(value)) or math.isinf(float(value)):
+            return None
+        return float(value)
+    if hasattr(value, "item"):
+        try:
+            return _research_clean_value(value.item())
+        except Exception:
+            pass
+    return value
+
+
+def _research_info_value(info, *keys):
+    for key in keys:
+        value = _research_clean_value(info.get(key))
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _research_pct(value):
+    value = _research_clean_value(value)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        is_percent = "%" in value
+        clean = re.sub(r"[^0-9.\-]", "", value)
+        if not clean:
+            return None
+        if is_percent:
+            return round(float(clean), 2)
+        value = clean
+    value = float(value)
+    return round(value * 100, 2) if abs(value) <= 1 else round(value, 2)
+
+
+def _research_money(value):
+    value = _research_clean_value(value)
+    if value is None:
+        return None
+    return round(float(value), 2)
+
+
+def _research_expense_pct(*values):
+    for value in values:
+        value = _research_clean_value(value)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            if "%" in value:
+                return _research_pct(value)
+            value = re.sub(r"[^0-9.\-]", "", value)
+            if not value:
+                continue
+        value = float(value)
+        return round(value * 100, 2) if abs(value) < 0.02 else round(value, 2)
+    return None
+
+
+def _research_dividend_frequency(dividends):
+    if dividends is None or dividends.empty:
+        return None
+    divs = dividends[dividends > 0].dropna()
+    if divs.empty:
+        return None
+    recent = divs[divs.index >= (divs.index.max() - pd.DateOffset(months=18))]
+    count = len(recent) if len(recent) else len(divs.tail(12))
+    if count >= 40:
+        return "Weekly"
+    if count >= 10:
+        return "Monthly"
+    if count >= 5:
+        return "Quarterly/Monthly"
+    if count >= 3:
+        return "Quarterly"
+    if count >= 2:
+        return "Semiannual"
+    return "Annual/Irregular"
+
+
+def _research_top_holdings(fund_data, limit=10):
+    try:
+        holdings = fund_data.top_holdings
+    except Exception:
+        return []
+    if holdings is None or holdings.empty:
+        return []
+
+    rows = []
+    for symbol, row in holdings.head(limit).iterrows():
+        percent = _research_clean_value(row.get("Holding Percent"))
+        rows.append({
+            "symbol": str(symbol) if symbol is not None else "",
+            "name": row.get("Name") or str(symbol),
+            "weight_pct": round(float(percent) * 100, 2) if percent is not None and abs(float(percent)) <= 1 else _research_pct(percent),
+        })
+    return rows
+
+
+def _research_weight_map(value):
+    if not isinstance(value, dict):
+        return []
+    rows = []
+    for key, weight in value.items():
+        clean = _research_clean_value(weight)
+        if clean is None:
+            continue
+        label = str(key).replace("_", " ").replace("-", " ").title()
+        rows.append({"name": label, "weight_pct": round(float(clean) * 100, 2)})
+    return sorted(rows, key=lambda r: r["weight_pct"], reverse=True)
+
+
+_KNOWN_FUND_ISSUERS = (
+    "iShares", "BlackRock", "Vanguard", "Schwab", "SPDR", "State Street",
+    "Invesco", "JPMorgan", "JP Morgan", "Fidelity", "Goldman Sachs", "PIMCO",
+    "First Trust", "Eaton Vance", "Nuveen", "Cohen & Steers", "Calamos",
+    "Allspring", "T. Rowe Price", "Franklin", "WisdomTree", "Direxion",
+    "ProShares", "Global X", "Hartford", "Putnam", "Neuberger Berman",
+    "Tortoise", "DoubleLine", "Western Asset", "Guggenheim", "Virtus",
+    "Wells Fargo", "Aberdeen", "Gabelli", "Royce", "Tri-Continental",
+    "John Hancock", "MFS", "BNY Mellon", "DWS", "Pioneer", "Voya",
+    "Columbia", "Lazard", "Pacer", "Roundhill", "YieldMax", "REX",
+    "Defiance", "Innovator", "Amplify", "Simplify", "KraneShares", "VistaShares",
+)
+
+
+def _derive_issuer(info, name):
+    family = _research_info_value(info, "fundFamily")
+    if family:
+        return family
+    name_l = (name or "").lower()
+    for issuer in _KNOWN_FUND_ISSUERS:
+        if issuer.lower() in name_l:
+            return issuer
+    return None
+
+
+def _derive_legal_type(quote_type, summary, fund_overview, type_disp, name=None, industry=None):
+    overview_legal = (fund_overview or {}).get("legalType") if isinstance(fund_overview, dict) else None
+    if overview_legal:
+        return overview_legal
+    summary_l = (summary or "").lower()
+    name_l = (name or "").lower()
+    industry_l = (industry or "").lower()
+    if "business development company" in summary_l or " bdc" in summary_l or name_l.endswith(" bdc"):
+        return "Business Development Company"
+    if "closed ended" in summary_l or "closed-end fund" in summary_l or "closed end fund" in summary_l:
+        return "Closed-End Fund"
+    if "reit" in industry_l or "real estate investment trust" in summary_l or "reit" in summary_l.split() or " reit " in f" {summary_l} ":
+        return "Real Estate Investment Trust"
+    if quote_type == "ETF":
+        return "Exchange Traded Fund"
+    if quote_type == "MUTUALFUND":
+        return "Mutual Fund"
+    if "exchange traded fund" in summary_l or "exchange-traded fund" in summary_l:
+        return "Exchange Traded Fund"
+    if "open ended" in summary_l or "open-end mutual fund" in summary_l:
+        return "Mutual Fund"
+    return type_disp or None
+
+
+def _derive_fund_type(legal_type, quote_type):
+    if legal_type:
+        if "Business Development" in legal_type:
+            return "BDC"
+        if "Closed" in legal_type:
+            return "CEF"
+        if "Real Estate" in legal_type:
+            return "REIT"
+        if "Exchange" in legal_type or legal_type == "ETF":
+            return "ETF"
+        if "Mutual" in legal_type:
+            return "Mutual Fund"
+    if quote_type == "ETF":
+        return "ETF"
+    if quote_type == "MUTUALFUND":
+        return "Mutual Fund"
+    return "Fund"
+
+
+def _vistashares_page_text(ticker):
+    try:
+        from html import unescape
+        from urllib.request import Request, urlopen
+        url = f"https://www.vistashares.com/etf/{ticker.lower()}/"
+        req = Request(url, headers={"User-Agent": "PortfolioTrackingClient/1.0"})
+        with urlopen(req, timeout=12) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+        html = re.sub(r"(?is)<(script|style).*?</\1>", " ", html)
+        html = re.sub(r"(?i)<br\s*/?>", "\n", html)
+        html = re.sub(r"(?i)</(p|div|li|tr|td|th|h[1-6]|section)>", "\n", html)
+        text = re.sub(r"(?s)<[^>]+>", " ", html)
+        text = unescape(text)
+        lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+        return "\n".join(line for line in lines if line), url
+    except Exception:
+        return "", None
+
+
+def _vistashares_match(text, pattern, flags=re.I | re.S):
+    m = re.search(pattern, text, flags)
+    return re.sub(r"\s+", " ", m.group(1)).strip() if m else None
+
+
+def _vistashares_section(text, pattern, flags=re.I | re.S):
+    m = re.search(pattern, text, flags)
+    return m.group(1).strip() if m else None
+
+
+def _vistashares_money(value):
+    if not value:
+        return None
+    clean = re.sub(r"[^0-9.\-]", "", value)
+    try:
+        return round(float(clean), 2)
+    except Exception:
+        return None
+
+
+def _fetch_vistashares_etf_profile(ticker):
+    text, url = _vistashares_page_text(ticker)
+    if not text or "VistaShares" not in text:
+        return None
+
+    summary = _vistashares_match(text, r"ETF Summary\s+(.*?)\s+ETF Objective")
+    objective = _vistashares_match(text, r"ETF Objective\s+(.*?)\s+Key Information")
+    description = " ".join(part for part in [summary, objective] if part)
+    title = _vistashares_match(text, rf"#{re.escape(ticker)}\s+###\s+(.*?)\s+Factsheet")
+
+    key_info = {}
+    for label in ("Inception Date", "Expense Ratio", "Net Assets", "NAV", "Distribution Frequency"):
+        value = _vistashares_match(
+            text,
+            rf"{re.escape(label)}\s+(.+?)(?=\s+(?:Inception Date|Expense Ratio|Net Assets|NAV|Distribution Frequency|Trading Details)\b)"
+        )
+        if value:
+            key_info[label] = value
+
+    dist_rate = _vistashares_match(text, r"Distribution Rate\s+.*?([0-9.]+%)\s+30-Day SEC Yield")
+    if not dist_rate:
+        dist_rate = _vistashares_match(text, r"Distribution Rate\s+([0-9.]+%)")
+    sec_yield = _vistashares_match(text, r"30-Day SEC Yield\s+.*?(-?[0-9.]+%)\s+As of")
+
+    holdings = []
+    holdings_section = _vistashares_section(text, r"Top 10 Holdings\s+.*?Ticker\s+Market Value\s+Weightings\s+(.*?)\s+Swipe to view more")
+    if holdings_section:
+        lines = [line.strip() for line in holdings_section.splitlines() if line.strip()]
+        i = 0
+        while i + 3 < len(lines):
+            name_symbol, symbol, market_value, weight = lines[i:i + 4]
+            if re.match(r"^[A-Z][A-Z0-9.-]{0,8}$", symbol) and market_value.startswith("$") and weight.endswith("%"):
+                name = re.sub(rf"\s+{re.escape(symbol)}$", "", name_symbol).strip()
+                try:
+                    holdings.append({
+                        "symbol": symbol,
+                        "name": name or name_symbol,
+                        "weight_pct": round(float(weight.replace("%", "").strip()), 2),
+                    })
+                except Exception:
+                    pass
+                i += 4
+            else:
+                i += 1
+
+    exposure = []
+    exposure_section = _vistashares_section(text, r"Exposure\s+.*?Industry\s+Sector\s+Country\s+MCap\s+(.*?)\s+ETF Documents")
+    if exposure_section:
+        exp_lines = [line.strip(" *") for line in exposure_section.splitlines() if line.strip(" *")]
+        for i in range(len(exp_lines) - 1):
+            if re.match(r"^-?[0-9.]+\s*%$", exp_lines[i + 1]):
+                try:
+                    exposure.append({
+                        "name": exp_lines[i],
+                        "weight_pct": round(float(exp_lines[i + 1].replace("%", "").strip()), 2),
+                    })
+                except Exception:
+                    pass
+
+    return {
+        "name": title,
+        "fund_type": "ETF",
+        "description": description or objective or summary,
+        "objective": objective or summary,
+        "issuer": "VistaShares",
+        "legal_type": "Exchange Traded Fund",
+        "expense_ratio_pct": _research_expense_pct(key_info.get("Expense Ratio")),
+        "total_assets": _vistashares_money(key_info.get("Net Assets")),
+        "total_assets_label": "Net Assets",
+        "nav_price": _vistashares_money(key_info.get("NAV")),
+        "nav_label": "NAV",
+        "inception_date": key_info.get("Inception Date"),
+        "dividend_frequency": key_info.get("Distribution Frequency"),
+        "estimated_yield_pct": _research_pct(dist_rate),
+        "distribution_rate_pct": _research_pct(dist_rate),
+        "sec_30_day_yield_pct": _research_pct(sec_yield),
+        "target_yield_label": "Distribution Rate",
+        "top_holdings": holdings,
+        "sector_weightings": exposure[:10],
+        "source_url": url,
+        "data_source": "VistaShares",
+    }
+
+
+def _research_has_value(value):
+    return value not in (None, "", [])
+
+
+def _research_needs_provider_fallback(response):
+    fields = (
+        "description", "issuer", "category", "expense_ratio_pct",
+        "total_assets", "nav_price", "inception_date",
+        "dividend_frequency", "estimated_yield_pct",
+    )
+    present = sum(1 for field in fields if _research_has_value(response.get(field)))
+    has_holdings = bool(response.get("top_holdings"))
+    return present < 6 or not has_holdings
+
+
+def _fetch_provider_etf_profile(ticker, response):
+    """Try official issuer/provider pages when the market-data feed is sparse."""
+    provider_hints = " ".join(str(response.get(k) or "") for k in ("name", "issuer", "data_source"))
+    fetchers = []
+    if "vistashares" in provider_hints.lower():
+        fetchers.append(_fetch_vistashares_etf_profile)
+    fetchers.append(_fetch_vistashares_etf_profile)
+
+    seen = set()
+    for fetcher in fetchers:
+        if fetcher in seen:
+            continue
+        seen.add(fetcher)
+        profile = fetcher(ticker)
+        if profile:
+            return profile
+    return None
+
+
+@app.route("/api/security-research/<kind>/<ticker>", methods=["GET"])
+def security_research(kind, ticker):
+    """Return ETF or stock research facts for a user-entered symbol."""
+    import yfinance as yf
+
+    kind = (kind or "").strip().lower()
+    ticker = (ticker or "").strip().upper()
+    if kind not in {"etf", "stock"}:
+        return jsonify({"error": "kind must be etf or stock"}), 400
+    if not ticker:
+        return jsonify({"error": "ticker is required"}), 400
+
+    try:
+        yf_ticker = yf.Ticker(ticker)
+        info = yf_ticker.info or {}
+    except Exception as exc:
+        return jsonify({"error": f"Could not load {ticker}: {exc}"}), 404
+
+    name = _research_info_value(info, "longName", "shortName", "displayName") or ticker
+    quote_type = (_research_info_value(info, "quoteType") or "").upper()
+    summary = _research_info_value(info, "longBusinessSummary") or ""
+
+    try:
+        dividends = yf_ticker.dividends
+    except Exception:
+        dividends = pd.Series(dtype=float)
+
+    dividend_frequency = _research_dividend_frequency(dividends)
+    ttm_dividend = None
+    last_dividend = None
+    if dividends is not None and not dividends.empty:
+        divs = dividends[dividends > 0].dropna()
+        if not divs.empty:
+            last_dividend = {
+                "date": divs.index[-1].strftime("%Y-%m-%d"),
+                "amount": round(float(divs.iloc[-1]), 4),
+            }
+            trailing = divs[divs.index >= (pd.Timestamp.now(tz=divs.index.tz) - pd.DateOffset(years=1))]
+            ttm_dividend = round(float(trailing.sum()), 4) if not trailing.empty else None
+
+    if kind == "etf":
+        fund_data = None
+        fund_overview = {}
+        fund_operations = {}
+        try:
+            fund_data = yf_ticker.funds_data
+            fund_overview = getattr(fund_data, "fund_overview", None) or {}
+            ops = getattr(fund_data, "fund_operations", None)
+            if ops is not None and not ops.empty:
+                for attr in ops.index:
+                    value = _research_clean_value(ops.iloc[ops.index.get_loc(attr), 0])
+                    if value is not None:
+                        fund_operations[str(attr)] = value
+        except Exception:
+            fund_data = None
+
+        objective = summary
+        if fund_data is not None:
+            try:
+                objective = getattr(fund_data, "description", None) or objective
+            except Exception:
+                pass
+
+        type_disp = _research_info_value(info, "typeDisp")
+        industry_value = _research_info_value(info, "industry", "industryDisp")
+        legal_type = _derive_legal_type(quote_type, summary, fund_overview, type_disp, name, industry_value)
+        fund_type = _derive_fund_type(legal_type, quote_type)
+        is_traded_fund = legal_type in {"Closed-End Fund", "Business Development Company", "Real Estate Investment Trust"}
+        is_cef = is_traded_fund
+
+        category = _research_info_value(info, "category") or (fund_overview.get("categoryName") if isinstance(fund_overview, dict) else None)
+        if category is None:
+            industry = _research_info_value(info, "industry")
+            sector = _research_info_value(info, "sector")
+            if industry and sector and industry != sector:
+                category = f"{industry} \u2014 {sector}"
+            else:
+                category = industry or sector
+
+        total_assets = _research_money(_research_info_value(info, "totalAssets") or (fund_operations.get("Total Net Assets") if isinstance(fund_operations, dict) else None))
+        total_assets_label = "Total Assets"
+        if total_assets is None:
+            try:
+                bs = yf_ticker.balance_sheet
+                if bs is not None and not bs.empty and "Total Assets" in bs.index:
+                    total_assets = _research_money(bs.loc["Total Assets", bs.columns[0]])
+            except Exception:
+                pass
+        if total_assets is None and is_traded_fund:
+            total_assets = _research_money(_research_info_value(info, "marketCap"))
+            if total_assets is not None:
+                total_assets_label = "Market Cap"
+
+        nav_price = _research_money(_research_info_value(info, "navPrice"))
+        nav_label = "NAV"
+        if nav_price is None:
+            book_value = _research_money(_research_info_value(info, "bookValue"))
+            if book_value is not None:
+                nav_price = book_value
+                nav_label = "NAV / Share" if is_traded_fund else "Book Value / Share"
+        if nav_price is None and is_traded_fund:
+            nav_price = _research_money(_research_info_value(info, "regularMarketPrice", "currentPrice"))
+            if nav_price is not None:
+                nav_label = "Market Price"
+
+        response = {
+            "kind": "etf",
+            "ticker": ticker,
+            "name": name,
+            "quote_type": quote_type,
+            "fund_type": fund_type,
+            "description": objective,
+            "objective": objective,
+            "issuer": _derive_issuer(info, name) or (fund_overview.get("family") if isinstance(fund_overview, dict) else None),
+            "category": category,
+            "legal_type": legal_type,
+            "expense_ratio_pct": _research_expense_pct(
+                _research_info_value(info, "netExpenseRatio", "annualReportExpenseRatio"),
+                fund_operations.get("Annual Report Expense Ratio") if isinstance(fund_operations, dict) else None,
+            ),
+            "total_assets": total_assets,
+            "total_assets_label": total_assets_label,
+            "nav_price": nav_price,
+            "nav_label": nav_label,
+            "inception_date": None,
+            "dividend_frequency": dividend_frequency,
+            "last_dividend": last_dividend,
+            "ttm_dividend_per_share": ttm_dividend,
+            "estimated_yield_pct": _research_pct(_research_info_value(info, "yield", "dividendYield", "trailingAnnualDividendYield")),
+            "target_yield_label": "Estimated forward yield",
+            "top_holdings": _research_top_holdings(fund_data) if fund_data is not None else [],
+            "sector_weightings": _research_weight_map(getattr(fund_data, "sector_weightings", None)) if fund_data is not None else [],
+            "asset_classes": _research_weight_map(getattr(fund_data, "asset_classes", None)) if fund_data is not None else [],
+            "data_source": "Yahoo Finance",
+        }
+        official_profile = _fetch_provider_etf_profile(ticker, response) if _research_needs_provider_fallback(response) else None
+        if official_profile:
+            for key, value in official_profile.items():
+                if value not in (None, "", []):
+                    response[key] = value
+        inception = _research_info_value(info, "fundInceptionDate")
+        if inception:
+            try:
+                response["inception_date"] = pd.to_datetime(int(inception), unit="s").strftime("%Y-%m-%d")
+            except Exception:
+                response["inception_date"] = None
+        if response["inception_date"] is None:
+            first_trade_ms = _research_info_value(info, "firstTradeDateMilliseconds")
+            if first_trade_ms:
+                try:
+                    response["inception_date"] = pd.to_datetime(int(first_trade_ms), unit="ms").strftime("%Y-%m-%d")
+                except Exception:
+                    response["inception_date"] = None
+        return jsonify(response)
+
+    response = {
+        "kind": "stock",
+        "ticker": ticker,
+        "name": name,
+        "quote_type": quote_type,
+        "business_summary": summary,
+        "sector": _research_info_value(info, "sector"),
+        "industry": _research_info_value(info, "industry"),
+        "country": _research_info_value(info, "country"),
+        "website": _research_info_value(info, "website"),
+        "exchange": _research_info_value(info, "exchange", "fullExchangeName"),
+        "price": _research_money(_research_info_value(info, "regularMarketPrice", "currentPrice")),
+        "market_cap": _research_money(_research_info_value(info, "marketCap")),
+        "enterprise_value": _research_money(_research_info_value(info, "enterpriseValue")),
+        "beta": _research_clean_value(_research_info_value(info, "beta")),
+        "trailing_pe": _research_clean_value(_research_info_value(info, "trailingPE")),
+        "forward_pe": _research_clean_value(_research_info_value(info, "forwardPE")),
+        "price_to_book": _research_clean_value(_research_info_value(info, "priceToBook")),
+        "price_to_sales_ttm": _research_clean_value(_research_info_value(info, "priceToSalesTrailing12Months")),
+        "revenue": _research_money(_research_info_value(info, "totalRevenue")),
+        "revenue_growth_pct": _research_pct(_research_info_value(info, "revenueGrowth")),
+        "gross_margin_pct": _research_pct(_research_info_value(info, "grossMargins")),
+        "operating_margin_pct": _research_pct(_research_info_value(info, "operatingMargins")),
+        "profit_margin_pct": _research_pct(_research_info_value(info, "profitMargins")),
+        "net_income": _research_money(_research_info_value(info, "netIncomeToCommon")),
+        "ebitda": _research_money(_research_info_value(info, "ebitda")),
+        "free_cash_flow": _research_money(_research_info_value(info, "freeCashflow")),
+        "total_cash": _research_money(_research_info_value(info, "totalCash")),
+        "total_debt": _research_money(_research_info_value(info, "totalDebt")),
+        "debt_to_equity": _research_clean_value(_research_info_value(info, "debtToEquity")),
+        "dividend_frequency": dividend_frequency,
+        "last_dividend": last_dividend,
+        "ttm_dividend_per_share": ttm_dividend,
+        "dividend_rate": _research_money(_research_info_value(info, "dividendRate")),
+        "dividend_yield_pct": _research_pct(_research_info_value(info, "dividendYield", "trailingAnnualDividendYield")),
+        "payout_ratio_pct": _research_pct(_research_info_value(info, "payoutRatio")),
+        "fifty_two_week_low": _research_money(_research_info_value(info, "fiftyTwoWeekLow")),
+        "fifty_two_week_high": _research_money(_research_info_value(info, "fiftyTwoWeekHigh")),
+        "data_source": "Yahoo Finance",
+    }
+    return jsonify(response)
+
+
 # ── Data Management ───────────────────────────────────────────────────────────
 
 @app.route("/api/data/clear-all", methods=["POST"])
