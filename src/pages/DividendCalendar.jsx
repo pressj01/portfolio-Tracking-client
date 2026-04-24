@@ -7,6 +7,31 @@ const FILTERS = [
   { key: 'next30', label: 'Next 30 Days' },
 ]
 
+const DIV_CAL_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+
+function readCalendarCache(key) {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const cached = JSON.parse(raw)
+    if (!cached?.ts || Date.now() - cached.ts > DIV_CAL_CACHE_TTL_MS) {
+      localStorage.removeItem(key)
+      return null
+    }
+    return cached.data || null
+  } catch {
+    return null
+  }
+}
+
+function writeCalendarCache(key, data) {
+  try {
+    localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }))
+  } catch {
+    // Cache writes are best-effort; the live request remains the source of truth.
+  }
+}
+
 function addDays(iso, n) {
   const d = new Date(iso + 'T00:00:00')
   d.setDate(d.getDate() + n)
@@ -20,18 +45,38 @@ export default function DividendCalendar() {
   const [today, setToday] = useState('')
   const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
+  const cacheKey = useMemo(() => `portfolio_div_calendar_${selection}`, [selection])
 
   useEffect(() => {
-    setLoading(true)
+    let stale = false
+    const cached = readCalendarCache(cacheKey)
+    if (cached) {
+      setEvents(cached.events || [])
+      setToday(cached.today || new Date().toISOString().slice(0, 10))
+      setLoading(false)
+    } else {
+      setEvents([])
+      setToday('')
+      setLoading(true)
+    }
     pf('/api/div-calendar')
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`Request failed (${r.status})`)
+        return r.json()
+      })
       .then(data => {
+        if (stale) return
         setEvents(data.events || [])
         setToday(data.today || new Date().toISOString().slice(0, 10))
+        writeCalendarCache(cacheKey, {
+          events: data.events || [],
+          today: data.today || new Date().toISOString().slice(0, 10),
+        })
         setLoading(false)
       })
-      .catch(() => setLoading(false))
-  }, [selection])
+      .catch(() => { if (!stale) setLoading(false) })
+    return () => { stale = true }
+  }, [pf, selection, cacheKey])
 
   const filtered = useMemo(() => {
     if (!today) return events

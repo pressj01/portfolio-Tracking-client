@@ -59,6 +59,49 @@ app.config["PROPAGATE_EXCEPTIONS"] = False
 _PORTFOLIO_SUMMARY_CACHE = {}
 _PORTFOLIO_COVERAGE_CACHE = {}
 _PORTFOLIO_SUMMARY_TTL_SEC = 30 * 60
+_UPCOMING_DIVIDENDS_CACHE = {}
+_DIVIDEND_CALENDAR_CACHE = {}
+_DIVIDEND_EVENT_TTL_SEC = 60 * 60
+
+
+def _cache_value(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def _rows_signature(rows, columns):
+    return tuple(
+        tuple(_cache_value(row[col]) for col in columns)
+        for row in rows
+    )
+
+
+def _cache_get(cache, key, ttl=_DIVIDEND_EVENT_TTL_SEC):
+    entry = cache.get(key)
+    if not entry:
+        return None
+    ts, payload = entry
+    if time.time() - ts > ttl:
+        cache.pop(key, None)
+        return None
+    return payload
+
+
+def _cache_set(cache, key, payload):
+    cache[key] = (time.time(), payload)
+
+
+def _clear_dividend_event_caches():
+    _UPCOMING_DIVIDENDS_CACHE.clear()
+    _DIVIDEND_CALENDAR_CACHE.clear()
 
 
 @app.errorhandler(500)
@@ -5025,6 +5068,7 @@ def refresh_market_data():
         populate_dividends(pid)
 
     conn.close()
+    _clear_dividend_event_caches()
 
     # Sync Owner only when the refresh touched an Owner source account,
     # or when the Owner page itself initiated the refresh.
@@ -7067,6 +7111,19 @@ def upcoming_dividends():
         return jsonify([])
 
     today = datetime.today().date()
+    cache_columns = (
+        "ticker", "description", "ex_div_date", "div_pay_date",
+        "div", "div_frequency", "quantity", "approx_monthly_income",
+    )
+    cache_key = (
+        tuple(pids),
+        today.isoformat(),
+        _rows_signature(rows, cache_columns),
+    )
+    cached = _cache_get(_UPCOMING_DIVIDENDS_CACHE, cache_key)
+    if cached is not None:
+        return jsonify(cached)
+
     week_end = today + timedelta(days=7)
 
     freq_days = {"W": 7, "52": 7, "M": 30, "Q": 91, "SA": 182, "A": 365}
@@ -7163,6 +7220,7 @@ def upcoming_dividends():
             })
 
     events.sort(key=lambda e: e["ex_date"])
+    _cache_set(_UPCOMING_DIVIDENDS_CACHE, cache_key, events)
     return jsonify(events)
 
 
@@ -11113,6 +11171,20 @@ def _build_cal_events():
         return []
     conn.close()
 
+    today_d = datetime.today().date()
+    cache_columns = (
+        "ticker", "description", "ex_div_date", "div_pay_date", "div", "div_frequency",
+    )
+    cache_rows = df.to_dict("records")
+    cache_key = (
+        profile_id,
+        today_d.isoformat(),
+        _rows_signature(cache_rows, cache_columns),
+    )
+    cached = _cache_get(_DIVIDEND_CALENDAR_CACHE, cache_key)
+    if cached is not None:
+        return cached
+
     official_cache = {}
 
     def official_snapshot_for(ticker, description):
@@ -11132,7 +11204,6 @@ def _build_cal_events():
             yf_pay_dates[tkr] = pd_date
 
     events = []
-    today_d = datetime.today().date()
 
     conn = get_connection()
     lag_pattern_map = _build_dividend_lag_patterns(conn)
@@ -11228,6 +11299,7 @@ def _build_cal_events():
         })
 
     events.sort(key=lambda e: e["pay_date"])
+    _cache_set(_DIVIDEND_CALENDAR_CACHE, cache_key, events)
     return events
 
 
