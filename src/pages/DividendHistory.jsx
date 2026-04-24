@@ -167,6 +167,8 @@ export default function DividendHistory() {
   }, [data, view, showCumulative])
 
   const rangeOptions = view === 'monthly' ? MONTHLY_RANGE : view === 'weekly' ? WEEKLY_RANGE : null
+  const trendPeriodLabel = view === 'yearly' ? 'YEAR' : view === 'monthly' ? 'MONTH' : 'PERIOD'
+  const growthLabel = `CHANGE VS FIRST ${trendPeriodLabel}`
 
   return (
     <div className="page dashboard">
@@ -281,7 +283,7 @@ export default function DividendHistory() {
               <div className="summary-value">{fmt(data.summary.max)}</div>
             </div>
             <div className="summary-card">
-              <div className="summary-label">GROWTH</div>
+              <div className="summary-label">{growthLabel}</div>
               <div className="summary-value" style={{ color: data.summary.trend_pct >= 0 ? '#4dff91' : '#ff6b6b' }}>
                 {data.summary.trend_pct >= 0 ? '+' : ''}{data.summary.trend_pct}%
               </div>

@@ -1346,6 +1346,289 @@ def parse_etrade_dividends_xlsx(file_path, filename):
     }
 
 
+# Robinhood (Positions PDF + Transactions CSV)
+
+_ROBINHOOD_DIVIDEND_CODES = {"CDIV", "MDIV", "LCAP", "SCAP"}
+
+
+def _parse_money(raw):
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    negative = text.startswith("(") and text.endswith(")")
+    text = text.strip("()").replace("$", "").replace(",", "").strip()
+    val = _safe_float(text)
+    if val is None:
+        return None
+    return -val if negative else val
+
+
+def _robinhood_clean_description(description):
+    lines = []
+    for line in str(description or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("CUSIP:") or line == "Recurring":
+            continue
+        lines.append(line)
+    return " ".join(lines)
+
+
+def parse_robinhood_positions_pdf(file_path, filename):
+    """Parse a Robinhood holdings PDF as a current positions snapshot.
+
+    Robinhood's holdings PDF does not include cost basis. To keep this as a
+    positions source of truth, cost basis is initialized to current value and
+    transaction history can be imported separately for recordkeeping.
+    """
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:
+        raise ValueError(
+            "Robinhood PDF import requires the pypdf package. "
+            "Install backend requirements, then try again."
+        ) from exc
+
+    reader = PdfReader(file_path)
+    row_re = re.compile(
+        r"^Estimated Yield:\s*(?P<yield>[0-9.]+)%\s+"
+        r"(?P<ticker>[A-Z][A-Z0-9.\-/]{0,10})\s+"
+        r"(?P<acct>\S+)\s+"
+        r"(?P<qty>[0-9.,]+)\s+"
+        r"\$(?P<price>[0-9.,]+)\s+"
+        r"\$(?P<value>[0-9.,]+)\s+"
+        r"\$(?P<annual>[0-9.,]+)\s+"
+        r"(?P<pct>[0-9.]+)%$"
+    )
+
+    positions = []
+    filtered_count = 0
+    in_holdings = False
+    desc_lines = []
+    account_value = 0.0
+
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        if "Securities Held in Account" not in text and not in_holdings:
+            continue
+
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if "Securities Held in Account" in line:
+                in_holdings = True
+                desc_lines = []
+                continue
+            if line.startswith("Total Priced Portfolio"):
+                account_value = _parse_money(line.replace("Total Priced Portfolio", "").strip()) or account_value
+                in_holdings = False
+                desc_lines = []
+                break
+            if not in_holdings:
+                continue
+            if line.startswith("Page ") or line == "Portfolio Summary":
+                continue
+
+            match = row_re.match(line)
+            if not match:
+                desc_lines.append(line)
+                continue
+
+            ticker = match.group("ticker").upper()
+            quantity = _safe_float(match.group("qty"))
+            current_price = _safe_float(match.group("price"))
+            current_value = _safe_float(match.group("value"))
+            dividend_yield = _safe_float(match.group("yield"))
+            annual_payment = _safe_float(match.group("annual")) or 0.0
+            description = " ".join(desc_lines).strip()
+            desc_lines = []
+
+            if not ticker or not TICKER_RE.match(ticker) or quantity is None or quantity <= 0:
+                filtered_count += 1
+                continue
+
+            current_price = current_price or 0.0
+            current_value = current_value if current_value is not None else quantity * current_price
+            positions.append({
+                "ticker": ticker,
+                "description": description,
+                "quantity": quantity,
+                "cost_per_share": current_price,
+                "current_price": current_price,
+                "purchase_value": round(current_value, 2),
+                "current_value": round(current_value, 2),
+                "gain_or_loss": 0.0,
+                "dividend_yield": dividend_yield,
+                "estim_payment_per_year": round(annual_payment, 2) if annual_payment > 0 else None,
+                "approx_monthly_income": round(annual_payment / 12.0, 2) if annual_payment > 0 else None,
+                "reinvest_dividends": None,
+                "asset_type": "Security",
+            })
+
+    if not positions:
+        raise ValueError(
+            "No holdings rows were found in the Robinhood PDF. "
+            "Make sure this is the Robinhood holdings/positions PDF."
+        )
+
+    return {
+        "positions": positions,
+        "summary": {
+            "holdings": len(positions),
+            "filtered": filtered_count,
+            "options": 0,
+            "account_value": round(account_value or sum(p["current_value"] for p in positions), 2),
+            "cost_basis_missing": True,
+        },
+        "format_type": "positions",
+        "source_format": "robinhood_positions",
+    }
+
+
+def _robinhood_parse_quantity(raw):
+    text = str(raw or "").strip().upper()
+    if text.endswith("S"):
+        text = text[:-1]
+    return _safe_float(text)
+
+
+def parse_robinhood_transactions_csv(file_path, filename):
+    """Parse a Robinhood transaction/activity CSV export."""
+    with open(file_path, "r", encoding="utf-8-sig", newline="") as fh:
+        reader = csv.DictReader(fh)
+        headers = reader.fieldnames or []
+        rows = list(reader)
+
+    required = {"Activity Date", "Instrument", "Description", "Trans Code", "Quantity", "Price", "Amount"}
+    missing = sorted(required - set(headers))
+    if missing:
+        raise ValueError(
+            "This does not look like a Robinhood transaction CSV. "
+            f"Missing required columns: {', '.join(missing)}"
+        )
+    if not rows:
+        raise ValueError("The CSV file is empty or has no data rows.")
+
+    kept = []
+    filtered_count = 0
+
+    for row in rows:
+        code = (row.get("Trans Code") or "").strip().upper()
+        ticker = (row.get("Instrument") or "").strip().upper()
+        description = row.get("Description") or ""
+
+        if not ticker or not TICKER_RE.match(ticker):
+            filtered_count += 1
+            continue
+
+        date_str = _parse_date_str(row.get("Activity Date"))
+        if not date_str:
+            filtered_count += 1
+            continue
+
+        qty = _robinhood_parse_quantity(row.get("Quantity"))
+        price = _parse_money(row.get("Price"))
+        amount = _parse_money(row.get("Amount"))
+        note = _robinhood_clean_description(description) or code
+
+        if code == "BUY":
+            if qty is None or qty <= 0:
+                filtered_count += 1
+                continue
+            if price is None and amount is not None:
+                price = abs(amount) / qty
+            kept.append({
+                "type": "BUY",
+                "ticker": ticker,
+                "date": date_str,
+                "shares": abs(qty),
+                "price_per_share": price or 0.0,
+                "fees": 0.0,
+                "dividend_amount": None,
+                "notes": note,
+            })
+        elif code == "SELL":
+            if qty is None or qty <= 0:
+                filtered_count += 1
+                continue
+            if price is None and amount is not None:
+                price = abs(amount) / qty
+            kept.append({
+                "type": "SELL",
+                "ticker": ticker,
+                "date": date_str,
+                "shares": abs(qty),
+                "price_per_share": price or 0.0,
+                "fees": 0.0,
+                "dividend_amount": None,
+                "notes": note,
+            })
+        elif code in _ROBINHOOD_DIVIDEND_CODES:
+            if amount is None:
+                filtered_count += 1
+                continue
+            if str(description).lstrip().upper().startswith("REVERT:"):
+                amount = -abs(amount)
+            kept.append({
+                "type": "DIVIDEND",
+                "ticker": ticker,
+                "date": date_str,
+                "shares": None,
+                "price_per_share": None,
+                "fees": 0.0,
+                "dividend_amount": round(amount, 2),
+                "notes": note,
+            })
+        elif code == "ACATI":
+            if qty is None or qty <= 0:
+                filtered_count += 1
+                continue
+            kept.append({
+                "type": "BUY",
+                "ticker": ticker,
+                "date": date_str,
+                "shares": abs(qty),
+                "price_per_share": 0.0,
+                "fees": 0.0,
+                "dividend_amount": None,
+                "notes": "[Transfer in] ACAT",
+            })
+        elif code == "ACATO":
+            if qty is None or qty <= 0:
+                filtered_count += 1
+                continue
+            kept.append({
+                "type": "SELL",
+                "ticker": ticker,
+                "date": date_str,
+                "shares": abs(qty),
+                "price_per_share": 0.0,
+                "fees": 0.0,
+                "dividend_amount": None,
+                "notes": "[Transfer out] ACAT",
+            })
+        else:
+            filtered_count += 1
+
+    buys = sum(1 for t in kept if t["type"] == "BUY")
+    sells = sum(1 for t in kept if t["type"] == "SELL")
+    divs = sum(1 for t in kept if t["type"] == "DIVIDEND")
+
+    return {
+        "transactions": kept,
+        "summary": {
+            "buys": buys,
+            "sells": sells,
+            "dividends": divs,
+            "filtered": filtered_count,
+            "drip_detected": 0,
+            "splits_applied": 0,
+        },
+    }
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _parse_date(raw):
@@ -1403,6 +1686,8 @@ PARSERS = {
     "etrade_dividends": parse_etrade_dividends_xlsx,
     "fidelity": parse_fidelity_positions_xlsx,
     "fidelity_transactions": parse_fidelity_transactions_xlsx,
+    "robinhood": parse_robinhood_positions_pdf,
+    "robinhood_transactions": parse_robinhood_transactions_csv,
 }
 
 # Labels shown in the UI format dropdown
@@ -1416,4 +1701,6 @@ PARSER_LABELS = {
     "etrade_dividends": "E*Trade (Dividends)",
     "fidelity": "Fidelity (Positions)",
     "fidelity_transactions": "Fidelity (Transactions)",
+    "robinhood": "Robinhood (Positions PDF)",
+    "robinhood_transactions": "Robinhood (Transactions)",
 }

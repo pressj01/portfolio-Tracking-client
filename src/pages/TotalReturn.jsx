@@ -209,7 +209,10 @@ export default function TotalReturn() {
     })
 
     const layout = {
-      title: `${cmpMode === 'total' ? 'Total Return' : 'Price Return'} Comparison — ${cmpData.period_label} (normalized to 100)`,
+      title: {
+        text: `${cmpMode === 'total' ? 'Total Return' : 'Price Return'} Comparison — ${cmpData.period_label} (normalized to 100)`,
+        font: { color: '#e0e8f0' },
+      },
       template: 'plotly_dark',
       paper_bgcolor: '#1a1f2e',
       plot_bgcolor: 'rgba(255,255,255,0.03)',
@@ -217,7 +220,6 @@ export default function TotalReturn() {
       yaxis: { title: { text: 'Normalized (100 = start)', font: { color: '#d0dde8' } }, tickfont: { color: '#c0cdd8', size: 12 }, gridcolor: 'rgba(255,255,255,0.08)' },
       height: 550,
       legend: { orientation: 'h', y: -0.15, font: { color: '#d0dde8', size: 12 } },
-      title: { font: { color: '#e0e8f0' } },
       hovermode: 'x unified',
       margin: { t: 50, b: 80, l: 60, r: 20 },
     }

@@ -6,7 +6,9 @@ import { useDialog } from '../components/DialogProvider'
 const PRESETS = [
   { label: '6M',  years: 0.5 },
   { label: '1Y',  years: 1 },
+  { label: '2Y',  years: 2 },
   { label: '3Y',  years: 3 },
+  { label: '4Y',  years: 4 },
   { label: '5Y',  years: 5 },
   { label: '10Y', years: 10 },
   { label: '15Y', years: 15 },
@@ -23,6 +25,13 @@ const fmtNum = (v, digits = 2) =>
 const fmtMoney = (v) =>
   v == null || !isFinite(v) ? '—' : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
 const fmtInt = (v) => (v == null || !isFinite(v) ? '—' : Math.round(v))
+
+const fmtSignedMoney = (v) => {
+  if (v == null || !isFinite(v)) return '--'
+  const n = Number(v)
+  const sign = n > 0 ? '+' : n < 0 ? '-' : ''
+  return `${sign}$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+}
 
 function todayISO() { return new Date().toISOString().slice(0, 10) }
 function subYearsISO(iso, yrs) {
@@ -48,10 +57,12 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
     }
   }, [pickerOpen])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  const visiblePicker = (currentHoldings || []).filter(h => {
-    if (!pickerSearch.trim()) return true
-    return h.ticker.toUpperCase().includes(pickerSearch.trim().toUpperCase())
-  })
+  const visiblePicker = (currentHoldings || [])
+    .filter(h => {
+      if (!pickerSearch.trim()) return true
+      return h.ticker.toUpperCase().includes(pickerSearch.trim().toUpperCase())
+    })
+    .sort((a, b) => a.ticker.localeCompare(b.ticker))
 
   const togglePick = (t) => {
     setPicked(prev => {
@@ -700,7 +711,7 @@ export default function PortfolioTester() {
       layout: {
         grid: { rows: 2, columns: 1, roworder: 'top to bottom' },
         height: 560,
-        margin: { l: 70, r: 20, t: 40, b: 50 },
+        margin: { l: 95, r: 20, t: 40, b: 50 },
         paper_bgcolor: 'transparent', plot_bgcolor: '#0f0f1e',
         font: { color: '#e0e0e0', size: 11 },
         legend: { orientation: 'h', y: -0.14 },
@@ -721,15 +732,17 @@ export default function PortfolioTester() {
         xaxis: { domain: [0, 1], anchor: 'y', gridcolor: '#2a2a44' },
         yaxis: {
           domain: [0.40, 1],
-          title: { text: `Portfolio Value ($)`, font: { size: 12 } },
-          gridcolor: '#2a2a44', tickprefix: '$', tickformat: ',.2f', hoverformat: ',.2f',
+          title: { text: 'Portfolio Value ($)', font: { size: 12 }, standoff: 14 },
+          gridcolor: '#2a2a44', tickprefix: '$', tickformat: ',d', hoverformat: ',.2f',
+          automargin: true,
         },
         xaxis2: { domain: [0, 1], anchor: 'y2', gridcolor: '#2a2a44' },
         yaxis2: {
           domain: [0, 0.30],
-          title: { text: 'Drawdown from Peak (%)', font: { size: 12 } },
-          gridcolor: '#2a2a44', ticksuffix: '%', tickformat: '.2f', hoverformat: '.2f',
+          title: { text: 'Drawdown from Peak (%)', font: { size: 12 }, standoff: 10 },
+          gridcolor: '#2a2a44', ticksuffix: '%', tickformat: '.1f', hoverformat: '.2f',
           zeroline: true, zerolinecolor: '#8899aa', zerolinewidth: 1,
+          automargin: true,
         },
       },
     }
@@ -970,6 +983,54 @@ export default function PortfolioTester() {
         <>
           {/* Score cards */}
           <ScoreCards portfolios={result.portfolios} colors={colors} includeDiv={result.include_div} />
+
+          {/* Total return summary */}
+          <div className="card" style={{ padding: '0.75rem', marginBottom: '1rem' }}>
+            <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem' }}>Portfolio Total Return</h3>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: '0.6rem',
+            }}>
+              {result.portfolios.map((p, i) => {
+                const tr = p.metrics?.total_return
+                const gain = p.metrics?.final_value != null && result.initial != null
+                  ? p.metrics.final_value - result.initial
+                  : null
+                const isPositive = tr == null ? null : tr >= 0
+                return (
+                  <div key={p.name + i} style={{
+                    background: '#0f0f1e',
+                    border: `1px solid ${colors[i]}`,
+                    borderRadius: 4,
+                    padding: '0.65rem 0.75rem',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: '0.4rem' }}>
+                      <span style={{ display: 'inline-block', width: 10, height: 10, background: colors[i], borderRadius: 2 }} />
+                      <span style={{ color: '#e0e0e0', fontWeight: 600 }}>{p.name}</span>
+                    </div>
+                    <div style={{
+                      fontSize: '1.5rem',
+                      lineHeight: 1.15,
+                      fontWeight: 700,
+                      color: isPositive == null ? '#e0e0e0' : isPositive ? '#4dff91' : '#ff9090',
+                    }}>
+                      {fmtPct(tr)}
+                    </div>
+                    <div style={{ marginTop: '0.35rem', color: '#8899aa', fontSize: '0.8rem' }}>
+                      <strong style={{ color: isPositive == null ? '#e0e0e0' : isPositive ? '#4dff91' : '#ff9090' }}>
+                        {fmtSignedMoney(gain)}
+                      </strong>
+                      {' '}on {fmtMoney(result.initial)} initial investment
+                    </div>
+                    <div style={{ marginTop: '0.2rem', color: '#8899aa', fontSize: '0.78rem' }}>
+                      Final value {fmtMoney(p.metrics?.final_value)}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
 
           {/* Metrics table */}
           <div className="card" style={{ padding: '0.75rem', marginBottom: '1rem', overflowX: 'auto' }}>

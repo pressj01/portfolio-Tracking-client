@@ -13,6 +13,8 @@ ETRADE_DIVIDENDS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', '
 SNOWBALL_HOLDINGS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'snowball_holdings_template.csv')
 FIDELITY_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'fidelity_positions_template.xlsx')
 FIDELITY_TRANSACTIONS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'fidelity_transactions_template.xlsx')
+ROBINHOOD_TRANSACTIONS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'robinhood_transactions_template.csv')
+ROBINHOOD_HOLDINGS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'robinhood_holdings_template.csv')
 
 
 def _write_csv_template(path, rows):
@@ -714,6 +716,50 @@ def create_etrade_dividends_template():
     )
 
 
+def create_robinhood_transactions_template():
+    """Create a CSV template matching the Robinhood activity/transactions export."""
+    rows = [
+        ["Activity Date", "Process Date", "Settle Date", "Instrument", "Description", "Trans Code", "Quantity", "Price", "Amount"],
+        # Buy
+        ["4/8/2026", "4/8/2026", "4/9/2026", "JEPI", "JPMorgan Equity Premium Income ETF\nCUSIP: 46641Q332", "Buy", "10", "$57.20", "($572.00)"],
+        # Sell
+        ["4/6/2026", "4/6/2026", "4/7/2026", "SCHD", "Schwab U.S. Dividend Equity ETF\nCUSIP: 808524797", "Sell", "5", "$82.50", "$412.50"],
+        # Cash dividend
+        ["4/8/2026", "4/8/2026", "4/8/2026", "JEPI", "Cash Div: R/D 2026-04-07 P/D 2026-04-08 - 10 shares at 0.4500", "CDIV", "", "", "$4.50"],
+        # Manufactured dividend
+        ["4/1/2026", "4/1/2026", "4/1/2026", "TSPY", "Manufactured Div: R/D 2026-03-31 P/D 2026-04-01 - 5 shares at 0.2807", "MDIV", "", "", "$1.40"],
+        # Short-term capital gain
+        ["1/7/2026", "1/7/2026", "1/7/2026", "SHLD", "Cap Gains: R/D 2025-12-30 P/D 2026-01-07 - 6 shares at 0.0778", "SCAP", "", "", "$0.47"],
+        # Long-term capital gain
+        ["1/7/2026", "1/7/2026", "1/7/2026", "SHLD", "Cap Gains: R/D 2025-12-30 P/D 2026-01-07 - 6 shares at 0.0130", "LCAP", "", "", "$0.08"],
+        # ACAT transfer in (shares transferred from another broker)
+        ["7/25/2025", "7/25/2025", "7/25/2025", "O", "Realty Income Corp\nCUSIP: 756109104", "ACATI", "25", "", ""],
+        # --- rows below are skipped by the importer ---
+        ["4/7/2026", "4/7/2026", "4/7/2026", "", "Aggregated Margin Rate", "MINT", "", "", "($6.34)"],
+        ["12/3/2025", "12/3/2025", "12/4/2025", "", "ACH Withdrawal", "ACH", "", "", "($31.40)"],
+        ["", "", "", "", "The data provided is for informational purposes only.", "", "", "", ""],
+    ]
+    return _write_csv_template(ROBINHOOD_TRANSACTIONS_TEMPLATE_PATH, rows)
+
+
+def create_robinhood_holdings_template():
+    """Create a CSV template showing the columns parsed from the Robinhood holdings PDF.
+
+    Robinhood does not offer a CSV positions export — holdings come from the
+    Portfolio Summary PDF. This template shows the exact field order the PDF
+    parser extracts so users can understand the source data format.
+    """
+    rows = [
+        # NOTE: this mirrors the PDF layout — do not change column order
+        ["Securities Held in Account", "Estimated Yield %", "Sym/Cusip", "Acct Type", "Qty", "Price", "Mkt Value", "Est. Dividend Yield", "% of Total Portfolio"],
+        ["JPMorgan Equity Premium Income ETF", "7.50%", "JEPI", "Margin", "100", "$57.20", "$5,720.00", "$429.00", "15.15%"],
+        ["Schwab U.S. Dividend Equity ETF",    "3.01%", "SCHD", "Margin",  "50", "$82.50", "$4,125.00", "$124.00", "10.92%"],
+        ["Realty Income Corp",                 "5.89%", "O",    "Margin",  "25", "$55.80", "$1,395.00",  "$82.20",  "3.69%"],
+        ["Amazon.com Inc",                     "0.00%", "AMZN", "Margin",   "5", "$185.00", "$925.00",   "$0.00",   "2.45%"],
+    ]
+    return _write_csv_template(ROBINHOOD_HOLDINGS_TEMPLATE_PATH, rows)
+
+
 if __name__ == "__main__":
     path = create_template()
     print(f"Template created at: {path}")
@@ -733,3 +779,7 @@ if __name__ == "__main__":
     print(f"Fidelity positions template created at: {fidelity_path}")
     fidelity_txn_path = create_fidelity_transactions_template()
     print(f"Fidelity transactions template created at: {fidelity_txn_path}")
+    robinhood_holdings_path = create_robinhood_holdings_template()
+    print(f"Robinhood holdings reference created at: {robinhood_holdings_path}")
+    robinhood_txn_path = create_robinhood_transactions_template()
+    print(f"Robinhood transactions template created at: {robinhood_txn_path}")

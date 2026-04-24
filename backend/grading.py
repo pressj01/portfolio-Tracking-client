@@ -32,14 +32,16 @@ def _sortino(close, risk_free_annual=0.05):
         if len(daily_ret) < 30:
             return None
         daily_rf = risk_free_annual / 252
-        neg_ret = daily_ret[daily_ret < 0]
-        if len(neg_ret) == 0:
-            return None
-        down_std = float(neg_ret.std())
-        if down_std == 0 or np.isnan(down_std):
+        # Target downside deviation: sqrt(mean of squared shortfalls below MAR),
+        # averaged over ALL observations (not just the negative-return subset).
+        # Using .std() on neg_ret is wrong — it divides by n_neg-1 and centers on
+        # mean(neg_ret) instead of the MAR, roughly halving the denominator.
+        shortfall = (daily_ret - daily_rf).clip(upper=0.0)
+        down_dev = float(np.sqrt((shortfall ** 2).mean()))
+        if down_dev == 0 or np.isnan(down_dev):
             return None
         excess = float(daily_ret.mean()) - daily_rf
-        return round(excess / down_std * np.sqrt(252), 2)
+        return round(excess / down_dev * np.sqrt(252), 2)
     except Exception:
         return None
 
@@ -48,7 +50,14 @@ def _calmar(close):
     try:
         if len(close) < 30:
             return None
-        ann_ret = (close.iloc[-1] / close.iloc[0]) ** (252 / len(close)) - 1
+        start = float(close.iloc[0])
+        end = float(close.iloc[-1])
+        if start <= 0 or end <= 0:
+            return None
+        # n observations → n-1 return periods. Previous code used len(close)
+        # which understated the annualization by one period.
+        n_periods = max(len(close) - 1, 1)
+        ann_ret = (end / start) ** (252 / n_periods) - 1
         running_max = close.cummax()
         drawdowns = (close - running_max) / running_max
         mdd = float(drawdowns.min())
@@ -82,7 +91,17 @@ def _ulcer_index(close):
         running_max = close.cummax()
         pct_drawdown = ((close - running_max) / running_max) * 100
         squared_avg = (pct_drawdown ** 2).mean()
-        return round(float(np.sqrt(squared_avg)), 2)
+        ui = float(np.sqrt(squared_avg))
+        # Flat/dead price series produces UI==0, which would score 100 ("no
+        # downside risk"). Treat as un-measurable instead of rewarding it.
+        if ui == 0:
+            try:
+                daily_ret = close.pct_change().dropna()
+                if len(daily_ret) == 0 or float(daily_ret.std()) == 0:
+                    return None
+            except Exception:
+                return None
+        return round(ui, 2)
     except Exception:
         return None
 
@@ -91,7 +110,17 @@ def _max_drawdown(close):
     try:
         running_max = close.cummax()
         drawdowns = (close - running_max) / running_max
-        return float(drawdowns.min())
+        mdd = float(drawdowns.min())
+        # Flat/dead series (no drawdowns observed in the window) should be
+        # un-measurable, not a perfect 0% drawdown that scores 100.
+        if mdd == 0:
+            try:
+                daily_ret = close.pct_change().dropna()
+                if len(daily_ret) == 0 or float(daily_ret.std()) == 0:
+                    return None
+            except Exception:
+                return None
+        return mdd
     except Exception:
         return None
 
@@ -175,9 +204,44 @@ def letter_grade(score):
 
 # ── Per-ticker grading ────────────────────────────────────────────────────────
 
+def _is_stale_or_dead(close, daily_ret):
+    """Detect delisted / flat-lined / penny-stock series that would otherwise
+    be rewarded for having zero volatility. Returns True if the series should
+    be treated as un-gradeable junk."""
+    try:
+        if close is None or len(close) < 2:
+            return True
+        last_price = float(close.iloc[-1])
+        # Penny / likely-delisted
+        if last_price < 1.0:
+            return True
+        # Price collapsed >90% from peak and never recovered
+        peak = float(close.max())
+        if peak > 0 and last_price / peak < 0.1:
+            return True
+        if daily_ret is None or len(daily_ret) < 30:
+            return True
+        std = float(daily_ret.std())
+        # No variance at all (flat-lined)
+        if std == 0 or np.isnan(std):
+            return True
+        # Mostly-zero returns (stale quote feed)
+        zero_frac = float((daily_ret == 0).sum()) / len(daily_ret)
+        if zero_frac > 0.75:
+            return True
+        return False
+    except Exception:
+        return True
+
+
 def ticker_score(close, daily_ret, bench_ret=None):
     """Compute individual ticker risk score (0-100).
     Returns (score, sharpe, sortino, calmar, omega, mdd, down_capture, ulcer)."""
+    # Guard: delisted / flat-lined / stale series must not score well just
+    # because they have no measurable volatility.
+    if _is_stale_or_dead(close, daily_ret):
+        return 0.0, None, None, None, None, None, None, None
+
     sharpe_v = _safe(_sharpe(close))
     sortino_v = _safe(_sortino(close))
     calmar_v = _safe(_calmar(close))
@@ -229,7 +293,12 @@ def grade_portfolio(returns_df, weights_arr, bench_ret=None):
         w = w / w_sum
 
     port_daily = returns_df.dot(w)
-    port_cum = (1 + port_daily).cumprod()
+    # Prepend 1.0 so that _sharpe/_sortino/_calmar can recover every daily
+    # return via pct_change. Without this, cumprod starts at (1 + r_0) and
+    # the first day's return is silently dropped by the pct_change() inside
+    # those helpers.
+    _cum_vals = (1.0 + port_daily).cumprod().values
+    port_cum = pd.Series(np.concatenate([[1.0], _cum_vals]))
 
     port_mdd = _safe(_max_drawdown(port_cum))
     metrics = {

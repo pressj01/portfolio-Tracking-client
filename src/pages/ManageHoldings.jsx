@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useDialog } from '../components/DialogProvider'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
@@ -12,6 +12,59 @@ const EMPTY_HOLDING = {
   estim_payment_per_year: '', approx_monthly_income: '',
   cash_not_reinvested: '', total_cash_reinvested: '',
   shares_bought_from_dividend: '',
+}
+
+function InfoHint({ text }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+      <button
+        type="button"
+        aria-label="More information"
+        onClick={() => setOpen(v => !v)}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onBlur={() => setOpen(false)}
+        style={{
+          width: 18,
+          height: 18,
+          borderRadius: '50%',
+          border: '1px solid #4fc3f7',
+          background: 'rgba(79, 195, 247, 0.12)',
+          color: '#90caf9',
+          fontSize: '0.72rem',
+          fontWeight: 700,
+          lineHeight: '16px',
+          padding: 0,
+          cursor: 'help',
+        }}
+      >
+        i
+      </button>
+      {open && (
+        <span style={{
+          position: 'absolute',
+          zIndex: 20,
+          left: 22,
+          top: '50%',
+          transform: 'translateY(-50%)',
+          width: 240,
+          maxWidth: '70vw',
+          padding: '0.45rem 0.55rem',
+          borderRadius: 6,
+          border: '1px solid #31517a',
+          background: '#101a33',
+          boxShadow: '0 8px 22px rgba(0,0,0,0.35)',
+          color: '#c8d8ef',
+          fontSize: '0.72rem',
+          lineHeight: 1.35,
+          whiteSpace: 'normal',
+        }}>
+          {text}
+        </span>
+      )}
+    </span>
+  )
 }
 
 function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
@@ -828,6 +881,7 @@ const DIV_SOURCE_OPTIONS = [
   { value: 'fidelity', label: 'Fidelity' },
   { value: 'snowball', label: 'Snowball' },
   { value: 'etrade', label: 'E*Trade' },
+  { value: 'robinhood', label: 'Robinhood' },
   { value: 'snapshot', label: 'Snapshot' },
   { value: 'yahoo', label: 'Yahoo' },
   { value: 'mixed', label: 'Mixed' },
@@ -840,7 +894,7 @@ const DIV_REPAIR_MODES = [
   { value: 'yahoo', label: 'Yahoo only' },
 ]
 
-const IMPORTED_DIV_SOURCES = ['broker', 'schwab', 'fidelity', 'snowball', 'etrade', 'imported']
+const IMPORTED_DIV_SOURCES = ['broker', 'schwab', 'fidelity', 'snowball', 'etrade', 'robinhood', 'imported']
 
 const DIV_SOURCE_META = {
   broker: { label: 'Imported', color: '#81c784' },
@@ -848,6 +902,7 @@ const DIV_SOURCE_META = {
   fidelity: { label: 'Fidelity', color: '#a5d6a7' },
   snowball: { label: 'Snowball', color: '#4db6ac' },
   etrade: { label: 'E*Trade', color: '#80cbc4' },
+  robinhood: { label: 'Robinhood', color: '#81c784' },
   imported: { label: 'Imported', color: '#81c784' },
   snapshot: { label: 'Snapshot', color: '#ce93d8' },
   yahoo: { label: 'Yahoo', color: '#64b5f6' },
@@ -860,6 +915,7 @@ const PREVIEW_SOURCE_COLUMNS = [
   { key: 'fidelity', label: 'Fidelity' },
   { key: 'snowball', label: 'Snowball' },
   { key: 'etrade', label: 'E*Trade' },
+  { key: 'robinhood', label: 'Robinhood' },
   { key: 'imported', label: 'Other' },
   { key: 'snapshot', label: 'Snapshot' },
   { key: 'yahoo', label: 'Yahoo' },
@@ -1052,6 +1108,7 @@ export default function ManageHoldings() {
   const pf = useProfileFetch()
   const { profileId, isAggregate, selection } = useProfile()
   const dialog = useDialog()
+  const holdingsRequestRef = useRef(0)
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -1059,6 +1116,9 @@ export default function ManageHoldings() {
   const [showModal, setShowModal] = useState(false)
   const [editHolding, setEditHolding] = useState(null)
   const [message, setMessage] = useState(null)
+  const [dividendRefreshAccounts, setDividendRefreshAccounts] = useState(null)
+  const [dividendRefreshDate, setDividendRefreshDate] = useState(null)
+  const [accrualSummary, setAccrualSummary] = useState(null)
   const [error, setError] = useState(null)
   const [sortKey, setSortKey] = useState('ticker')
   const [sortDir, setSortDir] = useState('asc')
@@ -1073,18 +1133,39 @@ export default function ManageHoldings() {
   const [expandedTickers, setExpandedTickers] = useState({})  // { ticker: [txns] | 'loading' }
 
   const fetchHoldings = async () => {
+    const requestId = ++holdingsRequestRef.current
+    setLoading(true)
     try {
       const res = await pf('/api/holdings')
       const data = await res.json()
-      setHoldings(data)
+      if (!res.ok) throw new Error(data?.error || 'Failed to load holdings')
+      if (requestId !== holdingsRequestRef.current) return
+      setHoldings(Array.isArray(data) ? data : [])
+      setError(null)
     } catch (e) {
+      if (requestId !== holdingsRequestRef.current) return
       setError('Failed to load holdings')
     } finally {
-      setLoading(false)
+      if (requestId === holdingsRequestRef.current) setLoading(false)
     }
   }
 
-  useEffect(() => { fetchHoldings() }, [selection])
+  const fetchAccrualSummary = async () => {
+    try {
+      const res = await pf('/api/holdings/accrual-summary')
+      const data = await res.json()
+      setAccrualSummary(data.accounts || [])
+    } catch (e) {
+      // non-critical — don't surface error
+    }
+  }
+
+  useEffect(() => {
+    setDividendRefreshAccounts(null)
+    setDividendRefreshDate(null)
+    fetchHoldings()
+    fetchAccrualSummary()
+  }, [selection])
 
   // Clear any stale repair preview when the selected portfolio changes,
   // so an Apply can't target a scope the preview wasn't built against.
@@ -1142,12 +1223,17 @@ export default function ManageHoldings() {
     setRefreshing(true)
     setError(null)
     setMessage(null)
+    setDividendRefreshAccounts(null)
+    setDividendRefreshDate(null)
     try {
       const res = await pf('/api/refresh', { method: 'POST' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
+      setDividendRefreshAccounts(data.dividend_update_accounts || [])
+      setDividendRefreshDate(data.refresh_date || null)
       setMessage(data.message)
       await fetchHoldings()
+      await fetchAccrualSummary()
     } catch (e) {
       setError(e.message)
     } finally {
@@ -1159,6 +1245,8 @@ export default function ManageHoldings() {
     setRepairingDivs(true)
     setError(null)
     setMessage(null)
+    setDividendRefreshAccounts(null)
+    setDividendRefreshDate(null)
     setRepairPreview(null)
     try {
       const res = await pf('/api/repair-dividends-preview', {
@@ -1180,6 +1268,8 @@ export default function ManageHoldings() {
     setApplyingRepair(true)
     setError(null)
     setMessage(null)
+    setDividendRefreshAccounts(null)
+    setDividendRefreshDate(null)
     try {
       const res = await pf('/api/repair-dividends-from-transactions', {
         method: 'POST',
@@ -1202,6 +1292,8 @@ export default function ManageHoldings() {
     setSyncingDrip(true)
     setError(null)
     setMessage(null)
+    setDividendRefreshAccounts(null)
+    setDividendRefreshDate(null)
     try {
       const res = await pf('/api/sync-drip-to-owner', { method: 'POST' })
       const data = await res.json()
@@ -1243,6 +1335,8 @@ export default function ManageHoldings() {
   const handleDelete = async (ticker) => {
     if (!await dialog.confirm(`Delete ${ticker}?`)) return
     setError(null)
+    setDividendRefreshAccounts(null)
+    setDividendRefreshDate(null)
     try {
       const res = await pf(`/api/holdings/${ticker}`, { method: 'DELETE' })
       const data = await res.json()
@@ -1257,6 +1351,8 @@ export default function ManageHoldings() {
   const handleSave = async (payload) => {
     setError(null)
     setMessage(null)
+    setDividendRefreshAccounts(null)
+    setDividendRefreshDate(null)
     const isEdit = !!editHolding
 
     try {
@@ -1286,6 +1382,16 @@ export default function ManageHoldings() {
     return (Number(v) * 100).toFixed(2) + '%'
   }
 
+  const fmtCurrency = (v) => `$${fmt(Number(v || 0))}`
+
+  const fmtDateLabel = (v) => {
+    if (!v) return 'refresh date'
+    const parsed = new Date(`${v}T00:00:00`)
+    return Number.isNaN(parsed.getTime())
+      ? v
+      : parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  }
+
   const sourceBadge = (source) => {
     const value = source || 'none'
     const meta = DIV_SOURCE_META[value]
@@ -1302,6 +1408,8 @@ export default function ManageHoldings() {
   const activeRepairModeLabel = DIV_REPAIR_MODES.find(opt => opt.value === (repairPreview?.mode || repairMode))?.label || DIV_REPAIR_MODES[0].label
   const previewTotals = repairPreview?.source_totals || {}
   const previewImportedTotal = repairPreview?.broker_updated ?? IMPORTED_DIV_SOURCES.reduce((sum, key) => sum + (previewTotals[key] || 0), 0)
+  const hasDividendRefreshResult = Array.isArray(dividendRefreshAccounts)
+  const dividendRefreshDateLabel = fmtDateLabel(dividendRefreshDate)
 
   return (
     <div className="page">
@@ -1353,6 +1461,104 @@ export default function ManageHoldings() {
         </div>
       </div>
 
+      {hasDividendRefreshResult && (
+        <section style={{ marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+            <h2 style={{ margin: 0, fontSize: '1rem', color: '#90caf9' }}>Latest Refresh Result</h2>
+            <div style={{ fontSize: '0.78rem', color: '#90a4ae' }}>{dividendRefreshDateLabel}</div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            {dividendRefreshAccounts.map(account => {
+              const distributions = account.distributions_today || []
+              const distributionTotal = distributions.reduce((sum, item) => sum + Number(item.amount || 0), 0)
+              const insertedPayments = Number(account.history_payments_inserted || 0)
+              const updatedPayments = Number(account.history_payments_updated || 0)
+              const existingPayments = Number(account.history_payments_existing || 0)
+              const changedDividendFields = Number(account.dividend_updates || 0)
+              return (
+                <div key={account.profile_id} className="card" style={{
+                  flex: '1 1 220px', minWidth: 180, padding: '0.75rem 1rem',
+                  borderTop: '3px solid #2e7d32',
+                }}>
+                  <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>
+                    {account.name}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '1.25rem', fontWeight: 700, color: '#4fc3f7' }}>
+                      {fmtCurrency(distributionTotal)}
+                    </span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem', color: '#a5d6a7' }}>
+                      distributions payable today
+                      <InfoHint text="Total estimated cash from holdings with a pay date on the refresh date. These can be inserted, updated, or skipped if payment history already has the row." />
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: '#78909c', marginTop: '0.2rem' }}>
+                    {fmtCurrency(account.accrued_dividends)} estimated accrual since previous refresh
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', fontSize: '0.72rem', color: '#78909c', marginTop: '0.2rem' }}>
+                    <span>{changedDividendFields} holding dividend field{changedDividendFields === 1 ? '' : 's'} changed</span>
+                    <InfoHint text="Holding fields are the dividend metadata columns on the holdings row, such as dividend/share, ex-date, pay date, frequency, YTD, and current-month income." />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', fontSize: '0.72rem', color: '#78909c', marginTop: '0.2rem', lineHeight: 1.35 }}>
+                    <span>Payment history: {insertedPayments} recorded, {updatedPayments} updated, {existingPayments} already existed</span>
+                    <InfoHint text="Payment history rows are dividend_payments entries created by Refresh for payable distributions. Existing imported or already-matching refresh rows are counted separately." />
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: '#90a4ae', marginTop: '0.45rem' }}>
+                    {distributions.length > 0 ? `Distributions on ${dividendRefreshDateLabel}` : `No distributions on ${dividendRefreshDateLabel}`}
+                  </div>
+                  {distributions.length > 0 && (
+                    <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.45rem' }}>
+                      {distributions.map(item => (
+                        <span key={item.ticker} style={{
+                          display: 'inline-flex', gap: '0.25rem', alignItems: 'center',
+                          padding: '0.2rem 0.45rem', borderRadius: 4,
+                          background: 'rgba(76, 175, 80, 0.12)', color: '#c8e6c9',
+                          fontSize: '0.72rem', whiteSpace: 'nowrap',
+                        }}>
+                          <strong style={{ color: '#81c784' }}>{item.ticker}</strong>
+                          {fmtCurrency(item.amount)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      {accrualSummary && accrualSummary.length > 0 && (
+        <section style={{ marginBottom: '0.75rem' }}>
+          <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem', color: '#90caf9' }}>Accrued Since Last Refresh</h2>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            {accrualSummary.map(account => {
+              const days = account.days_since_last_refresh
+              const hasData = days != null
+              return (
+                <div key={account.profile_id} className="card" style={{
+                  flex: '1 1 160px', minWidth: 140, padding: '0.65rem 1rem',
+                  borderTop: '3px solid #1565c0',
+                }}>
+                  <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.2rem' }}>
+                    {account.name}
+                  </div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#4fc3f7' }}>
+                    {hasData ? fmtCurrency(account.accrued_dividends) : '-'}
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: '#78909c', marginTop: '0.15rem' }}>
+                    {hasData
+                      ? account.confirmed_payments > 0
+                        ? `${account.confirmed_payments} payment${account.confirmed_payments !== 1 ? 's' : ''} since refresh`
+                        : `est. over ${days < 1 ? '<1' : Math.round(days)} day${Math.round(days) !== 1 ? 's' : ''}`
+                      : 'no prior refresh'}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
       {message && <div className="alert alert-success">{message}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
@@ -1575,6 +1781,8 @@ export default function ManageHoldings() {
               <div style={{ color: '#81c784', fontWeight: 700 }}>Imported: {previewImportedTotal}</div>
               <div style={{ color: '#64b5f6', fontWeight: 700 }}>Yahoo: {previewTotals.yahoo ?? repairPreview.yahoo_updated}</div>
               <div style={{ color: '#ce93d8', fontWeight: 700 }}>Snapshot: {previewTotals.snapshot ?? repairPreview.snapshot_updated ?? 0}</div>
+              <div style={{ color: '#b0bec5', fontWeight: 700 }}>Dates/Amounts: {repairPreview.metadata_updated ?? 0}</div>
+              <div style={{ color: '#ffcc80', fontWeight: 700 }}>Official: {repairPreview.official_updated ?? 0}</div>
               <div style={{ color: '#90a4ae', fontWeight: 700 }}>No source: {repairPreview.none_updated}</div>
               <div style={{ color: '#e0e0e0', fontWeight: 700 }}>Mode: {activeRepairModeLabel}</div>
             </div>

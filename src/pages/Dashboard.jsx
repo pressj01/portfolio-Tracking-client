@@ -78,7 +78,7 @@ function UpcomingDividends({ events }) {
               Ex: {e.ex_weekday} {new Date(e.ex_date + 'T00:00').toLocaleDateString()}
             </div>
             <div style={{ fontSize: '0.8rem', color: '#8899aa' }}>
-              Pay: ~{e.pay_weekday} {new Date(e.pay_date + 'T00:00').toLocaleDateString()}
+              Pay: {e.pay_estimated === false ? '' : '~'}{e.pay_weekday} {new Date(e.pay_date + 'T00:00').toLocaleDateString()}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem' }}>
               <span style={{ fontSize: '0.8rem', color: '#90a4ae' }}>${e.amount}/share</span>
@@ -424,12 +424,17 @@ export default function Dashboard() {
             .then(r => {
               if (stale) return
               setRefreshStatus(r.message)
-              return pf('/api/holdings')
+              return Promise.all([
+                pf('/api/holdings').then(safeJson),
+                pf('/api/income-summary').then(safeJson).catch(() => null),
+              ])
             })
-            .then(r => { if (!stale && r) return safeJson(r) })
-            .then(updated => {
-              if (stale || !updated) return
+            .then(result => {
+              if (stale || !result) return
+              const [updated, summary] = result
+              if (!updated) return
               setHoldings(updated)
+              if (summary) setIncomeSummary(summary)
               setGradeStatus('Loading risk grades...')
               return pf('/api/portfolio-summary/data')
                 .then(safeJson)
@@ -494,7 +499,7 @@ export default function Dashboard() {
     const monthlyNotReinvested = sum('monthly_income_not_reinvested')
     const annualIncome = sum('estim_payment_per_year')
     const rawMonthIncome = sum('current_month_income')
-    const currentMonthIncome = rawMonthIncome != null ? rawMonthIncome : (incomeSummary?.current_month_income ?? 0)
+    const currentMonthIncome = incomeSummary?.current_month_income ?? rawMonthIncome ?? 0
 
     let avgYoc = 0
     const valid = holdings.filter(h => h.purchase_value > 0 && h.annual_yield_on_cost != null)

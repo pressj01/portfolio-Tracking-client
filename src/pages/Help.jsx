@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 
-const APP_VERSION = '1.22.2'
+const APP_VERSION = '1.23.0'
 
 const GROUPS = [
   {
@@ -69,10 +69,11 @@ function Overview() {
         Portfolio Tracking Client is a desktop application for managing dividend-focused investment portfolios.
         It lets you import holdings from spreadsheets, track positions and transactions, monitor dividend income,
         analyze portfolio performance, and run screening tools — all from a single interface.
+        Robinhood is also supported for both positions (PDF) and transaction history (CSV) imports.
       </p>
       <h3 style={{ marginBottom: '0.5rem' }}>Key Capabilities</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
-        <li><strong>Import</strong> — Bulk-load brokerage positions and transaction history from your own spreadsheet, a generic template, or brokerage exports. Supports Schwab (Positions &amp; Transactions), E*TRADE (Positions, Buys &amp; Sells, Dividends), Fidelity (Positions &amp; Transactions), and Snowball (Holdings Migration &amp; Transactions). Automatic database backups before every import with one-click restore.</li>
+        <li><strong>Import</strong> — Bulk-load brokerage positions and transaction history from your own spreadsheet, a generic template, or brokerage exports. Supports Schwab (Positions &amp; Transactions), E*TRADE (Positions, Buys &amp; Sells, Dividends), Fidelity (Positions &amp; Transactions), Robinhood (Positions PDF &amp; Transactions), and Snowball (Holdings Migration &amp; Transactions). Automatic database backups before every import and dividend repair with one-click restore.</li>
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
         <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation.</li>
         <li><strong>Dividends</strong> — Dividend analysis, calendar view, and comparison tools.</li>
@@ -87,7 +88,7 @@ function Overview() {
 function ImportHelp() {
   return (
     <div>
-      <h2>Import Brokerage Positions and Snowball Data</h2>
+      <h2>Import Brokerage Positions, Transactions, and Snowball Data</h2>
       <p style={{ marginBottom: '1rem' }}>
         The <strong>Import Brokerage Positions and Snowball Data</strong> page lets you bulk-load holdings into a portfolio from an Excel or CSV file.
         There are two main import modes, each on its own tab: <strong>My Spreadsheet</strong> (owner format) and <strong>Generic Upload</strong>.
@@ -98,7 +99,7 @@ function ImportHelp() {
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
         <strong>Brokerage templates:</strong> The Generic Upload area also includes downloadable brokerage-position templates.
         Use the matching template if you want to paste or export positions from a broker first, then import them into the app.
-        The app currently provides templates for <strong>E*TRADE</strong>, <strong>Charles Schwab</strong>, and <strong>Fidelity</strong>, plus a generic template and Snowball holdings migration template.
+        The app currently provides templates for <strong>E*TRADE</strong>, <strong>Charles Schwab</strong>, <strong>Fidelity</strong>, and <strong>Robinhood</strong>, plus a generic template and Snowball holdings migration template.
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Brokerage Position Templates</h3>
@@ -106,6 +107,8 @@ function ImportHelp() {
         <li><strong>E*TRADE template</strong> — use this when you want a worksheet laid out for E*TRADE position data before importing.</li>
         <li><strong>Charles Schwab (Positions) template</strong> — use this when preparing Schwab position exports or copy/paste data for import.</li>
         <li><strong>Fidelity (Positions) template</strong> — use this when preparing a Fidelity positions workbook with the exact columns the importer reads.</li>
+        <li><strong>Robinhood Holdings reference</strong> — a CSV showing the fields read from the Robinhood Holdings PDF. The actual import still expects the PDF export.</li>
+        <li><strong>Robinhood Transactions template</strong> — a CSV with the exact activity columns this importer reads for buys, sells, dividends, capital gains, and ACAT share transfers.</li>
         <li><strong>Snowball Holdings template</strong> — use this for a migration-style holdings snapshot when moving from Snowball into the app.</li>
         <li><strong>Generic template</strong> — use this when your source does not match a brokerage template and you want the broadest flexible import format.</li>
       </ul>
@@ -137,8 +140,8 @@ function ImportHelp() {
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
         <strong>Recommended workflow:</strong>
         <ol style={{ paddingLeft: '1.5rem', marginTop: '0.5rem', marginBottom: 0 }}>
-          <li>Import a <strong>Positions</strong> file first (Schwab, E*TRADE, or Fidelity) to set accurate current holdings, share counts, and cost basis.</li>
-          <li>Then import <strong>Transaction History</strong> (Schwab Transactions, E*TRADE Buys &amp; Sells / Dividends, Fidelity Transactions, or Snowball Transactions) for dividend tracking and realized gain records.</li>
+          <li>Import a <strong>Positions</strong> file first (Schwab, E*TRADE, Fidelity, or Robinhood) to set accurate current holdings, share counts, and cost basis.</li>
+          <li>Then import <strong>Transaction History</strong> (Schwab Transactions, E*TRADE Buys &amp; Sells / Dividends, Fidelity Transactions, Robinhood Transactions, or Snowball Transactions) for dividend tracking and realized gain records.</li>
           <li>Run <strong>Refresh Prices &amp; Divs</strong> to update market data, dividend fields, and pay-date estimates.</li>
         </ol>
         When a Positions import has been done first, transaction imports store history without overwriting your holdings data.
@@ -155,7 +158,7 @@ function ImportHelp() {
         (e.g. only the last 1–2 years), imported buy/sell transactions may recalculate your share counts and cost
         basis from the transactions alone — which may not match your actual holdings. To avoid this, import a
         Positions file first (see recommended workflow above). A database backup is created automatically before
-        every import so you can restore if needed.
+        every import and dividend repair so you can restore if needed.
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Charles Schwab (Transactions)</h4>
@@ -163,6 +166,7 @@ function ImportHelp() {
         <li>In Schwab, go to <strong>Accounts &gt; History</strong>, set the date range, then export to CSV.</li>
         <li>Set the format selector to <strong>Charles Schwab (Transactions)</strong>.</li>
         <li>Imports: BUY, SELL, DRIP reinvestment shares, cash dividends, reinvested dividends, capital gain distributions, return of capital, and dividend adjustments.</li>
+        <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
         <li>DRIP reinvestments are tagged as <code>[DRIP]</code> buys.</li>
       </ul>
 
@@ -178,6 +182,7 @@ function ImportHelp() {
         <li>In E*TRADE, go to <strong>Accounts &gt; Transaction History</strong>, filter to "Dividends", then download the XLSX.</li>
         <li>Set the format selector to <strong>E*TRADE (Dividends)</strong>.</li>
         <li>Imports: cash dividend payments and DRIP reinvestment buys. Positive amounts are recorded as dividends; negative amounts with shares are recorded as <code>[DRIP]</code> buys.</li>
+        <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
       </ul>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Fidelity (Transactions)</h4>
@@ -185,7 +190,24 @@ function ImportHelp() {
         <li>In Fidelity, export the <strong>Transactions XLSX</strong> workbook for a single account.</li>
         <li>Set the format selector to <strong>Fidelity (Transactions)</strong>.</li>
         <li>Imports: BUY, SELL, cash dividend receipts, and DRIP reinvestment rows.</li>
+        <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
         <li>If the portfolio already has holdings from a positions import, the transaction import preserves those holdings and stores the Fidelity history for recordkeeping.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Robinhood (Positions PDF)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>In Robinhood, download your <strong>Holdings PDF</strong> from the app or website.</li>
+        <li>Set the format selector to <strong>Robinhood (Positions PDF)</strong>.</li>
+        <li>Imports: current positions with ticker, shares, and current value.</li>
+        <li><strong>Note:</strong> Robinhood does not include cost basis in the Holdings PDF, so the current value is used as the initial cost basis. Update cost basis manually on the Holdings page or import Robinhood Transactions to build lot-level cost basis.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Robinhood (Transactions)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>In Robinhood, export your <strong>Activity CSV</strong>.</li>
+        <li>Set the format selector to <strong>Robinhood (Transactions)</strong>.</li>
+        <li>Imports: BUY, SELL, cash dividends, manufactured dividends, capital gain distributions, and ACAT share transfers.</li>
+        <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
       </ul>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Snowball Transactions</h4>
@@ -206,13 +228,13 @@ function ImportHelp() {
         <li>Duplicate transactions (same ticker, date, shares, price) are automatically skipped on re-import.</li>
       </ol>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Import Backups &amp; Restore</h3>
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Database Backups &amp; Restore</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        A database backup is created automatically before every import (positions, transactions, and spreadsheet imports).
+        A database backup is created automatically before every import (positions, transactions, and spreadsheet imports) and before applying dividend repair.
         The last 5 backups are kept; older ones are pruned automatically.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Backups appear in the <strong>Import Backups</strong> section at the bottom of the Import page.</li>
+        <li>Backups appear in the <strong>Database Backups</strong> section at the bottom of the Import page.</li>
         <li>Each backup shows the date/time and file size.</li>
         <li>Click <strong>Restore</strong> on any backup to replace the current database with that snapshot. A confirmation dialog appears first.</li>
         <li>After restoring, refresh your browser to see the restored data.</li>
@@ -441,7 +463,8 @@ function DashboardHelp() {
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Upcoming Dividends</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the summary cards, a card shows dividends expected this week based on ex-dividend dates,
-        with estimated payout amounts per holding.
+        with estimated payout amounts per holding. Pay dates prefixed with <strong>~</strong> are estimated;
+        pay dates without the tilde are confirmed (sourced from the holding's stored pay date data).
       </p>
     </div>
   )
@@ -471,16 +494,27 @@ function HoldingsHelp() {
       {/* ── Toolbar Buttons ─────────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Toolbar Buttons</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Refresh Prices & Divs</strong> — Fetches the latest prices, dividend amounts, and ex-div dates from Yahoo Finance for the currently selected portfolio scope. Individual accounts refresh only themselves; Owner refreshes its included source accounts; Aggregate refreshes its configured member accounts.</li>
-        <li><strong>Div Src filter</strong> (dropdown, left of Refresh) — Filters the holdings table by the source of each row's dividend actuals. Options: <em>All</em>, <em>Imported actuals</em> (any broker-sourced payment data — Schwab, Fidelity, E*Trade, Snowball, or generic imports), individual brokers, <em>Snapshot</em> (lifetime totals preserved from a Snowball migration), <em>Yahoo</em> (fallback filled from Yahoo history), <em>Mixed</em> (aggregate rows whose members have different sources), and <em>No source</em> (holdings with no dividend data yet). The selected source is also shown in the new <strong>Div Src</strong> column in the table.</li>
-        <li><strong>Dividend repair mode</strong> (dropdown, right of Refresh) — Chooses which data sources the next repair run is allowed to use:
+        <li><strong>Refresh Prices &amp; Divs</strong> - Fetches the latest prices, dividend amounts, and ex-div dates from Yahoo Finance for the currently selected portfolio scope. Individual accounts refresh only themselves; Owner refreshes its included source accounts; Aggregate refreshes its configured member accounts.</li>
+        <li><strong>Latest Refresh Result</strong> - After Refresh Prices &amp; Divs finishes, a result section appears on the Holdings screen. Each account card shows:
           <ul style={{ paddingLeft: '1.25rem', lineHeight: '1.7', marginTop: '0.25rem' }}>
-            <li><em>Imported actuals + Yahoo</em> (default) — Use imported broker dividend payments where available; fall back to Yahoo history for tickers with no imported payments. Snowball snapshots are preserved.</li>
-            <li><em>Imported actuals only</em> — Use only imported broker payments. Tickers with no imported payments get their dividend fields cleared to "No source". Snowball snapshots are preserved.</li>
-            <li><em>Yahoo only</em> — Ignore imported broker payments and rebuild every row from Yahoo history. Snowball snapshots are <strong>not</strong> preserved in this mode.</li>
+            <li><strong>Distributions payable today</strong> — total estimated cash from holdings with a pay date on the refresh date.</li>
+            <li><strong>Estimated accrual since previous refresh</strong> — estimated dividends earned between the last refresh and this one.</li>
+            <li><strong>Holding dividend fields changed</strong> — how many holdings had metadata (dividend/share, ex-date, pay date, frequency, YTD, current-month income) updated.</li>
+            <li><strong>Payment history</strong> — how many payment rows were recorded (new), updated (amount changed), or already existed (skipped).</li>
+            <li><strong>Distribution ticker chips</strong> — the tickers that produced distributions on the refresh date, with their estimated dollar amounts.</li>
           </ul>
         </li>
-        <li><strong>Preview Div Repair</strong> — Runs the selected repair mode in dry-run form and opens a preview modal showing, per sub-account, how many holdings would be updated from each source (Schwab / Fidelity / Snowball / E*Trade / Other / Snapshot / Yahoo / No source) plus totals. Nothing is written until you confirm with <strong>Apply Repair</strong>; a database backup is taken automatically before writes. Closing the modal (Escape, clicking outside, the × button, or Cancel) discards the preview. Switching the active portfolio also clears any in-flight preview so you can't apply it against a different scope by accident.</li>
+        <li><strong>Accrued Since Last Refresh</strong> - Below the refresh result, accrual cards summarize estimated dividends earned since the previous refresh for each account. The payment count is labeled as payments since refresh so it does not imply only payments from the current calendar day. These cards also appear on page load (before any refresh) so you can always see the running accrual.</li>
+        <li><strong>Dividend history tracking</strong> - When the refresh finds a ticker with an expected pay date equal to the refresh date, it writes an estimated payment row into Dividend History using source <code>refresh_estimate</code>. If a broker dividend import later brings in the actual payment for the same ticker, account, and date, the actual broker row replaces the refresh estimate instead of creating a duplicate. Dividend repair ignores <code>refresh_estimate</code> rows when rebuilding actual payment totals, so estimates do not get counted as imported broker actuals.</li>
+        <li><strong>Div Src filter</strong> (dropdown, left of Refresh) — Filters the holdings table by the source of each row's dividend actuals. Options: <em>All</em>, <em>Imported actuals</em> (any broker-sourced payment data — Schwab, Fidelity, E*Trade, Robinhood, Snowball, or generic imports), individual brokers, <em>Snapshot</em> (lifetime totals preserved from a Snowball migration), <em>Yahoo</em> (fallback filled from Yahoo history), <em>Mixed</em> (aggregate rows whose members have different sources), and <em>No source</em> (holdings with no dividend data yet). The selected source is also shown in the new <strong>Div Src</strong> column in the table.</li>
+        <li><strong>Dividend repair mode</strong> (dropdown, right of Refresh) — Chooses which data sources the next repair run is allowed to use:
+          <ul style={{ paddingLeft: '1.25rem', lineHeight: '1.7', marginTop: '0.25rem' }}>
+            <li><em>Imported actuals + Yahoo</em> (default) — Use imported broker dividend payments where available; fall back to Yahoo history for tickers with no imported payments. Dividend dates, pay dates, current amount, and frequency are also refreshed from Yahoo metadata and supported official issuer sites when available. Snowball snapshots are preserved.</li>
+            <li><em>Imported actuals only</em> — Use only imported broker payments. Tickers with no imported payments get their dividend fields cleared to "No source". Snowball snapshots are preserved. Refresh-estimated rows are ignored.</li>
+            <li><em>Yahoo only</em> — Ignore imported broker payments and rebuild every row from Yahoo history. Dividend metadata can still be improved by supported official issuer sites. Snowball snapshots are <strong>not</strong> preserved in this mode.</li>
+          </ul>
+        </li>
+        <li><strong>Preview Div Repair</strong> — Runs the selected repair mode in dry-run form and opens a preview modal showing, per sub-account, how many holdings would be updated from each source (Schwab / Fidelity / Snowball / E*Trade / Robinhood / Other / Snapshot / Yahoo / No source) plus totals. The Dates/Amounts count shows holdings whose current dividend metadata would be refreshed; Official shows how many of those came from supported issuer sites. Nothing is written until you confirm with <strong>Apply Repair</strong>; a database backup is taken automatically before writes. Closing the modal (Escape, clicking outside, the × button, or Cancel) discards the preview. Switching the active portfolio also clears any in-flight preview so you can't apply it against a different scope by accident.</li>
         <li><strong>DRIP Matrix</strong> — (Owner only) Opens a matrix view showing DRIP on/off status for every ticker across all sub-accounts.
           You can toggle DRIP per ticker per account directly from this modal. Each cell shows a checkbox and the share count
           held in that account. The Owner column shows the aggregate DRIP status and DRIP-eligible share count.
@@ -1435,8 +1469,9 @@ function DividendHistoryHelp() {
     <div>
       <h2>Dividend History</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The Dividend History page plots actual dividends received over time from your recorded dividend payments.
-        It is designed for looking backward at what you were paid, not projecting future income.
+        The Dividend History page plots dividends received over time from recorded broker payments and refresh-tracked
+        same-day estimates. It is designed for looking backward at what you were paid or what the app detected as
+        payable on a refresh date, not projecting future income.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Views and Ranges</h3>
@@ -1445,6 +1480,15 @@ function DividendHistoryHelp() {
         <li><strong>Monthly</strong> — shows monthly dividends as an area chart with an optional 3-month moving average.</li>
         <li><strong>Weekly</strong> — shows weekly dividend history for shorter lookbacks.</li>
         <li><strong>Range buttons</strong> — Monthly and Weekly views include preset lookback ranges so you can quickly zoom in or out.</li>
+        <li><strong>Partial current period</strong> - The current month is labeled like <em>Apr '26 partial</em>, the current year is labeled like <em>2026 YTD</em>, and today's weekly entry is labeled <em>today</em>. These labels mean the period is still incomplete.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Sources</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Broker payments</strong> - Imported dividend transactions from Schwab, E*TRADE, Fidelity, Snowball, or generic sources are treated as actual payment history.</li>
+        <li><strong>Refresh estimates</strong> - Refresh Prices &amp; Divs can add source <code>refresh_estimate</code> rows when a holding's expected pay date matches the refresh date. These rows let the history chart begin tracking same-day distributions even before a broker transaction file is imported. Dividend repair excludes them from actual payment totals so they do not replace or inflate imported broker actuals.</li>
+        <li><strong>Actuals replace estimates</strong> - If a later broker import brings in the actual payment for the same ticker, account, and date, the actual amount replaces the refresh estimate.</li>
+        <li><strong>Legacy payout tables</strong> - If older monthly or weekly payout tables exist for an account, Dividend History keeps using that history and only fills missing periods with refresh-estimated rows. A new refresh estimate will not hide the older history.</li>
       </ul>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters and Overlay</h3>
@@ -1456,9 +1500,15 @@ function DividendHistoryHelp() {
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Strip</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        The cards above the chart show total dividends, average period amount, min, max, and trend/growth
-        for the currently selected view and filters.
+        The cards above the chart show total dividends, average period amount, min, max, and the change from
+        the first period in the selected range.
       </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>CHANGE VS FIRST MONTH</strong> - Monthly view compares the last completed month to the first month in the selected range.</li>
+        <li><strong>CHANGE VS FIRST YEAR</strong> - Yearly view compares the latest completed year to the first year when enough completed yearly data exists.</li>
+        <li><strong>CHANGE VS FIRST PERIOD</strong> - Weekly view compares the latest completed period to the first period in the selected range.</li>
+        <li><strong>Partial periods are excluded when possible</strong> - The current incomplete month, year, or day is not used as the ending point for the change calculation when there are at least two completed periods. This prevents a partial current period from looking like a dividend-income collapse.</li>
+      </ul>
     </div>
   )
 }
@@ -2537,7 +2587,7 @@ function PortfolioTesterHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Type a ticker + optional weight %</strong> and click <strong>Add</strong> (or press Enter). If no weight is given, it's added at 0% and you can click Equal or Normalize to distribute.</li>
         <li><strong>Load All Current</strong> — replaces the portfolio with every current holding, weighted by current dollar value. Useful when you want to benchmark your real portfolio against a hypothetical alternative.</li>
-        <li><strong>Pick Tickers…</strong> — opens an inline picker showing every current holding with checkboxes. Search by ticker, use <strong>Select All</strong> / <strong>Select None</strong>, then apply:
+        <li><strong>Pick Tickers…</strong> — opens an inline picker showing every current holding sorted alphabetically with checkboxes. Search by ticker, use <strong>Select All</strong> / <strong>Select None</strong>, then apply:
           <ul style={{ paddingLeft: '1.25rem', marginTop: '0.25rem' }}>
             <li><strong>Replace Portfolio</strong> — overwrites this portfolio with exactly the selected tickers, weighted by current value.</li>
             <li><strong>Add to Portfolio</strong> — keeps existing holdings at their weights and merges in only the newly-picked tickers, then renormalizes to 100%.</li>
@@ -2554,7 +2604,7 @@ function PortfolioTesterHelp() {
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Run Settings</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Start / End</strong> date inputs, plus <strong>preset buttons</strong>: 6M, 1Y, 3Y, 5Y, 10Y, 15Y, 20Y, 25Y. Presets set end to today and start to N years before.</li>
+        <li><strong>Start / End</strong> date inputs, plus <strong>preset buttons</strong>: 6M, 1Y, 2Y, 3Y, 4Y, 5Y, 10Y, 15Y, 20Y, 25Y. Presets set end to today and start to N years before.</li>
         <li><strong>Initial</strong> — starting investment for the backtest (default $10,000). Applied equally to both portfolios and the benchmark.</li>
         <li><strong>Benchmark checkbox + ticker</strong> — uncheck the <strong>Benchmark</strong> box to run <em>Portfolio A vs Portfolio B only</em> with no benchmark line. Check it to include a reference ticker (default <code>SPY</code>; change to <code>QQQ</code>, <code>VTI</code>, etc. as needed).</li>
         <li><strong>Rebalance</strong> — None, Monthly, Quarterly, or Annually. If set, each portfolio is rebalanced back to its target weights at that frequency.</li>
@@ -2594,6 +2644,14 @@ function PortfolioTesterHelp() {
         A header badge calls out the <strong>overall winner</strong> — the portfolio that won the most
         metrics — or "Tied" if they match. The score card is only meaningful when two portfolios are
         present; with one portfolio, it shows its values without a winner concept.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Total Return</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Below the score cards, a <strong>Portfolio Total Return</strong> section shows a summary card for each portfolio
+        with the total return percentage, dollar gain/loss, initial investment amount, and final value.
+        Values are color-coded green (positive) or red (negative). This provides a quick at-a-glance view
+        of how much each portfolio gained or lost over the backtest period.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Performance Summary Table</h3>

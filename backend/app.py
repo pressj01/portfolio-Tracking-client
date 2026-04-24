@@ -147,7 +147,7 @@ def rows_to_dicts(rows):
 _ACCOUNT_MATCH_IGNORED_TOKENS = {
     "account", "acct", "portfolio",
     "etrade", "e", "trade",
-    "schwab", "charles", "fidelity",
+    "schwab", "charles", "fidelity", "robinhood",
     "snowball", "analytics",
     "traditional",
 }
@@ -289,7 +289,7 @@ def _broker_import_target_error(profile_id, conn):
 def _should_preserve_positions_for_transaction_import(profile_id, fmt, conn):
     """Return True when transaction imports should not recalculate holdings."""
     fmt = (fmt or "").strip().lower()
-    if fmt in {"schwab", "etrade", "fidelity", "snowball_holdings"}:
+    if fmt in {"schwab", "etrade", "fidelity", "snowball_holdings", "robinhood"}:
         return False
 
     if _profile_is_positions_managed(profile_id, conn):
@@ -1219,25 +1219,43 @@ import glob as _glob
 
 _BACKUP_DIR = os.path.join(os.path.dirname(DB_PATH), "backups")
 _MAX_BACKUPS = 5  # Keep at most this many backup files
+_BACKUP_PREFIX = "portfolio_backup_"
+_LEGACY_BACKUP_PREFIX = "portfolio_pre_import_"
+
+
+def _database_backup_paths(reverse=False):
+    """Return database backup files, including legacy pre-import names."""
+    paths = []
+    for prefix in (_BACKUP_PREFIX, _LEGACY_BACKUP_PREFIX):
+        paths.extend(_glob.glob(os.path.join(_BACKUP_DIR, f"{prefix}*.db")))
+    unique_paths = sorted(set(paths), key=lambda path: os.path.getmtime(path), reverse=reverse)
+    return unique_paths
+
+
+def _database_backup_timestamp_part(filename):
+    for prefix in (_BACKUP_PREFIX, _LEGACY_BACKUP_PREFIX):
+        if filename.startswith(prefix) and filename.endswith(".db"):
+            return filename[len(prefix):-3]
+    return None
 
 
 def _create_import_backup():
-    """Create a timestamped copy of the database before an import.
+    """Create a timestamped copy of the database before a write operation.
 
     Returns the backup file path, or None if the copy failed.
     """
     os.makedirs(_BACKUP_DIR, exist_ok=True)
     from datetime import datetime as _dt
     ts = _dt.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = os.path.join(_BACKUP_DIR, f"portfolio_pre_import_{ts}.db")
+    backup_path = os.path.join(_BACKUP_DIR, f"{_BACKUP_PREFIX}{ts}.db")
     try:
         shutil.copy2(DB_PATH, backup_path)
     except Exception:
         return None
 
     # Prune old backups, keep only the newest _MAX_BACKUPS
-    backups = sorted(_glob.glob(os.path.join(_BACKUP_DIR, "portfolio_pre_import_*.db")))
-    for old in backups[:-_MAX_BACKUPS]:
+    backups = _database_backup_paths(reverse=True)
+    for old in backups[_MAX_BACKUPS:]:
         try:
             os.remove(old)
         except OSError:
@@ -1248,16 +1266,16 @@ def _create_import_backup():
 
 @app.route("/api/import/backups", methods=["GET"])
 def list_import_backups():
-    """List available pre-import database backups."""
+    """List available database backups."""
     if not os.path.isdir(_BACKUP_DIR):
         return jsonify({"backups": []})
-    backups = sorted(_glob.glob(os.path.join(_BACKUP_DIR, "portfolio_pre_import_*.db")), reverse=True)
+    backups = _database_backup_paths(reverse=True)
     result = []
     for bp in backups:
         fname = os.path.basename(bp)
         size_mb = round(os.path.getsize(bp) / (1024 * 1024), 1)
         # Extract timestamp from filename
-        ts_part = fname.replace("portfolio_pre_import_", "").replace(".db", "")
+        ts_part = _database_backup_timestamp_part(fname) or fname
         try:
             from datetime import datetime as _dt
             dt = _dt.strptime(ts_part, "%Y%m%d_%H%M%S")
@@ -1270,14 +1288,17 @@ def list_import_backups():
 
 @app.route("/api/import/restore", methods=["POST"])
 def restore_import_backup():
-    """Restore the database from a pre-import backup.
+    """Restore the database from a backup.
 
-    Expects JSON: {"filename": "portfolio_pre_import_20260414_120000.db"}
+    Expects JSON: {"filename": "portfolio_backup_20260414_120000.db"}
+    Legacy portfolio_pre_import_* backup filenames are also accepted.
     """
     data = request.get_json(force=True)
     fname = data.get("filename", "")
     if not fname or ".." in fname or "/" in fname or "\\" in fname:
         return jsonify({"error": "Invalid filename"}), 400
+    if _database_backup_timestamp_part(fname) is None:
+        return jsonify({"error": "Invalid backup filename"}), 400
     backup_path = os.path.join(_BACKUP_DIR, fname)
     if not os.path.isfile(backup_path):
         return jsonify({"error": "Backup file not found"}), 404
@@ -1592,11 +1613,20 @@ def api_import_transactions():
         # Insert aggregated dividends
         for (ticker, date_str), info in div_agg.items():
             dup = conn.execute(
-                "SELECT 1 FROM dividend_payments WHERE ticker = ? AND profile_id = ? AND payment_date = ?",
+                "SELECT id, source FROM dividend_payments WHERE ticker = ? AND profile_id = ? AND payment_date = ?",
                 (ticker, profile_id, date_str),
             ).fetchone()
             if dup:
-                duplicates_skipped += 1
+                notes = "; ".join(dict.fromkeys(info["notes_parts"]))  # dedupe note parts
+                if (dup["source"] or "").lower() == "refresh_estimate":
+                    conn.execute(
+                        "UPDATE dividend_payments SET amount = ?, source = ?, notes = ? WHERE id = ?",
+                        (round(info["amount"], 2), fmt, notes, dup["id"]),
+                    )
+                    dividends_applied += 1
+                    tickers_with_divs.add(ticker)
+                else:
+                    duplicates_skipped += 1
                 continue
 
             notes = "; ".join(dict.fromkeys(info["notes_parts"]))  # dedupe note parts
@@ -1759,6 +1789,12 @@ def _dividend_repair_message(result, scope_label, mode, owner_actuals_updated=0,
         message += f"{imported_count} imported actuals, {yahoo_count} Yahoo fallback, {none_count} no-source."
     if snapshot_count:
         message += f" Preserved {snapshot_count} Snowball snapshot row{'' if snapshot_count == 1 else 's'}."
+    metadata_count = result.get("metadata_updated", 0)
+    official_count = result.get("official_updated", 0)
+    if metadata_count:
+        verb = "Would update" if preview else "Updated"
+        official_note = f", including {official_count} from official issuer sites" if official_count else ""
+        message += f" {verb} dividend dates/amounts for {metadata_count} holding{'' if metadata_count == 1 else 's'}{official_note}."
     if result["payment_rows"] and mode == "yahoo":
         message += (
             f" Ignored {result['payment_rows']} imported dividend payment"
@@ -1805,6 +1841,8 @@ def api_preview_repair_dividends_from_transactions():
             "yahoo_updated": result["yahoo_updated"],
             "none_updated": result["none_updated"],
             "snapshot_updated": result["snapshot_updated"],
+            "metadata_updated": result["metadata_updated"],
+            "official_updated": result["official_updated"],
             "source_totals": result["source_totals"],
             "accounts": result["accounts"],
             "message": _dividend_repair_message(result, scope_label, mode, preview=True),
@@ -1877,6 +1915,8 @@ def api_repair_dividends_from_transactions():
             "yahoo_updated": result["yahoo_updated"],
             "none_updated": result["none_updated"],
             "snapshot_updated": result["snapshot_updated"],
+            "metadata_updated": result["metadata_updated"],
+            "official_updated": result["official_updated"],
             "source_totals": result["source_totals"],
             "accounts": result["accounts"],
             "owner_actuals_updated": owner_actuals_updated,
@@ -2046,6 +2086,19 @@ def _format_mdy_date(value):
     return ts.strftime("%m/%d/%y") if ts is not None else None
 
 
+def _date_from_value(value):
+    """Return a Python date from a date-like value, or None when unavailable."""
+    ts = _parse_timestamp_value(value)
+    if ts is None:
+        return None
+    try:
+        if pd.isna(ts):
+            return None
+    except Exception:
+        pass
+    return ts.date()
+
+
 def _infer_dividend_frequency_from_count(count):
     """Infer dividend frequency code from the number of positive payments in ~1 year."""
     if count >= 45:
@@ -2084,6 +2137,34 @@ def _infer_dividend_frequency_from_history(history):
         return _infer_dividend_frequency_from_count(len(idx))
     except Exception:
         return _infer_dividend_frequency_from_count(len(history))
+
+
+def _infer_dividend_frequency_from_dates(dates):
+    """Infer dividend cadence from date-like values that may include future schedule rows."""
+    try:
+        idx = pd.DatetimeIndex([
+            _parse_timestamp_value(date)
+            for date in dates
+            if _parse_timestamp_value(date) is not None
+        ]).sort_values()
+        idx = idx[~idx.duplicated(keep="last")]
+        if len(idx) < 2:
+            return _infer_dividend_frequency_from_count(len(idx))
+        gaps = pd.Series(idx).diff().dt.days.dropna()
+        median_gap = float(gaps.median()) if not gaps.empty else None
+        if median_gap is None:
+            return _infer_dividend_frequency_from_count(len(idx))
+        if median_gap <= 10:
+            return "W"
+        if median_gap <= 40:
+            return "M"
+        if median_gap <= 110:
+            return "Q"
+        if median_gap <= 220:
+            return "SA"
+        return "A"
+    except Exception:
+        return None
 
 
 def _fetch_yahoo_dividend_history_for_tickers(tickers):
@@ -2252,6 +2333,103 @@ def _apply_dividend_repair_metrics(conn, profile_id, ticker, metrics, existing_f
     )
 
 
+def _build_repair_metadata_from_snapshot(holding, snapshot):
+    """Build current dividend metadata from an official issuer snapshot."""
+    if not snapshot or not snapshot.get("has_dividend"):
+        return None
+
+    div = float(snapshot.get("div") or 0)
+    if div <= 0:
+        return None
+
+    quantity = float(holding["quantity"] or 0)
+    purchase_value = float(holding["purchase_value"] or 0)
+    current_value = float(holding["current_value"] or 0)
+    freq = (snapshot.get("freq") or holding["div_frequency"] or "Q").upper()
+    freq_mult = {"W": 52, "52": 52, "M": 12, "Q": 4, "SA": 2, "A": 1}
+    mult = freq_mult.get(freq, 4)
+    annual_cash = div * quantity * mult
+    dividend_paid = div * quantity
+
+    return {
+        "div": round(div, 6),
+        "dividend_paid": round(dividend_paid, 6),
+        "ex_div_date": snapshot.get("ex_div_date"),
+        "div_pay_date": snapshot.get("div_pay_date"),
+        "div_frequency": freq,
+        "estim_payment_per_year": round(annual_cash, 2) if annual_cash > 0 else 0,
+        "approx_monthly_income": round(annual_cash / 12.0, 2) if annual_cash > 0 else 0,
+        "annual_yield_on_cost": round(annual_cash / purchase_value, 4) if annual_cash > 0 and purchase_value > 0 else 0,
+        "current_annual_yield": round(annual_cash / current_value, 4) if annual_cash > 0 and current_value > 0 else 0,
+    }
+
+
+def _apply_dividend_repair_metadata(conn, profile_id, ticker, holding, metadata):
+    if not metadata:
+        return False
+
+    old_exdiv = holding["ex_div_date"]
+    old_pay_date = holding["div_pay_date"]
+    old_freq = holding["div_frequency"]
+    new_exdiv = metadata.get("ex_div_date")
+    new_pay_date = metadata.get("div_pay_date")
+    new_freq = metadata.get("div_frequency")
+    effective_exdiv = new_exdiv or old_exdiv
+    effective_pay_date = new_pay_date or old_pay_date
+    effective_freq = new_freq or old_freq
+
+    if old_exdiv and old_pay_date and (
+        old_exdiv != effective_exdiv
+        or old_pay_date != effective_pay_date
+        or (old_freq or "") != (effective_freq or "")
+    ):
+        try:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO dividend_schedule_history
+                (ticker, profile_id, ex_div_date, pay_date, frequency, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (ticker, profile_id, old_exdiv, old_pay_date, old_freq, "repair"),
+            )
+        except Exception:
+            pass
+
+    sets = [
+        "div = ?",
+        "dividend_paid = ?",
+        "estim_payment_per_year = ?",
+        "approx_monthly_income = ?",
+        "annual_yield_on_cost = ?",
+        "current_annual_yield = ?",
+    ]
+    vals = [
+        metadata["div"],
+        metadata["dividend_paid"],
+        metadata["estim_payment_per_year"],
+        metadata["approx_monthly_income"],
+        metadata["annual_yield_on_cost"],
+        metadata["current_annual_yield"],
+    ]
+
+    optional_fields = [
+        ("ex_div_date", new_exdiv),
+        ("div_pay_date", new_pay_date),
+        ("div_frequency", new_freq),
+    ]
+    for field, value in optional_fields:
+        if value:
+            sets.append(f"{field} = ?")
+            vals.append(value)
+
+    vals.extend([ticker, profile_id])
+    conn.execute(
+        f"UPDATE all_account_info SET {', '.join(sets)} WHERE ticker = ? AND profile_id = ?",
+        vals,
+    )
+    return True
+
+
 def _clear_dividend_actuals(conn, profile_id, ticker):
     conn.execute(
         """UPDATE all_account_info
@@ -2265,12 +2443,15 @@ def _clear_dividend_actuals(conn, profile_id, ticker):
     )
 
 
-DIVIDEND_REPAIR_SOURCE_KEYS = ("schwab", "fidelity", "snowball", "etrade", "imported", "snapshot", "yahoo", "none")
-IMPORTED_DIVIDEND_SOURCES = {"schwab", "fidelity", "snowball", "etrade", "imported"}
+DIVIDEND_REPAIR_SOURCE_KEYS = ("schwab", "fidelity", "snowball", "etrade", "robinhood", "imported", "snapshot", "yahoo", "none")
+IMPORTED_DIVIDEND_SOURCES = {"schwab", "fidelity", "snowball", "etrade", "robinhood", "imported"}
+REFRESH_ESTIMATE_DIVIDEND_SOURCE = "refresh_estimate"
 
 
 def _normalise_dividend_payment_source(source):
     value = str(source or "").strip().lower()
+    if value == REFRESH_ESTIMATE_DIVIDEND_SOURCE:
+        return REFRESH_ESTIMATE_DIVIDEND_SOURCE
     if value.startswith("schwab"):
         return "schwab"
     if value.startswith("fidelity"):
@@ -2279,6 +2460,8 @@ def _normalise_dividend_payment_source(source):
         return "snowball"
     if value.startswith("etrade") or value.startswith("e*trade") or value.startswith("e-trade"):
         return "etrade"
+    if value.startswith("robinhood"):
+        return "robinhood"
     return "imported"
 
 
@@ -2314,6 +2497,8 @@ def _recompute_dividend_fields_from_payments(
             "yahoo_updated": 0,
             "none_updated": 0,
             "snapshot_updated": 0,
+            "metadata_updated": 0,
+            "official_updated": 0,
             "source_totals": _source_count_template(),
             "accounts": [],
             "updated_profile_ids": set(),
@@ -2339,7 +2524,8 @@ def _recompute_dividend_fields_from_payments(
         f"""SELECT ticker, profile_id, quantity, purchase_value, current_value,
                   purchase_date, div_frequency, total_divs_received,
                   ytd_divs, current_month_income, paid_for_itself,
-                  dividend_actuals_source
+                  dividend_actuals_source, description, ex_div_date,
+                  div_pay_date
            FROM all_account_info
            WHERE profile_id IN ({placeholders})
              AND COALESCE(quantity, 0) > 0
@@ -2355,8 +2541,13 @@ def _recompute_dividend_fields_from_payments(
         profile_ids,
     ).fetchall()
 
+    actual_payment_rows = [
+        row for row in payment_rows
+        if _normalise_dividend_payment_source(row["source"]) in IMPORTED_DIVIDEND_SOURCES
+    ]
+
     broker_grouped = defaultdict(list)
-    for row in payment_rows:
+    for row in actual_payment_rows:
         try:
             ts = pd.Timestamp(row["payment_date"]).normalize()
         except Exception:
@@ -2373,7 +2564,105 @@ def _recompute_dividend_fields_from_payments(
         }
     else:
         missing_broker_tickers = {row["ticker"] for row in holdings}
-    yahoo_histories = _fetch_yahoo_dividend_history_for_tickers(missing_broker_tickers) if use_yahoo_fallback else {}
+    all_tickers = {row["ticker"] for row in holdings}
+    yahoo_histories = _fetch_yahoo_dividend_history_for_tickers(all_tickers) if use_yahoo_fallback else {}
+    yahoo_actual_histories = {
+        ticker: series
+        for ticker, series in yahoo_histories.items()
+        if ticker in missing_broker_tickers
+    }
+
+    metadata_snapshots = {}
+    official_metadata_tickers = set()
+    if use_yahoo_fallback:
+        lag_pattern_map = _build_dividend_lag_patterns(conn)
+        freq_rank = {"W": 6, "52": 6, "M": 5, "Q": 4, "SA": 3, "A": 2, None: 0}
+        preferred_freqs = {}
+        descriptions = {}
+        for row in holdings:
+            ticker = row["ticker"]
+            if ticker not in descriptions and row["description"]:
+                descriptions[ticker] = row["description"]
+            freq = row["div_frequency"]
+            if freq_rank.get(freq, 0) > freq_rank.get(preferred_freqs.get(ticker), 0):
+                preferred_freqs[ticker] = freq
+        empty_snapshot = {
+            "known": False,
+            "has_dividend": False,
+            "div": 0.0,
+            "ex_div_date": None,
+            "div_pay_date": None,
+            "freq": None,
+            "history": pd.Series(dtype=float),
+        }
+
+        for ticker, history in yahoo_histories.items():
+            if history is None or history.empty:
+                continue
+            history = history[history > 0].dropna()
+            if history.empty:
+                continue
+            freq = _infer_dividend_frequency_from_history(history)
+            ex_div_date = _format_mdy_date(history.index[-1])
+            metadata_snapshots[ticker] = {
+                "known": True,
+                "has_dividend": True,
+                "div": float(history.iloc[-1]),
+                "ex_div_date": ex_div_date,
+                "div_pay_date": _format_mdy_date(
+                    _estimate_dividend_pay_from_pattern(
+                        ex_div_date,
+                        freq,
+                        pattern=lag_pattern_map.get(ticker),
+                        ticker=ticker,
+                        description=descriptions.get(ticker),
+                    )
+                ),
+                "freq": freq,
+                "history": history,
+            }
+
+        missing_metadata_tickers = all_tickers - set(metadata_snapshots)
+        if missing_metadata_tickers:
+            try:
+                import yfinance as yf
+            except Exception:
+                yf = None
+            if yf is not None:
+                for ticker in sorted(missing_metadata_tickers):
+                    try:
+                        snapshot = _fetch_refresh_dividend_snapshot(
+                            yf.Ticker(ticker),
+                            preferred_freq=preferred_freqs.get(ticker),
+                        )
+                    except Exception:
+                        snapshot = None
+                    if snapshot and snapshot.get("has_dividend"):
+                        metadata_snapshots[ticker] = snapshot
+
+        for ticker in sorted(all_tickers):
+            try:
+                official = _fetch_official_distribution_snapshot(ticker, descriptions.get(ticker))
+            except Exception:
+                official = None
+            if not official:
+                continue
+
+            base_snapshot = dict(metadata_snapshots.get(ticker) or empty_snapshot)
+            official_ex = _parse_timestamp_value(official.get("ex_div_date"))
+            current_ex = _parse_timestamp_value(base_snapshot.get("ex_div_date"))
+            if (
+                not base_snapshot.get("has_dividend")
+                or current_ex is None
+                or (official_ex is not None and official_ex >= current_ex)
+            ):
+                base_snapshot.update(official)
+                metadata_snapshots[ticker] = base_snapshot
+                official_metadata_tickers.add(ticker)
+            elif base_snapshot.get("has_dividend"):
+                metadata_snapshots[ticker] = base_snapshot
+            else:
+                pass
 
     today = pd.Timestamp(_date.today())
     jan1 = pd.Timestamp(today.year, 1, 1)
@@ -2385,6 +2674,8 @@ def _recompute_dividend_fields_from_payments(
     yahoo_updated = 0
     none_updated = 0
     snapshot_updated = 0
+    metadata_updated = 0
+    official_updated = 0
     source_totals = _source_count_template()
     updated_profile_ids = set()
 
@@ -2420,8 +2711,8 @@ def _recompute_dividend_fields_from_payments(
             metrics = _build_repair_metrics_from_series(
                 series, holding, payment_source, today, jan1, first_of_month, trailing_start
             )
-        elif ticker in yahoo_histories:
-            per_share = yahoo_histories[ticker]
+        elif ticker in yahoo_actual_histories:
+            per_share = yahoo_actual_histories[ticker]
             quantity = float(holding["quantity"] or 0)
             series = per_share * quantity
             metrics = _build_repair_metrics_from_series(
@@ -2459,13 +2750,31 @@ def _recompute_dividend_fields_from_payments(
             count_source(profile_id, "none")
             updated_profile_ids.add(profile_id)
 
+        metadata_snapshot = metadata_snapshots.get(ticker)
+        metadata = _build_repair_metadata_from_snapshot(holding, metadata_snapshot)
+        if metadata:
+            if not dry_run:
+                _apply_dividend_repair_metadata(
+                    conn,
+                    profile_id,
+                    ticker,
+                    holding,
+                    metadata,
+                )
+            metadata_updated += 1
+            if ticker in official_metadata_tickers:
+                official_updated += 1
+            updated_profile_ids.add(profile_id)
+
     return {
         "updated": updated,
-        "payment_rows": len(payment_rows),
+        "payment_rows": len(actual_payment_rows),
         "broker_updated": broker_updated,
         "yahoo_updated": yahoo_updated,
         "none_updated": none_updated,
         "snapshot_updated": snapshot_updated,
+        "metadata_updated": metadata_updated,
+        "official_updated": official_updated,
         "source_totals": source_totals,
         "accounts": list(account_counts.values()),
         "updated_profile_ids": updated_profile_ids,
@@ -2924,7 +3233,7 @@ def _fetch_tappalpha_distribution_snapshot(ticker):
         "div": float(history.iloc[-1]),
         "ex_div_date": latest_ex.strftime("%m/%d/%y"),
         "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
-        "freq": "M",
+        "freq": _infer_dividend_frequency_from_history(history),
         "history": history,
     }
 
@@ -3038,6 +3347,568 @@ def _fetch_xfunds_distribution_snapshot(ticker):
     }
 
 
+def _fetch_kurv_distribution_snapshot(ticker):
+    """Fetch recent official distribution history from Kurv fund pages when available."""
+    import html
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return None
+
+    url = f"https://www.kurvinvest.com/etf/{ticker.lower()}"
+    try:
+        resp = requests.get(
+            url,
+            timeout=10,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        resp.raise_for_status()
+    except Exception:
+        return None
+
+    body = resp.text or ""
+    if "Ex-Dividend Date" not in body or "$ per Share" not in body:
+        return None
+
+    rows = re.findall(
+        r"<tr[^>]*class=\"[^\"]*table_row[^\"]*\"[^>]*>(.*?)</tr>",
+        body,
+        flags=re.IGNORECASE | re.S,
+    )
+    entries = []
+    scheduled = []
+    for row in rows:
+        cells = re.findall(
+            r"<span[^>]*class=\"[^\"]*u-cms-text[^\"]*\"[^>]*>(.*?)</span>",
+            row,
+            flags=re.IGNORECASE | re.S,
+        )
+        cells = [
+            html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", c))).strip()
+            for c in cells
+        ]
+        if len(cells) < 5:
+            continue
+
+        _declared, ex_date, _record_date, pay_date, amount_raw = cells[:5]
+        ex_ts = pd.to_datetime(ex_date, errors="coerce")
+        pay_ts = pd.to_datetime(pay_date, errors="coerce")
+        if pd.isna(ex_ts):
+            continue
+        ex_ts = ex_ts.normalize()
+        pay_ts = pay_ts.normalize() if not pd.isna(pay_ts) else None
+        scheduled.append((ex_ts, pay_ts))
+
+        amount_clean = str(amount_raw or "").replace("$", "").replace(",", "").strip()
+        if not amount_clean or amount_clean in {"--", "-"}:
+            continue
+        try:
+            amount_value = float(amount_clean)
+        except (TypeError, ValueError):
+            continue
+        if amount_value > 0:
+            entries.append((ex_ts, amount_value, pay_ts))
+
+    if not entries:
+        return None
+
+    entries.sort(key=lambda item: item[0])
+    history = pd.Series([item[1] for item in entries], index=pd.DatetimeIndex([item[0] for item in entries]))
+    history = history[~history.index.duplicated(keep="last")]
+    history = history.sort_index()
+
+    pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
+    latest_actual_ex = history.index[-1]
+    chosen_ex = latest_actual_ex
+    chosen_pay = pay_map.get(latest_actual_ex)
+
+    # Kurv publishes future ex/pay rows before the amount is announced.
+    # Show the next known date, while retaining the latest actual amount.
+    today = pd.Timestamp.now().normalize()
+    upcoming_rows = [
+        (ex_ts, pay_ts)
+        for ex_ts, pay_ts in scheduled
+        if ex_ts is not None and ex_ts >= today
+    ]
+    if upcoming_rows:
+        upcoming_rows.sort(key=lambda item: item[0])
+        chosen_ex, chosen_pay = upcoming_rows[0]
+
+    freq = "W" if ticker == "KYLD" else "M"
+    return {
+        "known": True,
+        "has_dividend": True,
+        "div": float(history.iloc[-1]),
+        "ex_div_date": chosen_ex.strftime("%m/%d/%y"),
+        "div_pay_date": chosen_pay.strftime("%m/%d/%y") if chosen_pay is not None else None,
+        "freq": freq,
+        "history": history,
+    }
+
+
+def _fetch_globalx_distribution_snapshot(ticker):
+    """Fetch recent official distribution history from Global X fund pages when available."""
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return None
+
+    url = f"https://www.globalxetfs.com/funds/{ticker.lower()}"
+    try:
+        resp = requests.get(
+            url,
+            timeout=10,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        resp.raise_for_status()
+    except Exception:
+        return None
+
+    body = resp.text or ""
+    if "distributionHistoryData" not in body:
+        return None
+
+    data_match = re.search(
+        r'distributionHistoryData\\":\[\{\\"ETF_TICKER\\":\\"'
+        + re.escape(ticker)
+        + r'\\",\\"DISTRIBUTION_HISTORY\\":\[(.*?)\]\}\]',
+        body,
+        flags=re.IGNORECASE | re.S,
+    )
+    if not data_match:
+        return None
+
+    rows = re.findall(
+        r'\{\\"amount\\":([^,]+).*?'
+        r'\\"ex_date\\":\\"([^\\]+)\\".*?'
+        r'\\"payable_date\\":\\"([^\\]+)\\".*?'
+        r'\\"record_date\\":\\"([^\\]+)\\"',
+        data_match.group(1),
+        flags=re.IGNORECASE | re.S,
+    )
+    entries = []
+    scheduled = []
+    for amount_raw, ex_date, pay_date, _record_date in rows:
+        ex_ts = pd.to_datetime(ex_date, errors="coerce")
+        pay_ts = pd.to_datetime(pay_date, errors="coerce")
+        if pd.isna(ex_ts):
+            continue
+        ex_ts = ex_ts.normalize()
+        pay_ts = pay_ts.normalize() if not pd.isna(pay_ts) else None
+        scheduled.append((ex_ts, pay_ts))
+
+        amount_clean = str(amount_raw or "").replace('"', "").replace("$", "").replace(",", "").strip()
+        if not amount_clean or amount_clean.lower() == "null":
+            continue
+        try:
+            amount_value = float(amount_clean)
+        except (TypeError, ValueError):
+            continue
+        if amount_value > 0:
+            entries.append((ex_ts, amount_value, pay_ts))
+
+    if not entries:
+        return None
+
+    entries.sort(key=lambda item: item[0])
+    history = pd.Series([item[1] for item in entries], index=pd.DatetimeIndex([item[0] for item in entries]))
+    history = history[~history.index.duplicated(keep="last")]
+    history = history.sort_index()
+
+    pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
+    latest_actual_ex = history.index[-1]
+    chosen_ex = latest_actual_ex
+    chosen_pay = pay_map.get(latest_actual_ex)
+
+    # Global X also publishes future schedule rows with null amounts.
+    # Use those dates when present, without fabricating a future amount.
+    today = pd.Timestamp.now().normalize()
+    upcoming_rows = [
+        (ex_ts, pay_ts)
+        for ex_ts, pay_ts in scheduled
+        if ex_ts is not None and ex_ts >= today
+    ]
+    if upcoming_rows:
+        upcoming_rows.sort(key=lambda item: item[0])
+        chosen_ex, chosen_pay = upcoming_rows[0]
+
+    freq = (
+        _infer_dividend_frequency_from_dates([item[0] for item in scheduled])
+        or _infer_dividend_frequency_from_history(history)
+        or "M"
+    )
+    return {
+        "known": True,
+        "has_dividend": True,
+        "div": float(history.iloc[-1]),
+        "ex_div_date": chosen_ex.strftime("%m/%d/%y"),
+        "div_pay_date": chosen_pay.strftime("%m/%d/%y") if chosen_pay is not None else None,
+        "freq": freq,
+        "history": history,
+    }
+
+
+def _fetch_amplify_distribution_snapshot(ticker):
+    """Fetch recent official distribution history from Amplify fund pages when available."""
+    import html
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return None
+
+    url = f"https://amplifyetfs.com/{ticker.lower()}/"
+    try:
+        resp = requests.get(
+            url,
+            timeout=10,
+            headers={
+                "User-Agent": "PortfolioTrackingClient/1.0",
+                "Accept": "text/html,application/json,*/*",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        resp.raise_for_status()
+    except Exception:
+        return None
+
+    body = resp.text or ""
+    if "EX-DATE" not in body or "PAYABLE DATE" not in body or "AMOUNT" not in body:
+        return None
+
+    body = re.sub(r"<script\b[^>]*>.*?</script>", " ", body, flags=re.IGNORECASE | re.S)
+    body = re.sub(r"<style\b[^>]*>.*?</style>", " ", body, flags=re.IGNORECASE | re.S)
+    text = html.unescape(re.sub(r"<[^>]+>", " ", body))
+    text = re.sub(r"\s+", " ", text).strip()
+
+    freq = None
+    freq_match = re.search(r"Distribution Frequency\s+([A-Za-z -]+)", text, flags=re.IGNORECASE)
+    if freq_match:
+        freq_label = freq_match.group(1).strip().upper()
+        for suffix in (" EX-DATE", " YIELDS", " FUND", " DISTRIBUTION"):
+            if suffix in freq_label:
+                freq_label = freq_label.split(suffix, 1)[0].strip()
+        freq = {
+            "WEEKLY": "W",
+            "MONTHLY": "M",
+            "QUARTERLY": "Q",
+            "SEMI-ANNUAL": "SA",
+            "SEMIANNUAL": "SA",
+            "ANNUAL": "A",
+        }.get(freq_label)
+
+    block_match = re.search(
+        r"EX-DATE\s+RECORD DATE\s+PAYABLE DATE\s+AMOUNT(.*?)(?:There is no guarantee|Fund Holdings|TOP 10 HOLDINGS|Performance)",
+        text,
+        flags=re.IGNORECASE | re.S,
+    )
+    block = block_match.group(1) if block_match else text
+
+    rows = re.findall(
+        r"(\d{1,2}/\d{1,2}/\d{2,4})\s+"
+        r"(\d{1,2}/\d{1,2}/\d{2,4})\s+"
+        r"(\d{1,2}/\d{1,2}/\d{2,4})"
+        r"(?:\s+\*?\s*\$\s*([0-9.,]+)\s*\*?)?",
+        block,
+    )
+    entries = []
+    scheduled = []
+    for ex_date, _record_date, pay_date, amount_raw in rows:
+        ex_ts = pd.to_datetime(ex_date, errors="coerce")
+        pay_ts = pd.to_datetime(pay_date, errors="coerce")
+        if pd.isna(ex_ts):
+            continue
+        ex_ts = ex_ts.normalize()
+        pay_ts = pay_ts.normalize() if not pd.isna(pay_ts) else None
+        scheduled.append((ex_ts, pay_ts))
+
+        amount_clean = str(amount_raw or "").replace(",", "").strip()
+        if not amount_clean:
+            continue
+        try:
+            amount_value = float(amount_clean)
+        except (TypeError, ValueError):
+            continue
+        if amount_value > 0:
+            entries.append((ex_ts, amount_value, pay_ts))
+
+    if not entries:
+        return None
+
+    entries.sort(key=lambda item: item[0])
+    history = pd.Series([item[1] for item in entries], index=pd.DatetimeIndex([item[0] for item in entries]))
+    history = history[~history.index.duplicated(keep="last")]
+    history = history.sort_index()
+
+    pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
+    latest_actual_ex = history.index[-1]
+    chosen_ex = latest_actual_ex
+    chosen_pay = pay_map.get(latest_actual_ex)
+
+    # Amplify publishes future ex/pay rows before the amount is declared.
+    # Keep the latest actual amount, but show the next known schedule date.
+    today = pd.Timestamp.now().normalize()
+    upcoming_rows = [
+        (ex_ts, pay_ts)
+        for ex_ts, pay_ts in scheduled
+        if ex_ts is not None and ex_ts >= today
+    ]
+    if upcoming_rows:
+        upcoming_rows.sort(key=lambda item: item[0])
+        chosen_ex, chosen_pay = upcoming_rows[0]
+
+    inferred_freq = _infer_dividend_frequency_from_dates([item[0] for item in scheduled])
+    return {
+        "known": True,
+        "has_dividend": True,
+        "div": float(history.iloc[-1]),
+        "ex_div_date": chosen_ex.strftime("%m/%d/%y"),
+        "div_pay_date": chosen_pay.strftime("%m/%d/%y") if chosen_pay is not None else None,
+        "freq": freq or inferred_freq or _infer_dividend_frequency_from_history(history),
+        "history": history,
+    }
+
+
+def _fetch_quantify_distribution_snapshot(ticker):
+    """Fetch recent official distribution history from Quantify Funds when available."""
+    import html
+    import json
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return None
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    fund_url = f"https://quantifyfunds.com/optionsbasedincome/{ticker.lower()}/"
+
+    try:
+        session = requests.Session()
+        page = session.get(fund_url, timeout=10, headers=headers)
+        page.raise_for_status()
+    except Exception:
+        return None
+
+    page_body = page.text or ""
+    post_match = re.search(
+        r'data-twm-type="distribution-table"\s+data-post-id="(\d+)"',
+        page_body,
+        flags=re.IGNORECASE,
+    )
+    if not post_match:
+        return None
+
+    try:
+        resp = session.get(
+            "https://quantifyfunds.com/wp-json/twm/v1/data",
+            params={"type": "distribution-table", "post_id": post_match.group(1)},
+            timeout=10,
+            headers={
+                **headers,
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "Referer": fund_url,
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except (Exception, json.JSONDecodeError):
+        return None
+
+    table_html = html.unescape(payload.get("html") or "")
+    if "EX Date" not in table_html or "Payable Date" not in table_html or "Fund Total" not in table_html:
+        return None
+
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.IGNORECASE | re.S)
+    entries = []
+    for row in rows:
+        cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, flags=re.IGNORECASE | re.S)
+        cells = [html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", c))).strip() for c in cells]
+        if len(cells) < 4 or cells[0].lower().startswith("ex date"):
+            continue
+        ex_date, _record_date, pay_date, amount = cells[:4]
+        ex_ts = pd.to_datetime(ex_date, format="%m/%d/%Y", errors="coerce")
+        pay_ts = pd.to_datetime(pay_date, format="%m/%d/%Y", errors="coerce")
+        if pd.isna(ex_ts):
+            continue
+        try:
+            amount_value = float(str(amount).replace("$", "").replace(",", "").strip())
+        except (TypeError, ValueError):
+            continue
+        ex_ts = ex_ts.normalize()
+        pay_ts = pay_ts.normalize() if not pd.isna(pay_ts) else None
+        entries.append((ex_ts, amount_value, pay_ts))
+
+    if not entries:
+        return None
+
+    entries.sort(key=lambda item: item[0])
+    history = pd.Series([item[1] for item in entries], index=pd.DatetimeIndex([item[0] for item in entries]))
+    history = history[~history.index.duplicated(keep="last")]
+    history = history.sort_index()
+
+    pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
+    latest_ex = history.index[-1]
+    latest_pay = pay_map.get(latest_ex)
+
+    return {
+        "known": True,
+        "has_dividend": True,
+        "div": float(history.iloc[-1]),
+        "ex_div_date": latest_ex.strftime("%m/%d/%y"),
+        "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
+        "freq": _infer_dividend_frequency_from_history(history) or "W",
+        "history": history,
+    }
+
+
+def _fetch_rex_distribution_snapshot(ticker):
+    """Fetch recent official distribution history from REX Shares when available."""
+    import html
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return None
+
+    url = f"https://www.rexshares.com/{ticker.lower()}/"
+    try:
+        resp = requests.get(
+            url,
+            timeout=10,
+            headers={
+                # REX blocks some generic clients; browser-like headers keep this
+                # aligned with the public pages users can view directly.
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        resp.raise_for_status()
+    except Exception:
+        return None
+
+    body = resp.text or ""
+    if "Distribution Per Share" not in body or "EX Date" not in body or "Payable" not in body:
+        return None
+
+    freq = None
+    freq_match = re.search(
+        r"Distribution Frequency</div>\s*<div class=\"t-col t-data\">([^<]+)</div>",
+        body,
+        flags=re.IGNORECASE,
+    )
+    if freq_match:
+        freq_label = html.unescape(freq_match.group(1)).strip().upper()
+        freq = {
+            "WEEKLY": "W",
+            "MONTHLY": "M",
+            "QUARTERLY": "Q",
+            "SEMI-ANNUAL": "SA",
+            "SEMIANNUAL": "SA",
+            "ANNUAL": "A",
+        }.get(freq_label)
+
+    rows = re.findall(
+        r"<div class=\"t-row\">\s*"
+        r"<div class=\"t-col t-data\">(.*?)</div>\s*"
+        r"<div class=\"t-col t-data\">(.*?)</div>\s*"
+        r"<div class=\"t-col t-data\">(.*?)</div>\s*"
+        r"<div class=\"t-col t-data\">(.*?)</div>\s*"
+        r"<div class=\"t-col t-data\">(.*?)</div>\s*"
+        r"</div>",
+        body,
+        flags=re.IGNORECASE | re.S,
+    )
+    entries = []
+    scheduled = []
+    for cells in rows:
+        cells = [html.unescape(re.sub(r"<[^>]+>", "", c)).strip() for c in cells]
+        amount_raw, _declared, ex_date, _record, pay_date = cells
+        ex_ts = pd.to_datetime(ex_date, format="%m/%d/%Y", errors="coerce")
+        pay_ts = pd.to_datetime(pay_date, format="%m/%d/%Y", errors="coerce")
+        if pd.isna(ex_ts):
+            continue
+        ex_ts = ex_ts.normalize()
+        pay_ts = pay_ts.normalize() if not pd.isna(pay_ts) else None
+
+        amount_clean = amount_raw.replace("$", "").replace(",", "").strip()
+        if amount_clean:
+            try:
+                entries.append((ex_ts, float(amount_clean), pay_ts))
+            except (TypeError, ValueError):
+                scheduled.append((ex_ts, pay_ts))
+        else:
+            scheduled.append((ex_ts, pay_ts))
+
+    if not entries:
+        return None
+
+    entries.sort(key=lambda item: item[0])
+    history = pd.Series([item[1] for item in entries], index=pd.DatetimeIndex([item[0] for item in entries]))
+    history = history[~history.index.duplicated(keep="last")]
+    history = history.sort_index()
+
+    pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
+    latest_actual_ex = history.index[-1]
+    chosen_ex = latest_actual_ex
+    chosen_pay = pay_map.get(latest_actual_ex)
+
+    # REX often publishes future ex/pay dates before the amount is declared.
+    # Keep the latest actual amount, but show the next known ex/pay date.
+    all_known_dates = [(item[0], item[2]) for item in entries] + scheduled
+    today = pd.Timestamp.now().normalize()
+    upcoming_rows = [
+        (ex_ts, pay_ts)
+        for ex_ts, pay_ts in all_known_dates
+        if ex_ts is not None and ex_ts >= today
+    ]
+    if upcoming_rows:
+        upcoming_rows.sort(key=lambda item: item[0])
+        chosen_ex, chosen_pay = upcoming_rows[0]
+
+    inferred_freq = _infer_dividend_frequency_from_history(history)
+    return {
+        "known": True,
+        "has_dividend": True,
+        "div": float(history.iloc[-1]),
+        "ex_div_date": chosen_ex.strftime("%m/%d/%y"),
+        "div_pay_date": chosen_pay.strftime("%m/%d/%y") if chosen_pay is not None else None,
+        "freq": inferred_freq or freq,
+        "history": history,
+    }
+
+
 def _is_yieldmax_fund(ticker, description=""):
     """Identify YieldMax funds even when the description is abbreviated."""
     ticker = (ticker or "").strip().upper()
@@ -3092,7 +3963,7 @@ def _is_tappalpha_fund(ticker, description=""):
     description_l = (description or "").lower()
     if "tappalpha" in description_l or "tapalpha" in description_l or "tapp alpha" in description_l:
         return True
-    return ticker in {"TSPY", "TDAQ", "TDAX"}
+    return ticker in {"TSPY", "TDAQ", "TDAX", "TSYX"}
 
 
 def _is_xfunds_fund(ticker, description=""):
@@ -3105,8 +3976,103 @@ def _is_xfunds_fund(ticker, description=""):
         or "nicholasx" in description_l
     ):
         return True
-    explicit_family = {"GIAX", "BLOX", "FIAX", "WEPN", "NUKX"}
+    explicit_family = {"GIAX", "BLOX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX"}
     return ticker in explicit_family
+
+
+def _is_kurv_fund(ticker, description=""):
+    """Identify Kurv ETFs that publish official distribution tables."""
+    ticker = (ticker or "").strip().upper()
+    description_l = (description or "").lower()
+    if "kurv" in description_l or "kurve" in description_l:
+        return True
+    explicit_family = {
+        "KQQQ", "KYLD", "KGLD", "KSLV", "KCOP",
+        "AMZP", "AAPY", "GOOP", "MSFY", "NFLP", "TSLP",
+    }
+    return ticker in explicit_family
+
+
+def _is_globalx_fund(ticker, description=""):
+    """Identify Global X income ETFs with issuer distribution history pages."""
+    ticker = (ticker or "").strip().upper()
+    description_l = (description or "").lower()
+    if "global x" in description_l or "globalx" in description_l:
+        return True
+    explicit_family = {
+        "QYLD", "XYLD", "RYLD", "DJIA",
+        "QYLG", "XYLG", "TYLG",
+        "EDGQ", "EDGX", "QRMI", "XRMI", "QCLR", "XCLR",
+    }
+    return ticker in explicit_family
+
+
+def _is_amplify_fund(ticker, description=""):
+    """Identify Amplify income ETFs that publish official distribution tables."""
+    ticker = (ticker or "").strip().upper()
+    description_l = (description or "").lower()
+    if "amplify" in description_l:
+        return True
+    explicit_family = {
+        "BAGY", "BITY", "DIVO", "QDVO", "IDVO",
+        "HCOW", "HAKY", "ETTY", "SLJY",
+    }
+    return ticker in explicit_family
+
+
+def _is_quantify_fund(ticker, description=""):
+    """Identify Quantify Funds option-income ETFs."""
+    ticker = (ticker or "").strip().upper()
+    description_l = (description or "").lower()
+    if "quantify" in description_l or "incomestkd" in description_l:
+        return True
+    return ticker in {"ISBG", "ISSB"}
+
+
+def _is_rex_fund(ticker, description=""):
+    """Identify REX Shares income ETFs that publish official distribution tables."""
+    ticker = (ticker or "").strip().upper()
+    description_l = (description or "").lower()
+    if (
+        ("rex " in description_l or "rex shares" in description_l or "rexshares" in description_l)
+        and any(term in description_l for term in ("income", "premium", "covered call", "growth & income", "growth and income"))
+    ):
+        return True
+    explicit_family = {
+        # Covered call / equity premium income
+        "AIPI", "FEPI", "CEPI", "ATCL",
+        # REX IncomeMax / related income
+        "ULTI", "TLDR", "GIF",
+        # REX Growth & Income
+        "COII", "MSII", "NVII", "TSII", "HOII", "PLTI", "CWII", "LLII", "WMTI",
+    }
+    return ticker in explicit_family
+
+
+def _fetch_official_distribution_snapshot(ticker, description=None):
+    """Fetch issuer-published distribution data for supported fund families."""
+    ticker = (ticker or "").strip().upper()
+    description = description or ""
+
+    if _is_yieldmax_fund(ticker, description):
+        return _fetch_yieldmax_distribution_snapshot(ticker)
+    if _is_neos_fund(ticker, description):
+        return _fetch_neos_distribution_snapshot(ticker)
+    if _is_tappalpha_fund(ticker, description):
+        return _fetch_tappalpha_distribution_snapshot(ticker)
+    if _is_xfunds_fund(ticker, description):
+        return _fetch_xfunds_distribution_snapshot(ticker)
+    if _is_kurv_fund(ticker, description):
+        return _fetch_kurv_distribution_snapshot(ticker)
+    if _is_globalx_fund(ticker, description):
+        return _fetch_globalx_distribution_snapshot(ticker)
+    if _is_amplify_fund(ticker, description):
+        return _fetch_amplify_distribution_snapshot(ticker)
+    if _is_quantify_fund(ticker, description):
+        return _fetch_quantify_distribution_snapshot(ticker)
+    if _is_rex_fund(ticker, description):
+        return _fetch_rex_distribution_snapshot(ticker)
+    return None
 
 
 def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
@@ -3171,42 +4137,29 @@ def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
                 ex_ts = pd.Timestamp(ex_ts, unit="s", tz=_timezone.utc)
             snapshot["ex_div_date"] = _format_mdy_date(ex_ts)
 
-    description_l = description.lower()
-    official = None
-    if _is_yieldmax_fund(ticker, description):
-        official = _fetch_yieldmax_distribution_snapshot(ticker)
-    elif _is_neos_fund(ticker, description):
-        official = _fetch_neos_distribution_snapshot(ticker)
-    elif _is_tappalpha_fund(ticker, description):
-        official = _fetch_tappalpha_distribution_snapshot(ticker)
-    elif _is_xfunds_fund(ticker, description):
-        official = _fetch_xfunds_distribution_snapshot(ticker)
+    official = _fetch_official_distribution_snapshot(ticker, description)
+    official_pay_date = None
 
     if official:
-        official_ex = _parse_timestamp_value(official.get("ex_div_date"))
-        current_ex = _parse_timestamp_value(snapshot.get("ex_div_date"))
-        if (
-            not snapshot.get("has_dividend")
-            or current_ex is None
-            or (official_ex is not None and official_ex >= current_ex)
-        ):
-            snapshot.update(official)
+        snapshot.update(official)
+        official_pay_date = official.get("div_pay_date")
 
-    try:
-        cal = yf_ticker.calendar
-        pay_date = None
-        if isinstance(cal, dict):
-            pay_date = cal.get("Dividend Date") or cal.get("Payment Date")
-        elif hasattr(cal, "loc"):
-            for key in ["Dividend Date", "Payment Date"]:
-                if key in cal.index:
-                    pay_date = cal.loc[key].iloc[0] if hasattr(cal.loc[key], "iloc") else cal.loc[key]
-                    break
-        if isinstance(pay_date, (int, float)):
-            pay_date = pd.Timestamp(pay_date, unit="s", tz=_timezone.utc)
-        snapshot["div_pay_date"] = _format_mdy_date(pay_date)
-    except Exception:
-        pass
+    if not official_pay_date:
+        try:
+            cal = yf_ticker.calendar
+            pay_date = None
+            if isinstance(cal, dict):
+                pay_date = cal.get("Dividend Date") or cal.get("Payment Date")
+            elif hasattr(cal, "loc"):
+                for key in ["Dividend Date", "Payment Date"]:
+                    if key in cal.index:
+                        pay_date = cal.loc[key].iloc[0] if hasattr(cal.loc[key], "iloc") else cal.loc[key]
+                        break
+            if isinstance(pay_date, (int, float)):
+                pay_date = pd.Timestamp(pay_date, unit="s", tz=_timezone.utc)
+            snapshot["div_pay_date"] = _format_mdy_date(pay_date)
+        except Exception:
+            pass
 
     if not snapshot["div_pay_date"] and snapshot["ex_div_date"]:
         est_pay_ts = _estimate_dividend_pay_from_pattern(
@@ -3229,27 +4182,12 @@ def _apply_official_snapshot_override(ticker, snapshot, description=None):
     snapshot = dict(snapshot or {})
     description = description or ""
 
-    official = None
-    if _is_yieldmax_fund(ticker, description):
-        official = _fetch_yieldmax_distribution_snapshot(ticker)
-    elif _is_neos_fund(ticker, description):
-        official = _fetch_neos_distribution_snapshot(ticker)
-    elif _is_tappalpha_fund(ticker, description):
-        official = _fetch_tappalpha_distribution_snapshot(ticker)
-    elif _is_xfunds_fund(ticker, description):
-        official = _fetch_xfunds_distribution_snapshot(ticker)
+    official = _fetch_official_distribution_snapshot(ticker, description)
 
     if not official:
         return snapshot
 
-    official_ex = _parse_timestamp_value(official.get("ex_div_date"))
-    current_ex = _parse_timestamp_value(snapshot.get("ex_div_date"))
-    if (
-        not snapshot.get("has_dividend")
-        or current_ex is None
-        or (official_ex is not None and official_ex >= current_ex)
-    ):
-        snapshot.update(official)
+    snapshot.update(official)
     return snapshot
 
 
@@ -3321,7 +4259,7 @@ def _simulate_drip_refresh(div_series, close_series, base_qty, start_date=None, 
 def refresh_market_data():
     """Update current price, div/share, ex-div date, and frequency for all holdings from Yahoo Finance."""
     import yfinance as yf
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt, timedelta as _td
 
     conn = get_connection()
     refresh_info = _get_refresh_target_info(conn)
@@ -3334,15 +4272,42 @@ def refresh_market_data():
     # - Owner: source accounts that feed Owner
     # - Aggregate: aggregate member profiles
     all_rows = conn.execute(
-        "SELECT profile_id, ticker, description, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date, ex_div_date, div_pay_date, div_frequency, div, estim_payment_per_year, approx_monthly_income, current_value, ytd_divs, current_month_income FROM all_account_info WHERE profile_id IN ({})".format(
+        "SELECT profile_id, ticker, description, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date, ex_div_date, div_pay_date, div_frequency, div, dividend_paid, estim_payment_per_year, approx_monthly_income, current_value, ytd_divs, current_month_income FROM all_account_info WHERE profile_id IN ({})".format(
             ",".join("?" * len(source_pids))
         ) + " AND quantity > 0",
         source_pids,
     ).fetchall()
 
+    profile_name_rows = conn.execute(
+        "SELECT id, name FROM profiles WHERE id IN ({})".format(",".join("?" * len(source_pids))),
+        source_pids,
+    ).fetchall()
+    refresh_profile_names = {r["id"]: r["name"] for r in profile_name_rows}
+
     if not all_rows:
+        dividend_update_accounts = [
+            {
+                "profile_id": pid,
+                "name": refresh_profile_names.get(pid) or f"Profile {pid}",
+                "dividend_updates": 0,
+                "accrued_dividends": 0.0,
+                "days_since_last_refresh": None,
+                "distributions_today": [],
+                "history_payments_recorded": 0,
+                "history_payments_inserted": 0,
+                "history_payments_updated": 0,
+                "history_payments_existing": 0,
+            }
+            for pid in source_pids
+        ]
         conn.close()
-        return jsonify({"updated": 0, "message": "No holdings to refresh"})
+        return jsonify({
+            "updated": 0,
+            "dividend_updates": 0,
+            "dividend_update_accounts": dividend_update_accounts,
+            "refresh_date": _dt.now().date().isoformat(),
+            "message": "No holdings to refresh",
+        })
 
     tickers = list({r["ticker"] for r in all_rows})
     # Build per-profile holding map
@@ -3361,6 +4326,7 @@ def refresh_market_data():
             "div_pay_date": r["div_pay_date"] or None,
             "div_frequency": r["div_frequency"] or None,
             "div": r["div"] or 0,
+            "dividend_paid": r["dividend_paid"] or 0,
             "estim_payment_per_year": r["estim_payment_per_year"] or 0,
             "approx_monthly_income": r["approx_monthly_income"] or 0,
             "current_value": r["current_value"] or 0,
@@ -3634,7 +4600,58 @@ def refresh_market_data():
         else:
             effective_freq[t] = None
 
+    def _refresh_num_changed(old_value, new_value, tolerance=0.005):
+        try:
+            return abs(float(old_value or 0) - float(new_value or 0)) > tolerance
+        except Exception:
+            return (old_value or "") != (new_value or "")
+
+    def _refresh_text_changed(old_value, new_value):
+        return (old_value or "") != (new_value or "")
+
+    def _refresh_parse_date(value):
+        if not value:
+            return None
+        for fmt in ("%m/%d/%y", "%m/%d/%Y", "%Y-%m-%d"):
+            try:
+                return _dt.strptime(str(value).strip(), fmt).date()
+            except Exception:
+                pass
+        return None
+
+    def _refresh_expected_pay_date(ex_div_date, pay_date, freq):
+        parsed_pay = _refresh_parse_date(pay_date)
+        if parsed_pay:
+            return parsed_pay
+        parsed_ex = _refresh_parse_date(ex_div_date)
+        if not parsed_ex:
+            return None
+        lag_days = {"W": 3, "M": 7, "Q": 10, "SA": 14, "A": 14}
+        return parsed_ex + _td(days=lag_days.get((freq or "Q").upper(), 10))
+
+    # Load last-refresh timestamps per profile so we can estimate accrued dividends
+    last_refresh_times = {}
+    for pid in source_pids:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (f"last_refresh_{pid}",)
+        ).fetchone()
+        if row and row[0]:
+            try:
+                last_refresh_times[pid] = _dt.fromisoformat(row[0])
+            except Exception:
+                pass
+
     updated = 0
+    dividend_updates = 0
+    dividend_updates_by_profile = {pid: 0 for pid in source_pids}
+    accrued_divs_by_profile = {pid: 0.0 for pid in source_pids}
+    days_since_refresh_by_profile = {}
+    distributions_today_by_profile = {pid: [] for pid in source_pids}
+    history_payments_recorded_by_profile = {pid: 0 for pid in source_pids}
+    history_payments_inserted_by_profile = {pid: 0 for pid in source_pids}
+    history_payments_updated_by_profile = {pid: 0 for pid in source_pids}
+    history_payments_existing_by_profile = {pid: 0 for pid in source_pids}
+    refresh_date = _dt.now().date()
     updated_pids = set()
     refreshed_owner_source = False
     owner_source_ids = set(_get_owner_source_profile_ids(conn))
@@ -3676,6 +4693,22 @@ def refresh_market_data():
                 continue
 
             h = holding_map[key]
+
+            # Estimate dividends accrued since last refresh for this holding
+            if pid in last_refresh_times:
+                last_rt = last_refresh_times[pid]
+                days_elapsed = max(0.0, (_dt.now() - last_rt).total_seconds() / 86400.0)
+                _freq_days = {'W': 7.0, 'M': 30.44, 'Q': 91.25, 'SA': 182.5, 'A': 365.0}
+                _h_div = float(h.get("div") or 0)
+                _h_qty = float(h.get("qty") or 0)
+                _h_freq = (h.get("div_frequency") or "Q").upper()
+                _fd = _freq_days.get(_h_freq, 91.25)
+                if _h_div > 0 and _h_qty > 0 and _fd > 0:
+                    accrued_divs_by_profile[pid] = accrued_divs_by_profile.get(pid, 0.0) + (
+                        _h_div * _h_qty * (days_elapsed / _fd)
+                    )
+                days_since_refresh_by_profile[pid] = days_elapsed
+
             qty = h["qty"]
             price_paid = h["price_paid"]
             purchase_value = h["purchase_value"]
@@ -3686,12 +4719,21 @@ def refresh_market_data():
             old_exdiv = h["ex_div_date"]
             old_pay_date = h["div_pay_date"]
             old_freq = h["div_frequency"]
-            preserve_income_estimate = (
+            existing_estim_annual = float(h.get("estim_payment_per_year") or 0)
+            # Preserve the existing income estimate when:
+            #  (a) this profile is positions-managed (manual income), OR
+            #  (b) we don't have fresh positive dividend data from the source
+            #      (yfinance sometimes serves prices but omits the dividend
+            #       field — treating that as "no dividend" used to zero out
+            #       good income data).
+            fresh_div = snapshot.get("div") if bool(snapshot.get("has_dividend")) else None
+            preserve_income_estimate = existing_estim_annual > 0 and (
                 pid in positions_managed_ids
-                and float(h.get("estim_payment_per_year") or 0) > 0
+                or not (fresh_div and float(fresh_div) > 0)
             )
             sets = []
             vals = []
+            dividend_row_updated = False
 
             # Backfill purchase_value if missing
             if not purchase_value and price_paid and qty:
@@ -3806,6 +4848,12 @@ def refresh_market_data():
                     sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?",
                                  "estim_payment_per_year = ?", "approx_monthly_income = ?"])
                     vals.extend([new_div, yoc, cur_yield, estim_annual, estim_monthly])
+                    if (
+                        _refresh_num_changed(h["div"], new_div, tolerance=0.000001)
+                        or _refresh_num_changed(h["estim_payment_per_year"], estim_annual)
+                        or _refresh_num_changed(h["approx_monthly_income"], estim_monthly)
+                    ):
+                        dividend_row_updated = True
                 else:
                     if preserve_income_estimate:
                         estim_annual = float(h.get("estim_payment_per_year") or 0)
@@ -3819,10 +4867,22 @@ def refresh_market_data():
                         sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?",
                                      "estim_payment_per_year = ?", "approx_monthly_income = ?"])
                         vals.extend([0, yoc, cur_yield, estim_annual, estim_monthly])
+                        if (
+                            _refresh_num_changed(h["div"], 0, tolerance=0.000001)
+                            or _refresh_num_changed(h["estim_payment_per_year"], estim_annual)
+                            or _refresh_num_changed(h["approx_monthly_income"], estim_monthly)
+                        ):
+                            dividend_row_updated = True
                     else:
                         sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?",
                                      "estim_payment_per_year = ?", "approx_monthly_income = ?"])
                         vals.extend([0, 0, 0, 0, 0])
+                        if (
+                            _refresh_num_changed(h["div"], 0, tolerance=0.000001)
+                            or _refresh_num_changed(h["estim_payment_per_year"], 0)
+                            or _refresh_num_changed(h["approx_monthly_income"], 0)
+                        ):
+                            dividend_row_updated = True
 
                 sets.append("ex_div_date = ?")
                 vals.append(new_exdiv)
@@ -3831,6 +4891,12 @@ def refresh_market_data():
 
                 sets.append("div_frequency = ?")
                 vals.append(new_freq)
+                if (
+                    _refresh_text_changed(old_exdiv, new_exdiv)
+                    or _refresh_text_changed(old_pay_date, new_pay_date)
+                    or _refresh_text_changed(old_freq, new_freq)
+                ):
+                    dividend_row_updated = True
 
             # Actual YTD and current-month dividends from yfinance history,
             # filtered to only include dividends on or after purchase_date.
@@ -3858,14 +4924,39 @@ def refresh_market_data():
                 has_dividend_history
                 or (not has_dividend and not existing_dividend_hint.get(t))
             ):
+                next_ytd_divs = round(ytd_divs, 2)
+                next_current_month_income = round(current_month_income, 2)
+                if (
+                    _refresh_num_changed(h["ytd_divs"], next_ytd_divs)
+                    or _refresh_num_changed(h["current_month_income"], next_current_month_income)
+                ):
+                    dividend_row_updated = True
                 sets.append("ytd_divs = ?")
-                vals.append(round(ytd_divs, 2))
+                vals.append(next_ytd_divs)
                 sets.append("current_month_income = ?")
-                vals.append(round(current_month_income, 2))
+                vals.append(next_current_month_income)
 
             effective_div = new_div if snapshot_known else h["div"]
+            next_dividend_paid = _current_dividend_paid(qty, effective_div)
+            if _refresh_num_changed(h["dividend_paid"], next_dividend_paid):
+                dividend_row_updated = True
             sets.append("dividend_paid = ?")
-            vals.append(_current_dividend_paid(qty, effective_div))
+            vals.append(next_dividend_paid)
+
+            expected_pay_date = _refresh_expected_pay_date(
+                new_exdiv if snapshot_known else old_exdiv,
+                new_pay_date if snapshot_known else old_pay_date,
+                new_freq if snapshot_known else old_freq,
+            )
+            if expected_pay_date == refresh_date and next_dividend_paid > 0:
+                distributions_today_by_profile.setdefault(pid, []).append({
+                    "ticker": t,
+                    "amount": round(float(next_dividend_paid), 2),
+                    "div": round(float(effective_div or 0), 6),
+                    "quantity": round(float(qty or 0), 6),
+                    "frequency": (new_freq if snapshot_known else old_freq) or "",
+                    "pay_date": expected_pay_date.isoformat(),
+                })
 
             if sets:
                 vals.extend([t, pid])
@@ -3874,7 +4965,57 @@ def refresh_market_data():
                     vals,
                 )
                 updated += 1
+                if dividend_row_updated:
+                    dividend_updates += 1
+                    dividend_updates_by_profile[pid] = dividend_updates_by_profile.get(pid, 0) + 1
                 updated_pids.add(pid)
+
+    for pid, distributions in distributions_today_by_profile.items():
+        for item in distributions:
+            ticker = item["ticker"]
+            pay_date = item["pay_date"]
+            amount = float(item["amount"] or 0)
+            if amount <= 0:
+                continue
+            existing = conn.execute(
+                "SELECT id, source, amount, notes FROM dividend_payments WHERE ticker = ? AND profile_id = ? AND payment_date = ?",
+                (ticker, pid, pay_date),
+            ).fetchone()
+            notes = (
+                f"Recorded by Refresh Prices & Divs; div/share {item['div']}; "
+                f"quantity {item['quantity']}; frequency {item['frequency'] or 'unknown'}"
+            )
+            if existing:
+                if (existing["source"] or "").lower() == "refresh_estimate":
+                    rounded_amount = round(amount, 2)
+                    existing_amount = round(float(existing["amount"] or 0), 2)
+                    if existing_amount != rounded_amount or (existing["notes"] or "") != notes:
+                        conn.execute(
+                            "UPDATE dividend_payments SET amount = ?, notes = ? WHERE id = ?",
+                            (rounded_amount, notes, existing["id"]),
+                        )
+                        history_payments_recorded_by_profile[pid] = history_payments_recorded_by_profile.get(pid, 0) + 1
+                        history_payments_updated_by_profile[pid] = history_payments_updated_by_profile.get(pid, 0) + 1
+                    else:
+                        history_payments_existing_by_profile[pid] = history_payments_existing_by_profile.get(pid, 0) + 1
+                else:
+                    history_payments_existing_by_profile[pid] = history_payments_existing_by_profile.get(pid, 0) + 1
+                continue
+            conn.execute(
+                "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (ticker, pid, pay_date, round(amount, 2), "refresh_estimate", notes),
+            )
+            history_payments_recorded_by_profile[pid] = history_payments_recorded_by_profile.get(pid, 0) + 1
+            history_payments_inserted_by_profile[pid] = history_payments_inserted_by_profile.get(pid, 0) + 1
+
+    # Save last-refresh timestamps for next refresh's accrual calculation
+    now_iso = _dt.now().isoformat()
+    for pid in source_pids:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (f"last_refresh_{pid}", now_iso),
+        )
 
     conn.commit()
 
@@ -3897,7 +5038,123 @@ def refresh_market_data():
         msg = f"Refreshed {refreshed_rows} holdings across {len(source_pids)} Aggregate member portfolios."
     else:
         msg = f"Refreshed {refreshed_rows} holdings in {_get_profile_name(selected_profile_id)}."
-    return jsonify({"updated": updated, "message": msg})
+    dividend_update_accounts = [
+        {
+            "profile_id": pid,
+            "name": refresh_profile_names.get(pid) or f"Profile {pid}",
+            "dividend_updates": dividend_updates_by_profile.get(pid, 0),
+            "accrued_dividends": round(accrued_divs_by_profile.get(pid, 0.0), 2),
+            "days_since_last_refresh": round(days_since_refresh_by_profile.get(pid, 0.0), 1)
+            if pid in days_since_refresh_by_profile
+            else None,
+            "distributions_today": sorted(
+                distributions_today_by_profile.get(pid, []),
+                key=lambda item: item["ticker"],
+            ),
+            "history_payments_recorded": history_payments_recorded_by_profile.get(pid, 0),
+            "history_payments_inserted": history_payments_inserted_by_profile.get(pid, 0),
+            "history_payments_updated": history_payments_updated_by_profile.get(pid, 0),
+            "history_payments_existing": history_payments_existing_by_profile.get(pid, 0),
+        }
+        for pid in source_pids
+    ]
+    return jsonify({
+        "updated": updated,
+        "dividend_updates": dividend_updates,
+        "dividend_update_accounts": dividend_update_accounts,
+        "refresh_date": refresh_date.isoformat(),
+        "message": msg,
+    })
+
+
+# ── Accrual summary (dividends earned since last refresh) ─────────────────────
+
+@app.route("/api/holdings/accrual-summary", methods=["GET"])
+def get_accrual_summary():
+    """Return estimated dividends accrued since last refresh, per source account."""
+    from datetime import datetime as _dt2, date as _date
+    conn = get_connection()
+    refresh_info = _get_refresh_target_info(conn)
+    source_pids = refresh_info["source_profile_ids"]
+
+    profile_name_rows = conn.execute(
+        "SELECT id, name FROM profiles WHERE id IN ({})".format(",".join("?" * len(source_pids))),
+        source_pids,
+    ).fetchall()
+    profile_names = {r["id"]: r["name"] for r in profile_name_rows}
+
+    from datetime import timedelta as _td
+    freq_days_map = {"W": 7.0, "M": 30.44, "Q": 91.25, "SA": 182.5, "A": 365.0}
+    # Typical ex-div → payment lags by frequency
+    pay_lag_days = {"W": 3, "M": 7, "Q": 10, "SA": 14, "A": 14}
+    today = _date.today()
+
+    def _parse_date(s):
+        if not s:
+            return None
+        for fmt in ("%m/%d/%y", "%m/%d/%Y", "%Y-%m-%d"):
+            try:
+                return _dt2.strptime(s.strip(), fmt).date()
+            except Exception:
+                pass
+        return None
+
+    accounts = []
+    for pid in source_pids:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (f"last_refresh_{pid}",)
+        ).fetchone()
+        last_refresh_dt = None
+        if row and row[0]:
+            try:
+                last_refresh_dt = _dt2.fromisoformat(row[0])
+            except Exception:
+                pass
+
+        days_elapsed = None
+        accrued = 0.0
+        confirmed_payments = 0
+        if last_refresh_dt:
+            days_elapsed = max(0.0, (_dt2.now() - last_refresh_dt).total_seconds() / 86400.0)
+            last_refresh_date = last_refresh_dt.date()
+            holdings = conn.execute(
+                "SELECT div, quantity, div_frequency, ex_div_date FROM all_account_info "
+                "WHERE profile_id = ? AND quantity > 0",
+                (pid,),
+            ).fetchall()
+            for h in holdings:
+                div = float(h["div"] or 0)
+                qty = float(h["quantity"] or 0)
+                if div <= 0 or qty <= 0:
+                    continue
+                freq = (h["div_frequency"] or "Q").upper()
+                fd = freq_days_map.get(freq, 91.25)
+                # Estimate payment date from ex_div_date + typical lag for this frequency.
+                # div_pay_date stored in DB uses a fixed 10-day lag that's wrong for weekly
+                # payers — deriving from ex_div_date is more accurate.
+                ex_date = _parse_date(h["ex_div_date"] or "")
+                confirmed = False
+                if ex_date:
+                    lag = pay_lag_days.get(freq, 10)
+                    expected_pay = ex_date + _td(days=lag)
+                    if last_refresh_date <= expected_pay <= today:
+                        accrued += div * qty
+                        confirmed_payments += 1
+                        confirmed = True
+                if not confirmed and fd > 0:
+                    accrued += div * qty * (days_elapsed / fd)
+
+        accounts.append({
+            "profile_id": pid,
+            "name": profile_names.get(pid) or f"Profile {pid}",
+            "accrued_dividends": round(accrued, 2),
+            "confirmed_payments": confirmed_payments,
+            "days_since_last_refresh": round(days_elapsed, 1) if days_elapsed is not None else None,
+            "last_refresh": last_refresh_dt.isoformat() if last_refresh_dt else None,
+        })
+
+    conn.close()
+    return jsonify({"accounts": accounts})
 
 
 # ── Holdings CRUD ──────────────────────────────────────────────────────────────
@@ -4025,6 +5282,24 @@ def list_holdings():
             r["current_month_income"] = _estimate_current_month_income(r)
         if r.get("ytd_divs") is None:
             r["ytd_divs"] = _estimate_ytd_income(r)
+    if not is_agg and len(pids) == 1 and pids[0] == 1:
+        owner_source_ids = _get_owner_source_profile_ids(conn)
+        if owner_source_ids:
+            import datetime
+            mph = ",".join("?" * len(owner_source_ids))
+            today_d = datetime.date.today()
+            pay_rows = conn.execute(
+                f"""SELECT ticker, COALESCE(SUM(amount), 0) as amount
+                    FROM dividend_payments
+                    WHERE profile_id IN ({mph})
+                      AND payment_date >= ? AND payment_date <= ?
+                    GROUP BY ticker""",
+                owner_source_ids + [today_d.replace(day=1).isoformat(), today_d.isoformat()],
+            ).fetchall()
+            if pay_rows:
+                paid_by_ticker = {r["ticker"]: float(r["amount"] or 0) for r in pay_rows}
+                for r in results:
+                    r["current_month_income"] = round(paid_by_ticker.get(r["ticker"], 0), 2)
     # For single-profile queries, compute reinvested/not-reinvested splits.
     # Owner (profile_id=1) uses sub-account DRIP ratios since the Owner
     # flag may be stale.  Sub-accounts use their own flag directly.
@@ -5369,6 +6644,34 @@ def download_fidelity_transactions_template():
     )
 
 
+@app.route("/api/template/robinhood-holdings-download", methods=["GET"])
+def download_robinhood_holdings_template():
+    template_path = os.path.join(os.path.dirname(__file__), '..', 'templates', 'robinhood_holdings_template.csv')
+    if not os.path.exists(template_path):
+        from create_template import create_robinhood_holdings_template
+        create_robinhood_holdings_template()
+    return send_file(
+        os.path.abspath(template_path),
+        as_attachment=True,
+        download_name='robinhood_holdings_template.csv',
+        mimetype='text/csv',
+    )
+
+
+@app.route("/api/template/robinhood-transactions-download", methods=["GET"])
+def download_robinhood_transactions_template():
+    template_path = os.path.join(os.path.dirname(__file__), '..', 'templates', 'robinhood_transactions_template.csv')
+    if not os.path.exists(template_path):
+        from create_template import create_robinhood_transactions_template
+        create_robinhood_transactions_template()
+    return send_file(
+        os.path.abspath(template_path),
+        as_attachment=True,
+        download_name='robinhood_transactions_template.csv',
+        mimetype='text/csv',
+    )
+
+
 # ── Export Holdings ───────────────────────────────────────────────────────────
 
 # Shared column definitions (matches create_template.py headers exactly)
@@ -5741,6 +7044,7 @@ def upcoming_dividends():
     if is_agg and len(pids) > 1:
         rows = conn.execute(
             f"""SELECT ticker, MAX(description) as description, MAX(ex_div_date) as ex_div_date,
+                   MAX(div_pay_date) as div_pay_date,
                    MAX(div) as div, MAX(div_frequency) as div_frequency,
                    SUM(quantity) as quantity, SUM(approx_monthly_income) as approx_monthly_income
                FROM all_account_info
@@ -5751,7 +7055,7 @@ def upcoming_dividends():
         ).fetchall()
     else:
         rows = conn.execute(
-            f"""SELECT ticker, description, ex_div_date, div, div_frequency, quantity, approx_monthly_income
+            f"""SELECT ticker, description, ex_div_date, div_pay_date, div, div_frequency, quantity, approx_monthly_income
                FROM all_account_info
                WHERE profile_id IN ({placeholders}) AND ex_div_date IS NOT NULL AND ex_div_date != ''
                  AND ex_div_date != '--' AND quantity > 0""",
@@ -5768,6 +7072,7 @@ def upcoming_dividends():
     freq_days = {"W": 7, "52": 7, "M": 30, "Q": 91, "SA": 182, "A": 365}
     freq_labels = {"W": "Weekly", "52": "Weekly", "M": "Monthly", "Q": "Quarterly", "SA": "Semi-Annual", "A": "Annual"}
     freq_colors = {"M": "#00c9a7", "52": "#FFD700", "W": "#FFD700", "Q": "#7ecfff", "SA": "#f0a0ff", "A": "#f0a0ff"}
+    official_cache = {}
 
     def next_biz(d):
         if d.weekday() == 5:
@@ -5776,23 +7081,60 @@ def upcoming_dividends():
             d += timedelta(days=1)
         return d
 
+    def official_snapshot_for(ticker, description):
+        key = ((ticker or "").strip().upper(), description or "")
+        if key not in official_cache:
+            try:
+                official_cache[key] = _fetch_official_distribution_snapshot(key[0], key[1])
+            except Exception:
+                official_cache[key] = None
+        return official_cache[key]
+
     events = []
     for r in rows:
+        ticker = (r["ticker"] or "").strip().upper()
+        description = r["description"] or ticker
+        freq = (r["div_frequency"] or "Q").upper()
+        amount = r["div"] or 0
+        stored_pay = _date_from_value(r["div_pay_date"])
+        official_pay = None
+        official = official_snapshot_for(ticker, description)
+        if official and official.get("has_dividend"):
+            official_freq = (official.get("freq") or "").strip().upper()
+            if official_freq:
+                freq = official_freq
+            try:
+                official_div = official.get("div")
+                if official_div is not None and float(official_div) > 0:
+                    amount = float(official_div)
+            except Exception:
+                pass
+            ex = _date_from_value(official.get("ex_div_date"))
+            official_pay = _date_from_value(official.get("div_pay_date"))
+            if official_pay is not None:
+                stored_pay = official_pay
+        else:
+            ex = None
+
         try:
-            ex = datetime.strptime(r["ex_div_date"], "%m/%d/%y").date()
+            if ex is None:
+                ex = datetime.strptime(r["ex_div_date"], "%m/%d/%y").date()
         except (ValueError, TypeError):
             try:
-                ex = datetime.strptime(r["ex_div_date"], "%Y-%m-%d").date()
+                if ex is None:
+                    ex = datetime.strptime(r["ex_div_date"], "%Y-%m-%d").date()
             except (ValueError, TypeError):
                 continue
 
-        freq = (r["div_frequency"] or "Q").upper()
         step = freq_days.get(freq, 91)
 
         # Project forward — keep advancing until the estimated pay date >= today
         nxt = ex
+        cycle_steps = 0
         while True:
-            if freq in ("W", "52"):
+            if stored_pay and cycle_steps == 0:
+                pay = stored_pay
+            elif freq in ("W", "52"):
                 pay = next_biz(nxt + timedelta(days=1))
             elif freq == "M":
                 pay = next_biz(nxt + timedelta(days=2))
@@ -5802,17 +7144,19 @@ def upcoming_dividends():
             if pay >= today:
                 break
             nxt += timedelta(days=step)
+            cycle_steps += 1
 
         if nxt <= week_end:
             events.append({
-                "ticker": r["ticker"],
-                "description": r["description"] or r["ticker"],
+                "ticker": ticker,
+                "description": description,
                 "ex_date": nxt.strftime("%Y-%m-%d"),
                 "ex_weekday": nxt.strftime("%a"),
                 "pay_date": pay.strftime("%Y-%m-%d"),
                 "pay_weekday": pay.strftime("%a"),
-                "amount": r["div"] or 0,
-                "est_payment": round((r["div"] or 0) * (r["quantity"] or 0), 2),
+                "pay_estimated": not (official_pay is not None and cycle_steps == 0),
+                "amount": amount,
+                "est_payment": round(amount * (r["quantity"] or 0), 2),
                 "frequency": freq,
                 "freq_label": freq_labels.get(freq, "Quarterly"),
                 "color": freq_colors.get(freq, "#7ecfff"),
@@ -6082,6 +7426,17 @@ def ticker_return_chart(ticker):
         "SELECT purchase_date, price_paid, description FROM all_account_info WHERE ticker = ? AND profile_id = ? AND purchase_value > 0",
         (ticker, profile_id),
     ).fetchone()
+    txn_row = conn.execute(
+        """SELECT transaction_date, price_per_share
+           FROM transactions
+           WHERE ticker = ? AND profile_id = ?
+             AND transaction_type = 'BUY'
+             AND shares > 0
+             AND price_per_share > 0
+           ORDER BY transaction_date ASC
+           LIMIT 1""",
+        (ticker, profile_id),
+    ).fetchone()
     conn.close()
 
     if not row:
@@ -6090,6 +7445,12 @@ def ticker_return_chart(ticker):
     purchase_date = pd.to_datetime(row["purchase_date"])
     price_paid = float(row["price_paid"] or 0)
     description = row["description"] or ticker
+
+    if pd.isna(purchase_date) and txn_row:
+        purchase_date = pd.to_datetime(txn_row["transaction_date"])
+        price_paid = float(txn_row["price_per_share"] or 0)
+    if price_paid <= 0 and txn_row:
+        price_paid = float(txn_row["price_per_share"] or 0)
 
     if pd.isna(purchase_date) or price_paid <= 0:
         return jsonify({"error": f"Missing purchase date or price for {ticker}"}), 404
@@ -6303,6 +7664,62 @@ def income_summary():
         # yet this period, which is correct (not a reason to use the full estimate)
         total_month += _estimate_current_month_income(h) if stored_month is None else stored_month
         total_ytd += _estimate_ytd_income(h) if stored_ytd is None else stored_ytd
+
+    payment_pids = pids
+    if not is_agg and len(pids) == 1 and pids[0] == 1:
+        owner_source_ids = _get_owner_source_profile_ids(conn)
+        if owner_source_ids:
+            payment_pids = owner_source_ids
+    payment_placeholders = ",".join("?" * len(payment_pids))
+    month_start = today.replace(day=1).isoformat()
+    today_iso = today.isoformat()
+
+    payment_month = conn.execute(
+        f"""SELECT COALESCE(SUM(amount), 0) as amount, COUNT(*) as rows
+            FROM dividend_payments
+            WHERE profile_id IN ({payment_placeholders})
+              AND payment_date >= ? AND payment_date <= ?""",
+        payment_pids + [month_start, today_iso],
+    ).fetchone()
+    paid_month_to_date = None
+    if payment_month and payment_month["rows"]:
+        paid_month_to_date = float(payment_month["amount"] or 0)
+        total_month = paid_month_to_date
+
+    payout_month = conn.execute(
+        f"""SELECT COALESCE(SUM(amount), 0) as amount, COUNT(*) as rows
+            FROM monthly_payouts
+            WHERE profile_id IN ({placeholders})
+              AND year = ? AND month = ?""",
+        pids + [today.year, today.month],
+    ).fetchone()
+    if paid_month_to_date is None and payout_month and payout_month["rows"]:
+        total_month = float(payout_month["amount"] or 0)
+
+    completed_payout_ytd = conn.execute(
+        f"""SELECT COALESCE(SUM(amount), 0) as amount,
+                   COUNT(DISTINCT month) as months
+            FROM monthly_payouts
+            WHERE profile_id IN ({placeholders})
+              AND year = ? AND month < ?""",
+        pids + [today.year, today.month],
+    ).fetchone()
+    if (
+        paid_month_to_date is not None
+        and int(completed_payout_ytd["months"] or 0) >= today.month - 1
+    ):
+        total_ytd = float(completed_payout_ytd["amount"] or 0) + paid_month_to_date
+
+    payout_ytd = conn.execute(
+        f"""SELECT COALESCE(SUM(amount), 0) as amount,
+                   COUNT(DISTINCT month) as months
+            FROM monthly_payouts
+            WHERE profile_id IN ({placeholders})
+              AND year = ? AND month <= ?""",
+        pids + [today.year, today.month],
+    ).fetchone()
+    if paid_month_to_date is None and payout_ytd and int(payout_ytd["months"] or 0) >= today.month:
+        total_ytd = float(payout_ytd["amount"] or 0)
 
     conn.close()
     return jsonify({
@@ -6581,7 +7998,7 @@ def dividend_analysis_data():
     import yfinance as yf
     import plotly.graph_objects as go
     import plotly.utils
-    from grading import grade_portfolio, letter_grade, _sharpe, _sortino
+    from grading import grade_portfolio, letter_grade, _sharpe, _sortino, _is_stale_or_dead
     warnings.filterwarnings("ignore")
 
     def _clean(v):
@@ -6958,9 +8375,16 @@ def dividend_analysis_data():
             bench_close = close["SPY"] if "SPY" in close.columns else None
             bench_ret = bench_close.pct_change().dropna() if bench_close is not None else None
             available = [t for t in tickers if t in close.columns and len(close[t].dropna()) >= 30]
-            if len(available) >= 2:
-                returns_df = close[available].pct_change().fillna(0)
-                weights_arr = np.array([values_map.get(t, 0.0) for t in available])
+            # Drop delisted / flat-lined / penny-stock series from the dashboard grade
+            live = [
+                t for t in available
+                if not _is_stale_or_dead(close[t].dropna(), close[t].pct_change().dropna())
+            ]
+            if not live:
+                live = available  # fallback: avoid empty grade
+            if len(live) >= 2:
+                returns_df = close[live].pct_change().fillna(0)
+                weights_arr = np.array([values_map.get(t, 0.0) for t in live])
                 pm = grade_portfolio(returns_df, weights_arr, bench_ret)
                 g = pm.get("grade", {})
                 grade_info = {
@@ -9151,7 +10575,7 @@ def growth_data():
     import warnings
     import numpy as np
     import yfinance as yf
-    from grading import grade_portfolio, letter_grade, _sharpe, _sortino
+    from grading import grade_portfolio, letter_grade, _sharpe, _sortino, _is_stale_or_dead
     warnings.filterwarnings("ignore")
 
     def _clean(v):
@@ -9320,9 +10744,16 @@ def growth_data():
     # ── Portfolio grade ──
     grade_info = {}
     if len(available_tickers) >= 2 and len(daily_returns) >= 30:
-        weights_arr = np.array([values.get(t, 0.0) for t in available_tickers])
+        # Drop delisted / flat-lined / penny-stock series from the overall grade
+        live_tickers = [
+            t for t in available_tickers
+            if not _is_stale_or_dead(close_aligned[t].dropna(), daily_returns[t])
+        ]
+        if not live_tickers:
+            live_tickers = available_tickers  # fallback
+        weights_arr = np.array([values.get(t, 0.0) for t in live_tickers])
         bench_ret = daily_returns[benchmark].dropna() if benchmark in daily_returns.columns else None
-        returns_for_grade = daily_returns[available_tickers]
+        returns_for_grade = daily_returns[live_tickers]
         pm = grade_portfolio(returns_for_grade, weights_arr, bench_ret)
         g = pm.get("grade", {})
         grade_info = {
@@ -9682,6 +11113,17 @@ def _build_cal_events():
         return []
     conn.close()
 
+    official_cache = {}
+
+    def official_snapshot_for(ticker, description):
+        key = ((ticker or "").strip().upper(), description or "")
+        if key not in official_cache:
+            try:
+                official_cache[key] = _fetch_official_distribution_snapshot(key[0], key[1])
+            except Exception:
+                official_cache[key] = None
+        return official_cache[key]
+
     # Pre-fetch yfinance pay dates for non-weekly tickers
     yf_pay_dates = {}
     for tkr in df.loc[~df["div_frequency"].isin(["52", "W"]), "ticker"].tolist():
@@ -9697,15 +11139,36 @@ def _build_cal_events():
     conn.close()
 
     for _, row in df.iterrows():
-        dt_ts = _parse_timestamp_value(row["ex_div_date"])
+        ticker = str(row["ticker"] or "").strip().upper()
+        description = str(row["description"]) if pd.notna(row["description"]) else ""
+        freq = str(row["div_frequency"]).strip() if pd.notna(row["div_frequency"]) else ""
+        amount = float(row["div"]) if pd.notna(row["div"]) and row["div"] else None
+        ex_value = row["ex_div_date"]
+        pay_value = row.get("div_pay_date")
+        official_pay_ts = None
+
+        official = official_snapshot_for(ticker, description)
+        if official and official.get("has_dividend"):
+            official_freq = (official.get("freq") or "").strip().upper()
+            if official_freq:
+                freq = official_freq
+            try:
+                official_div = official.get("div")
+                if official_div is not None and float(official_div) > 0:
+                    amount = float(official_div)
+            except Exception:
+                pass
+            if official.get("ex_div_date"):
+                ex_value = official.get("ex_div_date")
+            if official.get("div_pay_date"):
+                pay_value = official.get("div_pay_date")
+                official_pay_ts = _parse_timestamp_value(pay_value)
+
+        dt_ts = _parse_timestamp_value(ex_value)
         if dt_ts is None:
             continue
         dt = dt_ts.date()
-        stored_pay_ts = _parse_timestamp_value(row.get("div_pay_date"))
-
-        freq = str(row["div_frequency"]).strip() if pd.notna(row["div_frequency"]) else ""
-        amount = float(row["div"]) if pd.notna(row["div"]) and row["div"] else None
-        ticker = row["ticker"]
+        stored_pay_ts = _parse_timestamp_value(pay_value)
 
         # Project ex-div date forward to next upcoming occurrence
         # Owner (pid==1) non-weekly dates come from Excel import and are kept as-is
@@ -9724,7 +11187,11 @@ def _build_cal_events():
         # Determine pay date
         pay_estimated = True
 
-        if freq in ("52", "W"):
+        if official_pay_ts is not None and cycle_steps == 0:
+            # Issuer-published pay dates supersede Yahoo calendar values.
+            pay_dt = official_pay_ts
+            pay_estimated = False
+        elif freq in ("52", "W"):
             # Weekly: pay 1 business day after ex-div
             pay_dt = _estimate_dividend_pay_timestamp(dt, freq)
         elif ticker in yf_pay_dates:
@@ -9738,14 +11205,14 @@ def _build_cal_events():
                 freq,
                 pattern=lag_pattern_map.get(ticker),
                 ticker=ticker,
-                description=row.get("description"),
+                description=description,
             )
             if pay_dt is None:
                 continue
 
         events.append({
             "ticker":        ticker,
-            "description":   str(row["description"]) if pd.notna(row["description"]) else "",
+            "description":   description,
             "date":          dt.isoformat(),
             "day":           str(dt.day),
             "month":         dt.strftime("%b"),
@@ -12231,17 +13698,25 @@ def _build_efficient_frontier(returns_df, n_points=30):
 
 GROWTH_ETFS = ["QQQ", "VOO", "VGT", "VUG", "SCHG", "IWF", "MGK", "QQQM", "XLK", "SMH"]
 INCOME_ETFS = [
-    "SPYI", "QQQI", "MLPI", "TSPY", "TDAQ", "IWMI", "JEPQ", "CHPY", "ULTY", "O", "MAIN", "PBDC", "XQQI",
+    "SPYI", "QQQI", "MLPI", "TSPY", "TDAQ", "TDAX", "TSYX", "IWMI", "JEPQ", "CHPY", "ULTY", "O", "MAIN", "PBDC", "XQQI",
     # VistaShares income-oriented ETFs
     "ACKY", "OMAH", "QUSA", "DRKY", "SIOO", "TPRY", "BTYB",
     # Kurv ETF lineup
     "KQQQ", "KYLD", "KGLD", "KSLV", "KCOP", "AMZP", "AAPY", "GOOP", "MSFY", "NFLP", "TSLP",
+    # Global X covered-call / option-income ETFs
+    "QYLD", "XYLD", "RYLD", "DJIA", "QYLG", "XYLG", "TYLG", "EDGQ", "EDGX", "QRMI", "XRMI", "QCLR", "XCLR",
+    # Amplify income / option-income ETFs
+    "BAGY", "BITY", "DIVO", "QDVO", "IDVO", "HCOW", "HAKY", "ETTY", "SLJY",
+    # XFunds / Nicholas Wealth income ETFs
+    "GIAX", "BLOX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX",
     # NEOS ETF lineup
     "SPYI", "QQQI", "IWMI", "IYRI", "BTCI", "ETHI", "NEHI", "NIHI", "MLPI",
     "IAUI", "HYBI", "CSHI", "QQQH", "SPYH", "XQQI", "XSPI",
     # REX Shares income lineup
     "ATCL", "FEPI", "AIPI", "CEPI", "ULTI", "GIF",
     "COII", "MSII", "NVII", "TSII", "HOII", "PLTI", "CWII", "LLII", "WMTI", "TLDR",
+    # Quantify Funds option-income lineup
+    "ISBG", "ISSB",
     # GraniteShares YieldBOOST core index / broad income funds
     "YSPY", "TQQY", "YBST", "YBTY",
     # GraniteShares YieldBOOST single-name / thematic income funds
@@ -13407,7 +14882,8 @@ def builder_analyze(port_id):
     import yfinance as yf
     from grading import (ticker_score, grade_portfolio, letter_grade,
                          _ulcer_index, _sharpe, _sortino, _calmar, _omega,
-                         _max_drawdown, _capture_ratios, _safe)
+                         _max_drawdown, _capture_ratios, _safe,
+                         _is_stale_or_dead)
 
     data = request.get_json() or {}
     benchmark = (data.get("benchmark") or "SPY").strip().upper()
@@ -13602,8 +15078,16 @@ def builder_analyze(port_id):
         long_cols = {t: s for t, s in returns_cols.items() if len(s) >= 30}
         if not long_cols:
             long_cols = returns_cols  # fallback: use whatever we have
-        returns_df = pd.DataFrame(long_cols).dropna()
-        available = [t for t in tickers if t in long_cols]
+        # Drop delisted / flat-lined / penny-stock series so they don't mask
+        # the portfolio's real risk profile in the overall grade.
+        live_cols = {
+            t: s for t, s in long_cols.items()
+            if not _is_stale_or_dead(close_df[t].dropna(), s)
+        }
+        if not live_cols:
+            live_cols = long_cols  # fallback: avoid empty grade
+        returns_df = pd.DataFrame(live_cols).dropna()
+        available = [t for t in tickers if t in live_cols]
         avail_weights = np.array([weights_list[tickers.index(t)] for t in available])
         if avail_weights.sum() > 0:
             avail_weights = avail_weights / avail_weights.sum()
@@ -13690,7 +15174,7 @@ def builder_analyze(port_id):
 def builder_compare():
     import numpy as np
     import yfinance as yf
-    from grading import grade_portfolio, letter_grade
+    from grading import grade_portfolio, letter_grade, _is_stale_or_dead
 
     data = request.get_json() or {}
     port_ids = data.get("portfolio_ids", [])
@@ -13755,10 +15239,17 @@ def builder_compare():
         long_cols = {t: s for t, s in returns_cols.items() if len(s) >= 30}
         if not long_cols:
             long_cols = returns_cols  # fallback
-        returns_df = pd.DataFrame(long_cols).dropna()
+        # Drop delisted / flat-lined / penny-stock series from the portfolio grade
+        live_cols = {
+            t: s for t, s in long_cols.items()
+            if not _is_stale_or_dead(close_df[t].dropna(), s)
+        }
+        if not live_cols:
+            live_cols = long_cols  # fallback: avoid empty grade
+        returns_df = pd.DataFrame(live_cols).dropna()
         if len(returns_df) < 2:
-            returns_df = pd.DataFrame(long_cols).fillna(0)
-        used_tickers = list(long_cols.keys())
+            returns_df = pd.DataFrame(live_cols).fillna(0)
+        used_tickers = list(live_cols.keys())
         weights = np.array([next(h["dollar_amount"] for h in holdings if h["ticker"] == t) for t in used_tickers])
         weights = weights / weights.sum()
 
@@ -17321,17 +18812,60 @@ def dividend_history_data():
     today = datetime.date.today()
     labels = []
     values = []
+    partial_periods = []
     placeholders = ",".join("?" * len(pids))
 
+    def _payment_query_parts(extra_clauses=(), extra_params=()):
+        clauses = [f"profile_id IN ({placeholders})"]
+        params = list(pids)
+        if filtered_tickers is not None:
+            if filtered_tickers:
+                ticker_ph = ",".join("?" * len(filtered_tickers))
+                clauses.append(f"ticker IN ({ticker_ph})")
+                params.extend(sorted(filtered_tickers))
+            else:
+                clauses.append("1 = 0")
+        clauses.extend(extra_clauses)
+        params.extend(extra_params)
+        return " AND ".join(clauses), params
+
+    def _has_non_refresh_payments(rows):
+        return any(
+            "refresh_estimate" not in {
+                s.strip().lower()
+                for s in str(row["sources"] or "").split(",")
+                if s.strip()
+            }
+            for row in rows
+        )
+
     if view == "yearly":
-        rows = conn.execute(
+        where_sql, pay_params = _payment_query_parts()
+        payment_rows = conn.execute(
+            f"SELECT substr(payment_date, 1, 4) as year, SUM(amount) as total, "
+            f"GROUP_CONCAT(DISTINCT COALESCE(source, '')) as sources "
+            f"FROM dividend_payments WHERE {where_sql} "
+            f"GROUP BY substr(payment_date, 1, 4) ORDER BY year",
+            pay_params,
+        ).fetchall()
+        payout_rows = conn.execute(
             f"SELECT year, SUM(amount) as total FROM monthly_payouts "
             f"WHERE profile_id IN ({placeholders}) GROUP BY year ORDER BY year",
             pids,
         ).fetchall()
-        for r in rows:
-            labels.append(str(r["year"]))
-            values.append(round(float(r["total"]) * cat_ratio, 2))
+
+        if payment_rows and (not payout_rows or _has_non_refresh_payments(payment_rows)):
+            series_by_year = {str(r["year"]): round(float(r["total"] or 0), 2) for r in payment_rows}
+        else:
+            series_by_year = {str(r["year"]): round(float(r["total"]) * cat_ratio, 2) for r in payout_rows}
+            for r in payment_rows:
+                series_by_year.setdefault(str(r["year"]), round(float(r["total"] or 0), 2))
+
+        for year in sorted(series_by_year):
+            is_partial = int(year) == today.year
+            labels.append(f"{year} YTD" if is_partial else year)
+            values.append(series_by_year[year])
+            partial_periods.append(is_partial)
 
     elif view == "monthly":
         # Compute start date
@@ -17343,28 +18877,76 @@ def dividend_history_data():
         start_key = start_y * 100 + start_m
         end_key = today.year * 100 + today.month
 
-        rows = conn.execute(
+        start_date = datetime.date(start_y, start_m, 1).isoformat()
+        where_sql, pay_params = _payment_query_parts(
+            ["payment_date >= ?", "payment_date <= ?"],
+            [start_date, today.isoformat()],
+        )
+        payment_rows = conn.execute(
+            f"SELECT substr(payment_date, 1, 7) as ym, SUM(amount) as total, "
+            f"GROUP_CONCAT(DISTINCT COALESCE(source, '')) as sources "
+            f"FROM dividend_payments WHERE {where_sql} "
+            f"GROUP BY substr(payment_date, 1, 7) ORDER BY ym",
+            pay_params,
+        ).fetchall()
+        payout_rows = conn.execute(
             f"SELECT year, month, amount FROM monthly_payouts "
             f"WHERE profile_id IN ({placeholders}) AND (year * 100 + month) >= ? AND (year * 100 + month) <= ? "
             f"ORDER BY year, month",
             pids + [start_key, end_key],
         ).fetchall()
-        for r in rows:
-            dt = datetime.date(int(r["year"]), int(r["month"]), 1)
-            labels.append(dt.strftime("%b '%y"))
-            values.append(round(float(r["amount"]) * cat_ratio, 2))
+
+        if payment_rows and (not payout_rows or _has_non_refresh_payments(payment_rows)):
+            series_by_month = {r["ym"]: round(float(r["total"] or 0), 2) for r in payment_rows}
+        else:
+            series_by_month = {
+                f"{int(r['year']):04d}-{int(r['month']):02d}": round(float(r["amount"]) * cat_ratio, 2)
+                for r in payout_rows
+            }
+            for r in payment_rows:
+                series_by_month.setdefault(r["ym"], round(float(r["total"] or 0), 2))
+
+        for ym in sorted(series_by_month):
+            year, month = [int(part) for part in ym.split("-")]
+            dt = datetime.date(year, month, 1)
+            is_partial = year == today.year and month == today.month
+            label = dt.strftime("%b '%y")
+            labels.append(f"{label} partial" if is_partial else label)
+            values.append(series_by_month[ym])
+            partial_periods.append(is_partial)
 
     elif view == "weekly":
         start_date = today - datetime.timedelta(days=months_back * 30)
-        rows = conn.execute(
+        where_sql, pay_params = _payment_query_parts(
+            ["payment_date >= ?", "payment_date <= ?"],
+            [start_date.isoformat(), today.isoformat()],
+        )
+        payment_rows = conn.execute(
+            f"SELECT payment_date, SUM(amount) as total, "
+            f"GROUP_CONCAT(DISTINCT COALESCE(source, '')) as sources "
+            f"FROM dividend_payments WHERE {where_sql} "
+            f"GROUP BY payment_date ORDER BY payment_date",
+            pay_params,
+        ).fetchall()
+        payout_rows = conn.execute(
             f"SELECT pay_date, amount FROM weekly_payouts "
             f"WHERE profile_id IN ({placeholders}) AND pay_date >= ? "
             f"ORDER BY pay_date",
             pids + [start_date.isoformat()],
         ).fetchall()
-        for r in rows:
-            labels.append(r["pay_date"])
-            values.append(round(float(r["amount"]) * cat_ratio, 2))
+
+        if payment_rows and (not payout_rows or _has_non_refresh_payments(payment_rows)):
+            series_by_date = {r["payment_date"]: round(float(r["total"] or 0), 2) for r in payment_rows}
+        else:
+            series_by_date = {r["pay_date"]: round(float(r["amount"]) * cat_ratio, 2) for r in payout_rows}
+            for r in payment_rows:
+                series_by_date.setdefault(r["payment_date"], round(float(r["total"] or 0), 2))
+
+        for pay_date in sorted(series_by_date):
+            is_partial = pay_date == today.isoformat()
+            labels.append(f"{pay_date} today" if is_partial else pay_date)
+            values.append(series_by_date[pay_date])
+            partial_periods.append(is_partial)
 
     conn.close()
 
@@ -17373,10 +18955,16 @@ def dividend_history_data():
     avg = total / len(values) if values else 0
     mn = min(values) if values else 0
     mx = max(values) if values else 0
-    # Growth: compare last value to first
+    # Growth: compare the first and last completed periods so partial current
+    # month/year/week data doesn't make the portfolio look like it collapsed.
     trend_pct = 0.0
-    if len(values) >= 2 and values[0] > 0:
-        trend_pct = round((values[-1] - values[0]) / values[0] * 100, 1)
+    growth_values = [v for v, is_partial in zip(values, partial_periods) if not is_partial]
+    trend_basis = "completed periods"
+    if len(growth_values) < 2:
+        growth_values = values
+        trend_basis = "available periods"
+    if len(growth_values) >= 2 and growth_values[0] > 0:
+        trend_pct = round((growth_values[-1] - growth_values[0]) / growth_values[0] * 100, 1)
 
     # Cumulative
     cumulative = []
@@ -17392,6 +18980,7 @@ def dividend_history_data():
             "labels": labels,
             "values": values,
             "cumulative": cumulative,
+            "partial_periods": partial_periods,
         },
         "summary": {
             "total": round(total, 2),
@@ -17399,6 +18988,7 @@ def dividend_history_data():
             "min": round(mn, 2),
             "max": round(mx, 2),
             "trend_pct": trend_pct,
+            "trend_basis": trend_basis,
         },
     })
 
@@ -18764,7 +20354,12 @@ def _general_scanner_refresh_impl(tickers, type_map, force_info=False):
     # Ticker-based overrides for ETFs that yfinance doesn't classify well
     _options_income_tickers = set([
         # JPM / Global X / classic covered call
-        "JEPI", "JEPQ", "JEPY", "QYLD", "XYLD", "RYLD", "DJIA", "DIVO", "PUTW", "NUSI",
+        "JEPI", "JEPQ", "JEPY", "QYLD", "XYLD", "RYLD", "DJIA", "QYLG", "XYLG", "TYLG",
+        "EDGQ", "EDGX", "QRMI", "XRMI", "QCLR", "XCLR", "DIVO", "PUTW", "NUSI",
+        # Amplify
+        "BAGY", "BITY", "QDVO", "IDVO", "HCOW", "HAKY", "ETTY", "SLJY",
+        # XFunds / Nicholas Wealth
+        "GIAX", "BLOX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX",
         # NEOS / option-income and hedged-income
         "SPYI", "QQQI", "IWMI", "IYRI", "BTCI", "ETHI", "NEHI", "NIHI", "MLPI",
         "IAUI", "HYBI", "CSHI", "QQQH", "SPYH", "XQQI", "XSPI",
@@ -18776,6 +20371,8 @@ def _general_scanner_refresh_impl(tickers, type_map, force_info=False):
         # REX Shares income
         "AIPI", "FEPI", "CEPI", "ULTI", "GIF", "ATCL",
         "COII", "MSII", "NVII", "TSII", "HOII", "PLTI", "CWII", "LLII", "WMTI", "TLDR",
+        # Quantify Funds option-income
+        "ISBG", "ISSB",
         # VistaShares
         "ACKY", "OMAH", "QUSA", "DRKY", "SIOO", "TPRY", "BTYB",
         # GraniteShares YieldBOOST

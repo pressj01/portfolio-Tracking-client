@@ -235,6 +235,14 @@ export default function Import() {
     window.open(`${API_BASE}/api/template/fidelity-transactions-download`, '_blank')
   }
 
+  const handleDownloadRobinhoodHoldingsTemplate = () => {
+    window.open(`${API_BASE}/api/template/robinhood-holdings-download`, '_blank')
+  }
+
+  const handleDownloadRobinhoodTransactionsTemplate = () => {
+    window.open(`${API_BASE}/api/template/robinhood-transactions-download`, '_blank')
+  }
+
   if (isAggregate) {
     return (
       <div className="page">
@@ -438,7 +446,7 @@ export default function Import() {
       {/* ── Transaction History Import ─────────────────────────────────── */}
       {activeTab === 'txnHistory' && (
         <div className="card">
-          <h2>Import Brokerage Positions and Snowball Data</h2>
+          <h2>Import Brokerage Positions, Transactions, and Snowball Data</h2>
           <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
             {txnFormat === 'schwab'
               ? <>Import current positions from a Schwab <strong>Positions CSV</strong> export. In Schwab, go to Accounts {'>'} Positions, then export to CSV. This sets holdings, cost basis, and current prices directly.</>
@@ -456,12 +464,16 @@ export default function Import() {
                   ? <>Import current positions from a Fidelity <strong>Positions XLSX</strong> export. This uses only the holdings and dividend fields the app already supports, and treats money market rows as cash.</>
                   : txnFormat === 'fidelity_transactions'
                     ? <>Import transaction history from a Fidelity <strong>Transactions XLSX</strong> export. This imports buys, sells, dividend cash receipts, and DRIP reinvestments for recordkeeping.</>
+                  : txnFormat === 'robinhood'
+                    ? <>Import current positions from a Robinhood <strong>Holdings PDF</strong>. Robinhood does not include cost basis in this PDF, so current value is used as the initial cost basis.</>
+                  : txnFormat === 'robinhood_transactions'
+                    ? <>Import transaction history from a Robinhood <strong>Transactions CSV</strong> export. This imports buys, sells, cash/manufactured dividends, capital gains, and ACAT share transfers.</>
                  : <>Import BUY/SELL transactions and dividend payments from your broker or tracking app.
                  Each file should be a <strong>single account</strong> export — combined/merged exports will be rejected.</>
             }
           </p>
 
-          {['snowball', 'schwab_transactions', 'etrade_buys_sells', 'etrade_dividends', 'fidelity_transactions'].includes(txnFormat) && (
+          {['snowball', 'schwab_transactions', 'etrade_buys_sells', 'etrade_dividends', 'fidelity_transactions', 'robinhood_transactions'].includes(txnFormat) && (
             <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
               <strong>Partial history warning:</strong> If this file does not cover the full account history
               (e.g. only the last 1–2 years), imported buy/sell transactions will recalculate your share
@@ -470,12 +482,12 @@ export default function Import() {
                 {' '}Snowball Analytics exports may also not exactly match the broker's live positions or account value.
               </>)}
               <br /><br />
-              <strong>Recommended approach:</strong> Import a <em>Positions</em> file first (Schwab, E*TRADE, or Fidelity)
+              <strong>Recommended approach:</strong> Import a <em>Positions</em> file first (Schwab, E*TRADE, Fidelity, or Robinhood)
               to set accurate current holdings, then import transaction history for dividend tracking and
               realized gain records. When a Positions import has been done first, transaction imports store
               history without overwriting your holdings data.
               <br /><br />
-              A database backup is created automatically before every import — you can restore from the
+              A database backup is created automatically before every import and dividend repair — you can restore from the
               bottom of this page if needed.
             </div>
           )}
@@ -570,6 +582,28 @@ export default function Import() {
             </div>
           )}
 
+          {txnFormat === 'robinhood' && (
+            <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+              <strong>Robinhood holdings reference available:</strong> the downloadable CSV shows the fields read from the Robinhood Holdings PDF. The actual import still expects the PDF export.
+              <div style={{ marginTop: '0.75rem' }}>
+                <button className="btn btn-secondary" onClick={handleDownloadRobinhoodHoldingsTemplate}>
+                  Download Robinhood Holdings Reference
+                </button>
+              </div>
+            </div>
+          )}
+
+          {txnFormat === 'robinhood_transactions' && (
+            <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+              <strong>Robinhood transactions template available:</strong> the downloadable CSV contains the exact activity columns this importer reads for buys, sells, dividends, capital gains, and ACAT share transfers.
+              <div style={{ marginTop: '0.75rem' }}>
+                <button className="btn btn-secondary" onClick={handleDownloadRobinhoodTransactionsTemplate}>
+                  Download Robinhood Transactions Template
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="form-group" style={{ marginBottom: '1rem' }}>
             <label>Format</label>
             <select
@@ -586,12 +620,14 @@ export default function Import() {
               <option value="etrade_dividends">E*Trade (Dividends)</option>
               <option value="fidelity">Fidelity (Positions)</option>
               <option value="fidelity_transactions">Fidelity (Transactions)</option>
+              <option value="robinhood">Robinhood (Positions PDF)</option>
+              <option value="robinhood_transactions">Robinhood (Transactions)</option>
             </select>
           </div>
 
           <FileUpload
             onFileSelect={(f) => { setTxnFile(f); setTxnPreview(null); setResult(null); setError(null) }}
-            accept={txnFormat.startsWith('etrade_') || txnFormat === 'fidelity' || txnFormat === 'fidelity_transactions' ? '.xlsx,.xls' : '.csv'}
+            accept={txnFormat === 'robinhood' ? '.pdf' : (txnFormat.startsWith('etrade_') || txnFormat === 'fidelity' || txnFormat === 'fidelity_transactions' ? '.xlsx,.xls' : '.csv')}
             file={txnFile}
           />
 
@@ -678,6 +714,9 @@ export default function Import() {
                 )}
                 {txnPreview.summary.account_value > 0 && (
                   <> Account value: <strong>${txnPreview.summary.account_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></>
+                )}
+                {txnPreview.summary.cost_basis_missing && (
+                  <> Cost basis not provided by file; current value will be used.</>
                 )}
               </div>
 
@@ -806,9 +845,9 @@ export default function Import() {
       {/* ── Backup / Restore ──────────────────────────────────────────── */}
       {backups.length > 0 && (
         <div className="card" style={{ marginTop: '1.5rem' }}>
-          <h3>Import Backups</h3>
+          <h3>Database Backups</h3>
           <p style={{ color: '#90a4ae', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
-            A backup is created automatically before every import. If an import caused problems, restore to a previous state.
+            A backup is created automatically before every import and dividend repair. If a change caused problems, restore to a previous state.
           </p>
           <table className="data-table" style={{ fontSize: '0.85rem' }}>
             <thead>
