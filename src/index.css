@@ -688,6 +688,11 @@ label {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.35rem 0.45rem;
+  background: rgba(22, 33, 62, 0.55);
+  border: 1px solid rgba(15, 52, 96, 0.75);
+  border-radius: 6px;
 }
 .etf-ticker-input select {
   background: #16213e;
@@ -709,6 +714,26 @@ label {
 .etf-period-bar {
   display: flex;
   gap: 0.25rem;
+  flex-wrap: wrap;
+}
+.etf-control-label {
+  color: #8fa6c2;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.primary-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 0.55rem;
+  border-radius: 999px;
+  background: #7ecfff;
+  color: #071526;
+  font-size: 0.78rem;
+  font-weight: 800;
 }
 .btn-sm {
   padding: 0.25rem 0.6rem;
@@ -968,22 +993,31 @@ label {
 
 /* ETF Screen — Return controls */
 .etf-return-controls {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(360px, 1.4fr) minmax(260px, 0.7fr) minmax(240px, 0.6fr);
+  align-items: start;
+  gap: 0.6rem;
   margin-bottom: 0.75rem;
 }
 .etf-mode-bar {
   display: flex;
   gap: 0.25rem;
   flex-wrap: wrap;
+  padding: 0.45rem;
+  background: rgba(22, 33, 62, 0.55);
+  border: 1px solid rgba(15, 52, 96, 0.75);
+  border-radius: 6px;
 }
 .etf-reinvest {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   font-size: 0.85rem;
+  min-height: 36px;
+  padding: 0.45rem;
+  background: rgba(22, 33, 62, 0.55);
+  border: 1px solid rgba(15, 52, 96, 0.75);
+  border-radius: 6px;
 }
 .etf-reinvest label {
   white-space: nowrap;
@@ -1034,9 +1068,7 @@ label {
   opacity: 0.35;
 }
 .reinvest-note {
-  font-size: 0.8rem;
-  color: #aaa;
-  margin: 0.2rem 0 0.3rem;
+  display: none;
 }
 .reinvest-note summary {
   cursor: pointer;
@@ -1053,11 +1085,31 @@ label {
   color: #bbb;
   max-width: 600px;
 }
+.etf-chart-options {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  min-height: 36px;
+  padding: 0.45rem;
+  background: rgba(22, 33, 62, 0.55);
+  border: 1px solid rgba(15, 52, 96, 0.75);
+  border-radius: 6px;
+}
+.etf-muted {
+  color: #7f8da6;
+  font-size: 0.78rem;
+}
 .etf-compare {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   flex-wrap: wrap;
+  grid-column: 1 / -1;
+  padding: 0.45rem;
+  background: rgba(22, 33, 62, 0.55);
+  border: 1px solid rgba(15, 52, 96, 0.75);
+  border-radius: 6px;
 }
 .etf-compare select {
   background: #16213e;
@@ -1081,7 +1133,8 @@ label {
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
-  padding: 0.15rem 0.5rem;
+  min-height: 24px;
+  padding: 0.1rem 0.5rem;
   border-radius: 12px;
   font-size: 0.8rem;
   font-weight: 600;
@@ -1094,6 +1147,14 @@ label {
   cursor: pointer;
   padding: 0;
   line-height: 1;
+}
+@media (max-width: 1100px) {
+  .etf-return-controls {
+    grid-template-columns: 1fr;
+  }
+  .etf-compare {
+    grid-column: auto;
+  }
 }
 
 /* ETF Screen — Stat cards */

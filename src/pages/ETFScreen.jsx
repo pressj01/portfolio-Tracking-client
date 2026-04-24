@@ -2110,6 +2110,8 @@ export default function ETFScreen() {
   const [compareInput, setCompareInput] = useState('')
   const [returnData, setReturnData] = useState(null)
   const [returnLoading, setReturnLoading] = useState(false)
+  const [showReturnLabels, setShowReturnLabels] = useState(true)
+  const [returnHoverMode, setReturnHoverMode] = useState('x unified')
   const returnAbortRef = useRef(null)
 
   // Debounce the reinvest slider — wait 300ms after user stops dragging
@@ -2144,7 +2146,7 @@ export default function ETFScreen() {
   // Load return data — cancel any in-flight request to prevent stale data
   const loadReturns = useCallback(() => {
     // Use primary ticker, or fall back to first comparison ticker
-    const primary = ticker.trim() || (compareTickers.length ? compareTickers[0] : '')
+    const primary = ticker.trim().toUpperCase() || (compareTickers.length ? compareTickers[0] : '')
     if (!primary) return
     // Abort previous request
     if (returnAbortRef.current) returnAbortRef.current.abort()
@@ -2179,13 +2181,34 @@ export default function ETFScreen() {
   const isLoading = tab === 'technical' ? loading : returnLoading
   const canLoad = tab === 'technical' ? !!ticker.trim() : !!(ticker.trim() || compareTickers.length)
 
+  const normalizeTicker = (value) => (value || '').trim().toUpperCase()
+  const primaryTicker = normalizeTicker(ticker)
+
+  const setPrimaryTicker = (value) => {
+    const next = normalizeTicker(value)
+    setTicker(next)
+    if (next) setCompareTickers(prev => prev.filter(t => t !== next))
+  }
+
+  const addCompareSymbols = (value) => {
+    const symbols = String(value || '')
+      .split(/[\s,]+/)
+      .map(normalizeTicker)
+      .filter(Boolean)
+    if (!symbols.length) return
+    setCompareTickers(prev => {
+      const next = [...prev]
+      symbols.forEach(s => {
+        if (s !== primaryTicker && !next.includes(s)) next.push(s)
+      })
+      return next
+    })
+  }
+
   const handleKeyDown = (e) => { if (e.key === 'Enter') loadChart() }
 
   const addCompare = () => {
-    const s = compareInput.trim().toUpperCase()
-    if (s && s !== ticker.toUpperCase() && !compareTickers.includes(s)) {
-      setCompareTickers(prev => [...prev, s])
-    }
+    addCompareSymbols(compareInput)
     setCompareInput('')
   }
   const removeCompare = (s) => setCompareTickers(prev => prev.filter(t => t !== s))
@@ -2444,7 +2467,7 @@ export default function ETFScreen() {
         })
 
         // End-of-line return % annotation
-        if (values.length > 0) {
+        if (showReturnLabels && values.length > 0) {
           const lastVal = values[values.length - 1]
           const retNum = lastVal - 100
           const retPct = retNum.toFixed(2)
@@ -2475,7 +2498,8 @@ export default function ETFScreen() {
     // Build title like web version
     const modeInfo = RETURN_MODES.find(m => m.value === returnData.mode) || {}
     const periodLabel = PERIODS.find(p => p.value === period)?.label || period
-    let titleText = `${ticker.toUpperCase()} — ${periodLabel}`
+    const titleSymbol = Object.keys(returnData.series)[0] || ticker.toUpperCase()
+    let titleText = `${titleSymbol} — ${periodLabel}`
     if (returnData.mode === 'all3') {
       titleText += ` — Price vs Custom vs DRIP (${returnData.reinvest_pct}% reinvest)`
     } else if (returnData.mode === 'all4') {
@@ -2526,11 +2550,11 @@ export default function ETFScreen() {
       xaxis: { type: 'date', gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot' },
       yaxis: { title: 'Normalized Return (100 = start)', gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot' },
       legend: { orientation: 'h', y: 1.06, x: 0.5, xanchor: 'center', font: { size: 11 } },
-      hovermode: 'closest',
+      hovermode: returnHoverMode,
       annotations,
     }
     return { data: traces, layout }
-  }, [returnData, ticker, period])
+  }, [returnData, ticker, period, showReturnLabels, returnHoverMode])
 
 
   const sliderDisabled = returnMode === 'price' || returnMode === 'pricediv'
@@ -2548,21 +2572,18 @@ export default function ETFScreen() {
       {/* Controls bar */}
       <div className="etf-controls">
         <div className="etf-ticker-input">
-          <select value="" onChange={e => setTicker(e.target.value)} title="Pick from portfolio">
+          <span className="etf-control-label">Primary</span>
+          <select value="" onChange={e => setPrimaryTicker(e.target.value)} title="Pick from portfolio">
             <option value="">Portfolio...</option>
             {portfolioTickers.map(t => (
               <option key={t.ticker} value={t.ticker}>{t.ticker} — {t.description}</option>
             ))}
           </select>
-          <input type="text" placeholder="Ticker (e.g. SPY)" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} onKeyDown={handleKeyDown} />
+          <input type="text" placeholder="Ticker (e.g. SPY)" value={ticker} onChange={e => setPrimaryTicker(e.target.value)} onKeyDown={handleKeyDown} />
+          {primaryTicker && <span className="primary-chip">{primaryTicker}</span>}
           <button className="btn btn-primary" onClick={loadChart} disabled={isLoading || !canLoad}>
             {isLoading ? 'Loading...' : 'Load'}
           </button>
-          {compareTickers.map((s, i) => (
-            <span key={s} className="compare-chip" style={{ background: CHIP_COLORS[i % CHIP_COLORS.length], color: '#111' }}>
-              {s} <button onClick={() => removeCompare(s)}>&times;</button>
-            </span>
-          ))}
         </div>
 
         <div className="etf-period-bar">
@@ -2742,17 +2763,21 @@ export default function ETFScreen() {
             </p>
           </details>
 
+          <div className="etf-chart-options">
+            <span className="etf-control-label">Chart</span>
+            <button className={`btn btn-sm${showReturnLabels ? ' btn-active' : ''}`} onClick={() => setShowReturnLabels(v => !v)}>End Labels</button>
+            <button className={`btn btn-sm${returnHoverMode === 'x unified' ? ' btn-active' : ''}`} onClick={() => setReturnHoverMode(m => m === 'x unified' ? 'closest' : 'x unified')}>Unified Hover</button>
+          </div>
+
           <div className="etf-compare">
-            <select value="" onChange={e => {
-              const s = e.target.value.toUpperCase()
-              if (s && s !== ticker.toUpperCase() && !compareTickers.includes(s)) setCompareTickers(prev => [...prev, s])
-            }}>
+            <span className="etf-control-label">Compare</span>
+            <select value="" onChange={e => addCompareSymbols(e.target.value)}>
               <option value="">Add from portfolio...</option>
-              {portfolioTickers.filter(t => t.ticker !== ticker.toUpperCase() && !compareTickers.includes(t.ticker)).map(t => (
+              {portfolioTickers.filter(t => t.ticker !== primaryTicker && !compareTickers.includes(t.ticker)).map(t => (
                 <option key={t.ticker} value={t.ticker}>{t.ticker} — {t.description}</option>
               ))}
             </select>
-            <input type="text" placeholder="Or type ticker..." value={compareInput} onChange={e => setCompareInput(e.target.value.toUpperCase())} onKeyDown={e => { if (e.key === 'Enter') addCompare() }} />
+            <input type="text" placeholder="Type ticker..." value={compareInput} onChange={e => setCompareInput(e.target.value.toUpperCase())} onKeyDown={e => { if (e.key === 'Enter') addCompare() }} />
             <button className="btn btn-sm" onClick={addCompare}>Add</button>
             {compareTickers.map((s, i) => (
               <span key={s} className="compare-chip" style={{ background: CHIP_COLORS[i % CHIP_COLORS.length], color: '#111' }}>

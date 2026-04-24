@@ -31,6 +31,12 @@ function writeDashboardCache(key, data) {
 }
 
 const fmt = (v, d = 2) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
+const shortDate = (value) => {
+  if (!value) return ''
+  const d = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
 const pct = (v) => (v == null ? '—' : (Number(v) * 100).toFixed(2) + '%')
 
 function SummaryCard({ label, value, sub, color, className }) {
@@ -494,7 +500,7 @@ export default function Dashboard() {
     const gainLoss = sum('gain_or_loss')
     const totalDivs = sum('total_divs_received')
     const rawYtd = sum('ytd_divs')
-    const ytdDivs = rawYtd != null && rawYtd > 0 ? rawYtd : (incomeSummary?.ytd_income ?? 0)
+    const ytdDivs = incomeSummary?.ytd_income ?? rawYtd ?? 0
     const monthlyIncome = sum('approx_monthly_income')
     const monthlyReinvested = sum('monthly_income_reinvested')
     const monthlyNotReinvested = sum('monthly_income_not_reinvested')
@@ -573,6 +579,18 @@ export default function Dashboard() {
   const pfiColor = (v) => { const p = pfiVal(v); return p >= 100 ? '#4dff91' : p >= 50 ? '#ffd700' : undefined }
 
   const currentMonth = new Date().toLocaleString('default', { month: 'long' })
+  const currentMonthSub = useMemo(() => {
+    if (!incomeSummary) return null
+    if (incomeSummary.current_month_income_source === 'dividend_payments') {
+      const rows = Number(incomeSummary.current_month_payment_rows || 0)
+      const through = shortDate(incomeSummary.current_month_payment_through)
+      return `${rows} recorded payment${rows === 1 ? '' : 's'}${through ? ` through ${through}` : ''}`
+    }
+    if (incomeSummary.current_month_income_source === 'monthly_payouts') {
+      return 'Monthly payout history'
+    }
+    return 'Holding estimates'
+  }, [incomeSummary])
 
   if (loading) {
     return <div className="page" style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
@@ -627,8 +645,8 @@ export default function Dashboard() {
         <SummaryCard label="Sortino Ratio" value={portfolioGrade.sortino ?? '—'} />
         <SummaryCard label="Sharpe Ratio" value={portfolioGrade.sharpe ?? '—'} />
         <SummaryCard label="YTD Dividends" value={fmt(totals.ytdDivs)} color="#4dff91" />
-        <SummaryCard label={`${currentMonth} Income`} value={fmt(totals.currentMonthIncome)} color="#4dff91" />
-        <SummaryCard label="Est. Monthly Income" value={fmt(totals.monthlyIncome)} color="#4dff91" />
+        <SummaryCard label={`${currentMonth} Income`} value={fmt(totals.currentMonthIncome)} color="#4dff91" sub={currentMonthSub} />
+        <SummaryCard label="Est. Monthly Income" value={fmt(totals.monthlyIncome)} color="#4dff91" sub="Annual estimate / 12" />
         <SummaryCard label="Mo$ Reinvested" value={fmt(totals.monthlyReinvested)} color="#7ecfff" />
         <SummaryCard label="Mo$ Not Reinvested" value={fmt(totals.monthlyNotReinvested)} color="#ffb300" />
         <SummaryCard label="Est. Annual Income" value={fmt(totals.annualIncome)} color="#4dff91" />

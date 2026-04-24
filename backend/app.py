@@ -4695,6 +4695,7 @@ def refresh_market_data():
     history_payments_updated_by_profile = {pid: 0 for pid in source_pids}
     history_payments_existing_by_profile = {pid: 0 for pid in source_pids}
     refresh_date = _dt.now().date()
+    refresh_month_start = refresh_date.replace(day=1)
     updated_pids = set()
     refreshed_owner_source = False
     owner_source_ids = set(_get_owner_source_profile_ids(conn))
@@ -4991,7 +4992,11 @@ def refresh_market_data():
                 new_pay_date if snapshot_known else old_pay_date,
                 new_freq if snapshot_known else old_freq,
             )
-            if expected_pay_date == refresh_date and next_dividend_paid > 0:
+            if (
+                expected_pay_date is not None
+                and refresh_month_start <= expected_pay_date <= refresh_date
+                and next_dividend_paid > 0
+            ):
                 distributions_today_by_profile.setdefault(pid, []).append({
                     "ticker": t,
                     "amount": round(float(next_dividend_paid), 2),
@@ -5326,24 +5331,35 @@ def list_holdings():
             r["current_month_income"] = _estimate_current_month_income(r)
         if r.get("ytd_divs") is None:
             r["ytd_divs"] = _estimate_ytd_income(r)
-    if not is_agg and len(pids) == 1 and pids[0] == 1:
-        owner_source_ids = _get_owner_source_profile_ids(conn)
-        if owner_source_ids:
-            import datetime
-            mph = ",".join("?" * len(owner_source_ids))
+    if not is_agg and len(pids) == 1:
+        import datetime
+        payment_profile_ids = pids
+        if pids[0] == 1:
+            owner_source_ids = _get_owner_source_profile_ids(conn)
+            if owner_source_ids:
+                payment_profile_ids = owner_source_ids
+        if payment_profile_ids:
+            mph = ",".join("?" * len(payment_profile_ids))
             today_d = datetime.date.today()
+            month_start = today_d.replace(day=1).isoformat()
+            year_start = today_d.replace(month=1, day=1).isoformat()
+            today_iso = today_d.isoformat()
             pay_rows = conn.execute(
-                f"""SELECT ticker, COALESCE(SUM(amount), 0) as amount
+                f"""SELECT ticker,
+                           COALESCE(SUM(amount), 0) as ytd_amount,
+                           COALESCE(SUM(CASE WHEN payment_date >= ? THEN amount ELSE 0 END), 0) as month_amount
                     FROM dividend_payments
                     WHERE profile_id IN ({mph})
                       AND payment_date >= ? AND payment_date <= ?
                     GROUP BY ticker""",
-                owner_source_ids + [today_d.replace(day=1).isoformat(), today_d.isoformat()],
+                [month_start] + payment_profile_ids + [year_start, today_iso],
             ).fetchall()
             if pay_rows:
-                paid_by_ticker = {r["ticker"]: float(r["amount"] or 0) for r in pay_rows}
+                ytd_paid_by_ticker = {r["ticker"]: float(r["ytd_amount"] or 0) for r in pay_rows}
+                month_paid_by_ticker = {r["ticker"]: float(r["month_amount"] or 0) for r in pay_rows}
                 for r in results:
-                    r["current_month_income"] = round(paid_by_ticker.get(r["ticker"], 0), 2)
+                    r["ytd_divs"] = round(ytd_paid_by_ticker.get(r["ticker"], 0), 2)
+                    r["current_month_income"] = round(month_paid_by_ticker.get(r["ticker"], 0), 2)
     # For single-profile queries, compute reinvested/not-reinvested splits.
     # Owner (profile_id=1) uses sub-account DRIP ratios since the Owner
     # flag may be stale.  Sub-accounts use their own flag directly.
@@ -7722,6 +7738,7 @@ def income_summary():
         # yet this period, which is correct (not a reason to use the full estimate)
         total_month += _estimate_current_month_income(h) if stored_month is None else stored_month
         total_ytd += _estimate_ytd_income(h) if stored_ytd is None else stored_ytd
+    estimated_month_to_date = total_month
 
     payment_pids = pids
     if not is_agg and len(pids) == 1 and pids[0] == 1:
@@ -7740,9 +7757,27 @@ def income_summary():
         payment_pids + [month_start, today_iso],
     ).fetchone()
     paid_month_to_date = None
+    current_month_income_source = "holding_estimates"
+    current_month_payment_rows = 0
     if payment_month and payment_month["rows"]:
         paid_month_to_date = float(payment_month["amount"] or 0)
+        current_month_payment_rows = int(payment_month["rows"] or 0)
+        current_month_income_source = "dividend_payments"
         total_month = paid_month_to_date
+
+    payment_ytd = conn.execute(
+        f"""SELECT COALESCE(SUM(amount), 0) as amount, COUNT(*) as rows
+            FROM dividend_payments
+            WHERE profile_id IN ({payment_placeholders})
+              AND payment_date >= ? AND payment_date <= ?""",
+        payment_pids + [today.replace(month=1, day=1).isoformat(), today_iso],
+    ).fetchone()
+    ytd_income_source = "holding_estimates"
+    ytd_payment_rows = 0
+    if payment_ytd and payment_ytd["rows"]:
+        total_ytd = float(payment_ytd["amount"] or 0)
+        ytd_payment_rows = int(payment_ytd["rows"] or 0)
+        ytd_income_source = "dividend_payments"
 
     payout_month = conn.execute(
         f"""SELECT COALESCE(SUM(amount), 0) as amount, COUNT(*) as rows
@@ -7753,6 +7788,7 @@ def income_summary():
     ).fetchone()
     if paid_month_to_date is None and payout_month and payout_month["rows"]:
         total_month = float(payout_month["amount"] or 0)
+        current_month_income_source = "monthly_payouts"
 
     completed_payout_ytd = conn.execute(
         f"""SELECT COALESCE(SUM(amount), 0) as amount,
@@ -7763,10 +7799,13 @@ def income_summary():
         pids + [today.year, today.month],
     ).fetchone()
     if (
+        not ytd_payment_rows
+        and
         paid_month_to_date is not None
         and int(completed_payout_ytd["months"] or 0) >= today.month - 1
     ):
         total_ytd = float(completed_payout_ytd["amount"] or 0) + paid_month_to_date
+        ytd_income_source = "monthly_payouts"
 
     payout_ytd = conn.execute(
         f"""SELECT COALESCE(SUM(amount), 0) as amount,
@@ -7776,13 +7815,26 @@ def income_summary():
               AND year = ? AND month <= ?""",
         pids + [today.year, today.month],
     ).fetchone()
-    if paid_month_to_date is None and payout_ytd and int(payout_ytd["months"] or 0) >= today.month:
+    if (
+        not ytd_payment_rows
+        and paid_month_to_date is None
+        and payout_ytd
+        and int(payout_ytd["months"] or 0) >= today.month
+    ):
         total_ytd = float(payout_ytd["amount"] or 0)
+        ytd_income_source = "monthly_payouts"
 
     conn.close()
     return jsonify({
         "ytd_income": total_ytd,
+        "ytd_income_source": ytd_income_source,
+        "ytd_payment_rows": ytd_payment_rows,
         "current_month_income": total_month,
+        "current_month_income_source": current_month_income_source,
+        "current_month_payment_rows": current_month_payment_rows,
+        "current_month_payment_start": month_start,
+        "current_month_payment_through": today_iso,
+        "estimated_month_to_date": estimated_month_to_date,
         "month_label": today.strftime("%B"),
     })
 
@@ -10873,6 +10925,23 @@ def _blend_price_drip(close_series, divs_series, frac, track_cash=True):
     return pd.Series(vals, index=close_series.index)
 
 
+def _series_return(values, default=None):
+    if not values:
+        return default
+    return round(float(values[-1]) - 100, 2)
+
+
+def _normalized_drawdown(values):
+    if not values:
+        return None
+    series = pd.Series(values, dtype=float)
+    running_max = series.cummax()
+    drawdown = ((series - running_max) / running_max * 100).dropna()
+    if drawdown.empty:
+        return None
+    return round(float(drawdown.min()), 2)
+
+
 @app.route("/api/etf-screen/data")
 def etf_screen_data():
     """Return OHLCV + return data for one or more tickers."""
@@ -11060,15 +11129,22 @@ def etf_screen_data():
 
             # Statistics — use base (daily) consistently with traces
             price_ret = round((float(base.iloc[-1]) / float(base.iloc[0]) - 1) * 100, 2)
-            # Use the best available total return figure
+            # Match stats to the selected/custom total-return path.
             if "total" in traces:
-                total_ret = round(traces["total"][-1] - 100, 2)
-            elif "drip" in traces:
-                total_ret = round(traces["drip"][-1] - 100, 2)
+                total_ret = _series_return(traces["total"], price_ret)
+                drawdown_basis = traces["total"]
+            elif "blend" in traces:
+                total_ret = _series_return(traces["blend"], price_ret)
+                drawdown_basis = traces["blend"]
             elif "pricediv" in traces:
-                total_ret = round(traces["pricediv"][-1] - 100, 2)
+                total_ret = _series_return(traces["pricediv"], price_ret)
+                drawdown_basis = traces["pricediv"]
+            elif "drip" in traces:
+                total_ret = _series_return(traces["drip"], price_ret)
+                drawdown_basis = traces["drip"]
             else:
                 total_ret = price_ret
+                drawdown_basis = traces.get("price", norm_price)
             div_contrib = round(total_ret - price_ret, 2)
 
             # Annualized return
@@ -11080,10 +11156,8 @@ def etf_screen_data():
             else:
                 ann = None
 
-            # Max drawdown (on price)
-            running_max = base.cummax()
-            drawdown = ((base - running_max) / running_max * 100)
-            mdd = round(float(drawdown.min()), 2)
+            # Max drawdown for the selected return path, not price-only.
+            mdd = _normalized_drawdown(drawdown_basis)
 
             result["series"][sym] = {"dates": dates, "traces": traces}
             result["stats"][sym] = {
