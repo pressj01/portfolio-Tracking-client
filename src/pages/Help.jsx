@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 
-const APP_VERSION = '1.24.0'
+const APP_VERSION = '1.25.0'
 
 const GROUPS = [
   {
@@ -42,6 +42,7 @@ const GROUPS = [
     label: 'Analysis',
     sections: [
       { id: 'general-scanner', label: 'General Scanner' },
+      { id: 'security-research', label: 'Security Research' },
       { id: 'etf-screen', label: 'ETF/Stock Screen' },
       { id: 'watchlist', label: 'Watchlist' },
       { id: 'buy-sell', label: 'Buy/Sell Signals' },
@@ -1926,6 +1927,54 @@ function GeneralScannerHelp() {
   )
 }
 
+function SecurityResearchHelp() {
+  return (
+    <div>
+      <h2>Security Research</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Security Research is a quick lookup screen for checking an ETF or stock before adding it to a portfolio.
+        It combines identity, dividend, holdings, allocation, valuation, and one-year return context in one place.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Lookup Modes</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>ETF</strong> - enter an ETF ticker to review the fund name, objective, issuer, category, legal type, expense ratio, assets, NAV, inception date, yield data, top holdings, and allocation breakdown.</li>
+        <li><strong>Stock</strong> - enter a stock ticker to review business description, sector and industry, valuation metrics, fundamentals, dividend data, and payout context.</li>
+        <li><strong>Lookup</strong> - fetches the selected ticker using the current ETF or Stock mode. Pressing Enter in the ticker box also runs the lookup.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>ETF Research Results</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Name &amp; Description</strong> summarizes the fund objective or description.</li>
+        <li><strong>Metric grid</strong> shows issuer, category, legal type, expense ratio, total assets, NAV, inception date, dividend frequency, estimated yield, SEC yield, TTM dividend per share, and source link when available.</li>
+        <li><strong>Top Holdings</strong> lists the largest reported positions with weights.</li>
+        <li><strong>Allocation</strong> displays sector or asset-class weights as horizontal bars.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Stock Research Results</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Business Description</strong> gives a plain-language company summary.</li>
+        <li><strong>Valuation</strong> includes price, market cap, enterprise value, beta, trailing and forward P/E, price/book, and price/sales.</li>
+        <li><strong>Fundamentals</strong> includes revenue, revenue growth, margins, net income, free cash flow, and debt/equity.</li>
+        <li><strong>Dividends</strong> includes dividend frequency, rate, yield, payout ratio, TTM dividend per share, and last dividend when available.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Annual Chart</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Click <strong>Open Annual Chart</strong> from any research result to show a one-year chart comparing price return and total return.
+        The chart scrolls into view below the research cards and helps you see whether dividends materially changed the one-year outcome.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>When to Use It</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li>Use Security Research for a fast first pass on a single ticker.</li>
+        <li>Use Stock and ETF Analysis when you need a deeper technical chart with indicators, drawing tools, or return simulations.</li>
+        <li>Use General Scanner when you want to compare many tickers at once with filters and sortable columns.</li>
+      </ul>
+    </div>
+  )
+}
+
 function ETFScreenHelp() {
   return (
     <div>
@@ -3232,6 +3281,7 @@ const CONTENT_MAP = {
   'gains-losses': GainsLossesHelp,
   'safe-withdrawal': SafeWithdrawalHelp,
   'general-scanner': GeneralScannerHelp,
+  'security-research': SecurityResearchHelp,
   'etf-screen': ETFScreenHelp,
   watchlist: WatchlistHelp,
   'buy-sell': BuySellHelp,
