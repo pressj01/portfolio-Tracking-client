@@ -648,7 +648,7 @@ UPLOAD_COL_MAP = {
     'withdraw_8pct_cost_annually': ['8% annual wdraw', 'annual withdrawal', 'withdraw_8pct_cost_annually'],
     'withdraw_8pct_per_month':     ['8% monthly wdraw', 'monthly withdrawal', 'withdraw_8pct_per_month'],
     'percent_change':              ['% change', 'price change', 'percent_change'],
-    'category':                    ['category', 'cat', 'group'],
+    'category':                    ['category', 'categories', 'cat', 'group'],
 }
 
 
@@ -662,6 +662,60 @@ def _normalize_upload_columns(df):
                 rename[lower_map[alias]] = canonical
                 break
     return df.rename(columns=rename)
+
+
+def _split_category_names(value):
+    """Return normalized category names from an exported/uploaded category cell."""
+    if value is None:
+        return []
+    text = str(value).strip()
+    if text in ('', 'nan', 'None', 'NaN', 'none'):
+        return []
+
+    names = []
+    seen = set()
+    for part in re.split(r'[,;\n|]+', text):
+        name = part.strip()
+        key = name.casefold()
+        if name and key not in seen:
+            names.append(name)
+            seen.add(key)
+    return names
+
+
+def _apply_category_assignments(cur, profile_id, category_assignments):
+    """Replace imported ticker category links with the categories from the upload."""
+    if not category_assignments:
+        return
+
+    for ticker, cat_names in category_assignments.items():
+        cur.execute(
+            "DELETE FROM ticker_categories WHERE ticker = ? AND profile_id = ?",
+            (ticker, profile_id),
+        )
+
+        for cat_name in cat_names:
+            existing_cat = cur.execute(
+                "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
+                (cat_name, profile_id),
+            ).fetchone()
+            if existing_cat:
+                cat_id = existing_cat[0]
+            else:
+                max_pos = cur.execute(
+                    "SELECT COALESCE(MAX(sort_order), 0) FROM categories WHERE profile_id = ?",
+                    (profile_id,),
+                ).fetchone()[0]
+                cur.execute(
+                    "INSERT INTO categories (name, target_pct, sort_order, profile_id) VALUES (?, 0, ?, ?)",
+                    (cat_name, max_pos + 1, profile_id),
+                )
+                cat_id = cur.lastrowid
+
+            cur.execute(
+                "INSERT OR IGNORE INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
+                (ticker, cat_id, profile_id),
+            )
 
 
 def import_from_upload(df, profile_id):
@@ -808,13 +862,13 @@ def import_from_upload(df, profile_id):
         except (ValueError, TypeError):
             return None
 
-    # Extract category assignments before building enriched rows
-    _category_assignments = {}  # ticker -> category name
-    for _, row in df.iterrows():
-        t = row['ticker']
-        cat_val = _val(row, 'category') if 'category' in df.columns else None
-        if cat_val:
-            _category_assignments[t] = str(cat_val).strip()
+    # Extract category assignments before building enriched rows. Blank cells are
+    # meaningful when the category column exists: exported unallocated holdings
+    # should come back unallocated instead of keeping stale assignments.
+    _category_assignments = {}  # ticker -> [category names]
+    if 'category' in df.columns:
+        for _, row in df.iterrows():
+            _category_assignments[row['ticker']] = _split_category_names(_val(row, 'category'))
 
     enriched = []
     for _, row in df.iterrows():
@@ -1032,32 +1086,8 @@ def import_from_upload(df, profile_id):
         msg = f"Merge complete: {', '.join(parts)} holdings."
 
     # ── Process category assignments from spreadsheet ─────────────────────
-    if _category_assignments:
-        for ticker, cat_name in _category_assignments.items():
-            # Find or create the category
-            existing_cat = cur.execute(
-                "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
-                (cat_name, profile_id),
-            ).fetchone()
-            if existing_cat:
-                cat_id = existing_cat[0]
-            else:
-                max_pos = cur.execute(
-                    "SELECT COALESCE(MAX(sort_order), 0) FROM categories WHERE profile_id = ?",
-                    (profile_id,),
-                ).fetchone()[0]
-                cur.execute(
-                    "INSERT INTO categories (name, target_pct, sort_order, profile_id) VALUES (?, 0, ?, ?)",
-                    (cat_name, max_pos + 1, profile_id),
-                )
-                cat_id = cur.lastrowid
-
-            # Assign ticker if not already assigned to this category
-            cur.execute(
-                "INSERT OR IGNORE INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
-                (ticker, cat_id, profile_id),
-            )
-        conn.commit()
+    _apply_category_assignments(cur, profile_id, _category_assignments)
+    conn.commit()
 
     conn.close()
     return row_count, msg
