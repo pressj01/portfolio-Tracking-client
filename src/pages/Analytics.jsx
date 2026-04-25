@@ -319,24 +319,24 @@ export default function Analytics() {
                   <Stat label="Est. Annual Income" value={pm.est_annual_income != null ? '$' + pm.est_annual_income.toLocaleString() : '—'} color="#66bb6a" />
                 </div>
 
-                {/* Coverage Ratio */}
+                {/* NAV Erosion Ratio */}
                 {portfolioCoverage != null && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: 140, alignItems: 'center' }}>
-                    <div style={{ fontSize: '0.82rem', color: '#8899aa' }}>Coverage Ratio</div>
+                    <div style={{ fontSize: '0.82rem', color: '#8899aa' }}>NAV Erosion Ratio</div>
                     <div style={{
                       fontSize: '1.6rem', fontWeight: 700,
-                      color: portfolioCoverage < 0.8 ? '#ff6b6b' : portfolioCoverage < 1.0 ? '#ffb300' : '#4dff91',
+                      color: portfolioCoverage > 0.75 ? '#ff6b6b' : portfolioCoverage > 0.25 ? '#ffb300' : '#4dff91',
                     }}>
                       {portfolioCoverage.toFixed(4)}
                     </div>
                     <div style={{
                       padding: '0.3rem 0.7rem', borderRadius: 6,
-                      border: portfolioCoverage < 0.8 ? '2px solid #ff6b6b' : portfolioCoverage < 1.0 ? '2px solid #ffb300' : '2px solid #4dff91',
-                      background: portfolioCoverage < 0.8 ? 'rgba(255,107,107,0.12)' : portfolioCoverage < 1.0 ? 'rgba(255,179,0,0.12)' : 'rgba(77,255,145,0.12)',
+                      border: portfolioCoverage > 0.75 ? '2px solid #ff6b6b' : portfolioCoverage > 0.25 ? '2px solid #ffb300' : '2px solid #4dff91',
+                      background: portfolioCoverage > 0.75 ? 'rgba(255,107,107,0.12)' : portfolioCoverage > 0.25 ? 'rgba(255,179,0,0.12)' : 'rgba(77,255,145,0.12)',
                       fontSize: '0.78rem', fontWeight: 600, textAlign: 'center',
-                      color: portfolioCoverage < 0.8 ? '#ff6b6b' : portfolioCoverage < 1.0 ? '#ffb300' : '#4dff91',
+                      color: portfolioCoverage > 0.75 ? '#ff6b6b' : portfolioCoverage > 0.25 ? '#ffb300' : '#4dff91',
                     }}>
-                      {portfolioCoverage < 0.8 ? 'High Probability of NAV Erosion' : portfolioCoverage < 1.0 ? 'Borderline NAV Erosion Risk' : 'Low Probability of NAV Erosion'}
+                      {portfolioCoverage > 0.75 ? 'High Benchmark-Adjusted NAV Erosion' : portfolioCoverage > 0.25 ? 'Moderate Benchmark-Adjusted NAV Erosion' : 'Low Benchmark-Adjusted NAV Erosion'}
                     </div>
                   </div>
                 )}
@@ -344,7 +344,7 @@ export default function Analytics() {
             </div>
           )}
 
-          {/* Coverage Chart */}
+          {/* NAV Erosion Ratio Chart */}
           {sortedMetrics.length > 0 && Object.keys(tickerCoverage).length > 0 && (() => {
             const covTickers = sortedMetrics.filter(m => tickerCoverage[m.ticker] != null)
             if (covTickers.length === 0) return null
@@ -353,7 +353,7 @@ export default function Analytics() {
             const rawVals = sorted.map(m => tickerCoverage[m.ticker])
             const CAP = 5
             const clippedVals = rawVals.map(v => Math.min(v, CAP))
-            const colors = rawVals.map(v => v < 0.8 ? '#ff6b6b' : v < 1.0 ? '#ffb300' : '#4dff91')
+            const colors = rawVals.map(v => v > 0.75 ? '#ff6b6b' : v > 0.25 ? '#ffb300' : '#4dff91')
             const textLabels = rawVals.map(v => v > CAP ? v.toFixed(1) : '')
             return (
               <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
@@ -366,22 +366,22 @@ export default function Analytics() {
                       textposition: 'outside',
                       textfont: { color: '#4dff91', size: 10 },
                       customdata: rawVals,
-                      hovertemplate: '<b>%{x}</b><br>Coverage: %{customdata:.4f}<extra></extra>',
+                      hovertemplate: '<b>%{x}</b><br>NAV Erosion Ratio: %{customdata:.4f}<extra></extra>',
                     },
                     {
-                      x: [tks[0], tks[tks.length - 1]], y: [1, 1],
+                      x: [tks[0], tks[tks.length - 1]], y: [0.75, 0.75],
                       type: 'scatter', mode: 'lines',
                       line: { color: '#ffffff', width: 2, dash: 'dash' },
-                      hoverinfo: 'skip', name: 'Sustainable (1.0)',
+                      hoverinfo: 'skip', name: 'High Threshold (0.75)',
                     },
                   ]}
                   layout={{
-                    title: 'Per-Ticker Coverage Ratio',
+                    title: 'Per-Ticker NAV Erosion Ratio',
                     template: 'plotly_dark',
                     margin: { t: 40, l: 50, r: 20, b: 60 },
                     height: 300, autosize: true,
                     showlegend: false,
-                    yaxis: { title: 'Coverage', zeroline: true, range: [Math.min(...rawVals, 0) - 0.2, CAP + 0.5] },
+                    yaxis: { title: 'NAV Erosion Ratio', zeroline: true, range: [Math.min(...rawVals, 0) - 0.2, CAP + 0.5] },
                     hoverlabel: { bgcolor: '#111124', bordercolor: '#3a3a5c', font: { color: '#e0e0e0', size: 13 } },
                   }}
                   useResizeHandler
@@ -421,7 +421,7 @@ export default function Analytics() {
                       { key: 'annual_ret', label: 'Ann Ret', tip: 'Price return annualized (excludes dividends)' },
                       { key: 'annual_total_ret', label: 'Tot Ret', tip: 'Price return + dividend yield annualized' },
                       { key: 'annual_vol', label: 'Ann Vol', tip: 'Annualized standard deviation. Lower = less volatile' },
-                      { key: '_coverage', label: 'Cov', tip: 'Coverage ratio — above 1.0 sustainable, 0.8–1.0 borderline, below 0.8 likely NAV decay' },
+                      { key: '_coverage', label: 'NAV', tip: 'Benchmark-adjusted NAV erosion ratio. Lower is better: <=0.25 low, <=0.75 medium, >0.75 high' },
                     ].map(col => (
                       <th key={col.key} onClick={() => handleSort(col.key)} title={col.tip || ''} style={{
                         padding: '0.4rem 0.5rem', borderBottom: '1px solid #2a3a4e',
@@ -468,7 +468,7 @@ export default function Analytics() {
                         {pm.down_capture?.toFixed(0) ?? '—'}
                       </td>
                       <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }} colSpan={3}></td>
-                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', fontWeight: 600, color: portfolioCoverage == null ? '#556' : portfolioCoverage < 0.8 ? '#ff6b6b' : portfolioCoverage < 1.0 ? '#ffb300' : '#4dff91' }}>
+                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', fontWeight: 600, color: portfolioCoverage == null ? '#556' : portfolioCoverage > 0.75 ? '#ff6b6b' : portfolioCoverage > 0.25 ? '#ffb300' : '#4dff91' }}>
                         {portfolioCoverage != null ? portfolioCoverage.toFixed(2) : '—'}
                       </td>
                     </tr>
@@ -515,7 +515,7 @@ export default function Analytics() {
                       {(() => {
                         const cov = tickerCoverage[m.ticker]
                         return (
-                          <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', fontWeight: 600, color: cov == null ? '#556' : cov < 0.8 ? '#ff6b6b' : cov < 1.0 ? '#ffb300' : '#4dff91' }}>
+                          <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', fontWeight: 600, color: cov == null ? '#556' : cov > 0.75 ? '#ff6b6b' : cov > 0.25 ? '#ffb300' : '#4dff91' }}>
                             {cov != null ? cov.toFixed(2) : '—'}
                           </td>
                         )
@@ -647,14 +647,14 @@ export default function Analytics() {
                         {metricRow('Ulcer Index', b.ulcer_index, a.ulcer_index, fmtNum, false, 'Drawdown severity & duration. <3 great, <5 good, >10 poor')}
                         {metricRow('Max Drawdown', b.max_drawdown, a.max_drawdown, fmtPct, false, 'Largest peak-to-trough decline. Closer to 0% is better')}
                         {(b.coverage != null || a.coverage != null) && (() => {
-                          const covColor = (v) => v == null ? '#556' : v < 0.8 ? '#ff6b6b' : v < 1.0 ? '#ffb300' : '#4dff91'
+                          const covColor = (v) => v == null ? '#556' : v > 0.75 ? '#ff6b6b' : v > 0.25 ? '#ffb300' : '#4dff91'
                           const covDelta = b.coverage != null && a.coverage != null ? a.coverage - b.coverage : null
                           return (
                             <tr style={{ borderBottom: '1px solid #1a2a3e' }}>
-                              <td title="Coverage ratio — above 1.0 sustainable, 0.8–1.0 borderline, below 0.8 likely NAV decay" style={{ padding: '0.3rem 0.5rem', color: '#8899aa', fontSize: '0.78rem', cursor: 'help' }}>Coverage Ratio ⓘ</td>
+                              <td title="Benchmark-adjusted NAV erosion ratio. Lower is better: <=0.25 low, <=0.75 medium, >0.75 high" style={{ padding: '0.3rem 0.5rem', color: '#8899aa', fontSize: '0.78rem', cursor: 'help' }}>NAV Erosion Ratio ⓘ</td>
                               <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covColor(b.coverage), fontWeight: 600 }}>{b.coverage != null ? b.coverage.toFixed(4) : '—'}</td>
                               <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covColor(a.coverage), fontWeight: 600 }}>{a.coverage != null ? a.coverage.toFixed(4) : '—'}</td>
-                              <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covDelta == null ? '#8899aa' : covDelta > 0.01 ? '#4dff91' : covDelta < -0.01 ? '#ff6b6b' : '#8899aa', fontWeight: 600 }}>
+                              <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covDelta == null ? '#8899aa' : covDelta < -0.01 ? '#4dff91' : covDelta > 0.01 ? '#ff6b6b' : '#8899aa', fontWeight: 600 }}>
                                 {covDelta != null ? (covDelta > 0 ? '+' : '') + covDelta.toFixed(4) : '—'}
                               </td>
                             </tr>

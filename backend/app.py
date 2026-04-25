@@ -49,6 +49,11 @@ from normalize import (
 )
 from transaction_import import PARSERS as TXN_PARSERS
 from options_api import register_routes as register_options_routes
+from dividend_safety import (
+    apply_nav_coverage_overlay,
+    get_dividend_safety_for_holdings,
+    summarize_dividend_safety,
+)
 
 app = Flask(__name__)
 app.json = NanSafeJSONProvider(app)
@@ -58,10 +63,13 @@ app.config["PROPAGATE_EXCEPTIONS"] = False
 
 _PORTFOLIO_SUMMARY_CACHE = {}
 _PORTFOLIO_COVERAGE_CACHE = {}
+_NAV_BENCHMARK_OVERRIDE_CACHE = {"ts": 0, "data": {}}
 _PORTFOLIO_SUMMARY_TTL_SEC = 30 * 60
 _UPCOMING_DIVIDENDS_CACHE = {}
 _DIVIDEND_CALENDAR_CACHE = {}
+_EARNINGS_CALENDAR_CACHE = {}
 _DIVIDEND_EVENT_TTL_SEC = 60 * 60
+_EARNINGS_EVENT_TTL_SEC = 6 * 60 * 60
 
 
 def _cache_value(value):
@@ -5277,6 +5285,12 @@ def list_holdings():
                    MAX(a.import_date) as import_date,
                    MIN(a.purchase_date) as purchase_date,
                    {cur_mo} as current_month_income,
+                   CASE
+                       WHEN SUM(CASE WHEN a.nav_erosion_scope = 'test' THEN 1 ELSE 0 END) > 0 THEN 'test'
+                       WHEN SUM(CASE WHEN a.nav_erosion_scope = 'skip' THEN 1 ELSE 0 END) = COUNT(*) THEN 'skip'
+                       ELSE 'auto'
+                   END as nav_erosion_scope,
+                   MAX(a.nav_benchmark_override) as nav_benchmark_override,
                    GROUP_CONCAT(DISTINCT COALESCE(a.dividend_actuals_source, 'none')) as dividend_actuals_sources,
                    (SELECT c2.name FROM ticker_categories tc2
                     JOIN categories c2 ON tc2.category_id = c2.id
@@ -5447,6 +5461,7 @@ def add_holding():
         "ex_div_date", "div_pay_date", "div", "dividend_paid", "estim_payment_per_year",
         "approx_monthly_income", "annual_yield_on_cost", "current_annual_yield",
         "purchase_date", "ytd_divs", "total_divs_received", "paid_for_itself",
+        "nav_erosion_scope", "nav_benchmark_override",
     ]
     for field in allowed_fields:
         if field in data and data[field] is not None:
@@ -5518,6 +5533,7 @@ def update_holding(ticker):
         "approx_monthly_income", "annual_yield_on_cost", "current_annual_yield",
         "purchase_date", "ytd_divs", "total_divs_received", "paid_for_itself",
         "cash_not_reinvested", "total_cash_reinvested", "shares_bought_from_dividend",
+        "nav_erosion_scope", "nav_benchmark_override",
     ]
     updates = []
     vals = []
@@ -5570,6 +5586,47 @@ def update_holding(ticker):
     populate_dividends(profile_id)
     conn.close()
     return jsonify({"ticker": ticker, "message": f"{ticker} updated"})
+
+
+@app.route("/api/holdings/<ticker>/nav-erosion-scope", methods=["PUT"])
+def update_holding_nav_erosion_scope(ticker):
+    """Override whether a holding should be tested for NAV erosion and compared to a benchmark."""
+    is_agg, pids = get_profile_filter()
+    data = request.get_json() or {}
+    ticker = ticker.upper()
+    scope = str(data.get("nav_erosion_scope") or "auto").strip().lower()
+    if scope not in {"auto", "test", "skip"}:
+        return jsonify({"error": "nav_erosion_scope must be auto, test, or skip"}), 400
+    benchmark = str(data.get("nav_benchmark_override") or "").strip().upper()
+    benchmark = benchmark or None
+
+    if is_agg:
+        profile_id = _resolve_aggregate_profile(ticker, pids)
+    else:
+        profile_id = pids[0]
+
+    conn = get_connection()
+    existing = conn.execute(
+        "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    if not existing:
+        conn.close()
+        return jsonify({"error": f"{ticker} not found"}), 404
+
+    conn.execute(
+        "UPDATE all_account_info SET nav_erosion_scope = ?, nav_benchmark_override = ? WHERE ticker = ? AND profile_id = ?",
+        (scope, benchmark, ticker, profile_id),
+    )
+    conn.commit()
+    conn.close()
+    _PORTFOLIO_COVERAGE_CACHE.clear()
+    return jsonify({
+        "ticker": ticker,
+        "nav_erosion_scope": scope,
+        "nav_benchmark_override": benchmark,
+        "message": f"{ticker} NAV erosion testing set to {scope}",
+    })
 
 
 @app.route("/api/holdings/<ticker>", methods=["DELETE"])
@@ -7244,15 +7301,10 @@ def upcoming_dividends():
 
 @app.route("/api/portfolio-coverage", methods=["GET"])
 def portfolio_coverage():
-    """Compute TTM yield-based coverage for each ticker and aggregate.
+    """Compute benchmark-adjusted NAV erosion ratio for each ticker and aggregate.
 
-    Coverage ≈ (TTM price return % + TTM distribution yield %) / TTM distribution yield %
-    This approximates  (SEC Yield + Option Yield) / 12-mo Distribution Yield.
-
-    Interpretation:
-      > 1.0  → sustainable
-      0.8–1.0 → borderline
-      < 0.8  → likely NAV decay
+    Ratio = fund price decline / TTM distribution yield, only when the benchmark is flat/up.
+    Lower is better: <= 0.25 low erosion, <= 0.75 medium, > 0.75 high.
     """
     import warnings
     warnings.filterwarnings("ignore")
@@ -7260,7 +7312,8 @@ def portfolio_coverage():
     pid = get_profile_id()
     conn = get_connection()
     rows = conn.execute(
-        "SELECT ticker, current_price, quantity "
+        "SELECT ticker, current_price, quantity, description, classification_type, "
+        "       estim_payment_per_year, current_value, nav_erosion_scope, nav_benchmark_override "
         "FROM all_account_info "
         "WHERE profile_id = ? AND quantity > 0",
         (pid,),
@@ -7276,19 +7329,47 @@ def portfolio_coverage():
         tk = r[0]
         cur_price = float(r[1] or 0)
         qty = float(r[2] or 0)
+        annual_income = float(r["estim_payment_per_year"] or 0) if "estim_payment_per_year" in r.keys() else 0.0
+        current_value = float(r["current_value"] or 0) if "current_value" in r.keys() else cur_price * qty
         if tk not in ticker_info:
-            ticker_info[tk] = {"current_price": cur_price, "quantity": qty}
+            ticker_info[tk] = {
+                "current_price": cur_price,
+                "quantity": qty,
+                "description": r["description"] if "description" in r.keys() else "",
+                "classification_type": r["classification_type"] if "classification_type" in r.keys() else "",
+                "annual_income": annual_income,
+                "current_value": current_value,
+                "nav_erosion_scope": r["nav_erosion_scope"] if "nav_erosion_scope" in r.keys() else "auto",
+                "nav_benchmark_override": r["nav_benchmark_override"] if "nav_benchmark_override" in r.keys() else None,
+            }
         else:
             ticker_info[tk]["quantity"] += qty
+            ticker_info[tk]["annual_income"] += annual_income
+            ticker_info[tk]["current_value"] += current_value
             if cur_price > 0:
                 ticker_info[tk]["current_price"] = cur_price
+            if ticker_info[tk].get("nav_erosion_scope") != "test":
+                scope = r["nav_erosion_scope"] if "nav_erosion_scope" in r.keys() else "auto"
+                if scope == "test" or (scope == "skip" and ticker_info[tk].get("nav_erosion_scope") == "auto"):
+                    ticker_info[tk]["nav_erosion_scope"] = scope
+            bench_override = r["nav_benchmark_override"] if "nav_benchmark_override" in r.keys() else None
+            if bench_override and not ticker_info[tk].get("nav_benchmark_override"):
+                ticker_info[tk]["nav_benchmark_override"] = bench_override
 
     tickers = list(ticker_info.keys())
 
     # Cache keyed on profile + ticker set; TTL matches portfolio-summary (30 min).
     # Intraday price movement doesn't invalidate — weights/coverage are only re-
     # computed on a buy/sell (ticker set change) or after the TTL expires.
-    coverage_cache_key = (pid, tuple(sorted(tickers)))
+    coverage_cache_key = (
+        pid,
+        "destructive-nav-v10",
+        tuple(sorted((
+            t,
+            ticker_info[t].get("nav_erosion_scope", "auto"),
+            ticker_info[t].get("nav_benchmark_override") or "",
+        ) for t in tickers)),
+    )
     _ccache = _PORTFOLIO_COVERAGE_CACHE.get(coverage_cache_key)
     if _ccache and (time.time() - _ccache[0]) < _PORTFOLIO_SUMMARY_TTL_SEC:
         return jsonify(_ccache[1])
@@ -7303,25 +7384,46 @@ def portfolio_coverage():
         info = ticker_info[tk]
         cur_price = info["current_price"]
         qty = info["quantity"]
+        nav_scope = info.get("nav_erosion_scope", "auto")
+        if not _should_test_nav_erosion(
+            tk,
+            info.get("description", ""),
+            info.get("classification_type", ""),
+            nav_scope,
+        ):
+            total_dist_dollars += max(0.0, float(info.get("annual_income") or 0.0))
+            results.append({
+                "ticker": tk,
+                "coverage_ratio": None,
+                "benchmark": None,
+                "nav_tested": False,
+                "nav_erosion_scope": nav_scope,
+                "nav_benchmark_override": info.get("nav_benchmark_override"),
+            })
+            continue
 
         if cur_price <= 0:
-            results.append({"ticker": tk, "coverage_ratio": None})
+            results.append({"ticker": tk, "coverage_ratio": None, "benchmark": None, "nav_tested": False})
             continue
 
         try:
             yf_tk = yf.Ticker(tk)
-            hist = yf_tk.history(start=one_year_ago, interval="1d", auto_adjust=True)
+            hist = yf_tk.history(start=one_year_ago, interval="1d", auto_adjust=False, actions=True)
             if hist.empty or len(hist) < 2:
-                results.append({"ticker": tk, "coverage_ratio": None})
+                results.append({"ticker": tk, "coverage_ratio": None, "benchmark": None, "nav_tested": False})
                 continue
 
-            price_1yr_ago = float(hist["Close"].iloc[0])
-            if price_1yr_ago <= 0:
-                results.append({"ticker": tk, "coverage_ratio": None})
+            close = hist["Close"].dropna()
+            if len(close) < 2:
+                results.append({"ticker": tk, "coverage_ratio": None, "benchmark": None, "nav_tested": False})
+                continue
+            price_1yr_ago = float(close.iloc[0])
+            cur_price = float(close.iloc[-1])
+            if price_1yr_ago <= 0 or cur_price <= 0:
+                results.append({"ticker": tk, "coverage_ratio": None, "benchmark": None, "nav_tested": False})
                 continue
 
-            # TTM price return as a percentage of starting price
-            ttm_price_return_pct = (cur_price - price_1yr_ago) / price_1yr_ago
+            fund_return = (cur_price - price_1yr_ago) / price_1yr_ago
 
             # TTM distributions per share
             divs = yf_tk.dividends
@@ -7336,26 +7438,75 @@ def portfolio_coverage():
 
             # TTM distribution yield
             ttm_dist_yield = ttm_dist_per_share / cur_price if cur_price > 0 else 0.0
+            annual_income = max(0.0, float(info.get("annual_income") or 0.0))
+            current_value = max(0.0, float(info.get("current_value") or 0.0))
+            estimated_annual_yield = annual_income / current_value if current_value > 0 else 0.0
+            if estimated_annual_yield > ttm_dist_yield:
+                ttm_dist_yield = estimated_annual_yield
 
-            if ttm_dist_yield > 0:
-                coverage = round((ttm_price_return_pct + ttm_dist_yield) / ttm_dist_yield, 4)
+            benchmark_override = (info.get("nav_benchmark_override") or "").strip().upper()
+            benchmark = benchmark_override or _nav_benchmark_for_ticker(
+                tk,
+                info.get("description", ""),
+                info.get("classification_type", ""),
+            )
+            benchmark_return = fund_return
+            try:
+                component_returns = []
+                for bench in _nav_benchmark_parts(benchmark):
+                    bench_hist = yf.Ticker(bench).history(start=one_year_ago, interval="1d", auto_adjust=True)
+                    if bench_hist is not None and not bench_hist.empty and "Close" in bench_hist.columns:
+                        bench_close = bench_hist["Close"].dropna()
+                        if len(bench_close) >= 2:
+                            bench_start = float(bench_close.iloc[0])
+                            bench_end = float(bench_close.iloc[-1])
+                            if bench_start > 0 and bench_end > 0:
+                                component_returns.append((bench_end - bench_start) / bench_start)
+                if component_returns:
+                    benchmark_return = sum(component_returns)
+            except Exception:
+                pass
+            if benchmark_override and not component_returns:
+                results.append({
+                    "ticker": tk,
+                    "coverage_ratio": None,
+                    "benchmark": benchmark,
+                    "benchmark_valid": False,
+                    "nav_tested": False,
+                    "nav_erosion_scope": nav_scope,
+                    "nav_benchmark_override": info.get("nav_benchmark_override"),
+                    "warning": "Benchmark override did not return price history",
+                })
+                continue
+
+            numerator = _nav_erosion_numerator(fund_return, benchmark_return)
+            if ttm_dist_yield > 0 and numerator is not None:
+                coverage = round(numerator / ttm_dist_yield, 4)
             else:
                 coverage = None
 
-            results.append({"ticker": tk, "coverage_ratio": coverage})
+            results.append({
+                "ticker": tk,
+                "coverage_ratio": coverage,
+                "benchmark": benchmark,
+                "benchmark_valid": True,
+                "nav_tested": coverage is not None,
+                "nav_erosion_scope": nav_scope,
+                "nav_benchmark_override": info.get("nav_benchmark_override"),
+            })
 
-            if coverage is not None:
-                # Dollar-weight for aggregate
-                dist_dollars = ttm_dist_per_share * qty
-                price_return_dollars = (cur_price - price_1yr_ago) * qty
+            # Dollar-weight for aggregate, including tested holdings with no erosion.
+            dist_dollars = ttm_dist_per_share * qty
+            if dist_dollars > 0:
+                erosion_dollars = (numerator or 0.0) * price_1yr_ago * qty
                 total_dist_dollars += dist_dollars
-                total_price_return_dollars += price_return_dollars
+                total_price_return_dollars += erosion_dollars
 
         except Exception:
-            results.append({"ticker": tk, "coverage_ratio": None})
+            results.append({"ticker": tk, "coverage_ratio": None, "benchmark": None, "nav_tested": False})
 
     if total_dist_dollars > 0:
-        agg_coverage = round((total_price_return_dollars + total_dist_dollars) / total_dist_dollars, 4)
+        agg_coverage = round(total_price_return_dollars / total_dist_dollars, 4)
     else:
         agg_coverage = None
 
@@ -8250,6 +8401,294 @@ def data_stats():
     return jsonify({"holdings": holdings, "dividends": dividends, "income_tracking": income})
 
 
+def _nav_benchmark_overrides():
+    try:
+        import json as _json
+        now = time.time()
+        cached = _NAV_BENCHMARK_OVERRIDE_CACHE
+        if cached.get("data") is not None and (now - float(cached.get("ts") or 0)) < 60:
+            return cached.get("data") or {}
+        conn = get_connection()
+        row = conn.execute("SELECT value FROM settings WHERE key = 'nav_benchmark_overrides'").fetchone()
+        conn.close()
+        raw = _json.loads(row["value"]) if row and row["value"] else {}
+        data = {
+            str(k).strip().upper(): str(v).strip().upper()
+            for k, v in raw.items()
+            if str(k).strip() and str(v).strip()
+        }
+        _NAV_BENCHMARK_OVERRIDE_CACHE.update({"ts": now, "data": data})
+        return data
+    except Exception:
+        _NAV_BENCHMARK_OVERRIDE_CACHE.update({"ts": time.time(), "data": {}})
+        return {}
+
+
+def _nav_benchmark_for_ticker(ticker, name="", category=""):
+    """Best-effort benchmark for underlying-adjusted NAV erosion."""
+    t = str(ticker or "").upper()
+    text = f"{name or ''} {category or ''}".lower()
+    override = _nav_benchmark_overrides().get(t)
+    if override:
+        return override
+    direct = {
+        "QQQI": "QQQ", "XQQI": "QQQ", "KQQQ": "QQQ", "TDAQ": "QQQ", "TDAX": "QQQ",
+        "TQQY": "QQQ", "QDTE": "QQQ", "QYLD": "QQQ", "JEPQ": "QQQ",
+        "SPYI": "SPY", "SPYH": "SPY", "XSPI": "SPY", "TSPY": "SPY",
+        "TSYX": "SPY", "XDTE": "SPY", "DIVO": "SPY", "JEPI": "SPY", "XYLD": "SPY",
+        "IWMI": "IWM", "RDTE": "IWM", "RYLD": "IWM",
+        "BTCI": "BTC-USD", "BLOX": "BTC-USD",
+        "ISBG": "BTC-USD+GLD", "ISSB": "SPY+BTC-USD",
+        "BITY": "BTC-USD", "XBCI": "BTC-USD",
+        "ETTY": "ETH-USD", "ETHI": "ETH-USD", "ETHY": "ETH-USD", "NEHI": "ETH-USD",
+        "SOL": "SOL-USD", "SOLM": "SOL-USD", "SOLY": "SOL-USD",
+        "IAUI": "GLD", "KGLD": "GLD", "GLDN": "GLD",
+        "KSLV": "SLV", "SLVX": "SLV", "SLJY": "SLV",
+        "MLPI": "AMLP",
+        "KCOP": "CPER",
+        "XLEI": "XLE", "NUKX": "NLR", "WEPN": "ITA",
+        "CSHI": "BIL", "BIL": "BIL", "SGOV": "BIL", "SHV": "BIL",
+        "PFFA": "PFF",
+        "PBDC": "BIZD", "BIZD": "BIZD",
+        "TSLY": "TSLA", "TSLP": "TSLA", "TSMY": "TSLA",
+        "NVDY": "NVDA", "NVDP": "NVDA",
+        "CONY": "COIN", "MSTY": "MSTR", "AMZY": "AMZN", "MSFO": "MSFT",
+        "APLY": "AAPL", "GOOY": "GOOG", "GOOP": "GOOG", "GPTY": "GOOG",
+        "FBY": "META", "NFLY": "NFLX", "DISO": "DIS", "PYPY": "PYPL",
+        "SQY": "SQ", "AMDY": "AMD", "JPMO": "JPM", "PLTY": "PLTR",
+        "SMCY": "SMCI", "GMEY": "GME", "MARO": "MARA", "MRNY": "MRNA",
+        "SNOY": "SNOW", "XOMO": "XOM", "OARK": "ARKK",
+    }
+    bdc_tickers = {
+        "ARCC", "MAIN", "OBDC", "BXSL", "HTGC", "GBDC", "FDUS", "CSWC",
+        "FSK", "OCSL", "TCPC", "TPVG", "PSEC", "NMFC", "TSLX", "BDC",
+        "HRZN", "GLAD", "GAIN", "SAR", "CGBD", "CCAP", "TRIN", "RWAY",
+    }
+    if t in direct:
+        return direct[t]
+    if t in bdc_tickers or "bdc" in text or "business development" in text:
+        return "BIZD"
+    if "nasdaq" in text or "qqq" in text:
+        return "QQQ"
+    if "s&p 500" in text or "s&p" in text or "spy" in text:
+        return "SPY"
+    if "russell 2000" in text or "small cap" in text:
+        return "IWM"
+    if "dow jones" in text or " dow " in f" {text} ":
+        return "DIA"
+    if "msci eafe" in text or "eafe" in text or "international" in text:
+        return "EFA"
+    if "emerging market" in text:
+        return "EEM"
+    if "bitcoin" in text or "btc" in text:
+        return "BTC-USD"
+    if "ethereum" in text or "ether" in text:
+        return "ETH-USD"
+    if "solana" in text:
+        return "SOL-USD"
+    if "crypto" in text:
+        return "BTC-USD"
+    if "gold" in text:
+        return "GLD"
+    if "silver" in text:
+        return "SLV"
+    if "copper" in text:
+        return "CPER"
+    if "mlp" in text or "energy infrastructure" in text:
+        return "AMLP"
+    if "semiconductor" in text or "semiconductors" in text:
+        return "SOXX"
+    if "preferred" in text or "preferreds" in text:
+        return "PFF"
+    if "treasury bill" in text or "t-bill" in text or "cash" in text:
+        return "BIL"
+    if "treasury" in text and ("long" in text or "20+" in text):
+        return "TLT"
+    if "treasury" in text or "bond" in text or "fixed income" in text:
+        return "BND"
+    if "nuclear" in text or "uranium" in text:
+        return "NLR"
+    if "defense" in text or "aerospace" in text or "weapon" in text:
+        return "ITA"
+    if "energy" in text or "oil" in text:
+        return "XLE"
+    if "real estate" in text or "reit" in text:
+        return "VNQ"
+    if "financial" in text or "bank" in text:
+        return "XLF"
+    if "healthcare" in text or "health care" in text:
+        return "XLV"
+    if "utility" in text or "utilities" in text:
+        return "XLU"
+    return "SPY"
+
+
+def _nav_benchmark_parts(benchmark):
+    parts = [
+        p.strip().upper()
+        for p in str(benchmark or "").replace("/", "+").split("+")
+        if p.strip()
+    ]
+    return parts or ["SPY"]
+
+
+def _nav_benchmark_close_from_df(close_df, benchmark, fallback_close):
+    parts = _nav_benchmark_parts(benchmark)
+    series = []
+    try:
+        for part in parts:
+            if part in close_df.columns:
+                s = close_df[part].dropna()
+                if len(s) >= 2:
+                    series.append(s.rename(part))
+        if not series:
+            return fallback_close
+        if len(series) == 1:
+            return series[0]
+        aligned = pd.concat(series, axis=1, join="inner").dropna()
+        if len(aligned) < 2:
+            return fallback_close
+        composite = 1.0
+        for col in aligned.columns:
+            start = float(aligned[col].iloc[0])
+            if start <= 0:
+                return fallback_close
+            composite = composite + (aligned[col] / start - 1.0)
+        composite.name = benchmark
+        return composite
+    except Exception:
+        return fallback_close
+
+
+def _is_nav_erosion_candidate(ticker, name="", category=""):
+    """True only for products where structural NAV decay is plausible.
+
+    Plain equities and broad/dividend/growth ETFs can underperform, but that is
+    not NAV erosion in the income-fund sense.
+    """
+    t = str(ticker or "").upper()
+    text = f"{name or ''} {category or ''}".lower()
+    safe_plain_tickers = {
+        "SCHD", "SCHG", "SCHB", "SCHF", "SCHX", "VOO", "VTI", "VT", "QQQ",
+        "QQQM", "SPY", "IVV", "IWM", "DIA", "VIG", "DGRO", "VYM", "HDV",
+        "PBDC", "BIZD", "ARCC", "MAIN", "OBDC",
+        "BXSL", "HTGC", "GBDC", "FDUS", "CSWC", "FSK", "OCSL", "TCPC",
+        "TPVG", "PSEC", "NMFC", "TSLX", "BDC", "HRZN", "GLAD", "GAIN",
+        "SAR", "CGBD", "CCAP", "TRIN", "RWAY",
+    }
+    if t in safe_plain_tickers:
+        return False
+    known_risky = {
+        "DIVO", "JEPI", "JEPQ", "QQQI", "SPYI", "TSPY", "TDAQ", "XQQI",
+        "IWMI", "SPYH", "CSHI", "KQQQ", "TQQY", "QDTE", "XDTE", "RDTE",
+        "QYLD", "XYLD", "RYLD",
+        "BTCI", "KYLD", "BLOX", "ISBG", "ISSB", "BITY", "XBCI",
+        "ETTY", "ETHI", "ETHY", "NEHI", "SOL", "SOLM", "SOLY", "TSYX", "TDAX", "BNDI",
+        "IAUI", "KGLD", "KCOP", "YQQQ",
+        "ULTY", "ULTI", "YMAX", "YMAG", "YBIT", "BIGY", "FIVY", "LFGY", "SLTY",
+        "TSLY", "NVDY", "CONY", "MSTY", "AMZY", "MSFO", "APLY", "GOOY", "FBY",
+        "NFLY", "DISO", "PYPY", "SQY", "AMDY", "OARK", "MRNY", "SNOY", "JPMO",
+        "BABO", "TSMY", "PLTY", "FIAT", "GMEY", "MARO", "CRSH", "ABNY", "SMCY",
+        "METY", "TSLP", "NVDP", "QQQY", "JEPY", "IWMY", "PFFA",
+        "FEPI", "AIPI", "CEPI", "GIF", "TLDR", "ATCL",
+        "GIAX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX", "SLJY",
+        "XLEI", "CHPY", "GPTY", "GOOP", "WNTR", "BEGS",
+    }
+    risky_markers = (
+        "yieldmax", "single stock", "synthetic", "ultra option income",
+        "ultra income", "2x", "leveraged", "daily target", "daily leveraged",
+        "defiance", "rex shares", "graniteshares yieldboost",
+    )
+    option_markers = (
+        "covered call", "buywrite", "buy-write", "option income",
+        "options income", "option strategy", "option premium", "premium income",
+        "high income", "daily income", "enhanced income", "boosted",
+        "hedged equity income", "income max", "incomemax",
+    )
+    return (
+        t in known_risky
+        or any(marker in text for marker in risky_markers)
+        or any(marker in text for marker in option_markers)
+    )
+
+
+def _should_test_nav_erosion(ticker, name="", category="", scope="auto"):
+    scope = str(scope or "auto").strip().lower()
+    if scope == "test":
+        return True
+    if scope == "skip":
+        return False
+    return _is_nav_erosion_candidate(ticker, name, category)
+
+
+def _nav_erosion_numerator(fund_return, benchmark_return):
+    """Only count the fund's own price decay, not benchmark underperformance.
+
+    Benchmark is a gate: if the underlying market is down too, the fund's price
+    decline is not treated as structural NAV erosion.
+    """
+    if fund_return is None or benchmark_return is None:
+        return None
+    if fund_return >= 0 or benchmark_return < 0:
+        return 0.0
+    return abs(fund_return)
+
+
+def _nav_erosion_from_adjusted_ratio(ratio):
+    try:
+        if ratio is None:
+            return None
+        ratio = float(ratio)
+    except (TypeError, ValueError):
+        return None
+    if ratio <= 0.25:
+        return "Low"
+    if ratio <= 0.75:
+        return "Medium"
+    return "High"
+
+
+def _nav_signal_from_adjusted_ratio(ratio):
+    erosion = _nav_erosion_from_adjusted_ratio(ratio)
+    if erosion == "Low":
+        return "BUY"
+    if erosion == "High":
+        return "SELL"
+    if erosion == "Medium":
+        return "NEUTRAL"
+    return None
+
+
+def _nav_adjusted_erosion_ratio(close, divs_series, benchmark_close):
+    """Destructive NAV erosion ratio: fund price decline / yield, gated by flat/up benchmark."""
+    try:
+        if close is None or benchmark_close is None:
+            return None
+        close = close.dropna()
+        benchmark_close = benchmark_close.dropna()
+        if len(close) < 2 or len(benchmark_close) < 2:
+            return None
+        cur_price = float(close.iloc[-1])
+        start_price = float(close.iloc[0])
+        bench_start = float(benchmark_close.iloc[0])
+        bench_end = float(benchmark_close.iloc[-1])
+        if min(cur_price, start_price, bench_start, bench_end) <= 0:
+            return None
+        fund_return = (cur_price - start_price) / start_price
+        benchmark_return = (bench_end - bench_start) / bench_start
+        ttm_dist_per_share = float(divs_series.sum()) if divs_series is not None and not divs_series.empty else 0.0
+        ttm_dist_yield = ttm_dist_per_share / cur_price if cur_price > 0 else 0.0
+        if ttm_dist_yield <= 0:
+            return None
+        numerator = _nav_erosion_numerator(fund_return, benchmark_return)
+        if numerator is None:
+            return None
+        ratio = round(numerator / ttm_dist_yield, 4)
+        return ratio
+    except Exception:
+        return None
+
+
 # ── Income Summary ────────────────────────────────────────────────────────────
 
 @app.route("/api/income-summary", methods=["GET"])
@@ -8767,8 +9206,20 @@ def dividend_analysis_data():
         totals["actual_monthly_income"] = 0
 
     # ── Build table rows ──
+    refresh_safety = request.args.get("refresh_safety") in {"1", "true", "yes"}
+    try:
+        safety_by_ticker = get_dividend_safety_for_holdings(
+            conn,
+            profile_id,
+            df.to_dict("records"),
+            refresh=refresh_safety,
+        )
+    except Exception:
+        safety_by_ticker = {}
+
     table_rows = []
     for _, row in df.iterrows():
+        safety = safety_by_ticker.get(str(row["ticker"]).upper(), {})
         table_rows.append({
             "ticker": row["ticker"],
             "description": row["description"],
@@ -8783,7 +9234,18 @@ def dividend_analysis_data():
             "current_annual_yield": _clean(row.get("current_annual_yield")),
             "gain_or_loss": _clean(row.get("gain_or_loss")),
             "current_value": _clean(row.get("current_value")),
+            "safety_score": _clean(safety.get("safety_score")),
+            "safety_risk_level": safety.get("risk_level") or "Unknown",
+            "cut_risk_flag": bool(safety.get("cut_risk_flag")),
+            "risk_reasons": safety.get("risk_reasons") or [],
+            "payout_ratio_pct": _clean(safety.get("payout_ratio_pct")),
+            "earnings_coverage": _clean(safety.get("earnings_coverage")),
+            "dividend_streak_years": _clean(safety.get("dividend_streak_years")),
+            "debt_to_equity": _clean(safety.get("debt_to_equity")),
+            "safety_score_model": safety.get("score_model") or "unknown",
         })
+    safety_summary = summarize_dividend_safety(table_rows)
+    totals["dividend_safety"] = safety_summary
 
     # ── Charts ──
     charts = {}
@@ -9061,6 +9523,37 @@ def dividend_analysis_data():
 
 
 # ── Sync DRIP flags from sub-profiles to Owner ──────────────────────────────
+
+@app.route("/api/dividend-safety", methods=["GET"])
+def dividend_safety_data():
+    """Return dividend cut-risk metrics for current profile holdings."""
+    profile_id = get_profile_id()
+    refresh = request.args.get("refresh") in {"1", "true", "yes"}
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    rows = conn.execute(
+        """SELECT ticker, description, classification_type, current_value,
+                  current_annual_yield, estim_payment_per_year,
+                  div_frequency, div
+           FROM all_account_info
+           WHERE purchase_value IS NOT NULL AND purchase_value > 0
+             AND IFNULL(quantity, 0) > 0
+             AND profile_id = ?
+           ORDER BY ticker""",
+        (profile_id,),
+    ).fetchall()
+    holdings = [dict(r) for r in rows]
+    safety = get_dividend_safety_for_holdings(conn, profile_id, holdings, refresh=refresh)
+    out = []
+    for holding in holdings:
+        payload = safety.get(str(holding["ticker"]).upper(), {})
+        merged = dict(holding)
+        merged.update(payload)
+        out.append(merged)
+    summary = summarize_dividend_safety(out)
+    conn.close()
+    return jsonify(rows=out, summary=summary)
+
 
 @app.route("/api/sync-drip-to-owner", methods=["POST"])
 def sync_drip_to_owner():
@@ -11931,6 +12424,575 @@ def div_calendar():
         return jsonify(error=str(e)), 500
 
 
+# ── Earnings Calendar ──────────────────────────────────────────────────────────
+
+_EARNINGS_TICKER_CACHE = {}
+_EARNINGS_TICKER_TTL_SEC = 6 * 60 * 60
+
+
+def _coerce_earnings_timestamp(value):
+    """Convert assorted yfinance/Nasdaq date values to a date object, or None."""
+    from datetime import datetime, date
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if hasattr(value, "to_pydatetime"):
+        try:
+            return value.to_pydatetime().date()
+        except Exception:
+            pass
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.utcfromtimestamp(float(value)).date()
+        except Exception:
+            return None
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%b %d, %Y", "%B %d, %Y"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        try:
+            return pd.to_datetime(s, errors="coerce").date()
+        except Exception:
+            return None
+    return None
+
+
+def _yf_earnings_info(ticker):
+    """Pull next earnings date + last quarter's actual/estimate via yfinance.
+
+    Returns dict or None. Result fields:
+      next_date (date or None), eps_estimate, last_date, last_eps_estimate,
+      last_eps_actual, last_surprise_pct.
+    """
+    import yfinance as yf
+    from datetime import date
+
+    sym = (ticker or "").strip().upper()
+    if not sym:
+        return None
+
+    cached = _cache_get(_EARNINGS_TICKER_CACHE, sym, ttl=_EARNINGS_TICKER_TTL_SEC)
+    if cached is not None:
+        return cached if cached else None
+
+    out = {
+        "next_date": None,
+        "eps_estimate": None,
+        "last_date": None,
+        "last_eps_estimate": None,
+        "last_eps_actual": None,
+        "last_surprise_pct": None,
+    }
+    found = False
+
+    try:
+        tk = yf.Ticker(sym)
+    except Exception:
+        _cache_set(_EARNINGS_TICKER_CACHE, sym, {})
+        return None
+
+    today_d = date.today()
+
+    # Preferred source: earnings_dates DataFrame (history + upcoming).
+    try:
+        ed = tk.earnings_dates
+    except Exception:
+        ed = None
+
+    if ed is not None and hasattr(ed, "empty") and not ed.empty:
+        try:
+            df = ed.copy()
+            # Index is timezone-aware Timestamp; pull date components.
+            df["_d"] = [
+                (idx.date() if hasattr(idx, "date") else _coerce_earnings_timestamp(idx))
+                for idx in df.index
+            ]
+            df = df[df["_d"].notna()]
+
+            def _col(name):
+                # Find a column whose name contains `name`, case-insensitive.
+                for c in df.columns:
+                    if name.lower() in str(c).lower():
+                        return c
+                return None
+
+            est_col = _col("EPS Estimate")
+            act_col = _col("Reported EPS")
+            sur_col = _col("Surprise")
+
+            upcoming = df[df["_d"] >= today_d].sort_values("_d")
+            if not upcoming.empty:
+                row = upcoming.iloc[0]
+                out["next_date"] = row["_d"]
+                if est_col is not None:
+                    val = row.get(est_col)
+                    try:
+                        if pd.notna(val):
+                            out["eps_estimate"] = float(val)
+                    except Exception:
+                        pass
+                found = True
+
+            past = df[df["_d"] < today_d].sort_values("_d")
+            if not past.empty:
+                row = past.iloc[-1]
+                out["last_date"] = row["_d"]
+                if est_col is not None:
+                    try:
+                        v = row.get(est_col)
+                        if pd.notna(v):
+                            out["last_eps_estimate"] = float(v)
+                    except Exception:
+                        pass
+                if act_col is not None:
+                    try:
+                        v = row.get(act_col)
+                        if pd.notna(v):
+                            out["last_eps_actual"] = float(v)
+                    except Exception:
+                        pass
+                if sur_col is not None:
+                    try:
+                        v = row.get(sur_col)
+                        if pd.notna(v):
+                            out["last_surprise_pct"] = float(v)
+                    except Exception:
+                        pass
+                # Derive surprise % if missing but actual + estimate present.
+                if (
+                    out["last_surprise_pct"] is None
+                    and out["last_eps_actual"] is not None
+                    and out["last_eps_estimate"] is not None
+                    and out["last_eps_estimate"] != 0
+                ):
+                    out["last_surprise_pct"] = (
+                        (out["last_eps_actual"] - out["last_eps_estimate"])
+                        / abs(out["last_eps_estimate"])
+                        * 100.0
+                    )
+                found = True
+        except Exception:
+            pass
+
+    # Fallback: calendar dict has "Earnings Date" (list of one or two dates).
+    if out["next_date"] is None:
+        try:
+            cal = tk.calendar
+        except Exception:
+            cal = None
+        if cal is not None:
+            ed_val = None
+            try:
+                if isinstance(cal, dict):
+                    ed_val = cal.get("Earnings Date")
+                elif hasattr(cal, "loc") and "Earnings Date" in getattr(cal, "index", []):
+                    ed_val = cal.loc["Earnings Date"]
+                    if hasattr(ed_val, "iloc"):
+                        ed_val = ed_val.iloc[0]
+            except Exception:
+                ed_val = None
+            if isinstance(ed_val, (list, tuple)) and ed_val:
+                cand = _coerce_earnings_timestamp(ed_val[0])
+            else:
+                cand = _coerce_earnings_timestamp(ed_val)
+            if cand and cand >= today_d:
+                out["next_date"] = cand
+                found = True
+
+    _cache_set(_EARNINGS_TICKER_CACHE, sym, out if found else {})
+    return out if found else None
+
+
+_EARNINGS_FIELDS = (
+    "next_date",
+    "eps_estimate",
+    "last_date",
+    "last_eps_estimate",
+    "last_eps_actual",
+    "last_surprise_pct",
+)
+
+
+def _empty_earnings_info():
+    return {f: None for f in _EARNINGS_FIELDS}
+
+
+def _merge_earnings_info(primary, fallback):
+    """Fill any None fields in `primary` from `fallback` (in place to a new dict)."""
+    if not fallback:
+        return primary
+    if not primary:
+        return dict(fallback)
+    out = dict(primary)
+    for k in _EARNINGS_FIELDS:
+        if out.get(k) is None and fallback.get(k) is not None:
+            out[k] = fallback[k]
+    return out
+
+
+def _earnings_info_complete(info):
+    """True when info has both upcoming and last-quarter data fully populated."""
+    if not info:
+        return False
+    return all(info.get(f) is not None for f in _EARNINGS_FIELDS)
+
+
+def _safe_float(value):
+    if value is None:
+        return None
+    try:
+        s = str(value).strip().replace("$", "").replace(",", "").replace("+", "").replace("%", "")
+        if not s or s == "-" or s.upper() in ("NA", "N/A"):
+            return None
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _nasdaq_surprise_info(ticker):
+    """Past quarterly results from Nasdaq's earnings-surprise endpoint."""
+    import urllib.request
+    import urllib.error
+    import json
+    from datetime import date
+
+    sym = (ticker or "").strip().upper()
+    if not sym:
+        return None
+    cache_key = f"NASDAQ_SURPRISE::{sym}"
+    cached = _cache_get(_EARNINGS_TICKER_CACHE, cache_key, ttl=_EARNINGS_TICKER_TTL_SEC)
+    if cached is not None:
+        return cached if cached else None
+
+    out = _empty_earnings_info()
+    url = f"https://api.nasdaq.com/api/company/{sym}/earnings-surprise"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Portfolio Tracking)",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception:
+        _cache_set(_EARNINGS_TICKER_CACHE, cache_key, {})
+        return None
+
+    found = False
+    try:
+        rows = ((payload or {}).get("data") or {}).get("earningsSurpriseTable", {}).get("rows") or []
+        today_d = date.today()
+        parsed = []
+        for r in rows:
+            d = _coerce_earnings_timestamp(r.get("dateReported") or r.get("fiscalQtrEnd"))
+            if d:
+                parsed.append((d, r))
+        parsed.sort(key=lambda t: t[0])
+        for d, r in reversed(parsed):
+            if d < today_d:
+                out["last_date"] = d
+                out["last_eps_estimate"] = _safe_float(r.get("consensusForecast"))
+                out["last_eps_actual"] = _safe_float(r.get("eps"))
+                out["last_surprise_pct"] = _safe_float(r.get("percentageSurprise"))
+                found = True
+                break
+    except Exception:
+        pass
+
+    _cache_set(_EARNINGS_TICKER_CACHE, cache_key, out if found else {})
+    return out if found else None
+
+
+def _nasdaq_eps_info(ticker):
+    """Upcoming EPS consensus from Nasdaq's quote/{sym}/eps endpoint.
+
+    Response shape: {data: {earningsPerShare: [{type, period, consensus, earnings}]}}
+    where type is 'PreviousQuarter' or 'UpcomingQuarter'. We pick the first
+    upcoming row's consensus as the next-quarter estimate.
+    """
+    import urllib.request
+    import urllib.error
+    import json
+
+    sym = (ticker or "").strip().upper()
+    if not sym:
+        return None
+    cache_key = f"NASDAQ_EPS::{sym}"
+    cached = _cache_get(_EARNINGS_TICKER_CACHE, cache_key, ttl=_EARNINGS_TICKER_TTL_SEC)
+    if cached is not None:
+        return cached if cached else None
+
+    out = _empty_earnings_info()
+    found = False
+
+    for asset_class in ("stocks", "etf"):
+        url = f"https://api.nasdaq.com/api/quote/{sym}/eps?assetclass={asset_class}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Portfolio Tracking)",
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        except Exception:
+            continue
+        try:
+            data = (payload or {}).get("data") or {}
+            if not data:
+                continue
+            eps_rows = data.get("earningsPerShare") or []
+            for r in eps_rows:
+                rtype = str(r.get("type") or "").lower()
+                if "upcoming" in rtype:
+                    est = _safe_float(r.get("consensus"))
+                    if est is not None:
+                        out["eps_estimate"] = est
+                        found = True
+                        break
+            # Past rows can also fill in last-quarter estimate/actual when missing.
+            past = [r for r in eps_rows if "previous" in str(r.get("type") or "").lower()]
+            if past:
+                last = past[-1]
+                est = _safe_float(last.get("consensus"))
+                act = _safe_float(last.get("earnings"))
+                if est is not None:
+                    out["last_eps_estimate"] = est
+                    found = True
+                if act is not None:
+                    out["last_eps_actual"] = act
+                    found = True
+                if est not in (None, 0) and act is not None and out.get("last_surprise_pct") is None:
+                    out["last_surprise_pct"] = (act - est) / abs(est) * 100.0
+            if found:
+                break
+        except Exception:
+            continue
+
+    _cache_set(_EARNINGS_TICKER_CACHE, cache_key, out if found else {})
+    return out if found else None
+
+
+def _nasdaq_info_next_date(ticker):
+    """Pull the next earnings announcement date from quote/{sym}/info keyStats.
+
+    The 'info' endpoint embeds messages like "Earnings Date : Apr 30, 2026" in
+    a keyStats / events block. We regex-scrape that out as a focused fallback.
+    """
+    import urllib.request
+    import urllib.error
+    import json
+    import re
+
+    sym = (ticker or "").strip().upper()
+    if not sym:
+        return None
+    cache_key = f"NASDAQ_INFO::{sym}"
+    cached = _cache_get(_EARNINGS_TICKER_CACHE, cache_key, ttl=_EARNINGS_TICKER_TTL_SEC)
+    if cached is not None:
+        return cached if cached else None
+
+    out = _empty_earnings_info()
+    found = False
+    for asset_class in ("stocks", "etf"):
+        url = f"https://api.nasdaq.com/api/quote/{sym}/info?assetclass={asset_class}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Portfolio Tracking)",
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+        except Exception:
+            continue
+        m = re.search(r"Earnings\s+Date\s*:\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})", body)
+        if m:
+            d = _coerce_earnings_timestamp(m.group(1))
+            if d:
+                out["next_date"] = d
+                found = True
+                break
+        # Some payloads stash the date as a structured field — try JSON parse too.
+        try:
+            payload = json.loads(body)
+        except Exception:
+            payload = None
+        if payload:
+            try:
+                key_stats = (((payload.get("data") or {}).get("keyStats") or {}))
+                ed = (
+                    (key_stats.get("EarningsDate") or {}).get("value")
+                    if isinstance(key_stats.get("EarningsDate"), dict)
+                    else None
+                )
+                if ed:
+                    d = _coerce_earnings_timestamp(ed)
+                    if d:
+                        out["next_date"] = d
+                        found = True
+                        break
+            except Exception:
+                pass
+
+    _cache_set(_EARNINGS_TICKER_CACHE, cache_key, out if found else {})
+    return out if found else None
+
+
+# NOTE: Zacks's per-symbol earnings pages and helper PHPs are gated by Imperva
+# bot detection — server-side scrapes return a JS challenge page or 403, not
+# the earnings table. Their public quote-feed JSON (quote-feed.zacks.com) does
+# not include earnings dates either. Until Zacks ships a usable public feed
+# we cover the same fields via Nasdaq's quote/eps and quote/info endpoints.
+
+
+def _build_earnings_events():
+    """Build earnings-calendar events for the active portfolio (or aggregate)."""
+    from datetime import datetime, date
+
+    is_aggregate, profile_ids = get_profile_filter()
+    if not profile_ids:
+        return []
+    placeholders = ",".join("?" * len(profile_ids))
+    conn = get_connection()
+    try:
+        df = pd.read_sql(
+            f"""
+            SELECT ticker, MAX(description) AS description
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND COALESCE(quantity, 0) > 0
+              AND ticker IS NOT NULL
+              AND ticker NOT IN ('', '--')
+            GROUP BY ticker
+            ORDER BY ticker
+            """,
+            conn,
+            params=profile_ids,
+        )
+    except Exception:
+        conn.close()
+        return []
+    conn.close()
+
+    today_d = date.today()
+    cache_columns = ("ticker", "description")
+    cache_rows = df.to_dict("records")
+    cache_scope = ("agg", tuple(sorted(profile_ids))) if is_aggregate else ("single", profile_ids[0])
+    cache_key = (
+        cache_scope,
+        today_d.isoformat(),
+        _rows_signature(cache_rows, cache_columns),
+    )
+    cached = _cache_get(_EARNINGS_CALENDAR_CACHE, cache_key, ttl=_EARNINGS_EVENT_TTL_SEC)
+    if cached is not None:
+        return cached
+
+    events = []
+    for _, row in df.iterrows():
+        ticker = str(row["ticker"] or "").strip().upper()
+        if not ticker:
+            continue
+        description = str(row["description"]) if pd.notna(row["description"]) else ""
+
+        info = _yf_earnings_info(ticker) or _empty_earnings_info()
+
+        # Layer Nasdaq sources for fields yfinance left blank. Each fills a
+        # different slice: info → next announcement date,
+        # eps → upcoming consensus + same-quarter prior actual,
+        # surprise → last-quarter actual / estimate / surprise %.
+        if info.get("next_date") is None:
+            info = _merge_earnings_info(info, _nasdaq_info_next_date(ticker))
+        if not _earnings_info_complete(info):
+            info = _merge_earnings_info(info, _nasdaq_eps_info(ticker))
+        if not _earnings_info_complete(info):
+            info = _merge_earnings_info(info, _nasdaq_surprise_info(ticker))
+
+        next_d = info.get("next_date")
+        last_d = info.get("last_date")
+        if not next_d and not last_d:
+            continue
+
+        # Color by recency: upcoming this month = green, upcoming later = teal,
+        # past = muted.
+        color = "#8899aa"
+        if next_d:
+            days = (next_d - today_d).days
+            if days <= 7:
+                color = "#00e89a"
+            elif days <= 30:
+                color = "#00c9a7"
+            else:
+                color = "#7ecfff"
+
+        primary = next_d or last_d
+        is_upcoming = bool(next_d and next_d >= today_d)
+        days_until = (next_d - today_d).days if next_d else None
+
+        events.append({
+            "ticker": ticker,
+            "description": description,
+            "date": primary.isoformat(),
+            "day": str(primary.day),
+            "month": primary.strftime("%b"),
+            "weekday": primary.strftime("%a"),
+            "year": primary.year,
+            "is_upcoming": is_upcoming,
+            "days_until": days_until,
+            "eps_estimate": info.get("eps_estimate"),
+            "last_date": last_d.isoformat() if last_d else None,
+            "last_date_label": last_d.strftime("%b %d, %Y") if last_d else None,
+            "last_eps_actual": info.get("last_eps_actual"),
+            "last_eps_estimate": info.get("last_eps_estimate"),
+            "last_surprise_pct": (
+                round(info["last_surprise_pct"], 2)
+                if info.get("last_surprise_pct") is not None
+                else None
+            ),
+            "color": color,
+        })
+
+    # Upcoming first (soonest first), then past (most recent first).
+    def _sort_key(ev):
+        if ev["is_upcoming"]:
+            return (0, ev["days_until"] if ev["days_until"] is not None else 9999)
+        return (1, -datetime.fromisoformat(ev["date"]).toordinal())
+
+    events.sort(key=_sort_key)
+    _cache_set(_EARNINGS_CALENDAR_CACHE, cache_key, events)
+    return events
+
+
+@app.route("/api/earnings-calendar")
+def earnings_calendar():
+    """Return earnings calendar events for the active portfolio."""
+    from datetime import date
+    try:
+        events = _build_earnings_events()
+        return jsonify(events=events, today=date.today().isoformat())
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
 # ── Buy / Sell Signals ─────────────────────────────────────────────────────────
 
 SIGNAL_COLOR = {"BUY": "#00c853", "SELL": "#d50000", "NEUTRAL": "#f9a825"}
@@ -12072,43 +13134,15 @@ def _bss_vote(signals):
     return "NEUTRAL"
 
 
-def _bss_coverage(close, divs_series):
-    """Compute TTM yield-based coverage ratio — same formula as /api/portfolio-coverage.
+def _bss_coverage(close, divs_series, benchmark_close=None):
+    """Compute benchmark-adjusted NAV erosion ratio for Buy/Sell Signals.
 
-    coverage = (TTM_price_return_pct + TTM_dist_yield) / TTM_dist_yield
-    Returns (coverage_ratio, signal, nav_erosion_label).
+    ratio = fund price decline / TTM distribution yield, only when benchmark is flat/up
+    Lower is better: <=0.25 Low, <=0.75 Medium, >0.75 High.
+    Returns (ratio, signal, nav_erosion_label).
     """
-    try:
-        if close is None or len(close) < 2:
-            return None, None, None
-        cur_price = float(close.iloc[-1])
-        price_1yr_ago = float(close.iloc[0])
-        if cur_price <= 0 or price_1yr_ago <= 0:
-            return None, None, None
-
-        ttm_price_return_pct = (cur_price - price_1yr_ago) / price_1yr_ago
-
-        ttm_dist_per_share = float(divs_series.sum()) if divs_series is not None and not divs_series.empty else 0.0
-        ttm_dist_yield = ttm_dist_per_share / cur_price if cur_price > 0 else 0.0
-
-        if ttm_dist_yield <= 0:
-            return None, None, None
-
-        coverage = round((ttm_price_return_pct + ttm_dist_yield) / ttm_dist_yield, 4)
-
-        if coverage > 1:
-            sig = "BUY"
-            erosion = "Low"
-        elif coverage < 1:
-            sig = "SELL"
-            erosion = "High"
-        else:
-            sig = "NEUTRAL"
-            erosion = "Medium"
-
-        return coverage, sig, erosion
-    except Exception:
-        return None, None, None
+    ratio = _nav_adjusted_erosion_ratio(close, divs_series, benchmark_close if benchmark_close is not None else close)
+    return ratio, _nav_signal_from_adjusted_ratio(ratio), _nav_erosion_from_adjusted_ratio(ratio)
 
 
 def _bss_sharpe(close, risk_free_annual=0.05):
@@ -12173,14 +13207,28 @@ def buy_sell_signals_data():
     conn = get_connection()
     try:
         port = pd.read_sql("""
-            SELECT ticker, description, classification_type, purchase_value
+            SELECT ticker, description, classification_type, purchase_value,
+                   current_annual_yield, estim_payment_per_year,
+                   div_frequency, div
             FROM all_account_info
             WHERE purchase_value IS NOT NULL AND purchase_value > 0
               AND profile_id = ?
             ORDER BY ticker
         """, conn, params=[profile_id])
     except Exception:
-        port = pd.DataFrame(columns=["ticker", "description", "classification_type", "purchase_value"])
+        port = pd.DataFrame(columns=[
+            "ticker", "description", "classification_type", "purchase_value",
+            "current_annual_yield", "estim_payment_per_year", "div_frequency", "div",
+        ])
+    try:
+        safety_by_ticker = get_dividend_safety_for_holdings(
+            conn,
+            profile_id,
+            port.to_dict("records"),
+            refresh=request.args.get("refresh_safety") in {"1", "true", "yes"},
+        )
+    except Exception:
+        safety_by_ticker = {}
     conn.close()
 
     port["description"] = port["description"].fillna("")
@@ -12190,7 +13238,17 @@ def buy_sell_signals_data():
     port_type = dict(zip(port["ticker"].tolist(), port["classification_type"].tolist()))
 
     all_wl = SECTOR_WATCHLIST + ALT_WATCHLIST
-    all_tickers = sorted(set(port["ticker"].tolist() + all_wl))
+    display_tickers = sorted(set(port["ticker"].tolist() + all_wl))
+    benchmark_tickers = sorted({
+        part
+        for t in display_tickers
+        for part in _nav_benchmark_parts(_nav_benchmark_for_ticker(
+            t,
+            port_desc.get(t) or BSS_WATCHLIST_NAMES.get(t, ""),
+            port_type.get(t, ""),
+        ))
+    })
+    all_tickers = sorted(set(display_tickers + benchmark_tickers))
 
     error = None
     fig_json = None
@@ -12201,9 +13259,11 @@ def buy_sell_signals_data():
             " ".join(all_tickers),
             period="1y",
             interval="1d",
-            auto_adjust=True,
+            auto_adjust=False,
             actions=True,
             progress=False,
+            ignore_tz=True,
+            threads=False,
         )
 
         if raw.empty:
@@ -12212,17 +13272,18 @@ def buy_sell_signals_data():
             try:
                 high_df = raw["High"]
                 low_df = raw["Low"]
-                close_df = raw["Close"]
+                close_df = raw["Adj Close"] if "Adj Close" in raw.columns.get_level_values(0) else raw["Close"]
+                nav_close_df = raw["Close"]
             except KeyError:
-                high_df = low_df = close_df = None
+                high_df = low_df = close_df = nav_close_df = None
 
-            # Extract dividends for coverage ratio
+            # Extract distributions for NAV erosion ratio
             try:
                 divs_df = raw["Dividends"]
             except KeyError:
                 divs_df = None
 
-            if any(df is None for df in [high_df, low_df, close_df]):
+            if any(df is None for df in [high_df, low_df, close_df, nav_close_df]):
                 error = "Missing OHLC price data from Yahoo Finance."
             else:
                 SECTOR_SET = set(SECTOR_WATCHLIST)
@@ -12233,7 +13294,7 @@ def buy_sell_signals_data():
                 hover_texts = [""]
                 empty = pd.Series([], dtype=float)
 
-                for ticker in all_tickers:
+                for ticker in display_tickers:
                     has_data = (ticker in close_df.columns and
                                 ticker in high_df.columns and
                                 ticker in low_df.columns)
@@ -12252,20 +13313,31 @@ def buy_sell_signals_data():
                     sharpe_val = _bss_sharpe(close)
                     sortino_val = _bss_sortino(close)
 
-                    # Coverage ratio (same formula as /api/portfolio-coverage)
+                    # Benchmark-adjusted NAV erosion ratio (same formula as /api/portfolio-coverage)
                     tk_divs = pd.Series(dtype=float)
                     if divs_df is not None and has_data:
                         if isinstance(divs_df, pd.DataFrame) and ticker in divs_df.columns:
                             tk_divs = divs_df[ticker].dropna()
                         elif isinstance(divs_df, pd.Series):
                             tk_divs = divs_df.dropna()
-                    cov_ratio, cov_sig, nav_erosion = _bss_coverage(close, tk_divs)
+                    nav_name = port_desc.get(ticker) or BSS_WATCHLIST_NAMES.get(ticker, "")
+                    nav_type = port_type.get(ticker, "")
+                    if _is_nav_erosion_candidate(ticker, nav_name, nav_type):
+                        bench_ticker = _nav_benchmark_for_ticker(ticker, nav_name, nav_type)
+                        nav_close = nav_close_df[ticker].dropna() if ticker in nav_close_df.columns else close
+                        bench_close = _nav_benchmark_close_from_df(close_df, bench_ticker, close)
+                        cov_ratio, cov_sig, nav_erosion = _bss_coverage(nav_close, tk_divs, bench_close)
+                    else:
+                        cov_ratio, cov_sig, nav_erosion = None, None, None
 
                     signal = _bss_vote([ao_sig, rsi_sig, macd_sig, sma50_sig, sma200_sig, cov_sig])
 
                     is_portfolio = ticker in port_sizes
                     is_sector = ticker in SECTOR_SET and not is_portfolio
                     size = port_sizes.get(ticker, WATCHLIST_SIZE)
+                    safety = safety_by_ticker.get(ticker, {}) if is_portfolio else {}
+                    if is_portfolio:
+                        safety = apply_nav_coverage_overlay(safety, cov_ratio, nav_erosion)
 
                     # Treemap nodes
                     if has_plotly:
@@ -12279,7 +13351,7 @@ def buy_sell_signals_data():
                             f"MACD: {macd_sig}<br>"
                             f"SMA 50: {sma50_sig} ({_fmt_pct(sma50_pct)})<br>"
                             f"SMA 200: {sma200_sig} ({_fmt_pct(sma200_pct)})<br>"
-                            f"Coverage: {cov_str} ({nav_erosion or chr(8212)} erosion risk)"
+                            f"NAV Ratio: {cov_str} ({nav_erosion or chr(8212)} erosion risk)"
                         )
                         if is_portfolio:
                             labels.append(ticker)
@@ -12327,6 +13399,10 @@ def buy_sell_signals_data():
                         "cov_sig": cov_sig or "NEUTRAL",
                         "cov_sig_ord": SIGNAL_ORDER.get(cov_sig or "NEUTRAL", 1),
                         "nav_erosion": nav_erosion or "\u2014",
+                        "div_safety_score": safety.get("safety_score"),
+                        "div_safety_risk": safety.get("risk_level") or ("\u2014" if not is_portfolio else "Unknown"),
+                        "div_cut_risk": bool(safety.get("cut_risk_flag")) if is_portfolio else False,
+                        "div_risk_reasons": safety.get("risk_reasons") or [],
                         "pv_fmt": f"${size:,.2f}" if is_portfolio else "\u2014",
                         "pv_num": float(size) if is_portfolio else 0,
                         "src_order": 0 if is_portfolio else (1 if is_sector else 2),
@@ -12435,6 +13511,12 @@ def watchlist_data():
     watching_tickers = [r["ticker"] for r in watching_rows]
     if not watching_tickers:
         return jsonify(watching=[], counts={"BUY": 0, "SELL": 0, "NEUTRAL": 0})
+    benchmark_tickers = sorted({
+        part
+        for t in watching_tickers
+        for part in _nav_benchmark_parts(_nav_benchmark_for_ticker(t))
+    })
+    download_tickers = sorted(set(watching_tickers + benchmark_tickers))
 
     error = None
     result_rows = []
@@ -12546,12 +13628,14 @@ def watchlist_data():
 
     try:
         raw = yf.download(
-            " ".join(watching_tickers),
+            " ".join(download_tickers),
             period="1y",
             interval="1d",
             auto_adjust=False,
             actions=True,
             progress=False,
+            ignore_tz=True,
+            threads=False,
         )
 
         if raw.empty:
@@ -12595,13 +13679,17 @@ def watchlist_data():
             macd_sig = _macd(close)
             sma50_sig, sma50_v, sma50_pct = _sma(close, 50)
             sma200_sig, sma200_v, sma200_pct = _sma(close, 200)
-            # Coverage ratio
+            # Benchmark-adjusted NAV erosion ratio
             cov_ratio, cov_sig, cov_erosion = None, None, None
             if divs_df is not None and has_data:
                 try:
                     t_divs_cov = divs_df[ticker].dropna() if ticker in divs_df.columns else pd.Series([], dtype=float)
                     t_divs_cov = t_divs_cov[t_divs_cov > 0]
-                    cov_ratio, cov_sig, cov_erosion = _bss_coverage(close, t_divs_cov)
+                    if _is_nav_erosion_candidate(ticker):
+                        nav_close = unadj_close_df[ticker].dropna() if ticker in unadj_close_df.columns else close
+                        bench_ticker = _nav_benchmark_for_ticker(ticker)
+                        bench_close = _nav_benchmark_close_from_df(close_df, bench_ticker, close)
+                        cov_ratio, cov_sig, cov_erosion = _bss_coverage(nav_close, t_divs_cov, bench_close)
                 except Exception:
                     pass
 
@@ -12743,10 +13831,24 @@ def nav_erosion_data():
         import plotly.graph_objects as go
         import plotly.utils
 
+        benchmark = _nav_benchmark_for_ticker(sym)
         hist = yf.Ticker(sym).history(
             start=start_date, end=end_date,
             interval="1d", auto_adjust=False, actions=True,
         )
+        bench_series = []
+        for bench in _nav_benchmark_parts(benchmark):
+            try:
+                bench_hist = yf.Ticker(bench).history(
+                    start=start_date, end=end_date,
+                    interval="1d", auto_adjust=True,
+                )
+                if bench_hist is not None and not bench_hist.empty and "Close" in bench_hist.columns:
+                    bench_close = bench_hist["Close"].dropna().rename(bench)
+                    if len(bench_close) >= 2:
+                        bench_series.append(bench_close)
+            except Exception:
+                pass
 
         if hist.empty:
             return jsonify(error=f"No data found for ticker {sym}. Check the symbol and date range.")
@@ -12763,9 +13865,23 @@ def nav_erosion_data():
 
         monthly_close = hist["Close"].resample("ME").last()
         monthly_divs = hist["Dividends"].resample("ME").sum()
+        if len(bench_series) == 1:
+            monthly_benchmark = bench_series[0].resample("ME").last()
+        elif len(bench_series) > 1:
+            aligned_bench = pd.concat(bench_series, axis=1, join="inner").dropna()
+            if len(aligned_bench) >= 2:
+                composite = 1.0
+                for col in aligned_bench.columns:
+                    composite = composite + (aligned_bench[col] / float(aligned_bench[col].iloc[0]) - 1.0)
+                monthly_benchmark = composite.resample("ME").last()
+            else:
+                monthly_benchmark = monthly_close
+        else:
+            monthly_benchmark = monthly_close
 
-        df = pd.DataFrame({"price": monthly_close, "div": monthly_divs}).dropna(subset=["price"])
+        df = pd.DataFrame({"price": monthly_close, "div": monthly_divs, "benchmark_price": monthly_benchmark}).dropna(subset=["price"])
         df["div"] = df["div"].fillna(0.0)
+        df["benchmark_price"] = df["benchmark_price"].ffill()
 
         if df.empty:
             return jsonify(error=f"No usable monthly data for {sym}.")
@@ -12779,10 +13895,12 @@ def nav_erosion_data():
         cumulative_reinvested = 0.0
         cumulative_shares_bought = 0.0
         prev_price = initial_price
+        prev_benchmark_price = float(df["benchmark_price"].dropna().iloc[0]) if not df["benchmark_price"].dropna().empty else initial_price
         cumulative_divs_per_share = 0.0
 
         for dt, row in df.iterrows():
             price = float(row["price"])
+            benchmark_price = float(row["benchmark_price"]) if pd.notna(row["benchmark_price"]) else prev_benchmark_price
             div_per_share = float(row["div"])
             total_dist = div_per_share * current_shares
             reinvest_amt = total_dist * reinvest_pct / 100.0
@@ -12797,17 +13915,22 @@ def nav_erosion_data():
             cumulative_shares_bought += shares_bought
             cumulative_divs_per_share += div_per_share
 
-            # Coverage ratio: (month-over-month price change + distribution) / distribution
-            price_change = price - prev_price
-            if div_per_share > 0:
-                coverage_ratio = round((price_change + div_per_share) / div_per_share, 4)
+            # Benchmark-adjusted NAV erosion ratio. Lower is better.
+            if div_per_share > 0 and prev_price > 0 and prev_benchmark_price > 0 and benchmark_price > 0:
+                fund_month_return = (price - prev_price) / prev_price
+                benchmark_month_return = (benchmark_price - prev_benchmark_price) / prev_benchmark_price
+                month_dist_yield = div_per_share / price if price > 0 else 0.0
+                numerator = _nav_erosion_numerator(fund_month_return, benchmark_month_return)
+                coverage_ratio = round(numerator / month_dist_yield, 4) if month_dist_yield > 0 and numerator is not None else None
             else:
                 coverage_ratio = None
             prev_price = price
+            prev_benchmark_price = benchmark_price
 
             rows.append({
                 "date": dt.strftime("%b %Y"),
                 "price": round(price, 4),
+                "benchmark_price": round(benchmark_price, 4) if benchmark_price is not None else None,
                 "price_delta_pct": round(price_delta_pct, 2),
                 "div_per_share": round(div_per_share, 4),
                 "total_dist": round(total_dist, 2),
@@ -12821,13 +13944,19 @@ def nav_erosion_data():
             })
 
         final_row = rows[-1]
-        # Aggregate coverage: (total price change + total divs per share) / total divs per share
-        total_price_change = final_row["price"] - initial_price
-        if cumulative_divs_per_share > 0:
-            total_coverage = round((total_price_change + cumulative_divs_per_share) / cumulative_divs_per_share, 4)
+        # Aggregate benchmark-adjusted NAV erosion ratio across the selected period.
+        benchmark_start = float(df["benchmark_price"].dropna().iloc[0]) if not df["benchmark_price"].dropna().empty else initial_price
+        benchmark_end = float(df["benchmark_price"].dropna().iloc[-1]) if not df["benchmark_price"].dropna().empty else final_row["price"]
+        fund_return = (final_row["price"] - initial_price) / initial_price if initial_price > 0 else 0.0
+        benchmark_return = (benchmark_end - benchmark_start) / benchmark_start if benchmark_start > 0 else fund_return
+        period_dist_yield = cumulative_divs_per_share / final_row["price"] if final_row["price"] > 0 else 0.0
+        numerator = _nav_erosion_numerator(fund_return, benchmark_return)
+        if period_dist_yield > 0 and numerator is not None:
+            total_coverage = round(numerator / period_dist_yield, 4)
         else:
             total_coverage = None
         summary = {
+            "benchmark": benchmark,
             "total_dist": round(cumulative_dist, 2),
             "total_shares_bought": round(cumulative_shares_bought, 4),
             "total_reinvested": round(cumulative_reinvested, 2),
@@ -13089,12 +14218,18 @@ def nav_erosion_portfolio_data():
         validated.append({"ticker": ticker, "amount": amount, "reinvest_pct": reinvest_pct})
 
     unique_tickers = list(dict.fromkeys(r["ticker"] for r in validated))
+    benchmark_tickers = list(dict.fromkeys(
+        part
+        for t in unique_tickers
+        for part in _nav_benchmark_parts(_nav_benchmark_for_ticker(t))
+    ))
+    download_tickers = list(dict.fromkeys(unique_tickers + benchmark_tickers))
 
     # Batch download all tickers
     try:
         from datetime import datetime as _dt
         raw = yf.download(
-            unique_tickers,
+            download_tickers,
             start=start_date, end=end_date,
             interval="1d", auto_adjust=False, actions=True,
             group_by="ticker", progress=False,
@@ -13133,10 +14268,16 @@ def nav_erosion_portfolio_data():
     results = []
     for r in validated:
         sym = r["ticker"]
+        benchmark = _nav_benchmark_for_ticker(sym)
         amount = r["amount"]
         reinvest_pct = r["reinvest_pct"]
 
         close, divs = get_ticker_df(sym)
+        benchmark_close = _nav_benchmark_close_from_df(
+            pd.DataFrame({part: get_ticker_df(part)[0] for part in _nav_benchmark_parts(benchmark) if get_ticker_df(part)[0] is not None}),
+            benchmark,
+            close,
+        )
 
         if close is None or close.dropna().empty:
             results.append({
@@ -13147,9 +14288,15 @@ def nav_erosion_portfolio_data():
 
         monthly_close = close.resample("ME").last()
         monthly_divs = divs.resample("ME").sum()
+        monthly_benchmark = (
+            benchmark_close.resample("ME").last()
+            if benchmark_close is not None and not benchmark_close.dropna().empty
+            else monthly_close
+        )
 
-        df = pd.DataFrame({"price": monthly_close, "div": monthly_divs}).dropna(subset=["price"])
+        df = pd.DataFrame({"price": monthly_close, "div": monthly_divs, "benchmark_price": monthly_benchmark}).dropna(subset=["price"])
         df["div"] = df["div"].fillna(0.0)
+        df["benchmark_price"] = df["benchmark_price"].ffill()
 
         if df.empty:
             results.append({
@@ -13202,15 +14349,22 @@ def nav_erosion_portfolio_data():
         total_return_dollar = portfolio_val + cash_taken - amount
         total_return_pct = total_return_dollar / amount * 100 if amount else 0.0
 
-        # Coverage ratio: (total price change + total divs per share) / total divs per share
-        total_price_change = final_price - initial_price
-        if cumul_divs_per_share > 0:
-            coverage_ratio = round((total_price_change + cumul_divs_per_share) / cumul_divs_per_share, 4)
+        # Benchmark-adjusted NAV erosion ratio. Lower is better.
+        benchmark_series = df["benchmark_price"].dropna()
+        benchmark_start = float(benchmark_series.iloc[0]) if not benchmark_series.empty else initial_price
+        benchmark_end = float(benchmark_series.iloc[-1]) if not benchmark_series.empty else final_price
+        fund_return = (final_price - initial_price) / initial_price if initial_price > 0 else 0.0
+        benchmark_return = (benchmark_end - benchmark_start) / benchmark_start if benchmark_start > 0 else fund_return
+        period_dist_yield = cumul_divs_per_share / final_price if final_price > 0 else 0.0
+        numerator = _nav_erosion_numerator(fund_return, benchmark_return)
+        if period_dist_yield > 0 and numerator is not None:
+            coverage_ratio = round(numerator / period_dist_yield, 4)
         else:
             coverage_ratio = None
 
         results.append({
             "ticker": sym,
+            "benchmark": benchmark,
             "amount": round(amount, 2),
             "reinvest_pct": round(reinvest_pct, 1),
             "start_price": round(initial_price, 4),
@@ -14008,10 +15162,17 @@ def _optimize_sharpe(returns_df, current_weights=None, weight_caps=None, turnove
 
 
 def _compute_nav_erosion(close_df, tickers, trading_days=252):
-    """Compute annualized price return per ticker. Negative = NAV erosion."""
+    """Compute structural NAV erosion proxy for eligible high-risk income products.
+
+    Non-candidates get 0 so ordinary stocks, broad/dividend ETFs, BDCs, and
+    normal preferred funds do not get penalized as NAV erosion.
+    """
     import numpy as np
     erosion = {}
     for t in tickers:
+        if not _is_nav_erosion_candidate(t):
+            erosion[t] = 0.0
+            continue
         if t not in close_df.columns:
             erosion[t] = 0.0
             continue
@@ -14022,7 +15183,7 @@ def _compute_nav_erosion(close_df, tickers, trading_days=252):
         total_ret = float(s.iloc[-1] / s.iloc[0]) - 1.0
         n_days = len(s)
         ann_ret = (1 + total_ret) ** (trading_days / max(n_days, 1)) - 1.0
-        erosion[t] = ann_ret
+        erosion[t] = min(ann_ret, 0.0)
     return erosion
 
 
@@ -14519,19 +15680,37 @@ def analytics_data():
     if period not in valid_periods:
         period = "1y"
 
-    all_dl = list(set(tickers + [benchmark]))
+    benchmark_map = {t: _nav_benchmark_for_ticker(t) for t in tickers}
+    benchmark_downloads = [part for b in benchmark_map.values() for part in _nav_benchmark_parts(b)]
+    all_dl = list(set(tickers + [benchmark] + benchmark_downloads))
     try:
-        raw = yf.download(" ".join(all_dl), period=period, auto_adjust=True, progress=False)
+        raw = yf.download(
+            " ".join(all_dl),
+            period=period,
+            auto_adjust=False,
+            actions=True,
+            progress=False,
+            ignore_tz=True,
+            threads=False,
+        )
         if raw.empty:
             return jsonify(error="No price data returned."), 500
     except Exception as e:
         return jsonify(error=f"yfinance error: {str(e)}"), 500
 
     if isinstance(raw.columns, pd.MultiIndex):
-        close = raw["Close"].dropna(how="all")
+        close = (raw["Adj Close"] if "Adj Close" in raw.columns.get_level_values(0) else raw["Close"]).dropna(how="all")
+        nav_close = raw["Close"].dropna(how="all")
+        divs_all = raw["Dividends"] if "Dividends" in raw.columns.get_level_values(0) else None
     else:
-        close = raw[["Close"]].dropna(how="all")
+        close_col = "Adj Close" if "Adj Close" in raw.columns else "Close"
+        close = raw[[close_col]].dropna(how="all")
         close.columns = [all_dl[0]]
+        nav_close = raw[["Close"]].dropna(how="all")
+        nav_close.columns = [all_dl[0]]
+        divs_all = raw[["Dividends"]] if "Dividends" in raw.columns else None
+        if divs_all is not None:
+            divs_all.columns = [all_dl[0]]
 
     # DB weights and yields
     profile_id = get_profile_id()
@@ -14559,22 +15738,34 @@ def analytics_data():
         yield_map[t] = ep / cv
         income_map[t] = ep
 
-    # Per-ticker coverage ratio: (TTM price return % + TTM dist yield %) / TTM dist yield %
+    # Per-ticker benchmark-adjusted NAV erosion ratio. Lower is better.
     coverage_map = {}
     for t in tickers:
-        if t not in close.columns:
+        if not _is_nav_erosion_candidate(t):
             continue
-        tc = close[t].dropna()
+        if t not in nav_close.columns:
+            continue
+        tc = nav_close[t].dropna()
         if len(tc) < 2:
             continue
-        price_start = float(tc.iloc[0])
-        price_end = float(tc.iloc[-1])
-        if price_start <= 0:
-            continue
-        price_return_pct = (price_end - price_start) / price_start
-        dist_yield = yield_map.get(t, 0)
-        if dist_yield > 0:
-            coverage_map[t] = round((price_return_pct + dist_yield) / dist_yield, 4)
+        divs_series = pd.Series(dtype=float)
+        if divs_all is not None:
+            try:
+                divs_series = divs_all[t].dropna() if t in divs_all.columns else divs_series
+                divs_series = divs_series[divs_series > 0]
+            except Exception:
+                divs_series = pd.Series(dtype=float)
+        if divs_series.empty and yield_map.get(t, 0) > 0:
+            divs_series = pd.Series([yield_map[t] * float(tc.iloc[-1])])
+        bt = benchmark_map.get(t) or benchmark
+        bc = _nav_benchmark_close_from_df(
+            close,
+            bt,
+            close[benchmark].dropna() if benchmark in close.columns else close[t].dropna(),
+        )
+        ratio = _nav_adjusted_erosion_ratio(tc, divs_series, bc)
+        if ratio is not None:
+            coverage_map[t] = ratio
 
     bench_close = close[benchmark] if benchmark in close.columns else None
     bench_ret = bench_close.pct_change().dropna() if bench_close is not None else None
@@ -14675,16 +15866,20 @@ def analytics_data():
 
     # Include per-ticker coverage and aggregate in response
     cov_results = [{"ticker": t, "coverage_ratio": coverage_map.get(t)} for t in available_tickers]
-    # Dollar-weighted aggregate coverage
+    # Portfolio-level ratio: candidate erosion weighted across the full portfolio,
+    # so a small risky sleeve does not imply the whole portfolio has NAV erosion.
     _cov_num = 0.0
     _cov_den = 0.0
+    _cov_seen = False
     for t in available_tickers:
         cov = coverage_map.get(t)
         w = weight_map.get(t, 0)
-        if cov is not None and w > 0:
-            _cov_num += cov * w
+        if w > 0:
             _cov_den += w
-    agg_cov = round(_cov_num / _cov_den, 4) if _cov_den > 0 else None
+        if cov is not None and w > 0:
+            _cov_seen = True
+            _cov_num += cov * w
+    agg_cov = round(_cov_num / _cov_den, 4) if _cov_seen and _cov_den > 0 else None
 
     result = {"metrics": metrics, "portfolio_metrics": port_metrics,
               "coverage": {"results": cov_results, "aggregate_coverage": agg_cov}}
@@ -16264,6 +17459,9 @@ def save_settings():
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (k, str(v)))
     conn.commit()
     conn.close()
+    if "nav_benchmark_overrides" in data:
+        _NAV_BENCHMARK_OVERRIDE_CACHE.update({"ts": 0, "data": {}})
+        _PORTFOLIO_COVERAGE_CACHE.clear()
     return jsonify({"ok": True})
 
 

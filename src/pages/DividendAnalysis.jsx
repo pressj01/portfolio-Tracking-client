@@ -21,6 +21,20 @@ const fmt = v => v != null ? `$${Number(v).toLocaleString(undefined, { minimumFr
 const fmtPct = v => v != null ? `${(Number(v) * 100).toFixed(2)}%` : '—'
 const fmtPctRaw = v => v != null ? `${Number(v).toFixed(2)}%` : '—'
 
+const fmtNum = v => v != null && v !== '' ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }) : '\u2014'
+
+function SafetyBadge({ level }) {
+  const text = level || 'Unknown'
+  const cls = String(text).toLowerCase().replace(/\s+/g, '-')
+  return <span className={`safety-badge safety-${cls}`}>{text}</span>
+}
+
+function SafetyScore({ score }) {
+  if (score == null) return <span className="safety-score safety-unknown">{'\u2014'}</span>
+  const level = score >= 80 ? 'low' : score >= 65 ? 'moderate' : score >= 45 ? 'elevated' : 'high'
+  return <span className={`safety-score safety-${level}`}>{Math.round(Number(score))}</span>
+}
+
 const METRIC_OPTIONS = [
   { value: 'yield_pct', label: 'Yield (%)' },
   { value: 'annual_payout', label: 'Annual payout ($)' },
@@ -316,7 +330,7 @@ export default function DividendAnalysis() {
     } else {
       setSortCol(col)
       // Default descending for numeric columns
-      const numCols = ['ytd_divs', 'total_divs_received', 'paid_for_itself', 'dividend_paid', 'estim_payment_per_year', 'approx_monthly_income', 'annual_yield_on_cost', 'current_annual_yield', 'gain_or_loss']
+      const numCols = ['ytd_divs', 'total_divs_received', 'paid_for_itself', 'dividend_paid', 'estim_payment_per_year', 'approx_monthly_income', 'annual_yield_on_cost', 'current_annual_yield', 'gain_or_loss', 'safety_score', 'payout_ratio_pct', 'earnings_coverage', 'dividend_streak_years', 'debt_to_equity']
       setSortAsc(!numCols.includes(col))
     }
   }
@@ -355,6 +369,12 @@ export default function DividendAnalysis() {
     { key: 'approx_monthly_income', label: 'Est. Monthly', fmt: fmt, align: 'right', tip: 'Estimated monthly dividend income' },
     { key: 'annual_yield_on_cost', label: 'Yield on Cost', fmt: fmtPct, align: 'right', tip: 'Annual dividend yield based on your cost basis' },
     { key: 'current_annual_yield', label: 'Current Yield', fmt: fmtPct, align: 'right', tip: 'Current annual dividend yield based on market price' },
+    { key: 'safety_score', label: 'Safety', align: 'center', tip: 'Composite dividend safety score from payout, EPS coverage, streak, and debt/equity' },
+    { key: 'safety_risk_level', label: 'Risk', align: 'center', tip: 'Estimated dividend cut risk level' },
+    { key: 'payout_ratio_pct', label: 'Payout', fmt: v => v != null ? `${Number(v).toFixed(1)}%` : '\u2014', align: 'right', tip: 'Dividend payout ratio' },
+    { key: 'earnings_coverage', label: 'EPS Cov.', fmt: v => v != null ? `${Number(v).toFixed(2)}x` : '\u2014', align: 'right', tip: 'EPS coverage of annual dividend' },
+    { key: 'dividend_streak_years', label: 'Streak', fmt: v => v != null ? `${Number(v).toFixed(0)}y` : '\u2014', align: 'right', tip: 'Consecutive years with dividend payments' },
+    { key: 'debt_to_equity', label: 'D/E', fmt: fmtNum, align: 'right', tip: 'Debt to equity ratio' },
     { key: 'gain_or_loss', label: 'Gain / Loss', fmt: fmt, align: 'right', tip: 'Unrealized gain or loss in dollar amount' },
   ]
 
@@ -424,6 +444,9 @@ export default function DividendAnalysis() {
             <MetricCard label="Est. Monthly Income" value={fmt(data.totals?.approx_monthly_income)} />
             <MetricCard label={`Actual Income (${data.totals?.current_month_label || 'This Month'})`} value={fmt(data.totals?.actual_monthly_income)} />
             <MetricCard label="Est. Annual Income" value={fmt(data.totals?.estim_payment_per_year)} />
+            <MetricCard label="Avg. Safety Score" value={data.totals?.dividend_safety?.average_score ?? '\u2014'} />
+            <MetricCard label="High Risk Holdings" value={data.totals?.dividend_safety?.high_risk_count ?? 0} />
+            <MetricCard label="Income At Risk" value={fmt(data.totals?.dividend_safety?.portfolio_income_at_risk)} />
           </div>
 
           {/* Yield/Payout interactive chart */}
@@ -469,14 +492,17 @@ export default function DividendAnalysis() {
               <tbody>
                 {sortedRows.map(row => {
                   const paidPct = (row.paid_for_itself || 0) * 100
+                  const riskTitle = row.risk_reasons?.length ? row.risk_reasons.join('; ') : ''
                   return (
-                    <tr key={row.ticker} style={paidPct >= 100 ? { background: 'rgba(77,255,145,0.05)' } : {}}>
+                    <tr key={row.ticker} className={row.cut_risk_flag ? 'div-risk-row' : ''} style={paidPct >= 100 ? { background: 'rgba(77,255,145,0.05)' } : {}} title={riskTitle}>
                       {columns.map(col => {
                         const val = row[col.key]
                         let display = col.fmt ? col.fmt(val) : (val ?? '')
                         let style = col.align ? { textAlign: col.align } : {}
 
                         if (col.key === 'ticker') display = <strong>{val}</strong>
+                        if (col.key === 'safety_score') display = <SafetyScore score={val} />
+                        if (col.key === 'safety_risk_level') display = <SafetyBadge level={val} />
                         if (col.key === 'total_divs_received') display = <strong>{fmt(val)}</strong>
                         if (col.key === 'paid_for_itself') {
                           const color = paidPct >= 100 ? '#4dff91' : paidPct >= 50 ? '#ffd700' : undefined
@@ -502,7 +528,7 @@ export default function DividendAnalysis() {
                     <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.dividend_paid)}</strong></td>
                     <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.estim_payment_per_year)}</strong></td>
                     <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.approx_monthly_income)}</strong></td>
-                    <td colSpan={3}></td>
+                    <td colSpan={9}></td>
                   </tr>
                 </tfoot>
               )}

@@ -6,3 +6,44 @@ yfinance
 plotly
 scipy
 pypdf
+
+
+Patch the UI to render dividendRefreshAccounts right after the refresh button completes.
+Keep the current cards, but rename the text so it accurately describes the accrual summary.
+Do both, which would make the button result and ongoing accrued summary unambiguous.
+
+Underlying holdings return: +5%
+Fund price/NAV return: -7%
+TTM distribution yield: 12%
+
+NAV Erosion Ratio = (5 - (-7)) / 12
+                  = 12 / 12
+                  = 1.0
+That says the fund gave up about one full year of distribution yield in NAV underperformance relative to its holdings.
+
+For a stronger version, use total return too:
+
+Fund total return = Fund price return + TTM distribution yield
+
+Economic Underperformance =
+Fund total return - Underlying holdings return
+That separates two questions:
+
+Price/NAV erosion:
+Is the fund price/NAV falling versus its holdings?
+
+Economic erosion:
+Is the investor worse off after counting distributions?
+For your app, I’d add a new column like:
+
+NAV Drift vs Benchmark
+
+and calculate it as:
+
+Fund price return % - Benchmark/holdings return %
+Then optionally:
+
+Erosion Ratio
+
+max(0, Benchmark return % - Fund price return %) / TTM distribution yield %
+For option-income funds, the benchmark should usually be the target exposure: QQQ for Nasdaq funds, SPY for S&P funds, IWM for Russell funds, BTC proxy for Bitcoin funds, gold proxy for gold funds, etc.

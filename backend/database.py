@@ -81,6 +81,8 @@ def ensure_tables_exist(conn=None):
             purchase_date              TEXT,
             current_month_income       REAL,
             dividend_actuals_source    TEXT,
+            nav_erosion_scope          TEXT NOT NULL DEFAULT 'auto',
+            nav_benchmark_override     TEXT,
             UNIQUE (ticker, profile_id)
         )
     """)
@@ -111,6 +113,16 @@ def ensure_tables_exist(conn=None):
 
     try:
         cur.execute("ALTER TABLE all_account_info ADD COLUMN dividend_actuals_source TEXT")
+    except Exception:
+        pass  # column already exists
+
+    try:
+        cur.execute("ALTER TABLE all_account_info ADD COLUMN nav_erosion_scope TEXT NOT NULL DEFAULT 'auto'")
+    except Exception:
+        pass  # column already exists
+
+    try:
+        cur.execute("ALTER TABLE all_account_info ADD COLUMN nav_benchmark_override TEXT")
     except Exception:
         pass  # column already exists
 
@@ -209,6 +221,16 @@ def ensure_tables_exist(conn=None):
     # Same YoC percent→ratio repair for the dividends mirror table.
     cur.execute("UPDATE dividends SET annual_yield_on_cost = annual_yield_on_cost / 100.0 WHERE annual_yield_on_cost > 1")
     cur.execute("UPDATE dividends SET current_annual_yield = current_annual_yield / 100.0 WHERE current_annual_yield > 1")
+
+    # Cache ticker-level dividend safety fundamentals/scores. These values come
+    # from external market data and are refreshed by the API on a TTL.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS dividend_safety_cache (
+            ticker  TEXT PRIMARY KEY,
+            as_of   TEXT NOT NULL,
+            payload TEXT NOT NULL
+        )
+    """)
 
     # ── income_tracking ────────────────────────────────────────────────────────
     cur.execute("""

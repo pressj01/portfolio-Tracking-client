@@ -15,6 +15,19 @@ export default function Settings() {
   const [etfInput, setEtfInput] = useState('')
   const [etfStatus, setEtfStatus] = useState(null)
   const [etfSaving, setEtfSaving] = useState(false)
+  const [navOverrides, setNavOverrides] = useState({})
+  const [navTicker, setNavTicker] = useState('')
+  const [navBenchmark, setNavBenchmark] = useState('')
+  const [navStatus, setNavStatus] = useState(null)
+  const [navSaving, setNavSaving] = useState(false)
+
+  const navBenchmarkChoices = [
+    'SPY', 'QQQ', 'IWM', 'DIA', 'EFA', 'EEM',
+    'BTC-USD', 'ETH-USD', 'SOL-USD', 'BTC-USD+GLD', 'SPY+BTC-USD',
+    'GLD', 'SLV', 'CPER', 'AMLP', 'PFF',
+    'BIL', 'BND', 'TLT', 'NLR', 'ITA',
+    'XLE', 'SOXX', 'XLF', 'XLV', 'XLU', 'VNQ',
+  ]
 
   const fetchStats = () => {
     pf('/api/data/stats')
@@ -33,7 +46,21 @@ export default function Settings() {
       .catch(() => {})
   }
 
-  useEffect(() => { fetchStats(); fetchSingleStockEtfs() }, [selection])
+  const fetchNavBenchmarkOverrides = () => {
+    pf('/api/settings')
+      .then(r => r.json())
+      .then(data => {
+        try {
+          const parsed = data.nav_benchmark_overrides ? JSON.parse(data.nav_benchmark_overrides) : {}
+          setNavOverrides(parsed && typeof parsed === 'object' ? parsed : {})
+        } catch {
+          setNavOverrides({})
+        }
+      })
+      .catch(() => {})
+  }
+
+  useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides() }, [selection])
 
   const handleClearAll = async () => {
     setLoading(true)
@@ -101,6 +128,43 @@ export default function Settings() {
     setEtfSaving(false)
   }
 
+  const saveNavBenchmarkOverrides = async (next, successMsg) => {
+    setNavSaving(true)
+    setNavStatus(null)
+    try {
+      const res = await pf('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nav_benchmark_overrides: JSON.stringify(next) }),
+      })
+      if (res.ok) {
+        setNavOverrides(next)
+        setNavStatus({ type: 'success', msg: successMsg })
+      } else {
+        setNavStatus({ type: 'error', msg: 'Failed to save benchmark override.' })
+      }
+    } catch (e) {
+      setNavStatus({ type: 'error', msg: 'Server error: ' + e.message })
+    }
+    setNavSaving(false)
+  }
+
+  const handleAddNavOverride = () => {
+    const ticker = navTicker.trim().toUpperCase()
+    const benchmark = navBenchmark.trim().toUpperCase()
+    if (!ticker || !benchmark) return
+    const next = { ...navOverrides, [ticker]: benchmark }
+    saveNavBenchmarkOverrides(next, `${ticker} will benchmark against ${benchmark}`)
+    setNavTicker('')
+    setNavBenchmark('')
+  }
+
+  const handleRemoveNavOverride = (ticker) => {
+    const next = { ...navOverrides }
+    delete next[ticker]
+    saveNavBenchmarkOverrides(next, `Removed ${ticker} benchmark override`)
+  }
+
   const tagStyle = (removable) => ({
     display: 'inline-flex', alignItems: 'center', gap: 4,
     background: removable ? '#1a3a4a' : '#1a2a3a', color: removable ? '#7ecfff' : '#8899aa',
@@ -109,7 +173,7 @@ export default function Settings() {
   })
 
   return (
-    <div className="page" style={{ maxWidth: 700 }}>
+    <div className="page" style={{ maxWidth: 900 }}>
       <h1>Settings</h1>
 
       {/* Data Overview */}
@@ -133,6 +197,69 @@ export default function Settings() {
         ) : (
           <p style={{ color: '#8899aa' }}>Loading...</p>
         )}
+      </div>
+
+      {/* NAV Benchmark Overrides */}
+      <div className="card">
+        <h2>NAV Benchmark Overrides</h2>
+        <p style={{ color: '#90a4ae', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+          Automatic NAV erosion checks infer benchmarks from ticker, fund name, and strategy.
+          Add an override when a new fund needs a specific underlying.
+        </p>
+
+        {navStatus && (
+          <div className={`alert alert-${navStatus.type}`} style={{ marginBottom: '0.75rem' }}>{navStatus.msg}</div>
+        )}
+
+        {Object.keys(navOverrides).length > 0 && (
+          <div style={{ marginBottom: '0.75rem' }}>
+            <span style={{ color: '#8899aa', fontSize: '0.75rem', display: 'block', marginBottom: 4 }}>Overrides</span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
+              {Object.entries(navOverrides).sort(([a], [b]) => a.localeCompare(b)).map(([ticker, benchmark]) => (
+                <span key={ticker} style={tagStyle(true)}>
+                  {ticker} {'->'} {benchmark}
+                  <button
+                    onClick={() => handleRemoveNavOverride(ticker)}
+                    disabled={navSaving}
+                    style={{
+                      background: 'none', border: 'none', color: '#ff6b6b',
+                      cursor: 'pointer', padding: '0 2px', fontSize: '0.9rem', lineHeight: 1,
+                    }}
+                    title={`Remove ${ticker}`}
+                  >&times;</button>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(90px, 1fr) minmax(130px, 1fr) auto', gap: '0.5rem', alignItems: 'center' }}>
+          <input
+            type="text"
+            value={navTicker}
+            onChange={e => setNavTicker(e.target.value.toUpperCase())}
+            onKeyDown={e => e.key === 'Enter' && handleAddNavOverride()}
+            placeholder="Fund ticker"
+            style={{ textTransform: 'uppercase' }}
+            disabled={navSaving}
+          />
+          <input
+            type="text"
+            value={navBenchmark}
+            onChange={e => setNavBenchmark(e.target.value.toUpperCase())}
+            onKeyDown={e => e.key === 'Enter' && handleAddNavOverride()}
+            placeholder="Benchmark"
+            list="nav-benchmark-choices"
+            style={{ textTransform: 'uppercase' }}
+            disabled={navSaving}
+          />
+          <datalist id="nav-benchmark-choices">
+            {navBenchmarkChoices.map(b => <option key={b} value={b} />)}
+          </datalist>
+          <button className="btn btn-primary" onClick={handleAddNavOverride} disabled={navSaving || !navTicker.trim() || !navBenchmark.trim()}>
+            Save
+          </button>
+        </div>
       </div>
 
       {/* Single-Stock ETFs */}

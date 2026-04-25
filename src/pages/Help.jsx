@@ -30,6 +30,7 @@ const GROUPS = [
       { id: 'growth', label: 'Growth' },
       { id: 'dividends', label: 'Dividends' },
       { id: 'div-calendar', label: 'Div Calendar' },
+      { id: 'earnings-calendar', label: 'Earnings Calendar' },
       { id: 'div-compare', label: 'Div Compare' },
       { id: 'dividend-history', label: 'Dividend History' },
       { id: 'total-return', label: 'Total Return' },
@@ -414,7 +415,7 @@ function DashboardHelp() {
         <li><strong>Portfolio Value</strong> — total current market value.</li>
         <li><strong>Avg Yield on Cost / Current Yield</strong> — dividend yield based on cost basis vs current price.</li>
         <li><strong>Price Return / Total Return</strong> — portfolio returns excluding and including dividends.</li>
-        <li><strong>Coverage Ratio</strong> — sustainability metric for income-focused ETFs.</li>
+        <li><strong>NAV Erosion Ratio</strong> — benchmark-adjusted NAV erosion context for income-oriented funds. Lower is better: 0.25 or below is low, 0.25–0.75 is moderate, and above 0.75 is high.</li>
       </ul>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP$ and Cash$ Columns</h3>
@@ -457,9 +458,38 @@ function DashboardHelp() {
         <li><strong>YTD</strong> — year-to-date dividends received.</li>
         <li><strong>Mo$ / Yr$</strong> — estimated monthly and annual dividend income.</li>
         <li><strong>PFI%</strong> — "Paid For Itself" — percentage of original cost recovered through dividends.</li>
-        <li><strong>Cov</strong> — coverage ratio. Below 0.8 is highlighted red as a warning.</li>
+        <li><strong>NAV</strong> — benchmark-adjusted NAV erosion ratio plus controls for whether the holding should be tested and what benchmark it should use.</li>
         <li><strong>Grd</strong> — composite grade for the holding.</li>
       </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>NAV Testing Controls</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The NAV column is designed for income funds where the distribution may be funded partly by option premium,
+        leverage, return of capital, or other strategies that can pressure share price over time. It is not meant
+        to penalize every normal stock or growth ETF for ordinary price movement.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '1rem' }}>
+        <li><strong>Auto</strong> — the default. The app decides whether to test the holding using ticker lists and description/category keywords such as covered call, option income, enhanced income, YieldMax, leveraged, commodities, crypto, and similar income wrappers.</li>
+        <li><strong>Test</strong> — forces the holding into the NAV erosion calculation even if Auto would skip it. Use this for newer or unusual income funds the app may not recognize yet.</li>
+        <li><strong>Skip</strong> — excludes the holding from NAV erosion testing. Use this for ordinary stocks, growth ETFs, broad-market ETFs, or funds where NAV erosion is not the right lens.</li>
+        <li><strong>Benchmark field</strong> — optional. Leave blank to use the app's automatic benchmark, or type a priceable ticker such as <code>SPY</code>, <code>QQQ</code>, <code>IWM</code>, <code>ITA</code>, <code>GLD</code>, <code>BTC-USD</code>, or a composite such as <code>BTC-USD+GLD</code>.</li>
+      </ul>
+      <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>Benchmark rule of thumb:</strong> compare the income wrapper to the asset or sector it is trying to harvest.
+        For example, a Nasdaq option-income fund often belongs against <code>QQQ</code>, an S&amp;P 500 option-income fund against
+        <code>SPY</code>, a Russell 2000 fund against <code>IWM</code>, a defense income fund against <code>ITA</code>, a gold income fund
+        against <code>GLD</code>, and a bitcoin income fund against <code>BTC-USD</code>. If the benchmark text is not a priceable
+        ticker, the app marks it invalid instead of treating the NAV result as reliable.
+      </div>
+      <p style={{ marginBottom: '0.75rem' }}>
+        When the NAV value is blank, the holding was either skipped by Auto/Skip, lacked enough market or distribution
+        data, or has an invalid benchmark override. Hover the NAV cell for more context.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        These controls affect the Dashboard's per-holding NAV value and portfolio-level NAV Erosion Ratio.
+        The standalone NAV Erosion backtest and NAV Erosion Screener still use their own ticker inputs and
+        automatic benchmark rules.
+      </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Upcoming Dividends</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -1349,6 +1379,79 @@ function DivCalendarHelp() {
   )
 }
 
+function EarningsCalendarHelp() {
+  return (
+    <div>
+      <h2>Earnings Calendar</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Earnings Calendar surfaces upcoming and recent quarterly earnings dates for the
+        individual stocks you hold. Earnings surprises &mdash; especially misses on EPS &mdash; are one
+        of the strongest near-term threats to dividend safety, so keeping an eye on this schedule
+        complements the Dividend Calendar.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What the Page Shows</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each holding with an earnings date appears as a card. Cards are sorted upcoming-first
+        (soonest at the top), then past earnings most-recent first. Each card contains:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>
+          <strong>Date column</strong> &mdash; The day, month, and weekday of the next (or most recent)
+          earnings announcement.
+        </li>
+        <li>
+          <strong>Days-until label</strong> &mdash; Upcoming cards show "today", "tomorrow", or
+          "in N days" so you can spot what's imminent at a glance.
+        </li>
+        <li>
+          <strong>EPS Est</strong> &mdash; Wall Street's consensus EPS estimate for the upcoming report.
+        </li>
+        <li>
+          <strong>Last Actual / Last Est</strong> &mdash; The reported EPS from the most recent quarter
+          and the consensus estimate it was measured against.
+        </li>
+        <li>
+          <strong>Surprise %</strong> &mdash; How far the reported EPS came in above (▲ green) or below
+          (▼ red) the prior estimate. A pattern of misses is a yellow flag for dividend coverage.
+        </li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Upcoming</strong> (default) &mdash; Future earnings only.</li>
+        <li><strong>Next 30 Days</strong> &mdash; Reports landing in the next month.</li>
+        <li><strong>Past 30 Days</strong> &mdash; Recent reports, useful for reviewing surprises.</li>
+        <li><strong>All</strong> &mdash; Everything on file for your holdings.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Sources</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        The app layers several sources to maximize coverage. For each ticker it starts with Yahoo
+        Finance (via yfinance), then fills any missing fields from three Nasdaq endpoints in turn:
+        the quote/info feed for the next announcement date, the quote/eps feed for the upcoming
+        consensus estimate, and the company earnings-surprise feed for the last quarter's actual,
+        estimate, and surprise %. Each source is cached per-ticker for several hours, so first
+        load may be slow but repeat visits are fast. ETFs and funds typically don't report
+        earnings, so they are silently omitted from the calendar &mdash; an empty page usually
+        means the active portfolio holds no individual stocks.
+      </p>
+      <p style={{ marginBottom: '1rem', color: '#90a4ae', fontSize: '0.85rem' }}>
+        Note: Zacks's per-symbol earnings pages are gated by Imperva bot detection, so they can't
+        be scraped from the backend. If Zacks ever publishes an open feed, it would be a natural
+        addition here.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
+        <li>Start in <strong>Upcoming</strong> to see what earnings dates are on the horizon.</li>
+        <li>Switch to <strong>Past 30 Days</strong> after a busy week to scan for misses on income holdings.</li>
+        <li>If a holding shows a string of misses, cross-check the Dividend Calendar and Buy / Sell Signals before adding to the position.</li>
+      </ol>
+    </div>
+  )
+}
+
 function DivCompareHelp() {
   return (
     <div>
@@ -2060,8 +2163,8 @@ function WatchlistHelp() {
         The Watchlist is a curated monitor of tickers you're researching or considering buying.
         For each ticker it runs a full suite of technical and risk signals automatically —
         so you can see at a glance whether conditions favor buying, selling, or waiting.
-        It also shows dividend sustainability metrics (coverage ratio and NAV erosion probability),
-        making it especially useful for evaluating high-yield income funds before adding them to your portfolio.
+        It also shows benchmark-adjusted NAV erosion context for eligible income funds,
+        making it especially useful for evaluating high-yield strategies before adding them to your portfolio.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
@@ -2094,9 +2197,9 @@ function WatchlistHelp() {
         <li><strong>Sharpe</strong> — Risk-adjusted return. Above 1.5 = great, above 1.0 = good, below 0.5 = poor.</li>
         <li><strong>Sortino</strong> — Like Sharpe but only penalizes downside volatility. Above 2.0 = great, above 1.5 = good.</li>
         <li><strong>1Y Return</strong> — Total 12-month return percentage.</li>
-        <li><strong>Coverage</strong> — TTM coverage ratio: distributions divided by net investment income. Above 1.0 means the fund is earning enough to cover its payouts sustainably.</li>
-        <li><strong>Cov Signal</strong> — BUY if coverage &gt; 1.0, SELL if &lt; 1.0, NEUTRAL if equal.</li>
-        <li><strong>NAV Erosion</strong> — Probability label: <span style={{ color: '#81c784' }}>Low</span>, <span style={{ color: '#ffc107' }}>Medium</span>, or <span style={{ color: '#ef9a9a' }}>High</span>. Indicates risk that the fund's share price is being slowly eroded by distributions that exceed earnings.</li>
+        <li><strong>NAV Ratio</strong> — fund price decline divided by TTM distribution yield, only when the benchmark is flat or up. Lagging a rising benchmark is not treated as structural NAV erosion.</li>
+        <li><strong>NAV Signal</strong> — BUY at or below 0.25, NEUTRAL at or below 0.75, SELL above 0.75.</li>
+        <li><strong>NAV Erosion</strong> — Probability label: <span style={{ color: '#81c784' }}>Low</span>, <span style={{ color: '#ffc107' }}>Medium</span>, or <span style={{ color: '#ef9a9a' }}>High</span>. Indicates whether the income wrapper appears to be losing price/NAV faster than its distribution stream justifies.</li>
         <li><strong>Notes</strong> — Your custom notes for this ticker.</li>
         <li><strong>Actions</strong> — Remove button.</li>
       </ul>
@@ -2151,8 +2254,8 @@ function BuySellHelp() {
         <li><strong>SMA 200</strong> — 200-day SMA signal with % distance from price.</li>
         <li><strong>Sharpe</strong> — Risk-adjusted return ratio.</li>
         <li><strong>Sortino</strong> — Downside-risk-adjusted return.</li>
-        <li><strong>Coverage</strong> — TTM distribution coverage ratio.</li>
-        <li><strong>Cov Signal</strong> — BUY/SELL/NEUTRAL from coverage.</li>
+        <li><strong>NAV Ratio</strong> — Benchmark-adjusted NAV erosion ratio. Lower is better; blank means the holding was not an eligible NAV test candidate or lacked enough data.</li>
+        <li><strong>NAV Signal</strong> — BUY/NEUTRAL/SELL from the NAV ratio thresholds.</li>
         <li><strong>NAV Erosion</strong> — Low/Medium/High probability.</li>
         <li><strong>Portfolio $</strong> — Market value of this position (blank for watchlist tickers).</li>
       </ul>
@@ -2163,7 +2266,7 @@ function BuySellHelp() {
         <li><strong>Check summary badges</strong> to see the overall signal balance across your portfolio.</li>
         <li><strong>Sort the table by "Overall"</strong> to group all SELL signals together and review them.</li>
         <li><strong>Sort by "NAV Erosion"</strong> to surface high-risk income funds that may be eroding your capital.</li>
-        <li><strong>Sort by "Coverage"</strong> to see which funds are paying out more than they earn (coverage &lt; 1.0).</li>
+        <li><strong>Sort by "NAV Ratio"</strong> to see which funds are underperforming their benchmark after accounting for distributions.</li>
         <li><strong>Cross-reference with Portfolio $</strong> — a SELL signal on a large position is more urgent than on a small one.</li>
         <li>Click <strong>Refresh</strong> regularly (or after market close) to update signals with the latest data.</li>
       </ol>
@@ -2187,9 +2290,11 @@ function NavErosionHelp() {
       <p style={{ marginBottom: '1rem' }}>
         NAV (Net Asset Value) erosion occurs when a fund's share price falls faster than its
         distributions can compensate for. A fund paying a 15% annual distribution yield but losing
-        20% of its price per year is eroding your principal. The coverage ratio measures this:
-        a ratio above 1.0 means the fund earns enough to cover its payouts; below 1.0 means
-        it's paying out of capital.
+        20% of its price per year may be eroding your principal. The NAV erosion ratio compares
+        the fund's price decline against a relevant benchmark, then scales the destructive decline
+        by the fund's distribution yield. A lower ratio means less benchmark-adjusted erosion.
+        Benchmark weakness is treated as context: if the benchmark is down too, the fund's decline
+        is not automatically treated as structural NAV erosion.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Inputs</h3>
@@ -2199,6 +2304,19 @@ function NavErosionHelp() {
         <li><strong>Start / End Date</strong> — The historical backtest window.</li>
         <li><strong>Reinvestment %</strong> — Drag the slider or type a number (0–100%). At 0%, all distributions are taken as cash. At 100%, all distributions buy more shares (full DRIP). Use values between to simulate partial reinvestment.</li>
       </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Automatic Benchmark Context</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        NAV erosion is benchmark-adjusted so a fund is not punished just because its whole underlying market is weak.
+        The app chooses a best-effort benchmark from known ticker mappings and fund description keywords. Examples:
+        Nasdaq income funds generally compare to <code>QQQ</code>, S&amp;P 500 income funds to <code>SPY</code>,
+        Russell 2000 funds to <code>IWM</code>, defense funds to <code>ITA</code>, gold funds to <code>GLD</code>,
+        silver funds to <code>SLV</code>, and bitcoin funds to <code>BTC-USD</code>.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        For holding-level overrides, use the Dashboard NAV column. There you can force a fund to be tested, skip it,
+        or enter a custom benchmark ticker/composite when the automatic benchmark is not the right fit.
+      </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Statistics</h3>
       <p style={{ marginBottom: '0.75rem' }}>After running the backtest, a strip of metric tiles shows:</p>
@@ -2210,13 +2328,13 @@ function NavErosionHelp() {
         <li><strong>Price Change %</strong> — How much the share price moved over the period.</li>
         <li><strong>NAV Erosion</strong> — Yes or No verdict.</li>
         <li><strong>Final Shares Deficit/Surplus</strong> — Whether you ended up with more or fewer shares than needed to match your original investment at current prices.</li>
-        <li><strong>Coverage Ratio</strong> — Weighted average with a probability assessment: High / Borderline / Low erosion risk.</li>
+        <li><strong>Total NAV Erosion Ratio</strong> — Benchmark-adjusted ratio for the selected period. Low is 0.25 or below, moderate is 0.25–0.75, and high is above 0.75.</li>
       </ul>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Main Line Chart</strong> — Shows share price (blue), portfolio value (green), and a dashed gray break-even threshold over time. If the green line stays above the dashed line, your investment is holding its own.</li>
-        <li><strong>Coverage Ratio Chart</strong> — Monthly coverage ratio plotted over time with color-coded markers: red below 0.8, orange below 1.0, green at or above 1.0. Watch for sustained red periods.</li>
+        <li><strong>NAV Erosion Ratio Chart</strong> — Monthly benchmark-adjusted NAV erosion ratio plotted over time with color-coded markers: green at or below 0.25, orange at or below 0.75, red above 0.75. Watch for sustained red periods.</li>
       </ul>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Monthly Detail Table</h3>
@@ -2233,7 +2351,7 @@ function NavErosionHelp() {
         <li><strong>Portfolio Value</strong> — Current total value.</li>
         <li><strong>Break-Even Shares</strong> — Shares needed to recover original investment at current price.</li>
         <li><strong>Shares Deficit</strong> — Break-even minus total shares. <span style={{ color: '#ef9a9a' }}>Red = you need more shares</span>; <span style={{ color: '#81c784' }}>green = you have surplus</span>.</li>
-        <li><strong>Coverage</strong> — That month's coverage ratio, color-coded.</li>
+        <li><strong>NAV Ratio</strong> — That month's benchmark-adjusted NAV erosion ratio, color-coded.</li>
       </ul>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
@@ -2243,7 +2361,7 @@ function NavErosionHelp() {
         <li>Run at <strong>0% reinvestment</strong> first — this shows worst-case NAV erosion with no DRIP offsetting it.</li>
         <li>Then run at <strong>100%</strong> — this shows whether full DRIP can overcome price decay.</li>
         <li>Find the reinvestment percentage where the Shares Deficit turns positive — that's the break-even DRIP rate for this fund.</li>
-        <li>Check the coverage chart: consistent red months mean the fund is paying out of capital, not earnings.</li>
+        <li>Check the NAV ratio chart: consistent red months mean the fund price is lagging its benchmark despite distributions.</li>
       </ol>
     </div>
   )
@@ -2283,7 +2401,7 @@ function NavScreenerHelp() {
         <li>Total Invested, Total Final Value, Total Gain/Loss, Portfolio Return %</li>
         <li>Total Distributions, Total Reinvested</li>
         <li>NAV Erosion count (e.g., "3 of 8 funds eroding")</li>
-        <li>Portfolio Coverage (dollar-weighted average across all funds)</li>
+        <li>Portfolio NAV erosion ratio (dollar-weighted average across all funds)</li>
         <li>Best Performer (ticker + return %), Worst Performer</li>
         <li>Error Count (tickers where no data was found)</li>
       </ul>
@@ -2301,7 +2419,7 @@ function NavScreenerHelp() {
         <li><strong>Total Return $</strong> and <strong>Total Return %</strong> — Including distributions.</li>
         <li><strong>NAV Erosion</strong> — Yes (red) or No (green).</li>
         <li><strong>Shares Deficit</strong> — Positive = erosion winning, negative = surplus.</li>
-        <li><strong>Coverage</strong> — Weighted coverage ratio, color-coded.</li>
+        <li><strong>NAV Ratio</strong> — Weighted benchmark-adjusted NAV erosion ratio, color-coded.</li>
         <li><strong>Note</strong> — Any data warnings for that ticker.</li>
       </ul>
     </div>
@@ -2500,8 +2618,8 @@ function AnalyticsHelp() {
       <p style={{ marginBottom: '0.75rem' }}>Click <strong>Analyze</strong> to run the base analysis. Results include:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Portfolio Grade Card</strong> — Letter grade (A+ through F) and numeric score with a breakdown bar showing individual grades and weights for Risk, Income, Diversification, and other dimensions.</li>
-        <li><strong>Coverage Ratio</strong> — Colored display of NAV erosion probability for the portfolio.</li>
-        <li><strong>Coverage Bar Chart</strong> — Per-ticker coverage ratios with a 1.0 sustainability line. Tickers below the line are paying out more than they earn.</li>
+        <li><strong>NAV Erosion Ratio</strong> — Colored display of benchmark-adjusted NAV erosion context for the portfolio. Lower is better.</li>
+        <li><strong>NAV Erosion Bar Chart</strong> — Per-ticker NAV ratios with low/moderate/high thresholds. Tickers above 0.75 deserve a closer look.</li>
         <li><strong>Per-Ticker Metrics Table</strong> — One row per ticker with all risk metrics (see columns below). Sortable by any column.</li>
       </ul>
 
@@ -2519,7 +2637,7 @@ function AnalyticsHelp() {
         <li><strong>Annual Return %</strong> — Annualized price return.</li>
         <li><strong>Total Return %</strong> — Including dividends.</li>
         <li><strong>Annual Volatility %</strong> — Annualized standard deviation of returns.</li>
-        <li><strong>Coverage Ratio</strong> — TTM distribution sustainability.</li>
+        <li><strong>NAV Erosion Ratio</strong> — Benchmark-adjusted NAV erosion ratio for eligible income funds.</li>
       </ul>
 
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Optimization Modes</h3>
@@ -2582,7 +2700,7 @@ function PortfolioBuilderHelp() {
       <p style={{ marginBottom: '0.75rem' }}>
         Set the <strong>Period</strong> and <strong>Benchmark</strong> (default SPY), then click
         <strong> Analyze</strong>. Results are identical in format to the Portfolio Analytics page:
-        grade card, coverage ratio, per-ticker metrics table, and chart tabs (Risk & Returns,
+        grade card, NAV erosion ratio, per-ticker metrics table, and chart tabs (Risk & Returns,
         Income & Allocation, Backtesting, Tools).
       </p>
 
@@ -2591,7 +2709,7 @@ function PortfolioBuilderHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker, Grade, Score, Weight %, Current Price, Shares, Dollar Amount</strong></li>
         <li><strong>Ulcer Index, Sharpe, Sortino, Calmar, Omega</strong> — Risk metrics</li>
-        <li><strong>Max Drawdown, Annual Return, Total Return, Annual Volatility, Coverage Ratio</strong></li>
+        <li><strong>Max Drawdown, Annual Return, Total Return, Annual Volatility, NAV Erosion Ratio</strong></li>
       </ul>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparing Portfolios</h3>
@@ -3275,6 +3393,7 @@ const CONTENT_MAP = {
   growth: GrowthHelp,
   dividends: DividendsHelp,
   'div-calendar': DivCalendarHelp,
+  'earnings-calendar': EarningsCalendarHelp,
   'div-compare': DivCompareHelp,
   'dividend-history': DividendHistoryHelp,
   'total-return': TotalReturnHelp,

@@ -21,6 +21,13 @@ function SrcBadge({ source }) {
   return <span className="src-w">Watchlist</span>
 }
 
+function SafetyBadge({ risk, score }) {
+  if (!risk || risk === '—') return <span>{'\u2014'}</span>
+  const text = score != null ? `${Math.round(Number(score))} / ${risk}` : risk
+  const cls = String(risk).toLowerCase().replace(/\s+/g, '-')
+  return <span className={`safety-badge safety-${cls}`}>{text}</span>
+}
+
 function pctCls(s) {
   if (!s) return ''
   if (s[0] === '+') return 'pct-up'
@@ -75,7 +82,7 @@ export default function BuySellSignals() {
   // Sorting
   const colKeys = ['ticker', 'desc', 'ctype', 'source', 'sig_order', 'ao_sig_ord', 'ao_val_num', 'ao_dir',
     'rsi_sig_ord', 'macd_sig_ord', 'sma50_sig_ord', 'sma200_sig_ord', 'sharpe_val_num', 'sortino_val_num',
-    'cov_ratio_num', 'cov_sig_ord', 'nav_erosion', 'pv_num']
+    'cov_ratio_num', 'cov_sig_ord', 'nav_erosion', 'div_safety_score', 'div_cut_risk', 'pv_num']
 
   const sorted = useMemo(() => {
     const arr = [...rows]
@@ -115,9 +122,11 @@ export default function BuySellSignals() {
     { label: 'SMA 200', tip: 'Simple Moving Average 200-day — BUY when price is above' },
     { label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
     { label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
-    { label: 'Coverage', tip: 'TTM coverage ratio: (price return + dist yield) / dist yield. >1 = sustainable, <1 = NAV eroding' },
-    { label: 'Cov Signal', tip: 'Coverage signal: BUY (>1 sustainable), SELL (<1 eroding), NEUTRAL (=1)' },
-    { label: 'NAV Erosion', tip: 'Probability of NAV erosion: Low (>1), High (<1), Medium (=1)' },
+    { label: 'NAV Ratio', tip: 'NAV erosion ratio: fund price decline / TTM distribution yield, only when benchmark is flat or up. Lagging a rising benchmark is not erosion.' },
+    { label: 'NAV Signal', tip: 'Signal from NAV Ratio: BUY <= 0.25, NEUTRAL <= 0.75, SELL > 0.75' },
+    { label: 'NAV Erosion', tip: 'Derived from NAV Ratio: Low <= 0.25, Medium <= 0.75, High > 0.75' },
+    { label: 'Div Safety', tip: 'Dividend safety score and cut-risk level for portfolio holdings' },
+    { label: 'Cut Risk', tip: 'Flags portfolio holdings with elevated or high dividend cut risk' },
     { label: 'Portfolio $', tip: 'Current market value of this position in portfolio' },
   ]
 
@@ -136,7 +145,7 @@ export default function BuySellSignals() {
         <span style={{ color: '#00c853', fontWeight: 600 }}>&#9632; BUY</span>&nbsp;
         <span style={{ color: '#d50000', fontWeight: 600 }}>&#9632; SELL</span>&nbsp;
         <span style={{ color: '#f9a825', fontWeight: 600 }}>&#9632; NEUTRAL</span>
-        &nbsp;&middot;&nbsp; Overall signal = majority vote across AO, RSI, MACD, SMA50, SMA200, Coverage
+        &nbsp;&middot;&nbsp; Overall signal = majority vote across AO, RSI, MACD, SMA50, SMA200, NAV Signal
       </p>
 
       {/* Counts */}
@@ -196,7 +205,7 @@ export default function BuySellSignals() {
               <thead>
                 <tr>
                   {headers.map((h, i) => {
-                    const cls = i === 0 ? 'col-tick' : i === 1 ? 'col-name' : ([4, 5, 8, 9, 10, 11, 12, 14, 17].includes(i) ? 'grp-left' : '')
+                    const cls = i === 0 ? 'col-tick' : i === 1 ? 'col-name' : ([4, 5, 8, 9, 10, 11, 12, 14, 17, 19].includes(i) ? 'grp-left' : '')
                     return (
                       <th key={h.label} className={cls} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }} title={h.tip || ''}>
                         {h.label}{h.tip ? ' \u24D8' : ''}{arrow(i)}
@@ -240,6 +249,14 @@ export default function BuySellSignals() {
                       fontWeight: 600,
                       backgroundColor: r.nav_erosion === 'Low' ? 'rgba(0,200,83,0.12)' : r.nav_erosion === 'High' ? 'rgba(213,0,0,0.12)' : r.nav_erosion === 'Medium' ? 'rgba(249,168,37,0.12)' : 'transparent',
                     }}>{r.nav_erosion}</td>
+                    <td className="grp-left" title={r.div_risk_reasons?.join('; ') || ''}>
+                      <SafetyBadge risk={r.div_safety_risk} score={r.div_safety_score} />
+                    </td>
+                    <td>
+                      {r.source === 'Portfolio'
+                        ? <span className={`cut-risk ${r.div_cut_risk ? 'cut-risk-yes' : 'cut-risk-no'}`}>{r.div_cut_risk ? 'Yes' : 'No'}</span>
+                        : '\u2014'}
+                    </td>
                     <td className="grp-left">{r.pv_fmt}</td>
                   </tr>
                 ))}

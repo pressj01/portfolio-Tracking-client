@@ -317,9 +317,9 @@ export default function Watchlist() {
                   { label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
                   { label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
                   { label: '1Y Return', tip: 'Total return over the past 12 months' },
-                  { label: 'Coverage', tip: 'TTM coverage ratio: (price return + dist yield) / dist yield. >1 = sustainable, <1 = NAV eroding' },
-                  { label: 'Cov Signal', tip: 'Coverage signal: BUY (>1 sustainable), SELL (<1 eroding), NEUTRAL (=1)' },
-                  { label: 'NAV Erosion', tip: 'Probability of NAV erosion based on coverage ratio: Low (>1), High (<1), Medium (=1)' },
+                  { label: 'NAV Ratio', tip: 'NAV erosion ratio: fund price decline / TTM distribution yield, only when benchmark is flat or up. Lagging a rising benchmark is not erosion.' },
+                  { label: 'NAV Signal', tip: 'Signal from NAV Ratio: BUY <= 0.25, NEUTRAL <= 0.75, SELL > 0.75' },
+                  { label: 'NAV Erosion', tip: 'Derived from NAV Ratio: Low <= 0.25, Medium <= 0.75, High > 0.75' },
                   { label: 'Notes' },
                 ].map((h, i) => (
                   <th key={h.label} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }} title={h.tip || ''}>

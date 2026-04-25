@@ -1,0 +1,14 @@
+Activity Date,Process Date,Settle Date,Instrument,Description,Trans Code,Quantity,Price,Amount
+4/8/2026,4/8/2026,4/9/2026,JEPI,"JPMorgan Equity Premium Income ETF
+CUSIP: 46641Q332",Buy,10,$57.20,($572.00)
+4/6/2026,4/6/2026,4/7/2026,SCHD,"Schwab U.S. Dividend Equity ETF
+CUSIP: 808524797",Sell,5,$82.50,$412.50
+4/8/2026,4/8/2026,4/8/2026,JEPI,Cash Div: R/D 2026-04-07 P/D 2026-04-08 - 10 shares at 0.4500,CDIV,,,$4.50
+4/1/2026,4/1/2026,4/1/2026,TSPY,Manufactured Div: R/D 2026-03-31 P/D 2026-04-01 - 5 shares at 0.2807,MDIV,,,$1.40
+1/7/2026,1/7/2026,1/7/2026,SHLD,Cap Gains: R/D 2025-12-30 P/D 2026-01-07 - 6 shares at 0.0778,SCAP,,,$0.47
+1/7/2026,1/7/2026,1/7/2026,SHLD,Cap Gains: R/D 2025-12-30 P/D 2026-01-07 - 6 shares at 0.0130,LCAP,,,$0.08
+7/25/2025,7/25/2025,7/25/2025,O,"Realty Income Corp
+CUSIP: 756109104",ACATI,25,,
+4/7/2026,4/7/2026,4/7/2026,,Aggregated Margin Rate,MINT,,,($6.34)
+12/3/2025,12/3/2025,12/4/2025,,ACH Withdrawal,ACH,,,($31.40)
+,,,,The data provided is for informational purposes only.,,,,

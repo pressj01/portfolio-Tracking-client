@@ -13,6 +13,7 @@ import DividendAnalysis from './pages/DividendAnalysis'
 import TotalReturn from './pages/TotalReturn'
 import ETFScreen from './pages/ETFScreen'
 import DividendCalendar from './pages/DividendCalendar'
+import EarningsCalendar from './pages/EarningsCalendar'
 import Watchlist from './pages/Watchlist'
 import BuySellSignals from './pages/BuySellSignals'
 import NavErosion from './pages/NavErosion'
@@ -92,6 +93,7 @@ function App() {
         <Route path="/safe-withdrawal" element={<SafeWithdrawal />} />
         <Route path="/etf-screen" element={<ETFScreen />} />
         <Route path="/div-calendar" element={<DividendCalendar />} />
+        <Route path="/earnings-calendar" element={<EarningsCalendar />} />
         <Route path="/watchlist" element={<Watchlist />} />
         <Route path="/buy-sell-signals" element={<BuySellSignals />} />
         <Route path="/nav-erosion" element={<NavErosion />} />
@@ -150,6 +152,7 @@ function Nav() {
         <NavLink to="/growth">Growth</NavLink>
         <NavLink to="/dividends">Dividends</NavLink>
         <NavLink to="/div-calendar">Dividend Calendar</NavLink>
+        <NavLink to="/earnings-calendar">Earnings Calendar</NavLink>
         <NavLink to="/div-compare">Dividend Compare</NavLink>
         <NavLink to="/dividend-history">Dividend History</NavLink>
         <NavLink to="/total-return">Total Return</NavLink>

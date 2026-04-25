@@ -268,7 +268,7 @@ export default function NavErosionPortfolio() {
   const headers = ['Ticker', 'Amount', 'Reinvest %', 'Start Price', 'End Price',
     'Price \u0394%', 'Total Distributions', 'Total Reinvested', 'Final Value',
     'Gain/Loss $', 'Gain/Loss %', 'Total Return $', 'Total Return %',
-    'NAV Erosion', 'Shares Deficit', 'Coverage', 'Note']
+    'NAV Erosion', 'Shares Deficit', 'NAV Ratio', 'Note']
 
   return (
     <div className="nep-page">
@@ -455,25 +455,25 @@ export default function NavErosionPortfolio() {
                 sub="funds showing erosion"
               />
               <StatTile
-                label="Portfolio Coverage"
+                label="Portfolio NAV Erosion Ratio"
                 value={summary.aggCoverage != null ? summary.aggCoverage.toFixed(4) : '\u2014'}
-                color={summary.aggCoverage == null ? '#666' : summary.aggCoverage < 0.8 ? '#e05555' : summary.aggCoverage < 1.0 ? '#ffb300' : '#00c853'}
+                color={summary.aggCoverage == null ? '#666' : summary.aggCoverage > 0.75 ? '#e05555' : summary.aggCoverage > 0.25 ? '#ffb300' : '#00c853'}
                 sub="dollar-weighted avg"
               />
               {summary.aggCoverage != null && (
                 <div className="nep-stat-tile" style={{
-                  border: summary.aggCoverage < 0.8 ? '2px solid #e05555' : summary.aggCoverage < 1.0 ? '2px solid #ffb300' : '2px solid #00c853',
+                  border: summary.aggCoverage > 0.75 ? '2px solid #e05555' : summary.aggCoverage > 0.25 ? '2px solid #ffb300' : '2px solid #00c853',
                   borderRadius: '8px',
-                  background: summary.aggCoverage < 0.8 ? 'rgba(224,85,85,0.12)' : summary.aggCoverage < 1.0 ? 'rgba(255,179,0,0.12)' : 'rgba(0,200,83,0.12)',
+                  background: summary.aggCoverage > 0.75 ? 'rgba(224,85,85,0.12)' : summary.aggCoverage > 0.25 ? 'rgba(255,179,0,0.12)' : 'rgba(0,200,83,0.12)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                 }}>
                   <div className="nep-stat-val" style={{
-                    color: summary.aggCoverage < 0.8 ? '#e05555' : summary.aggCoverage < 1.0 ? '#ffb300' : '#00c853',
+                    color: summary.aggCoverage > 0.75 ? '#e05555' : summary.aggCoverage > 0.25 ? '#ffb300' : '#00c853',
                     fontSize: '0.85rem',
                     lineHeight: 1.3,
                     textAlign: 'center',
                   }}>
-                    {summary.aggCoverage < 0.8 ? 'High Probability of Portfolio NAV Erosion' : summary.aggCoverage < 1.0 ? 'Borderline Portfolio NAV Erosion Risk' : 'Low Probability of Portfolio NAV Erosion'}
+                    {summary.aggCoverage > 0.75 ? 'High Benchmark-Adjusted Portfolio NAV Erosion' : summary.aggCoverage > 0.25 ? 'Moderate Benchmark-Adjusted Portfolio NAV Erosion' : 'Low Benchmark-Adjusted Portfolio NAV Erosion'}
                   </div>
                 </div>
               )}
@@ -554,7 +554,7 @@ export default function NavErosionPortfolio() {
                           : <span style={{ color: '#00c853', fontWeight: 700 }}>No</span>}
                       </td>
                       <td className={defCls}>{parseFloat(r.final_deficit).toFixed(4)}</td>
-                      <td style={{ color: r.coverage_ratio == null ? '#666' : r.coverage_ratio < 0.8 ? '#e05555' : r.coverage_ratio < 1.0 ? '#ffb300' : '#00c853', fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
+                      <td style={{ color: r.coverage_ratio == null ? '#666' : r.coverage_ratio > 0.75 ? '#e05555' : r.coverage_ratio > 0.25 ? '#ffb300' : '#00c853', fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
                         {r.coverage_ratio != null ? r.coverage_ratio.toFixed(4) : '\u2014'}
                       </td>
                       <td style={{ textAlign: 'left', fontSize: '0.78rem', color: '#aaa' }}>
@@ -579,7 +579,7 @@ export default function NavErosionPortfolio() {
                     <td></td>
                     <td className={summary.totTR >= 0 ? 'pct-up' : 'pct-down'}>{fmt$(summary.totTR)}</td>
                     <td></td><td></td>
-                    <td style={{ color: summary.aggCoverage == null ? '#666' : summary.aggCoverage < 0.8 ? '#e05555' : summary.aggCoverage < 1.0 ? '#ffb300' : '#00c853', fontWeight: 600 }}>
+                    <td style={{ color: summary.aggCoverage == null ? '#666' : summary.aggCoverage > 0.75 ? '#e05555' : summary.aggCoverage > 0.25 ? '#ffb300' : '#00c853', fontWeight: 600 }}>
                       {summary.aggCoverage != null ? summary.aggCoverage.toFixed(4) : '\u2014'}
                     </td>
                     <td></td>

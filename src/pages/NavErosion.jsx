@@ -101,7 +101,7 @@ export default function NavErosion() {
   const arrow = (col) => sortCol === col ? (sortAsc ? ' \u25B2' : ' \u25BC') : ''
 
   const headers = ['Date', 'Price', 'Price \u0394%', 'Div / Share', 'Total Dist',
-    'Reinvested', 'Shares Bought', 'Total Shares', 'Portfolio Value', 'Break-Even Shares', 'Shares Deficit', 'Coverage']
+    'Reinvested', 'Shares Bought', 'Total Shares', 'Portfolio Value', 'Break-Even Shares', 'Shares Deficit', 'NAV Ratio']
 
   const s = summary || {}
 
@@ -237,22 +237,22 @@ export default function NavErosion() {
             color={s.final_deficit > 0 ? '#e05555' : '#00c853'}
           />
           <StatTile
-            label="Total Coverage Ratio"
+            label="Total NAV Erosion Ratio"
             value={s.total_coverage != null ? s.total_coverage.toFixed(4) : '\u2014'}
-            color={s.total_coverage == null ? '#666' : s.total_coverage < 0.8 ? '#e05555' : s.total_coverage < 1.0 ? '#ffb300' : '#00c853'}
+            color={s.total_coverage == null ? '#666' : s.total_coverage > 0.75 ? '#e05555' : s.total_coverage > 0.25 ? '#ffb300' : '#00c853'}
           />
           {s.total_coverage != null && (
             <div className="ne-stat-tile" style={{
-              border: s.total_coverage < 0.8 ? '2px solid #e05555' : s.total_coverage < 1.0 ? '2px solid #ffb300' : '2px solid #00c853',
+              border: s.total_coverage > 0.75 ? '2px solid #e05555' : s.total_coverage > 0.25 ? '2px solid #ffb300' : '2px solid #00c853',
               borderRadius: '8px',
-              background: s.total_coverage < 0.8 ? 'rgba(224,85,85,0.12)' : s.total_coverage < 1.0 ? 'rgba(255,179,0,0.12)' : 'rgba(0,200,83,0.12)',
+              background: s.total_coverage > 0.75 ? 'rgba(224,85,85,0.12)' : s.total_coverage > 0.25 ? 'rgba(255,179,0,0.12)' : 'rgba(0,200,83,0.12)',
             }}>
               <div className="ne-stat-val" style={{
-                color: s.total_coverage < 0.8 ? '#e05555' : s.total_coverage < 1.0 ? '#ffb300' : '#00c853',
+                color: s.total_coverage > 0.75 ? '#e05555' : s.total_coverage > 0.25 ? '#ffb300' : '#00c853',
                 fontSize: '0.85rem',
                 lineHeight: 1.3,
               }}>
-                {s.total_coverage < 0.8 ? 'High Probability of NAV Erosion' : s.total_coverage < 1.0 ? 'Borderline NAV Erosion Risk' : 'Low Probability of NAV Erosion'}
+                {s.total_coverage > 0.75 ? 'High Benchmark-Adjusted NAV Erosion' : s.total_coverage > 0.25 ? 'Moderate Benchmark-Adjusted NAV Erosion' : 'Low Benchmark-Adjusted NAV Erosion'}
               </div>
             </div>
           )}
@@ -272,13 +272,13 @@ export default function NavErosion() {
         </div>
       )}
 
-      {/* Coverage Ratio Chart */}
+      {/* NAV Erosion Ratio Chart */}
       {rows.length > 0 && !loading && (() => {
         const covRows = rows.filter(r => r.coverage_ratio != null)
         if (covRows.length === 0) return null
         const dates = covRows.map(r => r.date)
         const values = covRows.map(r => r.coverage_ratio)
-        const colors = values.map(v => v < 0.8 ? '#e05555' : v < 1.0 ? '#ffb300' : '#00c853')
+        const colors = values.map(v => v > 0.75 ? '#e05555' : v > 0.25 ? '#ffb300' : '#00c853')
         return (
           <div style={{ marginBottom: '1.5rem' }}>
             <Plot
@@ -290,21 +290,21 @@ export default function NavErosion() {
                   mode: 'lines+markers',
                   line: { color: '#7ecfff', width: 2 },
                   marker: { color: colors, size: 6 },
-                  hovertemplate: '<b>%{x}</b><br>Coverage: %{y:.4f}<extra></extra>',
-                  name: 'Coverage Ratio',
+                  hovertemplate: '<b>%{x}</b><br>NAV Erosion Ratio: %{y:.4f}<extra></extra>',
+                  name: 'NAV Erosion Ratio',
                 },
                 {
                   x: [dates[0], dates[dates.length - 1]],
-                  y: [1, 1],
+                  y: [0.75, 0.75],
                   type: 'scatter',
                   mode: 'lines',
                   line: { color: '#ffffff', width: 2, dash: 'dash' },
                   hoverinfo: 'skip',
-                  name: 'Sustainable (1.0)',
+                  name: 'High Threshold (0.75)',
                 },
               ]}
               layout={{
-                title: `${ticker.trim().toUpperCase()} — Monthly Coverage Ratio`,
+                title: `${ticker.trim().toUpperCase()} — Monthly NAV Erosion Ratio`,
                 template: 'plotly_dark',
                 margin: { t: 50, l: 60, r: 30, b: 50 },
                 height: 320,
@@ -315,7 +315,7 @@ export default function NavErosion() {
                   bordercolor: '#3a3a5c',
                   font: { color: '#e0e0e0', size: 13 },
                 },
-                yaxis: { title: 'Coverage Ratio', zeroline: true },
+                yaxis: { title: 'NAV Erosion Ratio', zeroline: true },
                 hovermode: 'x unified',
                 shapes: [{
                   type: 'rect',
@@ -371,7 +371,7 @@ export default function NavErosion() {
                       <td>{fmt$(r.portfolio_val)}</td>
                       <td className="grp-left">{fmt4(r.breakeven_sh)}</td>
                       <td className={defCls}>{fmt4(r.shares_deficit)}</td>
-                      <td style={{ color: r.coverage_ratio == null ? '#666' : r.coverage_ratio < 0.8 ? '#e05555' : r.coverage_ratio < 1.0 ? '#ffb300' : '#00c853', fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
+                      <td style={{ color: r.coverage_ratio == null ? '#666' : r.coverage_ratio > 0.75 ? '#e05555' : r.coverage_ratio > 0.25 ? '#ffb300' : '#00c853', fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
                         {r.coverage_ratio != null ? r.coverage_ratio.toFixed(4) : '\u2014'}
                       </td>
                     </tr>

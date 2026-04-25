@@ -307,9 +307,10 @@ export default function Dashboard() {
   const [modalTicker, setModalTicker] = useState(null)
   const [portfolioCoverage, setPortfolioCoverage] = useState(null)
   const [tickerCoverage, setTickerCoverage] = useState({})
+  const [tickerCoverageMeta, setTickerCoverageMeta] = useState({})
   const [overviewGroups, setOverviewGroups] = useState(null)
   const [sp500, setSp500] = useState(null)
-  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_${selection}`, [selection])
+  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v9_${selection}`, [selection])
 
   useEffect(() => {
     const cached = readDashboardCache(SP500_CACHE_KEY)
@@ -338,6 +339,7 @@ export default function Dashboard() {
       setPortfolioGrade(cached.portfolioGrade || {})
       setPortfolioCoverage(cached.portfolioCoverage ?? null)
       setTickerCoverage(cached.tickerCoverage || {})
+      setTickerCoverageMeta(cached.tickerCoverageMeta || {})
       setOverviewGroups(cached.overviewGroups || null)
       setLoading(false)
     } else {
@@ -348,6 +350,7 @@ export default function Dashboard() {
       setPortfolioGrade({})
       setPortfolioCoverage(null)
       setTickerCoverage({})
+      setTickerCoverageMeta({})
       setOverviewGroups(null)
       setLoading(true)
     }
@@ -408,11 +411,26 @@ export default function Dashboard() {
             .then(safeJson)
             .then(d => {
               if (stale) return
-              if (d.aggregate_coverage != null) setPortfolioCoverage(d.aggregate_coverage)
+              setPortfolioCoverage(d.aggregate_coverage ?? null)
               if (d.results) {
                 const map = {}
-                d.results.forEach(r => { if (r.coverage_ratio != null) map[r.ticker] = r.coverage_ratio })
+                const meta = {}
+                d.results.forEach(r => {
+                  if (r.coverage_ratio != null) map[r.ticker] = r.coverage_ratio
+                  meta[r.ticker] = {
+                    nav_tested: !!r.nav_tested,
+                    benchmark: r.benchmark || null,
+                    benchmark_valid: r.benchmark_valid !== false,
+                    nav_erosion_scope: r.nav_erosion_scope || 'auto',
+                    nav_benchmark_override: r.nav_benchmark_override || '',
+                    warning: r.warning || null,
+                  }
+                })
                 setTickerCoverage(map)
+                setTickerCoverageMeta(meta)
+              } else {
+                setTickerCoverage({})
+                setTickerCoverageMeta({})
               }
             })
             .catch(() => {})
@@ -476,6 +494,7 @@ export default function Dashboard() {
       portfolioGrade,
       portfolioCoverage,
       tickerCoverage,
+      tickerCoverageMeta,
       overviewGroups,
     })
   }, [
@@ -488,6 +507,7 @@ export default function Dashboard() {
     portfolioGrade,
     portfolioCoverage,
     tickerCoverage,
+    tickerCoverageMeta,
     overviewGroups,
   ])
 
@@ -538,10 +558,11 @@ export default function Dashboard() {
           total_return_pct: pv ? ((gl + td) / pv) : 0,
           pct_of_account: totalCv ? (cv / totalCv) : 0,
           _coverage: tickerCoverage[h.ticker] ?? null,
+          _coverage_meta: tickerCoverageMeta[h.ticker] || null,
           _grade_sort: ({ 'A+': 13, 'A': 12, 'A-': 11, 'B+': 10, 'B': 9, 'B-': 8, 'C+': 7, 'C': 6, 'C-': 5, 'D+': 4, 'D': 3, 'D-': 2, 'F': 1 })[tickerGrades[h.ticker]?.grade] || 0,
         }
       })
-  }, [holdings, totals, tickerCoverage, tickerGrades])
+  }, [holdings, totals, tickerCoverage, tickerCoverageMeta, tickerGrades])
 
   // Sorting
   const sorted = useMemo(() => {
@@ -563,6 +584,64 @@ export default function Dashboard() {
     setSortAsc(prev => sortCol === col ? !prev : (typeof enrichedHoldings[0]?.[col] === 'string'))
     setSortCol(col)
   }, [sortCol, enrichedHoldings])
+
+  const refreshPortfolioCoverage = useCallback(() => {
+    return pf('/api/portfolio-coverage')
+      .then(safeJson)
+      .then(d => {
+        setPortfolioCoverage(d.aggregate_coverage ?? null)
+        if (d.results) {
+          const map = {}
+          const meta = {}
+          d.results.forEach(r => {
+            if (r.coverage_ratio != null) map[r.ticker] = r.coverage_ratio
+            meta[r.ticker] = {
+              nav_tested: !!r.nav_tested,
+              benchmark: r.benchmark || null,
+              benchmark_valid: r.benchmark_valid !== false,
+              nav_erosion_scope: r.nav_erosion_scope || 'auto',
+              nav_benchmark_override: r.nav_benchmark_override || '',
+              warning: r.warning || null,
+            }
+          })
+          setTickerCoverage(map)
+          setTickerCoverageMeta(meta)
+        } else {
+          setTickerCoverage({})
+          setTickerCoverageMeta({})
+        }
+      })
+      .catch(() => {})
+  }, [pf])
+
+  const updateNavScope = useCallback((ticker, scope, benchmark = '') => {
+    const navBenchmark = String(benchmark || '').trim().toUpperCase()
+    setHoldings(prev => prev.map(h => (
+      h.ticker === ticker ? { ...h, nav_erosion_scope: scope, nav_benchmark_override: navBenchmark } : h
+    )))
+    setTickerCoverageMeta(prev => ({
+      ...prev,
+      [ticker]: {
+        ...(prev[ticker] || {}),
+        nav_erosion_scope: scope,
+        nav_benchmark_override: navBenchmark,
+      },
+    }))
+    pf(`/api/holdings/${ticker}/nav-erosion-scope`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nav_erosion_scope: scope,
+        nav_benchmark_override: navBenchmark,
+      }),
+    })
+      .then(safeJson)
+      .then(() => refreshPortfolioCoverage())
+      .catch(() => {
+        setRefreshStatus(`Could not update ${ticker} NAV test setting.`)
+        setTimeout(() => setRefreshStatus(null), 3000)
+      })
+  }, [pf, refreshPortfolioCoverage])
 
   const SortHeader = ({ col, children, align, tip }) => (
     <th
@@ -659,24 +738,24 @@ export default function Dashboard() {
           color={gradeColor(totals.priceReturn)}
         />
         <SummaryCard
-          label="Coverage Ratio"
+          label="NAV Erosion Ratio"
           value={portfolioCoverage != null ? portfolioCoverage.toFixed(4) : '—'}
-          color={portfolioCoverage == null ? undefined : portfolioCoverage < 0.8 ? '#ff6b6b' : portfolioCoverage < 1.0 ? '#ffb300' : '#4dff91'}
+          color={portfolioCoverage == null ? undefined : portfolioCoverage > 0.75 ? '#ff6b6b' : portfolioCoverage > 0.25 ? '#ffb300' : '#4dff91'}
         />
         {portfolioCoverage != null && (
           <div className={`summary-card`} style={{
-            border: portfolioCoverage < 0.8 ? '2px solid #ff6b6b' : portfolioCoverage < 1.0 ? '2px solid #ffb300' : '2px solid #4dff91',
+            border: portfolioCoverage > 0.75 ? '2px solid #ff6b6b' : portfolioCoverage > 0.25 ? '2px solid #ffb300' : '2px solid #4dff91',
             borderRadius: '8px',
-            background: portfolioCoverage < 0.8 ? 'rgba(255,107,107,0.12)' : portfolioCoverage < 1.0 ? 'rgba(255,179,0,0.12)' : 'rgba(77,255,145,0.12)',
+            background: portfolioCoverage > 0.75 ? 'rgba(255,107,107,0.12)' : portfolioCoverage > 0.25 ? 'rgba(255,179,0,0.12)' : 'rgba(77,255,145,0.12)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
             <div className="summary-value" style={{
-              color: portfolioCoverage < 0.8 ? '#ff6b6b' : portfolioCoverage < 1.0 ? '#ffb300' : '#4dff91',
+              color: portfolioCoverage > 0.75 ? '#ff6b6b' : portfolioCoverage > 0.25 ? '#ffb300' : '#4dff91',
               fontSize: '0.82rem',
               lineHeight: 1.3,
               textAlign: 'center',
             }}>
-              {portfolioCoverage < 0.8 ? 'High Probability of NAV Erosion' : portfolioCoverage < 1.0 ? 'Borderline NAV Erosion Risk' : 'Low Probability of NAV Erosion'}
+              {portfolioCoverage > 0.75 ? 'High Benchmark-Adjusted NAV Erosion' : portfolioCoverage > 0.25 ? 'Moderate Benchmark-Adjusted NAV Erosion' : 'Low Benchmark-Adjusted NAV Erosion'}
             </div>
           </div>
         )}
@@ -758,7 +837,7 @@ export default function Dashboard() {
               <SortHeader col="monthly_income_not_reinvested" align="right" tip="Monthly income NOT being reinvested (cash)">Cash$</SortHeader>
               <SortHeader col="estim_payment_per_year" align="right" tip="Estimated annual dividend income">Yr$</SortHeader>
               <SortHeader col="paid_for_itself" align="right" tip="Percentage of original cost recovered through dividends">PFI%</SortHeader>
-              <SortHeader col="_coverage" align="right" tip="Coverage ratio — above 1.0 sustainable, 0.8–1.0 borderline, below 0.8 likely NAV decay">Cov</SortHeader>
+              <SortHeader col="_coverage" align="right" tip="Benchmark-adjusted NAV erosion ratio. Lower is better: <=0.25 low, <=0.75 medium, >0.75 high">NAV</SortHeader>
               <SortHeader col="_grade_sort" align="center" tip="Composite grade based on yield, growth, and risk metrics">Grd</SortHeader>
             </tr>
           </thead>
@@ -766,7 +845,21 @@ export default function Dashboard() {
             {sorted.map(h => {
               const g = tickerGrades[h.ticker]
               const cov = h._coverage
-              const covBad = cov != null && cov < 0.8
+              const covBad = cov != null && cov > 0.75
+              const navMeta = h._coverage_meta || {}
+              const navScope = h.nav_erosion_scope || navMeta.nav_erosion_scope || 'auto'
+              const navBenchmark = h.nav_benchmark_override || navMeta.nav_benchmark_override || ''
+              const navLabel = navScope === 'test' ? 'Test' : navScope === 'skip' ? 'Skip' : 'Auto'
+              const navBenchmarkInvalid = navBenchmark && navMeta.benchmark_valid === false
+              const navTitle = navScope === 'skip'
+                ? 'Skipped by user override'
+                : navBenchmarkInvalid
+                  ? `${navBenchmark} is not returning benchmark price history`
+                : navScope === 'test'
+                  ? `Forced NAV test${navBenchmark || navMeta.benchmark ? ` vs ${navBenchmark || navMeta.benchmark}` : ''}`
+                  : navMeta.nav_tested
+                    ? `Auto-tested${navBenchmark || navMeta.benchmark ? ` vs ${navBenchmark || navMeta.benchmark}` : ''}`
+                    : 'Auto: not tested by current NAV erosion rules'
               return (
                 <tr key={h.ticker} style={covBad ? { background: 'rgba(255,107,107,0.1)' } : undefined}>
                   <td>
@@ -800,8 +893,68 @@ export default function Dashboard() {
                   <td style={{ textAlign: 'right', color: pfiColor(h.paid_for_itself), fontWeight: pfiVal(h.paid_for_itself) >= 100 ? 700 : 400 }}>
                     {h.paid_for_itself == null ? '—' : (h.paid_for_itself * 100).toFixed(2) + '%'}
                   </td>
-                  <td style={{ textAlign: 'right', color: cov == null ? '#556' : cov < 0.8 ? '#ff6b6b' : cov < 1.0 ? '#ffb300' : '#4dff91', fontWeight: cov != null ? 600 : 400 }}>
-                    {cov != null ? cov.toFixed(2) : '—'}
+                  <td
+                    style={{
+                      textAlign: 'right',
+                      color: cov == null ? '#6f7890' : cov > 0.75 ? '#ff6b6b' : cov > 0.25 ? '#ffb300' : '#4dff91',
+                      fontWeight: cov != null ? 600 : 400,
+                      minWidth: 92,
+                    }}
+                    title={navTitle}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
+                      <span>{cov != null ? cov.toFixed(2) : '—'}</span>
+                      <select
+                        aria-label={`${h.ticker} NAV erosion testing`}
+                        value={navScope}
+                        onClick={e => e.stopPropagation()}
+                        onChange={e => updateNavScope(h.ticker, e.target.value, navBenchmark)}
+                        title={navTitle}
+                        style={{
+                          width: 46,
+                          height: 20,
+                          border: '1px solid #294b73',
+                          borderRadius: 4,
+                          background: '#0f1c36',
+                          color: navScope === 'test' ? '#7ecfff' : navScope === 'skip' ? '#ffb300' : '#9aa8bd',
+                          fontSize: '0.62rem',
+                          padding: '0 2px',
+                        }}
+                      >
+                        <option value="auto">Auto</option>
+                        <option value="test">Test</option>
+                        <option value="skip">Skip</option>
+                      </select>
+                    </div>
+                    <input
+                      aria-label={`${h.ticker} NAV benchmark override`}
+                      value={navBenchmark}
+                      placeholder={navMeta.benchmark || 'bench'}
+                      onClick={e => e.stopPropagation()}
+                      onChange={e => {
+                        const value = e.target.value.toUpperCase()
+                        setHoldings(prev => prev.map(row => (
+                          row.ticker === h.ticker ? { ...row, nav_benchmark_override: value } : row
+                        )))
+                      }}
+                      onBlur={e => updateNavScope(h.ticker, navScope, e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') e.currentTarget.blur()
+                      }}
+                      title="Optional benchmark override, e.g. QQQ, GLD, BTC-USD, or BTC-USD+GLD"
+                      style={{
+                        width: 74,
+                        marginTop: 2,
+                        border: navBenchmarkInvalid ? '1px solid #ff6b6b' : '1px solid #203a5f',
+                        borderRadius: 4,
+                        background: '#0d1830',
+                        color: navBenchmarkInvalid ? '#ffb3b3' : navBenchmark ? '#d7e8ff' : '#7d8799',
+                        fontSize: '0.58rem',
+                        padding: '1px 3px',
+                        textAlign: 'right',
+                      }}
+                    />
+                    <div style={{ fontSize: '0.58rem', color: '#7d8799', lineHeight: 1.1 }}>{navLabel}</div>
                   </td>
                   <td style={{ textAlign: 'center' }}>{g ? <GradeBadge grade={g.grade} /> : '—'}</td>
                 </tr>

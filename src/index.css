@@ -1464,6 +1464,71 @@ label {
 .dc-freq { color: #5a6a7a; }
 .dc-paid-badge { font-size: .62rem; color: #2a9975; font-weight: 600; letter-spacing: .04em; margin-left: 4px; }
 
+/* ── Earnings Calendar ──────────────────────────────────────────────────────── */
+.ec-card.ec-past { opacity: .7; }
+.ec-days { color: #8899aa; font-weight: 400; text-transform: none; letter-spacing: 0; font-size: .68rem; }
+.ec-meta { display: flex; flex-wrap: wrap; gap: 2px; }
+.ec-beat { color: #00e89a; font-weight: 600; }
+.ec-miss { color: #e05555; font-weight: 600; }
+
+/* ── Dividend Safety ───────────────────────────────────────────────────────── */
+.safety-score,
+.safety-badge,
+.cut-risk {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  min-height: 22px;
+  padding: 0.12rem 0.42rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.safety-low {
+  color: #7dffb2;
+  background: rgba(0, 200, 83, 0.14);
+  border: 1px solid rgba(0, 200, 83, 0.28);
+}
+.safety-moderate {
+  color: #ffd56a;
+  background: rgba(249, 168, 37, 0.14);
+  border: 1px solid rgba(249, 168, 37, 0.3);
+}
+.safety-elevated {
+  color: #ffb36b;
+  background: rgba(255, 132, 0, 0.15);
+  border: 1px solid rgba(255, 132, 0, 0.32);
+}
+.safety-high {
+  color: #ff8a8a;
+  background: rgba(213, 0, 0, 0.16);
+  border: 1px solid rgba(213, 0, 0, 0.34);
+}
+.safety-unknown {
+  color: #9aa7b8;
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+}
+.safety-no-dividend {
+  color: #9aa7b8;
+  background: rgba(148, 163, 184, 0.1);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+.div-risk-row {
+  box-shadow: inset 3px 0 0 rgba(255, 107, 107, 0.7);
+}
+.cut-risk-yes {
+  color: #ff8a8a;
+  background: rgba(213, 0, 0, 0.16);
+}
+.cut-risk-no {
+  color: #7dffb2;
+  background: rgba(0, 200, 83, 0.12);
+}
+
 /* ── Watchlist ──────────────────────────────────────────────────────────────── */
 .wl-page { padding: 1.5rem 2rem; }
 .wl-form-row { display: flex; gap: 0.5rem; align-items: flex-end; margin-bottom: 1rem; flex-wrap: wrap; }
