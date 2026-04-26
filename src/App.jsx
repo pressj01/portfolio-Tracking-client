@@ -37,6 +37,7 @@ import TechnicalScanner from './pages/TechnicalScanner'
 import GeneralScanner from './pages/GeneralScanner'
 import PortfolioTester from './pages/PortfolioTester'
 import SecurityResearch from './pages/SecurityResearch'
+import DividendCalculator from './pages/DividendCalculator'
 // Option Trading Tools and Option Education are intentionally excluded from
 // deployed builds — still in development, not ready for production.
 // import OptionTradingTools from './pages/OptionTradingTools'
@@ -114,6 +115,7 @@ function App() {
         <Route path="/general-scanner" element={<GeneralScanner />} />
         <Route path="/portfolio-tester" element={<PortfolioTester />} />
         <Route path="/security-research" element={<SecurityResearch />} />
+        <Route path="/dividend-calculator" element={<DividendCalculator />} />
         {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
         <Route path="/help" element={<Help />} />
       </Routes>
@@ -158,6 +160,7 @@ function Nav() {
         <NavLink to="/total-return">Total Return</NavLink>
         <NavLink to="/gains-losses">Gains & Losses</NavLink>
         <NavLink to="/safe-withdrawal">Safe Withdrawal</NavLink>
+        <NavLink to="/dividend-calculator">Dividend Calculator</NavLink>
       </NavDropdown>
       <NavDropdown label="Analysis">
         <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>

@@ -2104,6 +2104,149 @@ def lookup_ticker(ticker):
     return jsonify(result)
 
 
+_DIV_CALC_FREQ_MAP = {
+    "W": ("Weekly", 52),
+    "M": ("Monthly", 12),
+    "Q": ("Quarterly", 4),
+    "SA": ("Semi-Annually", 2),
+    "A": ("Annually", 1),
+}
+
+
+def _div_calc_infer_frequency(divs):
+    if divs is None or divs.empty:
+        return "Q"
+    if divs.index.tz is not None:
+        cutoff = pd.Timestamp.now(tz=divs.index.tz) - pd.Timedelta(days=365)
+    else:
+        cutoff = pd.Timestamp.now() - pd.Timedelta(days=365)
+    recent = divs[divs.index >= cutoff]
+    n = len(recent[recent > 0])
+    if n >= 45: return "W"
+    if n >= 10: return "M"
+    if n >= 3:  return "Q"
+    if n >= 2:  return "SA"
+    if n >= 1:  return "A"
+    return "Q"
+
+
+def _div_calc_positive_dividends(divs):
+    if divs is None or divs.empty:
+        return pd.Series(dtype=float)
+    return divs[divs > 0].dropna()
+
+
+def _div_calc_annual_dividend(divs, freq_code):
+    """Prefer a current distribution run rate for frequent payers over stale TTM totals."""
+    pos = _div_calc_positive_dividends(divs)
+    if pos.empty:
+        return 0.0, 0.0, "none"
+
+    _, per_year = _DIV_CALC_FREQ_MAP.get(freq_code, ("Quarterly", 4))
+    tz = pos.index.tz
+    now = pd.Timestamp.now(tz=tz) if tz is not None else pd.Timestamp.now()
+    trailing = pos[pos.index >= now - pd.DateOffset(years=1)]
+    ttm_div = float(trailing.sum()) if not trailing.empty else 0.0
+
+    last_div = float(pos.iloc[-1])
+    run_rate_div = last_div * per_year
+
+    # Monthly and weekly option-income funds can have rapidly changing payouts.
+    # A trailing 12-month sum may reflect last year's higher distribution regime,
+    # so seed the calculator with the latest distribution rate instead.
+    if freq_code in ("W", "M"):
+        return run_rate_div, ttm_div, "latest_distribution_rate"
+
+    return (ttm_div or run_rate_div), ttm_div, "trailing_12_month"
+
+
+def _div_calc_growth_pct(divs, freq_code):
+    """Annualized dividend per-share growth using comparable recent/prior windows."""
+    pos = _div_calc_positive_dividends(divs)
+    if pos.empty:
+        return 0.0
+    _, per_year = _DIV_CALC_FREQ_MAP.get(freq_code, ("Quarterly", 4))
+    tz = pos.index.tz
+    now = pd.Timestamp.now(tz=tz) if tz is not None else pd.Timestamp.now()
+    recent_window = pos[pos.index >= now - pd.DateOffset(years=1)]
+    prior_window = pos[(pos.index >= now - pd.DateOffset(years=2)) & (pos.index < now - pd.DateOffset(years=1))]
+    min_count = max(1, int(per_year * 0.75))
+    if len(recent_window) < min_count or len(prior_window) < min_count:
+        return 0.0
+    if recent_window.empty or prior_window.empty:
+        return 0.0
+    recent_total = float(recent_window.mean()) * per_year
+    prior_total = float(prior_window.mean()) * per_year
+    if prior_total <= 0:
+        return 0.0
+    return round((recent_total / prior_total - 1.0) * 100.0, 4)
+
+
+@app.route("/api/dividend-calc/lookup/<ticker>", methods=["GET"])
+def dividend_calc_lookup(ticker):
+    """Return calculator-friendly facts for a ticker: name, price, yield, freq, growth."""
+    import yfinance as yf
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return jsonify({"error": "ticker is required"}), 400
+    try:
+        tk = yf.Ticker(ticker)
+        info = tk.info or {}
+        actual = (info.get("symbol") or "").upper()
+        if actual and actual != ticker:
+            tk = yf.Ticker(actual)
+            info = tk.info or {}
+            ticker = actual
+        try:
+            divs = tk.dividends
+        except Exception:
+            divs = pd.Series(dtype=float)
+
+        price = info.get("regularMarketPrice") or info.get("currentPrice") or info.get("navPrice") or 0
+        try:
+            price = float(price) if price else 0.0
+        except (TypeError, ValueError):
+            price = 0.0
+
+        freq_code = _div_calc_infer_frequency(divs)
+        freq_label, _per_year = _DIV_CALC_FREQ_MAP.get(freq_code, ("Quarterly", 4))
+
+        annual_div, ttm_div, yield_source = _div_calc_annual_dividend(divs, freq_code)
+
+        yield_pct = round((annual_div / price) * 100.0, 4) if price > 0 and annual_div > 0 else 0.0
+        if yield_pct == 0.0:
+            info_yield = info.get("dividendYield") or info.get("trailingAnnualDividendYield")
+            if info_yield:
+                try:
+                    iy = float(info_yield)
+                    yield_pct = round(iy * (100.0 if iy <= 1 else 1.0), 4)
+                    yield_source = "quote_yield"
+                except (TypeError, ValueError):
+                    pass
+
+        growth_pct = _div_calc_growth_pct(divs, freq_code)
+
+        name = (info.get("longName") or info.get("shortName") or ticker)
+        quote_type = (info.get("quoteType") or "").upper() or "ETF"
+
+        return jsonify({
+            "ticker": ticker,
+            "name": name,
+            "kind": "ETF" if quote_type == "ETF" else "Stock",
+            "price": round(price, 4),
+            "annual_dividend": round(annual_div, 4),
+            "ttm_dividend": round(ttm_div, 4),
+            "yield_pct": yield_pct,
+            "yield_source": yield_source,
+            "growth_pct": growth_pct,
+            "frequency_code": freq_code,
+            "frequency_label": freq_label,
+        })
+    except Exception as e:
+        return jsonify({"error": f"Could not look up {ticker}: {e}"}), 404
+
+
 def _parse_timestamp_value(value):
     """Best-effort conversion of a date-like value to pandas.Timestamp."""
     if value in (None, ""):

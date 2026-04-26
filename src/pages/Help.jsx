@@ -36,6 +36,7 @@ const GROUPS = [
       { id: 'total-return', label: 'Total Return' },
       { id: 'gains-losses', label: 'Gains & Losses' },
       { id: 'safe-withdrawal', label: 'Safe Withdrawal' },
+      { id: 'dividend-calculator', label: 'Dividend Calculator' },
     ],
   },
   {
@@ -561,6 +562,152 @@ function HoldingsHelp() {
         <li><strong>+ Add Holding</strong> — Opens the Add/Edit form to create a new position directly (no transaction).</li>
         <li><strong>+ Add/Edit via Transaction</strong> — Opens the Transaction modal to add a brand-new ticker by recording a BUY transaction.</li>
       </ul>
+
+      {/* ── Maintenance Actions in Detail ───────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Maintenance Actions in Detail</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The four maintenance buttons in the toolbar (<strong>Refresh Prices &amp; Divs</strong>,
+        <strong> Preview Div Repair</strong>, <strong>DRIP Matrix</strong>, and
+        <strong> Sync DRIP from Accounts</strong>) handle different jobs. Use the right one for the right
+        problem — they overlap in places but are <em>not</em> interchangeable.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Refresh Prices &amp; Divs</h4>
+      <p style={{ marginBottom: '0.5rem' }}>
+        <strong>What it does.</strong> Calls Yahoo Finance for every ticker currently held in the active
+        portfolio scope and updates the holdings table with the latest:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.7', marginBottom: '0.5rem' }}>
+        <li><em>Current price</em> — used to recompute Current Value, Gain/Loss, and any yield/coverage metric.</li>
+        <li><em>Dividend per share, frequency, ex-div date, pay date</em> — refreshes the forward-looking distribution metadata used by Estimated Annual Income, Approx Monthly Income, and the Dividend Calendar.</li>
+        <li><em>Accrued income since last refresh</em> — the gap between the previous refresh date and now is used to estimate dividends earned per holding, surfaced in the Latest Refresh Result and Accrued cards.</li>
+        <li><em>Estimated payment rows on pay-date matches</em> — if a holding's expected pay date equals today, an estimate row is written into Dividend History with source <code>refresh_estimate</code>. A later broker import for the same ticker/account/date overwrites the estimate with the actual payment, so estimates never double-count.</li>
+      </ul>
+      <p style={{ marginBottom: '0.5rem' }}>
+        <strong>Scope.</strong> A single profile refreshes only itself. Owner refreshes its included source
+        accounts. Aggregate refreshes its configured member accounts. Owner-level fields are then
+        recomputed from those sources.
+      </p>
+      <p style={{ marginBottom: '0.5rem' }}>
+        <strong>When to use.</strong>
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.7', marginBottom: '0.75rem' }}>
+        <li>Routinely — at least once a day or whenever you want current prices, gains, and yields.</li>
+        <li>After market close, to capture today's pay-date distributions as estimated payment rows.</li>
+        <li>Before running Buy/Sell Signals, NAV Erosion screens, or rebalancing — these depend on fresh prices and yields.</li>
+        <li>Before exporting reports or showing portfolio numbers to someone else.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>What it does <em>not</em> do.</strong> It does not rewrite historical broker dividend payments,
+        and it does not change DRIP flags or share counts. For those, use Preview Div Repair or
+        Sync DRIP / DRIP Matrix.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Preview Div Repair</h4>
+      <p style={{ marginBottom: '0.5rem' }}>
+        <strong>What it does.</strong> Runs the dividend-repair engine in <em>dry-run</em> mode using the
+        repair mode you've selected in the dropdown next to it. It rebuilds each holding's dividend
+        snapshot fields (current div/share, frequency, ex/pay dates, YTD distributions, total dividends
+        received, source label) from the chosen authoritative sources, then opens a modal showing exactly
+        what would change before anything is written.
+      </p>
+      <p style={{ marginBottom: '0.5rem' }}>
+        <strong>Repair modes</strong> determine which sources are allowed:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.7', marginBottom: '0.5rem' }}>
+        <li><em>Imported actuals + Yahoo</em> (default) — Use broker-imported payments where available; fall back to Yahoo history for tickers with no imported payments. Snowball snapshots are preserved. Refresh estimates are ignored.</li>
+        <li><em>Imported actuals only</em> — Strictly use broker payments. Tickers with no imported payments are cleared to "No source". Snowball snapshots preserved.</li>
+        <li><em>Yahoo only</em> — Ignore all broker payments and rebuild every row from Yahoo. Snowball snapshots are <strong>not</strong> preserved in this mode.</li>
+      </ul>
+      <p style={{ marginBottom: '0.5rem' }}>
+        The preview modal shows, per sub-account, how many holdings would be updated from each source
+        (Schwab / Fidelity / Snowball / E*Trade / Robinhood / Other / Snapshot / Yahoo / No source), plus
+        how many would have their dates/amounts metadata refreshed and how many came from supported
+        official issuer sites. Nothing is written until you click <strong>Apply Repair</strong>; an
+        automatic database backup is taken before the write. Closing the modal (Escape, ×, Cancel, or
+        clicking outside) discards the preview, and switching the active portfolio also clears it so you
+        can't apply a preview against the wrong scope.
+      </p>
+      <p style={{ marginBottom: '0.5rem' }}>
+        <strong>When to use.</strong>
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.7', marginBottom: '0.5rem' }}>
+        <li>Right after a broker dividend-history import (Schwab, Fidelity, E*Trade, Robinhood) so historical totals reflect the imported payments instead of stale estimates or Yahoo guesses.</li>
+        <li>When YTD Divs, Total Divs Received, or "Paid For Itself" look wrong on one or more tickers.</li>
+        <li>When the <strong>Div Src</strong> column shows "No source", "Mixed", or "Yahoo" for a ticker you know you have broker actuals for.</li>
+        <li>After migrating from Snowball, to merge Snowball lifetime snapshots with subsequent broker imports without losing the historical baseline.</li>
+        <li>Periodically (monthly is reasonable) to keep dividend frequency, ex/pay dates, and current div/share aligned with each issuer's latest declarations.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Always preview first.</strong> Apply Repair rewrites dividend snapshot fields and Dividend
+        History — review the per-account counts in the preview to confirm the source mix matches your
+        expectations, then apply. The pre-repair backup lets you restore from the Import page if the
+        result is not what you wanted.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>DRIP Matrix (Owner only)</h4>
+      <p style={{ marginBottom: '0.5rem' }}>
+        <strong>What it does.</strong> Opens a per-ticker × per-account grid of DRIP checkboxes covering
+        every holding across every sub-account that's included in Owner. Each cell shows the share count
+        held in that account next to its DRIP toggle, so you can see <em>which</em> shares are reinvesting
+        and which are not. The Owner column on the right shows the aggregate DRIP status and the
+        DRIP-eligible share count derived from the sub-accounts.
+      </p>
+      <p style={{ marginBottom: '0.5rem' }}>
+        A live stats bar at the top shows <strong>Total Annual Income</strong>,
+        <strong> DRIP Income</strong> (the dollar portion of distributions being reinvested), and
+        <strong> % Reinvested</strong>. These update as you toggle checkboxes so you can see the
+        income-reinvestment impact of any change before committing.
+      </p>
+      <p style={{ marginBottom: '0.5rem' }}>
+        Each toggle writes immediately to the underlying sub-account's <code>reinvest</code> flag.
+        Click <strong>Sync to Owner</strong> inside the modal (or use the toolbar's
+        <strong> Sync DRIP from Accounts</strong> button afterwards) to propagate those changes into
+        Owner's <code>reinvest</code> flags and partial DRIP-eligible share counts.
+      </p>
+      <p style={{ marginBottom: '0.5rem' }}>
+        <strong>When to use.</strong>
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.7', marginBottom: '0.5rem' }}>
+        <li>When you want to see, in one view, exactly which accounts are reinvesting which tickers — useful before running Income Simulation, Income Growth, or Buy/Sell Signals.</li>
+        <li>When changing DRIP at your broker — mirror the change here account-by-account so simulations match real-world cash flow.</li>
+        <li>When a ticker is held in several accounts and only some have DRIP on, and you want simulations to reinvest only the DRIP-eligible share count instead of the full aggregate.</li>
+        <li>To audit DRIP coverage — the % Reinvested stat tells you what fraction of total annual income is actually being compounded.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Filter box</strong> narrows the grid to a single ticker or partial symbol — useful in
+        portfolios with many holdings.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Sync DRIP from Accounts (Owner only)</h4>
+      <p style={{ marginBottom: '0.5rem' }}>
+        <strong>What it does.</strong> Recomputes Owner's per-ticker DRIP flags and DRIP-eligible share
+        counts from the current state of the included sub-accounts, using these rules:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.7', marginBottom: '0.5rem' }}>
+        <li>Owner's <code>reinvest</code> is set to <strong>Y</strong> if <em>any</em> sub-account has DRIP on for that ticker, and <strong>N</strong> only if <em>all</em> sub-accounts have it off.</li>
+        <li>If <em>all</em> accounts holding the ticker have DRIP on, Owner's DRIP-eligible share count is left blank and simulations use the full aggregate share count.</li>
+        <li>If <em>only some</em> accounts have DRIP on, Owner stores the partial DRIP-eligible share count (sum of shares from the DRIP-on accounts only), and simulations reinvest only that subset.</li>
+      </ul>
+      <p style={{ marginBottom: '0.5rem' }}>
+        After the sync, Owner's holdings and dividend tables are repopulated so downstream calculations
+        pick up the new flags immediately.
+      </p>
+      <p style={{ marginBottom: '0.5rem' }}>
+        <strong>When to use.</strong>
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.7', marginBottom: '0.5rem' }}>
+        <li>After importing a broker positions file that came in with its own DRIP flags — push those into Owner so aggregate views and simulations reflect them.</li>
+        <li>After toggling DRIP on individual sub-accounts (via the row checkbox or the DRIP Matrix) when you didn't already click "Sync to Owner" inside the matrix modal.</li>
+        <li>When Owner's DRIP column or income simulations look out of step with what your broker statements show — this is the cheapest way to reconcile.</li>
+        <li>Before running Owner-level Income Sim or Income Growth scenarios where DRIP behavior materially affects the projection.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Difference vs. DRIP Matrix.</strong> The DRIP Matrix is the editor — it lets you change
+        DRIP per ticker per account. Sync DRIP from Accounts is the propagator — it doesn't change any
+        sub-account, it only rolls the current sub-account state up into Owner. Use the matrix to make
+        changes; use Sync (or the matrix's "Sync to Owner" button) to publish them to Owner.
+      </p>
 
       {/* ── Row Actions ─────────────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Row Action Buttons</h3>
@@ -2297,6 +2444,54 @@ function NavErosionHelp() {
         is not automatically treated as structural NAV erosion.
       </p>
 
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Formula</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The benchmark-adjusted NAV erosion ratio is computed as:
+      </p>
+      <pre style={{
+        background: '#1a1a1a',
+        border: '1px solid #333',
+        borderRadius: '4px',
+        padding: '0.75rem 1rem',
+        marginBottom: '0.75rem',
+        color: '#e0e0e0',
+        fontSize: '0.95rem',
+        whiteSpace: 'pre-wrap',
+      }}>{`Ratio = |Fund Price Return| ÷ TTM Distribution Yield   (when erosion applies)
+Ratio = 0                                                (when it does not)
+
+Where:
+  Fund Price Return     = (End Price − Start Price) ÷ Start Price
+  Benchmark Return      = (Bench End − Bench Start) ÷ Bench Start
+                          (sum of component returns for composite benchmarks)
+  TTM Distribution Yield = (Trailing-12-mo distributions per share) ÷ End Price`}</pre>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Benchmark gate.</strong> The benchmark acts as a context filter, not a subtraction.
+        Erosion is only counted (numerator = <code>|Fund Return|</code>) when <em>both</em> conditions hold:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Fund Return is negative (the fund's price actually fell), <em>and</em></li>
+        <li>Benchmark Return is flat or positive (the underlying market was not down).</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        If the fund is up, or if the benchmark itself is down, the numerator is forced to <code>0</code>
+        — a fund is not punished for tracking a falling market lower, only for losing price while its
+        benchmark held up. This is what makes the ratio "benchmark-adjusted."
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Why divide by yield.</strong> Dividing the destructive price decline by the distribution
+        yield asks: "How much of the yield is being financed out of NAV?" A ratio of <code>0.50</code> means
+        roughly half of the yield is offset by price erosion; <code>1.00</code> means the entire yield was
+        eaten by NAV decline. Thresholds: <strong>≤ 0.25 Low</strong>, <strong>0.25–0.75 Moderate</strong>,
+        <strong> &gt; 0.75 High</strong>.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Portfolio aggregate.</strong> The portfolio-level ratio is dollar-weighted across all
+        eligible holdings: <code>Σ(erosion$ per ticker) ÷ Σ(TTM distribution$ per ticker)</code>, where
+        <code> erosion$ = numerator × start price × shares</code> and
+        <code> distribution$ = TTM dist per share × shares</code>.
+      </p>
+
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Inputs</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker</strong> — The ETF or fund to analyze (e.g., JEPI, XYLD, QYLD).</li>
@@ -3381,6 +3576,91 @@ function IncomeGrowthHelp() {
   )
 }
 
+function DividendCalculatorHelp() {
+  return (
+    <div>
+      <h2>Dividend Calculator</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Project income and portfolio growth over time across one or more ETFs and stocks, with or without
+        dividend reinvestment (DRIP). Unlike the Income Growth Simulator (which uses your actual portfolio),
+        the Dividend Calculator works from any tickers you enter — useful for evaluating new positions, comparing
+        funds side-by-side, or modeling what-if scenarios before you buy.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calculation Settings</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        Set your global assumptions once at the top of the page. These apply to every ticker you add and can be
+        adjusted at any time — the projection updates when you click <strong>Recalculate</strong>.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Years to Invest</strong> — Length of the projection (1–50 years).</li>
+        <li><strong>Initial Investment Per Ticker</strong> — Starting dollar amount applied to each ticker. Updating this value re-derives the share count for any already-loaded tickers.</li>
+        <li><strong>Annual Investment (split equally)</strong> — Total dollars added each year, divided evenly across all loaded tickers and contributed at the end of each compounding period.</li>
+        <li><strong>Dividend Tax Rate</strong> — Applied to taxable dividends each period. The Return of Capital % on each ticker reduces the taxable portion.</li>
+        <li><strong>Stock Price Growth (All Tickers)</strong> — Default annual price appreciation applied to every ticker. You can override this per ticker after it loads.</li>
+        <li><strong>Dividends Reinvested (DRIP)</strong> — Percentage of net dividends reinvested each period (0–100%). Anything not reinvested is tracked as cash dividends.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Type a symbol (e.g. <code>SCHD</code>, <code>JEPI</code>, <code>AAPL</code>) into the ticker bar and click
+        <strong> Add Ticker</strong>. The app fetches current price, dividend yield, dividend growth rate, and
+        payout frequency from Yahoo Finance, then auto-fills the row. Add as many tickers as you like — the
+        annual contribution is split equally across them and final results are aggregated.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each ticker becomes its own card with editable fields. Click the <strong>x</strong> on a chip or the
+        <strong> Remove</strong> button on the card to drop a ticker. <strong>Reset</strong> clears everything
+        back to defaults.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Per-Ticker Inputs</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Initial Investment / Stock Price / Number of Shares</strong> — These three fields stay in sync. Editing any one of them recomputes the others. Override the share count or price if you want to model a position different from the live market.</li>
+        <li><strong>Initial Dividend Yield</strong> — Annual yield based on the trailing distribution. Drives the first-year income.</li>
+        <li><strong>Dividend Growth</strong> — Annual percentage increase applied to the dividend per share each year. Auto-filled from Yahoo's historical growth rate; override based on your own expectations.</li>
+        <li><strong>Return of Capital</strong> — Percentage of distributions that aren't taxable income (common for covered-call ETFs and some MLPs). Reduces the dividend tax drag without affecting cash flow.</li>
+        <li><strong>Stock Price Growth</strong> — Per-ticker price appreciation. Defaults to the global setting but can be tuned individually.</li>
+        <li><strong>Payout Frequency</strong> — Weekly, Monthly, Quarterly, Semi-Annually, or Annually. Higher frequencies compound faster when DRIP is on.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Running the Calculation</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Click <strong>Calculate</strong> to project results. Whenever inputs change after a calculation, a
+        <strong> Needs recalculation</strong> badge appears next to the settings card and a banner above the
+        results — click <strong>Recalculate</strong> to refresh. Inputs are stored locally in the page; nothing
+        is saved to the database.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Summary Stats</strong> — Ending Wealth (final portfolio value plus uncollected cash dividends), Annual / Monthly Dividend Income at the final year, Yield on Cost, and total Estimated Dividend Taxes after Return of Capital adjustments.</li>
+        <li><strong>Portfolio &amp; Income Chart</strong> — Combined view of portfolio value (filled area), cumulative dividends, and annual income on a secondary axis.</li>
+        <li><strong>Shares Over Time</strong> — One line per ticker when multiple are loaded, or a single line for one ticker. Shows how DRIP grows your share count year by year.</li>
+        <li><strong>Year-by-Year Breakdown</strong> — Detailed table with shares, portfolio value, gross/net dividends, taxes, reinvested vs. cash dividends, and cumulative contributions per year.</li>
+        <li><strong>Per-Ticker Final Values</strong> — When two or more tickers are loaded, an additional table compares each ticker's final shares, portfolio value, income, taxes, and dividends. Useful for picking between candidates.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How DRIP Compounds</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each period the model: (1) pays the gross dividend on current shares, (2) subtracts taxes on the taxable
+        portion (gross x (1 - ROC%) x tax rate), (3) splits the net dividend between reinvested and cash based
+        on the DRIP %, (4) adds that period's annual-contribution slice, (5) buys new shares with the combined
+        cash at the current price, and (6) grows the price and dividend per share to the next period. Higher
+        payout frequencies, higher dividend growth, and lower taxes all amplify long-run compounding.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tips</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Use the per-ticker comparison table to evaluate two or more funds with similar yields but different growth or ROC profiles.</li>
+        <li>Set DRIP to 0% to model income-now scenarios (retirement) and 100% to model accumulation phases.</li>
+        <li>Bump the Dividend Tax Rate to 0% to preview tax-advantaged accounts (IRA, Roth, HSA) and back to your marginal rate for taxable accounts.</li>
+        <li>For high-yield covered-call ETFs (JEPI, JEPQ, QQQI, SPYI, etc.), check the fund's distribution classification — many report a meaningful ROC %, which substantially lowers the projected tax drag.</li>
+      </ul>
+    </div>
+  )
+}
+
 const CONTENT_MAP = {
   overview: Overview,
   import: ImportHelp,
@@ -3399,6 +3679,7 @@ const CONTENT_MAP = {
   'total-return': TotalReturnHelp,
   'gains-losses': GainsLossesHelp,
   'safe-withdrawal': SafeWithdrawalHelp,
+  'dividend-calculator': DividendCalculatorHelp,
   'general-scanner': GeneralScannerHelp,
   'security-research': SecurityResearchHelp,
   'etf-screen': ETFScreenHelp,
