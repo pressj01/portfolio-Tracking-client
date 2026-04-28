@@ -124,21 +124,29 @@ def load_overrides(conn, profile_id, year):
     """Return {ticker: override} resolving year-specific over year=0 default.
     Owner profile aggregates overrides from all member profiles."""
     ids = _resolve_profile_ids(conn, profile_id)
-    ph = _placeholders(ids)
+    lookup_ids = list(dict.fromkeys([profile_id] + ids))
+    owner_rank = {profile_id: 1}
+    for pid in ids:
+        owner_rank.setdefault(pid, 0)
+    ph = _placeholders(lookup_ids)
     rows = conn.execute(
-        f"SELECT ticker, year, treatment, qualified_pct, ordinary_pct, roc_pct, total_amount FROM dividend_tax_overrides "
+        f"SELECT ticker, profile_id, year, treatment, qualified_pct, ordinary_pct, roc_pct, total_amount FROM dividend_tax_overrides "
         f"WHERE profile_id IN ({ph})",
-        ids,
+        lookup_ids,
     ).fetchall()
     out = {}
+    ranks = {}
     for r in rows:
         r = dict(r)
         t = r["ticker"]
         y = int(r["year"] or 0)
-        if y == year:
+        rank = (1 if y == year else 0, owner_rank.get(r.get("profile_id"), 0))
+        if y == year and rank >= ranks.get(t, (-1, -1)):
             out[t] = _override_split(r)
-        elif y == 0 and t not in out:
+            ranks[t] = rank
+        elif y == 0 and rank >= ranks.get(t, (-1, -1)):
             out[t] = _override_split(r)
+            ranks[t] = rank
     return out
 
 

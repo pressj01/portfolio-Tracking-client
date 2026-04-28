@@ -63,11 +63,8 @@ function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
   })
   const [totalAmount, setTotalAmount] = useState(startTotal)
   const [amounts, setAmounts] = useState(amountsFromSplit(startSplit, startTotal))
-  const [touchedAmounts, setTouchedAmounts] = useState({
-    qualified_amt: false,
-    ordinary_amt: false,
-    roc_amt: false,
-  })
+  const [amountEditOrder, setAmountEditOrder] = useState([])
+  const [totalEditable, setTotalEditable] = useState(false)
   const [percentEditable, setPercentEditable] = useState(false)
   const [localError, setLocalError] = useState('')
 
@@ -81,11 +78,8 @@ function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
     })
     setTotalAmount(nextTotal)
     setAmounts(amountsFromSplit(next, nextTotal))
-    setTouchedAmounts({
-      qualified_amt: false,
-      ordinary_amt: false,
-      roc_amt: false,
-    })
+    setAmountEditOrder([])
+    setTotalEditable(false)
     setPercentEditable(false)
     setLocalError('')
   }, [row.ticker, row.total, row.total_amount, row.qualified_pct, row.ordinary_pct, row.roc_pct, row.treatment])
@@ -95,68 +89,86 @@ function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
     ordinary_pct: Number(next.ordinary_pct) || 0,
     roc_pct: Number(next.roc_pct) || 0,
   })
+  const amountSum = (nextAmounts = amounts) =>
+    amountKeys.reduce((sum, k) => sum + (Number(nextAmounts[k]) || 0), 0)
+
+  const validateAmounts = (nextAmounts = amounts, basis = totalAmount) => {
+    const expected = Number(basis) || 0
+    const actual = amountSum(nextAmounts)
+    const delta = actual - expected
+    if (Math.abs(delta) <= 0.01) {
+      setLocalError('')
+      return true
+    }
+    setLocalError(
+      delta > 0
+        ? `Amounts exceed ${fmt(expected)} by ${fmt(delta)}`
+        : `Amounts are short ${fmt(Math.abs(delta))} of ${fmt(expected)}`
+    )
+    return false
+  }
 
   const setPct = (key, value) => {
     setLocalError('')
     const next = { ...split, [key]: value }
     setSplit(next)
     setAmounts(amountsFromSplit(normalizeSplit(next), totalAmount))
+    setAmountEditOrder([])
   }
 
-  const rebalanceAmounts = (nextAmounts, nextTouched, basis, changedKey) => {
+  const rebalanceAmounts = (nextAmounts, editOrder, basis, changedKey) => {
     const total = Number(basis) || 0
-    const touchedKeys = amountKeys.filter(k => nextTouched[k])
-    const remainingKey = amountKeys.find(k => !nextTouched[k])
+    const remainingKey = amountKeys.find(k => !editOrder.includes(k))
 
-    if (touchedKeys.length >= 2 && remainingKey) {
+    if (editOrder.length >= 2 && remainingKey) {
       const enteredTotal = amountKeys
         .filter(k => k !== remainingKey)
         .reduce((sum, k) => sum + (Number(nextAmounts[k]) || 0), 0)
       nextAmounts[remainingKey] = formatAmount(Math.max(total - enteredTotal, 0))
-    } else if (touchedKeys.length === 1) {
+    } else if (editOrder.length === 1) {
       if (changedKey === 'qualified_amt') {
         nextAmounts.ordinary_amt = formatAmount(Math.max(total - (Number(nextAmounts.qualified_amt) || 0) - (Number(nextAmounts.roc_amt) || 0), 0))
       } else {
         nextAmounts.qualified_amt = formatAmount(Math.max(total - (Number(nextAmounts.ordinary_amt) || 0) - (Number(nextAmounts.roc_amt) || 0), 0))
       }
-    } else if (touchedKeys.length === 0) {
+    } else if (editOrder.length === 0) {
       nextAmounts.qualified_amt = formatAmount(total)
       nextAmounts.ordinary_amt = '0.00'
       nextAmounts.roc_amt = '0.00'
     }
 
-    const amountTotal = amountKeys.reduce((sum, k) => sum + (Number(nextAmounts[k]) || 0), 0)
-    if (amountTotal - total > 0.01) {
-      setLocalError(`Amounts exceed ${fmt(total)}`)
-    } else {
-      setLocalError('')
-    }
+    validateAmounts(nextAmounts, total)
     return nextAmounts
   }
 
   const setAmount = (key, value) => {
     setLocalError('')
+    const nextEditOrder = [...amountEditOrder.filter(k => k !== key), key].slice(-2)
     const nextAmounts = rebalanceAmounts(
       { ...amounts, [key]: value },
-      { ...touchedAmounts, [key]: true },
+      nextEditOrder,
       totalAmount,
       key,
     )
-    const nextTouched = { ...touchedAmounts, [key]: true }
-    setTouchedAmounts(nextTouched)
+    setAmountEditOrder(nextEditOrder)
     setAmounts(nextAmounts)
     setSplit(splitFromAmounts(nextAmounts, totalAmount))
   }
 
   const setTotal = (value) => {
     setLocalError('')
-    const nextAmounts = rebalanceAmounts({ ...amounts }, touchedAmounts, value, null)
+    const nextAmounts = rebalanceAmounts({ ...amounts }, amountEditOrder, value, null)
     setTotalAmount(value)
     setAmounts(nextAmounts)
     setSplit(splitFromAmounts(nextAmounts, value))
   }
 
+  const commitOnEnter = (e) => {
+    if (e.key === 'Enter') commit()
+  }
+
   const commit = () => {
+    if (!validateAmounts(amounts, totalAmount)) return
     const next = normalizeSplit(split)
     const total = next.qualified_pct + next.ordinary_pct + next.roc_pct
     if (Math.abs(total - 100) > 0.01) {
@@ -190,7 +202,10 @@ function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
   const totalStyle = {
     ...amountStyle,
     width: 86,
-    borderColor: '#5b78a8',
+    background: totalEditable ? '#101b36' : '#2d3442',
+    borderColor: totalEditable ? '#5b78a8' : '#515967',
+    color: totalEditable ? '#e6f4ff' : '#c1c7d0',
+    opacity: totalEditable ? 1 : 0.78,
   }
   const percentStyle = {
     ...inputStyle,
@@ -218,14 +233,16 @@ function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
       <label style={fieldLabel} title="Editable total dividends for this ticker and tax year">
         T
         <input type="number" min="0" step="0.01" value={totalAmount}
-          disabled={disabled} onChange={e => setTotal(e.target.value)}
-          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={totalStyle} />
+          disabled={disabled || !totalEditable} onChange={e => setTotal(e.target.value)}
+          onKeyDown={commitOnEnter} style={totalStyle} />
+        <input type="checkbox" checked={totalEditable} disabled={disabled}
+          onChange={e => setTotalEditable(e.target.checked)} title="Allow total dividend edits" />
       </label>
       <label style={fieldLabel} title="Qualified dividend dollars">
         Q
         <input type="number" min="0" step="0.01" value={amounts.qualified_amt}
           disabled={disabled} onChange={e => setAmount('qualified_amt', e.target.value)}
-          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={amountStyle} />
+          onKeyDown={commitOnEnter} style={amountStyle} />
         <input type="number" min="0" max="100" step="0.01" value={split.qualified_pct}
           disabled={disabled || !percentEditable} onChange={e => setPct('qualified_pct', e.target.value)}
           onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={percentStyle} title="Qualified percent" />
@@ -235,7 +252,7 @@ function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
         O
         <input type="number" min="0" step="0.01" value={amounts.ordinary_amt}
           disabled={disabled} onChange={e => setAmount('ordinary_amt', e.target.value)}
-          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={amountStyle} />
+          onKeyDown={commitOnEnter} style={amountStyle} />
         <input type="number" min="0" max="100" step="0.01" value={split.ordinary_pct}
           disabled={disabled || !percentEditable} onChange={e => setPct('ordinary_pct', e.target.value)}
           onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={percentStyle} title="Ordinary percent" />
@@ -245,7 +262,7 @@ function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
         ROC
         <input type="number" min="0" step="0.01" value={amounts.roc_amt}
           disabled={disabled} onChange={e => setAmount('roc_amt', e.target.value)}
-          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={amountStyle} />
+          onKeyDown={commitOnEnter} style={amountStyle} />
         <input type="number" min="0" max="100" step="0.01" value={split.roc_pct}
           disabled={disabled || !percentEditable} onChange={e => setPct('roc_pct', e.target.value)}
           onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={percentStyle} title="ROC percent" />
@@ -255,6 +272,11 @@ function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
         <input type="checkbox" checked={percentEditable} disabled={disabled}
           onChange={e => setPercentEditable(e.target.checked)} />
       </label>
+      <button type="button" className="btn btn-primary" disabled={disabled}
+        onClick={commit}
+        style={{ padding: '0.2rem 0.45rem', fontSize: '0.72rem' }}>
+        Save
+      </button>
       <button type="button" className="btn btn-secondary" disabled={disabled}
         onClick={() => onDefault(row.ticker)}
         style={{ padding: '0.2rem 0.45rem', fontSize: '0.72rem' }}>

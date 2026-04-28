@@ -3818,23 +3818,21 @@ function AnnualTaxReportHelp() {
 
       <h3 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Per-ticker overrides (custom split)</h3>
       <p style={{ marginBottom: '0.5rem' }}>
-        On the <strong>Dividends</strong> tab, each row has an inline split editor with an editable
+        On the <strong>Dividends</strong> tab, each row has an inline split editor with a
         <strong> T</strong> total-dividend field and three dollar amount fields:{' '}
         <strong>Q</strong> (Qualified), <strong>O</strong> (Ordinary), and{' '}
-        <strong>ROC</strong> (Return of Capital). The editor starts with Qualified equal to the
-        ticker's total dividends for the selected year. When you enter Ordinary or ROC dollars from
-        your broker tax statement, Qualified is reduced automatically and the app calculates the
-        percentage split for you. If the app's imported dividend total is wrong, edit <strong>T</strong>{' '}
-        first; the row will use that total for the tax split. Press Tab or Enter to apply. The totals
-        update immediately and the row shows a ★.
+        <strong>ROC</strong> (Return of Capital). The <strong>T</strong> field is locked by default;
+        check the box next to it to enable edits when your broker statement total differs from the
+        app's imported total. As you type amounts, the percent split is calculated automatically.
+        Click <strong>Save</strong> (or press Enter) to apply the override; the row will show a ★.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>Edit <strong>T</strong> only when the broker tax statement total differs from the app's imported dividend total.</li>
-        <li>Use the dollar fields first; the percent fields are calculated from the row's Total Dividends value.</li>
-        <li>When any two of Q, O, and ROC are entered, the remaining box is filled with the amount needed to match T.</li>
+        <li>Enter any two of Q, O, and ROC; the remaining box fills with the amount needed to match T.</li>
+        <li>The remaining box is based on the two most recently edited amount boxes, so you can change any field and the other one will rebalance.</li>
         <li>Example: if <strong>T</strong> is 1,645.33 and you enter O = 760.90 and ROC = 300.00, Q fills as 584.43.</li>
         <li>Turn on the <strong>%</strong> checkbox only when you need to manually adjust the calculated percentage fields.</li>
-        <li>The dollar amounts and percentages must resolve back to 100% of the ticker's dividend total.</li>
+        <li>The dollar amounts must add up to T; Save is blocked if the amounts are short or over.</li>
         <li>Click <strong>Default</strong> to clear the override and revert to the asset-class rule.</li>
       </ul>
       <p style={{ marginTop: '0.5rem' }}>
