@@ -126,10 +126,11 @@ function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
         .reduce((sum, k) => sum + (Number(nextAmounts[k]) || 0), 0)
       nextAmounts[remainingKey] = formatAmount(Math.max(total - enteredTotal, 0))
     } else if (editOrder.length === 1) {
-      if (changedKey === 'qualified_amt') {
+      // ROC is the default auto-fill; if user edited ROC, adjust O instead
+      if (changedKey === 'roc_amt') {
         nextAmounts.ordinary_amt = formatAmount(Math.max(total - (Number(nextAmounts.qualified_amt) || 0) - (Number(nextAmounts.roc_amt) || 0), 0))
       } else {
-        nextAmounts.qualified_amt = formatAmount(Math.max(total - (Number(nextAmounts.ordinary_amt) || 0) - (Number(nextAmounts.roc_amt) || 0), 0))
+        nextAmounts.roc_amt = formatAmount(Math.max(total - (Number(nextAmounts.qualified_amt) || 0) - (Number(nextAmounts.ordinary_amt) || 0), 0))
       }
     } else if (editOrder.length === 0) {
       nextAmounts.qualified_amt = formatAmount(total)
