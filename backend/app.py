@@ -4941,14 +4941,22 @@ def refresh_market_data():
             old_freq = h["div_frequency"]
             existing_estim_annual = float(h.get("estim_payment_per_year") or 0)
             # Preserve the existing income estimate when:
-            #  (a) this profile is positions-managed (manual income), OR
+            #  (a) this profile is positions-managed (broker-supplied income)
+            #      AND that import is still recent (≤30 days old), OR
             #  (b) we don't have fresh positive dividend data from the source
             #      (yfinance sometimes serves prices but omits the dividend
             #       field — treating that as "no dividend" used to zero out
             #       good income data).
+            # When broker data ages past 30 days, fall through to the recompute
+            # path so estim_payment_per_year tracks current div × qty × freq.
             fresh_div = snapshot.get("div") if bool(snapshot.get("has_dividend")) else None
+            parsed_import_date = _refresh_parse_date(import_date)
+            broker_data_fresh = (
+                parsed_import_date is not None
+                and (refresh_date - parsed_import_date).days <= 30
+            )
             preserve_income_estimate = existing_estim_annual > 0 and (
-                pid in positions_managed_ids
+                (pid in positions_managed_ids and broker_data_fresh)
                 or not (fresh_div and float(fresh_div) > 0)
             )
             sets = []
