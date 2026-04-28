@@ -48,6 +48,7 @@ from normalize import (
     populate_pillar_weights,
 )
 from transaction_import import PARSERS as TXN_PARSERS
+import tax_report
 from options_api import register_routes as register_options_routes
 from dividend_safety import (
     apply_nav_coverage_overlay,
@@ -468,7 +469,15 @@ def _current_dividend_paid(quantity, div):
     return round(qty * per_share, 6)
 
 
-def _recompute_position_income_fields(conn, profile_id, ticker, broker_dividend_yield=None, preserve_existing_income=False):
+def _recompute_position_income_fields(
+    conn,
+    profile_id,
+    ticker,
+    broker_dividend_yield=None,
+    preserve_existing_income=False,
+    previous_quantity=None,
+    previous_annual_income=None,
+):
     row = conn.execute(
         """SELECT quantity, purchase_value, current_value, div, div_frequency, ex_div_date,
                   estim_payment_per_year, approx_monthly_income
@@ -489,12 +498,28 @@ def _recompute_position_income_fields(conn, profile_id, ticker, broker_dividend_
     payments_per_year = _frequency_to_payments_per_year(div_frequency)
 
     annual = 0.0
-    if preserve_existing_income and quantity > 0 and imported_annual > 0:
-        annual = imported_annual
-    elif quantity > 0 and div > 0 and payments_per_year > 0:
+    try:
+        previous_quantity = float(previous_quantity or 0)
+    except (TypeError, ValueError):
+        previous_quantity = 0.0
+    try:
+        previous_annual_income = float(previous_annual_income or 0)
+    except (TypeError, ValueError):
+        previous_annual_income = 0.0
+
+    if quantity > 0 and div > 0 and payments_per_year > 0:
         annual = quantity * div * payments_per_year
     elif quantity > 0 and current_value > 0 and broker_dividend_yield:
         annual = current_value * (float(broker_dividend_yield) / 100.0)
+    elif (
+        quantity > 0
+        and previous_quantity > 0
+        and previous_annual_income > 0
+        and abs(imported_annual - previous_annual_income) < 0.005
+    ):
+        annual = previous_annual_income * (quantity / previous_quantity)
+    elif quantity > 0 and imported_annual > 0:
+        annual = imported_annual
 
     monthly = annual / 12.0 if annual > 0 else 0.0
     if preserve_existing_income and imported_monthly > 0 and annual > 0:
@@ -5638,6 +5663,7 @@ def add_holding():
                 (ticker, cat_row["id"], profile_id),
             )
 
+    _recompute_position_income_fields(conn, profile_id, ticker)
     conn.commit()
 
     # Update derived tables
@@ -5661,7 +5687,7 @@ def update_holding(ticker):
 
     conn = get_connection()
     existing = conn.execute(
-        "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        "SELECT quantity, estim_payment_per_year FROM all_account_info WHERE ticker = ? AND profile_id = ?",
         (ticker, profile_id),
     ).fetchone()
     if not existing:
@@ -5723,6 +5749,15 @@ def update_holding(ticker):
                     (ticker, cat_row["id"], profile_id),
                 )
 
+    previous_quantity = existing["quantity"] if isinstance(existing, dict) else existing[0]
+    previous_annual_income = existing["estim_payment_per_year"] if isinstance(existing, dict) else existing[1]
+    _recompute_position_income_fields(
+        conn,
+        profile_id,
+        ticker,
+        previous_quantity=previous_quantity,
+        previous_annual_income=previous_annual_income,
+    )
     conn.commit()
 
     populate_holdings(profile_id)
@@ -5938,6 +5973,17 @@ def _rollup_transactions(ticker, profile_id, conn):
     if not rows:
         return
 
+    previous_income_row = conn.execute(
+        "SELECT quantity, estim_payment_per_year FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    previous_quantity = (
+        previous_income_row["quantity"] if isinstance(previous_income_row, dict) else previous_income_row[0]
+    ) if previous_income_row else 0
+    previous_annual_income = (
+        previous_income_row["estim_payment_per_year"] if isinstance(previous_income_row, dict) else previous_income_row[1]
+    ) if previous_income_row else 0
+
     def _val(r, key, idx):
         return r[key] if isinstance(r, dict) else r[idx]
 
@@ -6024,6 +6070,13 @@ def _rollup_transactions(ticker, profile_id, conn):
              round(total_realized, 2),
              cur_val, gl, gl_pct, gl_pct,
              ticker, profile_id),
+        )
+        _recompute_position_income_fields(
+            conn,
+            profile_id,
+            ticker,
+            previous_quantity=previous_quantity,
+            previous_annual_income=previous_annual_income,
         )
     conn.commit()
     populate_holdings(profile_id)
@@ -7099,6 +7152,309 @@ def export_holdings_csv():
     return send_file(out, as_attachment=True,
                      download_name=fname,
                      mimetype="text/csv")
+
+
+# ── Watchlist Export / Import ─────────────────────────────────────────────────
+
+_WATCHLIST_EXPORT_HEADERS = [
+    "Ticker", "Notes", "Div Yield Override",
+    "NAV Erosion Scope", "NAV Benchmark Override", "Added Date",
+]
+
+
+def _read_watchlist_rows():
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT ticker, notes, added_date, div_yield_override, "
+            "nav_erosion_scope, nav_benchmark_override "
+            "FROM watchlist_watching ORDER BY sort_order, id"
+        ).fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+    return [
+        {
+            "Ticker": r["ticker"],
+            "Notes": r["notes"] or "",
+            "Div Yield Override": r["div_yield_override"] if r["div_yield_override"] is not None else "",
+            "NAV Erosion Scope": r["nav_erosion_scope"] or "auto",
+            "NAV Benchmark Override": r["nav_benchmark_override"] or "",
+            "Added Date": r["added_date"] or "",
+        }
+        for r in rows
+    ]
+
+
+@app.route("/api/export/watchlist", methods=["GET"])
+def export_watchlist():
+    """Export the watching list as an Excel file."""
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    rows = _read_watchlist_rows()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Watchlist"
+
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    required_fill = PatternFill(start_color="1565C0", end_color="1565C0", fill_type="solid")
+    optional_fill = PatternFill(start_color="37474F", end_color="37474F", fill_type="solid")
+    thin_border = Border(bottom=Side(style="thin", color="90CAF9"))
+
+    for ci, header in enumerate(_WATCHLIST_EXPORT_HEADERS, 1):
+        cell = ws.cell(row=1, column=ci, value=header)
+        cell.font = header_font
+        cell.fill = required_fill if ci == 1 else optional_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    for ri, row in enumerate(rows, 2):
+        for ci, header in enumerate(_WATCHLIST_EXPORT_HEADERS, 1):
+            cell = ws.cell(row=ri, column=ci, value=row[header])
+            cell.border = thin_border
+
+    widths = {
+        "Ticker": 12, "Notes": 60, "Div Yield Override": 20,
+        "NAV Erosion Scope": 20, "NAV Benchmark Override": 24, "Added Date": 14,
+    }
+    for i, header in enumerate(_WATCHLIST_EXPORT_HEADERS, 1):
+        ws.column_dimensions[get_column_letter(i)].width = widths.get(header, 16)
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name="watchlist_export.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.route("/api/export/watchlist/csv", methods=["GET"])
+def export_watchlist_csv():
+    """Export the watching list as a CSV file."""
+    import csv
+    from io import StringIO, BytesIO
+
+    rows = _read_watchlist_rows()
+    buf = StringIO()
+    writer = csv.DictWriter(buf, fieldnames=_WATCHLIST_EXPORT_HEADERS)
+    writer.writeheader()
+    writer.writerows(rows)
+
+    out = BytesIO(buf.getvalue().encode("utf-8"))
+    return send_file(
+        out,
+        as_attachment=True,
+        download_name="watchlist_export.csv",
+        mimetype="text/csv",
+    )
+
+
+@app.route("/api/import/watchlist", methods=["POST"])
+def api_import_watchlist():
+    """Import a watchlist file (xlsx/csv). Required column: Ticker. Optional: Notes."""
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    f = request.files["file"]
+    replace = request.form.get("replace", "false").lower() == "true"
+    path = os.path.join(UPLOAD_FOLDER, f.filename)
+    f.save(path)
+    try:
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".csv":
+            df = pd.read_csv(path)
+        else:
+            df = pd.read_excel(path, engine="openpyxl")
+
+        # Normalize column names: case-insensitive, strip spaces
+        col_lookup = {str(c).strip().lower(): c for c in df.columns}
+        ticker_col = col_lookup.get("ticker") or col_lookup.get("symbol")
+        if not ticker_col:
+            return jsonify({"error": "File must include a 'Ticker' column"}), 400
+        notes_col = col_lookup.get("notes")
+        yield_col = col_lookup.get("div yield override") or col_lookup.get("yield override") or col_lookup.get("div_yield_override")
+        scope_col = col_lookup.get("nav erosion scope") or col_lookup.get("nav_erosion_scope")
+        bench_col = col_lookup.get("nav benchmark override") or col_lookup.get("nav_benchmark_override") or col_lookup.get("benchmark override")
+
+        # Build incoming rows (preserve order, dedupe on first occurrence)
+        incoming = []
+        seen = set()
+        for _, row in df.iterrows():
+            t = row.get(ticker_col)
+            if t is None or (isinstance(t, float) and math.isnan(t)):
+                continue
+            ticker = str(t).strip().upper()
+            if not ticker or ticker in seen:
+                continue
+            seen.add(ticker)
+            notes = ""
+            if notes_col is not None:
+                nv = row.get(notes_col)
+                if nv is not None and not (isinstance(nv, float) and math.isnan(nv)):
+                    notes = str(nv).strip()[:500]
+            yield_override = None
+            if yield_col is not None:
+                yv = row.get(yield_col)
+                if yv is not None and yv != "" and not (isinstance(yv, float) and math.isnan(yv)):
+                    try:
+                        yield_override = float(yv)
+                    except (TypeError, ValueError):
+                        yield_override = None
+            scope = "auto"
+            if scope_col is not None:
+                sv = row.get(scope_col)
+                if sv is not None and not (isinstance(sv, float) and math.isnan(sv)):
+                    candidate = str(sv).strip().lower()
+                    if candidate in ("auto", "test", "skip"):
+                        scope = candidate
+            bench_override = None
+            if bench_col is not None:
+                bv = row.get(bench_col)
+                if bv is not None and not (isinstance(bv, float) and math.isnan(bv)):
+                    cleaned = str(bv).strip().upper()
+                    if cleaned:
+                        bench_override = cleaned
+            incoming.append((ticker, notes, yield_override, scope, bench_override))
+
+        conn = get_connection()
+        added = 0
+        updated = 0
+        if replace:
+            conn.execute("DELETE FROM watchlist_watching")
+            for i, (ticker, notes, yield_override, scope, bench_override) in enumerate(incoming):
+                conn.execute(
+                    "INSERT INTO watchlist_watching (ticker, notes, sort_order, div_yield_override, "
+                    "nav_erosion_scope, nav_benchmark_override) VALUES (?, ?, ?, ?, ?, ?)",
+                    (ticker, notes, i, yield_override, scope, bench_override),
+                )
+                added += 1
+        else:
+            existing = {
+                r["ticker"]: r["sort_order"] if "sort_order" in r.keys() else 0
+                for r in conn.execute("SELECT ticker, sort_order FROM watchlist_watching").fetchall()
+            }
+            max_order_row = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) AS m FROM watchlist_watching"
+            ).fetchone()
+            next_order = (max_order_row["m"] if max_order_row else -1) + 1
+            for ticker, notes, yield_override, scope, bench_override in incoming:
+                if ticker in existing:
+                    did_update = False
+                    if notes:
+                        conn.execute(
+                            "UPDATE watchlist_watching SET notes = ? WHERE ticker = ?",
+                            (notes, ticker),
+                        )
+                        did_update = True
+                    if yield_override is not None:
+                        conn.execute(
+                            "UPDATE watchlist_watching SET div_yield_override = ? WHERE ticker = ?",
+                            (yield_override, ticker),
+                        )
+                        did_update = True
+                    if scope != "auto":
+                        conn.execute(
+                            "UPDATE watchlist_watching SET nav_erosion_scope = ? WHERE ticker = ?",
+                            (scope, ticker),
+                        )
+                        did_update = True
+                    if bench_override:
+                        conn.execute(
+                            "UPDATE watchlist_watching SET nav_benchmark_override = ? WHERE ticker = ?",
+                            (bench_override, ticker),
+                        )
+                        did_update = True
+                    if did_update:
+                        updated += 1
+                else:
+                    conn.execute(
+                        "INSERT INTO watchlist_watching (ticker, notes, sort_order, div_yield_override, "
+                        "nav_erosion_scope, nav_benchmark_override) VALUES (?, ?, ?, ?, ?, ?)",
+                        (ticker, notes, next_order, yield_override, scope, bench_override),
+                    )
+                    next_order += 1
+                    added += 1
+        conn.commit()
+        conn.close()
+
+        if replace:
+            msg = f"Replaced watchlist with {added} ticker{'s' if added != 1 else ''}."
+        else:
+            parts = []
+            if added:
+                parts.append(f"{added} added")
+            if updated:
+                parts.append(f"{updated} updated")
+            if not parts:
+                parts.append("no changes")
+            msg = "Watchlist import: " + ", ".join(parts) + "."
+        return jsonify({"message": msg, "added": added, "updated": updated})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    finally:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+
+
+@app.route("/api/template/watchlist-download", methods=["GET"])
+def download_watchlist_template():
+    """Download a blank watchlist template."""
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Watchlist"
+
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    required_fill = PatternFill(start_color="1565C0", end_color="1565C0", fill_type="solid")
+    optional_fill = PatternFill(start_color="37474F", end_color="37474F", fill_type="solid")
+
+    headers = ["Ticker", "Notes", "Div Yield Override", "NAV Erosion Scope", "NAV Benchmark Override"]
+    for ci, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=ci, value=h)
+        cell.font = header_font
+        cell.fill = required_fill if ci == 1 else optional_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    examples = [
+        ("SCHD", "Dividend ETF candidate", "", "skip", ""),
+        ("TSLY", "Force NAV test against TSLA", "", "test", "TSLA"),
+        ("VTI", "", "", "auto", ""),
+    ]
+    for ri, row in enumerate(examples, 2):
+        t, n, y, scope, bench = row
+        ws.cell(row=ri, column=1, value=t)
+        ws.cell(row=ri, column=2, value=n)
+        ws.cell(row=ri, column=3, value=y)
+        ws.cell(row=ri, column=4, value=scope)
+        ws.cell(row=ri, column=5, value=bench)
+
+    ws.column_dimensions[get_column_letter(1)].width = 12
+    ws.column_dimensions[get_column_letter(2)].width = 60
+    ws.column_dimensions[get_column_letter(3)].width = 20
+    ws.column_dimensions[get_column_letter(4)].width = 20
+    ws.column_dimensions[get_column_letter(5)].width = 24
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name="watchlist_template.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 # ── Dividend Comparison (Forward vs TTM) ──────────────────────────────────────
@@ -8590,6 +8946,7 @@ def _nav_benchmark_for_ticker(ticker, name="", category=""):
         "MLPI": "AMLP",
         "KCOP": "CPER",
         "XLEI": "XLE", "NUKX": "NLR", "WEPN": "ITA",
+        "OVL": "SPY", "SEPI": "SPY",
         "CSHI": "BIL", "BIL": "BIL", "SGOV": "BIL", "SHV": "BIL",
         "PFFA": "PFF",
         "PBDC": "BIZD", "BIZD": "BIZD",
@@ -8735,7 +9092,7 @@ def _is_nav_erosion_candidate(ticker, name="", category=""):
         "METY", "TSLP", "NVDP", "QQQY", "JEPY", "IWMY", "PFFA",
         "FEPI", "AIPI", "CEPI", "GIF", "TLDR", "ATCL",
         "GIAX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX", "SLJY",
-        "XLEI", "CHPY", "GPTY", "GOOP", "WNTR", "BEGS",
+        "XLEI", "CHPY", "GPTY", "GOOP", "WNTR", "BEGS", "OVL", "SEPI",
     }
     risky_markers = (
         "yieldmax", "single stock", "synthetic", "ultra option income",
@@ -11855,6 +12212,210 @@ def gains_losses_chart():
         return jsonify({"error": str(e), "detail": traceback.format_exc(limit=3)}), 500
 
 
+# ── Annual Tax Report ──────────────────────────────────────────────────────────
+
+def _check_tax_advantaged(conn, profile_id):
+    """Return profile name if the selected profile is tax-advantaged, else None."""
+    if profile_id == 1:
+        return None
+    row = conn.execute("SELECT name FROM profiles WHERE id = ?", (profile_id,)).fetchone()
+    name = dict(row).get("name") if row else None
+    return name if tax_report.is_tax_advantaged(name) else None
+
+
+@app.route("/api/tax-report/years", methods=["GET"])
+def tax_report_years():
+    profile_id = get_profile_id()
+    conn = get_connection()
+    try:
+        adv = _check_tax_advantaged(conn, profile_id)
+        if adv:
+            return jsonify({"years": [], "tax_advantaged": True, "profile_name": adv})
+        years = tax_report.available_years(conn, profile_id)
+        return jsonify({"years": years})
+    finally:
+        conn.close()
+
+
+@app.route("/api/tax-report/summary", methods=["GET"])
+def tax_report_summary():
+    profile_id = get_profile_id()
+    try:
+        year = int(request.args.get("year", "0"))
+    except ValueError:
+        return jsonify({"error": "year must be an integer"}), 400
+    if year <= 0:
+        return jsonify({"error": "year is required"}), 400
+    conn = get_connection()
+    try:
+        adv = _check_tax_advantaged(conn, profile_id)
+        if adv:
+            return jsonify({"tax_advantaged": True, "profile_name": adv,
+                            "year": year})
+        return jsonify(tax_report.build_summary(conn, profile_id, year))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "detail": traceback.format_exc(limit=3)}), 500
+    finally:
+        conn.close()
+
+
+@app.route("/api/tax-report/overrides", methods=["GET"])
+def tax_report_list_overrides():
+    profile_id = get_profile_id()
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT ticker, year, treatment, qualified_pct, ordinary_pct, roc_pct, updated_at FROM dividend_tax_overrides "
+            "WHERE profile_id = ? ORDER BY ticker, year",
+            (profile_id,),
+        ).fetchall()
+        return jsonify({"overrides": [dict(r) for r in rows]})
+    finally:
+        conn.close()
+
+
+@app.route("/api/tax-report/overrides", methods=["PUT"])
+def tax_report_set_override():
+    """Body: {ticker, year (0 = all years), treatment in qualified|ordinary|roc|split|default}.
+    Treatment of 'default' deletes the override."""
+    profile_id = get_profile_id()
+    data = request.get_json(force=True) or {}
+    ticker = (data.get("ticker") or "").strip().upper()
+    treatment = (data.get("treatment") or "").strip().lower()
+    try:
+        year = int(data.get("year", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "year must be an integer"}), 400
+    if not ticker:
+        return jsonify({"error": "ticker is required"}), 400
+    if treatment not in ("qualified", "ordinary", "roc", "split", "default"):
+        return jsonify({"error": "treatment must be qualified, ordinary, roc, split, or default"}), 400
+
+    split_defaults = {
+        "qualified": (100.0, 0.0, 0.0),
+        "ordinary": (0.0, 100.0, 0.0),
+        "roc": (0.0, 0.0, 100.0),
+    }
+    if treatment == "split":
+        try:
+            qualified_pct = float(data.get("qualified_pct", 0))
+            ordinary_pct = float(data.get("ordinary_pct", 0))
+            roc_pct = float(data.get("roc_pct", 0))
+        except (TypeError, ValueError):
+            return jsonify({"error": "split percentages must be numbers"}), 400
+        if min(qualified_pct, ordinary_pct, roc_pct) < 0 or max(qualified_pct, ordinary_pct, roc_pct) > 100:
+            return jsonify({"error": "split percentages must be between 0 and 100"}), 400
+        if abs((qualified_pct + ordinary_pct + roc_pct) - 100.0) > 0.01:
+            return jsonify({"error": "qualified, ordinary, and ROC percentages must sum to 100"}), 400
+    else:
+        qualified_pct, ordinary_pct, roc_pct = split_defaults.get(treatment, (None, None, None))
+
+    conn = get_connection()
+    try:
+        if treatment == "default":
+            conn.execute(
+                "DELETE FROM dividend_tax_overrides WHERE ticker = ? AND profile_id = ? AND year = ?",
+                (ticker, profile_id, year),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO dividend_tax_overrides (ticker, profile_id, year, treatment, qualified_pct, ordinary_pct, roc_pct) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(ticker, profile_id, year) DO UPDATE SET "
+                "treatment = excluded.treatment, qualified_pct = excluded.qualified_pct, "
+                "ordinary_pct = excluded.ordinary_pct, roc_pct = excluded.roc_pct, "
+                "updated_at = CURRENT_TIMESTAMP",
+                (ticker, profile_id, year, treatment, qualified_pct, ordinary_pct, roc_pct),
+            )
+        conn.commit()
+        return jsonify({"ok": True})
+    finally:
+        conn.close()
+
+
+@app.route("/api/tax-report/export", methods=["GET"])
+def tax_report_export():
+    """Download CSV for the given year. format=1099div | 8949 | dividends | lots."""
+    import io, csv
+    profile_id = get_profile_id()
+    try:
+        year = int(request.args.get("year", "0"))
+    except ValueError:
+        return jsonify({"error": "year must be an integer"}), 400
+    if year <= 0:
+        return jsonify({"error": "year is required"}), 400
+    fmt = (request.args.get("format") or "dividends").strip().lower()
+
+    conn = get_connection()
+    try:
+        summary = tax_report.build_summary(conn, profile_id, year)
+    finally:
+        conn.close()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+
+    if fmt == "1099div":
+        writer.writerow(["Box", "Description", "Amount"])
+        p = summary["form_1099_div_preview"]
+        writer.writerow(["1a", "Total Ordinary Dividends", p["box_1a_total_ordinary"]])
+        writer.writerow(["1b", "Qualified Dividends", p["box_1b_qualified"]])
+        writer.writerow(["3", "Nondividend Distributions (ROC)", p["box_3_nondividend_distributions"]])
+        filename = f"1099-div-preview-{year}.csv"
+    elif fmt == "8949":
+        writer.writerow(["Description", "Date Acquired", "Date Sold", "Proceeds",
+                         "Cost Basis", "Gain/Loss", "Term", "Holding Days"])
+        for lot in summary["realized"]["lots"]:
+            writer.writerow([
+                f"{lot['shares']} sh {lot['ticker']}",
+                lot["buy_date"] or "",
+                lot["sell_date"] or "",
+                lot["proceeds"],
+                lot["cost"],
+                lot["gain"],
+                "Long-Term" if lot["term"] == "LT" else "Short-Term",
+                lot["holding_days"] if lot["holding_days"] is not None else "",
+            ])
+        filename = f"form-8949-preview-{year}.csv"
+    elif fmt == "lots":
+        writer.writerow(["Ticker", "Shares", "Buy Date", "Buy Price", "Sell Date",
+                         "Sell Price", "Proceeds", "Cost", "Gain/Loss", "Term",
+                         "Holding Days"])
+        for lot in summary["realized"]["lots"]:
+            writer.writerow([
+                lot["ticker"], lot["shares"],
+                lot["buy_date"] or "", lot["buy_price"],
+                lot["sell_date"] or "", lot["sell_price"],
+                lot["proceeds"], lot["cost"], lot["gain"], lot["term"],
+                lot["holding_days"] if lot["holding_days"] is not None else "",
+            ])
+        filename = f"realized-lots-{year}.csv"
+    else:
+        writer.writerow(["Ticker", "Classification", "Treatment", "Override?",
+                         "Qualified", "Ordinary", "ROC", "Total", "Payments"])
+        for row in summary["dividends"]["by_ticker"]:
+            writer.writerow([
+                row["ticker"], row.get("classification_type") or "",
+                row.get("treatment") or "",
+                "Yes" if row.get("is_override") else "",
+                round(row.get("qualified", 0), 2),
+                round(row.get("ordinary", 0), 2),
+                round(row.get("roc", 0), 2),
+                round(row.get("total", 0), 2),
+                row.get("count", 0),
+            ])
+        filename = f"dividends-by-ticker-{year}.csv"
+
+    payload = buf.getvalue().encode("utf-8")
+    from flask import Response
+    return Response(
+        payload,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 # ── Growth ─────────────────────────────────────────────────────────────────────
 
 @app.route("/api/growth/data", methods=["GET"])
@@ -13604,15 +14165,33 @@ def watchlist_watching_list():
     if request.method == "POST":
         data = request.get_json(force=True)
         rows = data.get("rows", [])
+        preserve_notes = bool(data.get("preserve_notes"))
+        existing_notes = {
+            r["ticker"]: r["notes"] or ""
+            for r in conn.execute("SELECT ticker, notes FROM watchlist_watching").fetchall()
+        }
         conn.execute("DELETE FROM watchlist_watching")
         for i, r in enumerate(rows):
             ticker = str(r.get("ticker", "")).strip().upper()
             if not ticker:
                 continue
-            notes = str(r.get("notes", ""))[:500]
+            notes_value = existing_notes.get(ticker, "") if preserve_notes else r.get("notes", existing_notes.get(ticker, ""))
+            notes = str(notes_value)[:500]
+            override_raw = r.get("div_yield_override", None)
+            override = None
+            if override_raw is not None and override_raw != "":
+                try:
+                    override = float(override_raw)
+                except (TypeError, ValueError):
+                    override = None
+            scope = str(r.get("nav_erosion_scope") or "auto").strip().lower()
+            if scope not in ("auto", "test", "skip"):
+                scope = "auto"
+            bench_override = str(r.get("nav_benchmark_override") or "").strip().upper() or None
             conn.execute(
-                "INSERT INTO watchlist_watching (ticker, notes, sort_order) VALUES (?, ?, ?)",
-                (ticker, notes, i),
+                "INSERT INTO watchlist_watching (ticker, notes, sort_order, div_yield_override, "
+                "nav_erosion_scope, nav_benchmark_override) VALUES (?, ?, ?, ?, ?, ?)",
+                (ticker, notes, i, override, scope, bench_override),
             )
         conn.commit()
         conn.close()
@@ -13620,7 +14199,9 @@ def watchlist_watching_list():
 
     # GET
     rows = conn.execute(
-        "SELECT ticker, notes, added_date FROM watchlist_watching ORDER BY sort_order, id"
+        "SELECT ticker, notes, added_date, div_yield_override, "
+        "nav_erosion_scope, nav_benchmark_override "
+        "FROM watchlist_watching ORDER BY sort_order, id"
     ).fetchall()
     conn.close()
     result = []
@@ -13629,6 +14210,9 @@ def watchlist_watching_list():
             "ticker": r["ticker"],
             "notes": r["notes"] or "",
             "added_date": r["added_date"] or "",
+            "div_yield_override": r["div_yield_override"],
+            "nav_erosion_scope": r["nav_erosion_scope"] or "auto",
+            "nav_benchmark_override": r["nav_benchmark_override"] or "",
         })
     return jsonify(rows=result)
 
@@ -13645,19 +14229,44 @@ def watchlist_data():
     conn = get_connection()
     try:
         watching_rows = conn.execute(
-            "SELECT ticker, notes FROM watchlist_watching ORDER BY sort_order, id"
+            "SELECT ticker, notes, div_yield_override, "
+            "nav_erosion_scope, nav_benchmark_override "
+            "FROM watchlist_watching ORDER BY sort_order, id"
         ).fetchall()
     except Exception:
         watching_rows = []
     conn.close()
 
     watching_tickers = [r["ticker"] for r in watching_rows]
+    yield_overrides = {
+        r["ticker"]: r["div_yield_override"]
+        for r in watching_rows
+        if r["div_yield_override"] is not None
+    }
+    nav_scopes = {
+        r["ticker"]: (str(r["nav_erosion_scope"] or "auto").strip().lower() or "auto")
+        for r in watching_rows
+    }
+    nav_bench_overrides = {
+        r["ticker"]: (str(r["nav_benchmark_override"] or "").strip().upper())
+        for r in watching_rows
+        if r["nav_benchmark_override"]
+    }
     if not watching_tickers:
         return jsonify(watching=[], counts={"BUY": 0, "SELL": 0, "NEUTRAL": 0})
+
+    # Resolve benchmark per ticker once (per-row override > global override > auto-detect),
+    # but only for tickers that will actually be NAV-tested.
+    resolved_benchmark = {}
+    for t in watching_tickers:
+        scope = nav_scopes.get(t, "auto")
+        if not _should_test_nav_erosion(t, scope=scope):
+            continue
+        resolved_benchmark[t] = nav_bench_overrides.get(t) or _nav_benchmark_for_ticker(t)
     benchmark_tickers = sorted({
         part
-        for t in watching_tickers
-        for part in _nav_benchmark_parts(_nav_benchmark_for_ticker(t))
+        for bench in resolved_benchmark.values()
+        for part in _nav_benchmark_parts(bench)
     })
     download_tickers = sorted(set(watching_tickers + benchmark_tickers))
 
@@ -13797,11 +14406,20 @@ def watchlist_data():
             low_df = raw["Low"]
             divs_df = raw["Dividends"] if "Dividends" in _top else None
         else:
-            close_df = raw[["Adj Close"]] if "Adj Close" in raw.columns else raw[["Close"]]
+            single_symbol = download_tickers[0] if len(download_tickers) == 1 else None
+            close_col = "Adj Close" if "Adj Close" in raw.columns else "Close"
+            close_df = raw[[close_col]]
             unadj_close_df = raw[["Close"]]
             high_df = raw[["High"]]
             low_df = raw[["Low"]]
             divs_df = raw[["Dividends"]] if "Dividends" in raw.columns else None
+            if single_symbol:
+                close_df.columns = [single_symbol]
+                unadj_close_df.columns = [single_symbol]
+                high_df.columns = [single_symbol]
+                low_df.columns = [single_symbol]
+                if divs_df is not None:
+                    divs_df.columns = [single_symbol]
 
         empty = pd.Series([], dtype=float)
         ticker_info = {}
@@ -13824,15 +14442,33 @@ def watchlist_data():
             sma200_sig, sma200_v, sma200_pct = _sma(close, 200)
             # Benchmark-adjusted NAV erosion ratio
             cov_ratio, cov_sig, cov_erosion = None, None, None
-            if divs_df is not None and has_data:
+            scope = nav_scopes.get(ticker, "auto")
+            bench_used = resolved_benchmark.get(ticker)
+            bench_valid = True
+            nav_tested = False
+            if divs_df is not None and has_data and bench_used:
                 try:
                     t_divs_cov = divs_df[ticker].dropna() if ticker in divs_df.columns else pd.Series([], dtype=float)
                     t_divs_cov = t_divs_cov[t_divs_cov > 0]
-                    if _is_nav_erosion_candidate(ticker):
-                        nav_close = unadj_close_df[ticker].dropna() if ticker in unadj_close_df.columns else close
-                        bench_ticker = _nav_benchmark_for_ticker(ticker)
-                        bench_close = _nav_benchmark_close_from_df(close_df, bench_ticker, close)
+                    nav_close = unadj_close_df[ticker].dropna() if ticker in unadj_close_df.columns else close
+                    div_yield_override = yield_overrides.get(ticker)
+                    if div_yield_override is not None and len(nav_close) >= 1:
+                        try:
+                            override_yield = float(div_yield_override) / 100.0
+                            nav_price = float(nav_close.iloc[-1])
+                            if override_yield > 0 and nav_price > 0:
+                                t_divs_cov = pd.Series([nav_price * override_yield], dtype=float)
+                        except (TypeError, ValueError):
+                            pass
+                    bench_close = _nav_benchmark_close_from_df(close_df, bench_used, close)
+                    # Detect when no benchmark history was returned for an explicit override.
+                    if bench_used and bench_close is close:
+                        bench_parts = _nav_benchmark_parts(bench_used)
+                        if not any(part in close_df.columns and len(close_df[part].dropna()) >= 2 for part in bench_parts):
+                            bench_valid = False
+                    if bench_valid:
                         cov_ratio, cov_sig, cov_erosion = _bss_coverage(nav_close, t_divs_cov, bench_close)
+                        nav_tested = True
                 except Exception:
                     pass
 
@@ -13855,6 +14491,12 @@ def watchlist_data():
                         div_yield = round(ttm_divs / price * 100, 2)
                 except Exception:
                     pass
+            div_yield_override = yield_overrides.get(ticker)
+            if div_yield_override is not None:
+                try:
+                    div_yield = round(float(div_yield_override), 2)
+                except (TypeError, ValueError):
+                    pass
 
             one_yr_ret = None
             if len(close) >= 2:
@@ -13876,6 +14518,7 @@ def watchlist_data():
                 "price": round(price, 2) if price is not None else None,
                 "change_1d": change_1d,
                 "div_yield": div_yield,
+                "div_yield_overridden": ticker in yield_overrides,
                 "signal": signal,
                 "ao_sig": ao_sig,
                 "ao_val": round(ao_val, 4) if ao_val is not None else None,
@@ -13894,6 +14537,11 @@ def watchlist_data():
                 "cov_ratio": round(cov_ratio, 4) if cov_ratio is not None else None,
                 "cov_sig": cov_sig,
                 "nav_erosion_prob": cov_erosion,
+                "nav_erosion_scope": scope,
+                "nav_benchmark_override": nav_bench_overrides.get(ticker, ""),
+                "benchmark": bench_used,
+                "benchmark_valid": bench_valid,
+                "nav_tested": nav_tested,
             }
 
         # Build watching result rows

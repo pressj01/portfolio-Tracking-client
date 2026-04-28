@@ -416,6 +416,18 @@ def ensure_tables_exist(conn=None):
             sort_order INTEGER NOT NULL DEFAULT 0
         )
     """)
+    try:
+        cur.execute("SELECT div_yield_override FROM watchlist_watching LIMIT 1")
+    except Exception:
+        cur.execute("ALTER TABLE watchlist_watching ADD COLUMN div_yield_override REAL")
+    try:
+        cur.execute("SELECT nav_erosion_scope FROM watchlist_watching LIMIT 1")
+    except Exception:
+        cur.execute("ALTER TABLE watchlist_watching ADD COLUMN nav_erosion_scope TEXT NOT NULL DEFAULT 'auto'")
+    try:
+        cur.execute("SELECT nav_benchmark_override FROM watchlist_watching LIMIT 1")
+    except Exception:
+        cur.execute("ALTER TABLE watchlist_watching ADD COLUMN nav_benchmark_override TEXT")
 
     # ── scanner_tickers ──────────────────────────────────────────────────────────
     cur.execute("""
@@ -718,6 +730,31 @@ def ensure_tables_exist(conn=None):
             value TEXT
         )
     """)
+
+    # ── dividend_tax_overrides ───────────────────────────────────────────────
+    # Per-ticker tax-treatment override for dividend payments. year=0 applies
+    # to all years (acts as a permanent default for that ticker); a specific
+    # year takes precedence over the year=0 row.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS dividend_tax_overrides (
+            ticker      TEXT NOT NULL,
+            profile_id  INTEGER NOT NULL DEFAULT 1,
+            year        INTEGER NOT NULL DEFAULT 0,
+            treatment   TEXT NOT NULL,
+            qualified_pct REAL,
+            ordinary_pct  REAL,
+            roc_pct       REAL,
+            updated_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (ticker, profile_id, year)
+        )
+    """)
+    _tax_cols = {r[1] for r in cur.execute("PRAGMA table_info(dividend_tax_overrides)").fetchall()}
+    if "qualified_pct" not in _tax_cols:
+        cur.execute("ALTER TABLE dividend_tax_overrides ADD COLUMN qualified_pct REAL")
+    if "ordinary_pct" not in _tax_cols:
+        cur.execute("ALTER TABLE dividend_tax_overrides ADD COLUMN ordinary_pct REAL")
+    if "roc_pct" not in _tax_cols:
+        cur.execute("ALTER TABLE dividend_tax_overrides ADD COLUMN roc_pct REAL")
 
     # ── regime_predictions (Brier score tracking) ─────────────────────────────
     cur.execute("""

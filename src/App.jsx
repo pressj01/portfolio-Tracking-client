@@ -38,6 +38,7 @@ import GeneralScanner from './pages/GeneralScanner'
 import PortfolioTester from './pages/PortfolioTester'
 import SecurityResearch from './pages/SecurityResearch'
 import DividendCalculator from './pages/DividendCalculator'
+import AnnualTaxReport from './pages/AnnualTaxReport'
 // Option Trading Tools and Option Education are intentionally excluded from
 // deployed builds — still in development, not ready for production.
 // import OptionTradingTools from './pages/OptionTradingTools'
@@ -116,6 +117,7 @@ function App() {
         <Route path="/portfolio-tester" element={<PortfolioTester />} />
         <Route path="/security-research" element={<SecurityResearch />} />
         <Route path="/dividend-calculator" element={<DividendCalculator />} />
+        <Route path="/tax-report" element={<AnnualTaxReport />} />
         {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
         <Route path="/help" element={<Help />} />
       </Routes>
@@ -180,6 +182,9 @@ function Nav() {
         <NavLink to="/macro-dashboard">Macro Regime Dashboard</NavLink>
           <NavLink to="/scanner">Single Strategy Scanner</NavLink>
         <NavLink to="/general-scanner">General Scanner</NavLink>
+      </NavDropdown>
+      <NavDropdown label="Taxes">
+        <NavLink to="/tax-report">Annual Tax Report</NavLink>
       </NavDropdown>
       {/* Option Trading Tools and Option Education hidden from deployed build — not ready */}
       <NavDropdown label="Admin">

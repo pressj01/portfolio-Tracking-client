@@ -6,7 +6,9 @@ export default function Export() {
   const pf = useProfileFetch()
   const { selection, isAggregate, currentProfileName, profileQueryString } = useProfile()
   const [loading, setLoading] = useState(null)   // null | 'excel' | 'csv'
+  const [wlLoading, setWlLoading] = useState(null) // null | 'excel' | 'csv'
   const [hasData, setHasData] = useState(false)
+  const [watchlistCount, setWatchlistCount] = useState(0)
   const [error, setError] = useState(null)
   const [success, setSuccess] = useState(null)
 
@@ -15,6 +17,10 @@ export default function Export() {
       .then(r => r.json())
       .then(d => setHasData(d.holdings > 0))
       .catch(() => setHasData(false))
+    pf('/api/watchlist/watching')
+      .then(r => r.json())
+      .then(d => setWatchlistCount((d.rows || []).length))
+      .catch(() => setWatchlistCount(0))
   }, [pf, selection])
 
   const handleExport = async (format) => {
@@ -55,6 +61,47 @@ export default function Export() {
       setError(e.message)
     } finally {
       setLoading(null)
+    }
+  }
+
+  const handleWatchlistExport = async (format) => {
+    setWlLoading(format)
+    setError(null)
+    setSuccess(null)
+
+    const endpoint = format === 'csv'
+      ? '/api/export/watchlist/csv'
+      : '/api/export/watchlist'
+    const fallbackName = format === 'csv'
+      ? 'watchlist_export.csv'
+      : 'watchlist_export.xlsx'
+
+    try {
+      const url = `${API_BASE}${endpoint}`
+      const res = await fetch(url)
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Export failed')
+      }
+
+      const disposition = res.headers.get('Content-Disposition') || ''
+      const match = disposition.match(/filename=([^;]+)/)
+      const filename = match ? match[1].trim() : fallbackName
+
+      const blob = await res.blob()
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(link.href)
+
+      setSuccess(`Watchlist exported successfully as ${filename}`)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setWlLoading(null)
     }
   }
 
@@ -102,6 +149,43 @@ export default function Export() {
               {loading === 'csv' ? <><span className="spinner" /> Exporting...</> : 'Export to CSV'}
             </button>
           </div>
+        )}
+      </div>
+
+      <div className="card" style={{ marginTop: '1.5rem' }}>
+        <h2>Export Watchlist</h2>
+        <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+          Download your watchlist (tickers and notes). Watchlist is global &mdash; not tied to the
+          selected portfolio. The exported file can be reimported on the Import page under the
+          <strong> Generic Upload</strong> tab.
+        </p>
+
+        {watchlistCount === 0 ? (
+          <div className="alert alert-info">
+            No watchlist tickers to export. Add some on the Watchlist page first.
+          </div>
+        ) : (
+          <>
+            <p style={{ color: '#90a4ae', marginBottom: '1rem', fontSize: '0.9rem' }}>
+              {watchlistCount} ticker{watchlistCount === 1 ? '' : 's'} in watchlist.
+            </p>
+            <div style={{ display: 'flex', gap: '1rem' }}>
+              <button
+                className="btn btn-primary"
+                onClick={() => handleWatchlistExport('excel')}
+                disabled={wlLoading}
+              >
+                {wlLoading === 'excel' ? <><span className="spinner" /> Exporting...</> : 'Export Watchlist to Excel'}
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={() => handleWatchlistExport('csv')}
+                disabled={wlLoading}
+              >
+                {wlLoading === 'csv' ? <><span className="spinner" /> Exporting...</> : 'Export Watchlist to CSV'}
+              </button>
+            </div>
+          </>
         )}
       </div>
 

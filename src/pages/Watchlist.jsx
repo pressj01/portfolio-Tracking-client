@@ -23,6 +23,214 @@ function fmt(v) {
   return '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+function YieldCell({ ticker, computed, override, overridden, onSave }) {
+  const [editing, setEditing] = useState(false)
+  const initial = (override ?? '').toString()
+  const [draft, setDraft] = useState(initial)
+  const inputRef = useRef(null)
+
+  useEffect(() => { setDraft((override ?? '').toString()) }, [override])
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [editing])
+
+  const commit = () => {
+    setEditing(false)
+    if (draft !== ((override ?? '').toString())) onSave(ticker, draft)
+  }
+
+  const cancel = () => {
+    setDraft((override ?? '').toString())
+    setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="wl-input"
+        type="number"
+        step="0.01"
+        min="0"
+        placeholder="blank = auto"
+        style={{ width: 80, padding: '0.2rem 0.35rem', fontSize: '0.85rem' }}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commit() }
+          else if (e.key === 'Escape') { e.preventDefault(); cancel() }
+        }}
+      />
+    )
+  }
+
+  const display = computed != null ? computed.toFixed(2) + '%' : '—'
+  return (
+    <span
+      onClick={() => setEditing(true)}
+      title={overridden ? 'Manual override (click to edit)' : 'Click to override yield'}
+      style={{
+        display: 'inline-block',
+        minWidth: 60,
+        padding: '0.15rem 0.3rem',
+        cursor: 'text',
+        color: overridden ? '#ffb74d' : 'inherit',
+        fontWeight: overridden ? 600 : 'inherit',
+        borderRadius: 3,
+      }}
+    >
+      {display}{overridden ? ' *' : ''}
+    </span>
+  )
+}
+
+function NotesCell({ ticker, value, onSave }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value)
+  const inputRef = useRef(null)
+
+  useEffect(() => { setDraft(value) }, [value])
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [editing])
+
+  const commit = () => {
+    setEditing(false)
+    if (draft !== value) onSave(ticker, draft)
+  }
+
+  const cancel = () => {
+    setDraft(value)
+    setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="wl-input"
+        style={{ width: '100%', minWidth: 160, padding: '0.25rem 0.4rem', fontSize: '0.85rem' }}
+        value={draft}
+        maxLength={500}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commit() }
+          else if (e.key === 'Escape') { e.preventDefault(); cancel() }
+        }}
+      />
+    )
+  }
+
+  return (
+    <span
+      onClick={() => setEditing(true)}
+      title="Click to edit notes"
+      style={{
+        display: 'inline-block',
+        minHeight: '1.2em',
+        minWidth: 140,
+        padding: '0.15rem 0.3rem',
+        cursor: 'text',
+        color: value ? 'inherit' : '#5a6878',
+        fontStyle: value ? 'normal' : 'italic',
+        borderRadius: 3,
+      }}
+    >
+      {value || 'Click to add note'}
+    </span>
+  )
+}
+
+function NavCell({ row, analysis, onSave }) {
+  const scope = row.nav_erosion_scope || analysis?.nav_erosion_scope || 'auto'
+  const benchmarkOverride = row.nav_benchmark_override || analysis?.nav_benchmark_override || ''
+  const benchmarkUsed = analysis?.benchmark || row.benchmark || ''
+  const benchmarkInvalid = benchmarkOverride && (analysis?.benchmark_valid === false || row.benchmark_valid === false)
+  const navTested = analysis?.nav_tested ?? row.nav_tested
+  const navLabel = scope === 'test' ? 'Test' : scope === 'skip' ? 'Skip' : 'Auto'
+  const benchmarkLabel = benchmarkOverride || benchmarkUsed
+  const title = scope === 'skip'
+    ? 'Skipped by user override'
+    : benchmarkInvalid
+      ? `${benchmarkOverride} is not returning benchmark price history`
+      : scope === 'test'
+        ? `Forced NAV test${benchmarkOverride || benchmarkUsed ? ` vs ${benchmarkOverride || benchmarkUsed}` : ''}`
+        : navTested
+          ? `Auto-tested${benchmarkOverride || benchmarkUsed ? ` vs ${benchmarkOverride || benchmarkUsed}` : ''}`
+          : 'Auto: not tested by current NAV erosion rules'
+
+  const saveScope = (nextScope) => onSave(row.ticker, nextScope, benchmarkOverride)
+  const saveBenchmark = (value) => onSave(row.ticker, scope, value)
+
+  return (
+    <td
+      style={{
+        color: analysis?.nav_erosion_prob === 'Low' ? '#00c853' : analysis?.nav_erosion_prob === 'High' ? '#d50000' : analysis?.nav_erosion_prob === 'Medium' ? '#f9a825' : '#888',
+        fontWeight: 600,
+        backgroundColor: analysis?.nav_erosion_prob === 'Low' ? 'rgba(0,200,83,0.12)' : analysis?.nav_erosion_prob === 'High' ? 'rgba(213,0,0,0.12)' : analysis?.nav_erosion_prob === 'Medium' ? 'rgba(249,168,37,0.12)' : 'transparent',
+        minWidth: 128,
+      }}
+      title={title}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span>{analysis?.nav_erosion_prob ? `${analysis.nav_erosion_prob} Probability` : '\u2014'}</span>
+        <select
+          aria-label={`${row.ticker} NAV erosion testing`}
+          value={scope}
+          onChange={e => saveScope(e.target.value)}
+          title={title}
+          style={{
+            width: 48,
+            height: 21,
+            border: '1px solid #294b73',
+            borderRadius: 4,
+            background: '#0f1c36',
+            color: scope === 'test' ? '#7ecfff' : scope === 'skip' ? '#ffb300' : '#9aa8bd',
+            fontSize: '0.62rem',
+            padding: '0 2px',
+          }}
+        >
+          <option value="auto">Auto</option>
+          <option value="test">Test</option>
+          <option value="skip">Skip</option>
+        </select>
+      </div>
+      <input
+        aria-label={`${row.ticker} NAV benchmark override`}
+        value={benchmarkOverride}
+        placeholder={benchmarkUsed || 'bench'}
+        onChange={e => onSave(row.ticker, scope, e.target.value.toUpperCase(), true)}
+        onBlur={e => saveBenchmark(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') e.currentTarget.blur()
+        }}
+        title="Optional benchmark override, e.g. QQQ, GLD, BTC-USD, or BTC-USD+GLD"
+        style={{
+          width: 86,
+          marginTop: 3,
+          border: benchmarkInvalid ? '1px solid #d50000' : '1px solid #203a5f',
+          borderRadius: 4,
+          background: '#0d1830',
+          color: benchmarkInvalid ? '#ffb3b3' : benchmarkOverride ? '#d7e8ff' : '#7d8799',
+          fontSize: '0.62rem',
+          padding: '2px 4px',
+        }}
+      />
+      <div style={{ fontSize: '0.58rem', color: '#7d8799', lineHeight: 1.1 }}>
+        {navLabel}{benchmarkLabel ? ` vs ${benchmarkLabel}` : ''}
+      </div>
+    </td>
+  )
+}
+
 function WatchlistTickerModal({ ticker, onClose }) {
   const pf = useProfileFetch()
   const [data, setData] = useState(null)
@@ -123,6 +331,8 @@ export default function Watchlist() {
   const [sortAsc, setSortAsc] = useState(true)
   const [modalTicker, setModalTicker] = useState(null)
   const initialLoad = useRef(true)
+  const watchingListRef = useRef(watchingList)
+  const saveQueueRef = useRef(Promise.resolve())
 
   const loadAnalysis = useCallback(() => {
     setLoading(true)
@@ -152,27 +362,49 @@ export default function Watchlist() {
 
   useEffect(() => { loadWatchingList() }, [loadWatchingList])
 
-  const saveList = useCallback((newList) => {
+  const cleanWatchlistRows = (rows) => rows.map(r => ({
+    ticker: r.ticker,
+    notes: r.notes || '',
+    div_yield_override: r.div_yield_override ?? null,
+    nav_erosion_scope: r.nav_erosion_scope || 'auto',
+    nav_benchmark_override: r.nav_benchmark_override || '',
+  }))
+
+  const saveList = useCallback((newList, options = {}) => {
+    watchingListRef.current = newList
     setWatchingList(newList)
-    pf('/api/watchlist/watching', {
+    saveQueueRef.current = saveQueueRef.current.catch(() => {}).then(() => pf('/api/watchlist/watching', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rows: newList }),
-    })
+      body: JSON.stringify({
+        rows: cleanWatchlistRows(newList),
+        preserve_notes: !!options.preserveNotes,
+      }),
+    }))
+    return saveQueueRef.current
   }, [pf])
 
-  const watchingListRef = useRef(watchingList)
   useEffect(() => { watchingListRef.current = watchingList }, [watchingList])
 
   const addWatching = async () => {
     const t = ticker.trim().toUpperCase()
     if (!t) return
     const current = watchingListRef.current
-    if (current.some(r => r.ticker === t)) {
-      await dialog.alert(t + ' is already in your watching list.')
+    const trimmedNotes = notes.trim()
+    const existingIdx = current.findIndex(r => r.ticker === t)
+    if (existingIdx !== -1) {
+      // Already in list — update notes instead of erroring out
+      if (!trimmedNotes) {
+        await dialog.alert(t + ' is already in your watching list. Type notes in the Notes field to update them, or click the Notes cell in the table.')
+        return
+      }
+      const newList = current.map((r, i) => i === existingIdx ? { ...r, notes: trimmedNotes } : r)
+      saveList(newList)
+      setTicker('')
+      setNotes('')
       return
     }
-    const newList = [...current, { ticker: t, notes: notes.trim() }]
+    const newList = [...current, { ticker: t, notes: trimmedNotes }]
     saveList(newList)
     setTicker('')
     setNotes('')
@@ -180,8 +412,62 @@ export default function Watchlist() {
     setTimeout(loadAnalysis, 300)
   }
 
+  const updateNotes = (t, newNotes) => {
+    const current = watchingListRef.current
+    const trimmed = (newNotes || '').slice(0, 500)
+    const idx = current.findIndex(r => r.ticker === t)
+    if (idx === -1) return
+    if ((current[idx].notes || '') === trimmed) return
+    const newList = current.map((r, i) => i === idx ? { ...r, notes: trimmed } : r)
+    saveList(newList)
+  }
+
+  const updateYieldOverride = (t, newValue) => {
+    const current = watchingListRef.current
+    const idx = current.findIndex(r => r.ticker === t)
+    if (idx === -1) return
+    const trimmed = (newValue ?? '').toString().trim()
+    let parsed = null
+    if (trimmed !== '') {
+      const n = Number(trimmed)
+      if (Number.isFinite(n)) parsed = n
+      else return
+    }
+    const prev = current[idx].div_yield_override
+    const prevNorm = (prev === undefined || prev === null) ? null : Number(prev)
+    if (prevNorm === parsed) return
+    const newList = current.map((r, i) => i === idx ? { ...r, div_yield_override: parsed } : r)
+    saveList(newList, { preserveNotes: true })
+    setTimeout(loadAnalysis, 200)
+  }
+
+  const updateNavSettings = (t, scope, benchmark, localOnly = false) => {
+    const current = watchingListRef.current
+    const idx = current.findIndex(r => r.ticker === t)
+    if (idx === -1) return
+    const nextScope = ['auto', 'test', 'skip'].includes(scope) ? scope : 'auto'
+    const nextBenchmark = (benchmark || '').trim().toUpperCase()
+    const prevScope = current[idx].nav_erosion_scope || 'auto'
+    const prevBenchmark = current[idx].nav_benchmark_override || ''
+    if (prevScope === nextScope && prevBenchmark === nextBenchmark && !current[idx]._nav_dirty) return
+
+    const newList = current.map((r, i) => i === idx ? {
+      ...r,
+      nav_erosion_scope: nextScope,
+      nav_benchmark_override: nextBenchmark,
+      _nav_dirty: localOnly,
+    } : r)
+    if (localOnly) {
+      watchingListRef.current = newList
+      setWatchingList(newList)
+      return
+    }
+    saveList(newList, { preserveNotes: true })
+    setTimeout(loadAnalysis, 200)
+  }
+
   const removeWatching = (t) => {
-    saveList(watchingListRef.current.filter(r => r.ticker !== t))
+    saveList(watchingListRef.current.filter(r => r.ticker !== t), { preserveNotes: true })
   }
 
   const getAnalysis = (tkr) => {
@@ -190,10 +476,12 @@ export default function Watchlist() {
     return rows.find(r => r.ticker === tkr) || null
   }
 
-  // Build display rows
+  // Build display rows — spread analysis first so user-edited fields
+  // (notes, div_yield_override) from watchingList always win over any
+  // stale copies the analysis endpoint may return.
   const displayRows = watchingList.map(r => ({
-    ...r,
     ...(getAnalysis(r.ticker) || {}),
+    ...r,
   }))
 
   // Sorting
@@ -307,7 +595,7 @@ export default function Watchlist() {
                   { label: 'Ticker' },
                   { label: 'Price', tip: 'Current market price' },
                   { label: '1D Chg', tip: '1-day price change percentage' },
-                  { label: 'Div Yield', tip: 'Current annual dividend yield' },
+                  { label: 'Div Yield', tip: 'Current annual dividend yield. Click the cell to override (e.g. for high-yield ETFs where yfinance is stale).' },
                   { label: 'Signal', tip: 'Overall buy/sell signal — majority vote across indicators' },
                   { label: 'AO', tip: 'Awesome Oscillator signal — momentum based on 5/34-period midpoint SMAs' },
                   { label: 'RSI', tip: 'Relative Strength Index signal — overbought >70, oversold <30' },
@@ -319,7 +607,7 @@ export default function Watchlist() {
                   { label: '1Y Return', tip: 'Total return over the past 12 months' },
                   { label: 'NAV Ratio', tip: 'NAV erosion ratio: fund price decline / TTM distribution yield, only when benchmark is flat or up. Lagging a rising benchmark is not erosion.' },
                   { label: 'NAV Signal', tip: 'Signal from NAV Ratio: BUY <= 0.25, NEUTRAL <= 0.75, SELL > 0.75' },
-                  { label: 'NAV Erosion', tip: 'Derived from NAV Ratio: Low <= 0.25, Medium <= 0.75, High > 0.75' },
+                  { label: 'NAV Erosion', tip: 'Derived from NAV Ratio. Use Auto/Test/Skip and optional benchmark override to control watchlist NAV testing.' },
                   { label: 'Notes' },
                 ].map((h, i) => (
                   <th key={h.label} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }} title={h.tip || ''}>
@@ -345,7 +633,15 @@ export default function Watchlist() {
                     </td>
                     <td>{a?.price != null ? `$${a.price.toFixed(2)}` : '\u2014'}</td>
                     <td className={pctClass(a?.change_1d)}>{a?.change_1d != null ? fmtPct(a.change_1d) : '\u2014'}</td>
-                    <td>{a?.div_yield != null ? a.div_yield.toFixed(2) + '%' : '\u2014'}</td>
+                    <td>
+                      <YieldCell
+                        ticker={r.ticker}
+                        computed={a?.div_yield}
+                        override={r.div_yield_override}
+                        overridden={a?.div_yield_overridden}
+                        onSave={updateYieldOverride}
+                      />
+                    </td>
                     <td><SignalBadge signal={a?.signal} /></td>
                     <td><SignalBadge signal={a?.ao_sig} /></td>
                     <td>
@@ -366,12 +662,14 @@ export default function Watchlist() {
                     <td className={pctClass(a?.one_yr_ret)}>{a?.one_yr_ret != null ? fmtPct(a.one_yr_ret) : '\u2014'}</td>
                     <td>{a?.cov_ratio != null ? a.cov_ratio.toFixed(4) : '\u2014'}</td>
                     <td><SignalBadge signal={a?.cov_sig} /></td>
-                    <td style={{
-                      color: a?.nav_erosion_prob === 'Low' ? '#00c853' : a?.nav_erosion_prob === 'High' ? '#d50000' : a?.nav_erosion_prob === 'Medium' ? '#f9a825' : '#888',
-                      fontWeight: 600,
-                      backgroundColor: a?.nav_erosion_prob === 'Low' ? 'rgba(0,200,83,0.12)' : a?.nav_erosion_prob === 'High' ? 'rgba(213,0,0,0.12)' : a?.nav_erosion_prob === 'Medium' ? 'rgba(249,168,37,0.12)' : 'transparent',
-                    }}>{a?.nav_erosion_prob ? `${a.nav_erosion_prob} Probability` : '\u2014'}</td>
-                    <td>{r.notes || ''}</td>
+                    <NavCell row={r} analysis={a} onSave={updateNavSettings} />
+                    <td style={{ minWidth: 180 }}>
+                      <NotesCell
+                        ticker={r.ticker}
+                        value={r.notes || ''}
+                        onSave={updateNotes}
+                      />
+                    </td>
                     <td>
                       <button className="btn-del" onClick={() => removeWatching(r.ticker)}>Remove</button>
                     </td>

@@ -62,6 +62,13 @@ const GROUPS = [
       { id: 'income-growth', label: 'Income Growth' },
     ],
   },
+  {
+    id: 'taxes',
+    label: 'Taxes',
+    sections: [
+      { id: 'tax-report', label: 'Annual Tax Report' },
+    ],
+  },
 ]
 
 function Overview() {
@@ -3661,12 +3668,143 @@ function DividendCalculatorHelp() {
   )
 }
 
+function AnnualTaxReportHelp() {
+  return (
+    <div>
+      <h2>Annual Tax Report</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The <strong>Annual Tax Report</strong> rolls your dividend payments and sell transactions
+        into an estimate of taxable activity for a single calendar year. It breaks dividends into
+        qualified, ordinary, and return-of-capital buckets, and realized gains into short-term vs.
+        long-term lots — presented as previews of IRS Form 1099-DIV and Form 8949. Use it to
+        cross-check your broker's 1099 before filing, or to plan sales and dividend timing during
+        the year.
+      </p>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        <strong>Estimates only.</strong> This is a planning tool, not tax advice. Wash-sale rules
+        are not applied. The 60-day qualified-dividend holding test is not enforced. ROC amounts
+        come from manual overrides only. Verify every figure against your broker's 1099-DIV and
+        1099-B before filing.
+      </div>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Tax-advantaged accounts</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        If the active portfolio is flagged as a tax-advantaged account (IRA, Roth IRA, 401(k),
+        HSA, or 529), the report is suppressed — dividends and gains inside those accounts are not
+        reportable in the year they occur. Switch to a taxable account or the <strong>Owner</strong>{' '}
+        view to see reportable activity.
+      </p>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Page layout</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        At the top, select a <strong>Tax Year</strong> from the dropdown (populated automatically
+        from years that have dividend or sell data). Below the year picker, a summary strip shows
+        eight headline numbers at a glance:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Qualified Dividends / Ordinary Dividends / Return of Capital / Total Dividends</strong> — dividend breakdown for the year.</li>
+        <li><strong>Short-Term G/L / Long-Term G/L / Total Realized G/L</strong> — net gain or loss from sales, colored green/red.</li>
+        <li><strong>Lots Sold</strong> — number of individual tax lots closed during the year.</li>
+      </ul>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Tabs</h3>
+
+      <p><strong>Form Previews</strong></p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Form 1099-DIV preview</strong> — Box 1a (Total Ordinary Dividends, which
+            includes both ordinary and qualified), Box 1b (Qualified Dividends subset), and Box 3
+            (Nondividend Distributions / Return of Capital).</li>
+        <li><strong>Form 8949 preview</strong> — Short-term and long-term rows showing total
+            proceeds, cost basis, and net gain or loss. Long-term = held more than 365 days; cost
+            basis comes from explicit lot allocations on each sell, falling back to FIFO.</li>
+      </ul>
+
+      <p><strong>Dividends</strong></p>
+      <p style={{ marginBottom: '0.5rem' }}>
+        One row per ticker with dividend activity in the selected year. Columns: Ticker, asset
+        Class, Treatment, Qualified amount, Ordinary amount, ROC amount, Total, and payment Count.
+        Rows are sortable by clicking any column header. A <strong>★</strong> next to the treatment
+        label means a manual override is in effect for that ticker and year.
+      </p>
+
+      <p><strong>Realized Lots</strong></p>
+      <p style={{ marginBottom: '1rem' }}>
+        One row per closed lot with: Ticker, Sell Date, Buy Date (shown as <em>unmatched</em> if
+        no BUY was found), Shares, Buy Price, Sell Price, Cost, Proceeds, Gain/Loss (colored
+        green/red), holding Days, and Term badge (Long-Term or Short-Term).
+      </p>
+
+      <h3 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Where the numbers come from</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li><strong>Dividend totals</strong> — sum of all dividend_payment rows whose payment date
+            falls in the selected year, grouped by ticker.</li>
+        <li><strong>Realized gains</strong> — SELL transactions in the selected year, matched to
+            BUY lots. Sells with explicit lot allocations use those; all others fall back to FIFO
+            across BUY rows on or before the sell date.</li>
+        <li><strong>Short-term vs. long-term</strong> — holding period of more than 365 days
+            qualifies a lot as long-term.</li>
+      </ul>
+
+      <h3 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Tax-treatment defaults</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        Each ticker is assigned a default treatment based on its asset classification:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li><strong>Qualified</strong> — common stocks, broad ETFs, ADRs, and the app's standard
+            pillar categories (Anchors, Boosters, Growth, Juicers, Hedged Anchor, Gold/Silver).</li>
+        <li><strong>Ordinary</strong> — REITs, BDCs, CEFs, MLPs, and preferred shares.</li>
+      </ul>
+
+      <h3 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Per-ticker overrides (custom split)</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        On the <strong>Dividends</strong> tab, each row has an inline split editor with three
+        percentage fields — <strong>Q</strong> (Qualified), <strong>O</strong> (Ordinary), and{' '}
+        <strong>ROC</strong> (Return of Capital) — that must sum to exactly 100. Edit a field and
+        press Tab or Enter to apply. The totals update immediately and the row shows a ★.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li>To make all payments qualified: Q = 100, O = 0, ROC = 0.</li>
+        <li>To model a fund that reports 30% ROC: Q = 70, O = 0, ROC = 30 (or any mix that sums to 100).</li>
+        <li>Click <strong>Default</strong> to clear the override and revert to the asset-class rule.</li>
+      </ul>
+      <p style={{ marginTop: '0.5rem' }}>
+        Overrides are stored per-ticker, per-year — changing 2024 does not affect 2023. There is
+        no automatic ROC inference; ROC must come from a manual override, typically driven by Box 3
+        of your actual 1099-DIV.
+      </p>
+
+      <h3 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Exports</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        Four CSV downloads appear next to the year selector when data is available:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li><strong>1099-DIV CSV</strong> — Box 1a, 1b, and 3 totals for the selected year.</li>
+        <li><strong>Form 8949 CSV</strong> — one row per realized lot, in IRS Form 8949 column order (description, dates, proceeds, cost, gain/loss, term).</li>
+        <li><strong>Dividends CSV</strong> — per-ticker breakdown showing qualified, ordinary, ROC, and total amounts.</li>
+        <li><strong>Realized Lots CSV</strong> — full per-lot detail including holding days and short/long-term classification.</li>
+      </ul>
+
+      <h3 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>What's not included</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li>Wash-sale adjustments.</li>
+        <li>The 60-day qualified-dividend holding-period test.</li>
+        <li>Foreign tax credits and foreign withholding (Form 1116).</li>
+        <li>Section 199A REIT dividends (Box 5 of 1099-DIV).</li>
+        <li>State income taxes.</li>
+        <li>Automatic ROC inference — NAV erosion overrides on the NAV Erosion page do not flow into the tax report.</li>
+      </ul>
+    </div>
+  )
+}
+
 const CONTENT_MAP = {
   overview: Overview,
   import: ImportHelp,
   export: ExportHelp,
   portfolios: PortfoliosHelp,
   settings: SettingsHelp,
+  'tax-report': AnnualTaxReportHelp,
   dashboard: DashboardHelp,
   holdings: HoldingsHelp,
   categories: CategoriesHelp,

@@ -14,6 +14,21 @@ const EMPTY_HOLDING = {
   shares_bought_from_dividend: '',
 }
 
+function invalidateDashboardCache() {
+  try {
+    for (const store of [localStorage, sessionStorage]) {
+      for (let i = store.length - 1; i >= 0; i -= 1) {
+        const key = store.key(i)
+        if (key && key.startsWith('portfolio_dashboard_v9_')) {
+          store.removeItem(key)
+        }
+      }
+    }
+  } catch {
+    // Cache invalidation is best-effort; data refresh still comes from the API.
+  }
+}
+
 function InfoHint({ text }) {
   const [open, setOpen] = useState(false)
   return (
@@ -1232,6 +1247,7 @@ export default function ManageHoldings() {
       setDividendRefreshAccounts(data.dividend_update_accounts || [])
       setDividendRefreshDate(data.refresh_date || null)
       setMessage(data.message)
+      invalidateDashboardCache()
       await fetchHoldings()
       await fetchAccrualSummary()
     } catch (e) {
@@ -1342,6 +1358,7 @@ export default function ManageHoldings() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setMessage(`${ticker} deleted`)
+      invalidateDashboardCache()
       fetchHoldings()
     } catch (e) {
       setError(e.message)
@@ -1366,6 +1383,7 @@ export default function ManageHoldings() {
       if (!res.ok) throw new Error(data.error)
       setMessage(data.message)
       setShowModal(false)
+      invalidateDashboardCache()
       fetchHoldings()
     } catch (e) {
       setError(e.message)
@@ -1488,12 +1506,12 @@ export default function ManageHoldings() {
                       {fmtCurrency(distributionTotal)}
                     </span>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem', color: '#a5d6a7' }}>
-                      distributions payable today
-                      <InfoHint text="Total estimated cash from holdings with a pay date on the refresh date. These can be inserted, updated, or skipped if payment history already has the row." />
+                      month-to-date payable distributions
+                      <InfoHint text="Total estimated cash from holdings with pay dates from the start of the refresh month through the refresh date. These can be inserted, updated, or skipped if payment history already has the row." />
                     </span>
                   </div>
                   <div style={{ fontSize: '0.72rem', color: '#78909c', marginTop: '0.2rem' }}>
-                    {fmtCurrency(account.accrued_dividends)} estimated accrual since previous refresh
+                    {fmtCurrency(account.accrued_dividends)} post-refresh accrual estimate
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', fontSize: '0.72rem', color: '#78909c', marginTop: '0.2rem' }}>
                     <span>{changedDividendFields} holding dividend field{changedDividendFields === 1 ? '' : 's'} changed</span>
@@ -1504,7 +1522,7 @@ export default function ManageHoldings() {
                     <InfoHint text="Payment history rows are dividend_payments entries created by Refresh for payable distributions. Existing imported or already-matching refresh rows are counted separately." />
                   </div>
                   <div style={{ fontSize: '0.72rem', color: '#90a4ae', marginTop: '0.45rem' }}>
-                    {distributions.length > 0 ? `Distributions on ${dividendRefreshDateLabel}` : `No distributions on ${dividendRefreshDateLabel}`}
+                    {distributions.length > 0 ? `Payable distributions through ${dividendRefreshDateLabel}` : `No payable distributions through ${dividendRefreshDateLabel}`}
                   </div>
                   {distributions.length > 0 && (
                     <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.45rem' }}>
@@ -1530,7 +1548,7 @@ export default function ManageHoldings() {
 
       {accrualSummary && accrualSummary.length > 0 && (
         <section style={{ marginBottom: '0.75rem' }}>
-          <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem', color: '#90caf9' }}>Accrued Since Last Refresh</h2>
+          <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem', color: '#90caf9' }}>Post-Refresh Accrual Estimate</h2>
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
             {accrualSummary.map(account => {
               const days = account.days_since_last_refresh
@@ -1831,7 +1849,10 @@ export default function ManageHoldings() {
           ticker={txnTicker}
           isNew={txnIsNew}
           onClose={() => { setTxnTicker(null); setTxnIsNew(false) }}
-          onSaved={fetchHoldings}
+          onSaved={() => {
+            invalidateDashboardCache()
+            fetchHoldings()
+          }}
           pf={pf}
         />
       )}

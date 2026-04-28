@@ -70,6 +70,13 @@ export default function Import() {
   const [backups, setBackups] = useState([])
   const [restoring, setRestoring] = useState(false)
 
+  // Watchlist import state
+  const [wlFile, setWlFile] = useState(null)
+  const [wlReplace, setWlReplace] = useState(false)
+  const [wlLoading, setWlLoading] = useState(false)
+  const [wlResult, setWlResult] = useState(null)
+  const [wlError, setWlError] = useState(null)
+
   const loadBackups = () => {
     pf('/api/import/backups').then(r => r.json()).then(d => setBackups(d.backups || [])).catch(() => {})
   }
@@ -241,6 +248,31 @@ export default function Import() {
 
   const handleDownloadRobinhoodTransactionsTemplate = () => {
     window.open(`${API_BASE}/api/template/robinhood-transactions-download`, '_blank')
+  }
+
+  const handleDownloadWatchlistTemplate = () => {
+    window.open(`${API_BASE}/api/template/watchlist-download`, '_blank')
+  }
+
+  const handleWatchlistImport = async () => {
+    if (!wlFile) return
+    setWlLoading(true)
+    setWlResult(null)
+    setWlError(null)
+    const formData = new FormData()
+    formData.append('file', wlFile)
+    if (wlReplace) formData.append('replace', 'true')
+    try {
+      const res = await pf('/api/import/watchlist', { method: 'POST', body: formData })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Import failed')
+      setWlResult(data.message)
+      setWlFile(null)
+    } catch (e) {
+      setWlError(e.message)
+    } finally {
+      setWlLoading(false)
+    }
   }
 
   if (isAggregate) {
@@ -439,6 +471,53 @@ export default function Import() {
             >
               {loading ? <><span className="spinner" /> Importing...</> : hasData ? 'Merge Portfolio' : 'Import Portfolio'}
             </button>
+          </div>
+
+          <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid #2a3344' }}>
+            <h2 style={{ marginTop: 0 }}>Import Watchlist</h2>
+            <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+              Import a watchlist file (.xlsx or .csv) with at minimum a <strong>Ticker</strong> column.
+              Optional: <strong>Notes</strong>, <strong>Div Yield Override</strong>, <strong>NAV Erosion Scope</strong>,
+              and <strong>NAV Benchmark Override</strong>. The watchlist is global &mdash; it is not tied to the selected portfolio.
+              Use the <em>Export Watchlist</em> button on the Export page to round-trip your list.
+            </p>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <button className="btn btn-secondary" onClick={handleDownloadWatchlistTemplate}>
+                Download Watchlist Template
+              </button>
+            </div>
+
+            <FileUpload
+              onFileSelect={(f) => { setWlFile(f); setWlResult(null); setWlError(null) }}
+              accept=".xlsx,.xls,.csv"
+              file={wlFile}
+            />
+
+            <div style={{ marginTop: '1rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '1rem' }}>
+                <input
+                  type="checkbox"
+                  checked={wlReplace}
+                  onChange={(e) => setWlReplace(e.target.checked)}
+                />
+                <strong>Replace existing watchlist</strong>
+                <span style={{ color: '#90a4ae', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+                  (otherwise: merge &mdash; new tickers added, notes updated for existing)
+                </span>
+              </label>
+
+              <button
+                className="btn btn-primary"
+                onClick={handleWatchlistImport}
+                disabled={!wlFile || wlLoading}
+              >
+                {wlLoading ? <><span className="spinner" /> Importing...</> : 'Import Watchlist'}
+              </button>
+            </div>
+
+            {wlError && <div className="alert alert-error" style={{ marginTop: '1rem' }}>{wlError}</div>}
+            {wlResult && <div className="alert alert-success" style={{ marginTop: '1rem' }}>{wlResult}</div>}
           </div>
         </div>
       )}
