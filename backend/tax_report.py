@@ -101,13 +101,18 @@ def _placeholders(items):
 
 def _override_split(row):
     treatment = (row.get("treatment") or "").strip().lower()
+    total_amount = row.get("total_amount")
+    base = {
+        "total_amount": float(total_amount) if total_amount is not None else None,
+    }
     if treatment == "qualified":
-        return {"treatment": treatment, "qualified_pct": 100.0, "ordinary_pct": 0.0, "roc_pct": 0.0}
+        return {**base, "treatment": treatment, "qualified_pct": 100.0, "ordinary_pct": 0.0, "roc_pct": 0.0}
     if treatment == "ordinary":
-        return {"treatment": treatment, "qualified_pct": 0.0, "ordinary_pct": 100.0, "roc_pct": 0.0}
+        return {**base, "treatment": treatment, "qualified_pct": 0.0, "ordinary_pct": 100.0, "roc_pct": 0.0}
     if treatment == "roc":
-        return {"treatment": treatment, "qualified_pct": 0.0, "ordinary_pct": 0.0, "roc_pct": 100.0}
+        return {**base, "treatment": treatment, "qualified_pct": 0.0, "ordinary_pct": 0.0, "roc_pct": 100.0}
     return {
+        **base,
         "treatment": "split",
         "qualified_pct": float(row.get("qualified_pct") or 0),
         "ordinary_pct": float(row.get("ordinary_pct") or 0),
@@ -121,7 +126,7 @@ def load_overrides(conn, profile_id, year):
     ids = _resolve_profile_ids(conn, profile_id)
     ph = _placeholders(ids)
     rows = conn.execute(
-        f"SELECT ticker, year, treatment, qualified_pct, ordinary_pct, roc_pct FROM dividend_tax_overrides "
+        f"SELECT ticker, year, treatment, qualified_pct, ordinary_pct, roc_pct, total_amount FROM dividend_tax_overrides "
         f"WHERE profile_id IN ({ph})",
         ids,
     ).fetchall()
@@ -193,8 +198,9 @@ def compute_dividend_breakdown(conn, profile_id, year):
     ids = _resolve_profile_ids(conn, profile_id)
     ph = _placeholders(ids)
     rows = conn.execute(
-        f"SELECT ticker, payment_date, amount FROM dividend_payments "
-        f"WHERE profile_id IN ({ph}) AND substr(payment_date, 1, 4) = ?",
+        f"SELECT ticker, SUM(amount) AS total, COUNT(*) AS count FROM dividend_payments "
+        f"WHERE profile_id IN ({ph}) AND substr(payment_date, 1, 4) = ? "
+        f"GROUP BY ticker",
         list(ids) + [str(year)],
     ).fetchall()
     classification = load_classification_map(conn, profile_id)
@@ -209,9 +215,10 @@ def compute_dividend_breakdown(conn, profile_id, year):
     for r in rows:
         r = dict(r)
         t = r["ticker"]
-        amt = float(r.get("amount") or 0)
+        actual_total = float(r.get("total") or 0)
         treatment = resolve_treatment(t, classification, overrides)
         bucket = by_ticker[t]
+        amt = float(treatment["total_amount"] if treatment.get("total_amount") is not None else actual_total)
         q_amt = amt * float(treatment["qualified_pct"] or 0) / 100.0
         o_amt = amt * float(treatment["ordinary_pct"] or 0) / 100.0
         r_amt = amt * float(treatment["roc_pct"] or 0) / 100.0
@@ -219,7 +226,9 @@ def compute_dividend_breakdown(conn, profile_id, year):
         bucket["ordinary"] += o_amt
         bucket["roc"] += r_amt
         bucket["total"] += amt
-        bucket["count"] += 1
+        bucket["actual_total"] = actual_total
+        bucket["total_amount"] = treatment.get("total_amount")
+        bucket["count"] += int(r.get("count") or 0)
         bucket["treatment"] = treatment["treatment"]
         bucket["qualified_pct"] = treatment["qualified_pct"]
         bucket["ordinary_pct"] = treatment["ordinary_pct"]

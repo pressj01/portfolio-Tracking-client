@@ -744,6 +744,7 @@ def ensure_tables_exist(conn=None):
             qualified_pct REAL,
             ordinary_pct  REAL,
             roc_pct       REAL,
+            total_amount   REAL,
             updated_at  TEXT DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (ticker, profile_id, year)
         )
@@ -755,6 +756,8 @@ def ensure_tables_exist(conn=None):
         cur.execute("ALTER TABLE dividend_tax_overrides ADD COLUMN ordinary_pct REAL")
     if "roc_pct" not in _tax_cols:
         cur.execute("ALTER TABLE dividend_tax_overrides ADD COLUMN roc_pct REAL")
+    if "total_amount" not in _tax_cols:
+        cur.execute("ALTER TABLE dividend_tax_overrides ADD COLUMN total_amount REAL")
 
     # ── regime_predictions (Brier score tracking) ─────────────────────────────
     cur.execute("""

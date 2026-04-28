@@ -3781,10 +3781,11 @@ function AnnualTaxReportHelp() {
 
       <p><strong>Dividends</strong></p>
       <p style={{ marginBottom: '0.5rem' }}>
-        One row per ticker with dividend activity in the selected year. Columns: Ticker, asset
-        Class, Treatment, Qualified amount, Ordinary amount, ROC amount, Total, and payment Count.
-        Rows are sortable by clicking any column header. A <strong>★</strong> next to the treatment
-        label means a manual override is in effect for that ticker and year.
+        One row per ticker with dividend activity in the selected year. Columns: Ticker, Treatment,
+        Total Dividends YTD for the current year (or Total Dividends for the selected closed year),
+        Qualified amount, Ordinary amount, ROC amount, and payment Count. Rows are sortable by
+        clicking any column header. A <strong>★</strong> next to the treatment label means a manual
+        override is in effect for that ticker and year.
       </p>
 
       <p><strong>Realized Lots</strong></p>
@@ -3817,14 +3818,23 @@ function AnnualTaxReportHelp() {
 
       <h3 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Per-ticker overrides (custom split)</h3>
       <p style={{ marginBottom: '0.5rem' }}>
-        On the <strong>Dividends</strong> tab, each row has an inline split editor with three
-        percentage fields — <strong>Q</strong> (Qualified), <strong>O</strong> (Ordinary), and{' '}
-        <strong>ROC</strong> (Return of Capital) — that must sum to exactly 100. Edit a field and
-        press Tab or Enter to apply. The totals update immediately and the row shows a ★.
+        On the <strong>Dividends</strong> tab, each row has an inline split editor with an editable
+        <strong> T</strong> total-dividend field and three dollar amount fields:{' '}
+        <strong>Q</strong> (Qualified), <strong>O</strong> (Ordinary), and{' '}
+        <strong>ROC</strong> (Return of Capital). The editor starts with Qualified equal to the
+        ticker's total dividends for the selected year. When you enter Ordinary or ROC dollars from
+        your broker tax statement, Qualified is reduced automatically and the app calculates the
+        percentage split for you. If the app's imported dividend total is wrong, edit <strong>T</strong>{' '}
+        first; the row will use that total for the tax split. Press Tab or Enter to apply. The totals
+        update immediately and the row shows a ★.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
-        <li>To make all payments qualified: Q = 100, O = 0, ROC = 0.</li>
-        <li>To model a fund that reports 30% ROC: Q = 70, O = 0, ROC = 30 (or any mix that sums to 100).</li>
+        <li>Edit <strong>T</strong> only when the broker tax statement total differs from the app's imported dividend total.</li>
+        <li>Use the dollar fields first; the percent fields are calculated from the row's Total Dividends value.</li>
+        <li>When any two of Q, O, and ROC are entered, the remaining box is filled with the amount needed to match T.</li>
+        <li>Example: if <strong>T</strong> is 1,645.33 and you enter O = 760.90 and ROC = 300.00, Q fills as 584.43.</li>
+        <li>Turn on the <strong>%</strong> checkbox only when you need to manually adjust the calculated percentage fields.</li>
+        <li>The dollar amounts and percentages must resolve back to 100% of the ticker's dividend total.</li>
         <li>Click <strong>Default</strong> to clear the override and revert to the asset-class rule.</li>
       </ul>
       <p style={{ marginTop: '0.5rem' }}>

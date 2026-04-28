@@ -27,39 +27,152 @@ function MetricCard({ label, value }) {
 }
 
 function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
-  const [split, setSplit] = useState({
+  const formatAmount = v => (Number(v) || 0).toFixed(2)
+  const formatPct = v => (Number(v) || 0).toFixed(2)
+  const amountKeys = ['qualified_amt', 'ordinary_amt', 'roc_amt']
+  const initialSplit = () => ({
     qualified_pct: Number(row.qualified_pct ?? (row.treatment === 'qualified' ? 100 : 0)),
     ordinary_pct: Number(row.ordinary_pct ?? (row.treatment === 'ordinary' ? 100 : 0)),
     roc_pct: Number(row.roc_pct ?? (row.treatment === 'roc' ? 100 : 0)),
   })
+  const initialTotal = () => formatAmount(row.total_amount ?? row.total)
+  const amountsFromSplit = (s, basis = row.total) => {
+    const total = Number(basis) || 0
+    return {
+      qualified_amt: total ? formatAmount((total * Number(s.qualified_pct || 0)) / 100) : '0.00',
+      ordinary_amt: total ? formatAmount((total * Number(s.ordinary_pct || 0)) / 100) : '0.00',
+      roc_amt: total ? formatAmount((total * Number(s.roc_pct || 0)) / 100) : '0.00',
+    }
+  }
+  const splitFromAmounts = (nextAmounts, basis) => {
+    const total = Number(basis) || 0
+    return total > 0
+      ? {
+          qualified_pct: formatPct((Number(nextAmounts.qualified_amt) || 0) / total * 100),
+          ordinary_pct: formatPct((Number(nextAmounts.ordinary_amt) || 0) / total * 100),
+          roc_pct: formatPct((Number(nextAmounts.roc_amt) || 0) / total * 100),
+        }
+      : { qualified_pct: '0.00', ordinary_pct: '0.00', roc_pct: '0.00' }
+  }
+  const startSplit = initialSplit()
+  const startTotal = initialTotal()
+  const [split, setSplit] = useState({
+    qualified_pct: formatPct(startSplit.qualified_pct),
+    ordinary_pct: formatPct(startSplit.ordinary_pct),
+    roc_pct: formatPct(startSplit.roc_pct),
+  })
+  const [totalAmount, setTotalAmount] = useState(startTotal)
+  const [amounts, setAmounts] = useState(amountsFromSplit(startSplit, startTotal))
+  const [touchedAmounts, setTouchedAmounts] = useState({
+    qualified_amt: false,
+    ordinary_amt: false,
+    roc_amt: false,
+  })
+  const [percentEditable, setPercentEditable] = useState(false)
   const [localError, setLocalError] = useState('')
 
   useEffect(() => {
+    const next = initialSplit()
+    const nextTotal = initialTotal()
     setSplit({
-      qualified_pct: Number(row.qualified_pct ?? (row.treatment === 'qualified' ? 100 : 0)),
-      ordinary_pct: Number(row.ordinary_pct ?? (row.treatment === 'ordinary' ? 100 : 0)),
-      roc_pct: Number(row.roc_pct ?? (row.treatment === 'roc' ? 100 : 0)),
+      qualified_pct: formatPct(next.qualified_pct),
+      ordinary_pct: formatPct(next.ordinary_pct),
+      roc_pct: formatPct(next.roc_pct),
     })
+    setTotalAmount(nextTotal)
+    setAmounts(amountsFromSplit(next, nextTotal))
+    setTouchedAmounts({
+      qualified_amt: false,
+      ordinary_amt: false,
+      roc_amt: false,
+    })
+    setPercentEditable(false)
     setLocalError('')
-  }, [row.ticker, row.qualified_pct, row.ordinary_pct, row.roc_pct, row.treatment])
+  }, [row.ticker, row.total, row.total_amount, row.qualified_pct, row.ordinary_pct, row.roc_pct, row.treatment])
+
+  const normalizeSplit = (next) => ({
+    qualified_pct: Number(next.qualified_pct) || 0,
+    ordinary_pct: Number(next.ordinary_pct) || 0,
+    roc_pct: Number(next.roc_pct) || 0,
+  })
 
   const setPct = (key, value) => {
     setLocalError('')
-    setSplit(prev => ({ ...prev, [key]: value }))
+    const next = { ...split, [key]: value }
+    setSplit(next)
+    setAmounts(amountsFromSplit(normalizeSplit(next), totalAmount))
+  }
+
+  const rebalanceAmounts = (nextAmounts, nextTouched, basis, changedKey) => {
+    const total = Number(basis) || 0
+    const touchedKeys = amountKeys.filter(k => nextTouched[k])
+    const remainingKey = amountKeys.find(k => !nextTouched[k])
+
+    if (touchedKeys.length >= 2 && remainingKey) {
+      const enteredTotal = amountKeys
+        .filter(k => k !== remainingKey)
+        .reduce((sum, k) => sum + (Number(nextAmounts[k]) || 0), 0)
+      nextAmounts[remainingKey] = formatAmount(Math.max(total - enteredTotal, 0))
+    } else if (touchedKeys.length === 1) {
+      if (changedKey === 'qualified_amt') {
+        nextAmounts.ordinary_amt = formatAmount(Math.max(total - (Number(nextAmounts.qualified_amt) || 0) - (Number(nextAmounts.roc_amt) || 0), 0))
+      } else {
+        nextAmounts.qualified_amt = formatAmount(Math.max(total - (Number(nextAmounts.ordinary_amt) || 0) - (Number(nextAmounts.roc_amt) || 0), 0))
+      }
+    } else if (touchedKeys.length === 0) {
+      nextAmounts.qualified_amt = formatAmount(total)
+      nextAmounts.ordinary_amt = '0.00'
+      nextAmounts.roc_amt = '0.00'
+    }
+
+    const amountTotal = amountKeys.reduce((sum, k) => sum + (Number(nextAmounts[k]) || 0), 0)
+    if (amountTotal - total > 0.01) {
+      setLocalError(`Amounts exceed ${fmt(total)}`)
+    } else {
+      setLocalError('')
+    }
+    return nextAmounts
+  }
+
+  const setAmount = (key, value) => {
+    setLocalError('')
+    const nextAmounts = rebalanceAmounts(
+      { ...amounts, [key]: value },
+      { ...touchedAmounts, [key]: true },
+      totalAmount,
+      key,
+    )
+    const nextTouched = { ...touchedAmounts, [key]: true }
+    setTouchedAmounts(nextTouched)
+    setAmounts(nextAmounts)
+    setSplit(splitFromAmounts(nextAmounts, totalAmount))
+  }
+
+  const setTotal = (value) => {
+    setLocalError('')
+    const nextAmounts = rebalanceAmounts({ ...amounts }, touchedAmounts, value, null)
+    setTotalAmount(value)
+    setAmounts(nextAmounts)
+    setSplit(splitFromAmounts(nextAmounts, value))
   }
 
   const commit = () => {
-    const next = {
-      qualified_pct: Number(split.qualified_pct) || 0,
-      ordinary_pct: Number(split.ordinary_pct) || 0,
-      roc_pct: Number(split.roc_pct) || 0,
-    }
+    const next = normalizeSplit(split)
     const total = next.qualified_pct + next.ordinary_pct + next.roc_pct
     if (Math.abs(total - 100) > 0.01) {
       setLocalError(`Sum ${total.toFixed(2)}%`)
       return
     }
-    onSave(row.ticker, next)
+    setSplit({
+      qualified_pct: formatPct(next.qualified_pct),
+      ordinary_pct: formatPct(next.ordinary_pct),
+      roc_pct: formatPct(next.roc_pct),
+    })
+    setAmounts(amountsFromSplit(next, totalAmount))
+    onSave(row.ticker, {
+      ...next,
+      total_amount: Number(totalAmount) || 0,
+    })
   }
 
   const inputStyle = {
@@ -68,26 +181,79 @@ function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
     fontSize: '0.78rem',
     textAlign: 'right',
   }
+  const amountStyle = {
+    ...inputStyle,
+    width: 76,
+    background: '#101b36',
+    borderColor: '#315078',
+  }
+  const totalStyle = {
+    ...amountStyle,
+    width: 86,
+    borderColor: '#5b78a8',
+  }
+  const percentStyle = {
+    ...inputStyle,
+    width: 66,
+    background: percentEditable ? '#15264a' : '#2d3442',
+    borderColor: percentEditable ? '#4b75a6' : '#515967',
+    color: percentEditable ? '#e6f4ff' : '#c1c7d0',
+    opacity: percentEditable ? 1 : 0.78,
+  }
+  const fieldLabel = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 3,
+    color: '#90a4ae',
+    fontSize: '0.74rem',
+  }
+  const percentSuffix = {
+    marginLeft: 3,
+    color: '#9fb0c4',
+    fontSize: '0.74rem',
+  }
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
-      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#90a4ae', fontSize: '0.74rem' }}>
+      <label style={fieldLabel} title="Editable total dividends for this ticker and tax year">
+        T
+        <input type="number" min="0" step="0.01" value={totalAmount}
+          disabled={disabled} onChange={e => setTotal(e.target.value)}
+          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={totalStyle} />
+      </label>
+      <label style={fieldLabel} title="Qualified dividend dollars">
         Q
+        <input type="number" min="0" step="0.01" value={amounts.qualified_amt}
+          disabled={disabled} onChange={e => setAmount('qualified_amt', e.target.value)}
+          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={amountStyle} />
         <input type="number" min="0" max="100" step="0.01" value={split.qualified_pct}
-          disabled={disabled} onChange={e => setPct('qualified_pct', e.target.value)}
-          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={inputStyle} />
+          disabled={disabled || !percentEditable} onChange={e => setPct('qualified_pct', e.target.value)}
+          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={percentStyle} title="Qualified percent" />
+        <span style={percentSuffix}>%</span>
       </label>
-      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#90a4ae', fontSize: '0.74rem' }}>
+      <label style={fieldLabel} title="Ordinary dividend dollars">
         O
+        <input type="number" min="0" step="0.01" value={amounts.ordinary_amt}
+          disabled={disabled} onChange={e => setAmount('ordinary_amt', e.target.value)}
+          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={amountStyle} />
         <input type="number" min="0" max="100" step="0.01" value={split.ordinary_pct}
-          disabled={disabled} onChange={e => setPct('ordinary_pct', e.target.value)}
-          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={inputStyle} />
+          disabled={disabled || !percentEditable} onChange={e => setPct('ordinary_pct', e.target.value)}
+          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={percentStyle} title="Ordinary percent" />
+        <span style={percentSuffix}>%</span>
       </label>
-      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#90a4ae', fontSize: '0.74rem' }}>
+      <label style={fieldLabel} title="Return of capital dollars">
         ROC
+        <input type="number" min="0" step="0.01" value={amounts.roc_amt}
+          disabled={disabled} onChange={e => setAmount('roc_amt', e.target.value)}
+          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={amountStyle} />
         <input type="number" min="0" max="100" step="0.01" value={split.roc_pct}
-          disabled={disabled} onChange={e => setPct('roc_pct', e.target.value)}
-          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={inputStyle} />
+          disabled={disabled || !percentEditable} onChange={e => setPct('roc_pct', e.target.value)}
+          onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={percentStyle} title="ROC percent" />
+        <span style={percentSuffix}>%</span>
+      </label>
+      <label style={{ ...fieldLabel, color: '#c0cdd8' }} title="Allow manual percent edits">
+        <input type="checkbox" checked={percentEditable} disabled={disabled}
+          onChange={e => setPercentEditable(e.target.checked)} />
       </label>
       <button type="button" className="btn btn-secondary" disabled={disabled}
         onClick={() => onDefault(row.ticker)}
@@ -420,12 +586,11 @@ export default function AnnualTaxReport() {
                   <tr>
                     {[
                       { k: 'ticker',              l: 'Ticker' },
-                      { k: 'classification_type', l: 'Class' },
                       { k: 'treatment',           l: 'Treatment' },
+                      { k: 'total',               l: year === new Date().getFullYear() ? 'Total Dividends YTD' : `Total Dividends for ${year}`, num: true },
                       { k: 'qualified',           l: 'Qualified',  num: true },
                       { k: 'ordinary',            l: 'Ordinary',   num: true },
                       { k: 'roc',                 l: 'ROC',        num: true },
-                      { k: 'total',               l: 'Total',      num: true },
                       { k: 'count',               l: 'Payments',   num: true },
                     ].map(c => (
                       <th key={c.k} onClick={() => onDivSort(c.k)}
@@ -445,7 +610,6 @@ export default function AnnualTaxReport() {
                   {sortedDivs.map((row, i) => (
                     <tr key={`${row.ticker}-${i}`}>
                       <td><strong>{row.ticker}</strong></td>
-                      <td style={{ color: '#8899aa' }}>{row.classification_type || '—'}</td>
                       <td>
                         <span style={{
                           display: 'inline-block', padding: '0.1rem 0.5rem', borderRadius: 3,
@@ -457,10 +621,10 @@ export default function AnnualTaxReport() {
                           {row.is_override ? ' ★' : ''}
                         </span>
                       </td>
+                      <td style={{ textAlign: 'right' }}><strong>{fmt(row.total)}</strong></td>
                       <td style={{ textAlign: 'right' }}>{fmt(row.qualified)}</td>
                       <td style={{ textAlign: 'right' }}>{fmt(row.ordinary)}</td>
                       <td style={{ textAlign: 'right' }}>{fmt(row.roc)}</td>
-                      <td style={{ textAlign: 'right' }}><strong>{fmt(row.total)}</strong></td>
                       <td style={{ textAlign: 'right', color: '#8899aa' }}>{row.count}</td>
                       <td>
                         <SplitOverrideEditor
@@ -473,7 +637,7 @@ export default function AnnualTaxReport() {
                     </tr>
                   ))}
                   {!sortedDivs.length && (
-                    <tr><td colSpan={9} style={{ color: '#556677', fontStyle: 'italic',
+                    <tr><td colSpan={8} style={{ color: '#556677', fontStyle: 'italic',
                       padding: '2rem 0', textAlign: 'center' }}>
                       No dividends recorded for {year}.
                     </td></tr>
@@ -482,11 +646,11 @@ export default function AnnualTaxReport() {
                 {sortedDivs.length > 0 && (
                   <tfoot>
                     <tr style={{ borderTop: '2px solid #0f3460', background: '#16213e' }}>
-                      <td colSpan={3}><strong>Totals</strong></td>
+                      <td colSpan={2}><strong>Totals</strong></td>
+                      <td style={{ textAlign: 'right' }}><strong>{fmt(dt.total)}</strong></td>
                       <td style={{ textAlign: 'right' }}><strong>{fmt(dt.qualified)}</strong></td>
                       <td style={{ textAlign: 'right' }}><strong>{fmt(dt.ordinary)}</strong></td>
                       <td style={{ textAlign: 'right' }}><strong>{fmt(dt.roc)}</strong></td>
-                      <td style={{ textAlign: 'right' }}><strong>{fmt(dt.total)}</strong></td>
                       <td colSpan={2}></td>
                     </tr>
                   </tfoot>

@@ -12274,7 +12274,7 @@ def tax_report_list_overrides():
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT ticker, year, treatment, qualified_pct, ordinary_pct, roc_pct, updated_at FROM dividend_tax_overrides "
+            "SELECT ticker, year, treatment, qualified_pct, ordinary_pct, roc_pct, total_amount, updated_at FROM dividend_tax_overrides "
             "WHERE profile_id = ? ORDER BY ticker, year",
             (profile_id,),
         ).fetchall()
@@ -12319,6 +12319,17 @@ def tax_report_set_override():
     else:
         qualified_pct, ordinary_pct, roc_pct = split_defaults.get(treatment, (None, None, None))
 
+    total_amount = data.get("total_amount")
+    if total_amount in ("", None):
+        total_amount = None
+    else:
+        try:
+            total_amount = float(total_amount)
+        except (TypeError, ValueError):
+            return jsonify({"error": "total amount must be a number"}), 400
+        if total_amount < 0:
+            return jsonify({"error": "total amount cannot be negative"}), 400
+
     conn = get_connection()
     try:
         if treatment == "default":
@@ -12328,13 +12339,14 @@ def tax_report_set_override():
             )
         else:
             conn.execute(
-                "INSERT INTO dividend_tax_overrides (ticker, profile_id, year, treatment, qualified_pct, ordinary_pct, roc_pct) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "INSERT INTO dividend_tax_overrides (ticker, profile_id, year, treatment, qualified_pct, ordinary_pct, roc_pct, total_amount) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(ticker, profile_id, year) DO UPDATE SET "
                 "treatment = excluded.treatment, qualified_pct = excluded.qualified_pct, "
                 "ordinary_pct = excluded.ordinary_pct, roc_pct = excluded.roc_pct, "
+                "total_amount = excluded.total_amount, "
                 "updated_at = CURRENT_TIMESTAMP",
-                (ticker, profile_id, year, treatment, qualified_pct, ordinary_pct, roc_pct),
+                (ticker, profile_id, year, treatment, qualified_pct, ordinary_pct, roc_pct, total_amount),
             )
         conn.commit()
         return jsonify({"ok": True})
