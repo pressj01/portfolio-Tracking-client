@@ -894,6 +894,65 @@ function HoldingsHelp() {
         the inline area shows a message that no transaction lots are recorded yet. History-only imports for other
         tickers do not appear under unrelated holdings.
       </p>
+
+      {/* ── DRIP Simulation ────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>How the DRIP Flag Works</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Setting DRIP to <strong>Y</strong> on a holding does <em>not</em> automatically add shares in real
+        time. Instead, every time you run <strong>Refresh Prices &amp; Divs</strong>, the app runs a
+        simulation that estimates how many shares your dividends would have purchased since your last broker
+        import. This keeps the share count and income projections accurate between imports without requiring
+        you to log every DRIP lot manually.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>What the simulation does</h4>
+      <p style={{ marginBottom: '0.5rem' }}>
+        Starting from your <strong>base quantity</strong> (the share count as of your last broker import)
+        and <strong>import date</strong>, the simulation walks forward through every dividend-per-share
+        event in Yahoo Finance history up to today:
+      </p>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2', marginBottom: '0.75rem' }}>
+        <li>Calculates the gross dividend for the current running share count at that date.</li>
+        <li>Divides by the closing price on that date to compute new shares purchased.</li>
+        <li>Adds those shares to the running count — so later dividends are paid on the larger balance (compounding).</li>
+      </ol>
+      <p style={{ marginBottom: '0.75rem' }}>
+        After the simulation, the app updates these fields on the holding:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Shares</strong> — base quantity plus all simulated DRIP shares earned since import.</li>
+        <li><strong>Shares Bought From Dividend</strong> — total DRIP shares earned in the simulation window.</li>
+        <li><strong>Total Cash Reinvested</strong> — dollar value of dividends converted into shares.</li>
+        <li><strong>YTD Divs / Current Month Income</strong> — computed from actual per-share dividend events × running share count, so they compound correctly with DRIP shares.</li>
+        <li><strong>Estimated Annual Income</strong> — recalculated from the DRIP-adjusted share count, so income projections grow as shares accumulate.</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Why the simulated count will drift from your broker</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The simulation uses Yahoo Finance dividend history and closing prices — not your broker's actual
+        reinvestment records. Brokers sometimes use NAV or a slightly different price for DRIP purchases,
+        apply fractional-share rounding differently, or execute reinvestment on a different date.
+        Over time these small differences accumulate, and the simulated share count will diverge from what
+        your brokerage statement shows.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Keeping it accurate</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Re-import broker positions periodically.</strong> A positions import sets <code>base_quantity</code>
+            to your real broker share count and resets <code>import_date</code> to today. The simulation
+            then restarts clean from your actual balance, eliminating accumulated drift.</li>
+        <li><strong>Monthly is usually enough.</strong> For most dividend frequencies the simulation
+            stays close between imports; weekly payers or high-compounding portfolios may drift a little
+            more quickly and benefit from more frequent position imports.</li>
+        <li><strong>Turning DRIP off</strong> immediately clears the simulated DRIP shares and reverts
+            the share count back to <code>base_quantity</code> on the next refresh.</li>
+      </ul>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.5rem' }}>
+        <strong>Tax lots:</strong> The DRIP simulation does not create BUY transaction records. If you
+        need individual DRIP lots for cost-basis tracking or the Annual Tax Report, import your broker's
+        transaction history — each DRIP reinvestment will appear as a BUY lot with the correct date and price.
+      </div>
     </div>
   )
 }
