@@ -2330,6 +2330,12 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
 }
 .dc-field { display: flex; flex-direction: column; gap: 0.3rem; }
 .dc-field label { color: #7a8aa6; font-size: 0.78rem; }
+.dc-field-note {
+  color: #9bb0cc;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  margin-top: 0.1rem;
+}
 .dc-field-toggle { justify-content: flex-end; }
 
 .dc-input-wrap { position: relative; display: flex; align-items: center; }

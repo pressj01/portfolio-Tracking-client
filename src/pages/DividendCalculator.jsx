@@ -471,6 +471,10 @@ export default function DividendCalculator() {
   }, [calculation])
 
   const totals = useMemo(() => aggregateProjections(projections), [projections])
+  const hasNegativePriceGrowth = rows.some(r => r.status === 'loaded' && Number(r.priceGrowthPct) < 0)
+  const negativeGrowthDripNote = hasNegativePriceGrowth && clampPct(dripPct) > 0
+    ? 'A negative stock price growth rate can still produce higher ending wealth when DRIP is on, because reinvested dividends buy more shares at lower prices.'
+    : ''
 
   const heroLine = useMemo(() => {
     const loaded = rows.filter(r => r.status === 'loaded')
@@ -533,6 +537,7 @@ export default function DividendCalculator() {
           <div className="dc-field">
             <label>Stock Price Growth (All Tickers)</label>
             <NumberInput value={defaultPriceGrowthPct} onChange={updateDefaultPriceGrowth} suffix="%" step="0.1" />
+            {negativeGrowthDripNote && <div className="dc-field-note">{negativeGrowthDripNote}</div>}
           </div>
           <div className="dc-field">
             <label>Dividends Reinvested (DRIP)</label>
