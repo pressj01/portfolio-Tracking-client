@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 
-const APP_VERSION = '1.25.0'
+const APP_VERSION = '1.26.0'
 
 const GROUPS = [
   {
@@ -28,6 +28,7 @@ const GROUPS = [
       { id: 'holdings', label: 'Holdings' },
       { id: 'categories', label: 'Categories' },
       { id: 'growth', label: 'Growth' },
+      { id: 'growth-2', label: 'Portfolio Growth 2' },
       { id: 'dividends', label: 'Dividends' },
       { id: 'div-calendar', label: 'Div Calendar' },
       { id: 'earnings-calendar', label: 'Earnings Calendar' },
@@ -1282,6 +1283,131 @@ function GrowthHelp() {
           might be candidates for trimming or replacement.
         </li>
       </ol>
+    </div>
+  )
+}
+
+function PortfolioGrowth2Help() {
+  return (
+    <div>
+      <h2>Portfolio Growth 2</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Portfolio Growth 2 gives you a dollar-value view of your portfolio over time: how much it is worth,
+        how much you have invested, and where profit or loss is coming from. Unlike the Growth page, which
+        indexes everything to 100 for comparison, this page shows actual dollar amounts and breaks
+        performance down by source: capital gains, dividends, realized P&amp;L, and fees.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Both charts share the same period selector and ticker filter, so every view stays in sync as you
+        explore different time ranges or focus on a subset of your holdings.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Controls</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>
+          <strong>Period</strong> - Eight buttons covering 7d, 1m, 3m, 6m, YTD, 1y, 5y, and all. Controls
+          the date range used by both charts, and changing it triggers a fresh data fetch.
+        </li>
+        <li>
+          <strong>Tickers</strong> - A multi-select dropdown listing every ticker in the active portfolio.
+          By default all tickers are included. Uncheck tickers to exclude them from both charts, or check
+          specific ones to focus on a subset. The button shows "All (N)" when nothing is excluded, or
+          "X of N" when a subset is selected.
+        </li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart 1 - Portfolio Value</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Shows the total dollar value of your portfolio over the selected period, calculated as current
+        share quantities multiplied by historical daily closing prices. This is not a simulated backtest -
+        it uses your actual holdings and shows what those shares were worth each day.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>
+          <strong>Portfolio line (cyan)</strong> - Total market value of all held shares each day.
+          A light fill beneath the line helps visualize the shape of the curve.
+        </li>
+        <li>
+          <strong>Show cost basis</strong> - Toggle the orange dashed line showing your total invested
+          amount (sum of purchase values across all active tickers). When the portfolio line is above this
+          line you are in unrealized profit; below it you are at a loss.
+        </li>
+        <li>
+          <strong>Show trades</strong> - Overlay buy and sell markers on the portfolio value line.
+          Green upward triangles mark buy transactions; red downward triangles mark sells. Hover over a
+          marker to see the ticker, share count, and price. Trade data comes from your imported transaction
+          history. For holdings without individual transaction records, the original purchase date from
+          the holdings table is used as a single buy marker.
+        </li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart 2 - Portfolio Performance</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Shows your cumulative profit or loss over the selected period, optionally broken down by source.
+        All values start at zero at the beginning of the period, or at your cost basis depending on the
+        P/L setting, and accumulate day by day.
+      </p>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Profit Sources</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Capital gain (cyan)</strong> - Unrealized price change: the difference between the
+          current portfolio value and its value at the start of the period, or your total cost basis when
+          using "From the first trade".</li>
+        <li><strong>Dividends (orange)</strong> - Cumulative dividends received within the period, sourced
+          from yfinance per-share dividend data multiplied by your share quantities.</li>
+        <li><strong>Realized P&amp;L (green)</strong> - Cumulative realized gains and losses from sell
+          transactions recorded in your transaction history. Only shown when the total is large enough
+          to be visible on the chart (more than 1% of the total P&amp;L range).</li>
+        <li><strong>Fee (purple)</strong> - Cumulative transaction fees from your imported trade history.
+          Only shown when fees are material (more than 1% of total P&amp;L range). Fees reduce overall profit
+          so this line runs negative.</li>
+        <li><strong>Total (dotted)</strong> - The sum of all active sources. When "Group by the profit
+          source" is off, only this line is shown as a solid cyan line.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Performance Controls</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>
+          <strong>Total profit % / Total profit $</strong> - Switch the Y-axis between dollar amounts
+          and percentage returns. In percentage mode all values are expressed relative to the base amount
+          (either period-start value or total cost basis).
+        </li>
+        <li>
+          <strong>Group by</strong> - Choose <em>No grouping</em> (default), <em>Ticker</em> (one series per
+          holding), or <em>Category</em> (one series per category). Use this when you want to compare how
+          different parts of the portfolio contribute to performance.
+        </li>
+        <li>
+          <strong>Group by the profit source</strong> - When on (default), the chart shows separate lines
+          for capital gain, dividends, realized P&amp;L, and fees plus a dotted total. When off, only the
+          single combined total line is shown, which is cleaner when you just want overall P&amp;L.
+        </li>
+        <li>
+          <strong>Calculate P/L for: Selected period</strong> - P&amp;L is measured from the portfolio value
+          at the first day of the selected period. The total line starts at zero and shows how much you
+          have gained or lost since that date.
+        </li>
+        <li>
+          <strong>Calculate P/L for: From the first trade</strong> - P&amp;L is measured against your total
+          invested cost basis (sum of purchase values). Capital gain reflects the difference between
+          current value and what you paid. This gives a true "return on investment" view regardless of
+          which period is selected.
+        </li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tips</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Use <strong>Show cost basis</strong> and <strong>"From the first trade"</strong> together to
+          see at a glance how far your portfolio is above or below your total investment.</li>
+        <li>Switch to <strong>Total profit %</strong> when comparing portfolios of different sizes.</li>
+        <li>Turn off <strong>"Group by the profit source"</strong> for a clean single-line total view,
+          then turn it back on to see how much of your profit comes from dividends versus price appreciation.</li>
+        <li>Use the <strong>Tickers</strong> filter to isolate a specific holding or category of holdings
+          and see how their value and P&amp;L have tracked over time.</li>
+        <li>Fees and Realized P&amp;L lines only appear when they represent more than 1% of the total P&amp;L
+          range. If you do not see them, those amounts are present but too small to show at the current
+          chart scale.</li>
+      </ul>
     </div>
   )
 }
@@ -3876,6 +4002,7 @@ const CONTENT_MAP = {
   holdings: HoldingsHelp,
   categories: CategoriesHelp,
   growth: GrowthHelp,
+  'growth-2': PortfolioGrowth2Help,
   dividends: DividendsHelp,
   'div-calendar': DivCalendarHelp,
   'earnings-calendar': EarningsCalendarHelp,
