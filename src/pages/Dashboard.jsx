@@ -107,49 +107,89 @@ const DONUT_COLORS = [
 function PortfolioOverview({ groups, totalValue }) {
   const chartRef = React.useRef(null)
 
+  const hasTargets = groups?.some(g => g.target_pct != null)
+  const totalTarget = groups?.reduce((s, g) => s + (Number(g.target_pct) || 0), 0) || 0
+  const showTargetRing = hasTargets && totalTarget > 0
+
   useEffect(() => {
     if (!groups || !groups.length || !window.Plotly || !chartRef.current) return
     const labels = groups.map(g => g.name)
     const values = groups.map(g => g.value)
     const colors = groups.map((_, i) => DONUT_COLORS[i % DONUT_COLORS.length])
 
-    const trace = {
-      labels, values,
-      type: 'pie', hole: 0.55,
-      marker: { colors },
-      textinfo: 'none',
-      hovertemplate: '%{label}: $%{value:,.2f}<br>%{percent}<extra></extra>',
-      sort: false,
+    const traces = []
+
+    if (showTargetRing) {
+      const sliceLabels = [], sliceValues = [], sliceColors = [], sliceHovers = []
+      const toRgba = (hex, a) => {
+        const r = parseInt(hex.slice(1,3),16), g2 = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16)
+        return `rgba(${r},${g2},${b},${a})`
+      }
+      groups.forEach((g, i) => {
+        const color = DONUT_COLORS[i % DONUT_COLORS.length]
+        const actualPct = totalValue ? (g.value / totalValue) * 100 : 0
+        const targetPct = Number(g.target_pct) || 0
+        const gap = Math.max(0, targetPct - actualPct)
+        sliceLabels.push(g.name)
+        sliceValues.push(actualPct)
+        sliceColors.push(color)
+        sliceHovers.push(`${g.name}: ${actualPct.toFixed(1)}% actual` + (targetPct ? ` (${targetPct}% target)` : ''))
+        if (gap > 0) {
+          sliceLabels.push(g.name + ' (under)')
+          sliceValues.push(gap)
+          sliceColors.push(toRgba(color, 0.25))
+          sliceHovers.push(`${g.name}: ${gap.toFixed(1)}% under target`)
+        }
+      })
+      traces.push({
+        labels: sliceLabels, values: sliceValues,
+        type: 'pie', hole: 0.55,
+        marker: { colors: sliceColors, line: { color: '#16213e', width: 1.5 } },
+        textinfo: 'none',
+        hovertemplate: '%{customdata}<extra></extra>',
+        customdata: sliceHovers,
+        sort: false,
+      })
+    } else {
+      traces.push({
+        labels, values,
+        type: 'pie', hole: 0.55,
+        marker: { colors },
+        textinfo: 'none',
+        hovertemplate: '%{label}: $%{value:,.2f}<br>%{percent}<extra></extra>',
+        sort: false,
+      })
     }
+
     const layout = {
       template: 'plotly_dark',
       paper_bgcolor: '#16213e', plot_bgcolor: '#16213e',
       margin: { l: 10, r: 10, t: 10, b: 10 },
       showlegend: false,
-      height: 220, width: 220,
+      height: 280, width: 280,
+      annotations: [],
     }
-    window.Plotly.newPlot(chartRef.current, [trace], layout, { responsive: true, displayModeBar: false })
+    window.Plotly.newPlot(chartRef.current, traces, layout, { responsive: true, displayModeBar: false })
     return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
-  }, [groups])
-
-  const hasTargets = groups?.some(g => g.target_pct != null)
+  }, [groups, showTargetRing, totalTarget])
 
   if (!groups || !groups.length) return null
 
   return (
     <div className="portfolio-overview card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem' }}>
       <h3 style={{ color: '#90caf9', margin: '0 0 0.75rem', fontSize: '1rem' }}>Portfolio</h3>
-      <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
-        <div ref={chartRef} style={{ width: 220, flexShrink: 0 }} />
-        <div style={{ flex: 1, overflowX: 'auto' }}>
+      <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start' }}>
+        <div ref={chartRef} style={{ width: 280, flexShrink: 0 }} />
+        <div style={{ flex: 1, overflowX: 'auto', minWidth: 0 }}>
           <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid #0f3460' }}>
                 <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Name</th>
                 <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Value/Invested</th>
                 <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Gain</th>
-                {hasTargets && <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Target</th>}
+                {showTargetRing && <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Target</th>}
                 <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Allocation</th>
+                {showTargetRing && <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Diff</th>}
               </tr>
             </thead>
             <tbody>
@@ -158,6 +198,8 @@ function PortfolioOverview({ groups, totalValue }) {
                 const gain = g.value - g.invested
                 const gainPct = g.invested ? ((gain / g.invested) * 100) : 0
                 const alloc = totalValue ? ((g.value / totalValue) * 100) : 0
+                const target = Number(g.target_pct) || 0
+                const diff = showTargetRing && target > 0 ? alloc - target : null
                 return (
                   <tr key={g.name} style={{ borderBottom: '1px solid #0a1628' }}>
                     <td style={{ padding: '0.5rem' }}>
@@ -179,14 +221,25 @@ function PortfolioOverview({ groups, totalValue }) {
                         {gain >= 0 ? '▲' : '▼'} {Math.abs(gainPct).toFixed(2)}%
                       </div>
                     </td>
-                    {hasTargets && (
+                    {showTargetRing && (
                       <td style={{ textAlign: 'right', padding: '0.5rem', color: '#8899aa' }}>
-                        {g.target_pct != null ? `${Number(g.target_pct).toFixed(0)}%` : '—'}
+                        {target > 0 ? `${target.toFixed(0)}%` : '—'}
                       </td>
                     )}
                     <td style={{ textAlign: 'right', padding: '0.5rem' }}>
                       <div style={{ color: '#e0e8f5' }}>{alloc.toFixed(2)}%</div>
                     </td>
+                    {showTargetRing && (
+                      <td style={{ textAlign: 'right', padding: '0.5rem' }}>
+                        {diff != null ? (
+                          <div style={{ color: diff >= 0 ? '#4dff91' : '#ff6b6b', fontWeight: 600 }}>
+                            {diff >= 0 ? '+' : ''}{diff.toFixed(1)}%
+                          </div>
+                        ) : (
+                          <span style={{ color: '#8899aa' }}>—</span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 )
               })}

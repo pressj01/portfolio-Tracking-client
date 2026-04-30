@@ -1794,9 +1794,10 @@ def api_import_transactions():
 
             conn.execute(
                 "UPDATE all_account_info SET total_divs_received = ?, ytd_divs = ?, "
-                "paid_for_itself = CASE WHEN purchase_value > 0 THEN ? / purchase_value ELSE 0 END "
+                "paid_for_itself = CASE WHEN purchase_value > 0 THEN ? / purchase_value ELSE 0 END, "
+                "dividend_actuals_source = ? "
                 "WHERE ticker = ? AND profile_id = ?",
-                (total, ytd, total, ticker, profile_id),
+                (total, ytd, total, fmt, ticker, profile_id),
             )
 
         conn.commit()
@@ -23843,6 +23844,386 @@ def general_scanner_save_defaults():
 
 
 register_options_routes(app)
+
+
+# ── Portfolio Growth 2 ──────────────────────────────────────────────────────────
+
+@app.route("/api/growth-2/data", methods=["GET"])
+def growth_2_data():
+    """Portfolio value + invested timeline and P&L breakdown by source."""
+    import math
+    import warnings
+    import numpy as np
+    import yfinance as yf
+    from datetime import datetime, timedelta
+    warnings.filterwarnings("ignore")
+
+    def _clean(v):
+        if v is None:
+            return None
+        try:
+            if math.isnan(v) or math.isinf(v):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return v
+
+    profile_id = get_profile_id()
+    period_param = request.args.get("period", "1y")
+    tickers_param = request.args.get("tickers", "")
+    group_by = request.args.get("group_by", "none")
+    show_cost_basis = request.args.get("show_cost_basis", "true") == "true"
+    show_trades = request.args.get("show_trades", "false") == "true"
+    profit_mode = request.args.get("profit_mode", "dollar")
+    pl_basis = request.args.get("pl_basis", "selected_period")
+    group_profit_source = request.args.get("group_profit_source", "true") == "true"
+
+    period_map = {
+        "7d": 7, "1m": 30, "3m": 90, "6m": 180,
+        "ytd": "ytd", "1y": 365, "5y": 1825, "all": "max",
+    }
+    yf_period = "1y"
+    start_date = None
+    if period_param in period_map:
+        val = period_map[period_param]
+        if val == "ytd":
+            start_date = datetime(datetime.now().year, 1, 1)
+            yf_period = "ytd"
+        elif val == "max":
+            yf_period = "max"
+        else:
+            start_date = datetime.now() - timedelta(days=val)
+            if val <= 7:
+                yf_period = "1mo"
+            elif val <= 30:
+                yf_period = "3mo"
+            elif val <= 90:
+                yf_period = "6mo"
+            elif val <= 180:
+                yf_period = "1y"
+            elif val <= 365:
+                yf_period = "1y"
+            else:
+                yf_period = "max"
+    else:
+        custom_start = request.args.get("start_date", "")
+        custom_end = request.args.get("end_date", "")
+        if custom_start:
+            try:
+                start_date = datetime.strptime(custom_start, "%Y-%m-%d")
+            except ValueError:
+                pass
+        yf_period = "max"
+
+    conn = get_connection()
+
+    rows = conn.execute(
+        """SELECT ticker, quantity, price_paid, purchase_value, current_value,
+                  purchase_date
+           FROM all_account_info
+           WHERE profile_id = ? AND purchase_value > 0 AND quantity > 0""",
+        (profile_id,),
+    ).fetchall()
+
+    cats = conn.execute(
+        "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
+        (profile_id,),
+    ).fetchall()
+    categories = [{"id": c["id"], "name": c["name"]} for c in cats]
+
+    cat_map_rows = conn.execute(
+        "SELECT tc.ticker, c.name AS category_name "
+        "FROM ticker_categories tc JOIN categories c ON c.id = tc.category_id "
+        "WHERE tc.profile_id = ?", (profile_id,)
+    ).fetchall()
+    cat_map = {r["ticker"]: r["category_name"] for r in cat_map_rows}
+
+    # Owner (profile_id=1) is the combined view — fetch transactions across all profiles
+    if profile_id == 1:
+        txn_rows = conn.execute(
+            """SELECT ticker, transaction_type, transaction_date, shares,
+                      price_per_share, fees, realized_gain
+               FROM transactions
+               ORDER BY transaction_date"""
+        ).fetchall()
+        div_rows = conn.execute(
+            """SELECT ticker, payment_date, amount
+               FROM dividend_payments
+               ORDER BY payment_date"""
+        ).fetchall()
+    else:
+        txn_rows = conn.execute(
+            """SELECT ticker, transaction_type, transaction_date, shares,
+                      price_per_share, fees, realized_gain
+               FROM transactions
+               WHERE profile_id = ?
+               ORDER BY transaction_date""",
+            (profile_id,),
+        ).fetchall()
+        div_rows = conn.execute(
+            """SELECT ticker, payment_date, amount
+               FROM dividend_payments
+               WHERE profile_id = ?
+               ORDER BY payment_date""",
+            (profile_id,),
+        ).fetchall()
+
+    conn.close()
+
+    if not rows:
+        return jsonify({"error": "No holdings found", "categories": categories, "tickers": []}), 400
+
+    all_tickers = sorted(set(r["ticker"] for r in rows))
+
+    filter_tickers = None
+    if tickers_param:
+        filter_tickers = set(t.strip().upper() for t in tickers_param.split(",") if t.strip())
+
+    active_rows = [r for r in rows if not filter_tickers or r["ticker"] in filter_tickers]
+    if not active_rows:
+        return jsonify({"error": "No holdings after filter", "categories": categories, "tickers": all_tickers}), 400
+
+    active_tickers = [r["ticker"] for r in active_rows]
+    quantities = {r["ticker"]: float(r["quantity"] or 0) for r in active_rows}
+    cost_basis = {r["ticker"]: float(r["purchase_value"] or 0) for r in active_rows}
+
+    try:
+        raw = yf.download(
+            " ".join(active_tickers), period=yf_period, auto_adjust=True,
+            actions=True, progress=False
+        )
+        if raw.empty:
+            return jsonify({"error": "No price data", "tickers": all_tickers}), 500
+    except Exception as e:
+        return jsonify({"error": str(e), "tickers": all_tickers}), 500
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        close = raw["Close"].dropna(how="all")
+        divs_raw = raw["Dividends"].fillna(0) if "Dividends" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
+    else:
+        close = raw[["Close"]].dropna(how="all")
+        close.columns = [active_tickers[0]]
+        divs_raw = raw[["Dividends"]].fillna(0) if "Dividends" in raw.columns else pd.DataFrame(0, index=close.index, columns=[active_tickers[0]])
+        divs_raw.columns = [active_tickers[0]]
+
+    avail = [t for t in active_tickers if t in close.columns]
+    if not avail:
+        return jsonify({"error": "No price data for selected holdings", "tickers": all_tickers}), 500
+
+    first_valid = close[avail].dropna(how="all").index[0]
+    close_a = close[avail].loc[first_valid:].ffill().bfill()
+    divs_a = divs_raw[avail].loc[first_valid:].fillna(0) if set(avail).issubset(divs_raw.columns) else pd.DataFrame(0, index=close_a.index, columns=avail)
+
+    if start_date is not None:
+        start_ts = pd.Timestamp(start_date)
+        if start_ts > close_a.index[0]:
+            close_a = close_a.loc[close_a.index >= start_ts]
+            divs_a = divs_a.loc[divs_a.index >= start_ts]
+
+    if close_a.empty:
+        return jsonify({"error": "No data for selected period", "tickers": all_tickers}), 500
+
+    # ── Portfolio value timeline (current shares * historical prices) ──
+    port_value = pd.Series(0.0, index=close_a.index)
+    for t in avail:
+        port_value += close_a[t] * quantities.get(t, 0)
+
+    total_invested = sum(cost_basis.get(t, 0) for t in avail)
+    invested_series = pd.Series(total_invested, index=close_a.index)
+
+    # ── Build transaction timeline for trades overlay ──
+    # Tickers that have explicit transaction records
+    txn_tickers = set(dict(tx)["ticker"] for tx in txn_rows)
+
+    # For tickers with no transaction records, synthesize a BUY from all_account_info
+    synthetic_txns = []
+    for r in active_rows:
+        t = r["ticker"]
+        if t not in txn_tickers and r["purchase_date"]:
+            synthetic_txns.append({
+                "ticker": t,
+                "transaction_type": "BUY",
+                "transaction_date": r["purchase_date"],
+                "shares": float(r["quantity"] or 0),
+                "price_per_share": float(r["price_paid"] or 0),
+                "fees": 0,
+                "realized_gain": None,
+            })
+
+    all_txns = [dict(tx) for tx in txn_rows] + synthetic_txns
+
+    trade_points = []
+    if show_trades:
+        for tx in all_txns:
+            if tx["ticker"] not in avail:
+                continue
+            try:
+                td = pd.Timestamp(tx["transaction_date"])
+            except Exception:
+                continue
+            if td >= close_a.index[0] and td <= close_a.index[-1]:
+                idx_pos = close_a.index.searchsorted(td, side="right") - 1
+                if idx_pos >= 0:
+                    val_at = float(port_value.iloc[idx_pos])
+                    trade_points.append({
+                        "date": tx["transaction_date"],
+                        "value": round(val_at, 2),
+                        "type": tx["transaction_type"],
+                        "ticker": tx["ticker"],
+                        "shares": float(tx["shares"] or 0),
+                        "price": float(tx["price_per_share"] or 0),
+                    })
+
+    # ── P&L breakdown ──
+    dates_idx = close_a.index
+
+    # Capital gain = portfolio_value - invested at each point
+    # For "from first trade": use absolute values from start
+    # For "selected period": compute relative to period start
+    start_port_val = float(port_value.iloc[0])
+
+    # Cumulative dividends within the period (from yfinance per-share data)
+    cum_divs_dollar = pd.Series(0.0, index=dates_idx)
+    for t in avail:
+        cum_divs_dollar += divs_a[t].cumsum() * quantities.get(t, 0)
+
+    # Realized P&L from transactions
+    realized_cum = pd.Series(0.0, index=dates_idx)
+    fees_cum = pd.Series(0.0, index=dates_idx)
+    for tx in all_txns:
+        tx = dict(tx)
+        if tx["ticker"] not in avail:
+            continue
+        try:
+            td = pd.Timestamp(tx["transaction_date"])
+        except Exception:
+            continue
+        if td < dates_idx[0] or td > dates_idx[-1]:
+            continue
+        mask = dates_idx >= td
+        if tx["transaction_type"] == "SELL" and tx["realized_gain"] is not None:
+            realized_cum.loc[mask] += float(tx["realized_gain"])
+        if tx["fees"] is not None and float(tx["fees"]) > 0:
+            fees_cum.loc[mask] -= float(tx["fees"])
+
+    # Capital gain (unrealized price change)
+    if pl_basis == "first_trade":
+        capital_gain = port_value - total_invested
+    else:
+        capital_gain = port_value - start_port_val
+
+    total_pl = capital_gain + cum_divs_dollar + realized_cum + fees_cum
+
+    # Convert to percentage if needed
+    def to_pct(series, base):
+        if base > 0:
+            return series / base * 100
+        return series * 0
+
+    dates_str = [d.strftime("%Y-%m-%d") for d in dates_idx]
+
+    def _cs(s):
+        return [_clean(round(float(v), 2)) for v in s]
+
+    result = {
+        "dates": dates_str,
+        "portfolio_value": _cs(port_value),
+        "invested": _cs(invested_series),
+        "tickers": all_tickers,
+        "categories": categories,
+        "ticker_info": {t: {"category": cat_map.get(t, "Other"), "quantity": quantities.get(t, 0), "cost_basis": cost_basis.get(t, 0)} for t in avail},
+        "trade_points": trade_points,
+    }
+
+    base_for_pct = total_invested if pl_basis == "first_trade" else start_port_val
+
+    if profit_mode == "pct":
+        result["performance"] = {
+            "capital_gain": _cs(to_pct(capital_gain, base_for_pct)),
+            "dividends": _cs(to_pct(cum_divs_dollar, base_for_pct)),
+            "realized_pl": _cs(to_pct(realized_cum, base_for_pct)),
+            "fees": _cs(to_pct(fees_cum, base_for_pct)),
+            "total": _cs(to_pct(total_pl, base_for_pct)),
+        }
+        result["profit_unit"] = "%"
+    else:
+        result["performance"] = {
+            "capital_gain": _cs(capital_gain),
+            "dividends": _cs(cum_divs_dollar),
+            "realized_pl": _cs(realized_cum),
+            "fees": _cs(fees_cum),
+            "total": _cs(total_pl),
+        }
+        result["profit_unit"] = "$"
+
+    # Per-ticker breakdown when grouping requested
+    if group_by == "ticker":
+        per_ticker = {}
+        for t in avail:
+            q = quantities.get(t, 0)
+            tv = close_a[t] * q
+            td_div = divs_a[t].cumsum() * q
+            if pl_basis == "first_trade":
+                t_cg = tv - cost_basis.get(t, 0)
+            else:
+                t_cg = tv - float(tv.iloc[0])
+            t_total = t_cg + td_div
+            tb = cost_basis.get(t, 0) if pl_basis == "first_trade" else float(tv.iloc[0])
+            if profit_mode == "pct":
+                per_ticker[t] = {
+                    "value": _cs(tv),
+                    "capital_gain": _cs(to_pct(t_cg, tb)),
+                    "dividends": _cs(to_pct(td_div, tb)),
+                    "total": _cs(to_pct(t_total, tb)),
+                }
+            else:
+                per_ticker[t] = {
+                    "value": _cs(tv),
+                    "capital_gain": _cs(t_cg),
+                    "dividends": _cs(td_div),
+                    "total": _cs(t_total),
+                }
+        result["per_ticker"] = per_ticker
+    elif group_by == "category":
+        per_cat = {}
+        for t in avail:
+            cat_name = cat_map.get(t, "Other")
+            if cat_name not in per_cat:
+                per_cat[cat_name] = {"value": np.zeros(len(dates_idx)), "cg": np.zeros(len(dates_idx)), "div": np.zeros(len(dates_idx)), "cost": 0.0, "start_val": 0.0}
+            q = quantities.get(t, 0)
+            tv = (close_a[t] * q).values
+            td_div = (divs_a[t].cumsum() * q).values
+            per_cat[cat_name]["value"] += tv
+            per_cat[cat_name]["div"] += td_div
+            per_cat[cat_name]["cost"] += cost_basis.get(t, 0)
+            per_cat[cat_name]["start_val"] += float(close_a[t].iloc[0]) * q
+
+        grouped = {}
+        for cat_name, d in per_cat.items():
+            if pl_basis == "first_trade":
+                cg = d["value"] - d["cost"]
+                base = d["cost"]
+            else:
+                cg = d["value"] - d["start_val"]
+                base = d["start_val"]
+            total = cg + d["div"]
+            if profit_mode == "pct":
+                grouped[cat_name] = {
+                    "value": _cs(d["value"]),
+                    "capital_gain": _cs(to_pct(pd.Series(cg), base)),
+                    "dividends": _cs(to_pct(pd.Series(d["div"]), base)),
+                    "total": _cs(to_pct(pd.Series(total), base)),
+                }
+            else:
+                grouped[cat_name] = {
+                    "value": _cs(d["value"]),
+                    "capital_gain": _cs(cg),
+                    "dividends": _cs(d["div"]),
+                    "total": _cs(total),
+                }
+        result["per_category"] = grouped
+
+    return jsonify(result)
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────

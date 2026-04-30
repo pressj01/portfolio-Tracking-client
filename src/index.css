@@ -654,6 +654,145 @@ label {
   }
 }
 
+/* ── Portfolio Growth 2 ── */
+.g2-chart-section {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1.5rem;
+  background: #0e1117;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #1a2233;
+}
+.g2-chart-area {
+  flex: 1;
+  min-width: 0;
+}
+.g2-chart-box {
+  min-height: 420px;
+}
+.g2-chart-controls {
+  width: 260px;
+  flex-shrink: 0;
+  padding: 1rem;
+  background: #13172a;
+  border-left: 1px solid #1a2233;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.g2-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.g2-toggle-label {
+  font-size: 0.85rem;
+  color: #c0c8d8;
+}
+.g2-tooltip-icon {
+  margin-left: 0.3rem;
+  font-size: 0.75rem;
+  color: #6a7a90;
+  cursor: help;
+}
+.g2-toggle {
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  border: none;
+  background: #2a3040;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.2s;
+  padding: 0;
+  flex-shrink: 0;
+}
+.g2-toggle-on {
+  background: #1976d2;
+}
+.g2-toggle-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e0e0e0;
+  transition: left 0.2s;
+}
+.g2-toggle-on .g2-toggle-knob {
+  left: 21px;
+}
+.g2-tab-btns {
+  display: flex;
+  border: 1px solid #2a3a50;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.g2-tab-btn {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.8rem;
+  background: transparent;
+  border: none;
+  color: #8a9ab0;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+  white-space: nowrap;
+}
+.g2-tab-btn:not(:last-child) {
+  border-right: 1px solid #2a3a50;
+}
+.g2-tab-btn.active {
+  background: #1a2a40;
+  color: #e0e8f5;
+  font-weight: 600;
+}
+.g2-tab-btn:hover:not(.active) {
+  background: #1a2233;
+}
+.g2-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.g2-control-label {
+  font-size: 0.85rem;
+  color: #c0c8d8;
+}
+.g2-select {
+  background: #1a2233;
+  color: #c0c8d8;
+  border: 1px solid #2a3a50;
+  border-radius: 4px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  outline: none;
+}
+.g2-select:hover {
+  border-color: #3a5a80;
+}
+.g2-hint {
+  font-size: 0.75rem;
+  color: #6a7a90;
+  line-height: 1.3;
+  margin-top: 0.3rem;
+}
+@media (max-width: 900px) {
+  .g2-chart-section {
+    flex-direction: column;
+  }
+  .g2-chart-controls {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid #1a2233;
+  }
+}
+
 /* Spinner */
 .spinner {
   display: inline-block;

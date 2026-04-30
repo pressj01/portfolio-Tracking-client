@@ -39,6 +39,7 @@ import PortfolioTester from './pages/PortfolioTester'
 import SecurityResearch from './pages/SecurityResearch'
 import DividendCalculator from './pages/DividendCalculator'
 import AnnualTaxReport from './pages/AnnualTaxReport'
+import PortfolioGrowth2 from './pages/PortfolioGrowth2'
 // Option Trading Tools and Option Education are intentionally excluded from
 // deployed builds — still in development, not ready for production.
 // import OptionTradingTools from './pages/OptionTradingTools'
@@ -117,6 +118,7 @@ function App() {
         <Route path="/portfolio-tester" element={<PortfolioTester />} />
         <Route path="/security-research" element={<SecurityResearch />} />
         <Route path="/dividend-calculator" element={<DividendCalculator />} />
+        <Route path="/growth-2" element={<PortfolioGrowth2 />} />
         <Route path="/tax-report" element={<AnnualTaxReport />} />
         {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
         <Route path="/help" element={<Help />} />
@@ -154,6 +156,7 @@ function Nav() {
         <NavLink to="/holdings">Holdings</NavLink>
         <NavLink to="/categories">Categories</NavLink>
         <NavLink to="/growth">Growth</NavLink>
+        <NavLink to="/growth-2">Portfolio Growth 2</NavLink>
         <NavLink to="/dividends">Dividends</NavLink>
         <NavLink to="/div-calendar">Dividend Calendar</NavLink>
         <NavLink to="/earnings-calendar">Earnings Calendar</NavLink>

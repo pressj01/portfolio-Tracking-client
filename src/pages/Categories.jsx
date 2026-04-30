@@ -102,6 +102,15 @@ export default function Categories() {
 
   const handleSave = async ({ name, target_pct }) => {
     setError(null)
+    if (target_pct != null) {
+      const otherTotal = data.categories
+        .filter(c => !editCat || c.id !== editCat.id)
+        .reduce((s, c) => s + (Number(c.target_pct) || 0), 0)
+      if (otherTotal + target_pct > 100) {
+        setError(`Target allocation would total ${(otherTotal + target_pct).toFixed(1)}% — cannot exceed 100%. Available: ${(100 - otherTotal).toFixed(1)}%`)
+        return
+      }
+    }
     try {
       if (editCat) {
         await pf(`/api/categories/${editCat.id}`, {
@@ -163,6 +172,7 @@ export default function Categories() {
   const totalCount = allocatedCount + data.unallocated.length
   const allocatedValue = data.categories.reduce((s, c) => s + c.actual_value, 0)
   const allocatedPct = data.total_value ? (allocatedValue / data.total_value * 100) : 0
+  const totalTargetPct = data.categories.reduce((s, c) => s + (Number(c.target_pct) || 0), 0)
 
   const barColor = (cat) => {
     if (cat.target_pct == null) return '#7ecfff'
@@ -197,6 +207,12 @@ export default function Categories() {
           <div>
             <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Total Value</span>
             <div style={{ fontWeight: 700, color: '#7ecfff' }}>{fmt(data.total_value)}</div>
+          </div>
+          <div>
+            <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Target Allocation</span>
+            <div style={{ fontWeight: 700, color: totalTargetPct > 100 ? '#ff6b6b' : totalTargetPct === 100 ? '#00e89a' : '#ffc107' }}>
+              {totalTargetPct.toFixed(1)}% / 100%
+            </div>
           </div>
         </div>
         <AllocationBar categories={data.categories} totalValue={data.total_value} />

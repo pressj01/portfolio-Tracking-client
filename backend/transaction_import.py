@@ -127,7 +127,7 @@ def parse_snowball_csv(file_path, filename):
 
         qty = _safe_float(row.get("Quantity"))
         price = _safe_float(row.get("Price"))
-        fees = _safe_float(row.get("FeeTax"))
+        fees = _safe_float(row.get("FeeTax") or row.get("Fee") or row.get("Fees") or row.get("Commission") or row.get("Commissions"))
         is_adjustment = ADJUSTMENT_NOTE in note
 
         if event == "DIVIDEND":
@@ -779,8 +779,8 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
         qty_val = _safe_float(record.get("Quantity"))
         price_val = _safe_float(record.get("Price ($)"))
         amount_val = _safe_float(record.get("Amount ($)"))
-        commission = _safe_float(record.get("Commission ($)")) or 0.0
-        fees = _safe_float(record.get("Fees ($)")) or 0.0
+        commission = _safe_float(record.get("Commission ($)") or record.get("Commission") or record.get("Commissions")) or 0.0
+        fees = _safe_float(record.get("Fees ($)") or record.get("Fees") or record.get("Fee")) or 0.0
         total_fees = round(commission + fees, 2)
         action_upper = action.upper()
 
@@ -957,7 +957,7 @@ def parse_schwab_transactions_csv(file_path, filename):
         raw_date = (row.get("Date") or "").strip()
         raw_qty = (row.get("Quantity") or "").strip()
         raw_price = (row.get("Price") or "").replace("$", "").replace(",", "").strip()
-        raw_fees = (row.get("Fees & Comm") or "").replace("$", "").replace(",", "").strip()
+        raw_fees = (row.get("Fees & Commissions") or row.get("Fees & Comm") or "").replace("$", "").replace(",", "").strip()
         raw_amount = (row.get("Amount") or "").strip()
 
         # Skip rows without a valid ticker
@@ -1183,7 +1183,7 @@ def parse_etrade_buys_sells_xlsx(file_path, filename):
         qty = row.get("Quantity #")
         price = row.get("Price $")
         amount = row.get("Amount $")
-        commission = row.get("Commission")
+        commission = row.get("Commission") or row.get("Commissions") or row.get("Fee") or row.get("Fees")
 
         if not symbol or not TICKER_RE.match(symbol):
             filtered_count += 1
