@@ -34,6 +34,22 @@ TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-/]{0,10}$")
 ADJUSTMENT_NOTE = "Automatically generated transaction to adjust"
 
 
+def _parse_reinvest_bool(value):
+    """Return True/False for common broker DRIP flag values, or None if blank."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().casefold()
+    if text in ("", "nan", "none", "null", "n/a", "-"):
+        return None
+    if text in ("y", "yes", "true", "t", "1", "on", "checked", "x", "drip", "reinvest", "reinvested"):
+        return True
+    if text in ("n", "no", "false", "f", "0", "off", "unchecked", "cash", "not reinvested"):
+        return False
+    return None
+
+
 # ── Snowball Analytics ──────────────────────────────────────────────────────────
 
 def parse_snowball_csv(file_path, filename):
@@ -443,7 +459,7 @@ def parse_schwab_csv(file_path, filename):
         )
         div_yield = (row.get("Div Yld (Dividend Yield)") or "").replace("%", "").strip()
         div_yield = _safe_float(div_yield)
-        reinvest = (row.get("Reinvest?") or "").strip().lower() == "yes"
+        reinvest = _parse_reinvest_bool(row.get("Reinvest?"))
 
         if qty is None or qty <= 0:
             filtered_count += 1

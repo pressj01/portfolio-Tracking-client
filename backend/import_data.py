@@ -200,6 +200,9 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    if "reinvest" in df.columns:
+        df["reinvest"] = df["reinvest"].apply(_parse_reinvest_flag)
+
     # Coerce purchase_date
     if "purchase_date" in df.columns:
         df["purchase_date"] = pd.to_datetime(df["purchase_date"], errors="coerce")
@@ -683,6 +686,25 @@ def _split_category_names(value):
     return names
 
 
+def _parse_reinvest_flag(value):
+    """Normalize common DRIP/reinvestment import values to 'Y' or 'N'."""
+    if value is None:
+        return "N"
+    if isinstance(value, bool):
+        return "Y" if value else "N"
+    if isinstance(value, (int, float)) and not pd.isna(value):
+        return "Y" if float(value) != 0 else "N"
+
+    text = str(value).strip().casefold()
+    if text in ("", "nan", "none", "null", "n/a", "-"):
+        return "N"
+    if text in ("y", "yes", "true", "t", "1", "on", "checked", "x", "drip", "reinvest", "reinvested"):
+        return "Y"
+    if text in ("n", "no", "false", "f", "0", "off", "unchecked", "cash", "not reinvested"):
+        return "N"
+    return "N"
+
+
 def _apply_category_assignments(cur, profile_id, category_assignments):
     """Replace imported ticker category links with the categories from the upload."""
     if not category_assignments:
@@ -937,9 +959,7 @@ def import_from_upload(df, profile_id):
         estim = _fval(row, 'estim_payment_per_year') or (div * qty * mult)
         monthly_income = _fval(row, 'approx_monthly_income') or (estim / 12 if estim else 0)
 
-        reinvest = str(_val(row, 'reinvest') or 'N').strip().upper()
-        if reinvest not in ('Y', 'N'):
-            reinvest = 'N'
+        reinvest = _parse_reinvest_flag(_val(row, 'reinvest'))
 
         description = _val(row, 'description')
         if not description:
