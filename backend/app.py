@@ -5592,8 +5592,12 @@ def list_holdings():
                 for r in results:
                     if r.get("monthly_income_reinvested") is None:
                         mi = r.get("approx_monthly_income") or 0
-                        r["monthly_income_reinvested"] = 0
-                        r["monthly_income_not_reinvested"] = mi
+                        if r.get("reinvest") == "Y":
+                            r["monthly_income_reinvested"] = mi
+                            r["monthly_income_not_reinvested"] = 0
+                        else:
+                            r["monthly_income_reinvested"] = 0
+                            r["monthly_income_not_reinvested"] = mi
         else:
             # Sub-account: use its own DRIP flag directly
             for r in results:
