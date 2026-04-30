@@ -6013,7 +6013,7 @@ def _rollup_transactions(ticker, profile_id, conn):
     for r in rows:
         txn_id = _val(r, "id", 0)
         txn_type = (_val(r, "transaction_type", 1) or "BUY").upper()
-        shares = _val(r, "shares", 2) or 0
+        shares = abs(float(_val(r, "shares", 2) or 0))
         price = _val(r, "price_per_share", 3) or 0
         fees = _val(r, "fees", 4) or 0
         tdate = _val(r, "transaction_date", 5)
@@ -6196,6 +6196,21 @@ def _apply_buy_to_lots(lots, shares, price, fees, txn_id=None, txn_date=None):
     return cost_per
 
 
+def _normalize_transaction_shares(raw_shares):
+    """Store BUY/SELL quantities as a positive share count.
+
+    Some broker screens display sells as negative quantities. The transaction
+    type carries the direction in this app, so shares must remain positive.
+    """
+    try:
+        shares = abs(float(raw_shares))
+    except (TypeError, ValueError):
+        raise ValueError("Shares is required")
+    if shares <= 1e-9:
+        raise ValueError("Shares must be greater than 0")
+    return shares
+
+
 def _get_open_lots(conn, ticker, profile_ids, exclude_txn_id=None):
     """Return open BUY lots for a ticker after applying sells and allocations."""
     placeholders = ",".join("?" * len(profile_ids))
@@ -6224,7 +6239,7 @@ def _get_open_lots(conn, ticker, profile_ids, exclude_txn_id=None):
             continue
 
         txn_type = ((row["transaction_type"] if isinstance(row, dict) else row[1]) or "BUY").upper()
-        shares = float((row["shares"] if isinstance(row, dict) else row[2]) or 0)
+        shares = abs(float((row["shares"] if isinstance(row, dict) else row[2]) or 0))
         price = float((row["price_per_share"] if isinstance(row, dict) else row[3]) or 0)
         fees = float((row["fees"] if isinstance(row, dict) else row[4]) or 0)
         txn_date = row["transaction_date"] if isinstance(row, dict) else row[5]
@@ -6320,9 +6335,10 @@ def _annotate_transaction_rows(rows, alloc_map):
         txn = dict(row) if isinstance(row, dict) else dict(zip(row.keys(), row))
         txn_id = txn["id"]
         txn_type = (txn.get("transaction_type") or "BUY").upper()
-        shares = float(txn.get("shares") or 0)
+        shares = abs(float(txn.get("shares") or 0))
         price = float(txn.get("price_per_share") or 0)
         fees = float(txn.get("fees") or 0)
+        txn["shares"] = shares
 
         txn_allocs = alloc_map.get(txn_id, [])
         txn["lot_allocations"] = [
@@ -6378,7 +6394,7 @@ def list_transactions(ticker):
     sell_ids = [
         row["id"] if isinstance(row, dict) else row[0]
         for row in rows
-        if ((row["transaction_type"] if isinstance(row, dict) else row[1]) or "BUY").upper() == "SELL"
+        if ((row["transaction_type"] if hasattr(row, "keys") else row[1]) or "BUY").upper() == "SELL"
     ]
     alloc_map = _load_lot_alloc_map(conn, sell_ids)
     conn.close()
@@ -6397,9 +6413,10 @@ def add_transaction(ticker):
     data = request.get_json()
     ticker = ticker.upper()
 
-    shares = data.get("shares")
-    if not shares:
-        return jsonify({"error": "Shares is required"}), 400
+    try:
+        shares = _normalize_transaction_shares(data.get("shares"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
     conn = get_connection()
 
@@ -6476,7 +6493,7 @@ def add_transaction(ticker):
     cur = conn.execute(
         "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (ticker, profile_id, txn_type, data.get("transaction_date"), float(shares),
+        (ticker, profile_id, txn_type, data.get("transaction_date"), shares,
          data.get("price_per_share"), data.get("fees", 0), data.get("notes")),
     )
     new_txn_id = cur.lastrowid
@@ -6539,7 +6556,11 @@ def update_transaction(ticker, txn_id):
     existing_allocs = _load_lot_alloc_map(conn, [txn_id]).get(txn_id, [])
 
     new_type = (data.get("transaction_type") or existing_type).upper()
-    new_shares = data.get("shares", existing_shares)
+    try:
+        new_shares = _normalize_transaction_shares(data.get("shares", existing_shares))
+    except ValueError as e:
+        conn.close()
+        return jsonify({"error": str(e)}), 400
     if new_type not in ("BUY", "SELL"):
         conn.close()
         return jsonify({"error": "transaction_type must be BUY or SELL"}), 400
@@ -6575,7 +6596,7 @@ def update_transaction(ticker, txn_id):
     for field in ["transaction_type", "transaction_date", "shares", "price_per_share", "fees", "notes"]:
         if field in data:
             updates.append(f"{field} = ?")
-            vals.append(data[field])
+            vals.append(new_shares if field == "shares" else data[field])
 
     if not updates:
         conn.close()
