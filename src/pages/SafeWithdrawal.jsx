@@ -3,6 +3,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 const fmt = v => v != null ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '\u2014'
 const fmtDate = v => v || '\u2014'
+const clamp = (v, min = 0, max = 1) => Math.min(max, Math.max(min, v))
 
 function MetricCard({ label, value, valueColor }) {
   return (
@@ -49,7 +50,10 @@ export default function SafeWithdrawal() {
   const allComputed = useMemo(() => rows.map(r => {
     const cost = r.purchase_value || 0
     const monthlyDiv = r.approx_monthly_income || 0
+    const monthlyNotReinvested = r.monthly_income_not_reinvested || 0
     const hasDividend = monthlyDiv > 0
+    const cashIncomeRatio = hasDividend ? clamp(monthlyNotReinvested / monthlyDiv) : 0
+    const cashCost = cost * cashIncomeRatio
     const yieldOnCost = cost > 0 ? ((r.estim_payment_per_year || 0) / cost) * 100 : 0
     const sustainable = hasDividend && yieldOnCost >= pct
     const rate = pct / 100
@@ -62,7 +66,10 @@ export default function SafeWithdrawal() {
       current_price: r.current_price || 0,
       quantity: r.quantity || 0,
       est_monthly_div: monthlyDiv,
+      monthly_not_reinvested: monthlyNotReinvested,
+      monthly_reinvested: Math.max(0, monthlyDiv - monthlyNotReinvested),
       cost,
+      cash_cost_after_drip: cashCost,
       annual_div: r.estim_payment_per_year || 0,
       yield_on_cost: yieldOnCost,
       current_yield: (r.current_annual_yield || 0) * 100,
@@ -86,14 +93,46 @@ export default function SafeWithdrawal() {
   const totals = useMemo(() => {
     const totalCost = computed.reduce((s, r) => s + r.cost, 0)
     const totalAnnualDiv = computed.reduce((s, r) => s + r.annual_div, 0)
+    const totalMonthlyDiv = computed.reduce((s, r) => s + r.est_monthly_div, 0)
+    const totalMonthlyDrip = computed.reduce((s, r) => s + r.monthly_reinvested, 0)
+    const totalCashCostAfterDrip = computed.reduce((s, r) => s + r.cash_cost_after_drip, 0)
+    const hasDrip = totalMonthlyDrip > 0.005
+    const freeCashMonthly = hasDrip
+      ? Math.max(0, totalMonthlyDiv - totalMonthlyDrip)
+      : totalMonthlyDiv
+    const freeCashWeekly = freeCashMonthly * 12 / 52
+    const freeCashAnnually = freeCashMonthly * 12
+    const rate = pct / 100
+    const withdrawalCost = hasDrip ? totalCashCostAfterDrip : totalCost
+    const withdrawalAnnually = withdrawalCost * rate
+    const withdrawalMonthly = withdrawalAnnually / 12
+    const withdrawalWeekly = withdrawalAnnually / 52
+    const cashRemainingWeekly = Math.max(0, freeCashWeekly - withdrawalWeekly)
+    const cashRemainingMonthly = Math.max(0, freeCashMonthly - withdrawalMonthly)
+    const cashRemainingAnnually = Math.max(0, freeCashAnnually - withdrawalAnnually)
     return {
-      est_monthly_div: computed.reduce((s, r) => s + r.est_monthly_div, 0),
+      has_drip: hasDrip,
+      est_monthly_div: totalMonthlyDiv,
+      drip_monthly: totalMonthlyDrip,
       w8_weekly: computed.reduce((s, r) => s + r.w8_weekly, 0),
       w8_monthly: computed.reduce((s, r) => s + r.w8_monthly, 0),
       w8_annually: computed.reduce((s, r) => s + r.w8_annually, 0),
+      free_cash_weekly: freeCashWeekly,
+      free_cash_monthly: freeCashMonthly,
+      free_cash_annually: freeCashAnnually,
+      withdrawal_weekly: withdrawalWeekly,
+      withdrawal_monthly: withdrawalMonthly,
+      withdrawal_annually: withdrawalAnnually,
+      cash_remaining_weekly: cashRemainingWeekly,
+      cash_remaining_monthly: cashRemainingMonthly,
+      cash_remaining_annually: cashRemainingAnnually,
+      no_cash_left_weekly: freeCashWeekly > 0 && freeCashWeekly - withdrawalWeekly <= 0,
+      no_cash_left_monthly: freeCashMonthly > 0 && freeCashMonthly - withdrawalMonthly <= 0,
+      no_cash_left_annually: freeCashAnnually > 0 && freeCashAnnually - withdrawalAnnually <= 0,
+      no_cash_left: freeCashMonthly > 0 && freeCashMonthly - withdrawalMonthly <= 0,
       break_even_pct: totalCost > 0 ? (totalAnnualDiv / totalCost) * 100 : 0,
     }
-  }, [computed])
+  }, [computed, pct])
 
   const handleSort = key => {
     if (sortCol === key) setSortAsc(a => !a)
@@ -135,7 +174,7 @@ export default function SafeWithdrawal() {
     <div className="page">
       <h1>Safe Withdrawal Amount</h1>
       <p style={{ color: '#8899aa', marginTop: '-1rem', marginBottom: '1.25rem', fontSize: '0.85rem' }}>
-        Estimates safe spending from dividends using {pct}% of purchase cost as a benchmark.
+        Estimates dividend cash left after DRIP and a {pct}% withdrawal target based on purchase cost.
       </p>
 
       {loading && <p>Loading...</p>}
@@ -184,10 +223,22 @@ export default function SafeWithdrawal() {
           )}
 
           <div className="summary-strip">
-            <MetricCard label={`${pct}% of Cost / Week`} value={fmt(totals.w8_weekly)} />
-            <MetricCard label={`${pct}% of Cost / Month`} value={fmt(totals.w8_monthly)} />
-            <MetricCard label={`${pct}% of Cost / Year`} value={fmt(totals.w8_annually)} />
-            <MetricCard label="Est Monthly Dividends" value={fmt(totals.est_monthly_div)} />
+            <MetricCard label={totals.has_drip ? 'Monthly Dividend Estimate Before DRIP' : 'Monthly Dividend Estimate'} value={fmt(totals.est_monthly_div)} />
+            {totals.has_drip && (
+              <MetricCard label="Monthly Dividends Reinvested by DRIP" value={fmt(totals.drip_monthly)} />
+            )}
+            <MetricCard label={totals.has_drip ? 'Yearly Cash Available After DRIP Before Withdrawal' : 'Yearly Cash Available Before Withdrawal'} value={fmt(totals.free_cash_annually)} />
+            <MetricCard label={totals.has_drip ? 'Monthly Cash Available After DRIP Before Withdrawal' : 'Monthly Cash Available Before Withdrawal'} value={fmt(totals.free_cash_monthly)} />
+            <MetricCard label={totals.has_drip ? 'Weekly Cash Available After DRIP Before Withdrawal' : 'Weekly Cash Available Before Withdrawal'} value={fmt(totals.free_cash_weekly)} />
+            <MetricCard label={`${pct}% of Cost Withdrawn Yearly`} value={fmt(totals.withdrawal_annually)} />
+            <MetricCard label={`${pct}% of Cost Withdrawn Monthly`} value={fmt(totals.withdrawal_monthly)} />
+            <MetricCard label={`${pct}% of Cost Withdrawn Weekly`} value={fmt(totals.withdrawal_weekly)} />
+            <MetricCard label={totals.has_drip ? 'Yearly Cash Left After DRIP and Withdrawal' : 'Yearly Cash Left After Withdrawal'} value={fmt(totals.cash_remaining_annually)} valueColor={totals.no_cash_left_annually ? '#ff6b6b' : undefined} />
+            <MetricCard label={totals.has_drip ? 'Monthly Cash Left After DRIP and Withdrawal' : 'Monthly Cash Left After Withdrawal'} value={fmt(totals.cash_remaining_monthly)} valueColor={totals.no_cash_left_monthly ? '#ff6b6b' : undefined} />
+            <MetricCard label={totals.has_drip ? 'Weekly Cash Left After DRIP and Withdrawal' : 'Weekly Cash Left After Withdrawal'} value={fmt(totals.cash_remaining_weekly)} valueColor={totals.no_cash_left_weekly ? '#ff6b6b' : undefined} />
+            {totals.no_cash_left && (
+              <MetricCard label="Cash Status" value="No more cash left to withdraw" valueColor="#ff6b6b" />
+            )}
             <MetricCard label="Break-even % (Portfolio YoC)"
               value={`${totals.break_even_pct.toFixed(2)}%`}
               valueColor={pct > totals.break_even_pct ? '#ff6b6b' : '#4ade80'} />

@@ -416,14 +416,14 @@ export default function GainsLosses() {
           <div className="summary-strip" style={{ marginBottom: '0.5rem' }}>
             <MetricCard label="Total Invested" value={fmtInt(t.unrealized_invested)} />
             <MetricCard label="Current Value" value={fmtInt(t.unrealized_value)} />
-            <MetricCard label="Unrealized Price G/L" value={<span style={{ color: glColor(t.unrealized_price_gl) }}>{fmtInt(t.unrealized_price_gl)}</span>} />
-            <MetricCard label="Unrealized Total G/L" value={<span style={{ color: glColor(t.unrealized_total_gl) }}>{fmtInt(t.unrealized_total_gl)}</span>} />
+            <MetricCard label="Unrealized G/L (Price Only)" value={<span style={{ color: glColor(t.unrealized_price_gl) }}>{fmtInt(t.unrealized_price_gl)}</span>} />
+            <MetricCard label="Unrealized G/L (Price + Divs)" value={<span style={{ color: glColor(t.unrealized_total_gl) }}>{fmtInt(t.unrealized_total_gl)}</span>} />
           </div>
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
-            <MetricCard label="Realized Price G/L" value={<span style={{ color: glColor(t.realized_price_gl) }}>{fmtInt(t.realized_price_gl)}</span>} />
-            <MetricCard label="Realized Total G/L" value={<span style={{ color: glColor(t.realized_total_gl) }}>{fmtInt(t.realized_total_gl)}</span>} />
-            <MetricCard label="Combined Price G/L" value={<span style={{ color: glColor(t.combined_price_gl) }}>{fmtInt(t.combined_price_gl)}</span>} />
-            <MetricCard label="Combined Total G/L" value={<span style={{ color: glColor(t.combined_total_gl) }}>{fmtInt(t.combined_total_gl)}</span>} />
+            <MetricCard label="Realized G/L (Price Only)" value={<span style={{ color: glColor(t.realized_price_gl) }}>{fmtInt(t.realized_price_gl)}</span>} />
+            <MetricCard label="Realized G/L (Price + Divs)" value={<span style={{ color: glColor(t.realized_total_gl) }}>{fmtInt(t.realized_total_gl)}</span>} />
+            <MetricCard label="Combined G/L (Price Only)" value={<span style={{ color: glColor(t.combined_price_gl) }}>{fmtInt(t.combined_price_gl)}</span>} />
+            <MetricCard label="Combined G/L (Price + Divs)" value={<span style={{ color: glColor(t.combined_total_gl) }}>{fmtInt(t.combined_total_gl)}</span>} />
           </div>
 
           {/* Tabs */}

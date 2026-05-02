@@ -219,6 +219,9 @@ function aggregateProjections(rows) {
     })
   }
   const totalInitial = rows.reduce((s, r) => s + r.initialInvestment, 0)
+  for (const y of yearly) {
+    y.yieldOnCost = totalInitial > 0 ? (y.annualIncome / totalInitial) * 100 : 0
+  }
   const final = yearly[yearly.length - 1]
   const initial = yearly[0]
   const endingWealth = rows.reduce((s, r) => s + r.projection.endingWealth, 0)
@@ -265,7 +268,7 @@ const DEFAULT_SETTINGS = {
   taxRatePct: 15,
   dripPct: 100,
   defaultInitialInvestment: 10000,
-  defaultPriceGrowthPct: 3,
+  defaultPriceGrowthPct: 5,
 }
 
 function newRow(overrides = {}) {
@@ -471,6 +474,11 @@ export default function DividendCalculator() {
   }, [calculation])
 
   const totals = useMemo(() => aggregateProjections(projections), [projections])
+  const chartYearRange = useMemo(() => {
+    if (!totals?.yearly?.length) return undefined
+    const yearsList = totals.yearly.map(y => y.year)
+    return [Math.min(...yearsList) - 0.25, Math.max(...yearsList) + 0.25]
+  }, [totals])
   const hasNegativePriceGrowth = rows.some(r => r.status === 'loaded' && Number(r.priceGrowthPct) < 0)
   const negativeGrowthDripNote = hasNegativePriceGrowth && clampPct(dripPct) > 0
     ? 'A negative stock price growth rate can still produce higher ending wealth when DRIP is on, because reinvested dividends buy more shares at lower prices.'
@@ -812,6 +820,136 @@ export default function DividendCalculator() {
               style={{ width: '100%' }}
               useResizeHandler
             />
+          </div>
+
+          <div className="dc-section-head">
+            <h3>Growth Projections</h3>
+          </div>
+
+          <div className="dc-chart-grid">
+            <div className="dc-chart-card dc-chart-card-compact">
+              <Plot
+                data={[{
+                  x: totals.yearly.map(y => y.year),
+                  y: totals.yearly.map(y => y.portfolioValue),
+                  name: 'Portfolio Value',
+                  type: 'scatter',
+                  mode: 'lines+markers',
+                  line: { color: '#7ecfff', width: 2 },
+                  marker: { color: '#7ecfff', size: 6 },
+                  fill: 'tozeroy',
+                  fillcolor: 'rgba(126, 207, 255, 0.14)',
+                  hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra></extra>',
+                }]}
+                layout={{
+                  template: 'plotly_dark',
+                  paper_bgcolor: '#16213e',
+                  plot_bgcolor: '#16213e',
+                  font: { color: '#e0e8f5' },
+                  margin: { l: 70, r: 28, t: 45, b: 45 },
+                  height: 280,
+                  title: { text: 'Total Portfolio Value ($)', font: { size: 15, color: '#cfe5ff' } },
+                  xaxis: { title: 'Year', gridcolor: '#1a2a3e', range: chartYearRange },
+                  yaxis: { tickprefix: '$', gridcolor: '#1a2a3e' },
+                  showlegend: false,
+                  hovermode: 'x unified',
+                }}
+                config={{ responsive: true, displayModeBar: false }}
+                style={{ width: '100%' }}
+                useResizeHandler
+              />
+            </div>
+
+            <div className="dc-chart-card dc-chart-card-compact">
+              <Plot
+                data={[{
+                  x: totals.yearly.map(y => y.year),
+                  y: totals.yearly.map(y => y.annualIncome),
+                  name: 'Annual Dividend Income',
+                  type: 'bar',
+                  marker: { color: '#4dff91' },
+                  hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra></extra>',
+                }]}
+                layout={{
+                  template: 'plotly_dark',
+                  paper_bgcolor: '#16213e',
+                  plot_bgcolor: '#16213e',
+                  font: { color: '#e0e8f5' },
+                  margin: { l: 70, r: 28, t: 45, b: 45 },
+                  height: 280,
+                  title: { text: 'Annual Dividend Income ($)', font: { size: 15, color: '#cfe5ff' } },
+                  xaxis: { title: 'Year', gridcolor: '#1a2a3e', range: chartYearRange },
+                  yaxis: { tickprefix: '$', gridcolor: '#1a2a3e' },
+                  showlegend: false,
+                  bargap: 0.35,
+                  hovermode: 'x unified',
+                }}
+                config={{ responsive: true, displayModeBar: false }}
+                style={{ width: '100%' }}
+                useResizeHandler
+              />
+            </div>
+
+            <div className="dc-chart-card dc-chart-card-compact">
+              <Plot
+                data={[{
+                  x: totals.yearly.map(y => y.year),
+                  y: totals.yearly.map(y => y.monthlyIncome),
+                  name: 'Monthly Dividend Income',
+                  type: 'bar',
+                  marker: { color: '#66d9a6' },
+                  hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra></extra>',
+                }]}
+                layout={{
+                  template: 'plotly_dark',
+                  paper_bgcolor: '#16213e',
+                  plot_bgcolor: '#16213e',
+                  font: { color: '#e0e8f5' },
+                  margin: { l: 70, r: 28, t: 45, b: 45 },
+                  height: 280,
+                  title: { text: 'Monthly Dividend Income ($)', font: { size: 15, color: '#cfe5ff' } },
+                  xaxis: { title: 'Year', gridcolor: '#1a2a3e', range: chartYearRange },
+                  yaxis: { tickprefix: '$', gridcolor: '#1a2a3e' },
+                  showlegend: false,
+                  bargap: 0.35,
+                  hovermode: 'x unified',
+                }}
+                config={{ responsive: true, displayModeBar: false }}
+                style={{ width: '100%' }}
+                useResizeHandler
+              />
+            </div>
+
+            <div className="dc-chart-card dc-chart-card-compact">
+              <Plot
+                data={[{
+                  x: totals.yearly.map(y => y.year),
+                  y: totals.yearly.map(y => y.yieldOnCost),
+                  name: 'Yield on Cost',
+                  type: 'scatter',
+                  mode: 'lines+markers',
+                  line: { color: '#f9a825', width: 2 },
+                  marker: { color: '#f9a825', size: 6 },
+                  hovertemplate: 'Year %{x}<br>%{y:.2f}%<extra></extra>',
+                }]}
+                layout={{
+                  template: 'plotly_dark',
+                  paper_bgcolor: '#16213e',
+                  plot_bgcolor: '#16213e',
+                  font: { color: '#e0e8f5' },
+                  margin: { l: 70, r: 28, t: 45, b: 45 },
+                  height: 280,
+                  title: { text: 'Yield on Cost (%)', font: { size: 15, color: '#cfe5ff' } },
+                  xaxis: { title: 'Year', gridcolor: '#1a2a3e', range: chartYearRange },
+                  yaxis: { ticksuffix: '%', gridcolor: '#1a2a3e' },
+                  showlegend: false,
+                  hovermode: 'x unified',
+                }}
+                config={{ responsive: true, displayModeBar: false }}
+                style={{ width: '100%' }}
+                useResizeHandler
+              />
+            </div>
           </div>
 
           <div className="dc-table-card">

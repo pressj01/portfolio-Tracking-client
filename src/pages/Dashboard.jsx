@@ -31,6 +31,18 @@ function writeDashboardCache(key, data) {
 }
 
 const fmt = (v, d = 2) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
+const fmtShares = (v) => Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 })
+const dripSharePrice = (h) => {
+  const currentPrice = Number(h?.current_price || 0)
+  if (currentPrice > 0) return currentPrice
+  const currentValue = Number(h?.current_value || 0)
+  const quantity = Number(h?.quantity || 0)
+  return currentValue > 0 && quantity > 0 ? currentValue / quantity : 0
+}
+const sharesFromDrip = (income, h) => {
+  const price = dripSharePrice(h)
+  return price > 0 ? Number(income || 0) / price : 0
+}
 const shortDate = (value) => {
   if (!value) return ''
   const d = new Date(`${value}T00:00:00`)
@@ -578,6 +590,8 @@ export default function Dashboard() {
     const monthlyReinvested = sum('monthly_income_reinvested')
     const monthlyNotReinvested = sum('monthly_income_not_reinvested')
     const annualIncome = sum('estim_payment_per_year')
+    const dripSharesMonthly = holdings.reduce((s, h) => s + sharesFromDrip(h.approx_monthly_income, h), 0)
+    const dripSharesYearly = holdings.reduce((s, h) => s + sharesFromDrip(h.estim_payment_per_year, h), 0)
     const rawMonthIncome = sum('current_month_income')
     const currentMonthIncome = incomeSummary?.current_month_income ?? rawMonthIncome ?? 0
 
@@ -592,7 +606,7 @@ export default function Dashboard() {
     const priceReturn = purchaseValue ? (gainLoss / purchaseValue) : 0
     const totalReturn = purchaseValue ? ((gainLoss + totalDivs) / purchaseValue) : 0
 
-    return { ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, annualIncome, currentValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, currentMonthIncome }
+    return { ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, annualIncome, dripSharesMonthly, dripSharesYearly, currentValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, currentMonthIncome }
   }, [holdings, incomeSummary])
 
   // Enrich holdings with computed fields
@@ -610,6 +624,8 @@ export default function Dashboard() {
           price_return_pct: pv ? (gl / pv) : 0,
           total_return_pct: pv ? ((gl + td) / pv) : 0,
           pct_of_account: totalCv ? (cv / totalCv) : 0,
+          drip_shares_monthly: sharesFromDrip(h.approx_monthly_income, h),
+          drip_shares_yearly: sharesFromDrip(h.estim_payment_per_year, h),
           _coverage: tickerCoverage[h.ticker] ?? null,
           _coverage_meta: tickerCoverageMeta[h.ticker] || null,
           _grade_sort: ({ 'A+': 13, 'A': 12, 'A-': 11, 'B+': 10, 'B': 9, 'B-': 8, 'C+': 7, 'C': 6, 'C-': 5, 'D+': 4, 'D': 3, 'D-': 2, 'F': 1 })[tickerGrades[h.ticker]?.grade] || 0,
@@ -886,9 +902,11 @@ export default function Dashboard() {
               <SortHeader col="ytd_divs" align="right" tip="Year-to-date dividends received">YTD</SortHeader>
               <SortHeader col="current_month_income" align="right" tip={`Dividend income received in ${currentMonth}`}>{currentMonth}</SortHeader>
               <SortHeader col="approx_monthly_income" align="right" tip="Estimated monthly dividend income">Mo$</SortHeader>
+              <SortHeader col="drip_shares_monthly" align="right" tip="Estimated shares bought per month if 100% of monthly dividend income is reinvested at the current price">MoShr</SortHeader>
               <SortHeader col="monthly_income_reinvested" align="right" tip="Monthly income being reinvested (DRIP)">DRIP$</SortHeader>
               <SortHeader col="monthly_income_not_reinvested" align="right" tip="Monthly income NOT being reinvested (cash)">Cash$</SortHeader>
               <SortHeader col="estim_payment_per_year" align="right" tip="Estimated annual dividend income">Yr$</SortHeader>
+              <SortHeader col="drip_shares_yearly" align="right" tip="Estimated shares bought per year if 100% of annual dividend income is reinvested at the current price">YrShr</SortHeader>
               <SortHeader col="paid_for_itself" align="right" tip="Percentage of original cost recovered through dividends">PFI%</SortHeader>
               <SortHeader col="_coverage" align="right" tip="Benchmark-adjusted NAV erosion ratio. Lower is better: <=0.25 low, <=0.75 medium, >0.75 high">NAV</SortHeader>
               <SortHeader col="_grade_sort" align="center" tip="Composite grade based on yield, growth, and risk metrics">Grd</SortHeader>
@@ -940,9 +958,11 @@ export default function Dashboard() {
                   <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(h.ytd_divs)}</td>
                   <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(h.current_month_income)}</td>
                   <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(h.approx_monthly_income)}</td>
+                  <td style={{ textAlign: 'right', color: '#9ad7ff' }}>{fmtShares(h.drip_shares_monthly)}</td>
                   <td style={{ textAlign: 'right', color: '#7ecfff' }}>{fmt(h.monthly_income_reinvested)}</td>
                   <td style={{ textAlign: 'right', color: '#ffb300' }}>{fmt(h.monthly_income_not_reinvested)}</td>
                   <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(h.estim_payment_per_year)}</td>
+                  <td style={{ textAlign: 'right', color: '#9ad7ff' }}>{fmtShares(h.drip_shares_yearly)}</td>
                   <td style={{ textAlign: 'right', color: pfiColor(h.paid_for_itself), fontWeight: pfiVal(h.paid_for_itself) >= 100 ? 700 : 400 }}>
                     {h.paid_for_itself == null ? '—' : (h.paid_for_itself * 100).toFixed(2) + '%'}
                   </td>
@@ -1023,9 +1043,11 @@ export default function Dashboard() {
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.ytdDivs)}</td>
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.currentMonthIncome)}</td>
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.monthlyIncome)}</td>
+              <td style={{ textAlign: 'right', color: '#9ad7ff' }}>{fmtShares(totals.dripSharesMonthly)}</td>
               <td style={{ textAlign: 'right', color: '#7ecfff' }}>{fmt(totals.monthlyReinvested)}</td>
               <td style={{ textAlign: 'right', color: '#ffb300' }}>{fmt(totals.monthlyNotReinvested)}</td>
               <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.annualIncome)}</td>
+              <td style={{ textAlign: 'right', color: '#9ad7ff' }}>{fmtShares(totals.dripSharesYearly)}</td>
               <td colSpan={3} />
             </tr>
           </tfoot>

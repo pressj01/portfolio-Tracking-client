@@ -876,6 +876,36 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS etf_providers (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider     TEXT NOT NULL UNIQUE,
+            total_assets REAL,
+            num_funds    INTEGER,
+            avg_expense  REAL
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS etf_provider_funds (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider_id INTEGER NOT NULL,
+            symbol      TEXT NOT NULL,
+            fund_name   TEXT,
+            assets      REAL,
+            div_yield   REAL,
+            exp_ratio   REAL,
+            change_1y   REAL,
+            annual_div  REAL,
+            ex_div_date TEXT,
+            frequency   TEXT,
+            payout_ratio REAL,
+            div_growth  REAL,
+            FOREIGN KEY (provider_id) REFERENCES etf_providers(id) ON DELETE CASCADE,
+            UNIQUE (provider_id, symbol)
+        )
+    """)
+
     conn.commit()
     if close:
         conn.close()

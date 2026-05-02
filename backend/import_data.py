@@ -687,22 +687,29 @@ def _split_category_names(value):
 
 
 def _parse_reinvest_flag(value):
-    """Normalize common DRIP/reinvestment import values to 'Y' or 'N'."""
+    """Normalize common DRIP/reinvestment import values to 'Y', 'N', or None.
+
+    Returns None when the value is absent/blank so that merge imports do not
+    overwrite an existing DRIP flag with a default.  Explicit 'Y'/'N' values
+    in the import file are always honoured.
+    """
     if value is None:
-        return "N"
+        return None
     if isinstance(value, bool):
         return "Y" if value else "N"
-    if isinstance(value, (int, float)) and not pd.isna(value):
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    if isinstance(value, (int, float)):
         return "Y" if float(value) != 0 else "N"
 
     text = str(value).strip().casefold()
     if text in ("", "nan", "none", "null", "n/a", "-"):
-        return "N"
+        return None
     if text in ("y", "yes", "true", "t", "1", "on", "checked", "x", "drip", "reinvest", "reinvested"):
         return "Y"
     if text in ("n", "no", "false", "f", "0", "off", "unchecked", "cash", "not reinvested"):
         return "N"
-    return "N"
+    return None
 
 
 def _apply_category_assignments(cur, profile_id, category_assignments):

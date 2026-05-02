@@ -11,15 +11,49 @@ const CHART_COLORS = [
 ]
 
 function fmt$(v) {
-  return '$' + parseFloat(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const n = Number(v)
+  if (!Number.isFinite(n)) return '$0.00'
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 function fmtPct(v) {
-  return (v >= 0 ? '+' : '') + parseFloat(v).toFixed(2) + '%'
+  const n = Number(v)
+  if (!Number.isFinite(n)) return '+0.00%'
+  return (n >= 0 ? '+' : '') + n.toFixed(2) + '%'
 }
 
-function StatTile({ label, value, color, sub }) {
+function fmtCompactNumber(v, { prefix = '', suffix = '', signed = false } = {}) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return prefix + '0.00' + suffix
+  const sign = signed && n >= 0 ? '+' : ''
+  const abs = Math.abs(n)
+  if (abs < 1e9) {
+    return sign + prefix + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + suffix
+  }
+  const units = [
+    { value: 1e12, label: 'T' },
+    { value: 1e9, label: 'B' },
+  ]
+  const unit = units.find(u => abs >= u.value && abs < 1e15)
+  if (unit) {
+    return sign + prefix + (n / unit.value).toLocaleString('en-US', { maximumFractionDigits: 2 }) + unit.label + suffix
+  }
+  return sign + prefix + n.toExponential(2) + suffix
+}
+
+const fmtCompact$ = (v) => fmtCompactNumber(v, { prefix: '$' })
+const fmtCompactPct = (v, signed = false) => fmtCompactNumber(v, { suffix: '%', signed })
+
+function MoneyValue({ value }) {
+  return <span className="pis-num" title={fmt$(value)}>{fmtCompact$(value)}</span>
+}
+
+function PctValue({ value, signed = false }) {
+  return <span className="pis-num" title={signed ? fmtPct(value) : `${Number(value || 0).toFixed(2)}%`}>{fmtCompactPct(value, signed)}</span>
+}
+
+function StatTile({ label, value, color, sub, title }) {
   return (
-    <div className="nep-stat-tile">
+    <div className="nep-stat-tile" title={title}>
       <div className="nep-stat-val" style={{ color }}>{value}</div>
       <div className="nep-stat-lbl">{label}</div>
       {sub && <div className="nep-stat-sub">{sub}</div>}
@@ -1492,8 +1526,8 @@ export default function PortfolioIncomeSim() {
     'Hist \u03BC%': 'Historical mean monthly return (annualized) — average expected return',
     'Hist \u03C3%': 'Historical standard deviation of monthly returns — measures volatility',
     'Skew': 'Skewness of historical returns — negative means more downside tail risk',
-    'Total Dist': 'Total dollar amount of dividends received over the period',
-    'Cum Yield': 'Cumulative yield — total distributions as a percentage of the amount invested',
+    'Total Dist': 'Total dollar amount of dividends generated over the period',
+    'Cum Dist %': 'Cumulative distribution yield — total distributions generated over the period as a percentage of the initial amount invested',
     'Reinvested': 'Dollar amount of dividends that were reinvested to buy more shares',
     'Final Value': 'Total portfolio value of this position at the end of the period',
     'Gain/Loss $': 'Dollar profit or loss (Final Value minus Amount invested)',
@@ -1505,7 +1539,7 @@ export default function PortfolioIncomeSim() {
   const headers = ['Ticker', 'Amount', 'Reinvest %', 'Start Price', 'End Price',
     'Price \u0394%', 'TTM Yield',
     ...(isSim ? ['Hist \u03BC%', 'Hist \u03C3%', 'Skew'] : []),
-    'Total Dist', 'Cum Yield', 'Reinvested',
+    'Total Dist', 'Cum Dist %', 'Reinvested',
     'Final Value', 'Gain/Loss $', 'Gain/Loss %', 'NAV Erosion', 'Deficit', 'Note']
 
   // Get reinvest pct label for compare mode header
@@ -1515,7 +1549,7 @@ export default function PortfolioIncomeSim() {
     return rRow ? rRow.reinvest_pct : 0
   }, [results, hasCompareGroupsRaw])
 
-  const compareSubHeaders = ['Total Dist', 'Cum Yield', 'Reinvested', 'Final Value', 'G/L $', 'G/L %']
+  const compareSubHeaders = ['Total Dist', 'Cum Dist %', 'Reinvested', 'Final Value', 'G/L $', 'G/L %']
 
   return (
     <div className="nep-page">
@@ -1912,21 +1946,26 @@ export default function PortfolioIncomeSim() {
           {/* Summary */}
           {summary && (
             <div className="nep-summary">
-              <StatTile label="Total Invested" value={fmt$(summary.totAmount)} color="#7ecfff" />
-              <StatTile label="Total Final Value" value={fmt$(summary.totFinal)} color="#7ecfff" />
-              <StatTile label="Total Gain / Loss" value={fmt$(summary.totGL)} color={summary.totGL >= 0 ? '#00c853' : '#e05555'} />
-              <StatTile label="Portfolio Return" value={fmtPct(summary.totGLPct)} color={summary.totGLPct >= 0 ? '#00c853' : '#e05555'} />
-              <StatTile label="Total Distributions" value={fmt$(summary.totDist)} color="#00e89a" />
-              <StatTile label="Cum Yield on Cost" value={summary.totEffYld.toFixed(2) + '%'} color="#00e89a" />
-              <StatTile label="Total Reinvested" value={fmt$(summary.totReinv)} color="#7ecfff" />
+              <StatTile label="Total Invested" value={fmtCompact$(summary.totAmount)} title={fmt$(summary.totAmount)} color="#7ecfff" />
+              <StatTile label="Total Final Value" value={fmtCompact$(summary.totFinal)} title={fmt$(summary.totFinal)} color="#7ecfff" />
+              <StatTile label="Total Gain / Loss" value={fmtCompact$(summary.totGL)} title={fmt$(summary.totGL)} color={summary.totGL >= 0 ? '#00c853' : '#e05555'} />
+              <StatTile label="Portfolio Return" value={fmtCompactPct(summary.totGLPct, true)} title={fmtPct(summary.totGLPct)} color={summary.totGLPct >= 0 ? '#00c853' : '#e05555'} />
+              <StatTile label="Total Distributions" value={fmtCompact$(summary.totDist)} title={fmt$(summary.totDist)} color="#00e89a" />
+              <StatTile label="Cum Dist Yield" value={fmtCompactPct(summary.totEffYld)} title={`${summary.totEffYld.toFixed(2)}%`} color="#00e89a" />
+              <StatTile label="Total Reinvested" value={fmtCompact$(summary.totReinv)} title={fmt$(summary.totReinv)} color="#7ecfff" />
               <StatTile label="NAV Erosion" value={summary.erosionCount + ' of ' + summary.erosionValid}
                 color={summary.erosionCount > 0 ? '#e05555' : '#00c853'} sub="funds showing erosion" />
-              {summary.best && <StatTile label="Best Performer"
+              {summary.validCount === 1 && summary.best && <StatTile label="Only Performer"
+                value={<span style={{ color: summary.best.gain_loss_pct >= 0 ? '#00c853' : '#e05555', fontWeight: 700 }}>{summary.best.ticker}</span>}
+                color={summary.best.gain_loss_pct >= 0 ? '#00c853' : '#e05555'}
+                sub={fmtCompactPct(summary.best.gain_loss_pct, true)}
+                title={fmtPct(summary.best.gain_loss_pct)} />}
+              {summary.validCount > 1 && summary.best && <StatTile label="Best Performer"
                 value={<span style={{ color: '#00c853', fontWeight: 700 }}>{summary.best.ticker}</span>}
-                color="#00c853" sub={fmtPct(summary.best.gain_loss_pct)} />}
-              {summary.worst && <StatTile label="Worst Performer"
+                color="#00c853" sub={fmtCompactPct(summary.best.gain_loss_pct, true)} title={fmtPct(summary.best.gain_loss_pct)} />}
+              {summary.validCount > 1 && summary.worst && <StatTile label="Worst Performer"
                 value={<span style={{ color: '#e05555', fontWeight: 700 }}>{summary.worst.ticker}</span>}
-                color="#e05555" sub={fmtPct(summary.worst.gain_loss_pct)} />}
+                color="#e05555" sub={fmtCompactPct(summary.worst.gain_loss_pct, true)} title={fmtPct(summary.worst.gain_loss_pct)} />}
               {mode === 'simulate' && (
                 <StatTile label="Market Bias"
                   value={marketType.charAt(0).toUpperCase() + marketType.slice(1)}
@@ -1971,7 +2010,7 @@ export default function PortfolioIncomeSim() {
                       return (
                         <tr key={idx} style={r.is_comparison ? { background: '#0d0d22' } : {}}>
                           <td><strong>{r.ticker}{r.is_comparison ? ' [C]' : ''}</strong></td>
-                          <td>{fmt$(r.amount || 0)}</td>
+                          <td><MoneyValue value={r.amount || 0} /></td>
                           <td colSpan={19} style={{ textAlign: 'left', color: '#e05555' }}>{r.error}</td>
                         </tr>
                       )
@@ -1984,18 +2023,18 @@ export default function PortfolioIncomeSim() {
                     return (
                       <tr key={idx} style={r.is_comparison ? { background: '#0d0d22' } : {}}>
                         <td><strong>{r.ticker}{r.is_comparison ? ' [C]' : ''}</strong></td>
-                        <td>{fmt$(r.amount)}</td>
-                        <td>{fmt$(r.start_price)}</td>
-                        <td>{fmt$(r.end_price)}</td>
-                        <td className={pCls}>{fmtPct(r.price_delta_pct)}</td>
+                        <td><MoneyValue value={r.amount} /></td>
+                        <td><MoneyValue value={r.start_price} /></td>
+                        <td><MoneyValue value={r.end_price} /></td>
+                        <td className={pCls}><PctValue value={r.price_delta_pct} signed /></td>
                         <td>{r.ttm_yield_pct != null ? r.ttm_yield_pct.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>
                         {/* Single row spans both groups */}
-                        <td>{fmt$(r.total_dist)}</td>
-                        <td className={effCls}>{(r.effective_yield_pct || 0).toFixed(2)}%</td>
-                        <td>{fmt$(r.total_reinvested)}</td>
-                        <td>{fmt$(r.final_value)}</td>
-                        <td className={glCls}>{fmt$(r.gain_loss_dollar)}</td>
-                        <td className={glPCls}>{fmtPct(r.gain_loss_pct)}</td>
+                        <td><MoneyValue value={r.total_dist} /></td>
+                        <td className={effCls}><PctValue value={r.effective_yield_pct || 0} /></td>
+                        <td><MoneyValue value={r.total_reinvested} /></td>
+                        <td><MoneyValue value={r.final_value} /></td>
+                        <td className={glCls}><MoneyValue value={r.gain_loss_dollar} /></td>
+                        <td className={glPCls}><PctValue value={r.gain_loss_pct} signed /></td>
                         <td colSpan={6} style={{ textAlign: 'center', color: '#555' }}>&mdash;</td>
                         <td>{r.has_erosion
                           ? <span style={{ color: '#e05555', fontWeight: 700 }}>Yes</span>
@@ -2025,25 +2064,25 @@ export default function PortfolioIncomeSim() {
                   return (
                     <tr key={idx} style={shared.is_comparison ? { background: '#0d0d22' } : {}}>
                       <td><strong>{item.ticker}{item.is_comparison ? ' [C]' : ''}</strong></td>
-                      <td>{fmt$(shared.amount)}</td>
-                      <td>{fmt$(shared.start_price)}</td>
-                      <td>{fmt$(shared.end_price)}</td>
-                      <td className={pCls}>{fmtPct(shared.price_delta_pct)}</td>
+                      <td><MoneyValue value={shared.amount} /></td>
+                      <td><MoneyValue value={shared.start_price} /></td>
+                      <td><MoneyValue value={shared.end_price} /></td>
+                      <td className={pCls}><PctValue value={shared.price_delta_pct} signed /></td>
                       <td>{shared.ttm_yield_pct != null ? shared.ttm_yield_pct.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>
                       {/* 0% Reinvest columns */}
-                      <td>{b.total_dist != null ? fmt$(b.total_dist) : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td className={bEffCls}>{b.effective_yield_pct != null ? b.effective_yield_pct.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td>{b.total_reinvested != null ? fmt$(b.total_reinvested) : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td>{b.final_value != null ? fmt$(b.final_value) : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td className={bGlCls}>{b.gain_loss_dollar != null ? fmt$(b.gain_loss_dollar) : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td className={bGlPCls}>{b.gain_loss_pct != null ? fmtPct(b.gain_loss_pct) : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td>{b.total_dist != null ? <MoneyValue value={b.total_dist} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td className={bEffCls}>{b.effective_yield_pct != null ? <PctValue value={b.effective_yield_pct} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td>{b.total_reinvested != null ? <MoneyValue value={b.total_reinvested} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td>{b.final_value != null ? <MoneyValue value={b.final_value} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td className={bGlCls}>{b.gain_loss_dollar != null ? <MoneyValue value={b.gain_loss_dollar} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td className={bGlPCls}>{b.gain_loss_pct != null ? <PctValue value={b.gain_loss_pct} signed /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
                       {/* X% Reinvest columns */}
-                      <td>{r.total_dist != null ? fmt$(r.total_dist) : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td className={rEffCls}>{r.effective_yield_pct != null ? r.effective_yield_pct.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td>{r.total_reinvested != null ? fmt$(r.total_reinvested) : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td>{r.final_value != null ? fmt$(r.final_value) : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td className={rGlCls}>{r.gain_loss_dollar != null ? fmt$(r.gain_loss_dollar) : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td className={rGlPCls}>{r.gain_loss_pct != null ? fmtPct(r.gain_loss_pct) : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td>{r.total_dist != null ? <MoneyValue value={r.total_dist} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td className={rEffCls}>{r.effective_yield_pct != null ? <PctValue value={r.effective_yield_pct} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td>{r.total_reinvested != null ? <MoneyValue value={r.total_reinvested} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td>{r.final_value != null ? <MoneyValue value={r.final_value} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td className={rGlCls}>{r.gain_loss_dollar != null ? <MoneyValue value={r.gain_loss_dollar} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td className={rGlPCls}>{r.gain_loss_pct != null ? <PctValue value={r.gain_loss_pct} signed /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
                       {/* NAV Erosion from baseline */}
                       <td>{b.has_erosion
                         ? <span style={{ color: '#e05555', fontWeight: 700 }}>Yes</span>
@@ -2062,14 +2101,14 @@ export default function PortfolioIncomeSim() {
                 <tfoot>
                   <tr>
                     <td><strong>TOTAL</strong></td>
-                    <td>{fmt$(summary.totAmount)}</td>
+                    <td><MoneyValue value={summary.totAmount} /></td>
                     <td></td><td></td><td></td><td></td>
-                    <td>{fmt$(summary.totDist)}</td>
-                    <td>{summary.totEffYld.toFixed(2)}%</td>
-                    <td>{fmt$(summary.totReinv)}</td>
-                    <td>{fmt$(summary.totFinal)}</td>
-                    <td className={summary.totGL >= 0 ? 'pct-up' : 'pct-down'}>{fmt$(summary.totGL)}</td>
-                    <td className={summary.totGLPct >= 0 ? 'pct-up' : 'pct-down'}>{fmtPct(summary.totGLPct)}</td>
+                    <td><MoneyValue value={summary.totDist} /></td>
+                    <td><PctValue value={summary.totEffYld} /></td>
+                    <td><MoneyValue value={summary.totReinv} /></td>
+                    <td><MoneyValue value={summary.totFinal} /></td>
+                    <td className={summary.totGL >= 0 ? 'pct-up' : 'pct-down'}><MoneyValue value={summary.totGL} /></td>
+                    <td className={summary.totGLPct >= 0 ? 'pct-up' : 'pct-down'}><PctValue value={summary.totGLPct} signed /></td>
                     <td colSpan={6}></td>
                     <td></td><td></td><td></td>
                   </tr>
@@ -2092,7 +2131,7 @@ export default function PortfolioIncomeSim() {
                     return (
                       <tr key={idx} style={r.is_comparison ? { background: '#0d0d22' } : {}}>
                         <td><strong>{r.ticker}{r.is_comparison ? ' [C]' : ''}</strong></td>
-                        <td>{fmt$(r.amount || 0)}</td>
+                        <td><MoneyValue value={r.amount || 0} /></td>
                         <td>{(r.reinvest_pct || 0)}%</td>
                         <td colSpan={isSim ? 15 : 12} style={{ textAlign: 'left', color: '#e05555' }}>{r.error}</td>
                         <td></td>
@@ -2111,21 +2150,21 @@ export default function PortfolioIncomeSim() {
                         {r.compare_group === 'baseline' && <span style={{ marginLeft: 6, fontSize: '0.72rem', color: '#e05555', fontWeight: 600 }}>0%</span>}
                         {r.compare_group === 'reinvested' && <span style={{ marginLeft: 6, fontSize: '0.72rem', color: '#00c853', fontWeight: 600 }}>{r.reinvest_pct}%</span>}
                       </td>
-                      <td>{fmt$(r.amount)}</td>
+                      <td><MoneyValue value={r.amount} /></td>
                       <td>{r.reinvest_pct}%</td>
-                      <td>{fmt$(r.start_price)}</td>
-                      <td>{fmt$(r.end_price)}</td>
-                      <td className={pCls}>{fmtPct(r.price_delta_pct)}</td>
+                      <td><MoneyValue value={r.start_price} /></td>
+                      <td><MoneyValue value={r.end_price} /></td>
+                      <td className={pCls}><PctValue value={r.price_delta_pct} signed /></td>
                       <td>{r.ttm_yield_pct != null ? r.ttm_yield_pct.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>
                       {isSim && <td style={{ color: (r.sim_stats?.hist_mean_monthly || 0) >= 0 ? '#4dff91' : '#ff6b6b' }}>{r.sim_stats?.hist_mean_monthly != null ? r.sim_stats.hist_mean_monthly.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>}
                       {isSim && <td>{r.sim_stats?.hist_sigma_monthly != null ? r.sim_stats.hist_sigma_monthly.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>}
                       {isSim && <td style={{ color: (r.sim_stats?.hist_skewness || 0) < -0.3 ? '#f9a825' : '#aaa' }}>{r.sim_stats?.hist_skewness != null ? r.sim_stats.hist_skewness.toFixed(2) : <span style={{ color: '#555' }}>&mdash;</span>}</td>}
-                      <td>{fmt$(r.total_dist)}</td>
-                      <td className={effCls}>{r.effective_yield_pct.toFixed(2)}%</td>
-                      <td>{fmt$(r.total_reinvested)}</td>
-                      <td>{fmt$(r.final_value)}</td>
-                      <td className={glCls}>{fmt$(r.gain_loss_dollar)}</td>
-                      <td className={glPCls}>{fmtPct(r.gain_loss_pct)}</td>
+                      <td><MoneyValue value={r.total_dist} /></td>
+                      <td className={effCls}><PctValue value={r.effective_yield_pct} /></td>
+                      <td><MoneyValue value={r.total_reinvested} /></td>
+                      <td><MoneyValue value={r.final_value} /></td>
+                      <td className={glCls}><MoneyValue value={r.gain_loss_dollar} /></td>
+                      <td className={glPCls}><PctValue value={r.gain_loss_pct} signed /></td>
                       <td>{r.has_erosion
                         ? <span style={{ color: '#e05555', fontWeight: 700 }}>Yes</span>
                         : <span style={{ color: '#00c853', fontWeight: 700 }}>No</span>}</td>
@@ -2143,15 +2182,15 @@ export default function PortfolioIncomeSim() {
                 <tfoot>
                   <tr>
                     <td><strong>TOTAL</strong></td>
-                    <td>{fmt$(summary.totAmount)}</td>
+                    <td><MoneyValue value={summary.totAmount} /></td>
                     <td></td><td></td><td></td><td></td><td></td>
                     {isSim && <><td></td><td></td><td></td></>}
-                    <td>{fmt$(summary.totDist)}</td>
-                    <td>{summary.totEffYld.toFixed(2)}%</td>
-                    <td>{fmt$(summary.totReinv)}</td>
-                    <td>{fmt$(summary.totFinal)}</td>
-                    <td className={summary.totGL >= 0 ? 'pct-up' : 'pct-down'}>{fmt$(summary.totGL)}</td>
-                    <td className={summary.totGLPct >= 0 ? 'pct-up' : 'pct-down'}>{fmtPct(summary.totGLPct)}</td>
+                    <td><MoneyValue value={summary.totDist} /></td>
+                    <td><PctValue value={summary.totEffYld} /></td>
+                    <td><MoneyValue value={summary.totReinv} /></td>
+                    <td><MoneyValue value={summary.totFinal} /></td>
+                    <td className={summary.totGL >= 0 ? 'pct-up' : 'pct-down'}><MoneyValue value={summary.totGL} /></td>
+                    <td className={summary.totGLPct >= 0 ? 'pct-up' : 'pct-down'}><PctValue value={summary.totGLPct} signed /></td>
                     <td></td><td></td><td></td>
                   </tr>
                 </tfoot>

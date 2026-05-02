@@ -35,6 +35,16 @@ function SafetyScore({ score }) {
   return <span className={`safety-score safety-${level}`}>{Math.round(Number(score))}</span>
 }
 
+function SafetyModelLabel({ model }) {
+  const labels = {
+    stock: 'Stock',
+    fund: 'Fund',
+    option_income: 'Option Income',
+    bdc: 'BDC',
+  }
+  return labels[model] || 'Other'
+}
+
 const METRIC_OPTIONS = [
   { value: 'yield_pct', label: 'Yield (%)' },
   { value: 'annual_payout', label: 'Annual payout ($)' },
@@ -357,6 +367,9 @@ export default function DividendAnalysis() {
     return sortAsc ? ' \u25B2' : ' \u25BC'
   }
 
+  const dividendSafety = data?.totals?.dividend_safety
+  const atRiskCount = dividendSafety?.at_risk_holdings?.length ?? 0
+
   const columns = [
     { key: 'ticker', label: 'Ticker', width: '5%' },
     { key: 'description', label: 'Description', width: '20%' },
@@ -444,10 +457,53 @@ export default function DividendAnalysis() {
             <MetricCard label="Est. Monthly Income" value={fmt(data.totals?.approx_monthly_income)} />
             <MetricCard label={`Actual Income (${data.totals?.current_month_label || 'This Month'})`} value={fmt(data.totals?.actual_monthly_income)} />
             <MetricCard label="Est. Annual Income" value={fmt(data.totals?.estim_payment_per_year)} />
-            <MetricCard label="Avg. Safety Score" value={data.totals?.dividend_safety?.average_score ?? '\u2014'} />
-            <MetricCard label="High Risk Holdings" value={data.totals?.dividend_safety?.high_risk_count ?? 0} />
-            <MetricCard label="Income At Risk" value={fmt(data.totals?.dividend_safety?.portfolio_income_at_risk)} />
+            <MetricCard label="Avg. Safety Score" value={dividendSafety?.average_score ?? '\u2014'} />
+            <MetricCard label="Holdings At Risk" value={atRiskCount} />
+            <MetricCard label="Income At Risk" value={fmt(dividendSafety?.portfolio_income_at_risk)} />
           </div>
+
+          {/* At-Risk Holdings detail */}
+          {atRiskCount > 0 && (
+            <details className="card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem', borderLeft: '3px solid #ff6b6b' }}>
+              <summary style={{ cursor: 'pointer', color: '#ff6b6b', fontWeight: 600, fontSize: '0.95rem' }}>
+                {atRiskCount} Holding{atRiskCount !== 1 ? 's' : ''} at Risk — {fmt(dividendSafety.portfolio_income_at_risk)} Annual Income at Risk
+              </summary>
+              <div style={{ marginTop: '0.75rem', overflowX: 'auto' }}>
+                <table style={{ fontSize: '0.85rem', width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #0f3460' }}>
+                      <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Ticker</th>
+                      <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Type</th>
+                      <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Risk Level</th>
+                      <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Safety Score</th>
+                      <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Est. Annual Income</th>
+                      <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Reason(s)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dividendSafety.at_risk_holdings.map(h => (
+                      <tr key={h.ticker} style={{ borderBottom: '1px solid #0a1628' }}>
+                        <td style={{ padding: '0.4rem 0.5rem', color: '#7ecfff', fontWeight: 600 }}>{h.ticker}</td>
+                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center', color: '#e0e8f5' }}>
+                          <SafetyModelLabel model={h.score_model} />
+                        </td>
+                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center' }}>
+                          <SafetyBadge level={h.risk_level} />
+                        </td>
+                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center' }}>
+                          <SafetyScore score={h.safety_score} />
+                        </td>
+                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: '#ffb300' }}>{fmt(h.est_annual_income)}</td>
+                        <td style={{ padding: '0.4rem 0.5rem', color: '#e0e8f5', fontSize: '0.8rem' }}>
+                          {h.risk_reasons?.length ? h.risk_reasons.join('; ') : 'No specific reason available'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
 
           {/* Yield/Payout interactive chart */}
           <div className="da-chart-grid">

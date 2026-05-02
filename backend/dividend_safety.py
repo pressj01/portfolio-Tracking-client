@@ -5,7 +5,7 @@ import time
 
 
 SAFETY_CACHE_TTL_HOURS = 24
-SAFETY_MODEL_VERSION = 22
+SAFETY_MODEL_VERSION = 24
 _NAV_BENCHMARK_OVERRIDE_CACHE = {"ts": 0, "data": {}}
 
 
@@ -368,12 +368,19 @@ def _is_fund(info, holding):
     qtype = str(info.get("quoteType") or holding.get("classification_type") or "").upper()
     category = str(info.get("category") or "").lower()
     name = str(info.get("longName") or info.get("shortName") or holding.get("description") or "").lower()
+    ticker = str(holding.get("ticker") or "").upper()
+    known_closed_end_funds = {
+        "FSCO",
+    }
     return (
-        qtype in {"ETF", "MUTUALFUND", "INDEX"}
+        ticker in known_closed_end_funds
+        or qtype in {"ETF", "MUTUALFUND", "INDEX"}
         or "fund" in category
         or "fund" in name
         or "etf" in name
         or "trust" in name
+        or "closed-end" in name
+        or "credit opportunities" in name
     )
 
 
@@ -535,7 +542,7 @@ def _risk_reasons(metrics, model):
         if nav_coverage is not None and (nav_coverage <= 0.25 or nav_erosion == "Low"):
             reasons.append("Low benchmark-adjusted NAV erosion")
         elif nav_coverage is not None and (nav_coverage > 0.75 or nav_erosion == "High"):
-            reasons.append("NAV drift versus benchmark")
+            reasons.append("Option-income NAV erosion versus benchmark")
         if streak is not None and streak < 1:
             reasons.append("Limited distribution history")
         return reasons[:4]
@@ -755,7 +762,7 @@ def apply_nav_coverage_overlay(payload, coverage_ratio=None, nav_erosion=None):
             if model == "bdc":
                 out["risk_reasons"] = ["BDC NAV drift versus benchmark; verify NII dividend coverage"] + reasons[:2]
             else:
-                out["risk_reasons"] = ["NAV drift versus benchmark, not a confirmed cut risk"] + reasons[:2]
+                out["risk_reasons"] = ["Option-income NAV erosion versus benchmark, not a confirmed cut risk"] + reasons[:2]
         else:
             out["safety_score"] = min(_clean_number(out.get("safety_score")) or 100, 44)
             out["risk_level"] = "High"
@@ -771,7 +778,7 @@ def apply_nav_coverage_overlay(payload, coverage_ratio=None, nav_erosion=None):
             out["safety_score"] = max(_clean_number(out.get("safety_score")) or 0, 68)
             out["risk_level"] = "Moderate"
             out["cut_risk_flag"] = False
-            out["risk_reasons"] = ["Moderate NAV drift versus benchmark"] + reasons[:2]
+            out["risk_reasons"] = ["Moderate option-income NAV erosion versus benchmark"] + reasons[:2]
     return out
 
 
@@ -784,13 +791,23 @@ def summarize_dividend_safety(rows):
     high = [r for r in rows or [] if _row_risk(r) == "High"]
     elevated = [r for r in rows or [] if _row_risk(r) == "Elevated"]
     income_at_risk = 0.0
+    at_risk_holdings = []
     for row in high + elevated:
         income = _clean_number(row.get("estim_payment_per_year"))
         if income is not None:
             income_at_risk += income
+        at_risk_holdings.append({
+            "ticker": row.get("ticker"),
+            "risk_level": _row_risk(row),
+            "score_model": row.get("safety_score_model") or row.get("score_model"),
+            "safety_score": _clean_number(row.get("safety_score")),
+            "est_annual_income": round(income, 2) if income is not None else 0,
+            "risk_reasons": row.get("risk_reasons") or [],
+        })
     return {
         "average_score": round(sum(scores) / len(scores), 1) if scores else None,
         "high_risk_count": len(high),
         "elevated_risk_count": len(elevated),
         "portfolio_income_at_risk": round(income_at_risk, 2),
+        "at_risk_holdings": at_risk_holdings,
     }

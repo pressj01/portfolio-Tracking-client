@@ -1423,6 +1423,15 @@ export default function ManageHoldings() {
     return sortDir === 'asc' ? ' \u25B2' : ' \u25BC'
   }
 
+  const incTotals = React.useMemo(() => {
+    const sum = (key) => filteredHoldings.reduce((s, h) => s + (Number(h[key]) || 0), 0)
+    return {
+      monthlyIncome: sum('approx_monthly_income'),
+      reinvested: sum('monthly_income_reinvested'),
+      notReinvested: sum('monthly_income_not_reinvested'),
+    }
+  }, [filteredHoldings])
+
   const activeRepairModeLabel = DIV_REPAIR_MODES.find(opt => opt.value === (repairPreview?.mode || repairMode))?.label || DIV_REPAIR_MODES[0].label
   const previewTotals = repairPreview?.source_totals || {}
   const previewImportedTotal = repairPreview?.broker_updated ?? IMPORTED_DIV_SOURCES.reduce((sum, key) => sum + (previewTotals[key] || 0), 0)
@@ -1580,6 +1589,23 @@ export default function ManageHoldings() {
       {message && <div className="alert alert-success">{message}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
+      {!loading && holdings.length > 0 && (
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+          <div className="card" style={{ flex: '1 1 140px', minWidth: 140, padding: '0.65rem 1rem' }}>
+            <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Est. Monthly Income</div>
+            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#4dff91' }}>${fmt(incTotals.monthlyIncome)}</div>
+          </div>
+          <div className="card" style={{ flex: '1 1 140px', minWidth: 140, padding: '0.65rem 1rem' }}>
+            <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mo$ Reinvested</div>
+            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#7ecfff' }}>${fmt(incTotals.reinvested)}</div>
+          </div>
+          <div className="card" style={{ flex: '1 1 140px', minWidth: 140, padding: '0.65rem 1rem' }}>
+            <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mo$ Not Reinvested</div>
+            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#ffb300' }}>${fmt(incTotals.notReinvested)}</div>
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
       ) : holdings.length === 0 ? (
@@ -1663,14 +1689,29 @@ export default function ManageHoldings() {
                       checked={h.reinvest === 'Y'}
                       onChange={async () => {
                         const newVal = h.reinvest === 'Y' ? 'N' : 'Y'
+                        setHoldings(prev => prev.map(row => {
+                          if (row.ticker !== h.ticker) return row
+                          const mi = Number(row.approx_monthly_income) || 0
+                          return {
+                            ...row,
+                            reinvest: newVal,
+                            monthly_income_reinvested: newVal === 'Y' ? mi : 0,
+                            monthly_income_not_reinvested: newVal === 'Y' ? 0 : mi,
+                          }
+                        }))
                         try {
                           await pf(`/api/holdings/${h.ticker}`, {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ reinvest: newVal }),
                           })
-                          fetchHoldings()
-                        } catch (e) { setError(e.message) }
+                          invalidateDashboardCache()
+                        } catch (e) {
+                          setHoldings(prev => prev.map(row =>
+                            row.ticker === h.ticker ? { ...row, reinvest: h.reinvest, monthly_income_reinvested: h.monthly_income_reinvested, monthly_income_not_reinvested: h.monthly_income_not_reinvested } : row
+                          ))
+                          setError(e.message)
+                        }
                       }}
                       style={{ cursor: 'pointer', width: '16px', height: '16px' }}
                     />

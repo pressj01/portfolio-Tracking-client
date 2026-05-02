@@ -1953,6 +1953,95 @@ const TRACE_STYLES = {
 function pct(v) { return v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '—' }
 function pctColor(v) { return v >= 0 ? '#4caf50' : '#ef5350' }
 
+const ANALYSIS_COLUMNS = [
+  { key: 'symbol', label: 'Symbol', locked: true },
+  { key: 'name', label: 'Fund Name', locked: true },
+  { key: 'price', label: 'Stock Price' },
+  { key: 'change_pct', label: 'Price Change 1D (%)' },
+  { key: 'assets', label: 'Assets Under Management' },
+  { key: 'expense_ratio', label: 'Expense Ratio' },
+  { key: 'pe_ratio', label: 'PE Ratio' },
+  { key: 'dividend_yield', label: 'Dividend Yield' },
+  { key: 'volume', label: 'Volume' },
+  { key: 'dollar_volume', label: 'Dollar Volume' },
+  { key: 'open', label: 'Open Price' },
+  { key: 'previous_close', label: 'Previous Close' },
+  { key: 'low_price', label: 'Low Price' },
+  { key: 'high_price', label: 'High Price' },
+  { key: 'fifty_two_week_low', label: '52 Week Low' },
+  { key: 'fifty_two_week_high', label: '52 Week High' },
+  { key: 'beta', label: 'Beta' },
+  { key: 'category', label: 'Category' },
+  { key: 'issuer', label: 'Issuer' },
+  { key: 'inception_date', label: 'Inception Date' },
+  { key: 'return_1y', label: 'Return CAGR 1Y' },
+  { key: 'return_annualized', label: 'Annualized Return' },
+  { key: 'max_drawdown', label: 'Max Drawdown' },
+]
+
+const DEFAULT_ANALYSIS_COLUMNS = [
+  'symbol', 'name', 'price', 'change_pct', 'assets', 'expense_ratio',
+  'pe_ratio', 'dividend_yield', 'volume', 'dollar_volume', 'open', 'return_1y',
+]
+
+function compactNumber(value) {
+  if (value == null || value === '') return '—'
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '—'
+  return Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 2 }).format(n)
+}
+
+function money(value) {
+  if (value == null || value === '') return '—'
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '—'
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function ratioPct(value) {
+  if (value == null || value === '') return '—'
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '—'
+  const pctValue = Math.abs(n) <= 1 ? n * 100 : n
+  return `${pctValue.toFixed(2)}%`
+}
+
+function dateKey(value) {
+  return String(value || '').slice(0, 10)
+}
+
+function normalizeReturnRange(range) {
+  if (!range?.[0] || !range?.[1]) return null
+  const start = dateKey(range[0])
+  const end = dateKey(range[1])
+  return start <= end ? [start, end] : [end, start]
+}
+
+function getVisibleDateRange(returnData, returnXRange, useRange = false) {
+  const range = useRange ? normalizeReturnRange(returnXRange) : null
+  if (range) return range
+  const allDates = Object.values(returnData?.series || {}).flatMap(sr => sr.dates || [])
+  if (!allDates.length) return [null, null]
+  return [
+    allDates.reduce((a, b) => a < b ? a : b),
+    allDates.reduce((a, b) => a > b ? a : b),
+  ]
+}
+
+function firstVisibleIndex(dates, start, end) {
+  if (!dates?.length) return -1
+  return dates.findIndex(d => (!start || dateKey(d) >= start) && (!end || dateKey(d) <= end))
+}
+
+function lastVisibleIndex(dates, start, end) {
+  if (!dates?.length) return -1
+  for (let i = dates.length - 1; i >= 0; i--) {
+    const d = dateKey(dates[i])
+    if ((!start || d >= start) && (!end || d <= end)) return i
+  }
+  return -1
+}
+
 // ── Main Component ───────────────────────────────────────────────────────────
 
 export default function ETFScreen() {
@@ -2112,7 +2201,27 @@ export default function ETFScreen() {
   const [returnLoading, setReturnLoading] = useState(false)
   const [showReturnLabels, setShowReturnLabels] = useState(true)
   const [returnHoverMode, setReturnHoverMode] = useState('x unified')
+  const [returnPctMode, setReturnPctMode] = useState(false)
+  const [showRangeSlider, setShowRangeSlider] = useState(false)
+  const [returnXRange, setReturnXRange] = useState([null, null])
+  const [indicatorMenuOpen, setIndicatorMenuOpen] = useState(false)
+  const [indicatorSearch, setIndicatorSearch] = useState('')
+  const [visibleAnalysisColumns, setVisibleAnalysisColumns] = useState(DEFAULT_ANALYSIS_COLUMNS)
+  const returnXRangeRef = useRef([null, null])
   const returnAbortRef = useRef(null)
+
+  const resetReturnRange = useCallback(() => {
+    returnXRangeRef.current = [null, null]
+    setReturnXRange([null, null])
+  }, [])
+
+  useEffect(() => {
+    returnXRangeRef.current = returnXRange
+  }, [returnXRange])
+
+  useEffect(() => {
+    resetReturnRange()
+  }, [ticker, period, compareTickers, resetReturnRange])
 
   // Debounce the reinvest slider — wait 300ms after user stops dragging
   useEffect(() => {
@@ -2187,6 +2296,7 @@ export default function ETFScreen() {
   const setPrimaryTicker = (value) => {
     const next = normalizeTicker(value)
     setTicker(next)
+    resetReturnRange()
     if (next) setCompareTickers(prev => prev.filter(t => t !== next))
   }
 
@@ -2196,6 +2306,7 @@ export default function ETFScreen() {
       .map(normalizeTicker)
       .filter(Boolean)
     if (!symbols.length) return
+    resetReturnRange()
     setCompareTickers(prev => {
       const next = [...prev]
       symbols.forEach(s => {
@@ -2211,7 +2322,10 @@ export default function ETFScreen() {
     addCompareSymbols(compareInput)
     setCompareInput('')
   }
-  const removeCompare = (s) => setCompareTickers(prev => prev.filter(t => t !== s))
+  const removeCompare = (s) => {
+    resetReturnRange()
+    setCompareTickers(prev => prev.filter(t => t !== s))
+  }
 
   const addStudy = (type) => {
     const template = STUDY_TEMPLATES.find(t => t.type === type)
@@ -2424,10 +2538,14 @@ export default function ETFScreen() {
     if (!returnData?.series) return { data: [], layout: {} }
     const traces = []
     const annotations = []
+    const labelCandidates = []
+    const visibleYValues = []
     const allSymbols = Object.keys(returnData.series)
     // Comparison ticker colors — cycling distinct hues
     const compColors = ['#a0f0c0', '#FFD700', '#ff7eb3', '#b39ddb', '#ff8a65', '#4dd0e1', '#aed581', '#f48fb1']
     const compDashes = ['solid', 'dash', 'dot', 'dashdot', 'longdash']
+    const activeReturnRange = normalizeReturnRange(returnXRange)
+    const [visibleStart, visibleEnd] = getVisibleDateRange(returnData, returnXRange, showRangeSlider)
 
     allSymbols.forEach((sym, si) => {
       const { dates, traces: traceMap } = returnData.series[sym]
@@ -2460,37 +2578,57 @@ export default function ETFScreen() {
           width = style.width
           name = `${sym} (${key === 'blend' ? returnData.reinvest_pct + '%' : style.label || key})`
         }
+        const lineLabel = allSymbols.length > 1
+          ? name.replace(/\s*\(([^)]*)\)$/, ' $1')
+          : (key === 'blend' ? 'Total Return' : style.label || key)
 
+        const baseIdx = firstVisibleIndex(dates, visibleStart, visibleEnd)
+        const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
+        const baseVal = baseIdx >= 0 ? values[baseIdx] : values[0]
+        const yVals = baseVal
+          ? values.map(v => returnPctMode ? (v / baseVal - 1) * 100 : (v / baseVal) * 100)
+          : values
+        dates.forEach((date, i) => {
+          const value = Number(yVals[i])
+          if (!Number.isFinite(value)) return
+          const d = dateKey(date)
+          if ((!visibleStart || d >= visibleStart) && (!visibleEnd || d <= visibleEnd)) {
+            visibleYValues.push(value)
+          }
+        })
         traces.push({
-          x: dates, y: values, type: 'scatter', mode: 'lines', name,
+          x: dates, y: yVals, type: 'scatter', mode: 'lines', name,
           line: { color, dash, width },
+          hovertemplate: returnPctMode
+            ? `<b>%{x|%b %d, %Y}</b><br>${lineLabel}: %{y:.2f}%<extra></extra>`
+            : `<b>%{x|%b %d, %Y}</b><br>${lineLabel}: %{y:.2f}<extra></extra>`,
         })
 
-        // End-of-line return % annotation
-        if (showReturnLabels && values.length > 0) {
-          const lastVal = values[values.length - 1]
-          const retNum = lastVal - 100
+        // Visible-window annotation: percent labels in percent mode, line names in normal mode.
+        if (showReturnLabels && labelIdx >= 0) {
+          const labelVal = yVals[labelIdx]
+          const retNum = returnPctMode ? labelVal : labelVal - 100
           const retPct = retNum.toFixed(2)
-          annotations.push({
-            x: dates[dates.length - 1],
-            _yRaw: lastVal,
-            text: `${retNum >= 0 ? '+' : ''}${retPct}%`,
-            showarrow: false,
-            xanchor: 'left',
-            xshift: 8,
-            font: { color, size: 11, family: 'monospace' },
-          })
+          if (Number.isFinite(Number(labelVal))) {
+            labelCandidates.push({
+              y: Number(labelVal),
+              text: returnPctMode ? `${retNum >= 0 ? '+' : ''}${retPct}%` : labelVal.toFixed(2),
+              color,
+              fontFamily: returnPctMode ? 'monospace' : undefined,
+            })
+          }
         }
       })
     })
 
-    // Baseline reference at 100
+    // Baseline reference
     if (traces.length) {
       const allDates = Object.values(returnData.series).flatMap(s => s.dates)
       const minDate = allDates.reduce((a, b) => a < b ? a : b)
       const maxDate = allDates.reduce((a, b) => a > b ? a : b)
+      const baseY = returnPctMode ? 0 : 100
       traces.push({
-        x: [minDate, maxDate], y: [100, 100], type: 'scatter', mode: 'lines',
+        x: [minDate, maxDate], y: [baseY, baseY], type: 'scatter', mode: 'lines',
         name: 'Baseline', line: { color: '#555', dash: 'dash', width: 1 }, showlegend: false,
       })
     }
@@ -2511,51 +2649,100 @@ export default function ETFScreen() {
       if (returnData.mode === 'total') titleText += ` (${returnData.reinvest_pct}% reinvest)`
     }
 
-    // De-overlap annotations: sort by Y, push apart so labels don't collide
-    // Each label needs ~16px clearance; chart plot area is ~420px (500 - margins)
-    if (annotations.length > 1) {
-      const allY = Object.values(returnData.series).flatMap(s =>
-        Object.values(s.traces).flat()
-      )
-      const yMin = Math.min(...allY), yMax = Math.max(...allY)
-      const yRange = yMax - yMin || 1
-      const pxPerUnit = 420 / yRange
-      const minGap = Math.max(18 / pxPerUnit, yRange * 0.04)  // at least 18px worth of Y units
-      annotations.sort((a, b) => a._yRaw - b._yRaw)
-      // Multiple passes to resolve cascading overlaps
-      for (let pass = 0; pass < 10; pass++) {
-        let moved = false
-        for (let i = 1; i < annotations.length; i++) {
-          const prev = annotations[i - 1]
-          const curr = annotations[i]
-          const gap = curr._yRaw - prev._yRaw
-          if (gap < minGap) {
-            const shift = (minGap - gap) / 2 + 0.05
-            prev._yRaw -= shift
-            curr._yRaw += shift
-            moved = true
-          }
+    if (showReturnLabels && labelCandidates.length) {
+      const axisBase = returnPctMode ? 0 : 100
+      const yMin = Math.min(axisBase, ...visibleYValues, ...labelCandidates.map(label => label.y))
+      const yMax = Math.max(axisBase, ...visibleYValues, ...labelCandidates.map(label => label.y))
+      const ySpan = Math.max(1, yMax - yMin)
+      const minLabelGap = Math.max(ySpan * 0.04, returnPctMode ? 0.45 : 1.5)
+      const sortedLabels = [...labelCandidates].sort((a, b) => a.y - b.y)
+
+      sortedLabels.forEach((label, index) => {
+        label.displayY = index === 0
+          ? label.y
+          : Math.max(label.y, sortedLabels[index - 1].displayY + minLabelGap)
+      })
+
+      const overflow = sortedLabels[sortedLabels.length - 1].displayY - yMax
+      if (overflow > 0) {
+        for (let index = sortedLabels.length - 1; index >= 0; index -= 1) {
+          const nextY = index === sortedLabels.length - 1
+            ? sortedLabels[index].displayY - overflow
+            : Math.min(sortedLabels[index].displayY, sortedLabels[index + 1].displayY - minLabelGap)
+          sortedLabels[index].displayY = Math.max(yMin, nextY)
         }
-        if (!moved) break
       }
+
+      sortedLabels.forEach(label => {
+        annotations.push({
+          x: 1,
+          xref: 'paper',
+          y: label.displayY,
+          text: label.text,
+          showarrow: false,
+          xanchor: 'left',
+          xshift: 8,
+          font: { color: label.color, size: 11, family: label.fontFamily },
+        })
+      })
     }
-    annotations.forEach(a => { a.y = a._yRaw; delete a._yRaw })
 
     const layout = {
       template: 'plotly_dark', paper_bgcolor: '#1e1e2f', plot_bgcolor: '#1e1e2f',
       font: { color: '#e0e0e0', size: 12 },
-      margin: { l: 60, r: 90, t: 50, b: 40 },
-      height: 500,
-      title: { text: titleText, font: { size: 14, color: '#e0e0e0' } },
-      xaxis: { type: 'date', gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot' },
-      yaxis: { title: 'Normalized Return (100 = start)', gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot' },
+      margin: { l: 60, r: 90, t: 70, b: 40 },
+      height: 520,
+      title: { text: titleText, font: { size: 14, color: '#e0e0e0' }, y: 0.98, x: 0.5, xanchor: 'center' },
+      xaxis: {
+        type: 'date',
+        rangeslider: showRangeSlider ? { visible: true, bgcolor: '#252540', bordercolor: '#555', borderwidth: 1 } : { visible: false },
+        ...(showRangeSlider && activeReturnRange ? { range: activeReturnRange } : {}),
+        gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot',
+      },
+      yaxis: {
+        title: returnPctMode ? 'Total Return (%)' : 'Normalized Return (100 = start)',
+        ...(returnPctMode && { ticksuffix: '%', tickformat: '+.2f' }),
+        gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot',
+      },
       legend: { orientation: 'h', y: 1.06, x: 0.5, xanchor: 'center', font: { size: 11 } },
       hovermode: returnHoverMode,
       annotations,
     }
     return { data: traces, layout }
-  }, [returnData, ticker, period, showReturnLabels, returnHoverMode])
+  }, [returnData, ticker, period, showReturnLabels, returnHoverMode, returnPctMode, showRangeSlider, returnXRange])
 
+
+  const handleReturnUpdate = useCallback((figure) => {
+    if (!showRangeSlider) return
+    const range = figure?.layout?.xaxis?.range || figure?.['xaxis.range'] || (
+      figure?.['xaxis.range[0]'] && figure?.['xaxis.range[1]']
+        ? [figure['xaxis.range[0]'], figure['xaxis.range[1]']]
+        : null
+    )
+    const normalized = normalizeReturnRange(range)
+    if (normalized) {
+      const [s, e] = normalized
+      if (s !== returnXRangeRef.current[0] || e !== returnXRangeRef.current[1]) {
+        returnXRangeRef.current = [s, e]
+        setReturnXRange([s, e])
+      }
+    }
+  }, [showRangeSlider])
+
+  const returnDateDisplay = useMemo(() => {
+    if (!showRangeSlider || !returnData?.series) return null
+    let s, e
+    const activeReturnRange = normalizeReturnRange(returnXRange)
+    if (activeReturnRange) { [s, e] = activeReturnRange }
+    else {
+      const allD = Object.values(returnData.series).flatMap(sr => sr.dates)
+      if (!allD.length) return null
+      s = allD.reduce((a, b) => a < b ? a : b)
+      e = allD.reduce((a, b) => a > b ? a : b)
+    }
+    const fmt = d => new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+    return `${fmt(s)}  →  ${fmt(e)}`
+  }, [showRangeSlider, returnData, returnXRange])
 
   const sliderDisabled = returnMode === 'price' || returnMode === 'pricediv'
 
@@ -2765,8 +2952,10 @@ export default function ETFScreen() {
 
           <div className="etf-chart-options">
             <span className="etf-control-label">Chart</span>
+            <button className={`btn btn-sm${returnPctMode ? ' btn-active' : ''}`} onClick={() => setReturnPctMode(v => !v)}>Return %</button>
             <button className={`btn btn-sm${showReturnLabels ? ' btn-active' : ''}`} onClick={() => setShowReturnLabels(v => !v)}>End Labels</button>
             <button className={`btn btn-sm${returnHoverMode === 'x unified' ? ' btn-active' : ''}`} onClick={() => setReturnHoverMode(m => m === 'x unified' ? 'closest' : 'x unified')}>Unified Hover</button>
+            <button className={`btn btn-sm${showRangeSlider ? ' btn-active' : ''}`} onClick={() => { setShowRangeSlider(v => !v); resetReturnRange() }}>Range Slider</button>
           </div>
 
           <div className="etf-compare">
@@ -3036,7 +3225,12 @@ export default function ETFScreen() {
                     Reinvest is 100% — the Custom and DRIP lines are identical and overlap. Adjust the slider below 100% to see them diverge.
                   </div>
                 )}
-                <Plot data={returnPlotData} layout={returnPlotLayout} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} />
+                {returnDateDisplay && (
+                  <div style={{ textAlign: 'right', fontSize: '0.9rem', color: '#90caf9', padding: '0.25rem 0.5rem 0', fontWeight: 500 }}>
+                    {returnDateDisplay}
+                  </div>
+                )}
+                <Plot data={returnPlotData} layout={returnPlotLayout} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} onUpdate={handleReturnUpdate} onRelayout={handleReturnUpdate} />
               </>
             ) : (
               !returnLoading && <div className="etf-placeholder">Select a return mode and click Load to compare returns.</div>
@@ -3044,6 +3238,7 @@ export default function ETFScreen() {
           )}
         </div>
       </div>
+
     </div>
   )
 }
