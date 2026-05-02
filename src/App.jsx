@@ -40,6 +40,9 @@ import SecurityResearch from './pages/SecurityResearch'
 import DividendCalculator from './pages/DividendCalculator'
 import AnnualTaxReport from './pages/AnnualTaxReport'
 import PortfolioGrowth2 from './pages/PortfolioGrowth2'
+import ETFProviderUpdate from './pages/ETFProviderUpdate'
+import ETFComparer from './pages/ETFComparer'
+import StockComparer from './pages/StockComparer'
 // Option Trading Tools and Option Education are intentionally excluded from
 // deployed builds — still in development, not ready for production.
 // import OptionTradingTools from './pages/OptionTradingTools'
@@ -119,6 +122,9 @@ function App() {
         <Route path="/security-research" element={<SecurityResearch />} />
         <Route path="/dividend-calculator" element={<DividendCalculator />} />
         <Route path="/growth-2" element={<PortfolioGrowth2 />} />
+        <Route path="/etf-provider-update" element={<ETFProviderUpdate />} />
+        <Route path="/etf-comparer" element={<ETFComparer />} />
+        <Route path="/stock-comparer" element={<StockComparer />} />
         <Route path="/tax-report" element={<AnnualTaxReport />} />
         {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
         <Route path="/help" element={<Help />} />
@@ -169,6 +175,8 @@ function Nav() {
       </NavDropdown>
       <NavDropdown label="Analysis">
         <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>
+        <NavLink to="/etf-comparer">ETF Comparer</NavLink>
+        <NavLink to="/stock-comparer">Stock Comparer</NavLink>
         <NavLink to="/security-research">Security Research</NavLink>
         <NavLink to="/watchlist">Watchlist</NavLink>
         <NavLink to="/buy-sell-signals">Buy / Sell Signals</NavLink>
@@ -193,6 +201,7 @@ function Nav() {
       <NavDropdown label="Admin">
         <NavLink to="/import">Import</NavLink>
         <NavLink to="/export">Export</NavLink>
+        <NavLink to="/etf-provider-update">ETF Provider Update</NavLink>
         <NavLink to="/portfolios">Portfolios</NavLink>
         <NavLink to="/settings">Settings</NavLink>
         <NavLink to="/help">Help</NavLink>

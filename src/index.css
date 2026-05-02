@@ -1552,6 +1552,441 @@ label {
   margin-top: 0.15rem;
 }
 
+.etf-analysis-sections {
+  margin-top: 1rem;
+  display: grid;
+  gap: 1rem;
+}
+.etf-analysis-section {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  padding: 0.9rem;
+}
+.etf-analysis-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid rgba(144, 202, 249, 0.18);
+  margin-bottom: 0.75rem;
+}
+.etf-analysis-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #e8eef8;
+}
+.etf-analysis-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.etf-indicator-menu-wrap {
+  position: relative;
+}
+.etf-indicator-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 20;
+  width: 290px;
+  max-width: calc(100vw - 2rem);
+  background: #10192e;
+  border: 1px solid #294363;
+  border-radius: 6px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+.etf-indicator-menu input[type="text"],
+.etf-indicator-menu > input {
+  width: 100%;
+  background: #0c1425;
+  color: #e0e8f5;
+  border: 0;
+  border-bottom: 1px solid #294363;
+  padding: 0.65rem 0.75rem;
+  font-size: 0.88rem;
+}
+.etf-indicator-options {
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 0.35rem;
+}
+.etf-indicator-option {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.42rem 0.45rem;
+  border-radius: 4px;
+  color: #d8e2f0;
+  font-size: 0.9rem;
+}
+.etf-indicator-option:hover {
+  background: #182748;
+}
+.etf-indicator-option input {
+  accent-color: #4677f5;
+}
+.etf-reset-selection {
+  width: 100%;
+  text-align: left;
+  background: #111a2f;
+  border: 0;
+  border-top: 1px solid #294363;
+  color: #cbd7e8;
+  padding: 0.55rem 0.75rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+.etf-analysis-table-wrap {
+  overflow-x: auto;
+  border: 1px solid rgba(144, 202, 249, 0.12);
+  border-radius: 5px;
+}
+.etf-analysis-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+}
+.etf-analysis-table th,
+.etf-analysis-table td {
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid rgba(144, 202, 249, 0.1);
+  white-space: nowrap;
+  font-size: 0.88rem;
+}
+.etf-analysis-table th {
+  text-align: left;
+  color: #dce8f7;
+  background: #10192e;
+  font-weight: 700;
+}
+.etf-analysis-table td {
+  color: #d3dbea;
+}
+.etf-analysis-table tbody tr:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.025);
+}
+.etf-analysis-table .pos {
+  color: #4dff91;
+}
+.etf-analysis-table .neg {
+  color: #ff6b6b;
+}
+.etf-return-note {
+  background: #10192e;
+  border: 1px solid rgba(144, 202, 249, 0.16);
+  border-radius: 5px;
+  color: #d8e2f0;
+  padding: 0.7rem 0.85rem;
+  margin-bottom: 0.75rem;
+  line-height: 1.45;
+}
+
+/* ETF Comparer */
+.etf-comparer-page {
+  max-width: 1600px;
+  background: #fff;
+  color: #111827;
+  min-height: calc(100vh - 4rem);
+}
+.etfc-breadcrumb {
+  color: #475569;
+  font-size: 0.9rem;
+  font-weight: 700;
+  margin-bottom: 0.45rem;
+}
+.etfc-title-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 3px solid #2563a2;
+  margin-bottom: 1rem;
+  padding-bottom: 0.45rem;
+}
+.etfc-title-row h1 {
+  margin: 0;
+  color: #111827;
+  font-size: 1.9rem;
+  line-height: 1.2;
+}
+.etfc-title-row span {
+  color: #475569;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.etfc-toolbar {
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.etfc-chip-input,
+.etfc-periods {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+.etfc-chip-input {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 0.45rem;
+  background: #f8fafc;
+}
+.etfc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 28px;
+  padding: 0.15rem 0.55rem;
+  border: 2px solid #2f7df6;
+  border-radius: 4px;
+  background: #fff;
+  color: #111827;
+  font-weight: 700;
+  font-size: 0.86rem;
+}
+.etfc-chip button {
+  border: 0;
+  background: none;
+  color: #111827;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+.etfc-chip-input input {
+  min-width: 150px;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: #111827;
+  outline: 0;
+  font-size: 0.95rem;
+}
+.etfc-periods .btn-sm,
+.etfc-toolbar .btn-sm {
+  background: #fff;
+  color: #111827;
+  border-color: #cbd5e1;
+}
+.etfc-select {
+  min-height: 36px;
+  background: #fff;
+  color: #111827;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  padding: 0.35rem 0.65rem;
+  font-weight: 700;
+}
+.etfc-periods .btn-sm.btn-active {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+  color: #111827;
+}
+.etfc-loading {
+  color: #64748b;
+  margin-bottom: 0.75rem;
+}
+.etfc-section {
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #fff;
+  margin-bottom: 1.5rem;
+}
+.etfc-chart-card {
+  padding: 0.5rem;
+}
+.etfc-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid #d7dde7;
+}
+.etfc-section-head h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 1.45rem;
+}
+.etfc-menu-wrap {
+  position: relative;
+}
+.etfc-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.45rem);
+  width: 310px;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+  z-index: 30;
+  overflow: hidden;
+}
+.etfc-menu > input {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 0.65rem 0.75rem;
+  color: #111827;
+}
+.etfc-menu-options {
+  max-height: 330px;
+  overflow-y: auto;
+  padding: 0.35rem;
+}
+.etfc-menu label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  justify-content: flex-start;
+  color: #111827;
+  padding: 0.38rem 0.45rem;
+  border-radius: 4px;
+}
+.etfc-menu label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  accent-color: #4f8fb0;
+}
+.etfc-menu label:hover {
+  background: #f1f5f9;
+}
+.etfc-menu button {
+  width: 100%;
+  text-align: left;
+  background: #f8fafc;
+  border: 0;
+  border-top: 1px solid #e5e7eb;
+  color: #334155;
+  padding: 0.55rem 0.75rem;
+  cursor: pointer;
+  font-weight: 700;
+}
+.etfc-table-wrap {
+  overflow-x: auto;
+}
+.etfc-table,
+.etfc-holdings-card table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.etfc-table {
+  min-width: 1000px;
+}
+.etfc-table th,
+.etfc-table td,
+.etfc-holdings-card th,
+.etfc-holdings-card td {
+  border-bottom: 1px solid #d7dde7;
+  padding: 0.7rem 0.85rem;
+  color: #111827;
+  white-space: nowrap;
+}
+.etfc-table th,
+.etfc-holdings-card th {
+  text-align: left;
+  font-weight: 800;
+}
+.etfc-table tbody tr:nth-child(odd),
+.etfc-holdings-card tbody tr:nth-child(odd) {
+  background: #f8fafc;
+}
+.etfc-note {
+  margin: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #d7dde7;
+  border-radius: 4px;
+  background: #f8fafc;
+  color: #111827;
+  line-height: 1.45;
+}
+.etfc-average-table-wrap {
+  padding: 0 1rem 1rem;
+}
+.etfc-average-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.etfc-average-table th,
+.etfc-average-table td {
+  color: #111827;
+  border-bottom: 1px solid #d7dde7;
+  padding: 0.65rem 0.75rem;
+  text-align: left;
+}
+.etfc-average-table th {
+  font-weight: 800;
+}
+.etfc-series-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  margin-right: 0.45rem;
+  vertical-align: -2px;
+}
+.etfc-holdings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+  gap: 1.6rem;
+  padding: 1rem;
+}
+.etfc-holdings-card {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  min-width: 0;
+}
+.etfc-holdings-card h3 {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid #d7dde7;
+  font-size: 1rem;
+  color: #111827;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.etfc-holdings-card td:nth-child(1),
+.etfc-holdings-card th:nth-child(1) {
+  width: 54px;
+}
+.etfc-holdings-card td:nth-child(4),
+.etfc-holdings-card th:nth-child(4) {
+  text-align: right;
+  width: 86px;
+}
+.etfc-holding-symbol {
+  color: #2d78cf !important;
+}
+@media (max-width: 900px) {
+  .etfc-toolbar {
+    grid-template-columns: 1fr;
+  }
+  .etfc-holdings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Stock Comparer Fundamentals ───────────────────────────────────────────── */
+.stc-fundamentals-card td:first-child {
+  color: #8899b8;
+  white-space: nowrap;
+}
+.stc-fundamentals-card td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Dividend Calendar ──────────────────────────────────────────────────────── */
 .dc-page { padding: 1.5rem 2rem; }
 .dc-title { margin-bottom: 0.2rem; }
@@ -1853,8 +2288,12 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
 .nep-stat-tile {
   background: #111124; border: 1px solid #2a2a3e; border-radius: 6px;
   padding: 0.55rem 1.1rem; text-align: center; min-width: 130px; flex: 1 1 130px;
+  min-inline-size: 0; overflow: hidden;
 }
-.nep-stat-val { font-size: 1.25rem; font-weight: 700; }
+.nep-stat-val {
+  font-size: clamp(0.92rem, 0.85vw, 1.25rem); font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .nep-stat-lbl { font-size: 0.72rem; color: #aaa; margin-top: 2px; }
 .nep-stat-sub { font-size: 0.68rem; color: #555; margin-top: 1px; }
 .nep-tbl-wrap {
@@ -1864,6 +2303,10 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
 .nep-tbl-wrap .sst tfoot td {
   background: #0d0d22; border-top: 2px solid #3a3a5c; font-weight: 700;
   color: #e0e0e0; position: sticky; bottom: 0;
+}
+.pis-num {
+  display: inline-block; max-width: 13ch;
+  overflow: hidden; text-overflow: ellipsis; vertical-align: bottom;
 }
 
 /* ── Portfolio Income Simulator ── */
@@ -2538,6 +2981,13 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
 }
 .dc-section-head h3 { margin: 0; color: #cfe5ff; font-size: 1.05rem; }
 .dc-total-return { font-size: 1.4rem; font-weight: 700; color: #fff; }
+.dc-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.dc-chart-card-compact { min-width: 0; margin-bottom: 0; }
 
 .dc-table-wrap { overflow-x: auto; }
 .dc-table {
@@ -2554,3 +3004,165 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
   font-weight: 600; font-size: 0.75rem; text-transform: uppercase;
 }
 .dc-table tbody tr:hover { background: #0f1c33; }
+
+/* ETF Comparer: match the app's dark analysis theme */
+.etf-comparer-page {
+  background: #1e1e2f !important;
+  color: #e0e8f5 !important;
+}
+.etfc-breadcrumb,
+.etfc-title-row span,
+.etfc-loading {
+  color: #90a4ae !important;
+}
+.etfc-title-row h1,
+.etfc-section-head h2,
+.etfc-holdings-card h3 {
+  color: #e0e8f5 !important;
+}
+.etfc-chip-input,
+.etfc-section,
+.etfc-holdings-card {
+  background: #16213e !important;
+  border-color: #0f3460 !important;
+}
+.etfc-chip {
+  background: #10192e !important;
+  color: #e0e8f5 !important;
+}
+.etfc-chip button,
+.etfc-chip-input input {
+  color: #e0e8f5 !important;
+}
+.etfc-periods .btn-sm,
+.etfc-toolbar .btn-sm,
+.etfc-select {
+  background: #16213e !important;
+  color: #e0e0e0 !important;
+  border-color: #0f3460 !important;
+}
+.etfc-periods .btn-sm.btn-active,
+.etfc-toolbar .btn-sm.btn-active {
+  background: #1a6fb5 !important;
+  border-color: #1a6fb5 !important;
+  color: #fff !important;
+}
+.etfc-return-controls {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.2fr) minmax(260px, 0.7fr) minmax(320px, 0.9fr);
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+.etfc-mode-bar,
+.etfc-reinvest,
+.etfc-chart-options {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  min-height: 36px;
+  padding: 0.45rem;
+  background: rgba(22, 33, 62, 0.55);
+  border: 1px solid rgba(15, 52, 96, 0.75);
+  border-radius: 6px;
+}
+.etfc-reinvest label,
+.etfc-chart-options span {
+  color: #8fa6c2 !important;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+.etfc-reinvest input[type="range"] {
+  width: 115px;
+  accent-color: #64b5f6;
+}
+.etfc-reinvest input[type="number"] {
+  width: 52px;
+  background: #16213e;
+  color: #e0e0e0;
+  border: 1px solid #0f3460;
+  border-radius: 3px;
+  padding: 0.15rem 0.3rem;
+}
+.etfc-section-head,
+.etfc-holdings-card h3 {
+  border-bottom-color: rgba(144, 202, 249, 0.18) !important;
+}
+.etfc-menu {
+  background: #10192e !important;
+  border-color: #294363 !important;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35) !important;
+}
+.etfc-menu > input {
+  background: #0c1425 !important;
+  color: #e0e8f5 !important;
+  border-bottom-color: #294363 !important;
+}
+.etfc-menu label {
+  color: #d8e2f0 !important;
+}
+.etfc-menu label input[type="checkbox"] {
+  width: 16px !important;
+  height: 16px !important;
+  flex: 0 0 16px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  accent-color: #4f8fb0;
+}
+.etfc-menu label:hover {
+  background: #182748 !important;
+}
+.etfc-menu button {
+  background: #111a2f !important;
+  border-top-color: #294363 !important;
+  color: #cbd7e8 !important;
+}
+.etfc-table th,
+.etfc-table td,
+.etfc-holdings-card th,
+.etfc-holdings-card td,
+.etfc-average-table th,
+.etfc-average-table td {
+  color: #d8e2f0 !important;
+  border-bottom-color: rgba(144, 202, 249, 0.14) !important;
+}
+.etfc-table tbody tr:nth-child(odd),
+.etfc-holdings-card tbody tr:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.03) !important;
+}
+.etfc-note {
+  background: #10192e !important;
+  color: #d8e2f0 !important;
+  border-color: rgba(144, 202, 249, 0.18) !important;
+}
+.etfc-holding-symbol {
+  color: #64b5f6 !important;
+}
+.etfc-empty {
+  min-height: 260px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #90a4ae !important;
+  font-size: 1rem;
+}
+.etfc-chip-input {
+  cursor: text;
+}
+.etfc-chip-input input {
+  flex: 1 1 240px !important;
+  min-width: 220px !important;
+  pointer-events: auto;
+}
+.etfc-chip-input .btn-sm,
+.etfc-chip,
+.etfc-chip button {
+  flex-shrink: 0;
+}
+@media (max-width: 1100px) {
+  .etfc-return-controls {
+    grid-template-columns: 1fr;
+  }
+}

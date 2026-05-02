@@ -2163,7 +2163,12 @@ def _div_calc_positive_dividends(divs):
 
 
 def _div_calc_annual_dividend(divs, freq_code):
-    """Prefer a current distribution run rate for frequent payers over stale TTM totals."""
+    """Return an annual dividend estimate for the calculator.
+
+    Prefer a completed trailing-12-month total when enough payments exist. For
+    variable weekly/monthly option-income funds, annualizing only the latest
+    payout can wildly overstate the baseline projection.
+    """
     pos = _div_calc_positive_dividends(divs)
     if pos.empty:
         return 0.0, 0.0, "none"
@@ -2177,10 +2182,17 @@ def _div_calc_annual_dividend(divs, freq_code):
     last_div = float(pos.iloc[-1])
     run_rate_div = last_div * per_year
 
-    # Monthly and weekly option-income funds can have rapidly changing payouts.
-    # A trailing 12-month sum may reflect last year's higher distribution regime,
-    # so seed the calculator with the latest distribution rate instead.
     if freq_code in ("W", "M"):
+        min_full_year_payments = max(1, int(per_year * 0.75))
+        if len(trailing) >= min_full_year_payments and ttm_div > 0:
+            return ttm_div, ttm_div, "trailing_12_month"
+
+        if len(pos) >= 2:
+            span_days = max(1, (pos.index[-1] - pos.index[0]).days)
+            observed_payments_per_year = min(per_year, 365.0 / (span_days / (len(pos) - 1)))
+            annualized_avg = float(pos.mean()) * observed_payments_per_year
+            return annualized_avg, ttm_div, "annualized_average_distribution"
+
         return run_rate_div, ttm_div, "latest_distribution_rate"
 
     return (ttm_div or run_rate_div), ttm_div, "trailing_12_month"
@@ -8170,6 +8182,39 @@ def portfolio_summary_data():
 
 # ── Ticker Return Chart ───────────────────────────────────────────────────────
 
+def _research_price_and_dividend_series(raw, dl_ticker):
+    """Extract close and dividend Series from yfinance output, tolerating missing actions."""
+    if isinstance(raw.columns, pd.MultiIndex):
+        close_block = raw["Close"]
+        close_col = close_block[dl_ticker] if dl_ticker in close_block.columns else close_block.iloc[:, 0]
+        if "Dividends" in raw.columns.get_level_values(0):
+            divs_block = raw["Dividends"]
+            divs_col = divs_block[dl_ticker] if dl_ticker in divs_block.columns else divs_block.iloc[:, 0]
+        else:
+            divs_col = pd.Series(0.0, index=close_col.index)
+    else:
+        close_col = raw["Close"]
+        divs_col = raw["Dividends"] if "Dividends" in raw.columns else pd.Series(0.0, index=close_col.index)
+
+    if not isinstance(close_col, pd.Series):
+        close_col = pd.Series(close_col) if hasattr(close_col, "__iter__") else pd.Series(dtype=float)
+    else:
+        close_col = close_col.squeeze()
+        if not isinstance(close_col, pd.Series):
+            close_col = pd.Series(dtype=float)
+
+    if not isinstance(divs_col, pd.Series):
+        divs_col = pd.Series(0.0, index=close_col.index)
+    else:
+        divs_col = divs_col.squeeze()
+        if not isinstance(divs_col, pd.Series):
+            divs_col = pd.Series(0.0, index=close_col.index)
+
+    close_col = pd.to_numeric(close_col, errors="coerce").dropna()
+    divs_col = pd.to_numeric(divs_col, errors="coerce").reindex(close_col.index, fill_value=0).fillna(0)
+    return close_col, divs_col
+
+
 @app.route("/api/ticker-return/<ticker>", methods=["GET"])
 def ticker_return_chart(ticker):
     """Return price return % and total return % data since purchase date."""
@@ -8234,31 +8279,12 @@ def ticker_return_chart(ticker):
         return jsonify({"error": f"No Yahoo Finance data for {ticker}"}), 404
 
     try:
-        if isinstance(raw.columns, pd.MultiIndex):
-            close_col = raw["Close"][dl_ticker] if dl_ticker in raw["Close"].columns else raw["Close"].iloc[:, 0]
-            divs_col = raw["Dividends"][dl_ticker] if dl_ticker in raw["Dividends"].columns else raw["Dividends"].iloc[:, 0]
-        else:
-            close_col = raw["Close"]
-            divs_col = raw["Dividends"]
-
-        # Ensure we have Series (not scalar from squeeze on single-row data)
-        if not isinstance(close_col, pd.Series):
-            close_col = pd.Series(close_col) if hasattr(close_col, '__iter__') else pd.Series()
-        else:
-            close_col = close_col.squeeze()
-            if not isinstance(close_col, pd.Series):
-                return jsonify({"error": f"Not enough price history for {ticker}"}), 404
-        if not isinstance(divs_col, pd.Series):
-            divs_col = pd.Series(0, index=close_col.index)
-        else:
-            divs_col = divs_col.squeeze()
-            if not isinstance(divs_col, pd.Series):
-                divs_col = pd.Series(0, index=close_col.index)
+        close_col, divs_col = _research_price_and_dividend_series(raw, dl_ticker)
 
         if len(close_col) < 2:
             return jsonify({"error": f"Not enough price history for {ticker}"}), 404
 
-        cum_divs = divs_col.reindex(close_col.index, fill_value=0).cumsum()
+        cum_divs = divs_col.cumsum()
 
         price_return = ((close_col - price_paid) / price_paid * 100).round(2)
         total_return = ((close_col - price_paid + cum_divs) / price_paid * 100).round(2)
@@ -8306,25 +8332,7 @@ def ticker_return_1y(ticker):
         return jsonify({"error": f"No Yahoo Finance data for {ticker}"}), 404
 
     try:
-        if isinstance(raw.columns, pd.MultiIndex):
-            close_col = raw["Close"][dl_ticker] if dl_ticker in raw["Close"].columns else raw["Close"].iloc[:, 0]
-            divs_col = raw["Dividends"][dl_ticker] if dl_ticker in raw["Dividends"].columns else raw["Dividends"].iloc[:, 0]
-        else:
-            close_col = raw["Close"]
-            divs_col = raw["Dividends"]
-
-        if not isinstance(close_col, pd.Series):
-            close_col = pd.Series(close_col) if hasattr(close_col, '__iter__') else pd.Series()
-        else:
-            close_col = close_col.squeeze()
-            if not isinstance(close_col, pd.Series):
-                return jsonify({"error": f"Not enough price history for {ticker}"}), 404
-        if not isinstance(divs_col, pd.Series):
-            divs_col = pd.Series(0, index=close_col.index)
-        else:
-            divs_col = divs_col.squeeze()
-            if not isinstance(divs_col, pd.Series):
-                divs_col = pd.Series(0, index=close_col.index)
+        close_col, divs_col = _research_price_and_dividend_series(raw, dl_ticker)
 
         if len(close_col) < 2:
             return jsonify({"error": f"Not enough price history for {ticker}"}), 404
@@ -8333,7 +8341,7 @@ def ticker_return_1y(ticker):
         if start_price <= 0:
             return jsonify({"error": f"Invalid start price for {ticker}"}), 404
 
-        cum_divs = divs_col.reindex(close_col.index, fill_value=0).cumsum()
+        cum_divs = divs_col.cumsum()
         price_return = ((close_col - start_price) / start_price * 100).round(2)
         total_return = ((close_col - start_price + cum_divs) / start_price * 100).round(2)
 
@@ -8437,13 +8445,128 @@ def _research_dividend_frequency(dividends):
     return "Annual/Irregular"
 
 
-def _research_top_holdings(fund_data, limit=10):
+def _fetch_neos_top_holdings(ticker, limit=25):
+    """Fetch the full NEOS holdings CSV and keep the top securities rows."""
+    import csv
+    import requests
+    from io import StringIO
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return []
+
+    url = f"https://neosfunds.com/wp-admin/admin-ajax.php?action=download_holdings_csv&ticker={ticker}"
+    try:
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "PortfolioTrackingClient/1.0"})
+        resp.raise_for_status()
+    except Exception:
+        return []
+
+    try:
+        reader = csv.DictReader(StringIO(resp.text or ""))
+    except Exception:
+        return []
+
+    rows = []
+    for row in reader:
+        symbol = (row.get("StockTicker") or "").strip()
+        name = (row.get("SecurityName") or "").strip()
+        if not symbol or symbol.lower() in {"cash&other", "cash"}:
+            continue
+        if name.lower() in {"cash & other", "cash and other"}:
+            continue
+        try:
+            weight = round(float((row.get("Weightings") or "").replace("%", "").strip()), 2)
+        except Exception:
+            weight = None
+        rows.append({
+            "symbol": symbol,
+            "name": name or symbol,
+            "weight_pct": weight,
+        })
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _strip_html_text(value):
+    import html
+    import re
+
+    text = re.sub(r"(?s)<!--.*?-->", "", str(value or ""))
+    text = re.sub(r"(?s)<[^>]+>", "", text)
+    return html.unescape(re.sub(r"\s+", " ", text)).strip()
+
+
+def _fetch_stockanalysis_top_holdings(ticker, limit=25):
+    """Fetch the free Top 25 holdings table exposed on StockAnalysis ETF pages."""
+    import re
+    import requests
+
+    ticker = (ticker or "").strip().lower()
+    if not ticker:
+        return []
+
+    url = f"https://stockanalysis.com/etf/{ticker}/holdings/"
+    try:
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "PortfolioTrackingClient/1.0"})
+        if resp.status_code == 404:
+            return []
+        resp.raise_for_status()
+    except Exception:
+        return []
+
+    html = resp.text or ""
+    start = html.lower().find("top 25 holdings")
+    if start >= 0:
+        html = html[start:]
+
+    rows = []
+    for row_html in re.findall(r"(?is)<tr[^>]*>(.*?)</tr>", html):
+        cells = re.findall(r"(?is)<td[^>]*>(.*?)</td>", row_html)
+        if len(cells) < 4:
+            continue
+
+        rank = _strip_html_text(cells[0])
+        symbol = _strip_html_text(cells[1])
+        name = _strip_html_text(cells[2])
+        weight_text = _strip_html_text(cells[3])
+
+        if not rank.isdigit() or not symbol or symbol.lower() == "symbol":
+            continue
+        if not weight_text.endswith("%"):
+            continue
+        try:
+            weight = round(float(weight_text.replace("%", "").replace(",", "").strip()), 2)
+        except Exception:
+            weight = None
+
+        rows.append({
+            "symbol": symbol,
+            "name": name or symbol,
+            "weight_pct": weight,
+        })
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _research_top_holdings(fund_data, limit=25, ticker=None, description=""):
+    if _is_neos_fund(ticker, description):
+        neos_rows = _fetch_neos_top_holdings(ticker, limit=limit)
+        if neos_rows:
+            return neos_rows
+
+    stockanalysis_rows = _fetch_stockanalysis_top_holdings(ticker, limit=limit)
+    if len(stockanalysis_rows) > 10:
+        return stockanalysis_rows
+
     try:
         holdings = fund_data.top_holdings
     except Exception:
-        return []
+        return stockanalysis_rows
     if holdings is None or holdings.empty:
-        return []
+        return stockanalysis_rows
 
     rows = []
     for symbol, row in holdings.head(limit).iterrows():
@@ -8453,7 +8576,7 @@ def _research_top_holdings(fund_data, limit=10):
             "name": row.get("Name") or str(symbol),
             "weight_pct": round(float(percent) * 100, 2) if percent is not None and abs(float(percent)) <= 1 else _research_pct(percent),
         })
-    return rows
+    return stockanalysis_rows if len(stockanalysis_rows) > len(rows) else rows
 
 
 def _research_weight_map(value):
@@ -8467,6 +8590,232 @@ def _research_weight_map(value):
         label = str(key).replace("_", " ").replace("-", " ").title()
         rows.append({"name": label, "weight_pct": round(float(clean) * 100, 2)})
     return sorted(rows, key=lambda r: r["weight_pct"], reverse=True)
+
+
+def _research_adjusted_close_series(ticker):
+    """Load a split/dividend-adjusted close series for a single ticker."""
+    import warnings
+    import yfinance as yf
+
+    warnings.filterwarnings("ignore")
+
+    symbol = (ticker or "").strip().upper()
+    if not symbol:
+        return None, symbol
+
+    dl_symbol = symbol
+    description = symbol
+    try:
+        info = yf.Ticker(symbol).info or {}
+        description = info.get("longName") or info.get("shortName") or info.get("displayName") or symbol
+        info_symbol = (info.get("symbol") or "").upper()
+        if info_symbol and info_symbol != symbol:
+            dl_symbol = info_symbol
+    except Exception:
+        pass
+
+    try:
+        raw = yf.download(dl_symbol, period="max", auto_adjust=True, progress=False)
+    except Exception:
+        return None, description
+
+    if raw is None or raw.empty:
+        return None, description
+
+    try:
+        if isinstance(raw.columns, pd.MultiIndex):
+            close = raw["Close"]
+            if dl_symbol in close.columns:
+                series = close[dl_symbol]
+            else:
+                series = close.iloc[:, 0]
+        else:
+            series = raw["Close"]
+    except Exception:
+        return None, description
+
+    if not isinstance(series, pd.Series):
+        series = pd.Series(series)
+    series = series.dropna()
+    series.index = pd.to_datetime(series.index)
+    return series, description
+
+
+def _research_window_return(series, start_dt):
+    if series is None or series.empty:
+        return None
+    window = series.loc[series.index >= pd.Timestamp(start_dt)].dropna()
+    if len(window) < 2:
+        return None
+    base = float(window.iloc[0])
+    if base <= 0:
+        return None
+    value = float((window.iloc[-1] / base - 1) * 100)
+    if math.isnan(value) or math.isinf(value):
+        return None
+    return round(value, 2)
+
+
+def _research_period_return_rows(series, benchmark_series):
+    if series is None or series.empty:
+        return []
+
+    end_dt = series.index.max()
+    windows = [
+        ("1 Month", pd.DateOffset(months=1)),
+        ("YTD", "ytd"),
+        ("1 Year", pd.DateOffset(years=1)),
+        ("5 Years", pd.DateOffset(years=5)),
+        ("10 Years", pd.DateOffset(years=10)),
+        ("Inception", "inception"),
+    ]
+
+    primary_inception = series.index.min()
+    has_benchmark = benchmark_series is not None and not benchmark_series.empty
+    benchmark_inception = benchmark_series.index.min() if has_benchmark else None
+
+    # Use the later inception so both series cover the same comparison window
+    common_inception = primary_inception
+    if benchmark_inception is not None and benchmark_inception > common_inception:
+        common_inception = benchmark_inception
+
+    rows = []
+    for label, offset in windows:
+        if offset == "inception":
+            start_dt = common_inception
+        elif offset == "ytd":
+            start_dt = pd.Timestamp(year=end_dt.year, month=1, day=1)
+        else:
+            start_dt = end_dt - offset
+
+        if offset not in ("inception", "ytd") and start_dt < common_inception:
+            rows.append({"label": label, "ticker_return": None, "benchmark_return": None})
+        else:
+            rows.append({
+                "label": label,
+                "ticker_return": _research_window_return(series, start_dt),
+                "benchmark_return": _research_window_return(benchmark_series, start_dt) if has_benchmark else None,
+            })
+    return rows
+
+
+def _research_multi_period_return_rows(series_by_symbol, common_window=True, include_inception=True, include_stock_long_windows=False):
+    valid_series = {
+        symbol: series
+        for symbol, series in series_by_symbol.items()
+        if series is not None and not series.empty
+    }
+    if not valid_series:
+        return []
+
+    windows = [
+        ("1 Month", pd.DateOffset(months=1)),
+        ("YTD", "ytd"),
+        ("1 Year", pd.DateOffset(years=1)),
+        ("5 Years", pd.DateOffset(years=5)),
+        ("10 Years", pd.DateOffset(years=10)),
+    ]
+    if include_stock_long_windows:
+        windows.extend([
+            ("15 Years", pd.DateOffset(years=15)),
+            ("20 Years", pd.DateOffset(years=20)),
+        ])
+    if include_inception:
+        windows.append(("Inception", "inception"))
+
+    rows = []
+    if common_window:
+        end_dt = min(series.index.max() for series in valid_series.values())
+        common_inception = max(series.index.min() for series in valid_series.values())
+
+        for label, offset in windows:
+            if offset == "inception":
+                start_dt = common_inception
+            elif offset == "ytd":
+                start_dt = pd.Timestamp(year=end_dt.year, month=1, day=1)
+            else:
+                start_dt = end_dt - offset
+
+            if offset not in ("inception", "ytd") and start_dt < common_inception:
+                returns = {symbol: None for symbol in valid_series}
+            else:
+                returns = {
+                    symbol: _research_window_return(series.loc[series.index <= end_dt], start_dt)
+                    for symbol, series in valid_series.items()
+                }
+            rows.append({"label": label, "returns": returns})
+        return rows
+
+    for label, offset in windows:
+        returns = {}
+        for symbol, series in valid_series.items():
+            end_dt = series.index.max()
+            inception = series.index.min()
+            if offset == "inception":
+                start_dt = inception
+            elif offset == "ytd":
+                start_dt = pd.Timestamp(year=end_dt.year, month=1, day=1)
+            else:
+                start_dt = end_dt - offset
+
+            if offset not in ("inception", "ytd") and start_dt < inception:
+                returns[symbol] = None
+            else:
+                returns[symbol] = _research_window_return(series.loc[series.index <= end_dt], start_dt)
+        rows.append({"label": label, "returns": returns})
+    return rows
+
+
+def _research_multi_return_summary(symbols, rows):
+    one_year = next((row for row in rows if row["label"] == "1 Year"), None)
+    ranked = [
+        (symbol, one_year["returns"].get(symbol))
+        for symbol in symbols
+        if one_year and one_year.get("returns", {}).get(symbol) is not None
+    ]
+    if not ranked:
+        return None
+
+    ranked.sort(key=lambda item: item[1], reverse=True)
+    best_symbol, best_return = ranked[0]
+    if len(ranked) == 1:
+        return f"In the past year, {best_symbol} returned a total of {best_return:.2f}%."
+
+    last_symbol, last_return = ranked[-1]
+    return (
+        f"In the past year, {best_symbol} had the highest total return at {best_return:.2f}%, "
+        f"compared with {last_symbol}'s {last_return:.2f}%."
+    )
+
+
+def _research_return_summary(ticker, benchmark, rows):
+    one_year = next((row for row in rows if row["label"] == "1 Year"), None)
+    if one_year and one_year["ticker_return"] is not None:
+        period_label = "In the past year"
+        t_ret = one_year["ticker_return"]
+        b_ret = one_year.get("benchmark_return")
+    else:
+        inception = next((row for row in rows if row["label"] == "Inception"), None)
+        if not inception or inception["ticker_return"] is None:
+            return None
+        period_label = "Since inception"
+        t_ret = inception["ticker_return"]
+        b_ret = inception.get("benchmark_return")
+    if b_ret is None:
+        return f"{period_label}, {ticker} returned a total of {t_ret:.2f}%."
+
+    diff = t_ret - b_ret
+    if abs(diff) < 0.25:
+        relation = "roughly matched"
+    elif diff > 0:
+        relation = "slightly higher than" if diff < 2 else "higher than"
+    else:
+        relation = "slightly lower than" if diff > -2 else "lower than"
+
+    return (
+        f"{period_label}, {ticker} returned a total of {t_ret:.2f}%, "
+        f"which is {relation} {benchmark}'s {b_ret:.2f}% return."
+    )
 
 
 _KNOWN_FUND_ISSUERS = (
@@ -8824,7 +9173,7 @@ def security_research(kind, ticker):
             "ttm_dividend_per_share": ttm_dividend,
             "estimated_yield_pct": _research_pct(_research_info_value(info, "yield", "dividendYield", "trailingAnnualDividendYield")),
             "target_yield_label": "Estimated forward yield",
-            "top_holdings": _research_top_holdings(fund_data) if fund_data is not None else [],
+            "top_holdings": _research_top_holdings(fund_data, ticker=ticker, description=f"{name} {summary}") if fund_data is not None else _fetch_neos_top_holdings(ticker, 25) if _is_neos_fund(ticker, f"{name} {summary}") else [],
             "sector_weightings": _research_weight_map(getattr(fund_data, "sector_weightings", None)) if fund_data is not None else [],
             "asset_classes": _research_weight_map(getattr(fund_data, "asset_classes", None)) if fund_data is not None else [],
             "data_source": "Yahoo Finance",
@@ -8883,16 +9232,130 @@ def security_research(kind, ticker):
         "last_dividend": last_dividend,
         "ttm_dividend_per_share": ttm_dividend,
         "dividend_rate": _research_money(_research_info_value(info, "dividendRate")),
-        "dividend_yield_pct": _research_pct(_research_info_value(info, "dividendYield", "trailingAnnualDividendYield")),
+        "dividend_yield_pct": None,
         "payout_ratio_pct": _research_pct(_research_info_value(info, "payoutRatio")),
+        "peg_ratio": _research_clean_value(_research_info_value(info, "pegRatio", "trailingPegRatio")),
+        "eps": _research_clean_value(_research_info_value(info, "trailingEps")),
+        "dividend_growth_pct": None,
         "fifty_two_week_low": _research_money(_research_info_value(info, "fiftyTwoWeekLow")),
         "fifty_two_week_high": _research_money(_research_info_value(info, "fiftyTwoWeekHigh")),
         "data_source": "Yahoo Finance",
     }
+    # Compute yield from TTM dividends / price — avoids yfinance field scaling inconsistencies
+    try:
+        price_val = response.get("price")
+        if ttm_dividend and price_val:
+            response["dividend_yield_pct"] = round(float(ttm_dividend) / float(price_val) * 100, 4)
+    except Exception:
+        pass
+    if response["dividend_yield_pct"] is None:
+        response["dividend_yield_pct"] = _research_pct(_research_info_value(info, "dividendYield", "trailingAnnualDividendYield"))
+    try:
+        freq_code = _div_calc_infer_frequency(dividends)
+        growth = _div_calc_growth_pct(dividends, freq_code)
+        if growth:
+            response["dividend_growth_pct"] = round(growth, 2)
+    except Exception:
+        pass
     return jsonify(response)
 
 
 # ── Data Management ───────────────────────────────────────────────────────────
+
+@app.route("/api/security-research/<kind>/<ticker>/average-return", methods=["GET"])
+def security_research_average_return(kind, ticker):
+    """Return multi-period total-return comparisons for the research page."""
+    import warnings
+    warnings.filterwarnings("ignore")
+
+    kind = (kind or "").strip().lower()
+    ticker = (ticker or "").strip().upper()
+    benchmark = (request.args.get("benchmark", "SPY") or "SPY").strip().upper()
+
+    if kind not in {"etf", "stock"}:
+        return jsonify({"error": "kind must be etf or stock"}), 400
+    if not ticker:
+        return jsonify({"error": "ticker is required"}), 400
+    if not benchmark:
+        benchmark = "SPY"
+
+    primary_series, primary_name = _research_adjusted_close_series(ticker)
+    benchmark_series, benchmark_name = _research_adjusted_close_series(benchmark)
+
+    if primary_series is None or primary_series.empty:
+        return jsonify({"error": f"No return data for {ticker}"}), 404
+
+    rows = _research_period_return_rows(primary_series, benchmark_series)
+    summary = _research_return_summary(ticker, benchmark, rows)
+
+    return jsonify({
+        "kind": kind,
+        "ticker": ticker,
+        "ticker_name": primary_name,
+        "benchmark": benchmark,
+        "benchmark_name": benchmark_name,
+        "periods": rows,
+        "series": [
+            {"name": ticker, "values": [row["ticker_return"] for row in rows], "color": "#4d8dff"},
+            {"name": benchmark, "values": [row["benchmark_return"] for row in rows], "color": "#ff8c42"},
+        ],
+        "summary": summary,
+        "note": "Returns are total returns based on split/dividend-adjusted prices and are shown from each period's start date.",
+    })
+
+
+@app.route("/api/security-research/<kind>/average-returns", methods=["GET"])
+def security_research_average_returns(kind):
+    """Return multi-period adjusted returns for multiple research symbols."""
+    import warnings
+    warnings.filterwarnings("ignore")
+
+    kind = (kind or "").strip().lower()
+    symbols = []
+    for raw in (request.args.get("tickers", "") or "").split(","):
+        symbol = raw.strip().upper()
+        if symbol and symbol not in symbols:
+            symbols.append(symbol)
+
+    if kind not in {"etf", "stock"}:
+        return jsonify({"error": "kind must be etf or stock"}), 400
+    if not symbols:
+        return jsonify({"error": "tickers are required"}), 400
+
+    series_by_symbol = {}
+    names = {}
+    errors = {}
+    for symbol in symbols:
+        series, name = _research_adjusted_close_series(symbol)
+        if series is None or series.empty:
+            errors[symbol] = f"No return data for {symbol}"
+            continue
+        series_by_symbol[symbol] = series
+        names[symbol] = name
+
+    rows = _research_multi_period_return_rows(
+        series_by_symbol,
+        common_window=(kind == "etf"),
+        include_inception=(kind == "etf"),
+        include_stock_long_windows=(kind == "stock"),
+    )
+    summary = _research_multi_return_summary(symbols, rows)
+
+    return jsonify({
+        "kind": kind,
+        "symbols": [symbol for symbol in symbols if symbol in series_by_symbol],
+        "names": names,
+        "periods": rows,
+        "series": [
+            {"name": symbol, "values": [row["returns"].get(symbol) for row in rows]}
+            for symbol in symbols
+            if symbol in series_by_symbol
+        ],
+        "summary": summary,
+        "errors": errors,
+        "note": "Returns are total returns based on split/dividend-adjusted prices and are shown from each period's start date.",
+    })
+
 
 @app.route("/api/data/clear-all", methods=["POST"])
 def clear_all_data():
@@ -11750,6 +12213,7 @@ def gains_losses_summary():
                   gain_or_loss, total_divs_received, purchase_date
            FROM all_account_info
            WHERE purchase_value IS NOT NULL AND purchase_value > 0
+             AND COALESCE(quantity, 0) > 1e-9
              AND profile_id = ?
            ORDER BY ticker""",
         (profile_id,),
@@ -12838,7 +13302,43 @@ def etf_screen_data():
         # Download daily data with dividends for return calcs
         div_df = yf.download(symbols, period=period, interval="1d", auto_adjust=False, actions=True, progress=False)
 
-        result = {"mode": mode, "reinvest_pct": reinvest_pct, "series": {}, "stats": {}, "warnings": []}
+        result = {"mode": mode, "reinvest_pct": reinvest_pct, "series": {}, "stats": {}, "profiles": {}, "warnings": []}
+        saved_fund_data = {}
+        try:
+            placeholders = ",".join("?" for _ in symbols)
+            conn = get_connection()
+            conn.row_factory = __import__("sqlite3").Row
+            for row in conn.execute(
+                f"""SELECT f.symbol, f.fund_name, f.assets, f.div_yield, f.exp_ratio, f.change_1y,
+                          p.provider
+                   FROM etf_provider_funds f
+                   JOIN etf_providers p ON p.id = f.provider_id
+                   WHERE UPPER(f.symbol) IN ({placeholders})""",
+                symbols,
+            ).fetchall():
+                saved_fund_data[str(row["symbol"]).upper()] = dict(row)
+            for row in conn.execute(
+                f"""SELECT ticker, name, price, change_pct, volume, dollar_volume, market_cap,
+                          pe_ratio, dividend_yield, expense_ratio, aum, etf_category, etf_strategy,
+                          country, updated_at
+                   FROM general_scanner_cache
+                   WHERE UPPER(ticker) IN ({placeholders})""",
+                symbols,
+            ).fetchall():
+                current = saved_fund_data.setdefault(str(row["ticker"]).upper(), {})
+                updated_at = row["updated_at"]
+                is_fresh = False
+                try:
+                    if updated_at:
+                        age = datetime.datetime.utcnow() - datetime.datetime.fromisoformat(str(updated_at).replace("Z", "+00:00").replace("+00:00", ""))
+                        is_fresh = age.days <= 7
+                except Exception:
+                    is_fresh = False
+                if is_fresh:
+                    current.update({k: row[k] for k in row.keys()})
+            conn.close()
+        except Exception:
+            saved_fund_data = {}
 
         def _extract_col(df, col, sym):
             """Safely extract a Series from yfinance download (handles multi-level columns)."""
@@ -12864,6 +13364,18 @@ def etf_screen_data():
                 return s.dropna()
             return pd.Series(dtype=float)
 
+        def _fmt_yf_date(value):
+            if not value:
+                return None
+            try:
+                if isinstance(value, (int, float)):
+                    return datetime.datetime.fromtimestamp(value).strftime("%Y-%m-%d")
+                if hasattr(value, "strftime"):
+                    return value.strftime("%Y-%m-%d")
+                return str(value)[:10]
+            except Exception:
+                return None
+
         for sym in symbols:
             close = _extract_col(price_df, "Close", sym)
             div_close = _extract_col(div_df, "Close", sym)
@@ -12873,8 +13385,18 @@ def etf_screen_data():
             divs = divs_raw.reindex(div_close.index, fill_value=0.0) if not divs_raw.empty else pd.Series(0.0, index=div_close.index)
 
             if close.empty and div_close.empty:
-                result["warnings"].append(f"{sym}: no data available")
-                continue
+                try:
+                    fallback = yf.Ticker(sym).history(period=period, interval="1d", auto_adjust=False, actions=True)
+                except Exception:
+                    fallback = pd.DataFrame()
+                if fallback is not None and not fallback.empty and "Close" in fallback.columns:
+                    close = fallback["Close"].dropna()
+                    div_close = close
+                    divs_raw = fallback["Dividends"].dropna() if "Dividends" in fallback.columns else pd.Series(dtype=float)
+                    divs = divs_raw.reindex(div_close.index, fill_value=0.0) if not divs_raw.empty else pd.Series(0.0, index=div_close.index)
+                else:
+                    result["warnings"].append(f"{sym}: no data available")
+                    continue
 
             # Use div_close (daily) for dates and price normalization so all
             # traces share the same x-axis.  close (from price_df) may use a
@@ -12951,6 +13473,63 @@ def etf_screen_data():
                 "price_ret": price_ret,
                 "div_contrib": div_contrib,
                 "annualized": ann,
+                "max_drawdown": mdd,
+            }
+
+            try:
+                info = yf.Ticker(sym).info or {}
+            except Exception:
+                info = {}
+
+            last_price = float(base.iloc[-1]) if not base.empty else None
+            prev_close = info.get("previousClose")
+            open_price = info.get("open") or info.get("regularMarketOpen")
+            day_change_pct = None
+            if prev_close and last_price:
+                try:
+                    day_change_pct = round((last_price / float(prev_close) - 1) * 100, 2)
+                except Exception:
+                    day_change_pct = None
+
+            assets = info.get("totalAssets") or info.get("totalNetAssets")
+            volume = info.get("volume") or info.get("regularMarketVolume")
+            dollar_volume = None
+            if volume and last_price:
+                try:
+                    dollar_volume = float(volume) * float(last_price)
+                except Exception:
+                    dollar_volume = None
+
+            dividend_yield = info.get("yield")
+            if dividend_yield is None:
+                dividend_yield = info.get("dividendYield")
+            expense_ratio = info.get("annualReportExpenseRatio") or info.get("netExpenseRatio")
+            pe_ratio = info.get("trailingPE") or info.get("forwardPE")
+
+            saved = saved_fund_data.get(sym, {})
+            result["profiles"][sym] = {
+                "symbol": sym,
+                "name": saved.get("fund_name") or saved.get("name") or info.get("longName") or info.get("shortName") or sym,
+                "price": round(last_price, 2) if last_price is not None else saved.get("price"),
+                "change_pct": day_change_pct if day_change_pct is not None else saved.get("change_pct"),
+                "assets": assets or saved.get("assets") or saved.get("aum") or saved.get("market_cap"),
+                "expense_ratio": expense_ratio if expense_ratio is not None else (saved.get("expense_ratio") if saved.get("expense_ratio") is not None else saved.get("exp_ratio")),
+                "pe_ratio": pe_ratio or saved.get("pe_ratio"),
+                "dividend_yield": dividend_yield if dividend_yield is not None else (saved.get("dividend_yield") if saved.get("dividend_yield") is not None else saved.get("div_yield")),
+                "volume": volume or saved.get("volume"),
+                "dollar_volume": dollar_volume or saved.get("dollar_volume"),
+                "open": open_price,
+                "previous_close": prev_close,
+                "low_price": info.get("dayLow") or info.get("regularMarketDayLow"),
+                "high_price": info.get("dayHigh") or info.get("regularMarketDayHigh"),
+                "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
+                "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
+                "beta": info.get("beta") or info.get("beta3Year"),
+                "category": saved.get("etf_category") or saved.get("etf_strategy") or info.get("category"),
+                "issuer": saved.get("provider") or info.get("fundFamily"),
+                "inception_date": _fmt_yf_date(info.get("fundInceptionDate")),
+                "return_1y": saved.get("change_1y") if saved.get("change_1y") is not None else total_ret,
+                "return_annualized": ann,
                 "max_drawdown": mdd,
             }
 
@@ -13657,19 +14236,15 @@ def _build_earnings_events():
     if cached is not None:
         return cached
 
-    events = []
-    for _, row in df.iterrows():
+    def _fetch_ticker_event(row):
         ticker = str(row["ticker"] or "").strip().upper()
         if not ticker:
-            continue
+            return None
         description = str(row["description"]) if pd.notna(row["description"]) else ""
 
         info = _yf_earnings_info(ticker) or _empty_earnings_info()
 
-        # Layer Nasdaq sources for fields yfinance left blank. Each fills a
-        # different slice: info → next announcement date,
-        # eps → upcoming consensus + same-quarter prior actual,
-        # surprise → last-quarter actual / estimate / surprise %.
+        # Layer Nasdaq sources for fields yfinance left blank.
         if info.get("next_date") is None:
             info = _merge_earnings_info(info, _nasdaq_info_next_date(ticker))
         if not _earnings_info_complete(info):
@@ -13680,10 +14255,8 @@ def _build_earnings_events():
         next_d = info.get("next_date")
         last_d = info.get("last_date")
         if not next_d and not last_d:
-            continue
+            return None
 
-        # Color by recency: upcoming this month = green, upcoming later = teal,
-        # past = muted.
         color = "#8899aa"
         if next_d:
             days = (next_d - today_d).days
@@ -13698,7 +14271,7 @@ def _build_earnings_events():
         is_upcoming = bool(next_d and next_d >= today_d)
         days_until = (next_d - today_d).days if next_d else None
 
-        events.append({
+        return {
             "ticker": ticker,
             "description": description,
             "date": primary.isoformat(),
@@ -13719,7 +14292,20 @@ def _build_earnings_events():
                 else None
             ),
             "color": color,
-        })
+        }
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    rows = [row for _, row in df.iterrows()]
+    events = []
+    with ThreadPoolExecutor(max_workers=min(5, len(rows))) as pool:
+        futures = {pool.submit(_fetch_ticker_event, row): row for row in rows}
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                if result:
+                    events.append(result)
+            except Exception:
+                pass
 
     # Upcoming first (soonest first), then past (most recent first).
     def _sort_key(ev):
@@ -24249,6 +24835,304 @@ def growth_2_data():
         result["per_category"] = grouped
 
     return jsonify(result)
+
+
+# ── ETF Providers lookup ───────────────────────────────────────────────────────
+
+@app.route("/api/etf-providers")
+def etf_providers():
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT p.provider, p.total_assets, p.num_funds, p.avg_expense
+           FROM etf_providers p
+           WHERE EXISTS (SELECT 1 FROM etf_provider_funds f WHERE f.provider_id = p.id)
+           ORDER BY p.total_assets DESC NULLS LAST"""
+    ).fetchall()
+    conn.close()
+    return jsonify([
+        {"provider": r[0], "total_assets": r[1], "num_funds": r[2], "avg_expense": r[3]}
+        for r in rows
+    ])
+
+
+@app.route("/api/etf-providers/<provider_name>/funds")
+def etf_provider_funds(provider_name):
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT f.symbol, f.fund_name, f.assets, f.div_yield, f.exp_ratio, f.change_1y
+           FROM etf_provider_funds f
+           JOIN etf_providers p ON p.id = f.provider_id
+           WHERE LOWER(p.provider) = LOWER(?)
+           ORDER BY f.assets DESC NULLS LAST""",
+        (provider_name,)
+    ).fetchall()
+    conn.close()
+    return jsonify([
+        {"symbol": r[0], "fund_name": r[1], "assets": r[2],
+         "div_yield": r[3], "exp_ratio": r[4], "change_1y": r[5]}
+        for r in rows
+    ])
+
+
+def _stockanalysis_provider_slug(provider):
+    provider = re.sub(r"[^a-z0-9]+", "-", (provider or "").strip().lower())
+    return provider.strip("-")
+
+
+def _stockanalysis_number(value):
+    import html
+
+    text = html.unescape(str(value or "")).strip().replace(",", "")
+    if not text or text in {"-", "—", "N/A"}:
+        return None
+    mult = 1.0
+    suffix = text[-1:].upper()
+    if suffix in {"K", "M", "B", "T"}:
+        text = text[:-1]
+        mult = {"K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}[suffix]
+    text = re.sub(r"[^0-9.\-]", "", text)
+    if not text:
+        return None
+    try:
+        return round(float(text) * mult, 6)
+    except Exception:
+        return None
+
+
+def _stockanalysis_percent(value):
+    import html
+
+    text = html.unescape(str(value or "")).strip()
+    if not text or text in {"-", "—", "N/A"}:
+        return None
+    text = re.sub(r"[^0-9.\-]", "", text)
+    if not text:
+        return None
+    try:
+        return round(float(text), 3)
+    except Exception:
+        return None
+
+
+def _stockanalysis_clean_text(value):
+    import html
+
+    text = re.sub(r"(?s)<!--.*?-->", "", str(value or ""))
+    text = re.sub(r"(?s)<[^>]+>", "", text)
+    return html.unescape(re.sub(r"\s+", " ", text)).strip()
+
+
+def _fetch_stockanalysis_provider_funds(provider):
+    import requests
+
+    slug = _stockanalysis_provider_slug(provider)
+    if not slug:
+        raise ValueError("Provider is required")
+
+    url = f"https://stockanalysis.com/etf/provider/{slug}/"
+    resp = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0 PortfolioTrackingClient/1.0"})
+    if resp.status_code == 404:
+        raise ValueError(f"StockAnalysis provider page was not found for {provider}")
+    resp.raise_for_status()
+
+    table_match = re.search(r'(?is)<table[^>]*id="main-table"[^>]*>(.*?)</table>', resp.text or "")
+    if not table_match:
+        raise ValueError("Could not find the StockAnalysis ETF table")
+
+    funds = []
+    for row_html in re.findall(r"(?is)<tr[^>]*>(.*?)</tr>", table_match.group(1)):
+        cells = re.findall(r"(?is)<td[^>]*>(.*?)</td>", row_html)
+        if len(cells) < 6:
+            continue
+        symbol_match = re.search(r"(?is)<a[^>]*>(.*?)</a>", cells[0])
+        symbol = _stockanalysis_clean_text(symbol_match.group(1) if symbol_match else cells[0]).upper()
+        if not symbol:
+            continue
+        funds.append({
+            "symbol": symbol,
+            "fund_name": _stockanalysis_clean_text(cells[1]),
+            "assets": _stockanalysis_number(cells[2]),
+            "div_yield": _stockanalysis_percent(cells[3]),
+            "exp_ratio": _stockanalysis_percent(cells[4]),
+            "change_1y": _stockanalysis_percent(cells[5]),
+        })
+
+    if not funds:
+        raise ValueError(f"No funds were parsed from StockAnalysis for {provider}")
+    return funds, url
+
+
+@app.route("/api/etf-providers/<provider_name>/refresh-stockanalysis", methods=["POST"])
+def refresh_etf_provider_stockanalysis(provider_name):
+    provider_name = (provider_name or "").strip()
+    if not provider_name:
+        return jsonify({"error": "Provider is required"}), 400
+
+    try:
+        scraped_funds, source_url = _fetch_stockanalysis_provider_funds(provider_name)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, provider FROM etf_providers WHERE LOWER(provider) = LOWER(?)",
+            (provider_name,),
+        ).fetchone()
+        if not row:
+            return jsonify({"error": f"Provider not found in database: {provider_name}"}), 404
+
+        provider_id = row["id"]
+        existing = {
+            str(r["symbol"]).upper()
+            for r in conn.execute("SELECT symbol FROM etf_provider_funds WHERE provider_id = ?", (provider_id,)).fetchall()
+        }
+
+        inserted = 0
+        updated = 0
+        for fund in scraped_funds:
+            was_existing = fund["symbol"] in existing
+            conn.execute(
+                """INSERT INTO etf_provider_funds
+                   (provider_id, symbol, fund_name, assets, div_yield, exp_ratio, change_1y)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(provider_id, symbol) DO UPDATE SET
+                     fund_name = excluded.fund_name,
+                     assets = excluded.assets,
+                     div_yield = excluded.div_yield,
+                     exp_ratio = excluded.exp_ratio,
+                     change_1y = excluded.change_1y""",
+                (
+                    provider_id,
+                    fund["symbol"],
+                    fund["fund_name"],
+                    fund["assets"],
+                    fund["div_yield"],
+                    fund["exp_ratio"],
+                    fund["change_1y"],
+                ),
+            )
+            if was_existing:
+                updated += 1
+            else:
+                inserted += 1
+
+        summary = conn.execute(
+            """SELECT COUNT(*) AS num_funds,
+                      SUM(assets) AS total_assets,
+                      AVG(exp_ratio) AS avg_expense
+               FROM etf_provider_funds
+               WHERE provider_id = ?""",
+            (provider_id,),
+        ).fetchone()
+        conn.execute(
+            "UPDATE etf_providers SET total_assets = ?, num_funds = ?, avg_expense = ? WHERE id = ?",
+            (summary["total_assets"], summary["num_funds"], summary["avg_expense"], provider_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return jsonify({
+        "provider": row["provider"],
+        "source_url": source_url,
+        "parsed": len(scraped_funds),
+        "updated": updated,
+        "inserted": inserted,
+        "total_assets": summary["total_assets"],
+        "num_funds": summary["num_funds"],
+        "avg_expense": summary["avg_expense"],
+    })
+
+
+@app.route("/api/etf-funds/search")
+def etf_funds_search():
+    search_q = request.args.get('q', '').strip().upper()
+    provider_filter = request.args.get('provider', '').strip()
+    sort_by = request.args.get('sort', 'symbol')
+
+    # Whitelist sort column to prevent SQL injection
+    allowed_sorts = {'symbol', 'fund_name', 'assets', 'div_yield', 'exp_ratio', 'change_1y', 'provider'}
+    if sort_by not in allowed_sorts:
+        sort_by = 'symbol'
+
+    where_clauses = ["1=1"]
+    params = []
+
+    if search_q:
+        where_clauses.append("(f.symbol LIKE ? OR f.fund_name LIKE ?)")
+        params.extend([f"%{search_q}%", f"%{search_q}%"])
+
+    if provider_filter:
+        where_clauses.append("LOWER(p.provider) = LOWER(?)")
+        params.append(provider_filter)
+
+    conn = get_connection()
+    rows = conn.execute(f"""
+        SELECT f.symbol, f.fund_name, p.provider, f.assets,
+               f.div_yield, f.exp_ratio, f.change_1y
+        FROM etf_provider_funds f
+        JOIN etf_providers p ON f.provider_id = p.id
+        WHERE {' AND '.join(where_clauses)}
+        ORDER BY {sort_by}
+        LIMIT 5000
+    """, params).fetchall()
+    conn.close()
+
+    funds = [
+        {'symbol': r[0], 'fund_name': r[1], 'provider': r[2],
+         'assets': r[3], 'div_yield': r[4], 'exp_ratio': r[5], 'change_1y': r[6], 'source': 'db'}
+        for r in rows
+    ]
+
+    exact_symbol_found = any(str(f.get('symbol') or '').upper() == search_q for f in funds)
+    looks_like_ticker = bool(re.fullmatch(r"[A-Z0-9.\-]{1,10}", search_q or ""))
+
+    # If a ticker-like query has no exact DB symbol match, try Yahoo Finance.
+    # This catches cases like "BST" where fuzzy DB search returns "YBST".
+    if search_q and not provider_filter and looks_like_ticker and not exact_symbol_found:
+        try:
+            import yfinance as yf
+            tk = yf.Ticker(search_q)
+            info = tk.info or {}
+            name = info.get('longName') or info.get('shortName') or ''
+            if name:
+                # trailingAnnualDividendYield is decimal (0.008 = 0.8%); dividendYield is already %
+                trail_yield = info.get('trailingAnnualDividendYield')
+                div_y_pct   = info.get('dividendYield')
+                if trail_yield is not None and trail_yield > 0:
+                    div_yield = round(trail_yield * 100, 3)
+                elif div_y_pct is not None and div_y_pct > 0:
+                    div_yield = round(float(div_y_pct), 3)
+                else:
+                    div_yield = None
+
+                # netExpenseRatio is already in % form (0.49 = 0.49%)
+                raw_exp = info.get('annualReportExpenseRatio') or info.get('netExpenseRatio')
+                exp_ratio = round(float(raw_exp), 3) if raw_exp else None
+
+                # 52WeekChange is decimal; ytdReturn is already %
+                raw_1y = info.get('52WeekChange')
+                change_1y = round(raw_1y * 100, 3) if raw_1y else None
+
+                yahoo_fund = {
+                    'symbol':    search_q,
+                    'fund_name': name,
+                    'provider':  info.get('fundFamily') or info.get('quoteType', 'Unknown'),
+                    'assets':    info.get('totalAssets'),
+                    'div_yield': div_yield,
+                    'exp_ratio': exp_ratio,
+                    'change_1y': change_1y,
+                    'source':    'yahoo',
+                }
+                funds = [yahoo_fund] + [
+                    f for f in funds
+                    if str(f.get('symbol') or '').upper() != search_q
+                ]
+        except Exception:
+            pass
+
+    return jsonify({'funds': funds, 'total': len(funds)})
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────
