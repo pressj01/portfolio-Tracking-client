@@ -8633,7 +8633,7 @@ def _research_adjusted_close_series(ticker):
     return series, description
 
 
-def _research_window_return(series, start_dt):
+def _research_window_return(series, start_dt, annualize=False):
     if series is None or series.empty:
         return None
     window = series.loc[series.index >= pd.Timestamp(start_dt)].dropna()
@@ -8642,7 +8642,15 @@ def _research_window_return(series, start_dt):
     base = float(window.iloc[0])
     if base <= 0:
         return None
-    value = float((window.iloc[-1] / base - 1) * 100)
+    end_value = float(window.iloc[-1])
+    if annualize:
+        elapsed_days = max((window.index[-1] - window.index[0]).days, 0)
+        years = elapsed_days / 365.25
+        if years <= 0:
+            return None
+        value = float(((end_value / base) ** (1 / years) - 1) * 100)
+    else:
+        value = float((end_value / base - 1) * 100)
     if math.isnan(value) or math.isinf(value):
         return None
     return round(value, 2)
@@ -8691,7 +8699,7 @@ def _research_period_return_rows(series, benchmark_series):
     return rows
 
 
-def _research_multi_period_return_rows(series_by_symbol, common_window=True, include_inception=True, include_stock_long_windows=False):
+def _research_multi_period_return_rows(series_by_symbol, common_window=True, include_inception=True, include_stock_long_windows=False, annualize_long_windows=False):
     valid_series = {
         symbol: series
         for symbol, series in series_by_symbol.items()
@@ -8728,11 +8736,12 @@ def _research_multi_period_return_rows(series_by_symbol, common_window=True, inc
             else:
                 start_dt = end_dt - offset
 
-            if offset not in ("inception", "ytd") and start_dt < common_inception:
+            if offset != "inception" and start_dt < common_inception:
                 returns = {symbol: None for symbol in valid_series}
             else:
+                annualize = annualize_long_windows and label not in ("1 Month", "YTD")
                 returns = {
-                    symbol: _research_window_return(series.loc[series.index <= end_dt], start_dt)
+                    symbol: _research_window_return(series.loc[series.index <= end_dt], start_dt, annualize=annualize)
                     for symbol, series in valid_series.items()
                 }
             rows.append({"label": label, "returns": returns})
@@ -8750,10 +8759,11 @@ def _research_multi_period_return_rows(series_by_symbol, common_window=True, inc
             else:
                 start_dt = end_dt - offset
 
-            if offset not in ("inception", "ytd") and start_dt < inception:
+            if offset != "inception" and start_dt < inception:
                 returns[symbol] = None
             else:
-                returns[symbol] = _research_window_return(series.loc[series.index <= end_dt], start_dt)
+                annualize = annualize_long_windows and label not in ("1 Month", "YTD")
+                returns[symbol] = _research_window_return(series.loc[series.index <= end_dt], start_dt, annualize=annualize)
         rows.append({"label": label, "returns": returns})
     return rows
 
@@ -9327,9 +9337,10 @@ def security_research_average_returns(kind):
 
     rows = _research_multi_period_return_rows(
         series_by_symbol,
-        common_window=(kind == "etf"),
+        common_window=False,
         include_inception=(kind == "etf"),
         include_stock_long_windows=(kind == "stock"),
+        annualize_long_windows=True,
     )
     summary = _research_multi_return_summary(symbols, rows)
 
@@ -9345,7 +9356,7 @@ def security_research_average_returns(kind):
         ],
         "summary": summary,
         "errors": errors,
-        "note": "Returns are total returns based on split/dividend-adjusted prices and are shown from each period's start date.",
+        "note": "Returns are based on split/dividend-adjusted prices. 1 Month and YTD are cumulative; longer windows are annualized average returns.",
     })
 
 
