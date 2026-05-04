@@ -62,6 +62,7 @@ const COLUMNS = [
 ]
 
 const DEFAULT_COLUMNS = ['symbol', 'name', 'price', 'change_pct', 'market_cap', 'pe_ratio', 'forward_pe', 'peg_ratio', 'dividend_yield', 'dividend_growth', 'volume', 'dollar_volume', 'open', 'return_1y']
+const AVERAGE_PERIOD_ORDER = ['1 Month', 'YTD', '1 Year', '5 Years', '10 Years', '15 Years', '20 Years']
 
 function pct(v) {
   if (v == null || Number.isNaN(Number(v))) return '-'
@@ -159,7 +160,7 @@ function totalReturnForYears(series, years) {
   const base = Number(values[startIdx])
   const last = Number(values[endIdx])
   if (!Number.isFinite(base) || !Number.isFinite(last) || base <= 0) return null
-  return Number(((last / base - 1) * 100).toFixed(2))
+  return Number((((last / base) ** (1 / years) - 1) * 100).toFixed(2))
 }
 
 function longReturnPeriodsFromHistory(historyData, symbols) {
@@ -539,7 +540,8 @@ export default function StockComparer() {
   const averageChart = useMemo(() => {
     const periods = averageData?.periods || []
     const averageSymbols = averageData?.symbols?.length ? averageData.symbols : symbols
-    const available = periods.filter(p => p.label !== 'Inception' && averageSymbols.some(sym => p.returns?.[sym] != null))
+    const periodByLabel = new Map(periods.map(p => [p.label, p]))
+    const available = AVERAGE_PERIOD_ORDER.map(label => periodByLabel.get(label) || { label, returns: {} })
     return {
       data: averageSymbols.map((sym, idx) => ({
         x: available.map(p => p.label),
@@ -565,6 +567,13 @@ export default function StockComparer() {
       },
     }
   }, [averageData, symbols])
+
+  const averageTablePeriods = useMemo(() => {
+    const periodByLabel = new Map((averageData?.periods || []).map(p => [p.label, p]))
+    return AVERAGE_PERIOD_ORDER
+      .filter(label => label !== '1 Month')
+      .map(label => periodByLabel.get(label) || { label, returns: {} })
+  }, [averageData])
 
   return (
     <div className="page etf-comparer-page">
@@ -715,8 +724,7 @@ export default function StockComparer() {
               <thead>
                 <tr>
                   <th>Symbol</th>
-                  {averageData.periods
-                    .filter(p => p.label !== '1 Month' && p.label !== 'Inception' && (averageData.symbols || symbols).some(sym => p.returns?.[sym] != null))
+                  {averageTablePeriods
                     .map(p => <th key={p.label}>{p.label === 'YTD' ? 'Year-to-date' : p.label}</th>)}
                 </tr>
               </thead>
@@ -724,8 +732,7 @@ export default function StockComparer() {
                 {(averageData.symbols || symbols).map((sym, idx) => (
                   <tr key={sym}>
                     <td><span className="etfc-series-swatch" style={{ background: COLORS[idx % COLORS.length] }} />{sym}</td>
-                    {averageData.periods
-                      .filter(p => p.label !== '1 Month' && p.label !== 'Inception' && (averageData.symbols || symbols).some(symbol => p.returns?.[symbol] != null))
+                    {averageTablePeriods
                       .map(p => <td key={p.label}>{pct(p.returns?.[sym])}</td>)}
                   </tr>
                 ))}
