@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 
-const APP_VERSION = '1.26.0'
+const APP_VERSION = '1.27.0'
 
 const GROUPS = [
   {
@@ -47,6 +47,8 @@ const GROUPS = [
       { id: 'general-scanner', label: 'General Scanner' },
       { id: 'security-research', label: 'Security Research' },
       { id: 'etf-screen', label: 'ETF/Stock Screen' },
+      { id: 'etf-comparer', label: 'ETF Comparer' },
+      { id: 'stock-comparer', label: 'Stock Comparer' },
       { id: 'watchlist', label: 'Watchlist' },
       { id: 'buy-sell', label: 'Buy/Sell Signals' },
       { id: 'nav-erosion', label: 'NAV Erosion' },
@@ -61,6 +63,7 @@ const GROUPS = [
       { id: 'consolidation', label: 'Consolidation' },
       { id: 'macro-dashboard', label: 'Macro Dashboard' },
       { id: 'income-growth', label: 'Income Growth' },
+      { id: 'rebalance-wizard', label: 'Rebalance Wizard' },
     ],
   },
   {
@@ -88,7 +91,7 @@ function Overview() {
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
         <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation.</li>
         <li><strong>Dividends</strong> — Dividend analysis, calendar view, and comparison tools.</li>
-        <li><strong>Analysis</strong> — General Scanner, Single Strategy Scanner, ETF screening, NAV erosion analysis, correlation matrix, income simulation, buy/sell signals, portfolio builder, consolidation analysis, and macro regime dashboard.</li>
+        <li><strong>Analysis</strong> — General Scanner, Single Strategy Scanner, ETF screening, ETF Comparer, Stock Comparer, NAV erosion analysis, correlation matrix, income simulation, buy/sell signals, portfolio builder, consolidation analysis, macro regime dashboard, and Rebalance Wizard.</li>
         <li><strong>Multi-Portfolio</strong> — Create multiple portfolios and view them individually or as an aggregate.</li>
         <li><strong>Market Data</strong> — Prices, dividends, and ex-div dates refresh automatically from Yahoo Finance.</li>
       </ul>
@@ -466,6 +469,9 @@ function DashboardHelp() {
         <li><strong>PrRtn / TotRtn</strong> — price-only return and total return (including dividends).</li>
         <li><strong>YTD</strong> — year-to-date dividends received.</li>
         <li><strong>Mo$ / Yr$</strong> — estimated monthly and annual dividend income.</li>
+        <li><strong>MoShr</strong> — estimated fractional shares acquired per month if the monthly dividend is fully reinvested at the current price (DRIP simulation).</li>
+        <li><strong>DRIP$</strong> — monthly income being reinvested (blue). Only present for shares in DRIP-enabled accounts.</li>
+        <li><strong>YrShr</strong> — estimated fractional shares acquired per year if the annual dividend is fully reinvested at the current price.</li>
         <li><strong>PFI%</strong> — "Paid For Itself" — percentage of original cost recovered through dividends.</li>
         <li><strong>NAV</strong> — benchmark-adjusted NAV erosion ratio plus controls for whether the holding should be tested and what benchmark it should use.</li>
         <li><strong>Grd</strong> — composite grade for the holding.</li>
@@ -978,14 +984,22 @@ function CategoriesHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
           <strong>Summary Strip (top)</strong> — Shows how many holdings are allocated vs. total,
-          the total allocated dollar value and percentage, and total portfolio value.
+          total allocated dollar value and percentage, total portfolio value, estimated monthly income
+          with portfolio yield, weekly dividend exposure (percentage of portfolio value in weekly-payer funds),
+          and the running total of target allocations set across all categories.
           Below the numbers is a colored <strong>allocation bar</strong> that visualizes each category's
           share of the portfolio. Hovering over a segment shows the category name and percentage.
           Any unallocated value appears as a gray segment labeled "Unallocated".
         </li>
         <li>
+          <strong>Target Assistant (optional panel)</strong> — Appears when any category has a target
+          allocation set. Suggests optimized target percentages based on current allocation, income yield,
+          risk flags, and your constraints. See <em>Target Assistant</em> section below.
+        </li>
+        <li>
           <strong>Category Cards (left panel)</strong> — One card per category showing the category name,
-          number of tickers, actual allocation percentage, dollar value, and a small progress bar.
+          number of tickers, actual allocation percentage, dollar value, a small progress bar,
+          and a Quality score (when the Target Assistant is active).
           Cards are expandable to show the individual tickers inside.
         </li>
         <li>
@@ -1107,6 +1121,69 @@ function CategoriesHelp() {
         </li>
       </ol>
 
+      {/* ── Target Assistant ──────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Target Assistant</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The Target Assistant appears automatically when at least one category has a target allocation set.
+        It analyzes the current allocation, income yield, weekly-payer exposure, and NAV risk flags for
+        each category and proposes optimized target percentages with plain-language rationale.
+      </p>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Mode Buttons</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Three preset modes are shown as cards at the top of the assistant panel. Click any card to switch the active mode:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Balanced</strong> — blends allocation quality with income preservation and drift reduction.</li>
+        <li><strong>Preserve income</strong> — prioritizes keeping projected monthly income at or above the income floor.</li>
+        <li><strong>Reduce target drift</strong> — prioritizes minimizing the total dollar distance from category targets, even if that means accepting slightly lower income.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each card previews the projected monthly income, income floor status (Met or Short by $X), a combined quality score, and total dollar moves required.
+      </p>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Suggestion Table</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The main table shows one row per category with:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Current</strong> — actual allocation percentage today.</li>
+        <li><strong>Target</strong> — your manually set target (if any).</li>
+        <li><strong>Suggested</strong> — the assistant's recommended target for the active mode (green).</li>
+        <li><strong>Yield</strong> — category's current income yield.</li>
+        <li><strong>Weekly</strong> — percentage of the category's value in weekly-paying funds.</li>
+        <li><strong>Quality</strong> — a composite score (0–100) based on concentration, NAV risk, yield sustainability, and diversification. Green ≥ 80, yellow ≥ 65, red below 65. Hover for the contributing factors.</li>
+        <li><strong>$ To Suggested</strong> — dollar amount that would need to move to reach the suggested target (green = buy more, red = trim).</li>
+        <li><strong>Reason</strong> — plain-language explanation of why the suggestion moved up or down.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Constraint Sliders</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Six sliders let you tune the assistant's suggestions without leaving the page:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Minimum acceptable monthly income</strong> — the income floor the assistant must not drop below. Defaults to the portfolio's current monthly income on first load.</li>
+        <li><strong>Max category %</strong> — caps any single category's suggested allocation.</li>
+        <li><strong>Max high-yield category %</strong> — a tighter cap applied to categories the assistant classifies as income-heavy or yield-chasing buckets.</li>
+        <li><strong>Max allowed drift</strong> — limits how far the suggested target can move from the current allocation in percentage points.</li>
+        <li><strong>Minimum anchor allocation</strong> — raises the floor for any category named "Anchor" (useful for core holdings you always want to be the largest bucket).</li>
+        <li><strong>Income growth priority</strong> — 0–100 slider; higher values tilt suggestions toward higher-yielding categories.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Projected Income Summary</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Below the sliders, the assistant shows projected monthly income after applying the suggested targets,
+        the income floor, current vs. projected portfolio yield, and current vs. projected weekly exposure percentage.
+        An income floor warning appears in red if the active mode's suggestions would breach the floor,
+        along with the shortfall and the extra yield the Rebalance Wizard would need to find on replacements.
+      </p>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Applying Suggestions</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Apply Suggested Targets</strong> — saves the suggested percentages as the target allocation for each category (overwrites any existing targets). No navigation occurs.</li>
+        <li><strong>Apply &amp; Open Rebalance</strong> — saves the suggested targets and immediately opens the Rebalance Wizard, passing the current income mode and income floor as defaults so the wizard is pre-configured to match the assistant's intent.</li>
+      </ul>
+
       {/* ── Expanded Category View ────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Expanded Category Details</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -1116,6 +1193,7 @@ function CategoriesHelp() {
         <li><strong>Ticker</strong> — The stock/ETF symbol.</li>
         <li><strong>Description</strong> — The holding's name.</li>
         <li><strong>Value</strong> — Current market value of that position.</li>
+        <li><strong>Freq</strong> — Dividend payment frequency. Weekly payers are highlighted in green.</li>
         <li><strong>% of Category</strong> — What percentage of the category's total value this ticker represents.</li>
         <li><strong>&times;</strong> — Unassign button to remove the ticker from this category.</li>
       </ul>
@@ -2407,9 +2485,18 @@ function SecurityResearchHelp() {
         The chart scrolls into view below the research cards and helps you see whether dividends materially changed the one-year outcome.
       </p>
 
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Average Return Chart</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Below the annual chart, an <strong>Average Return</strong> bar chart shows average annualized returns over standard multi-year windows
+        (1Y, 3Y, 5Y, 10Y, and since inception where available), comparing the ticker against its selected benchmark.
+        The benchmark defaults to SPY and can be changed in the benchmark field above the research result.
+        This helps you quickly assess whether the ticker has outperformed its reference index over multiple time horizons.
+      </p>
+
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>When to Use It</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>Use Security Research for a fast first pass on a single ticker.</li>
+        <li>Use ETF Comparer or Stock Comparer when you need to compare multiple tickers side-by-side with a full return history chart and comparison table.</li>
         <li>Use Stock and ETF Analysis when you need a deeper technical chart with indicators, drawing tools, or return simulations.</li>
         <li>Use General Scanner when you want to compare many tickers at once with filters and sortable columns.</li>
       </ul>
@@ -3991,6 +4078,204 @@ function AnnualTaxReportHelp() {
   )
 }
 
+function ETFComparerHelp() {
+  return (
+    <div>
+      <h2>ETF Comparer</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        ETF Comparer lets you compare up to seven ETFs side-by-side using an interactive return chart,
+        a customizable data table, an average return bar chart, and a multi-period comparison table.
+        It is designed for a direct head-to-head comparison of ETF return history, yield, and fund characteristics.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Type one or more ETF tickers (comma- or space-separated) in the input field and press <strong>Add</strong> or Enter.</li>
+        <li>Each ticker appears as a chip below the input. Click the × on a chip to remove it.</li>
+        <li>Up to seven tickers can be loaded simultaneously.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Return Chart</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Period</strong> — 1M, 3M, 6M, YTD, 1Y, 2Y, 5Y, 10Y, or MAX.</li>
+        <li><strong>Return Mode</strong> — choose Total Return (price + reinvested dividends), Price Only, Price + Dividends (cash), Both (total and price), All Three, or All Four traces per ticker.</li>
+        <li><strong>Reinvestment %</strong> — adjustable slider from 0% (all dividends taken as cash) to 100% (all dividends reinvested). Only applies to the blended trace in applicable modes.</li>
+        <li><strong>% / Index toggle</strong> — show returns as a percentage gain/loss from period start, or as an indexed value starting at 100.</li>
+        <li><strong>Labels</strong> — toggle end-of-period return labels on the chart.</li>
+        <li><strong>Range slider</strong> — drag to zoom into a specific date range within the selected period.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Comparison Table</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A sortable table shows live market data for each ticker. Symbol and Fund Name columns are always visible;
+        all other columns are optional. Click <strong>Columns</strong> to open the column picker and toggle which fields appear.
+        Available columns include: stock price, daily % change, assets under management, expense ratio, PE ratio,
+        dividend yield, volume, dollar volume, open price, 1Y CAGR, 52-week high/low, issuer, category, and max drawdown.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Average Return Bar Chart</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Below the comparison table, a grouped bar chart shows average annualized returns for each ticker
+        across standard time windows (1Y, 3Y, 5Y, 10Y). This makes it easy to spot which ETF has led
+        or lagged across different horizons at a glance.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Multi-Period Table</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A tabular summary shows 1Y, 3Y, 5Y, 10Y, 15Y, and 20Y total returns for each ticker in the comparison,
+        alongside any long-horizon data available for MAX-period lookups.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>When to Use It</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li>Use ETF Comparer when you want to evaluate several ETFs head-to-head with full return history and fund metrics.</li>
+        <li>Use Stock Comparer for the same workflow applied to individual stocks, with stock-specific fundamentals (market cap, PE, PEG, margins, etc.).</li>
+        <li>Use Security Research for a single-ticker quick lookup.</li>
+        <li>Use ETF/Stock Analysis when you need technical indicators, drawing tools, or a reinvestment-rate simulation for a single ticker.</li>
+      </ul>
+    </div>
+  )
+}
+
+function StockComparerHelp() {
+  return (
+    <div>
+      <h2>Stock Comparer</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Stock Comparer lets you compare up to seven individual stocks side-by-side using an interactive return chart,
+        a customizable data table, an average return bar chart, a multi-period comparison table,
+        and a Key Fundamentals card panel showing 24+ metrics per stock.
+        It mirrors the ETF Comparer layout but uses stock-specific columns and fundamentals.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Type one or more stock tickers (comma- or space-separated) and press <strong>Add</strong> or Enter.</li>
+        <li>Each ticker appears as a colored chip. Click × to remove it.</li>
+        <li>Up to seven tickers can be compared simultaneously.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Return Chart</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Identical controls to ETF Comparer: period selector (1M–MAX), return mode (Total Return, Price Only, Price + Divs, Both, All Three, All Four),
+        reinvestment % slider, % / index toggle, end labels, and a date range slider.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Comparison Table</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Symbol and Company Name are always visible. Optional columns include stock-specific fields not available for ETFs:
+        market cap, forward PE, PEG ratio, dividend growth rate, and EPS (TTM), in addition to the common fields
+        (price, daily % change, PE ratio, dividend yield, volume, dollar volume, open, 1Y CAGR, beta, payout ratio,
+        debt/equity, 52-week high/low, sector, industry, max drawdown, revenue, profit margin).
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Average Return Bar Chart &amp; Multi-Period Table</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Same as ETF Comparer — grouped bar chart of 1Y/3Y/5Y/10Y annualized returns and a tabular multi-period summary.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Key Fundamentals Cards</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Below the charts and table, each loaded stock gets a fundamentals card showing 24 metrics organized into groups:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Size &amp; Valuation</strong> — Market Cap, Enterprise Value, Trailing PE, Forward PE, PEG Ratio, Price/Book, Price/Sales, Beta.</li>
+        <li><strong>Profitability</strong> — Revenue, Net Income, Free Cash Flow, EBITDA, Gross Margin, Operating Margin, Profit Margin, Revenue Growth.</li>
+        <li><strong>Balance Sheet</strong> — Total Cash, Total Debt, Debt/Equity.</li>
+        <li><strong>Dividend</strong> — Dividend Yield, Payout Ratio, Dividend Growth Rate.</li>
+        <li><strong>52-Week Range</strong> — 52-Wk Low and 52-Wk High.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Dividend yield in the fundamentals card is computed from trailing twelve-month dividends divided by current price,
+        which avoids scaling inconsistencies in the data provider's reported yield field.
+      </p>
+    </div>
+  )
+}
+
+function RebalanceWizardHelp() {
+  return (
+    <div>
+      <h2>Rebalance Wizard</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Rebalance Wizard generates a category-level rebalance trade list for your active portfolio,
+        using your existing category targets and an income floor constraint to protect dividend income
+        while moving allocations toward their targets.
+        It can also be launched from the Categories page via the <strong>Target Assistant</strong>.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Settings</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Income Mode</strong> — <em>Preserve current income</em> sets the income floor to the portfolio's current monthly income. <em>Use custom floor only</em> lets you specify a different floor via the Minimum Monthly Income field.</li>
+        <li><strong>Rebalance Priority</strong> — <em>Match targets while preserving income</em> prioritizes closing allocation gaps subject to the income floor. <em>Maximize income while reducing drift</em> picks higher-yielding candidates first.</li>
+        <li><strong>Minimum Yield %</strong> — Optional. Buy candidates below this yield are excluded.</li>
+        <li><strong>Minimum Monthly Income</strong> — Optional custom income floor. Only used in custom floor mode.</li>
+        <li><strong>New Cash</strong> — Dollar amount of fresh capital to deploy. Defaults to 0 (rebalance within existing value).</li>
+        <li><strong>Minimum Trade</strong> — Trades smaller than this dollar threshold are suppressed. Defaults to $100.</li>
+        <li><strong>Locked Tickers</strong> — Comma-separated list of tickers that should not be sold (e.g. <code>JEPI, MAIN</code>).</li>
+        <li><strong>Allow Sells</strong> — Uncheck to generate buy-only trades (useful when adding new cash without trimming existing holdings).</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Plan Summary Cards</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        After generating, summary cards show:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Current Monthly Income</strong> — income before trades.</li>
+        <li><strong>Projected Monthly Income</strong> — income after all effective trades, with the delta vs current.</li>
+        <li><strong>Required Income Floor</strong> — the floor the optimizer enforced.</li>
+        <li><strong>Income Guardrail</strong> — Met (green) or Blocked (red). Blocked means the edited trades would drop income below the floor; exports are disabled until resolved.</li>
+        <li><strong>Trade Totals</strong> — total buy dollars and total sell dollars.</li>
+        <li><strong>Remaining Drift</strong> — total dollar distance from category targets after applying all trades.</li>
+        <li><strong>Execution</strong> — count of trades by status (pending / reviewed / placed / filled / skipped).</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Trade List</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each generated trade shows the action (BUY/SELL), ticker, category, dollar amount, shares, price, yield,
+        monthly income delta, and cumulative portfolio yield after the trade. You can:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Switch tickers</strong> — use the dropdown on any trade to pick an alternative candidate from the same category, or type a ticker to look it up live.</li>
+        <li><strong>Edit amounts</strong> — override the dollar amount, price, or yield for any trade.</li>
+        <li><strong>Remove trades</strong> — click the × to suppress a trade. Removed trades count toward Remaining Drift. Click <strong>Restore Removed</strong> to undo.</li>
+        <li><strong>Add manual trades</strong> — click <strong>Add Trade</strong> to insert a custom buy or sell not generated by the optimizer.</li>
+        <li><strong>Mark execution status</strong> — set each trade to Reviewed, Placed, Filled, or Skipped to track progress as you work through the list in your broker.</li>
+        <li><strong>Mark all reviewed</strong> — batch-sets all pending trades to Reviewed.</li>
+      </ul>
+
+      <div className="alert alert-warning" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>Income guardrail:</strong> if edited trades would drop projected monthly income below the required floor,
+        the page shows a hard-block warning and disables all exports until the issue is resolved.
+        Suspicious high-yield replacements (yield above 2× the portfolio average or 25%, whichever is higher) are also flagged.
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Category Candidates</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Candidates</strong> section lets you set preferred tickers per category.
+        Preferred tickers are ranked first when the optimizer picks buy candidates for that category.
+        Drag candidates up or down to set priority order, then click <strong>Save Preferences</strong> to persist them and regenerate the plan.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Saving and Loading Plans</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Give the plan a name and click <strong>Save Plan</strong> to persist it to the database.</li>
+        <li>Previously saved plans appear in the <strong>Saved Plans</strong> dropdown with projected income and status.</li>
+        <li>Select a plan and click <strong>Load</strong> to restore all settings, trades, and execution state.</li>
+        <li>Click <strong>Update Plan</strong> to overwrite the currently selected saved plan.</li>
+        <li>Click <strong>Delete</strong> to remove the selected saved plan.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Exports</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li><strong>Export Trade List (CSV)</strong> — exports the effective trade list with action, ticker, category, shares, amount, price, yield, income delta, and reason.</li>
+        <li><strong>Export Broker Ticket (CSV)</strong> — exports a broker-ready format including execution status and notes, suitable for copy/pasting into a trade journal or broker order system.</li>
+        <li><strong>Export Audit JSON</strong> — exports the full plan snapshot including settings, result, trade state, and summary for archiving or debugging.</li>
+      </ul>
+    </div>
+  )
+}
+
 const CONTENT_MAP = {
   overview: Overview,
   import: ImportHelp,
@@ -4015,6 +4300,8 @@ const CONTENT_MAP = {
   'general-scanner': GeneralScannerHelp,
   'security-research': SecurityResearchHelp,
   'etf-screen': ETFScreenHelp,
+  'etf-comparer': ETFComparerHelp,
+  'stock-comparer': StockComparerHelp,
   watchlist: WatchlistHelp,
   'buy-sell': BuySellHelp,
   'nav-erosion': NavErosionHelp,
@@ -4029,6 +4316,7 @@ const CONTENT_MAP = {
   consolidation: ConsolidationHelp,
   'macro-dashboard': MacroDashboardHelp,
   'income-growth': IncomeGrowthHelp,
+  'rebalance-wizard': RebalanceWizardHelp,
 }
 
 export default function Help() {
