@@ -43,6 +43,7 @@ import PortfolioGrowth2 from './pages/PortfolioGrowth2'
 import ETFProviderUpdate from './pages/ETFProviderUpdate'
 import ETFComparer from './pages/ETFComparer'
 import StockComparer from './pages/StockComparer'
+import RebalanceWizard from './pages/RebalanceWizard'
 // Option Trading Tools and Option Education are intentionally excluded from
 // deployed builds — still in development, not ready for production.
 // import OptionTradingTools from './pages/OptionTradingTools'
@@ -125,6 +126,7 @@ function App() {
         <Route path="/etf-provider-update" element={<ETFProviderUpdate />} />
         <Route path="/etf-comparer" element={<ETFComparer />} />
         <Route path="/stock-comparer" element={<StockComparer />} />
+        <Route path="/rebalance-wizard" element={<RebalanceWizard />} />
         <Route path="/tax-report" element={<AnnualTaxReport />} />
         {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
         <Route path="/help" element={<Help />} />
@@ -172,13 +174,13 @@ function Nav() {
         <NavLink to="/gains-losses">Gains & Losses</NavLink>
         <NavLink to="/safe-withdrawal">Safe Withdrawal</NavLink>
         <NavLink to="/dividend-calculator">Dividend Calculator</NavLink>
+        <NavLink to="/watchlist">Watchlist</NavLink>
       </NavDropdown>
       <NavDropdown label="Analysis">
         <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>
         <NavLink to="/etf-comparer">ETF Comparer</NavLink>
         <NavLink to="/stock-comparer">Stock Comparer</NavLink>
         <NavLink to="/security-research">Security Research</NavLink>
-        <NavLink to="/watchlist">Watchlist</NavLink>
         <NavLink to="/buy-sell-signals">Buy / Sell Signals</NavLink>
         <NavLink to="/nav-erosion">NAV Erosion</NavLink>
         <NavLink to="/nav-erosion-portfolio">NAV Erosion Screener</NavLink>
@@ -187,6 +189,7 @@ function Nav() {
         <NavLink to="/correlation">Correlation Matrix</NavLink>
         <NavLink to="/analytics">Portfolio Analytics</NavLink>
         <NavLink to="/portfolio-builder">Portfolio Builder</NavLink>
+        <NavLink to="/rebalance-wizard">Rebalance Wizard</NavLink>
         <NavLink to="/portfolio-tester">Portfolio Tester</NavLink>
         <NavLink to="/dist-compare">Distribution Compare</NavLink>
         <NavLink to="/consolidation">Consolidation Analysis</NavLink>

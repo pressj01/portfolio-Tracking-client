@@ -466,6 +466,39 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    # ── rebalance_candidate_preferences ───────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS rebalance_candidate_preferences (
+            profile_id INTEGER NOT NULL DEFAULT 1,
+            category   TEXT NOT NULL,
+            ticker     TEXT NOT NULL,
+            rank       INTEGER NOT NULL DEFAULT 0,
+            preferred  INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (profile_id, category, ticker)
+        )
+    """)
+
+    # ── rebalance_saved_plans ─────────────────────────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS rebalance_saved_plans (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id            INTEGER NOT NULL DEFAULT 1,
+            name                  TEXT NOT NULL,
+            settings_json         TEXT NOT NULL,
+            result_json           TEXT NOT NULL,
+            trade_state_json      TEXT NOT NULL,
+            effective_trades_json TEXT NOT NULL,
+            summary_json          TEXT NOT NULL,
+            created_at            TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at            TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_rebalance_saved_plans_profile_updated
+        ON rebalance_saved_plans (profile_id, updated_at)
+    """)
+
     # ── builder_portfolios ─────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS builder_portfolios (

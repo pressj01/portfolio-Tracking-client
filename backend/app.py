@@ -3,6 +3,7 @@ import re
 import sys
 import time
 import sqlite3
+import json
 
 # Ensure backend directory is on the Python path so sibling imports work
 # regardless of the working directory (e.g. when launched from project root).
@@ -7908,7 +7909,7 @@ def portfolio_coverage():
     # computed on a buy/sell (ticker set change) or after the TTL expires.
     coverage_cache_key = (
         pid,
-        "destructive-nav-v10",
+        "destructive-nav-v12",
         tuple(sorted((
             t,
             ticker_info[t].get("nav_erosion_scope", "auto"),
@@ -7970,19 +7971,9 @@ def portfolio_coverage():
 
             fund_return = (cur_price - price_1yr_ago) / price_1yr_ago
 
-            # TTM distributions per share
+            # TTM distributions per share, or all available history for funds under 12 months old.
             divs = yf_tk.dividends
-            if divs is not None and not divs.empty:
-                cutoff = _dt.now() - _td(days=365)
-                if divs.index.tz is not None:
-                    cutoff = cutoff.astimezone(divs.index.tz)
-                ttm_divs = divs[divs.index >= cutoff]
-                ttm_dist_per_share = float(ttm_divs.sum())
-            else:
-                ttm_dist_per_share = 0.0
-
-            # TTM distribution yield
-            ttm_dist_yield = ttm_dist_per_share / cur_price if cur_price > 0 else 0.0
+            ttm_dist_yield, ttm_dist_per_share = _nav_distribution_yield_from_history(divs, cur_price, close)
             annual_income = max(0.0, float(info.get("annual_income") or 0.0))
             current_value = max(0.0, float(info.get("current_value") or 0.0))
             estimated_annual_yield = annual_income / current_value if current_value > 0 else 0.0
@@ -7999,12 +7990,13 @@ def portfolio_coverage():
             try:
                 component_returns = []
                 for bench in _nav_benchmark_parts(benchmark):
-                    bench_hist = yf.Ticker(bench).history(start=one_year_ago, interval="1d", auto_adjust=True)
+                    bench_hist = yf.Ticker(bench).history(start=close.index[0], interval="1d", auto_adjust=True)
                     if bench_hist is not None and not bench_hist.empty and "Close" in bench_hist.columns:
                         bench_close = bench_hist["Close"].dropna()
-                        if len(bench_close) >= 2:
-                            bench_start = float(bench_close.iloc[0])
-                            bench_end = float(bench_close.iloc[-1])
+                        aligned = _nav_align_series(close.rename("fund"), bench_close.rename("benchmark"))
+                        if len(aligned) >= 2:
+                            bench_start = float(aligned["benchmark"].iloc[0])
+                            bench_end = float(aligned["benchmark"].iloc[-1])
                             if bench_start > 0 and bench_end > 0:
                                 component_returns.append((bench_end - bench_start) / bench_start)
                 if component_returns:
@@ -9529,6 +9521,38 @@ def _nav_benchmark_parts(benchmark):
     return parts or ["SPY"]
 
 
+def _nav_date_indexed_series(series):
+    try:
+        s = series.dropna()
+        if s.empty:
+            return s
+        idx = pd.to_datetime(s.index)
+        try:
+            idx = idx.tz_convert(None)
+        except Exception:
+            try:
+                idx = idx.tz_localize(None)
+            except Exception:
+                pass
+        s = s.copy()
+        s.index = idx.normalize()
+        return s.groupby(level=0).last()
+    except Exception:
+        return series
+
+
+def _nav_align_series(*series):
+    named = []
+    for i, s in enumerate(series):
+        if s is None:
+            return pd.DataFrame()
+        clean = _nav_date_indexed_series(s)
+        if clean is None or clean.empty:
+            return pd.DataFrame()
+        named.append(clean.rename(getattr(s, "name", None) or f"s{i}"))
+    return pd.concat(named, axis=1, join="inner").dropna()
+
+
 def _nav_benchmark_close_from_df(close_df, benchmark, fallback_close):
     parts = _nav_benchmark_parts(benchmark)
     series = []
@@ -9542,7 +9566,7 @@ def _nav_benchmark_close_from_df(close_df, benchmark, fallback_close):
             return fallback_close
         if len(series) == 1:
             return series[0]
-        aligned = pd.concat(series, axis=1, join="inner").dropna()
+        aligned = _nav_align_series(*series)
         if len(aligned) < 2:
             return fallback_close
         composite = 1.0
@@ -9631,6 +9655,55 @@ def _nav_erosion_numerator(fund_return, benchmark_return):
     return abs(fund_return)
 
 
+def _nav_distribution_yield_from_history(divs_series, current_price, close_series=None):
+    """Return distribution yield using TTM, or all available history under 12 months."""
+    try:
+        cur_price = float(current_price or 0)
+    except (TypeError, ValueError):
+        cur_price = 0.0
+    if cur_price <= 0 or divs_series is None:
+        return 0.0, 0.0
+    try:
+        divs = divs_series.dropna()
+        divs = divs[divs > 0]
+    except Exception:
+        return 0.0, 0.0
+    if divs.empty:
+        return 0.0, 0.0
+
+    end_ts = None
+    start_ts = None
+    try:
+        if close_series is not None:
+            close = close_series.dropna()
+            if len(close) >= 2:
+                start_ts = pd.Timestamp(close.index[0])
+                end_ts = pd.Timestamp(close.index[-1])
+    except Exception:
+        start_ts = None
+        end_ts = None
+    if end_ts is None:
+        end_ts = pd.Timestamp(divs.index[-1])
+
+    try:
+        cutoff = end_ts - pd.DateOffset(months=12)
+        if start_ts is not None and start_ts > cutoff:
+            cutoff = start_ts
+        if getattr(divs.index, "tz", None) is not None and cutoff.tzinfo is None:
+            cutoff = cutoff.tz_localize(divs.index.tz)
+        elif getattr(divs.index, "tz", None) is None and cutoff.tzinfo is not None:
+            cutoff = cutoff.tz_localize(None)
+        if start_ts is not None and start_ts > end_ts - pd.DateOffset(months=12):
+            trailing = divs[divs.index >= cutoff]
+        else:
+            trailing = divs[divs.index > cutoff]
+    except Exception:
+        trailing = divs
+
+    dist_per_share = float(trailing.sum()) if trailing is not None and not trailing.empty else 0.0
+    return dist_per_share / cur_price, dist_per_share
+
+
 def _nav_erosion_from_adjusted_ratio(ratio):
     try:
         if ratio is None:
@@ -9657,7 +9730,7 @@ def _nav_signal_from_adjusted_ratio(ratio):
 
 
 def _nav_adjusted_erosion_ratio(close, divs_series, benchmark_close):
-    """Destructive NAV erosion ratio: fund price decline / yield, gated by flat/up benchmark."""
+    """Destructive NAV erosion ratio: fund price decline / distribution yield, gated by flat/up benchmark."""
     try:
         if close is None or benchmark_close is None:
             return None
@@ -9665,16 +9738,20 @@ def _nav_adjusted_erosion_ratio(close, divs_series, benchmark_close):
         benchmark_close = benchmark_close.dropna()
         if len(close) < 2 or len(benchmark_close) < 2:
             return None
-        cur_price = float(close.iloc[-1])
-        start_price = float(close.iloc[0])
-        bench_start = float(benchmark_close.iloc[0])
-        bench_end = float(benchmark_close.iloc[-1])
+        aligned = _nav_align_series(close.rename("fund"), benchmark_close.rename("benchmark"))
+        if len(aligned) < 2:
+            return None
+        fund_close = aligned["fund"]
+        bench_close = aligned["benchmark"]
+        cur_price = float(fund_close.iloc[-1])
+        start_price = float(fund_close.iloc[0])
+        bench_start = float(bench_close.iloc[0])
+        bench_end = float(bench_close.iloc[-1])
         if min(cur_price, start_price, bench_start, bench_end) <= 0:
             return None
         fund_return = (cur_price - start_price) / start_price
         benchmark_return = (bench_end - bench_start) / bench_start
-        ttm_dist_per_share = float(divs_series.sum()) if divs_series is not None and not divs_series.empty else 0.0
-        ttm_dist_yield = ttm_dist_per_share / cur_price if cur_price > 0 else 0.0
+        ttm_dist_yield, _ = _nav_distribution_yield_from_history(divs_series, cur_price, fund_close)
         if ttm_dist_yield <= 0:
             return None
         numerator = _nav_erosion_numerator(fund_return, benchmark_return)
@@ -9892,12 +9969,24 @@ def categories_data():
 
     # Fetch active holdings only
     all_holdings = conn.execute(
-        """SELECT ticker, description, current_value
+        """SELECT ticker, description, classification_type, current_value, approx_monthly_income,
+                  current_annual_yield, div_frequency, nav_erosion_scope, gain_or_loss_percentage
            FROM all_account_info
            WHERE profile_id = ? AND quantity > 0""",
         (profile_id,),
     ).fetchall()
     total_value = sum(float(h["current_value"] or 0) for h in all_holdings)
+    total_monthly_income = sum(float(h["approx_monthly_income"] or 0) for h in all_holdings)
+    weekly_value = sum(
+        float(h["current_value"] or 0)
+        for h in all_holdings
+        if str(h["div_frequency"] or "").strip().upper() in {"W", "52", "WEEKLY"}
+    )
+    weekly_income = sum(
+        float(h["approx_monthly_income"] or 0)
+        for h in all_holdings
+        if str(h["div_frequency"] or "").strip().upper() in {"W", "52", "WEEKLY"}
+    )
 
     # Fetch ticker-category assignments
     assignments = conn.execute(
@@ -9915,13 +10004,45 @@ def categories_data():
                 t = a["ticker"]
                 h = holding_map.get(t)
                 if h:
+                    h_value = float(h["current_value"] or 0)
+                    h_monthly_income = float(h["approx_monthly_income"] or 0)
+                    h_freq = str(h["div_frequency"] or "").strip().upper()
+                    h_nav_risk = bool(_is_nav_erosion_candidate(
+                        t,
+                        h["description"] or "",
+                        h["classification_type"] or "",
+                    )) or str(h["nav_erosion_scope"] or "").strip().lower() == "test"
                     cat_tickers.append({
                         "ticker": t,
                         "description": h["description"],
-                        "current_value": float(h["current_value"] or 0),
+                        "classification_type": h["classification_type"],
+                        "current_value": h_value,
+                        "monthly_income": h_monthly_income,
+                        "current_yield": (h_monthly_income * 12 / h_value * 100) if h_value > 0 else 0,
+                        "div_frequency": h["div_frequency"],
+                        "weekly": h_freq in {"W", "52", "WEEKLY"},
+                        "nav_erosion_scope": h["nav_erosion_scope"] or "auto",
+                        "nav_risk": h_nav_risk,
+                        "gain_or_loss_percentage": float(h["gain_or_loss_percentage"] or 0),
                     })
                     assigned_tickers.add(t)
         cat_value = sum(t["current_value"] for t in cat_tickers)
+        cat_monthly_income = sum(t["monthly_income"] for t in cat_tickers)
+        cat_weekly_value = sum(t["current_value"] for t in cat_tickers if t["weekly"])
+        cat_weekly_income = sum(t["monthly_income"] for t in cat_tickers if t["weekly"])
+        cat_nav_risk_value = sum(t["current_value"] for t in cat_tickers if t["nav_risk"])
+        cat_largest_holding_pct = (
+            max((t["current_value"] for t in cat_tickers), default=0) / cat_value * 100
+            if cat_value > 0 else 0
+        )
+        cat_income_concentration_pct = (
+            max((t["monthly_income"] for t in cat_tickers), default=0) / cat_monthly_income * 100
+            if cat_monthly_income > 0 else 0
+        )
+        weighted_gain_loss = (
+            sum(t["gain_or_loss_percentage"] * t["current_value"] for t in cat_tickers) / cat_value
+            if cat_value > 0 else 0
+        )
         categories.append({
             "id": cat["id"],
             "name": cat["name"],
@@ -9930,15 +10051,41 @@ def categories_data():
             "tickers": sorted(cat_tickers, key=lambda x: x["ticker"]),
             "actual_value": cat_value,
             "actual_pct": (cat_value / total_value * 100) if total_value else 0,
+            "monthly_income": cat_monthly_income,
+            "current_yield": (cat_monthly_income * 12 / cat_value * 100) if cat_value > 0 else 0,
+            "weekly_value": cat_weekly_value,
+            "weekly_income": cat_weekly_income,
+            "weekly_value_pct": (cat_weekly_value / cat_value * 100) if cat_value > 0 else 0,
+            "nav_risk_value_pct": (cat_nav_risk_value / cat_value * 100) if cat_value > 0 else 0,
+            "nav_risk_count": sum(1 for t in cat_tickers if t["nav_risk"]),
+            "largest_holding_pct": cat_largest_holding_pct,
+            "income_concentration_pct": cat_income_concentration_pct,
+            "weighted_gain_loss_pct": weighted_gain_loss,
         })
 
     unallocated = []
     for h in all_holdings:
         if h["ticker"] not in assigned_tickers:
+            h_value = float(h["current_value"] or 0)
+            h_monthly_income = float(h["approx_monthly_income"] or 0)
+            h_freq = str(h["div_frequency"] or "").strip().upper()
+            h_nav_risk = bool(_is_nav_erosion_candidate(
+                h["ticker"],
+                h["description"] or "",
+                h["classification_type"] or "",
+            )) or str(h["nav_erosion_scope"] or "").strip().lower() == "test"
             unallocated.append({
                 "ticker": h["ticker"],
                 "description": h["description"],
-                "current_value": float(h["current_value"] or 0),
+                "classification_type": h["classification_type"],
+                "current_value": h_value,
+                "monthly_income": h_monthly_income,
+                "current_yield": (h_monthly_income * 12 / h_value * 100) if h_value > 0 else 0,
+                "div_frequency": h["div_frequency"],
+                "weekly": h_freq in {"W", "52", "WEEKLY"},
+                "nav_erosion_scope": h["nav_erosion_scope"] or "auto",
+                "nav_risk": h_nav_risk,
+                "gain_or_loss_percentage": float(h["gain_or_loss_percentage"] or 0),
             })
     unallocated.sort(key=lambda x: x["ticker"])
 
@@ -9947,6 +10094,11 @@ def categories_data():
         "categories": categories,
         "unallocated": unallocated,
         "total_value": total_value,
+        "monthly_income": total_monthly_income,
+        "portfolio_yield": (total_monthly_income * 12 / total_value * 100) if total_value else 0,
+        "weekly_value": weekly_value,
+        "weekly_income": weekly_income,
+        "weekly_value_pct": (weekly_value / total_value * 100) if total_value else 0,
     })
 
 
@@ -15372,7 +15524,11 @@ def nav_erosion_data():
         benchmark_end = float(df["benchmark_price"].dropna().iloc[-1]) if not df["benchmark_price"].dropna().empty else final_row["price"]
         fund_return = (final_row["price"] - initial_price) / initial_price if initial_price > 0 else 0.0
         benchmark_return = (benchmark_end - benchmark_start) / benchmark_start if benchmark_start > 0 else fund_return
-        period_dist_yield = cumulative_divs_per_share / final_row["price"] if final_row["price"] > 0 else 0.0
+        period_dist_yield, _ = _nav_distribution_yield_from_history(
+            df["div"],
+            final_row["price"],
+            df["price"],
+        )
         numerator = _nav_erosion_numerator(fund_return, benchmark_return)
         if period_dist_yield > 0 and numerator is not None:
             total_coverage = round(numerator / period_dist_yield, 4)
@@ -15778,7 +15934,11 @@ def nav_erosion_portfolio_data():
         benchmark_end = float(benchmark_series.iloc[-1]) if not benchmark_series.empty else final_price
         fund_return = (final_price - initial_price) / initial_price if initial_price > 0 else 0.0
         benchmark_return = (benchmark_end - benchmark_start) / benchmark_start if benchmark_start > 0 else fund_return
-        period_dist_yield = cumul_divs_per_share / final_price if final_price > 0 else 0.0
+        period_dist_yield, _ = _nav_distribution_yield_from_history(
+            df["div"],
+            final_price,
+            df["price"],
+        )
         numerator = _nav_erosion_numerator(fund_return, benchmark_return)
         if period_dist_yield > 0 and numerator is not None:
             coverage_ratio = round(numerator / period_dist_yield, 4)
@@ -18130,6 +18290,685 @@ def builder_update_portfolio(port_id):
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
+
+
+# ── Rebalance Wizard ──────────────────────────────────────────────────────────
+
+REBALANCE_CATEGORY_CANDIDATES = {
+    "bdc": ["BIZD", "PBDC", "ARCC", "MAIN", "HTGC", "GBDC", "BXSL", "OBDC", "ORCC", "FSK", "CSWC", "TPVG", "PSEC", "FDUS", "GAIN", "GLAD"],
+    "bdcs": ["BIZD", "PBDC", "ARCC", "MAIN", "HTGC", "GBDC", "BXSL", "OBDC", "ORCC", "FSK", "CSWC", "TPVG", "PSEC", "FDUS", "GAIN", "GLAD"],
+    "gold silver": ["KSLV", "SVLX", "GLD", "GLDM", "IAU", "SLV", "SIVR"],
+    "gold/silver": ["KSLV", "SVLX", "GLD", "GLDM", "IAU", "SLV", "SIVR"],
+    "energy": ["MLPI", "AMLP", "MLPA", "ENFR", "XLE", "VDE"],
+    "juicers": ["ULTY", "YMAX", "YMAG", "MSTY", "NVDY", "CONY", "TSLY"],
+    "anchors": ["SCHD", "DIVO", "JEPI", "JEPQ", "PFFA", "UTG", "ADX", "CSHI"],
+    "boosters": ["SPYI", "QQQI", "XQQI", "GIAX", "ISDB", "KYLD", "QYLD", "XYLD"],
+    "growth": ["SCHG", "VUG", "QQQ", "QQQM", "SPYG", "VTI"],
+    "hedged anchor": ["SPYH", "JEPI", "JEPQ", "DIVO", "PFFA"],
+}
+
+
+def _rebalance_category_seed_tickers(category):
+    key = str(category or "").strip().lower()
+    return REBALANCE_CATEGORY_CANDIDATES.get(key, [])
+
+
+def _rebalance_pref_key(category):
+    return str(category or "").strip()
+
+
+def _rebalance_nav_risk(ticker, description="", category="", scope="auto"):
+    scope = str(scope or "auto").lower()
+    if scope == "skip":
+        return "Skipped"
+    if scope == "test":
+        return "Test"
+    try:
+        return "Candidate" if _is_nav_erosion_candidate(ticker, description, category) else "Low"
+    except Exception:
+        return "Unknown"
+
+
+@app.route("/api/rebalance/candidate-preferences", methods=["GET"])
+def rebalance_candidate_preferences_get():
+    profile_id = _get_write_profile_id()
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT category, ticker, rank, preferred
+           FROM rebalance_candidate_preferences
+           WHERE profile_id = ?
+           ORDER BY category, rank, ticker""",
+        (profile_id,),
+    ).fetchall()
+    conn.close()
+    prefs = {}
+    for r in rows:
+        prefs.setdefault(r["category"], []).append({
+            "ticker": r["ticker"],
+            "rank": int(r["rank"] or 0),
+            "preferred": bool(r["preferred"]),
+        })
+    return jsonify({"preferences": prefs})
+
+
+@app.route("/api/rebalance/candidate-preferences", methods=["PUT"])
+def rebalance_candidate_preferences_put():
+    profile_id = _get_write_profile_id()
+    data = request.get_json() or {}
+    category = _rebalance_pref_key(data.get("category"))
+    tickers = [str(t).strip().upper() for t in data.get("tickers", []) if str(t).strip()]
+    if not category:
+        return jsonify({"error": "Category is required."}), 400
+    conn = get_connection()
+    conn.execute(
+        "DELETE FROM rebalance_candidate_preferences WHERE profile_id = ? AND category = ?",
+        (profile_id, category),
+    )
+    for rank, ticker in enumerate(dict.fromkeys(tickers)):
+        conn.execute(
+            """INSERT INTO rebalance_candidate_preferences
+               (profile_id, category, ticker, rank, preferred, updated_at)
+               VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP)""",
+            (profile_id, category, ticker, rank),
+        )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "category": category, "tickers": tickers})
+
+
+@app.route("/api/rebalance/saved-plans", methods=["GET"])
+def rebalance_saved_plans_get():
+    profile_id = _get_write_profile_id()
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT id, name, summary_json, created_at, updated_at
+           FROM rebalance_saved_plans
+           WHERE profile_id = ?
+           ORDER BY updated_at DESC, id DESC""",
+        (profile_id,),
+    ).fetchall()
+    conn.close()
+    plans = []
+    for r in rows:
+        try:
+            summary = json.loads(r["summary_json"] or "{}")
+        except Exception:
+            summary = {}
+        plans.append({
+            "id": r["id"],
+            "name": r["name"],
+            "summary": summary,
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+        })
+    return jsonify({"plans": plans})
+
+
+@app.route("/api/rebalance/saved-plans/<int:plan_id>", methods=["GET"])
+def rebalance_saved_plan_get(plan_id):
+    profile_id = _get_write_profile_id()
+    conn = get_connection()
+    row = conn.execute(
+        """SELECT id, name, settings_json, result_json, trade_state_json,
+                  effective_trades_json, summary_json, created_at, updated_at
+           FROM rebalance_saved_plans
+           WHERE id = ? AND profile_id = ?""",
+        (plan_id, profile_id),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "Saved rebalance plan not found."}), 404
+
+    def _loads(value, fallback):
+        try:
+            return json.loads(value or "")
+        except Exception:
+            return fallback
+
+    return jsonify({
+        "plan": {
+            "id": row["id"],
+            "name": row["name"],
+            "settings": _loads(row["settings_json"], {}),
+            "result": _loads(row["result_json"], {}),
+            "trade_state": _loads(row["trade_state_json"], {}),
+            "effective_trades": _loads(row["effective_trades_json"], []),
+            "summary": _loads(row["summary_json"], {}),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+    })
+
+
+@app.route("/api/rebalance/saved-plans", methods=["POST"])
+def rebalance_saved_plan_post():
+    profile_id = _get_write_profile_id()
+    data = request.get_json() or {}
+    name = str(data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Plan name is required."}), 400
+    settings = data.get("settings") or {}
+    result = data.get("result") or {}
+    trade_state = data.get("trade_state") or {}
+    effective_trades = data.get("effective_trades") or []
+    summary = data.get("summary") or {}
+    plan_id = data.get("id")
+
+    conn = get_connection()
+    if plan_id:
+        row = conn.execute(
+            "SELECT id FROM rebalance_saved_plans WHERE id = ? AND profile_id = ?",
+            (plan_id, profile_id),
+        ).fetchone()
+        if not row:
+            conn.close()
+            return jsonify({"error": "Saved rebalance plan not found."}), 404
+        conn.execute(
+            """UPDATE rebalance_saved_plans
+               SET name = ?, settings_json = ?, result_json = ?, trade_state_json = ?,
+                   effective_trades_json = ?, summary_json = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE id = ? AND profile_id = ?""",
+            (
+                name,
+                json.dumps(settings, separators=(",", ":")),
+                json.dumps(result, separators=(",", ":")),
+                json.dumps(trade_state, separators=(",", ":")),
+                json.dumps(effective_trades, separators=(",", ":")),
+                json.dumps(summary, separators=(",", ":")),
+                int(plan_id),
+                profile_id,
+            ),
+        )
+        saved_id = int(plan_id)
+    else:
+        cur = conn.execute(
+            """INSERT INTO rebalance_saved_plans
+               (profile_id, name, settings_json, result_json, trade_state_json,
+                effective_trades_json, summary_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                profile_id,
+                name,
+                json.dumps(settings, separators=(",", ":")),
+                json.dumps(result, separators=(",", ":")),
+                json.dumps(trade_state, separators=(",", ":")),
+                json.dumps(effective_trades, separators=(",", ":")),
+                json.dumps(summary, separators=(",", ":")),
+            ),
+        )
+        saved_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "id": saved_id, "name": name})
+
+
+@app.route("/api/rebalance/saved-plans/<int:plan_id>", methods=["DELETE"])
+def rebalance_saved_plan_delete(plan_id):
+    profile_id = _get_write_profile_id()
+    conn = get_connection()
+    cur = conn.execute(
+        "DELETE FROM rebalance_saved_plans WHERE id = ? AND profile_id = ?",
+        (plan_id, profile_id),
+    )
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        return jsonify({"error": "Saved rebalance plan not found."}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/rebalance/category-plan", methods=["POST"])
+def rebalance_category_plan():
+    """Generate a category-target rebalance plan with income constraints."""
+    data = request.get_json() or {}
+    income_mode = data.get("income_mode", "preserve_current")
+    rebalance_strategy = data.get("rebalance_strategy", "match_targets_preserve_income")
+    min_yield = data.get("min_yield")
+    min_monthly_income = data.get("min_monthly_income")
+    new_cash = max(float(data.get("new_cash") or 0), 0)
+    allow_sells = bool(data.get("allow_sells", True))
+    min_trade_amount = max(float(data.get("min_trade_amount") or 100), 0)
+    locked_tickers = {str(t).strip().upper() for t in data.get("locked_tickers", []) if str(t).strip()}
+
+    _, pids = get_profile_filter()
+    placeholders = ",".join("?" * len(pids))
+    conn = get_connection()
+
+    cats = conn.execute(
+        f"""SELECT id, name, target_pct, profile_id
+            FROM categories
+            WHERE profile_id IN ({placeholders})
+            ORDER BY profile_id, sort_order, name""",
+        pids,
+    ).fetchall()
+
+    holdings_rows = conn.execute(
+        f"""SELECT ticker, description, profile_id, quantity, current_price, current_value,
+                   approx_monthly_income, current_annual_yield, reinvest, nav_erosion_scope
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders}) AND IFNULL(quantity, 0) > 0""",
+        pids,
+    ).fetchall()
+
+    assignments = conn.execute(
+        f"""SELECT tc.ticker, tc.profile_id, tc.category_id, c.name AS category_name
+            FROM ticker_categories tc
+            JOIN categories c ON c.id = tc.category_id
+            WHERE tc.profile_id IN ({placeholders})""",
+        pids,
+    ).fetchall()
+
+    candidate_rows = conn.execute(
+        f"""SELECT a.ticker, a.description, a.profile_id, a.current_price, a.current_value,
+                   a.approx_monthly_income, a.current_annual_yield, a.nav_erosion_scope,
+                   c.name AS category_name
+            FROM ticker_categories tc
+            JOIN categories c ON c.id = tc.category_id
+            LEFT JOIN all_account_info a ON a.ticker = tc.ticker AND a.profile_id = tc.profile_id
+            WHERE tc.profile_id IN ({placeholders})""",
+        pids,
+    ).fetchall()
+
+    pref_rows = conn.execute(
+        f"""SELECT category, ticker, rank, preferred
+            FROM rebalance_candidate_preferences
+            WHERE profile_id IN ({placeholders})
+            ORDER BY category, rank, ticker""",
+        pids,
+    ).fetchall()
+    conn.close()
+
+    if not holdings_rows:
+        return jsonify({"error": "No active holdings found for this portfolio."}), 400
+    if not cats:
+        return jsonify({"error": "Please set your category target weights before running this."}), 400
+
+    category_targets = {}
+    target_conflicts = []
+    missing_targets = []
+    for cat in cats:
+        name = cat["name"]
+        target = cat["target_pct"]
+        if target is None:
+            missing_targets.append(name)
+            continue
+        target = float(target)
+        if name in category_targets and abs(category_targets[name] - target) > 0.01:
+            target_conflicts.append(name)
+        category_targets[name] = target
+
+    if not category_targets:
+        return jsonify({"error": "Please set your category target weights before running this."}), 400
+    if missing_targets:
+        names = ", ".join(sorted(set(missing_targets))[:8])
+        more = "" if len(set(missing_targets)) <= 8 else "..."
+        return jsonify({"error": f"Please set target weights for every category before rebalancing. Missing: {names}{more}."}), 400
+    if target_conflicts:
+        names = ", ".join(sorted(set(target_conflicts))[:8])
+        return jsonify({"error": f"Category target weights conflict across selected portfolios: {names}. Please align them before rebalancing."}), 400
+
+    target_total = sum(category_targets.values())
+    if abs(target_total - 100.0) > 0.2:
+        return jsonify({"error": f"Category target weights must total 100% before rebalancing. Current total: {target_total:.1f}%."}), 400
+
+    assignment_map = {}
+    for a in assignments:
+        assignment_map[(str(a["ticker"]).upper(), a["profile_id"])] = a["category_name"]
+
+    holdings = []
+    unallocated = []
+    total_value = 0.0
+    total_monthly_income = 0.0
+    for row in holdings_rows:
+        ticker = str(row["ticker"]).upper()
+        value = float(row["current_value"] or 0)
+        monthly_income = float(row["approx_monthly_income"] or 0)
+        annual_yield = row["current_annual_yield"]
+        if annual_yield is None and value > 0:
+            annual_yield = (monthly_income * 12) / value
+        annual_yield = float(annual_yield or 0)
+        if annual_yield > 1:
+            annual_yield = annual_yield / 100.0
+        category = assignment_map.get((ticker, row["profile_id"]))
+        holding = {
+            "ticker": ticker,
+            "description": row["description"] or "",
+            "category": category,
+            "quantity": float(row["quantity"] or 0),
+            "current_price": float(row["current_price"] or 0),
+            "current_value": value,
+            "monthly_income": monthly_income,
+            "annual_yield": annual_yield,
+            "reinvest": row["reinvest"] or "",
+            "nav_erosion_scope": row["nav_erosion_scope"] or "auto",
+            "locked": ticker in locked_tickers,
+        }
+        if not category:
+            unallocated.append(holding)
+        holdings.append(holding)
+        total_value += value
+        total_monthly_income += monthly_income
+
+    if total_value <= 0:
+        return jsonify({"error": "Portfolio value is zero, so a rebalance plan cannot be generated."}), 400
+    if unallocated:
+        sample = ", ".join(h["ticker"] for h in unallocated[:8])
+        more = "" if len(unallocated) <= 8 else "..."
+        return jsonify({"error": f"Assign all holdings to categories before rebalancing. Unallocated: {sample}{more}."}), 400
+
+    before_yield = (total_monthly_income * 12) / total_value if total_value > 0 else 0
+    required_monthly_income = total_monthly_income if income_mode == "preserve_current" else 0
+    if min_monthly_income not in (None, ""):
+        required_monthly_income = max(required_monthly_income, float(min_monthly_income))
+    if min_yield not in (None, ""):
+        required_monthly_income = max(required_monthly_income, (float(min_yield) / 100.0) * (total_value + new_cash) / 12.0)
+    suspicious_yield_threshold = max(0.25, before_yield * 2.0, 0.02)
+
+    buckets = {
+        name: {
+            "name": name,
+            "target_pct": target,
+            "current_value": 0.0,
+            "monthly_income": 0.0,
+            "holdings": [],
+        }
+        for name, target in category_targets.items()
+    }
+    for h in holdings:
+        if h["category"] not in buckets:
+            return jsonify({"error": f"Holding {h['ticker']} is assigned to category '{h['category']}', which has no target weight."}), 400
+        b = buckets[h["category"]]
+        b["current_value"] += h["current_value"]
+        b["monthly_income"] += h["monthly_income"]
+        b["holdings"].append(h)
+
+    category_candidate_rows = {}
+    for r in candidate_rows:
+        cat_name = r["category_name"]
+        if not cat_name:
+            continue
+        ticker = str(r["ticker"] or "").strip().upper()
+        if not ticker:
+            continue
+        price = float(r["current_price"] or 0)
+        monthly_income = float(r["approx_monthly_income"] or 0)
+        current_value = float(r["current_value"] or 0)
+        annual_yield = r["current_annual_yield"]
+        if annual_yield is None and current_value > 0:
+            annual_yield = (monthly_income * 12) / current_value
+        annual_yield = float(annual_yield or 0)
+        if annual_yield > 1:
+            annual_yield = annual_yield / 100.0
+        category_candidate_rows.setdefault(cat_name, {})[ticker] = {
+            "ticker": ticker,
+            "description": r["description"] or "",
+            "price": price,
+            "yield": annual_yield,
+            "current_value": current_value,
+            "monthly_income": monthly_income,
+            "nav_erosion_scope": r["nav_erosion_scope"] or "auto",
+        }
+
+    preference_map = {}
+    for r in pref_rows:
+        category = _rebalance_pref_key(r["category"])
+        preference_map.setdefault(category, []).append({
+            "ticker": str(r["ticker"] or "").upper(),
+            "rank": int(r["rank"] or 0),
+            "preferred": bool(r["preferred"]),
+        })
+
+    plan_value = total_value + new_cash
+    bucket_results = []
+    for b in buckets.values():
+        target_value = plan_value * b["target_pct"] / 100.0
+        gap = target_value - b["current_value"]
+        actual_pct = (b["current_value"] / total_value * 100.0) if total_value > 0 else 0
+        bucket_results.append({
+            "category": b["name"],
+            "target_pct": round(b["target_pct"], 4),
+            "actual_pct": round(actual_pct, 4),
+            "drift_pct": round(actual_pct - b["target_pct"], 4),
+            "current_value": round(b["current_value"], 2),
+            "target_value": round(target_value, 2),
+            "gap_dollars": round(gap, 2),
+            "monthly_income": round(b["monthly_income"], 2),
+        })
+
+    trades = []
+    warnings = []
+    projected_monthly = total_monthly_income
+    cash_available = new_cash
+
+    underweights = sorted(
+        [r for r in bucket_results if r["gap_dollars"] >= min_trade_amount],
+        key=lambda r: r["gap_dollars"],
+        reverse=True,
+    )
+    overweights = sorted(
+        [r for r in bucket_results if r["gap_dollars"] <= -min_trade_amount],
+        key=lambda r: r["gap_dollars"],
+    )
+
+    def _sell_candidates(category):
+        rows = [h for h in buckets[category]["holdings"] if not h["locked"] and h["current_value"] > 0]
+        return sorted(rows, key=lambda h: (h["annual_yield"], -h["current_value"]))
+
+    def _buy_candidate(category):
+        rows = [h for h in buckets[category]["holdings"] if not h["locked"] and h["current_price"] > 0]
+        if not rows:
+            rows = [h for h in buckets[category]["holdings"] if h["current_price"] > 0]
+        if not rows:
+            return None
+        return sorted(rows, key=lambda h: (h["annual_yield"], h["current_value"]), reverse=True)[0]
+
+    if rebalance_strategy == "maximize_income_reduce_drift":
+        underweights = sorted(
+            underweights,
+            key=lambda r: ((_buy_candidate(r["category"]) or {}).get("annual_yield", 0), r["gap_dollars"]),
+            reverse=True,
+        )
+
+    def _candidate_payload(raw, category, source, rank=999, preferred=False):
+        ticker = str(raw.get("ticker") or "").upper()
+        price = float(raw.get("price") or raw.get("current_price") or 0)
+        annual_yield = float(raw.get("yield") or raw.get("annual_yield") or 0)
+        if annual_yield > 1:
+            annual_yield = annual_yield / 100.0
+        amount = float(raw.get("sample_amount") or 0)
+        return {
+            "ticker": ticker,
+            "description": raw.get("description") or "",
+            "price": round(price, 4) if price > 0 else None,
+            "yield": round(annual_yield * 100, 4) if annual_yield > 0 else None,
+            "monthly_income_per_dollar": annual_yield / 12.0 if annual_yield > 0 else None,
+            "sample_monthly_income": round(amount * annual_yield / 12.0, 2) if amount > 0 and annual_yield > 0 else None,
+            "suspicious_yield": annual_yield >= suspicious_yield_threshold,
+            "suspicious_yield_threshold": round(suspicious_yield_threshold * 100, 4),
+            "current_value": round(float(raw.get("current_value") or 0), 2),
+            "monthly_income": round(float(raw.get("monthly_income") or 0), 2),
+            "nav_erosion_scope": raw.get("nav_erosion_scope") or "auto",
+            "nav_risk": _rebalance_nav_risk(ticker, raw.get("description") or "", category, raw.get("nav_erosion_scope") or "auto"),
+            "source": source,
+            "rank": rank,
+            "preferred": preferred,
+        }
+
+    def _buy_candidates(category, selected=None, amount=0):
+        seen = set()
+        out = []
+        pref_tickers = preference_map.get(_rebalance_pref_key(category), [])
+        assigned_candidates = category_candidate_rows.get(category, {})
+        for pref in pref_tickers:
+            ticker = pref["ticker"]
+            raw = assigned_candidates.get(ticker, {"ticker": ticker, "sample_amount": amount})
+            raw = {**raw, "sample_amount": amount}
+            if ticker in seen:
+                continue
+            seen.add(ticker)
+            out.append(_candidate_payload(raw, category, "preferred", pref["rank"], preferred=True))
+        rows = sorted(
+            [h for h in buckets[category]["holdings"] if h["current_price"] > 0],
+            key=lambda h: (h["annual_yield"], h["current_value"]),
+            reverse=True,
+        )
+        for h in rows:
+            if h["ticker"] in seen:
+                continue
+            seen.add(h["ticker"])
+            out.append(_candidate_payload({
+                "ticker": h["ticker"],
+                "description": h["description"],
+                "price": h["current_price"],
+                "yield": h["annual_yield"],
+                "current_value": h["current_value"],
+                "monthly_income": h["monthly_income"],
+                "nav_erosion_scope": h["nav_erosion_scope"],
+                "sample_amount": amount,
+            }, category, "held"))
+        for ticker, raw in sorted(assigned_candidates.items()):
+            if ticker in seen:
+                continue
+            seen.add(ticker)
+            out.append(_candidate_payload({**raw, "sample_amount": amount}, category, "assigned"))
+        for ticker in _rebalance_category_seed_tickers(category):
+            t = ticker.upper()
+            if t in seen:
+                continue
+            seen.add(t)
+            out.append(_candidate_payload({"ticker": t, "sample_amount": amount}, category, "library"))
+        if selected and selected not in seen:
+            out.insert(0, _candidate_payload({"ticker": selected, "sample_amount": amount}, category, "selected"))
+        return out
+
+    sell_pool = []
+    if allow_sells:
+        for over in overweights:
+            remaining = abs(over["gap_dollars"])
+            for h in _sell_candidates(over["category"]):
+                if remaining < min_trade_amount:
+                    break
+                amount = min(h["current_value"], remaining)
+                if amount < min_trade_amount:
+                    continue
+                monthly_delta = -(amount * h["annual_yield"] / 12.0)
+                sell_pool.append({
+                    "action": "sell",
+                    "ticker": h["ticker"],
+                    "category": over["category"],
+                    "amount": amount,
+                    "price": h["current_price"],
+                    "shares": amount / h["current_price"] if h["current_price"] > 0 else None,
+                    "monthly_income_delta": monthly_delta,
+                    "yield": h["annual_yield"],
+                    "reason": "Reduce overweight category; lower-yield positions are sold first to protect income.",
+                })
+                remaining -= amount
+
+    for under in underweights:
+        need = under["gap_dollars"]
+        buy = _buy_candidate(under["category"])
+        if not buy:
+            warnings.append(f"No priced holding exists in {under['category']} to receive buys.")
+            continue
+        funded = min(cash_available, need)
+        if funded < need and allow_sells:
+            while funded < need and sell_pool:
+                s = sell_pool.pop(0)
+                trades.append(s)
+                projected_monthly += s["monthly_income_delta"]
+                cash_available += s["amount"]
+                funded = min(cash_available, need)
+        amount = min(cash_available, need)
+        if amount < min_trade_amount:
+            continue
+        monthly_delta = amount * buy["annual_yield"] / 12.0
+        trades.append({
+            "action": "buy",
+            "ticker": buy["ticker"],
+            "category": under["category"],
+            "amount": amount,
+            "price": buy["current_price"],
+            "shares": amount / buy["current_price"] if buy["current_price"] > 0 else None,
+            "monthly_income_delta": monthly_delta,
+            "yield": buy["annual_yield"],
+            "candidates": _buy_candidates(under["category"], selected=buy["ticker"], amount=amount),
+            "reason": "Add to underweight category; highest-yield existing position is preferred.",
+        })
+        if buy["annual_yield"] >= suspicious_yield_threshold:
+            trades[-1]["suspicious_yield"] = True
+        projected_monthly += monthly_delta
+        cash_available -= amount
+
+    if not allow_sells and new_cash <= 0:
+        warnings.append("No trades were generated because sells are disabled and no new cash was provided.")
+
+    if projected_monthly + 0.01 < required_monthly_income:
+        warnings.append(
+            f"Projected income is below the required floor: ${projected_monthly:,.2f}/mo vs ${required_monthly_income:,.2f}/mo."
+        )
+    if any(t.get("suspicious_yield") for t in trades):
+        warnings.append(
+            f"One or more replacement buys yields at least {suspicious_yield_threshold * 100:.1f}%. Review the payout source before trading."
+        )
+
+    buy_total = sum(t["amount"] for t in trades if t["action"] == "buy")
+    sell_total = sum(t["amount"] for t in trades if t["action"] == "sell")
+    after_value = total_value + new_cash
+    after_yield = (projected_monthly * 12) / after_value if after_value > 0 else 0
+    category_candidates = {
+        b["category"]: _buy_candidates(
+            b["category"],
+            amount=max(float(b.get("gap_dollars") or 0), min_trade_amount),
+        )
+        for b in bucket_results
+    }
+
+    return jsonify({
+        "before": {
+            "value": round(total_value, 2),
+            "monthly_income": round(total_monthly_income, 2),
+            "annual_income": round(total_monthly_income * 12, 2),
+            "yield": round(before_yield * 100, 4),
+        },
+        "after": {
+            "value": round(after_value, 2),
+            "monthly_income": round(projected_monthly, 2),
+            "annual_income": round(projected_monthly * 12, 2),
+            "yield": round(after_yield * 100, 4),
+        },
+        "required": {
+            "monthly_income": round(required_monthly_income, 2),
+            "yield": round((required_monthly_income * 12 / after_value * 100) if after_value > 0 else 0, 4),
+        },
+        "summary": {
+            "total_buys": round(buy_total, 2),
+            "total_sells": round(sell_total, 2),
+            "net_cash": round(buy_total - sell_total, 2),
+            "cash_remaining": round(cash_available, 2),
+            "strategy": rebalance_strategy,
+        },
+        "guardrails": {
+            "income_floor_enforced": required_monthly_income > 0,
+            "income_floor_met": projected_monthly + 0.01 >= required_monthly_income,
+            "suspicious_yield_pct": round(suspicious_yield_threshold * 100, 4),
+        },
+        "bucket_results": bucket_results,
+        "category_candidates": category_candidates,
+        "trades": [
+            {
+                **t,
+                "amount": round(t["amount"], 2),
+                "shares": round(t["shares"], 4) if t["shares"] is not None else None,
+                "monthly_income_delta": round(t["monthly_income_delta"], 2),
+                "yield": round(t["yield"] * 100, 4),
+                "candidates": t.get("candidates", []),
+                "suspicious_yield": bool(t.get("suspicious_yield")),
+            }
+            for t in trades
+        ],
+        "warnings": warnings,
+    })
 
 
 @app.route("/api/builder/portfolios/<int:port_id>", methods=["DELETE"])
