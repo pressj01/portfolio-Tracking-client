@@ -341,8 +341,8 @@ export default function Categories() {
   const applySuggestedTargets = async (openWizard = false) => {
     if (!targetAssistant?.rows?.length) return
     const ok = await dialog.confirm(openWizard
-      ? 'Apply the suggested target percentages and open Rebalance Wizard?'
-      : 'Apply the suggested target percentages to your categories?')
+      ? 'Save these suggested category targets, then open Rebalance Wizard to build the trade list?'
+      : 'Save these suggested percentages as your category targets?')
     if (!ok) return
     setError(null)
     try {
@@ -368,7 +368,7 @@ export default function Categories() {
         navigate('/rebalance-wizard')
       }
     } catch (e) {
-      setError(e.message || 'Could not apply suggested targets')
+      setError(e.message || 'Could not save the suggested category targets.')
     }
   }
 
@@ -676,7 +676,7 @@ export default function Categories() {
             <div>
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Target Assistant</h2>
               <p style={{ color: '#90a4ae', margin: '0.25rem 0 0', fontSize: '0.85rem' }}>
-                Suggested targets use current allocation, income yield, risk flags, and your constraints.
+                Use this to set target weights before rebalancing. Suggestions start with your current allocation, then adjust for income, concentration, weekly-payer exposure, NAV-risk flags, and the limits you set.
               </p>
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -685,8 +685,8 @@ export default function Categories() {
                 <option value="preserve_income">Preserve income</option>
                 <option value="reduce_drift">Reduce target drift</option>
               </select>
-              <button className="btn btn-success" onClick={() => applySuggestedTargets(false)}>Apply Suggested Targets</button>
-              <button className="btn btn-primary" onClick={() => applySuggestedTargets(true)}>Apply & Open Rebalance</button>
+              <button className="btn btn-success" onClick={() => applySuggestedTargets(false)}>Save Targets</button>
+              <button className="btn btn-primary" onClick={() => applySuggestedTargets(true)}>Save & Build Trades</button>
             </div>
           </div>
 
@@ -703,7 +703,7 @@ export default function Categories() {
                   Income: {mix.projectedMonthly == null ? 'Unavailable' : fmt(mix.projectedMonthly)}
                 </div>
                 <div style={{ color: mix.incomeFloorBreached ? '#ffb74d' : '#cfd8dc', fontSize: '0.78rem' }}>
-                  Floor: {mix.incomeFloorBreached ? `Short ${fmt(mix.incomeShortfall)}` : 'Met'}
+                  Income floor: {mix.incomeFloorBreached ? `Short ${fmt(mix.incomeShortfall)}` : 'Met'}
                 </div>
                 <div style={{ color: '#cfd8dc', fontSize: '0.78rem' }}>
                   Quality: {mix.avgQuality.toFixed(0)} | Moves: {fmt(mix.totalMove)}
@@ -714,7 +714,7 @@ export default function Categories() {
 
           <div className="cat-assistant-grid">
             <div className="cat-suggestion-panel">
-              <div className="cat-panel-title">Target Suggestions With Rationale</div>
+              <div className="cat-panel-title">Suggested Targets</div>
               <div className="cat-suggestion-list">
                 {targetAssistant.rows.map(row => (
                   <div key={row.id} className="cat-suggestion-row">
@@ -724,14 +724,14 @@ export default function Categories() {
                         {row.suggested_pct >= Number(row.target_pct ?? row.actual_pct ?? 0) ? '+' : ''}{(row.suggested_pct - Number(row.target_pct ?? row.actual_pct ?? 0)).toFixed(1)} pts
                       </span>
                     </div>
-                    <p>Reason: {row.rationale}</p>
+                    <p>{row.rationale}</p>
                   </div>
                 ))}
               </div>
             </div>
 
             <div className="cat-constraints-panel">
-              <div className="cat-panel-title">Constraint Sliders</div>
+              <div className="cat-panel-title">Limits Used For Suggestions</div>
               <ConstraintSlider
                 label="Minimum acceptable monthly income"
                 value={constraints.minimumMonthlyIncome}
@@ -741,7 +741,7 @@ export default function Categories() {
                 prefix="$"
                 unit=""
                 onChange={v => setConstraint('minimumMonthlyIncome', v)}
-                help="Lower this if you are willing to trade income for allocation quality."
+                help="The assistant tries to keep projected income at or above this amount. Lower it only if you are comfortable giving up monthly income to improve allocation balance."
                 numeric
               />
               <ConstraintSlider
@@ -750,7 +750,7 @@ export default function Categories() {
                 min={5}
                 max={60}
                 onChange={v => setConstraint('maxCategoryPct', v)}
-                help="Caps any single category suggestion."
+                help="Prevents any one category from becoming too large in the suggested target mix."
               />
               <ConstraintSlider
                 label="Max high-yield category"
@@ -758,7 +758,7 @@ export default function Categories() {
                 min={5}
                 max={40}
                 onChange={v => setConstraint('maxHighYieldCategoryPct', v)}
-                help="Caps juicers and yield-heavy buckets."
+                help="Applies a tighter cap to categories that are yield-heavy or behave like high-yield buckets."
               />
               <ConstraintSlider
                 label="Max allowed drift"
@@ -766,7 +766,7 @@ export default function Categories() {
                 min={1}
                 max={20}
                 onChange={v => setConstraint('maxAllowedDrift', v)}
-                help="Limits suggested moves from current allocation."
+                help="Controls how far the assistant can move a category away from where it is today."
               />
               <ConstraintSlider
                 label="Minimum anchor allocation"
@@ -774,7 +774,7 @@ export default function Categories() {
                 min={0}
                 max={70}
                 onChange={v => setConstraint('minimumAnchorAllocation', v)}
-                help="Raises categories named Anchor when present."
+                help="Keeps a minimum allocation in categories with Anchor in the name, when those categories exist."
               />
               <ConstraintSlider
                 label="Income growth priority"
@@ -782,7 +782,7 @@ export default function Categories() {
                 min={0}
                 max={100}
                 onChange={v => setConstraint('incomeGrowthPriority', v)}
-                help="Higher values tilt suggestions toward yield."
+                help="Higher values favor income-producing categories; lower values favor balance and risk control."
               />
             </div>
           </div>
@@ -797,7 +797,7 @@ export default function Categories() {
               </div>
             </div>
             <div>
-              <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Income Floor</span>
+              <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Minimum Income Target</span>
               <div style={{ fontWeight: 700, color: targetAssistant.incomeFloorBreached ? '#ff6b6b' : '#00e89a' }}>
                 {fmt(targetAssistant.incomeFloor)} / mo
               </div>
@@ -820,21 +820,21 @@ export default function Categories() {
 
           {targetAssistant.incomeFloorBreached && (
             <div className="alert alert-warning" style={{ marginBottom: '0.75rem' }}>
-              Income floor warning: this target mix is short by {fmt(targetAssistant.incomeShortfall)} per month.
-              Rebalance Wizard may need higher-yield replacements to preserve income; required portfolio yield is {fmtPct(targetAssistant.requiredYield)}
-              {targetAssistant.yieldNeededOnReplacements > 0 ? ` and the edited dollars would need roughly +${fmtPct(targetAssistant.yieldNeededOnReplacements)} of extra yield.` : '.'}
+              This target mix is projected to miss your monthly income target by {fmt(targetAssistant.incomeShortfall)}.
+              You can lower the income target, choose a more income-focused mix, or let Rebalance Wizard look for higher-yield replacement buys. Required portfolio yield is {fmtPct(targetAssistant.requiredYield)}
+              {targetAssistant.yieldNeededOnReplacements > 0 ? `, and the dollars being moved would need roughly +${fmtPct(targetAssistant.yieldNeededOnReplacements)} of extra yield.` : '.'}
             </div>
           )}
 
           {!targetAssistant.hasIncomeProjectionData && targetAssistant.incomeFloor > 0 && (
             <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
-              Income projection unavailable: the category data loaded here does not include usable category yield or ticker monthly income, so the assistant is not treating the {fmt(targetAssistant.incomeFloor)} floor as breached.
+              Income check unavailable: this view does not have enough category yield or ticker income data to test the {fmt(targetAssistant.incomeFloor)} monthly target. The Rebalance Wizard will run the stricter income check before exports.
             </div>
           )}
 
           {!targetAssistant.hasWeeklyProjectionData && (
             <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
-              Weekly exposure unavailable: the category data loaded here does not include weekly exposure fields, so the assistant is not displaying a projected weekly exposure.
+              Weekly-payer check unavailable: this view does not have enough payout-frequency data to estimate projected weekly exposure.
             </div>
           )}
 
