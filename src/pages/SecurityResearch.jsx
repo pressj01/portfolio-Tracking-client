@@ -197,7 +197,68 @@ function AverageReturnChart({ kind, ticker, benchmark }) {
   )
 }
 
+function DistributionChart({ history, ticker }) {
+  const chartRef = useRef(null)
+
+  useEffect(() => {
+    if (!history?.length || !window.Plotly || !chartRef.current) return
+
+    const monthly = {}
+    for (const h of history) {
+      const dt = new Date(h.date + 'T00:00:00')
+      const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`
+      monthly[key] = (monthly[key] || 0) + h.amount
+    }
+    const sortedKeys = Object.keys(monthly).sort().slice(-36)
+    const labels = sortedKeys.map(k => {
+      const [y, m] = k.split('-')
+      const dt = new Date(Number(y), Number(m) - 1, 1)
+      return dt.toLocaleDateString(undefined, { year: '2-digit', month: 'short' })
+    })
+    const amounts = sortedKeys.map(k => Math.round(monthly[k] * 10000) / 10000)
+    const avg = amounts.reduce((s, v) => s + v, 0) / amounts.length
+
+    const traces = [{
+      x: labels,
+      y: amounts,
+      type: 'bar',
+      marker: {
+        color: amounts.map(a => a >= avg ? '#4dff91' : '#7ecfff'),
+      },
+      hovertemplate: '<b>%{x}</b><br>$%{y:.4f}<extra></extra>',
+    }]
+
+    const layout = {
+      template: 'plotly_dark',
+      paper_bgcolor: '#16213e',
+      plot_bgcolor: '#16213e',
+      title: { text: `${ticker} - Distribution History`, font: { size: 16, color: '#e0e8f5' } },
+      margin: { l: 60, r: 20, t: 56, b: 64 },
+      height: 380,
+      xaxis: { title: 'Month', gridcolor: '#1a2a3e', tickangle: -45 },
+      yaxis: { title: 'Distribution ($)', gridcolor: '#1a2a3e', tickprefix: '$' },
+      showlegend: false,
+      hovermode: 'x unified',
+    }
+
+    window.Plotly.newPlot(chartRef.current, traces, layout, { responsive: true, displayModeBar: false })
+    return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
+  }, [history, ticker])
+
+  if (!history?.length) return null
+
+  return (
+    <section className="research-chart-section" id="distribution-chart">
+      <div ref={chartRef} className="research-chart" />
+    </section>
+  )
+}
+
 function ETFResult({ data, onOpenChart }) {
+  const yieldLabel = data.yield_source && data.yield_source !== 'Yahoo Finance'
+    ? `${data.target_yield_label || 'Estimated Yield'} (${data.yield_source})`
+    : (data.target_yield_label || 'Estimated Yield')
+
   const metrics = [
     ['Issuer', data.issuer],
     ['Category', data.category],
@@ -207,11 +268,15 @@ function ETFResult({ data, onOpenChart }) {
     [data.nav_label || 'NAV', fmtMoney(data.nav_price)],
     ['Inception', fmtDate(data.inception_date)],
     ['Dividend Frequency', data.dividend_frequency || '-'],
-    [data.target_yield_label || 'Estimated Yield', fmtPct(data.estimated_yield_pct)],
+    [yieldLabel, fmtPct(data.estimated_yield_pct)],
     ['30-Day SEC Yield', fmtPct(data.sec_30_day_yield_pct)],
     ['TTM Dividend/Share', data.ttm_dividend_per_share == null ? '-' : '$' + fmtNum(data.ttm_dividend_per_share, 4)],
     ['Last Dividend', data.last_dividend ? `${fmtMoney(data.last_dividend.amount)} on ${data.last_dividend.date}` : '-'],
-    ['Source', data.source_url ? <a href={data.source_url} target="_blank" rel="noreferrer">{data.data_source || 'Source'}</a> : data.data_source],
+    ['Source', (() => {
+      const base = data.source_url ? <a href={data.source_url} target="_blank" rel="noreferrer">{data.data_source || 'Source'}</a> : (data.data_source || '-')
+      if (data.yield_source && data.yield_source !== data.data_source) return <>{base} + {data.yield_source}</>
+      return base
+    })()],
   ]
 
   return (
@@ -232,6 +297,8 @@ function ETFResult({ data, onOpenChart }) {
       <section className="research-grid">
         {metrics.map(([label, value]) => <Field key={label} label={label} value={value} />)}
       </section>
+
+      <DistributionChart history={data.distribution_history} ticker={data.ticker} />
 
       <section className="research-two-col">
         <div>

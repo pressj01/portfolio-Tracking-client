@@ -4282,30 +4282,89 @@ def _is_rex_fund(ticker, description=""):
     return ticker in explicit_family
 
 
+_FUND_FAMILY_REGISTRY = [
+    # (keywords_in_description, extra_condition_fn_or_None, fetcher)
+    # Checked in order; first match wins.  Keywords are matched against a
+    # combined lowercased text built from the ticker, fund name, description,
+    # and yfinance issuer/family so that *any* new ticker from a known fund
+    # family is automatically routed to the correct scraper.
+    {
+        "keywords": ["yieldmax"],
+        "fetcher": "_fetch_yieldmax_distribution_snapshot",
+        "legacy": _is_yieldmax_fund,
+    },
+    {
+        "keywords": ["neos"],
+        "fetcher": "_fetch_neos_distribution_snapshot",
+        "legacy": _is_neos_fund,
+    },
+    {
+        "keywords": ["tappalpha", "tapalpha", "tapp alpha"],
+        "fetcher": "_fetch_tappalpha_distribution_snapshot",
+        "legacy": _is_tappalpha_fund,
+    },
+    {
+        "keywords": ["nicholas wealth", "xfunds", "nicholasx"],
+        "fetcher": "_fetch_xfunds_distribution_snapshot",
+        "legacy": _is_xfunds_fund,
+    },
+    {
+        "keywords": ["kurv"],
+        "fetcher": "_fetch_kurv_distribution_snapshot",
+        "legacy": _is_kurv_fund,
+    },
+    {
+        "keywords": ["global x", "globalx"],
+        "fetcher": "_fetch_globalx_distribution_snapshot",
+        "legacy": _is_globalx_fund,
+    },
+    {
+        "keywords": ["amplify"],
+        "fetcher": "_fetch_amplify_distribution_snapshot",
+        "legacy": _is_amplify_fund,
+    },
+    {
+        "keywords": ["quantify", "incomestkd"],
+        "fetcher": "_fetch_quantify_distribution_snapshot",
+        "legacy": _is_quantify_fund,
+    },
+    {
+        "keywords": ["rex shares", "rexshares"],
+        "extra_keywords": ["income", "premium", "covered call", "growth & income", "growth and income"],
+        "fetcher": "_fetch_rex_distribution_snapshot",
+        "legacy": _is_rex_fund,
+    },
+]
+
+
+def _match_fund_family(ticker, description=""):
+    """Identify which fund family a ticker belongs to using keyword matching."""
+    ticker = (ticker or "").strip().upper()
+    text = (description or "").lower()
+
+    for entry in _FUND_FAMILY_REGISTRY:
+        if entry["legacy"](ticker, description):
+            return entry
+        if any(kw in text for kw in entry["keywords"]):
+            extra = entry.get("extra_keywords")
+            if extra and not any(ek in text for ek in extra):
+                continue
+            return entry
+    return None
+
+
 def _fetch_official_distribution_snapshot(ticker, description=None):
     """Fetch issuer-published distribution data for supported fund families."""
     ticker = (ticker or "").strip().upper()
     description = description or ""
 
-    if _is_yieldmax_fund(ticker, description):
-        return _fetch_yieldmax_distribution_snapshot(ticker)
-    if _is_neos_fund(ticker, description):
-        return _fetch_neos_distribution_snapshot(ticker)
-    if _is_tappalpha_fund(ticker, description):
-        return _fetch_tappalpha_distribution_snapshot(ticker)
-    if _is_xfunds_fund(ticker, description):
-        return _fetch_xfunds_distribution_snapshot(ticker)
-    if _is_kurv_fund(ticker, description):
-        return _fetch_kurv_distribution_snapshot(ticker)
-    if _is_globalx_fund(ticker, description):
-        return _fetch_globalx_distribution_snapshot(ticker)
-    if _is_amplify_fund(ticker, description):
-        return _fetch_amplify_distribution_snapshot(ticker)
-    if _is_quantify_fund(ticker, description):
-        return _fetch_quantify_distribution_snapshot(ticker)
-    if _is_rex_fund(ticker, description):
-        return _fetch_rex_distribution_snapshot(ticker)
-    return None
+    entry = _match_fund_family(ticker, description)
+    if entry is None:
+        return None
+    fetcher = globals().get(entry["fetcher"])
+    if fetcher is None:
+        return None
+    return fetcher(ticker)
 
 
 def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
@@ -9185,6 +9244,49 @@ def security_research(kind, ticker):
             for key, value in official_profile.items():
                 if value not in (None, "", []):
                     response[key] = value
+
+        # ── Official fund-site yield & distribution history ──────────────
+        description_text = f"{name} {summary}"
+        official_snapshot = None
+        try:
+            official_snapshot = _fetch_official_distribution_snapshot(ticker, description_text)
+        except Exception:
+            pass
+
+        dist_history_series = None
+        if official_snapshot and official_snapshot.get("history") is not None:
+            h = official_snapshot["history"]
+            if hasattr(h, "empty") and not h.empty:
+                dist_history_series = h
+                rate = official_snapshot.get("distribution_rate_pct")
+                if rate is not None:
+                    response["estimated_yield_pct"] = round(float(rate), 2)
+                    response["target_yield_label"] = "Distribution Rate"
+                if official_snapshot.get("freq"):
+                    response["dividend_frequency"] = {
+                        "W": "Weekly", "M": "Monthly", "Q": "Quarterly",
+                        "SA": "Semi-Annual", "A": "Annual",
+                    }.get(official_snapshot["freq"], response.get("dividend_frequency"))
+                last_entry = official_snapshot.get("div")
+                ex_date = official_snapshot.get("ex_div_date")
+                if last_entry and ex_date:
+                    response["last_dividend"] = {"amount": round(float(last_entry), 4), "date": ex_date}
+                response["yield_source"] = "Fund Site"
+
+        if dist_history_series is None and dividends is not None and not dividends.empty:
+            divs = dividends[dividends > 0].dropna()
+            if not divs.empty:
+                dist_history_series = divs
+                response["yield_source"] = "Yahoo Finance"
+
+        response["distribution_history"] = []
+        if dist_history_series is not None and not dist_history_series.empty:
+            for dt, amt in dist_history_series.items():
+                response["distribution_history"].append({
+                    "date": dt.strftime("%Y-%m-%d"),
+                    "amount": round(float(amt), 4),
+                })
+
         inception = _research_info_value(info, "fundInceptionDate")
         if inception:
             try:
