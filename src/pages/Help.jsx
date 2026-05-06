@@ -4172,8 +4172,8 @@ function ETFComparerHelp() {
       <h2>ETF Comparer</h2>
       <p style={{ marginBottom: '1rem' }}>
         ETF Comparer lets you compare up to seven ETFs side-by-side using an interactive return chart,
-        a customizable data table, an average return bar chart, and a multi-period comparison table.
-        It is designed for a direct head-to-head comparison of ETF return history, yield, and fund characteristics.
+        a customizable data table, a distribution history chart, an average return bar chart, and a multi-period comparison table.
+        It is designed for a direct head-to-head comparison of ETF return history, yield, distribution patterns, and fund characteristics.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
@@ -4193,25 +4193,47 @@ function ETFComparerHelp() {
         <li><strong>Range slider</strong> — drag to zoom into a specific date range within the selected period.</li>
       </ul>
 
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Distribution History</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The Distribution History section appears below the main return chart. It shows one ETF at a time so the monthly
+        distribution bars stay readable when several ETFs are loaded. Use the ticker buttons to switch which ETF is shown,
+        or use <strong>Hide Chart</strong> to collapse the section.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Distribution amounts and expected yield prefer supported official issuer sites when available. For NEOS funds,
+        Goldman Sachs funds such as GPIQ and GPIX, and other supported families, the chart and expected yield use fund-site
+        data first and fall back to Yahoo Finance when official data is unavailable. The source label shows where the chart
+        data came from.
+      </p>
+
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Comparison Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         A sortable table shows live market data for each ticker. Symbol and Fund Name columns are always visible;
-        all other columns are optional. Click <strong>Columns</strong> to open the column picker and toggle which fields appear.
+        all other columns are optional. Click <strong>Indicators</strong> to open the column picker and toggle which fields appear.
         Available columns include: stock price, daily % change, assets under management, expense ratio, PE ratio,
-        dividend yield, volume, dollar volume, open price, 1Y CAGR, 52-week high/low, issuer, category, and max drawdown.
+        expected dividend yield, dividend yield, expected yield source, volume, dollar volume, open price, 1Y CAGR,
+        52-week high/low, issuer, category, and max drawdown.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Expected Div. Yield</strong> is a forward-looking estimate based on official issuer distribution rates,
+        official distribution history, saved provider data, or Yahoo Finance fallback data, depending on what is available.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Average Return Bar Chart</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the comparison table, a grouped bar chart shows average annualized returns for each ticker
-        across standard time windows (1Y, 3Y, 5Y, 10Y). This makes it easy to spot which ETF has led
+        across standard time windows (year-to-date, 1Y, 5Y, 10Y, and inception where available). This makes it easy to spot which ETF has led
         or lagged across different horizons at a glance.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Use <strong>Download CSV</strong> to export the Average Return table. Exported return columns include
+        <strong> Return (%)</strong> in the heading so values such as 19.27 are clearly understood as 19.27%.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Multi-Period Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        A tabular summary shows 1Y, 3Y, 5Y, 10Y, 15Y, and 20Y total returns for each ticker in the comparison,
-        alongside any long-horizon data available for MAX-period lookups.
+        A tabular summary shows the same available average-return windows for each ticker. Blank cells mean that ticker
+        does not have enough history or aligned data for that period.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>When to Use It</h3>

@@ -4282,6 +4282,211 @@ def _is_rex_fund(ticker, description=""):
     return ticker in explicit_family
 
 
+_GOLDMAN_FUND_LIST_CACHE = {"ts": 0, "funds": {}}
+_GOLDMAN_FUND_LIST_URLS = (
+    "https://am.gs.com/en-us/advisors/products/active-etfs",
+    "https://am.gs.com/en-us/advisors/products/exchange-traded-funds",
+)
+
+
+def _is_goldman_sachs_fund(ticker, description=""):
+    """Identify Goldman Sachs ETFs, including GPIQ/GPIX premium income funds."""
+    ticker = (ticker or "").strip().upper()
+    description_l = (description or "").lower()
+    if "goldman sachs" in description_l or "gsam" in description_l:
+        return True
+    explicit_family = {
+        # Goldman Sachs ETF hub entries, kept as a backstop for sparse Yahoo descriptions.
+        "GPIX", "GPIQ", "GMUB", "GSGO", "GSST", "GSC", "GBND", "GSWO", "GTPE",
+    }
+    return ticker in explicit_family
+
+
+def _goldman_clean_float(value):
+    text = str(value or "").strip()
+    if not text or text in {"--", "-", "N/A"}:
+        return None
+    text = re.sub(r"[^0-9.\-]", "", text)
+    if not text:
+        return None
+    try:
+        return float(text)
+    except Exception:
+        return None
+
+
+def _goldman_collect_funds(node, found):
+    if isinstance(node, dict):
+        ticker = str(node.get("ticker") or "").strip().upper()
+        pv = node.get("pvNumber")
+        share_class = node.get("shareClassId")
+        if ticker and pv and share_class:
+            found[ticker] = {
+                "ticker": ticker,
+                "pvNumber": pv,
+                "shareClassId": share_class,
+                "fundName": node.get("fundName"),
+            }
+        for value in node.values():
+            _goldman_collect_funds(value, found)
+    elif isinstance(node, list):
+        for item in node:
+            _goldman_collect_funds(item, found)
+
+
+def _fetch_goldman_fund_map():
+    """Return ticker -> Goldman fund ids from public Goldman ETF pages."""
+    import requests
+
+    now = time.time()
+    if _GOLDMAN_FUND_LIST_CACHE["funds"] and now - _GOLDMAN_FUND_LIST_CACHE["ts"] < 60 * 60 * 6:
+        return _GOLDMAN_FUND_LIST_CACHE["funds"]
+
+    funds = {}
+    for url in _GOLDMAN_FUND_LIST_URLS:
+        try:
+            resp = requests.get(
+                url,
+                timeout=12,
+                headers={"User-Agent": "Mozilla/5.0 PortfolioTrackingClient/1.0"},
+            )
+            resp.raise_for_status()
+            match = re.search(
+                r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
+                resp.text or "",
+                flags=re.DOTALL,
+            )
+            if not match:
+                continue
+            page_data = json.loads(match.group(1))
+            _goldman_collect_funds(page_data, funds)
+        except Exception:
+            continue
+
+    if funds:
+        _GOLDMAN_FUND_LIST_CACHE["ts"] = now
+        _GOLDMAN_FUND_LIST_CACHE["funds"] = funds
+    return funds
+
+
+def _fetch_goldman_distribution_snapshot(ticker):
+    """Fetch official Goldman Sachs fund yield and distributions when available."""
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return None
+
+    fund = _fetch_goldman_fund_map().get(ticker)
+    if not fund:
+        return None
+
+    query = """
+      query getFundsDetail($fundDetailRequest: FundDetailRequest) {
+        fundsDetail(fundDetailRequest: $fundDetailRequest) {
+          fundName
+          ticker
+          distributionFrequency
+          yield {
+            value
+            label
+            asAtDate
+          }
+          distributions
+        }
+      }
+    """
+    variables = {
+        "fundDetailRequest": {
+            "country": "US",
+            "language": "en",
+            "audience": "individual",
+            "pvNumber": fund["pvNumber"],
+            "shareClassId": fund["shareClassId"],
+        }
+    }
+
+    try:
+        resp = requests.post(
+            "https://am.gs.com/services/funds",
+            json={"query": query, "variables": variables},
+            timeout=12,
+            headers={
+                "User-Agent": "Mozilla/5.0 PortfolioTrackingClient/1.0",
+                "Content-Type": "application/json",
+            },
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception:
+        return None
+
+    detail = ((payload.get("data") or {}).get("fundsDetail") or {})
+    if not detail:
+        return None
+
+    yield_entries = detail.get("yield") or []
+    distribution_rate_pct = None
+    if isinstance(yield_entries, list):
+        for item in yield_entries:
+            distribution_rate_pct = _goldman_clean_float((item or {}).get("value"))
+            if distribution_rate_pct is not None:
+                break
+
+    entries = []
+    for row in detail.get("distributions") or []:
+        amount = _goldman_clean_float((row or {}).get("amount") or (row or {}).get("income"))
+        ex_ts = pd.to_datetime((row or {}).get("expirationDate"), format="%m/%d/%Y", errors="coerce")
+        pay_ts = pd.to_datetime((row or {}).get("payableDate"), format="%m/%d/%Y", errors="coerce")
+        if amount is None or pd.isna(ex_ts):
+            continue
+        entries.append((ex_ts.normalize(), amount, pay_ts.normalize() if not pd.isna(pay_ts) else None))
+
+    history = pd.Series(dtype=float)
+    latest_ex = None
+    latest_pay = None
+    if entries:
+        entries.sort(key=lambda item: item[0])
+        history = pd.Series(
+            [item[1] for item in entries],
+            index=pd.DatetimeIndex([item[0] for item in entries]),
+        )
+        history = history[~history.index.duplicated(keep="last")].sort_index()
+        pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
+        latest_ex = history.index[-1]
+        latest_pay = pay_map.get(latest_ex)
+
+    if history.empty and distribution_rate_pct is None:
+        return None
+
+    freq_text = str(detail.get("distributionFrequency") or "").lower()
+    freq = None
+    if "week" in freq_text:
+        freq = "W"
+    elif "month" in freq_text:
+        freq = "M"
+    elif "quarter" in freq_text:
+        freq = "Q"
+    elif "semi" in freq_text:
+        freq = "SA"
+    elif "annual" in freq_text:
+        freq = "A"
+    if freq is None and not history.empty:
+        freq = _infer_dividend_frequency_from_history(history)
+
+    return {
+        "known": True,
+        "has_dividend": bool(not history.empty or distribution_rate_pct is not None),
+        "div": float(history.iloc[-1]) if not history.empty else None,
+        "ex_div_date": latest_ex.strftime("%m/%d/%y") if latest_ex is not None else None,
+        "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
+        "freq": freq,
+        "history": history,
+        "distribution_rate_pct": distribution_rate_pct,
+        "source": "Goldman Sachs",
+    }
+
+
 _FUND_FAMILY_REGISTRY = [
     # (keywords_in_description, extra_condition_fn_or_None, fetcher)
     # Checked in order; first match wins.  Keywords are matched against a
@@ -4333,6 +4538,11 @@ _FUND_FAMILY_REGISTRY = [
         "extra_keywords": ["income", "premium", "covered call", "growth & income", "growth and income"],
         "fetcher": "_fetch_rex_distribution_snapshot",
         "legacy": _is_rex_fund,
+    },
+    {
+        "keywords": ["goldman sachs", "gsam"],
+        "fetcher": "_fetch_goldman_distribution_snapshot",
+        "legacy": _is_goldman_sachs_fund,
     },
 ]
 
@@ -9271,7 +9481,7 @@ def security_research(kind, ticker):
                 ex_date = official_snapshot.get("ex_div_date")
                 if last_entry and ex_date:
                     response["last_dividend"] = {"amount": round(float(last_entry), 4), "date": ex_date}
-                response["yield_source"] = "Fund Site"
+                response["yield_source"] = official_snapshot.get("source") or "Fund Site"
 
         if dist_history_series is None and dividends is not None and not dividends.empty:
             divs = dividends[dividends > 0].dropna()
@@ -13575,6 +13785,7 @@ def etf_screen_data():
             conn.row_factory = __import__("sqlite3").Row
             for row in conn.execute(
                 f"""SELECT f.symbol, f.fund_name, f.assets, f.div_yield, f.exp_ratio, f.change_1y,
+                          f.annual_div, f.frequency,
                           p.provider
                    FROM etf_provider_funds f
                    JOIN etf_providers p ON p.id = f.provider_id
@@ -13742,8 +13953,10 @@ def etf_screen_data():
             }
 
             try:
-                info = yf.Ticker(sym).info or {}
+                tk_obj = yf.Ticker(sym)
+                info = tk_obj.info or {}
             except Exception:
+                tk_obj = None
                 info = {}
 
             last_price = float(base.iloc[-1]) if not base.empty else None
@@ -13768,10 +13981,125 @@ def etf_screen_data():
             dividend_yield = info.get("yield")
             if dividend_yield is None:
                 dividend_yield = info.get("dividendYield")
+            saved = saved_fund_data.get(sym, {})
+            expected_dividend_yield = None
+            expected_annual_dividend = None
+            expected_yield_source = None
+            distribution_history = []
+            distribution_source = None
+            distribution_frequency = None
+
+            def _set_expected_yield(yield_value=None, annual_dividend=None, source=None):
+                nonlocal expected_dividend_yield, expected_annual_dividend, expected_yield_source
+                if expected_dividend_yield is not None:
+                    return
+                try:
+                    if yield_value is not None:
+                        y = float(yield_value)
+                        expected_dividend_yield = round(y if abs(y) <= 1 else y / 100.0, 6)
+                    elif annual_dividend is not None and last_price:
+                        annual = float(annual_dividend)
+                        if annual <= 0:
+                            return
+                        expected_annual_dividend = round(annual, 6)
+                        expected_dividend_yield = round(annual / float(last_price), 6)
+                    if expected_dividend_yield is not None:
+                        expected_yield_source = source
+                except Exception:
+                    pass
+
+            description_text = " ".join(str(v or "") for v in (
+                saved.get("fund_name"), saved.get("name"), info.get("longName"),
+                info.get("shortName"), info.get("fundFamily"), sym,
+            ))
+            official_snapshot = None
+            try:
+                official_snapshot = _fetch_official_distribution_snapshot(sym, description_text)
+            except Exception:
+                official_snapshot = None
+            if official_snapshot and official_snapshot.get("has_dividend"):
+                official_source = official_snapshot.get("source") or "Fund Site"
+                official_history = official_snapshot.get("history")
+                if hasattr(official_history, "empty") and not official_history.empty:
+                    for dt, amt in official_history.items():
+                        try:
+                            distribution_history.append({
+                                "date": dt.strftime("%Y-%m-%d"),
+                                "amount": round(float(amt), 4),
+                            })
+                        except Exception:
+                            continue
+                    if distribution_history:
+                        distribution_source = official_source
+                        distribution_frequency = official_snapshot.get("freq")
+                _set_expected_yield(official_snapshot.get("distribution_rate_pct"), source=official_source)
+                if expected_dividend_yield is None and official_history is not None:
+                    try:
+                        if hasattr(official_history, "empty") and not official_history.empty:
+                            annual_div, _ttm_div, _yield_source = _div_calc_annual_dividend(
+                                official_history,
+                                official_snapshot.get("freq") or _div_calc_infer_frequency(official_history),
+                            )
+                            _set_expected_yield(annual_dividend=annual_div, source=official_source)
+                    except Exception:
+                        pass
+
+            if expected_dividend_yield is None:
+                try:
+                    provider_profile = _fetch_provider_etf_profile(sym, {
+                        "name": saved.get("fund_name") or saved.get("name") or info.get("longName") or info.get("shortName") or sym,
+                        "issuer": saved.get("provider") or info.get("fundFamily"),
+                        "data_source": saved.get("provider") or "Yahoo Finance",
+                    })
+                    if provider_profile:
+                        _set_expected_yield(
+                            provider_profile.get("distribution_rate_pct") or provider_profile.get("estimated_yield_pct"),
+                            source=provider_profile.get("data_source") or "Fund Site",
+                        )
+                except Exception:
+                    pass
+
+            _set_expected_yield(annual_dividend=saved.get("annual_div"), source=saved.get("provider"))
+            _set_expected_yield(saved.get("div_yield"), source=saved.get("provider"))
+
+            try:
+                history_divs = tk_obj.dividends if tk_obj is not None else pd.Series(dtype=float)
+            except Exception:
+                history_divs = pd.Series(dtype=float)
+            if history_divs is None or history_divs.empty:
+                history_divs = divs_raw
+            freq_code = None
+            try:
+                freq_code = _div_calc_infer_frequency(history_divs)
+                annual_div, _ttm_div, yield_source = _div_calc_annual_dividend(history_divs, freq_code)
+                _set_expected_yield(annual_dividend=annual_div, source=f"Yahoo Finance ({yield_source})")
+            except Exception:
+                pass
+            if not distribution_history:
+                try:
+                    yahoo_history = _div_calc_positive_dividends(history_divs)
+                    if not yahoo_history.empty:
+                        for dt, amt in yahoo_history.items():
+                            try:
+                                distribution_history.append({
+                                    "date": dt.strftime("%Y-%m-%d"),
+                                    "amount": round(float(amt), 4),
+                                })
+                            except Exception:
+                                continue
+                        if distribution_history:
+                            distribution_source = "Yahoo Finance"
+                            distribution_frequency = freq_code or _div_calc_infer_frequency(yahoo_history)
+                except Exception:
+                    pass
+            try:
+                _set_expected_yield(annual_dividend=info.get("dividendRate"), source="Yahoo Finance (dividendRate)")
+            except Exception:
+                pass
+            _set_expected_yield(dividend_yield, source="Yahoo Finance (yield)")
             expense_ratio = info.get("annualReportExpenseRatio") or info.get("netExpenseRatio")
             pe_ratio = info.get("trailingPE") or info.get("forwardPE")
 
-            saved = saved_fund_data.get(sym, {})
             result["profiles"][sym] = {
                 "symbol": sym,
                 "name": saved.get("fund_name") or saved.get("name") or info.get("longName") or info.get("shortName") or sym,
@@ -13781,6 +14109,12 @@ def etf_screen_data():
                 "expense_ratio": expense_ratio if expense_ratio is not None else (saved.get("expense_ratio") if saved.get("expense_ratio") is not None else saved.get("exp_ratio")),
                 "pe_ratio": pe_ratio or saved.get("pe_ratio"),
                 "dividend_yield": dividend_yield if dividend_yield is not None else (saved.get("dividend_yield") if saved.get("dividend_yield") is not None else saved.get("div_yield")),
+                "expected_dividend_yield": expected_dividend_yield,
+                "expected_annual_dividend": expected_annual_dividend,
+                "expected_yield_source": expected_yield_source,
+                "distribution_history": distribution_history,
+                "distribution_source": distribution_source,
+                "distribution_frequency": distribution_frequency,
                 "volume": volume or saved.get("volume"),
                 "dollar_volume": dollar_volume or saved.get("dollar_volume"),
                 "open": open_price,

@@ -41,6 +41,8 @@ const COLUMNS = [
   { key: 'assets', label: 'Assets' },
   { key: 'expense_ratio', label: 'Exp. Ratio' },
   { key: 'pe_ratio', label: 'PE Ratio' },
+  { key: 'expected_dividend_yield', label: 'Expected Div. Yield' },
+  { key: 'expected_yield_source', label: 'Expected Yield Source' },
   { key: 'dividend_yield', label: 'Div. Yield' },
   { key: 'volume', label: 'Volume' },
   { key: 'dollar_volume', label: 'Dollar Vol.' },
@@ -53,7 +55,7 @@ const COLUMNS = [
   { key: 'max_drawdown', label: 'Max Drawdown' },
 ]
 
-const DEFAULT_COLUMNS = ['symbol', 'name', 'price', 'change_pct', 'assets', 'expense_ratio', 'pe_ratio', 'dividend_yield', 'volume', 'dollar_volume', 'open', 'return_1y']
+const DEFAULT_COLUMNS = ['symbol', 'name', 'price', 'change_pct', 'assets', 'expense_ratio', 'pe_ratio', 'expected_dividend_yield', 'dividend_yield', 'volume', 'dollar_volume', 'open', 'return_1y']
 const AVERAGE_PERIOD_ORDER = ['1 Month', 'YTD', '1 Year', '5 Years', '10 Years', 'Inception']
 
 function pct(v) {
@@ -145,11 +147,15 @@ export default function ETFComparer() {
   const loadSeqRef = useRef(0)
   const reinvestRef = useRef(reinvest)
   const [holdings, setHoldings] = useState({})
+  const [holdingsLoadedNonce, setHoldingsLoadedNonce] = useState({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_COLUMNS)
+  const [showDistributionChart, setShowDistributionChart] = useState(true)
+  const [distributionSymbol, setDistributionSymbol] = useState('')
+  const [downloadStatus, setDownloadStatus] = useState('')
 
   const resetReturnRange = useCallback(() => {
     setReturnXRange([null, null])
@@ -198,16 +204,20 @@ export default function ETFComparer() {
 
   useEffect(() => {
     const symbols = tickers.map(normalize).filter(Boolean)
+    let cancelled = false
     symbols.forEach(sym => {
-      if (holdings[sym]) return
-      pf(`/api/security-research/etf/${encodeURIComponent(sym)}`)
+      if (holdingsLoadedNonce[sym] === refreshNonce) return
+      pf(`/api/security-research/etf/${encodeURIComponent(sym)}?refresh=${refreshNonce}`)
         .then(r => r.json())
         .then(d => {
-          if (!d.error) setHoldings(prev => ({ ...prev, [sym]: d.top_holdings || [] }))
+          if (cancelled || d.error) return
+          setHoldings(prev => ({ ...prev, [sym]: d.top_holdings || [] }))
+          setHoldingsLoadedNonce(prev => ({ ...prev, [sym]: refreshNonce }))
         })
         .catch(() => {})
     })
-  }, [tickers, holdings, pf])
+    return () => { cancelled = true }
+  }, [tickers, holdingsLoadedNonce, pf, refreshNonce])
 
   useEffect(() => {
     const requestedSymbols = tickers.map(normalize).filter(Boolean)
@@ -258,6 +268,15 @@ export default function ETFComparer() {
   }
 
   const symbols = useMemo(() => tickers.map(normalize).filter(Boolean), [tickers])
+
+  useEffect(() => {
+    if (!symbols.length) {
+      setDistributionSymbol('')
+      return
+    }
+    setDistributionSymbol(prev => symbols.includes(prev) ? prev : symbols[0])
+  }, [symbols])
+
   const reinvestDisabled = !['all3', 'all4'].includes(returnMode)
   const refreshComparison = useCallback(() => {
     if (!symbols.length) return
@@ -425,10 +444,78 @@ export default function ETFComparer() {
     if (value == null || value === '') return '-'
     if (['price', 'open', 'fifty_two_week_high', 'fifty_two_week_low', 'pe_ratio'].includes(key)) return number(value)
     if (['assets', 'volume', 'dollar_volume'].includes(key)) return compact(value)
-    if (['expense_ratio', 'dividend_yield'].includes(key)) return ratioPct(value)
+    if (['expense_ratio', 'dividend_yield', 'expected_dividend_yield'].includes(key)) return ratioPct(value)
     if (['change_pct', 'return_1y', 'max_drawdown'].includes(key)) return pct(value)
     return value
   }
+
+  const distributionChart = useMemo(() => {
+    const profile = data?.profiles?.[distributionSymbol] || {}
+    const history = Array.isArray(profile.distribution_history) ? profile.distribution_history : []
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    const byMonth = new Map()
+
+    history.forEach(item => {
+      const amount = Number(item?.amount)
+      const parts = String(item?.date || '').slice(0, 10).split('-')
+      if (!Number.isFinite(amount) || amount <= 0 || parts.length < 2) return
+      const year = Number(parts[0])
+      const month = Number(parts[1])
+      if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return
+      const key = `${year}-${String(month).padStart(2, '0')}`
+      byMonth.set(key, (byMonth.get(key) || 0) + amount)
+    })
+
+    const monthly = [...byMonth.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-36)
+      .map(([key, amount]) => {
+        const [year, month] = key.split('-').map(Number)
+        return {
+          label: `${monthNames[month - 1]} ${String(year).slice(-2)}`,
+          amount: Number(amount.toFixed(4)),
+        }
+      })
+    const values = monthly.map(item => item.amount)
+    const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
+
+    return {
+      hasData: values.length > 0,
+      source: profile.distribution_source || profile.expected_yield_source || '',
+      layout: {
+        template: 'plotly_dark',
+        paper_bgcolor: '#16213e',
+        plot_bgcolor: '#16213e',
+        font: { color: '#e0e8f5', size: 12 },
+        title: { text: `${distributionSymbol || 'ETF'} - Distribution History`, x: 0.5, font: { size: 18, color: '#e0e8f5' } },
+        height: 360,
+        margin: { l: 58, r: 36, t: 58, b: 72 },
+        bargap: 0.18,
+        yaxis: {
+          tickprefix: '$',
+          gridcolor: '#293a5f',
+          zerolinecolor: '#6a7892',
+          fixedrange: true,
+        },
+        xaxis: {
+          gridcolor: '#1c2a4b',
+          tickangle: -45,
+          fixedrange: true,
+        },
+        showlegend: false,
+      },
+      data: values.length ? [{
+        x: monthly.map(item => item.label),
+        y: values,
+        type: 'bar',
+        marker: {
+          color: values.map(value => value >= average ? '#62f27b' : '#82c7f5'),
+          line: { color: 'rgba(255, 255, 255, 0.12)', width: 1 },
+        },
+        hovertemplate: `<b>${distributionSymbol}</b><br>%{x}<br>$%{y:.4f}<extra></extra>`,
+      }] : [],
+    }
+  }, [data, distributionSymbol])
 
   const averageChart = useMemo(() => {
     const periods = averageData?.periods || []
@@ -467,6 +554,37 @@ export default function ETFComparer() {
       .filter(label => label !== '1 Month')
       .map(label => periodByLabel.get(label) || { label, returns: {} })
   }, [averageData])
+
+  const downloadAverageReturns = useCallback(() => {
+    const exportSymbols = averageData?.symbols?.length ? averageData.symbols : symbols
+    if (!exportSymbols.length || !averageTablePeriods.length) return
+    const escapeCsv = value => {
+      const text = value == null ? '' : String(value)
+      return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+    }
+    const headers = ['Symbol', ...averageTablePeriods.map(p => `${p.label === 'YTD' ? 'Year-to-date' : p.label} Return (%)`)]
+    const lines = [
+      headers.map(escapeCsv).join(','),
+      ...exportSymbols.map(sym => [
+        sym,
+        ...averageTablePeriods.map(p => {
+          const value = p.returns?.[sym]
+          return value == null || Number.isNaN(Number(value)) ? '' : Number(value).toFixed(2)
+        }),
+      ].map(escapeCsv).join(',')),
+    ]
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `etf-average-returns-${exportSymbols.join('-') || 'comparison'}-${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    setDownloadStatus(`Downloaded ${a.download}`)
+    window.setTimeout(() => setDownloadStatus(''), 4000)
+  }, [averageData, averageTablePeriods, symbols])
 
   return (
     <div className="page etf-comparer-page">
@@ -552,6 +670,50 @@ export default function ETFComparer() {
         </section>
       )}
 
+      {symbols.length > 0 && <section className="etfc-section etfc-distribution-section">
+        <div className="etfc-section-head">
+          <h2>Distribution History</h2>
+          <button className="btn btn-sm" onClick={() => setShowDistributionChart(v => !v)}>
+            {showDistributionChart ? 'Hide Chart' : 'Show Chart'}
+          </button>
+        </div>
+        {showDistributionChart && (
+          <>
+            <div className="etfc-distribution-toolbar">
+              <div className="etfc-distribution-tabs" aria-label="Distribution history ticker">
+                {symbols.map((sym, idx) => (
+                  <button
+                    key={sym}
+                    type="button"
+                    className={`btn btn-sm${distributionSymbol === sym ? ' btn-active' : ''}`}
+                    style={{ borderColor: COLORS[idx % COLORS.length] }}
+                    onClick={() => setDistributionSymbol(sym)}
+                  >
+                    {sym}
+                  </button>
+                ))}
+              </div>
+              {distributionChart.source && (
+                <span className="etfc-distribution-source">Source: {distributionChart.source}</span>
+              )}
+            </div>
+            {distributionChart.hasData ? (
+              <Plot
+                data={distributionChart.data}
+                layout={distributionChart.layout}
+                config={{ responsive: true, displayModeBar: false }}
+                useResizeHandler
+                style={{ width: '100%' }}
+              />
+            ) : (
+              <div className="etfc-empty etfc-distribution-empty">
+                No distribution history available for {distributionSymbol || 'this ETF'}.
+              </div>
+            )}
+          </>
+        )}
+      </section>}
+
       {symbols.length > 0 && <section className="etfc-section">
         <div className="etfc-section-head">
           <h2>Comparison</h2>
@@ -604,7 +766,10 @@ export default function ETFComparer() {
       {symbols.length > 0 && <section className="etfc-section">
         <div className="etfc-section-head">
           <h2>Average Return</h2>
-          <button className="btn btn-sm">Download ▼</button>
+          <div className="etfc-download-actions">
+            {downloadStatus && <span>{downloadStatus}</span>}
+            <button className="btn btn-sm" onClick={downloadAverageReturns} disabled={!averageData?.periods?.length}>Download CSV</button>
+          </div>
         </div>
         {averageData?.summary && (
           <div className="etfc-note">
