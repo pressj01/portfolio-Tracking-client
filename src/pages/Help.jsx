@@ -540,18 +540,19 @@ function HoldingsHelp() {
       {/* ── Toolbar Buttons ─────────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Toolbar Buttons</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Refresh Prices &amp; Divs</strong> - Fetches the latest prices, dividend amounts, and ex-div dates from Yahoo Finance for the currently selected portfolio scope. Individual accounts refresh only themselves; Owner refreshes its included source accounts; Aggregate refreshes its configured member accounts.</li>
-        <li><strong>Latest Refresh Result</strong> - After Refresh Prices &amp; Divs finishes, a result section appears on the Holdings screen. Each account card shows:
+        <li><strong>Refresh Prices &amp; Divs</strong> - Fetches the latest prices, dividend amounts, ex-div dates, pay dates, and dividend frequency from Yahoo Finance for the currently selected Holdings scope. Individual accounts refresh only themselves; Owner refreshes its included source accounts; Aggregate refreshes its configured member accounts.</li>
+        <li><strong>Latest Refresh Result</strong> - After Refresh Prices &amp; Divs finishes, a temporary result section appears near the top of the Holdings screen. Each account card shows:
           <ul style={{ paddingLeft: '1.25rem', lineHeight: '1.7', marginTop: '0.25rem' }}>
-            <li><strong>Distributions payable today</strong> — total estimated cash from holdings with a pay date on the refresh date.</li>
-            <li><strong>Estimated accrual since previous refresh</strong> — estimated dividends earned between the last refresh and this one.</li>
+            <li><strong>Month-to-date payable distributions</strong> — total estimated cash from holdings with expected pay dates from the first day of the refresh month through the refresh date.</li>
+            <li><strong>Post-refresh accrual estimate</strong> — estimated dividends earned between the previous refresh timestamp and this refresh.</li>
             <li><strong>Holding dividend fields changed</strong> — how many holdings had metadata (dividend/share, ex-date, pay date, frequency, YTD, current-month income) updated.</li>
             <li><strong>Payment history</strong> — how many payment rows were recorded (new), updated (amount changed), or already existed (skipped).</li>
-            <li><strong>Distribution ticker chips</strong> — the tickers that produced distributions on the refresh date, with their estimated dollar amounts.</li>
+            <li><strong>Distribution ticker chips</strong> — the tickers included in the month-to-date payable total, with their estimated dollar amounts.</li>
           </ul>
         </li>
-        <li><strong>Accrued Since Last Refresh</strong> - Below the refresh result, accrual cards summarize estimated dividends earned since the previous refresh for each account. The payment count is labeled as payments since refresh so it does not imply only payments from the current calendar day. These cards also appear on page load (before any refresh) so you can always see the running accrual.</li>
-        <li><strong>Dividend history tracking</strong> - When the refresh finds a ticker with an expected pay date equal to the refresh date, it writes an estimated payment row into Dividend History using source <code>refresh_estimate</code>. If a broker dividend import later brings in the actual payment for the same ticker, account, and date, the actual broker row replaces the refresh estimate instead of creating a duplicate. Dividend repair ignores <code>refresh_estimate</code> rows when rebuilding actual payment totals, so estimates do not get counted as imported broker actuals.</li>
+        <li><strong>DRIP during refresh</strong> - If a holding has DRIP turned on, Refresh Prices &amp; Divs can simulate reinvested dividends from the holding's import/purchase date using Yahoo dividend history and closing prices. When that succeeds, the holding's share count, shares from dividends, cash reinvested, estimated annual income, approximate monthly income, and estimated payment amount can all increase. This updates the Holdings row only; it does not create BUY transactions or rewrite transaction-lot history.</li>
+        <li><strong>Post-Refresh Accrual Estimate</strong> - The accrual cards summarize estimated dividends earned since the previous refresh for each account. If the app can identify pay-date events in that window, the count is labeled as payments since refresh. These cards also appear on page load before you run a new refresh, so you can always see the running accrual.</li>
+        <li><strong>Dividend history tracking</strong> - When the refresh finds an expected payment for the current month through the refresh date, it can write an estimated payment row into Dividend History using source <code>refresh_estimate</code>. If a broker dividend import later brings in the actual payment for the same ticker, account, and date, the actual broker row replaces the refresh estimate instead of creating a duplicate. Dividend repair ignores <code>refresh_estimate</code> rows when rebuilding actual payment totals, so estimates do not get counted as imported broker actuals.</li>
         <li><strong>Div Src filter</strong> (dropdown, left of Refresh) — Filters the holdings table by the source of each row's dividend actuals. Options: <em>All</em>, <em>Imported actuals</em> (any broker-sourced payment data — Schwab, Fidelity, E*Trade, Robinhood, Snowball, or generic imports), individual brokers, <em>Snapshot</em> (lifetime totals preserved from a Snowball migration), <em>Yahoo</em> (fallback filled from Yahoo history), <em>Mixed</em> (aggregate rows whose members have different sources), and <em>No source</em> (holdings with no dividend data yet). The selected source is also shown in the new <strong>Div Src</strong> column in the table.</li>
         <li><strong>Dividend repair mode</strong> (dropdown, right of Refresh) — Chooses which data sources the next repair run is allowed to use:
           <ul style={{ paddingLeft: '1.25rem', lineHeight: '1.7', marginTop: '0.25rem' }}>
@@ -594,8 +595,9 @@ function HoldingsHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.7', marginBottom: '0.5rem' }}>
         <li><em>Current price</em> — used to recompute Current Value, Gain/Loss, and any yield/coverage metric.</li>
         <li><em>Dividend per share, frequency, ex-div date, pay date</em> — refreshes the forward-looking distribution metadata used by Estimated Annual Income, Approx Monthly Income, and the Dividend Calendar.</li>
-        <li><em>Accrued income since last refresh</em> — the gap between the previous refresh date and now is used to estimate dividends earned per holding, surfaced in the Latest Refresh Result and Accrued cards.</li>
-        <li><em>Estimated payment rows on pay-date matches</em> — if a holding's expected pay date equals today, an estimate row is written into Dividend History with source <code>refresh_estimate</code>. A later broker import for the same ticker/account/date overwrites the estimate with the actual payment, so estimates never double-count.</li>
+        <li><em>DRIP share growth</em> — for holdings with DRIP turned on, refresh uses dividend history and close prices to estimate reinvested shares since the import/purchase date. If new DRIP shares are found, the holding's share count and income estimates are recalculated from the larger share balance. This affects the Holdings row and payment estimates, but does not add transaction-lot records.</li>
+        <li><em>Accrued income since last refresh</em> — the gap between the previous refresh timestamp and now is used to estimate dividends earned per holding, surfaced in the Latest Refresh Result and Post-Refresh Accrual Estimate cards.</li>
+        <li><em>Estimated payment rows on payable distributions</em> — if a holding's expected pay date falls from the start of the current month through the refresh date, an estimate row is written into Dividend History with source <code>refresh_estimate</code>. A later broker import for the same ticker/account/date overwrites the estimate with the actual payment, so estimates never double-count.</li>
       </ul>
       <p style={{ marginBottom: '0.5rem' }}>
         <strong>Scope.</strong> A single profile refreshes only itself. Owner refreshes its included source
@@ -607,7 +609,7 @@ function HoldingsHelp() {
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.7', marginBottom: '0.75rem' }}>
         <li>Routinely — at least once a day or whenever you want current prices, gains, and yields.</li>
-        <li>After market close, to capture today's pay-date distributions as estimated payment rows.</li>
+        <li>After market close, to capture payable distributions through the refresh date as estimated payment rows.</li>
         <li>Before running Buy/Sell Signals, NAV Erosion screens, or rebalancing — these depend on fresh prices and yields.</li>
         <li>Before exporting reports or showing portfolio numbers to someone else.</li>
       </ul>
