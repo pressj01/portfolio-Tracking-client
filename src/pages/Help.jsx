@@ -161,6 +161,15 @@ function ImportHelp() {
         When a Positions import has been done first, transaction imports store history without overwriting your holdings data.
       </div>
 
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Reimporting Old or Partial Files</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Transaction-history files are incremental.</strong> Reimporting an older transaction file skips duplicate BUY/SELL rows that already exist for the same ticker, date, shares, and price. New rows in a later export are added.</li>
+        <li><strong>Dividend payments are deduped by ticker, account, and payment date.</strong> If the app previously created a refresh estimate for that date, an imported broker dividend replaces the estimate; otherwise the duplicate payment is skipped.</li>
+        <li><strong>Broker Positions and Snowball Holdings imports are current snapshots.</strong> Existing tickers are updated, new tickers are inserted, and holdings missing from the imported snapshot can be removed as stale.</li>
+        <li><strong>Do not use a partial Positions file to add only new holdings.</strong> Because positions imports represent the full current account, a partial file can remove holdings that are not listed in the file. Use a complete current positions export, or use Generic Upload when you want an additive/update-style holdings merge.</li>
+        <li><strong>Reimporting an old Positions file can roll holdings back.</strong> It will update share counts, cost basis, values, and stale holdings to match that older file. Restore from the automatic backup if the snapshot was not the one you meant to apply.</li>
+      </ul>
+
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Transaction History Imports</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The import page includes several transaction-history importers. These are different from position imports:
