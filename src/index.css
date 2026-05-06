@@ -1453,6 +1453,13 @@ label {
 .etf-reinvest label {
   white-space: nowrap;
 }
+.etf-reinvest.is-disabled {
+  background: rgba(22, 33, 62, 0.28);
+  border-color: rgba(89, 104, 130, 0.45);
+}
+.etf-reinvest.is-disabled label {
+  color: #5f7088;
+}
 .etf-reinvest input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
@@ -1482,8 +1489,19 @@ label {
   cursor: pointer;
 }
 .etf-reinvest input[type="range"]:disabled {
-  opacity: 0.35;
-  cursor: default;
+  background: #29384d;
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.etf-reinvest input[type="range"]:disabled::-webkit-slider-thumb {
+  background: #59687a;
+  border-color: #8b98aa;
+  cursor: not-allowed;
+}
+.etf-reinvest input[type="range"]:disabled::-moz-range-thumb {
+  background: #59687a;
+  border-color: #8b98aa;
+  cursor: not-allowed;
 }
 .reinvest-num {
   width: 48px;
@@ -1496,7 +1514,10 @@ label {
   text-align: center;
 }
 .reinvest-num:disabled {
-  opacity: 0.35;
+  background: #111827;
+  color: #62748b;
+  border-color: #29384d;
+  cursor: not-allowed;
 }
 .reinvest-note {
   display: none;
@@ -3188,6 +3209,18 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
   width: 115px;
   accent-color: #64b5f6;
 }
+.etfc-reinvest.is-disabled {
+  background: rgba(22, 33, 62, 0.28);
+  border-color: rgba(89, 104, 130, 0.45);
+}
+.etfc-reinvest.is-disabled label {
+  color: #5f7088 !important;
+}
+.etfc-reinvest input[type="range"]:disabled {
+  accent-color: #59687a;
+  opacity: 0.42;
+  cursor: not-allowed;
+}
 .etfc-reinvest input[type="number"] {
   width: 52px;
   background: #16213e;
@@ -3195,6 +3228,12 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
   border: 1px solid #0f3460;
   border-radius: 3px;
   padding: 0.15rem 0.3rem;
+}
+.etfc-reinvest input[type="number"]:disabled {
+  background: #111827;
+  color: #62748b;
+  border-color: #29384d;
+  cursor: not-allowed;
 }
 .etfc-section-head,
 .etfc-holdings-card h3 {

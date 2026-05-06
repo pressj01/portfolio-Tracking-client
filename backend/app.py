@@ -13577,10 +13577,10 @@ def etf_screen_data():
                 pd_series = _blend_price_drip(div_close, divs, 0.0, track_cash=True)
                 traces["pricediv"] = [round(v, 4) for v in pd_series.tolist()]
             elif mode == "total":
-                tot = _blend_price_drip(div_close, divs, frac, track_cash=True)
+                tot = _blend_price_drip(div_close, divs, 1.0, track_cash=True)
                 traces["total"] = [round(v, 4) for v in tot.tolist()]
             elif mode == "both":
-                tot = _blend_price_drip(div_close, divs, frac, track_cash=True)
+                tot = _blend_price_drip(div_close, divs, 1.0, track_cash=True)
                 traces["total"] = [round(v, 4) for v in tot.tolist()]
                 traces["price"] = norm_price
             elif mode == "all3":

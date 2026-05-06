@@ -1931,10 +1931,10 @@ const PERIODS = [
 ]
 
 const RETURN_MODES = [
-  { value: 'total', label: 'Total Return', desc: 'Blends between Price Only (0%) and full DRIP (100%)' },
+  { value: 'total', label: 'Total Return', desc: 'Full dividend-reinvested total return' },
   { value: 'price', label: 'Price Only', desc: 'Share price change only — dividends ignored' },
   { value: 'pricediv', label: 'Price + Divs', desc: 'Price change plus dividends as cash — no reinvestment' },
-  { value: 'both', label: 'Both', desc: 'Overlays blended return and Price Only' },
+  { value: 'both', label: 'Both', desc: 'Overlays full total return and Price Only' },
   { value: 'all3', label: 'All Three', desc: 'Price Only, blended %, 100% DRIP' },
   { value: 'all4', label: 'All Four', desc: 'Price Only, Price+Div, blended %, 100% DRIP' },
 ]
@@ -2643,10 +2643,9 @@ export default function ETFScreen() {
     } else if (returnData.mode === 'all4') {
       titleText += ` — Price vs Custom vs DRIP (${returnData.reinvest_pct}% reinvest)`
     } else if (returnData.mode === 'both') {
-      titleText += ` — Total Return & Price (${returnData.reinvest_pct}% reinvest)`
+      titleText += ' — Total Return & Price'
     } else {
       titleText += ` — ${modeInfo.label || returnData.mode}`
-      if (returnData.mode === 'total') titleText += ` (${returnData.reinvest_pct}% reinvest)`
     }
 
     if (showReturnLabels && labelCandidates.length) {
@@ -2744,7 +2743,7 @@ export default function ETFScreen() {
     return `${fmt(s)}  →  ${fmt(e)}`
   }, [showRangeSlider, returnData, returnXRange])
 
-  const sliderDisabled = returnMode === 'price' || returnMode === 'pricediv'
+  const sliderDisabled = !['all3', 'all4'].includes(returnMode)
 
   return (
     <div className="page etf-screen">
@@ -2932,7 +2931,7 @@ export default function ETFScreen() {
             ))}
           </div>
 
-          <div className="etf-reinvest">
+          <div className={`etf-reinvest${sliderDisabled ? ' is-disabled' : ''}`}>
             <label title="% of dividends reinvested (DRIP). 0% = cash, 100% = full DRIP. Higher reinvestment compounds gains in rising markets but can underperform in declining markets.">Reinvest: <strong>{reinvest}%</strong></label>
             <input type="range" min={0} max={100} value={reinvest} onChange={e => setReinvest(Number(e.target.value))} disabled={sliderDisabled} />
             <input type="number" min={0} max={100} value={reinvest} onChange={e => setReinvest(Math.min(100, Math.max(0, Number(e.target.value) || 0)))} disabled={sliderDisabled} className="reinvest-num" />

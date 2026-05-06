@@ -225,7 +225,9 @@ export default function StockComparer() {
   const [returnXRange, setReturnXRange] = useState([null, null])
   const [data, setData] = useState(null)
   const [averageData, setAverageData] = useState(null)
+  const [refreshNonce, setRefreshNonce] = useState(0)
   const loadSeqRef = useRef(0)
+  const reinvestRef = useRef(reinvest)
   const [stockData, setStockData] = useState({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -236,6 +238,10 @@ export default function StockComparer() {
   const resetReturnRange = useCallback(() => {
     setReturnXRange([null, null])
   }, [])
+
+  useEffect(() => {
+    reinvestRef.current = reinvest
+  }, [reinvest])
 
   const load = useCallback(() => {
     const symbols = tickers.map(normalize).filter(Boolean)
@@ -251,7 +257,7 @@ export default function StockComparer() {
     setLoading(true)
     setError('')
     const [primary, ...extra] = symbols
-    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}`)
+    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}`)
       .then(r => r.json())
       .then(d => {
         if (loadSeqRef.current !== loadSeq) return
@@ -266,7 +272,7 @@ export default function StockComparer() {
       .finally(() => {
         if (loadSeqRef.current === loadSeq) setLoading(false)
       })
-  }, [pf, tickers, period, returnMode, reinvest])
+  }, [pf, tickers, period, returnMode, reinvest, refreshNonce])
 
   useEffect(() => { load() }, [load])
 
@@ -300,7 +306,7 @@ export default function StockComparer() {
 
     async function loadAverageReturns() {
       try {
-        const avgResp = await pf(`/api/security-research/stock/average-returns?tickers=${encodeURIComponent(requestedSymbols.join(','))}`)
+        const avgResp = await pf(`/api/security-research/stock/average-returns?tickers=${encodeURIComponent(requestedSymbols.join(','))}&refresh=${refreshNonce}`)
         const result = await avgResp.json()
         if (cancelled) return
         if (result.error || !result.periods?.length) {
@@ -311,7 +317,7 @@ export default function StockComparer() {
         let periods = (result.periods || []).filter(period => period.label !== 'Inception')
         const hasLongPeriods = periods.some(period => period.label === '15 Years') && periods.some(period => period.label === '20 Years')
         if (!hasLongPeriods) {
-          const historyResp = await pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=max&mode=total&reinvest=100&extra=${encodeURIComponent(extra.join(','))}`)
+          const historyResp = await pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=max&mode=total&reinvest=100&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}`)
           const history = await historyResp.json()
           if (cancelled) return
           if (!history.error) {
@@ -336,7 +342,7 @@ export default function StockComparer() {
     loadAverageReturns()
 
     return () => { cancelled = true }
-  }, [pf, tickers])
+  }, [pf, tickers, refreshNonce])
 
   const addTickers = () => {
     const symbols = input.split(/[\s,]+/).map(normalize).filter(Boolean)
@@ -357,6 +363,14 @@ export default function StockComparer() {
   }
 
   const symbols = useMemo(() => tickers.map(normalize).filter(Boolean), [tickers])
+  const reinvestDisabled = !['all3', 'all4'].includes(returnMode)
+  const refreshComparison = useCallback(() => {
+    if (!symbols.length) return
+    const currentReinvest = reinvestRef.current
+    setRefreshNonce(value => value + 1)
+    setReinvest(currentReinvest)
+  }, [symbols.length])
+
   const compareTitle = useMemo(() => {
     if (!symbols.length) return 'Compare Stocks'
     if (symbols.length === 1) return `Compare Stocks: ${symbols[0]}`
@@ -620,13 +634,14 @@ export default function StockComparer() {
             <button key={m.value} className={`btn btn-sm${returnMode === m.value ? ' btn-active' : ''}`} onClick={() => setReturnMode(m.value)}>{m.label}</button>
           ))}
         </div>
-        <div className="etfc-reinvest">
+        <div className={`etfc-reinvest${reinvestDisabled ? ' is-disabled' : ''}`}>
           <label>Reinvest: <strong>{reinvest}%</strong></label>
-          <input type="range" min="0" max="100" value={reinvest} onChange={e => setReinvest(Number(e.target.value))} disabled={returnMode === 'price' || returnMode === 'pricediv'} />
-          <input type="number" min="0" max="100" value={reinvest} onChange={e => setReinvest(Math.max(0, Math.min(100, Number(e.target.value) || 0)))} disabled={returnMode === 'price' || returnMode === 'pricediv'} />
+          <input type="range" min="0" max="100" value={reinvest} onChange={e => setReinvest(Number(e.target.value))} disabled={reinvestDisabled} />
+          <input type="number" min="0" max="100" value={reinvest} onChange={e => setReinvest(Math.max(0, Math.min(100, Number(e.target.value) || 0)))} disabled={reinvestDisabled} />
         </div>
         <div className="etfc-chart-options">
           <span>Chart</span>
+          <button type="button" className="btn btn-sm" onClick={refreshComparison} disabled={!symbols.length || loading}>{loading ? 'Refreshing...' : 'Refresh'}</button>
           <button className={`btn btn-sm${returnPctMode ? ' btn-active' : ''}`} onClick={() => setReturnPctMode(v => !v)}>Return %</button>
           <button className={`btn btn-sm${showReturnLabels ? ' btn-active' : ''}`} onClick={() => setShowReturnLabels(v => !v)}>End Labels</button>
           <button className={`btn btn-sm${returnHoverMode === 'x unified' ? ' btn-active' : ''}`} onClick={() => setReturnHoverMode(m => m === 'x unified' ? 'closest' : 'x unified')}>Unified Hover</button>
