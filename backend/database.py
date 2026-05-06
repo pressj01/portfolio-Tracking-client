@@ -15,6 +15,7 @@ def ensure_tables_exist(conn=None):
         CREATE TABLE IF NOT EXISTS profiles (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             name             TEXT NOT NULL,
+            broker_source    TEXT,
             include_in_owner INTEGER NOT NULL DEFAULT 0,
             positions_managed INTEGER NOT NULL DEFAULT 0,
             created_at       TEXT DEFAULT CURRENT_TIMESTAMP
@@ -27,6 +28,8 @@ def ensure_tables_exist(conn=None):
         cur.execute("UPDATE profiles SET include_in_owner = 1 WHERE id = 1")
     if "positions_managed" not in cols:
         cur.execute("ALTER TABLE profiles ADD COLUMN positions_managed INTEGER NOT NULL DEFAULT 0")
+    if "broker_source" not in cols:
+        cur.execute("ALTER TABLE profiles ADD COLUMN broker_source TEXT")
     cur.execute("""
         INSERT OR IGNORE INTO profiles (id, name, include_in_owner, positions_managed) VALUES (1, 'Owner', 1, 0)
     """)

@@ -298,31 +298,45 @@ function TickerModal({ ticker, onClose }) {
     const el = document.getElementById('ticker-chart')
     if (!el) return
 
-    const traces = [
-      {
-        x: data.dates, y: data.price_return,
-        mode: 'lines', name: 'Price Return %',
-        line: { color: '#7ecfff', width: 2 },
-        hovertemplate: '%{y:.2f}%<extra>Price</extra>',
-      },
-      {
-        x: data.dates, y: data.total_return,
-        mode: 'lines', name: 'Total Return %',
-        line: { color: '#4dff91', width: 2 },
-        fill: 'tonexty', fillcolor: 'rgba(77,255,145,0.08)',
-        hovertemplate: '%{y:.2f}%<extra>Total</extra>',
-      },
-    ]
+    const hasTotalReturn = data.total_return_available !== false && Array.isArray(data.total_return)
+    const traces = hasTotalReturn
+      ? [
+          {
+            x: data.dates, y: data.price_return,
+            mode: 'lines', name: 'Price Return %',
+            line: { color: '#7ecfff', width: 2 },
+            hovertemplate: '%{y:.2f}%<extra>Price</extra>',
+          },
+          {
+            x: data.dates, y: data.total_return,
+            mode: 'lines', name: 'Total Return %',
+            line: { color: '#4dff91', width: 2 },
+            fill: 'tonexty', fillcolor: 'rgba(77,255,145,0.08)',
+            hovertemplate: '%{y:.2f}%<extra>Total</extra>',
+          },
+        ]
+      : [
+          {
+            x: data.dates, y: data.prices,
+            mode: 'lines', name: 'Price',
+            line: { color: '#7ecfff', width: 2 },
+            hovertemplate: '$%{y:.2f}<extra>Price</extra>',
+          },
+        ]
     const layout = {
       template: 'plotly_dark',
       paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
-      title: { text: `${data.ticker} — Return Since Purchase`, font: { size: 16, color: '#e0e8f5' } },
+      title: { text: `${data.ticker} — ${hasTotalReturn ? 'Return Since Purchase' : 'Recent Price History'}`, font: { size: 16, color: '#e0e8f5' } },
       xaxis: { title: '', gridcolor: '#1a2233' },
-      yaxis: { title: 'Return %', gridcolor: '#1a2233', ticksuffix: '%' },
+      yaxis: hasTotalReturn
+        ? { title: 'Return %', gridcolor: '#1a2233', ticksuffix: '%' }
+        : { title: 'Price', gridcolor: '#1a2233', tickprefix: '$' },
       legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'center', x: 0.5, font: { size: 12 } },
       margin: { l: 50, r: 20, t: 60, b: 40 },
       hovermode: 'x unified',
-      shapes: [{ type: 'line', x0: data.dates[0], x1: data.dates[data.dates.length - 1], y0: 0, y1: 0, line: { dash: 'dot', color: '#556677', width: 1 } }],
+      shapes: hasTotalReturn
+        ? [{ type: 'line', x0: data.dates[0], x1: data.dates[data.dates.length - 1], y0: 0, y1: 0, line: { dash: 'dot', color: '#556677', width: 1 } }]
+        : [],
     }
     window.Plotly.newPlot(el, traces, layout, { responsive: true })
     return () => { if (el) window.Plotly.purge(el) }
@@ -342,6 +356,9 @@ function TickerModal({ ticker, onClose }) {
             <p style={{ color: '#8899aa', marginBottom: '1rem', fontSize: '0.9rem' }}>
               Purchased {new Date(data.purchase_date).toLocaleDateString()} at {fmt(data.price_paid)}
             </p>
+            {data.note && (
+              <p style={{ color: '#ffcc80', margin: '-0.5rem 0 1rem', fontSize: '0.85rem' }}>{data.note}</p>
+            )}
             <div id="ticker-chart" style={{ height: '400px' }} />
           </>
         )}
@@ -375,7 +392,7 @@ export default function Dashboard() {
   const [tickerCoverageMeta, setTickerCoverageMeta] = useState({})
   const [overviewGroups, setOverviewGroups] = useState(null)
   const [sp500, setSp500] = useState(null)
-  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v9_${selection}`, [selection])
+  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v10_${selection}`, [selection])
 
   useEffect(() => {
     const cached = readDashboardCache(SP500_CACHE_KEY)
@@ -897,6 +914,7 @@ export default function Dashboard() {
               <SortHeader col="gain_or_loss_percentage" align="right" tip="Unrealized gain or loss percentage">G/L%</SortHeader>
               <SortHeader col="price_return_pct" align="right" tip="Price-only return (excludes dividends)">PrRtn</SortHeader>
               <SortHeader col="total_return_pct" align="right" tip="Total return including dividends">TotRtn</SortHeader>
+              <SortHeader col="div" align="right" tip="Last dividend paid per share">Div$</SortHeader>
               <SortHeader col="current_annual_yield" align="right" tip="Current annual dividend yield based on market price">CurYld</SortHeader>
               <SortHeader col="annual_yield_on_cost" align="right" tip="Annual dividend yield based on your cost basis">YOC</SortHeader>
               <SortHeader col="ytd_divs" align="right" tip="Year-to-date dividends received">YTD</SortHeader>
@@ -953,6 +971,7 @@ export default function Dashboard() {
                   <td style={{ textAlign: 'right', color: gradeColor(h.gain_or_loss_percentage) }}>{pct(h.gain_or_loss_percentage)}</td>
                   <td style={{ textAlign: 'right', color: gradeColor(h.price_return_pct) }}>{pct(h.price_return_pct)}</td>
                   <td style={{ textAlign: 'right', color: gradeColor(h.total_return_pct) }}>{pct(h.total_return_pct)}</td>
+                  <td style={{ textAlign: 'right' }}>{h.div != null && h.div > 0 ? `$${Number(h.div).toFixed(4)}` : '—'}</td>
                   <td style={{ textAlign: 'right' }}>{pct(h.current_annual_yield)}</td>
                   <td style={{ textAlign: 'right' }}>{pct(h.annual_yield_on_cost)}</td>
                   <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(h.ytd_divs)}</td>

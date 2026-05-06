@@ -528,25 +528,25 @@ export default function Import() {
           <h2>Import Brokerage Positions, Transactions, and Snowball Data</h2>
           <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
             {txnFormat === 'schwab'
-              ? <>Import current positions from a Schwab <strong>Positions CSV</strong> export. In Schwab, go to Accounts {'>'} Positions, then export to CSV. This sets holdings, cost basis, and current prices directly.</>
+              ? <>Import current positions from a Schwab <strong>Positions CSV or XLSX</strong> export. In Schwab, go to Accounts {'>'} Positions, then export to CSV or Excel. This sets holdings, cost basis, and current prices directly.</>
               : txnFormat === 'snowball_holdings'
-                ? <>Import a Snowball <strong>Holdings CSV</strong> as a migration snapshot. This keeps only the holdings, dividend, and category fields the app can actually use, and ignores Snowball-only analytics columns.</>
+                ? <>Import a Snowball <strong>Holdings CSV or XLSX</strong> as a migration snapshot. This keeps only the holdings, dividend, and category fields the app can actually use, and ignores Snowball-only analytics columns.</>
               : txnFormat === 'schwab_transactions'
-                ? <>Import transaction history from a Schwab <strong>Transactions CSV</strong> export. In Schwab, go to Accounts {'>'} History, set the date range, then export to CSV. Imports buys, sells, DRIP reinvestments, and dividend payments.</>
+                ? <>Import transaction history from a Schwab <strong>Transactions CSV or XLSX</strong> export. In Schwab, go to Accounts {'>'} History, set the date range, then export to CSV or Excel. Imports buys, sells, DRIP reinvestments, and dividend payments.</>
               : txnFormat === 'etrade'
-                ? <>Import current positions from an E*TRADE <strong>portfolio download CSV</strong>. The file account must match the portfolio you currently have selected before import is allowed.</>
+                ? <>Import current positions from an E*TRADE <strong>portfolio download CSV or XLSX</strong>. The file account must match the portfolio you currently have selected before import is allowed.</>
               : txnFormat === 'etrade_buys_sells'
-                ? <>Import buy and sell transactions from an E*TRADE <strong>Transaction History XLSX</strong> export. In E*TRADE, go to Accounts {'>'} Transaction History, filter to "Buys &amp; Sells", then download.</>
+                ? <>Import buy and sell transactions from an E*TRADE <strong>Transaction History XLSX or CSV</strong> export. In E*TRADE, go to Accounts {'>'} Transaction History, filter to "Buys &amp; Sells", then download.</>
               : txnFormat === 'etrade_dividends'
-                ? <>Import dividend payments and DRIP reinvestments from an E*TRADE <strong>Transaction History XLSX</strong> export. In E*TRADE, go to Accounts {'>'} Transaction History, filter to "Dividends", then download.</>
+                ? <>Import dividend payments and DRIP reinvestments from an E*TRADE <strong>Transaction History XLSX or CSV</strong> export. In E*TRADE, go to Accounts {'>'} Transaction History, filter to "Dividends", then download.</>
                 : txnFormat === 'fidelity'
-                  ? <>Import current positions from a Fidelity <strong>Positions XLSX</strong> export. This uses only the holdings and dividend fields the app already supports, and treats money market rows as cash.</>
+                  ? <>Import current positions from a Fidelity <strong>Positions XLSX or CSV</strong> export. This uses only the holdings and dividend fields the app already supports, and treats money market rows as cash.</>
                   : txnFormat === 'fidelity_transactions'
-                    ? <>Import transaction history from a Fidelity <strong>Transactions XLSX</strong> export. This imports buys, sells, dividend cash receipts, and DRIP reinvestments for recordkeeping.</>
+                    ? <>Import transaction history from a Fidelity <strong>Transactions XLSX or CSV</strong> export. This imports buys, sells, dividend cash receipts, and DRIP reinvestments for recordkeeping.</>
                   : txnFormat === 'robinhood'
                     ? <>Import current positions from a Robinhood <strong>Holdings PDF</strong>. Robinhood does not include cost basis in this PDF, so current value is used as the initial cost basis.</>
                   : txnFormat === 'robinhood_transactions'
-                    ? <>Import transaction history from a Robinhood <strong>Transactions CSV</strong> export. This imports buys, sells, cash/manufactured dividends, capital gains, and ACAT share transfers.</>
+                    ? <>Import transaction history from a Robinhood <strong>Transactions CSV or XLSX</strong> export. This imports buys, sells, cash/manufactured dividends, capital gains, and ACAT share transfers.</>
                  : <>Import BUY/SELL transactions and dividend payments from your broker or tracking app.
                  Each file should be a <strong>single account</strong> export — combined/merged exports will be rejected.</>
             }
@@ -574,7 +574,7 @@ export default function Import() {
           {txnFormat === 'etrade' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
               <strong>E*TRADE template available:</strong> the downloadable template contains the exact account summary and holdings field names this importer reads.
-              If you build or edit an E*TRADE CSV manually, keep those headers unchanged.
+              If you build or edit an E*TRADE CSV/XLSX manually, keep those headers unchanged.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadEtradeTemplate}>
                   Download E*TRADE Template
@@ -586,7 +586,7 @@ export default function Import() {
           {txnFormat === 'schwab' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
               <strong>Schwab template available:</strong> the downloadable template contains the exact holdings field names this importer reads.
-              If you build or edit a Schwab CSV manually, keep those headers unchanged and leave the first "Positions for account ..." line in place.
+              If you build or edit a Schwab CSV/XLSX manually, keep those headers unchanged and leave the first "Positions for account ..." line in place when using CSV.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadSchwabTemplate}>
                   Download Schwab Template
@@ -597,7 +597,7 @@ export default function Import() {
 
           {txnFormat === 'snowball_holdings' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>Snowball holdings template available:</strong> the downloadable CSV contains the exact migration fields this importer reads. It is meant for moving holdings, dividend metadata, and categories from Snowball into the app.
+              <strong>Snowball holdings template available:</strong> the downloadable CSV contains the exact migration fields this importer reads. CSV and XLSX files with those fields are supported.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadSnowballHoldingsTemplate}>
                   Download Snowball Holdings Template
@@ -608,7 +608,7 @@ export default function Import() {
 
           {txnFormat === 'schwab_transactions' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>Schwab transactions template available:</strong> the downloadable template contains the exact transaction columns this importer reads for buys, sells, cash dividends, DRIP share purchases, and reinvestment adjustments.
+              <strong>Schwab transactions template available:</strong> the downloadable template contains the exact transaction columns this importer reads for buys, sells, cash dividends, DRIP share purchases, and reinvestment adjustments. CSV and XLSX files with those fields are supported.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadSchwabTransactionsTemplate}>
                   Download Schwab Transactions Template
@@ -619,7 +619,7 @@ export default function Import() {
 
           {txnFormat === 'etrade_buys_sells' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>E*TRADE buys/sells template available:</strong> the downloadable XLSX keeps the account row, total row, and row-7 headers exactly where this parser expects them.
+              <strong>E*TRADE buys/sells template available:</strong> the downloadable XLSX keeps the account row, total row, and row-7 headers exactly where this parser expects them. CSV files with the same row layout are also supported.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadEtradeBuysSellsTemplate}>
                   Download E*TRADE Buys &amp; Sells Template
@@ -630,7 +630,7 @@ export default function Import() {
 
           {txnFormat === 'etrade_dividends' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>E*TRADE dividends template available:</strong> the downloadable XLSX matches the dividend-history import, including cash dividend rows and DRIP reinvestment rows.
+              <strong>E*TRADE dividends template available:</strong> the downloadable XLSX matches the dividend-history import, including cash dividend rows and DRIP reinvestment rows. CSV files with the same row layout are also supported.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadEtradeDividendsTemplate}>
                   Download E*TRADE Dividends Template
@@ -641,7 +641,7 @@ export default function Import() {
 
           {txnFormat === 'fidelity' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>Fidelity positions template available:</strong> the downloadable XLSX contains the exact positions columns this importer reads. It only includes the fields the app already stores.
+              <strong>Fidelity positions template available:</strong> the downloadable XLSX contains the exact positions columns this importer reads. CSV exports with the same fields are also supported.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadFidelityTemplate}>
                   Download Fidelity Positions Template
@@ -652,7 +652,7 @@ export default function Import() {
 
           {txnFormat === 'fidelity_transactions' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>Fidelity transactions template available:</strong> the downloadable XLSX keeps the transaction header row where this parser expects it and only includes the fields this importer reads.
+              <strong>Fidelity transactions template available:</strong> the downloadable XLSX keeps the transaction header row where this parser expects it and only includes the fields this importer reads. CSV exports with the same fields are also supported.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadFidelityTransactionsTemplate}>
                   Download Fidelity Transactions Template
@@ -674,7 +674,7 @@ export default function Import() {
 
           {txnFormat === 'robinhood_transactions' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>Robinhood transactions template available:</strong> the downloadable CSV contains the exact activity columns this importer reads for buys, sells, dividends, capital gains, and ACAT share transfers.
+              <strong>Robinhood transactions template available:</strong> the downloadable CSV contains the exact activity columns this importer reads for buys, sells, dividends, capital gains, and ACAT share transfers. XLSX files with those fields are also supported.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadRobinhoodTransactionsTemplate}>
                   Download Robinhood Transactions Template
@@ -706,7 +706,7 @@ export default function Import() {
 
           <FileUpload
             onFileSelect={(f) => { setTxnFile(f); setTxnPreview(null); setResult(null); setError(null) }}
-            accept={txnFormat === 'robinhood' ? '.pdf' : (txnFormat.startsWith('etrade_') || txnFormat === 'fidelity' || txnFormat === 'fidelity_transactions' ? '.xlsx,.xls' : '.csv')}
+            accept={txnFormat === 'robinhood' ? '.pdf' : '.xlsx,.xls,.csv'}
             file={txnFile}
           />
 

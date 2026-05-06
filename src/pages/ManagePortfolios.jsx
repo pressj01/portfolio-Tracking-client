@@ -3,6 +3,16 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { API_BASE } from '../config'
 
+const BROKER_OPTIONS = [
+  { value: '', label: 'Not set' },
+  { value: 'schwab', label: 'Charles Schwab' },
+  { value: 'etrade', label: 'E*TRADE' },
+  { value: 'fidelity', label: 'Fidelity' },
+  { value: 'robinhood', label: 'Robinhood' },
+  { value: 'snowball', label: 'Snowball' },
+  { value: 'other', label: 'Other / Manual' },
+]
+
 export default function ManagePortfolios() {
   const { profiles, refreshProfiles, refreshAggregateConfig, aggregateConfig, aggregateName, isAggregate, setProfileId } = useProfile()
   const dialog = useDialog()
@@ -12,6 +22,7 @@ export default function ManagePortfolios() {
   const [aggNameInput, setAggNameInput] = useState('')
   const [editingId, setEditingId] = useState(null)
   const [editName, setEditName] = useState('')
+  const [editBrokerSource, setEditBrokerSource] = useState('')
 
   const loadSummary = useCallback(() => {
     fetch(`${API_BASE}/api/profiles/summary`)
@@ -41,7 +52,7 @@ export default function ManagePortfolios() {
     const res = await fetch(`${API_BASE}/api/profiles`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, broker_source: '' }),
     })
     if (res.ok) {
       await refreshProfiles()
@@ -52,6 +63,7 @@ export default function ManagePortfolios() {
   const startRename = (p) => {
     setEditingId(p.id)
     setEditName(p.name)
+    setEditBrokerSource(p.broker_source || '')
   }
 
   const saveRename = async (id) => {
@@ -59,13 +71,25 @@ export default function ManagePortfolios() {
     const res = await fetch(`${API_BASE}/api/profiles/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: editName.trim() }),
+      body: JSON.stringify({ name: editName.trim(), broker_source: editBrokerSource }),
     })
     if (res.ok) {
       await refreshProfiles()
       loadSummary()
     }
     setEditingId(null)
+  }
+
+  const saveBrokerSource = async (p, brokerSource) => {
+    const res = await fetch(`${API_BASE}/api/profiles/${p.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: p.name, broker_source: brokerSource }),
+    })
+    if (res.ok) {
+      await refreshProfiles()
+      loadSummary()
+    }
   }
 
   const deletePortfolio = async (p) => {
@@ -179,6 +203,7 @@ export default function ManagePortfolios() {
         <thead>
           <tr>
             <th>Name</th>
+            <th>Broker Source</th>
             <th style={{ textAlign: 'center' }} title="Include this portfolio in the Owner aggregate">Owner</th>
             <th style={{ textAlign: 'center' }} title="Include this portfolio in the Combined aggregate">Combined</th>
             <th style={{ textAlign: 'right' }}>Holdings</th>
@@ -192,15 +217,18 @@ export default function ManagePortfolios() {
             <tr key={p.id}>
               <td>
                 {editingId === p.id ? (
-                  <input
-                    className="dialog-input"
-                    style={{ width: '200px', padding: '0.2rem 0.5rem' }}
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') saveRename(p.id); if (e.key === 'Escape') setEditingId(null) }}
-                    onBlur={() => saveRename(p.id)}
-                    autoFocus
-                  />
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      className="dialog-input"
+                      style={{ width: '200px', padding: '0.2rem 0.5rem' }}
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') saveRename(p.id); if (e.key === 'Escape') setEditingId(null) }}
+                      autoFocus
+                    />
+                    <button className="btn btn-sm" onClick={() => saveRename(p.id)}>Save</button>
+                    <button className="btn btn-sm" onClick={() => setEditingId(null)}>Cancel</button>
+                  </div>
                 ) : (
                   <span
                     style={{ cursor: 'pointer', borderBottom: '1px dashed #64b5f6' }}
@@ -210,6 +238,24 @@ export default function ManagePortfolios() {
                     {p.name}
                   </span>
                 )}
+              </td>
+              <td>
+                <select
+                  value={editingId === p.id ? editBrokerSource : (p.broker_source || '')}
+                  onChange={(e) => {
+                    if (editingId === p.id) {
+                      setEditBrokerSource(e.target.value)
+                    } else {
+                      saveBrokerSource(p, e.target.value)
+                    }
+                  }}
+                  style={{ width: '150px' }}
+                  title="Broker used for import safety checks"
+                >
+                  {BROKER_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
               </td>
               <td style={{ textAlign: 'center' }}>
                 {p.id === 1 ? (

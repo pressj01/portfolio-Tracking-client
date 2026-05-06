@@ -1349,6 +1349,78 @@ function GrowthHelp() {
       </p>
 
       {/* ── How to Use ─────────────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Optimization View</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The Optimization tab is an income-smoothing planner. It takes the calendar's known or
+        estimated pay dates, dividend frequency, dividend amount, share count, and estimated annual
+        income, then projects cash flow into the next 12 calendar months. The month-to-month shape
+        follows the pay-date schedule, while the 12-month total is reconciled to the same estimated
+        annual income used on the Dividends page.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Important:</strong> this screen is about <em>timing</em>. It answers "which months
+        look light or heavy?" and "which pay schedules might help?" It does not decide whether a
+        ticker is attractive, safe, undervalued, or appropriate to buy.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Top Cards</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Average monthly income</strong> - the projected 12-month total divided by 12. This should closely match the Dividends page's estimated monthly income, apart from rounding.</li>
+        <li><strong>Lowest month</strong> - the month with the lowest projected dividend income in the next 12 months.</li>
+        <li><strong>Highest month</strong> - the month with the highest projected dividend income in the next 12 months.</li>
+        <li><strong>Total shortfall</strong> - the sum of all below-average months' shortfalls. This is not a required investment amount; it is a way to measure how uneven the calendar is.</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>12-Month Income Smoothing Heatmap</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Month tile</strong> - projected dividend income expected to be paid in that calendar month.</li>
+        <li><strong>Green tile</strong> - month is at or above the portfolio's average monthly income.</li>
+        <li><strong>Amber tile</strong> - month is below average but not a severe shortfall.</li>
+        <li><strong>Red tile</strong> - month is materially below average.</li>
+        <li><strong>"Below avg"</strong> - percentage shortfall versus the average monthly income. For example, "10% below avg" means that month is projected to be 10% lighter than the portfolio average month.</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Shortfall Months Table</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Month</strong> - the calendar month being analyzed.</li>
+        <li><strong>Projected</strong> - estimated dividend income expected to be paid in that month.</li>
+        <li><strong>Shortfall to avg</strong> - how many dollars that month is below the average monthly income. Yellow numbers mean the month is under target. "On target" means the month is at or above average.</li>
+        <li><strong>Top current payers</strong> - current holdings projected to pay in that month, sorted by estimated dollar contribution from highest to lowest.</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Suggestions</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Suggestions translate the shortfall table into plain language. If January is below average,
+        the page may say January needs about a certain dollar amount to match the average month.
+        That means January is light compared with your own portfolio average; it does not mean you
+        must add that exact amount or buy a specific ticker.
+      </p>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Schedule-Fit Candidates</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Schedule-Fit Candidates are funds whose known pay dates overlap your current shortfall
+        months. This is pay-date fit only, not a buy recommendation. A ticker can rank highly here
+        simply because it pays in a month where your current income is light.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Ticker</strong> - the candidate symbol. The row may show whether it is already owned, watchlisted, or known from available calendar data.</li>
+        <li><strong>Provider</strong> - the fund family or source group, such as NEOs, TAPPALPHA, X Funds, Tuttle funds, Kurv funds, Amplify, Shelton SEPI, YieldMax, or REX Shares.</li>
+        <li><strong>Freq</strong> - dividend frequency used for the schedule: weekly, monthly, quarterly, semiannual, or annual.</li>
+        <li><strong>Helps</strong> - shortfall months where that ticker has a known pay schedule. The smaller basis line shows which helped month is used for the share-count math and that month's shortfall.</li>
+        <li><strong>Distribution/share</strong> - projected total distribution per share in the basis month. Weekly payers include all projected weekly payments in that month.</li>
+        <li><strong>Yield</strong> - approximate annualized distribution yield based on the latest payout, frequency, and current price when available.</li>
+        <li><strong>Shares needed to fill the gap</strong> - estimated shares needed to offset the basis month's shortfall using the listed distribution/share. This is math only, not a trade recommendation.</li>
+        <li><strong>Est. cost</strong> - approximate cost of those what-if shares using the latest available price.</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Candidate Universe</h4>
+      <p style={{ marginBottom: '1rem' }}>
+        The Candidate Universe lists the fund families and seeded tickers the app is allowed to
+        consider for future schedule-fit analysis. Tickers without schedule data are shown as tracked
+        candidates, but they are not ranked until the app has usable pay-date metadata. Adding a ticker
+        to holdings or watchlist and refreshing dividend metadata can make it eligible for scoring.
+      </p>
+
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>
@@ -1676,18 +1748,18 @@ function DivCalendarHelp() {
     <div>
       <h2>Dividend Calendar</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The Dividend Calendar shows every ex-dividend and pay date for your portfolio holdings
-        in a scrollable card-based timeline. It lets you see at a glance which dividends are coming up,
-        when you'll receive payment, how much you'll earn per share, and which payments have already
-        been made this week or month. This is useful for planning reinvestments and tracking your
-        expected income day by day.
+        The Dividend Calendar has two views. <strong>Calendar</strong> shows ex-dividend and
+        pay-date events for your current holdings. <strong>Optimization</strong> projects those
+        payments across the next 12 months so you can see whether income is evenly distributed
+        or concentrated in certain months. Use this page for dividend timing and income-smoothing
+        research; it is not a buy/sell signal.
       </p>
 
       {/* ── What the Page Shows ─────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What the Page Shows</h3>
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calendar View</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Each holding with an ex-dividend date appears as a card in a grid layout. The cards are sorted
-        chronologically by ex-dividend date. Each card contains:
+        The Calendar tab shows each holding with an ex-dividend date as a card in a grid layout.
+        Cards are sorted chronologically and contain:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
@@ -1796,6 +1868,11 @@ function DivCalendarHelp() {
         <li>
           <strong>Switch to "All"</strong> to review past payments and confirm which holdings paid
           this week or this month using the green badge indicators.
+        </li>
+        <li>
+          <strong>Open "Optimization"</strong> to see whether the next 12 months are smooth or uneven.
+          Start with the Shortfall Months table, then use Schedule-Fit Candidates only as a research
+          list for pay-date timing.
         </li>
         <li>
           <strong>If no events appear</strong>, ensure your holdings have ex-dividend dates populated.

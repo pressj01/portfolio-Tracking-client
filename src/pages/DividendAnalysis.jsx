@@ -340,7 +340,7 @@ export default function DividendAnalysis() {
     } else {
       setSortCol(col)
       // Default descending for numeric columns
-      const numCols = ['ytd_divs', 'total_divs_received', 'paid_for_itself', 'dividend_paid', 'estim_payment_per_year', 'approx_monthly_income', 'annual_yield_on_cost', 'current_annual_yield', 'gain_or_loss', 'safety_score', 'payout_ratio_pct', 'earnings_coverage', 'dividend_streak_years', 'debt_to_equity']
+      const numCols = ['quantity', 'ytd_divs', 'total_divs_received', 'paid_for_itself', 'dividend_paid', 'estim_payment_per_year', 'approx_monthly_income', 'annual_yield_on_cost', 'current_annual_yield', 'gain_or_loss', 'safety_score', 'payout_ratio_pct', 'earnings_coverage', 'dividend_streak_years', 'debt_to_equity']
       setSortAsc(!numCols.includes(col))
     }
   }
@@ -370,19 +370,33 @@ export default function DividendAnalysis() {
   const dividendSafety = data?.totals?.dividend_safety
   const atRiskCount = dividendSafety?.at_risk_holdings?.length ?? 0
 
+  const DIV_FREQ_LABELS = {
+    D: 'Daily', W: 'Weekly', M: 'Monthly', Q: 'Quarterly',
+    SA: 'Semi-Ann', S: 'Semi-Ann', A: 'Annual',
+    DAILY: 'Daily', WEEKLY: 'Weekly', MONTHLY: 'Monthly',
+    QUARTERLY: 'Quarterly', ANNUAL: 'Annual',
+  }
   const columns = [
     { key: 'ticker', label: 'Ticker', width: '5%' },
-    { key: 'description', label: 'Description', width: '20%' },
+    { key: 'description', label: 'Description', width: '17%' },
     { key: 'category_name', label: 'Category', tip: 'Investment category', width: '7%' },
+    // \u2500\u2500 Dividend mechanics \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    { key: 'div_frequency', label: 'Freq', fmt: v => DIV_FREQ_LABELS[v] || v || '\u2014', align: 'center', tip: 'Dividend payment frequency' },
+    { key: 'ex_div_date', label: 'Ex-Div Date', align: 'center', tip: 'Ex-dividend date' },
+    { key: 'div_pay_date', label: 'Pay Date', align: 'center', tip: 'Dividend payment date' },
+    { key: 'quantity', label: 'Shares', fmt: v => v != null ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 4 }) : '\u2014', align: 'right', tip: 'Number of shares held' },
+    { key: 'div_per_share', label: '$/Share', fmt: v => v != null ? `$${Number(v).toFixed(4)}` : '\u2014', align: 'right', tip: 'Dividend amount per share' },
+    // \u2500\u2500 Income estimates (derived from the above) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    { key: 'approx_monthly_income', label: 'Est. Monthly', fmt: fmt, align: 'right', tip: 'Estimated monthly dividend income (shares \u00d7 $/share \u00d7 frequency)' },
+    { key: 'estim_payment_per_year', label: 'Est. Annual', fmt: fmt, align: 'right', tip: 'Estimated annual dividend income' },
+    { key: 'annual_yield_on_cost', label: 'Yield on Cost', fmt: fmtPct, align: 'right', tip: 'Annual dividend yield based on your cost basis' },
+    { key: 'current_annual_yield', label: 'Current Yield', fmt: fmtPct, align: 'right', tip: 'Current annual dividend yield based on market price' },
+    // \u2500\u2500 History \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     { key: 'ytd_divs', label: 'YTD Divs', fmt: fmt, align: 'right', tip: 'Year-to-date dividends received' },
     { key: 'total_divs_received', label: 'Total Divs', fmt: fmt, align: 'right', tip: 'Total dividends received since purchase' },
     { key: 'paid_for_itself', label: 'Paid For Itself', fmt: v => fmtPctRaw(v != null ? v * 100 : null), align: 'right', tip: 'Percentage of original cost recovered through dividends' },
-    { key: 'dividend_paid', label: 'Div Paid', fmt: fmt, align: 'right', tip: 'Last dividend amount paid per share' },
-    { key: 'estim_payment_per_year', label: 'Est. Annual', fmt: fmt, align: 'right', tip: 'Estimated annual dividend income' },
-    { key: 'approx_monthly_income', label: 'Est. Monthly', fmt: fmt, align: 'right', tip: 'Estimated monthly dividend income' },
-    { key: 'annual_yield_on_cost', label: 'Yield on Cost', fmt: fmtPct, align: 'right', tip: 'Annual dividend yield based on your cost basis' },
-    { key: 'current_annual_yield', label: 'Current Yield', fmt: fmtPct, align: 'right', tip: 'Current annual dividend yield based on market price' },
-    { key: 'safety_score', label: 'Safety', align: 'center', tip: 'Composite dividend safety score from payout, EPS coverage, streak, and debt/equity' },
+    // \u2500\u2500 Safety \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    { key: 'safety_score', label: 'Safety', align: 'center', tip: 'Composite dividend safety score' },
     { key: 'safety_risk_level', label: 'Risk', align: 'center', tip: 'Estimated dividend cut risk level' },
     { key: 'payout_ratio_pct', label: 'Payout', fmt: v => v != null ? `${Number(v).toFixed(1)}%` : '\u2014', align: 'right', tip: 'Dividend payout ratio' },
     { key: 'earnings_coverage', label: 'EPS Cov.', fmt: v => v != null ? `${Number(v).toFixed(2)}x` : '\u2014', align: 'right', tip: 'EPS coverage of annual dividend' },
@@ -578,13 +592,13 @@ export default function DividendAnalysis() {
                 <tfoot>
                   <tr style={{ borderTop: '2px solid #0f3460', background: '#16213e' }}>
                     <td colSpan={3}><strong>Totals</strong></td>
+                    <td colSpan={5}></td>
+                    <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.approx_monthly_income)}</strong></td>
+                    <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.estim_payment_per_year)}</strong></td>
+                    <td colSpan={2}></td>
                     <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.ytd_divs)}</strong></td>
                     <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.total_divs_received)}</strong></td>
-                    <td></td>
-                    <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.dividend_paid)}</strong></td>
-                    <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.estim_payment_per_year)}</strong></td>
-                    <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.approx_monthly_income)}</strong></td>
-                    <td colSpan={9}></td>
+                    <td colSpan={8}></td>
                   </tr>
                 </tfoot>
               )}

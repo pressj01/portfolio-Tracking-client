@@ -5,7 +5,7 @@ import time
 
 
 SAFETY_CACHE_TTL_HOURS = 24
-SAFETY_MODEL_VERSION = 24
+SAFETY_MODEL_VERSION = 25
 _NAV_BENCHMARK_OVERRIDE_CACHE = {"ts": 0, "data": {}}
 
 
@@ -486,16 +486,28 @@ def _score_fund(metrics):
 def _score_option_income_fund(metrics):
     nav_coverage = metrics.get("nav_coverage_ratio")
     nav_erosion = metrics.get("nav_erosion_risk")
-    if nav_coverage is not None:
-        if nav_coverage <= 0.25 or nav_erosion == "Low":
-            return 90
-        if nav_coverage > 0.75 or nav_erosion == "High":
-            return 62
-        return 68
     consistency = metrics.get("distribution_consistency")
     streak = metrics.get("dividend_streak_years")
     if consistency is None:
         consistency = 0
+
+    if nav_coverage is not None:
+        if nav_coverage <= 0.25 or nav_erosion == "Low":
+            return 90
+        # NAV erosion vs benchmark is expected for option strategies (capped
+        # upside in exchange for premium income).  Weight distribution
+        # consistency heavily — income is cut-risky only when distributions
+        # actually become inconsistent.
+        if nav_coverage > 0.75 or nav_erosion == "High":
+            if consistency >= 0.6:
+                return 82
+            if streak and streak >= 1:
+                return 75
+            return 68
+        if consistency >= 0.6:
+            return 85
+        return 75
+
     if consistency >= 0.6:
         return 92
     if consistency >= 0.4:
@@ -542,7 +554,7 @@ def _risk_reasons(metrics, model):
         if nav_coverage is not None and (nav_coverage <= 0.25 or nav_erosion == "Low"):
             reasons.append("Low benchmark-adjusted NAV erosion")
         elif nav_coverage is not None and (nav_coverage > 0.75 or nav_erosion == "High"):
-            reasons.append("Option-income NAV erosion versus benchmark")
+            reasons.append("NAV erosion versus benchmark is expected for option strategies")
         if streak is not None and streak < 1:
             reasons.append("Limited distribution history")
         return reasons[:4]
@@ -730,7 +742,7 @@ def apply_nav_coverage_overlay(payload, coverage_ratio=None, nav_erosion=None):
     """Use benchmark-adjusted NAV erosion ratio for income-vehicle overlays.
 
     The ratio is lower-is-better:
-      max(0, benchmark_return - fund_price_return) / distribution_yield
+      own fund price decline / distribution_yield, only when benchmark is flat/up
     """
     out = dict(payload or {})
     model = out.get("score_model")
@@ -755,14 +767,21 @@ def apply_nav_coverage_overlay(payload, coverage_ratio=None, nav_erosion=None):
         out["cut_risk_flag"] = False
         out["risk_reasons"] = ["Low benchmark-adjusted NAV erosion"]
     elif cov > 0.75 or erosion == "high":
-        if model in {"option_income", "bdc"}:
-            out["safety_score"] = 62 if model == "option_income" else 70
-            out["risk_level"] = "Elevated" if model == "option_income" else "Moderate"
-            out["cut_risk_flag"] = False
-            if model == "bdc":
-                out["risk_reasons"] = ["BDC NAV drift versus benchmark; verify NII dividend coverage"] + reasons[:2]
+        if model == "option_income":
+            consistency = _clean_number(out.get("distribution_consistency")) or 0
+            if consistency >= 0.6:
+                out["safety_score"] = max(_clean_number(out.get("safety_score")) or 0, 82)
+                out["risk_level"] = "Low"
             else:
-                out["risk_reasons"] = ["Option-income NAV erosion versus benchmark, not a confirmed cut risk"] + reasons[:2]
+                out["safety_score"] = max(_clean_number(out.get("safety_score")) or 0, 75)
+                out["risk_level"] = "Moderate"
+            out["cut_risk_flag"] = False
+            out["risk_reasons"] = ["NAV erosion versus benchmark is expected for option strategies"] + reasons[:2]
+        elif model == "bdc":
+            out["safety_score"] = 70
+            out["risk_level"] = "Moderate"
+            out["cut_risk_flag"] = False
+            out["risk_reasons"] = ["BDC NAV drift versus benchmark; verify NII dividend coverage"] + reasons[:2]
         else:
             out["safety_score"] = min(_clean_number(out.get("safety_score")) or 100, 44)
             out["risk_level"] = "High"
@@ -775,7 +794,7 @@ def apply_nav_coverage_overlay(payload, coverage_ratio=None, nav_erosion=None):
             out["cut_risk_flag"] = False
             out["risk_reasons"] = ["Moderate BDC NAV drift versus benchmark"] + reasons[:2]
         elif model == "option_income":
-            out["safety_score"] = max(_clean_number(out.get("safety_score")) or 0, 68)
+            out["safety_score"] = max(_clean_number(out.get("safety_score")) or 0, 75)
             out["risk_level"] = "Moderate"
             out["cut_risk_flag"] = False
             out["risk_reasons"] = ["Moderate option-income NAV erosion versus benchmark"] + reasons[:2]

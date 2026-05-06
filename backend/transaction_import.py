@@ -34,6 +34,51 @@ TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-/]{0,10}$")
 ADJUSTMENT_NOTE = "Automatically generated transaction to adjust"
 
 
+def _is_csv_file(file_path, filename=None):
+    name = str(filename or file_path or "").lower()
+    return name.endswith(".csv")
+
+
+def _read_table_rows(file_path, filename=None, sheet_name=None):
+    """Return a list of row lists from either CSV or Excel."""
+    if _is_csv_file(file_path, filename):
+        with open(file_path, "r", encoding="utf-8-sig", newline="") as fh:
+            return [row for row in csv.reader(fh)]
+
+    import openpyxl
+
+    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+    try:
+        ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
+        return [list(row) for row in ws.iter_rows(values_only=True)]
+    finally:
+        wb.close()
+
+
+def _row_has_values(row):
+    return any(v is not None and str(v).strip() != "" for v in row)
+
+
+def _row_cell(row, index, default=""):
+    if index >= len(row):
+        return default
+    value = row[index]
+    return default if value is None else value
+
+
+def _rows_to_dicts(rows, header_idx=0):
+    if len(rows) <= header_idx:
+        return [], []
+    header = [str(c or "").strip() for c in rows[header_idx]]
+    data_rows = []
+    for row in rows[header_idx + 1:]:
+        if not _row_has_values(row):
+            continue
+        values = list(row) + [None] * max(0, len(header) - len(row))
+        data_rows.append(dict(zip(header, values)))
+    return header, data_rows
+
+
 def _parse_reinvest_bool(value):
     """Return True/False for common broker DRIP flag values, or None if blank."""
     if value is None:
@@ -67,14 +112,10 @@ def parse_snowball_csv(file_path, filename):
         )
 
     # ── Read all rows ────────────────────────────────────────────────────────
-    rows = []
-    with open(file_path, "r", encoding="utf-8-sig") as fh:
-        reader = csv.DictReader(fh)
-        for row in reader:
-            rows.append(row)
+    _, rows = _rows_to_dicts(_read_table_rows(file_path, filename))
 
     if not rows:
-        raise ValueError("The CSV file is empty or has no data rows.")
+        raise ValueError("The file is empty or has no data rows.")
 
     # ── Check 2: multiple CASH_IN on earliest date → combined export ─────────
     earliest_date = None
@@ -248,26 +289,23 @@ def _infer_snowball_asset_type(sector, category):
 
 
 def parse_snowball_holdings_csv(file_path, filename):
-    """Parse a Snowball holdings CSV as a migration-style positions snapshot.
+    """Parse a Snowball holdings CSV/XLSX as a migration-style positions snapshot.
 
     Keeps only the fields this app can store and use meaningfully:
     ticker, description, shares, cost basis, current price/value, dividend
     metadata, dividends received, and category.
     """
-    with open(file_path, "r", encoding="utf-8-sig") as fh:
-        reader = csv.DictReader(fh)
-        headers = reader.fieldnames or []
-        rows = list(reader)
+    headers, rows = _rows_to_dicts(_read_table_rows(file_path, filename))
 
     required = {"Holding", "Holdings' name", "Shares", "Cost basis", "Current value", "Share price"}
     missing = sorted(required - set(headers))
     if missing:
         raise ValueError(
-            "This does not look like a Snowball Holdings CSV export. "
+            "This does not look like a Snowball Holdings export. "
             f"Missing required columns: {', '.join(missing)}"
         )
     if not rows:
-        raise ValueError("The CSV file is empty or has no data rows.")
+        raise ValueError("The file is empty or has no data rows.")
 
     positions = []
     filtered_count = 0
@@ -326,7 +364,7 @@ def parse_snowball_holdings_csv(file_path, filename):
         })
 
     if not positions:
-        raise ValueError("No valid holdings rows were found in the Snowball holdings CSV.")
+        raise ValueError("No valid holdings rows were found in the Snowball holdings file.")
 
     return {
         "positions": positions,
@@ -384,7 +422,7 @@ _SCHWAB_SKIP_SYMBOLS = {
 
 
 def parse_schwab_csv(file_path, filename):
-    """Parse a Schwab Positions CSV export.
+    """Parse a Schwab Positions CSV/XLSX export.
 
     The positions file is the source of truth for current holdings —
     it includes shares from inter-account transfers, reverse splits,
@@ -400,25 +438,23 @@ def parse_schwab_csv(file_path, filename):
 
     # First line is a header like "Positions for account ..." — skip it
     # Second line is blank, then the CSV header follows
-    with open(file_path, "r", encoding="utf-8-sig") as fh:
-        lines = fh.readlines()
+    rows = _read_table_rows(file_path, filename)
 
-    # Find the CSV header row (starts with "Symbol")
+    # Find the positions header row (starts with "Symbol")
     header_idx = None
-    for i, line in enumerate(lines):
-        if line.strip().startswith('"Symbol"') or line.strip().startswith("Symbol"):
+    for i, row in enumerate(rows):
+        first = str(_row_cell(row, 0)).strip().strip('"')
+        if first == "Symbol":
             header_idx = i
             break
 
     if header_idx is None:
         raise ValueError(
             "Could not find the positions header row. "
-            "Make sure this is a Schwab Positions CSV export."
+            "Make sure this is a Schwab Positions export."
         )
 
-    import io
-    csv_text = "".join(lines[header_idx:])
-    reader = csv.DictReader(io.StringIO(csv_text))
+    _, reader = _rows_to_dicts(rows, header_idx)
 
     positions = []
     filtered_count = 0
@@ -524,17 +560,14 @@ def parse_schwab_csv(file_path, filename):
 
 
 def parse_etrade_csv(file_path, filename):
-    """Parse an E*TRADE portfolio download CSV as current positions.
+    """Parse an E*TRADE portfolio download CSV/XLSX as current positions.
 
     Returns a positions-based result dict similar to the Schwab parser.
     """
-    import io
-
-    with open(file_path, "r", encoding="utf-8-sig") as fh:
-        rows = list(csv.reader(fh))
+    rows = _read_table_rows(file_path, filename)
 
     if not rows:
-        raise ValueError("The CSV file is empty.")
+        raise ValueError("The file is empty.")
 
     account_name = ""
     account_value = 0.0
@@ -542,16 +575,16 @@ def parse_etrade_csv(file_path, filename):
     header_idx = None
 
     for idx, row in enumerate(rows):
-        first = (row[0] if row else "").strip()
-        second = (row[1] if len(row) > 1 else "").strip()
+        first = str(_row_cell(row, 0)).strip()
+        second = str(_row_cell(row, 1)).strip()
 
         if first == "Account" and second == "Net Account Value":
             data_idx = idx + 1
-            while data_idx < len(rows) and not any(cell.strip() for cell in rows[data_idx]):
+            while data_idx < len(rows) and not _row_has_values(rows[data_idx]):
                 data_idx += 1
             if data_idx < len(rows):
                 account_row = rows[data_idx]
-                account_name = (account_row[0] if len(account_row) > 0 else "").strip()
+                account_name = str(_row_cell(account_row, 0)).strip()
                 account_value = _safe_float(account_row[1] if len(account_row) > 1 else None) or 0.0
                 cash_value = _safe_float(account_row[7] if len(account_row) > 7 else None) or 0.0
 
@@ -562,7 +595,7 @@ def parse_etrade_csv(file_path, filename):
     if header_idx is None:
         raise ValueError(
             "Could not find the E*TRADE holdings table. "
-            "Make sure this is an E*TRADE portfolio download CSV."
+            "Make sure this is an E*TRADE portfolio download export."
         )
 
     header = rows[header_idx]
@@ -570,14 +603,14 @@ def parse_etrade_csv(file_path, filename):
     filtered_count = 0
 
     for row in rows[header_idx + 1:]:
-        if not any(cell.strip() for cell in row):
+        if not _row_has_values(row):
             continue
 
-        first = (row[0] if row else "").strip()
+        first = str(_row_cell(row, 0)).strip()
         if first.startswith("Generated at"):
             break
 
-        padded = row + [""] * max(0, len(header) - len(row))
+        padded = list(row) + [""] * max(0, len(header) - len(row))
         record = dict(zip(header, padded))
 
         ticker = (record.get("Symbol") or "").strip().upper()
@@ -624,7 +657,7 @@ def parse_etrade_csv(file_path, filename):
         })
 
     if not positions:
-        raise ValueError("No holdings rows were found in the E*TRADE CSV.")
+        raise ValueError("No holdings rows were found in the E*TRADE file.")
 
     return {
         "positions": positions,
@@ -650,6 +683,44 @@ def _fidelity_read_xlsx(file_path, sheet_name=None):
         wb.close()
 
 
+def _fidelity_read_csv(file_path):
+    with open(file_path, "r", encoding="utf-8-sig", newline="") as fh:
+        return [row for row in csv.reader(fh)]
+
+
+def _fidelity_read_rows(file_path, filename, sheet_name=None):
+    if str(filename or file_path).lower().endswith(".csv"):
+        return _fidelity_read_csv(file_path)
+    return _fidelity_read_xlsx(file_path, sheet_name)
+
+
+def _fidelity_header_key(value):
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").strip().lower()).strip()
+
+
+def _fidelity_canonical_header(header, aliases):
+    alias_map = {
+        _fidelity_header_key(alias): canonical
+        for canonical, alias_list in aliases.items()
+        for alias in [canonical, *alias_list]
+    }
+    return [alias_map.get(_fidelity_header_key(col), str(col or "").strip()) for col in header]
+
+
+def _fidelity_row_record(header, row):
+    values = list(row) + [None] * max(0, len(header) - len(row))
+    record = {}
+    for key, value in zip(header, values):
+        if not key:
+            continue
+        existing = record.get(key)
+        existing_blank = existing is None or str(existing).strip() == ""
+        value_blank = value is None or str(value).strip() == ""
+        if key not in record or (existing_blank and not value_blank):
+            record[key] = value
+    return record
+
+
 def _fidelity_parse_percent_fraction(raw):
     val = _safe_float(raw)
     if val is None:
@@ -658,16 +729,33 @@ def _fidelity_parse_percent_fraction(raw):
 
 
 def parse_fidelity_positions_xlsx(file_path, filename):
-    """Parse a Fidelity positions XLSX export."""
-    rows = _fidelity_read_xlsx(file_path, "Position")
+    """Parse a Fidelity positions XLSX/XLS/CSV export."""
+    rows = _fidelity_read_rows(file_path, filename, "Position")
     if not rows:
-        raise ValueError("The Fidelity positions workbook is empty.")
+        raise ValueError("The Fidelity positions file is empty.")
 
-    header = [str(c or "").strip() for c in rows[0]]
+    header = _fidelity_canonical_header([str(c or "").strip() for c in rows[0]], {
+        "Account Number": ["Account #", "Account"],
+        "Account Name": ["Account"],
+        "Symbol": ["Ticker"],
+        "Description": ["Security Description", "Security name"],
+        "Last Price": ["Last price", "Price"],
+        "Current value": ["Current Value", "Market Value", "Market value"],
+        "Cost basis total": ["Cost Basis Total", "Cost basis", "Cost Basis"],
+        "Average cost basis": ["Average Cost Basis", "Average cost", "Cost/Share"],
+        "Total gain/loss $": ["Total Gain/Loss Dollar", "Total gain/loss dollar", "Gain/Loss $"],
+        "Dist. yield": ["Distribution Yield", "Distribution yield", "Dist yield"],
+        "Amount per share": ["Amount Per Share", "Dividend Amount"],
+        "Ex-date": ["Ex Date", "Ex-date"],
+        "Pay date": ["Pay Date"],
+        "Est. annual income": ["Estimated Annual Income", "Est Annual Income"],
+        "Type": ["Asset Type"],
+        "Quantity": ["Qty", "Shares"],
+    })
     if "Account Name" not in header or "Symbol" not in header or "Current value" not in header:
         raise ValueError(
             "Could not find the Fidelity positions columns. "
-            "Make sure this is a Fidelity positions export workbook."
+            "Make sure this is a Fidelity positions export file."
         )
 
     positions = []
@@ -679,7 +767,7 @@ def parse_fidelity_positions_xlsx(file_path, filename):
     for row in rows[1:]:
         if not any(v is not None and str(v).strip() != "" for v in row):
             continue
-        record = dict(zip(header, row + [None] * max(0, len(header) - len(row))))
+        record = _fidelity_row_record(header, row)
         account_name = (str(record.get("Account Name") or "")).strip()
         account_number = (str(record.get("Account Number") or "")).strip()
         if account_name:
@@ -736,7 +824,7 @@ def parse_fidelity_positions_xlsx(file_path, filename):
             "Please export a single account at a time."
         )
     if not positions:
-        raise ValueError("No holdings rows were found in the Fidelity positions workbook.")
+        raise ValueError("No holdings rows were found in the Fidelity positions file.")
 
     account_name = next(iter(account_names), "")
     positions_value = round(sum(p["current_value"] for p in positions), 2)
@@ -756,14 +844,23 @@ def parse_fidelity_positions_xlsx(file_path, filename):
 
 
 def parse_fidelity_transactions_xlsx(file_path, filename):
-    """Parse a Fidelity transactions XLSX export."""
-    rows = _fidelity_read_xlsx(file_path, "Transactions")
-    if len(rows) < 4:
-        raise ValueError("The Fidelity transactions workbook has too few rows.")
+    """Parse a Fidelity transactions XLSX/XLS/CSV export."""
+    rows = _fidelity_read_rows(file_path, filename, "Transactions")
+    if not rows:
+        raise ValueError("The Fidelity transactions file is empty.")
 
     header_idx = None
     for idx, row in enumerate(rows):
-        vals = [str(c or "").strip() for c in row]
+        vals = _fidelity_canonical_header([str(c or "").strip() for c in row], {
+            "Run Date": ["Date", "Settlement Date"],
+            "Action": ["Transaction Type", "Type"],
+            "Symbol": ["Ticker"],
+            "Quantity": ["Qty", "Shares"],
+            "Price ($)": ["Price", "Price $"],
+            "Amount ($)": ["Amount", "Amount $"],
+            "Commission ($)": ["Commission", "Commissions", "Commission $"],
+            "Fees ($)": ["Fees", "Fee", "Fees $"],
+        })
         if "Run Date" in vals and "Action" in vals and "Symbol" in vals:
             header_idx = idx
             header = vals
@@ -771,7 +868,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
     if header_idx is None:
         raise ValueError(
             "Could not find the Fidelity transaction header row. "
-            "Make sure this is a Fidelity transactions export workbook."
+            "Make sure this is a Fidelity transactions export file."
         )
 
     kept = []
@@ -780,7 +877,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
     for row in rows[header_idx + 1:]:
         if not any(v is not None and str(v).strip() != "" for v in row):
             continue
-        record = dict(zip(header, row + [None] * max(0, len(header) - len(row))))
+        record = _fidelity_row_record(header, row)
         action = (str(record.get("Action") or "")).strip()
         symbol = (str(record.get("Symbol") or "")).strip().upper()
         if not symbol or not TICKER_RE.match(symbol):
@@ -928,7 +1025,7 @@ def _schwab_parse_date_field(raw):
 
 
 def parse_schwab_transactions_csv(file_path, filename):
-    """Parse a Schwab Transactions CSV export.
+    """Parse a Schwab Transactions CSV/XLSX export.
 
     Columns: Date, Action, Symbol, Description, Quantity, Price, Fees & Comm, Amount
 
@@ -938,31 +1035,28 @@ def parse_schwab_transactions_csv(file_path, filename):
     are imported as DIVIDEND.
     """
 
-    with open(file_path, "r", encoding="utf-8-sig") as fh:
-        lines = fh.readlines()
+    rows = _read_table_rows(file_path, filename)
 
-    if not lines:
-        raise ValueError("The CSV file is empty.")
+    if not rows:
+        raise ValueError("The file is empty.")
 
     # Schwab transaction CSVs start directly with the header row
     # (Date,Action,Symbol,...) — no preamble lines like the positions file.
     # Find the header row to be safe.
-    import io
     header_idx = None
-    for i, line in enumerate(lines):
-        stripped = line.strip().strip('"')
-        if stripped.startswith("Date") and "Action" in line and "Symbol" in line:
+    for i, row in enumerate(rows):
+        vals = [str(c or "").strip() for c in row]
+        if vals and vals[0] == "Date" and "Action" in vals and "Symbol" in vals:
             header_idx = i
             break
 
     if header_idx is None:
         raise ValueError(
             "Could not find the transaction header row (Date,Action,Symbol,...). "
-            "Make sure this is a Schwab Transactions CSV export."
+            "Make sure this is a Schwab Transactions export."
         )
 
-    csv_text = "".join(lines[header_idx:])
-    reader = csv.DictReader(io.StringIO(csv_text))
+    _, reader = _rows_to_dicts(rows, header_idx)
 
     kept = []
     filtered_count = 0
@@ -1107,8 +1201,8 @@ def parse_schwab_transactions_csv(file_path, filename):
 
 # ── E*Trade (Transaction History — Buys & Sells) ─────────────────────────────
 
-def _etrade_read_xlsx(file_path):
-    """Read an E*Trade transaction history XLSX and return (account_info, header, data_rows).
+def _etrade_read_rows(file_path, filename):
+    """Read an E*Trade transaction history CSV/XLSX and return (account_info, data_rows).
 
     The file layout is:
         Row 1: Title (e.g. "Buys & Sells Activity Types")
@@ -1117,16 +1211,10 @@ def _etrade_read_xlsx(file_path):
         Row 7: Column headers
         Row 8+: Data rows (until empty/disclaimer text)
     """
-    import openpyxl
-
-    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-    ws = wb.active
-
-    rows = list(ws.iter_rows(values_only=True))
-    wb.close()
+    rows = _read_table_rows(file_path, filename)
 
     if len(rows) < 8:
-        raise ValueError("File has too few rows to be an E*Trade transaction export.")
+        raise ValueError("File has too few rows to be an E*TRADE transaction export.")
 
     account_info = str(rows[2][0] or "").strip()  # Row 3
     header = [str(c or "").strip() for c in rows[6]]  # Row 7
@@ -1179,11 +1267,11 @@ def _etrade_parse_date_str(raw):
 
 
 def parse_etrade_buys_sells_xlsx(file_path, filename):
-    """Parse an E*Trade Buys & Sells transaction history XLSX export.
+    """Parse an E*Trade Buys & Sells transaction history CSV/XLSX export.
 
     Returns a normalised transaction result dict with BUY and SELL entries.
     """
-    account_info, data_rows = _etrade_read_xlsx(file_path)
+    account_info, data_rows = _etrade_read_rows(file_path, filename)
     account_name = _etrade_extract_account_name(account_info)
 
     if not data_rows:
@@ -1265,14 +1353,14 @@ def parse_etrade_buys_sells_xlsx(file_path, filename):
 # ── E*Trade (Transaction History — Dividends) ────────────────────────────────
 
 def parse_etrade_dividends_xlsx(file_path, filename):
-    """Parse an E*Trade Dividends transaction history XLSX export.
+    """Parse an E*Trade Dividends transaction history CSV/XLSX export.
 
     Positive Amount = cash dividend payment → DIVIDEND
     Negative Amount with Quantity/Price = DRIP reinvestment → BUY with [DRIP] tag
     Both the cash dividend and the DRIP buy are imported so the full picture
     is captured (dividend income + share accumulation).
     """
-    account_info, data_rows = _etrade_read_xlsx(file_path)
+    account_info, data_rows = _etrade_read_rows(file_path, filename)
     account_name = _etrade_extract_account_name(account_info)
 
     if not data_rows:
@@ -1511,11 +1599,8 @@ def _robinhood_parse_quantity(raw):
 
 
 def parse_robinhood_transactions_csv(file_path, filename):
-    """Parse a Robinhood transaction/activity CSV export."""
-    with open(file_path, "r", encoding="utf-8-sig", newline="") as fh:
-        reader = csv.DictReader(fh)
-        headers = reader.fieldnames or []
-        rows = list(reader)
+    """Parse a Robinhood transaction/activity CSV/XLSX export."""
+    headers, rows = _rows_to_dicts(_read_table_rows(file_path, filename))
 
     required = {"Activity Date", "Instrument", "Description", "Trans Code", "Quantity", "Price", "Amount"}
     missing = sorted(required - set(headers))
@@ -1525,7 +1610,7 @@ def parse_robinhood_transactions_csv(file_path, filename):
             f"Missing required columns: {', '.join(missing)}"
         )
     if not rows:
-        raise ValueError("The CSV file is empty or has no data rows.")
+        raise ValueError("The file is empty or has no data rows.")
 
     kept = []
     filtered_count = 0
