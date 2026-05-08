@@ -12,11 +12,13 @@ Write-Host "=== Building Windows Package (v$version) ===" -ForegroundColor Cyan
 if (Test-Path $outWin) { Remove-Item -Recurse -Force $outWin }
 New-Item -ItemType Directory -Path $outWin -Force | Out-Null
 New-Item -ItemType Directory -Path "$outWin\backend\uploads" -Force | Out-Null
+New-Item -ItemType Directory -Path "$outWin\backend\seed" -Force | Out-Null
 New-Item -ItemType Directory -Path "$outWin\electron" -Force | Out-Null
 
 # Backend python files
 Copy-Item "$src\backend\*.py" "$outWin\backend\"
 Copy-Item "$src\backend\requirements.txt" "$outWin\backend\"
+Copy-Item "$src\backend\seed\etf_providers.db" "$outWin\backend\seed\"
 
 # Built frontend
 Copy-Item "$src\dist" "$outWin\dist" -Recurse
@@ -52,11 +54,13 @@ Write-Host "=== Building Mac Package (v$version) ===" -ForegroundColor Cyan
 if (Test-Path $outMac) { Remove-Item -Recurse -Force $outMac }
 New-Item -ItemType Directory -Path $outMac -Force | Out-Null
 New-Item -ItemType Directory -Path "$outMac\backend\uploads" -Force | Out-Null
+New-Item -ItemType Directory -Path "$outMac\backend\seed" -Force | Out-Null
 New-Item -ItemType Directory -Path "$outMac\electron" -Force | Out-Null
 
 # Backend python files
 Copy-Item "$src\backend\*.py" "$outMac\backend\"
 Copy-Item "$src\backend\requirements.txt" "$outMac\backend\"
+Copy-Item "$src\backend\seed\etf_providers.db" "$outMac\backend\seed\"
 
 # Built frontend
 Copy-Item "$src\dist" "$outMac\dist" -Recurse

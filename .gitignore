@@ -9,6 +9,8 @@ venv/
 
 # Database
 *.db
+!backend/seed/
+!backend/seed/etf_providers.db
 
 # Node
 node_modules/

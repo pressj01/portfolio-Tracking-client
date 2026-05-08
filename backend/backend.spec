@@ -5,7 +5,7 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('config.py', '.'), ('database.py', '.'), ('import_data.py', '.'), ('normalize.py', '.'), ('grading.py', '.'), ('create_template.py', '.')],
+    datas=[('config.py', '.'), ('database.py', '.'), ('import_data.py', '.'), ('normalize.py', '.'), ('grading.py', '.'), ('create_template.py', '.'), ('seed/etf_providers.db', 'seed')],
     hiddenimports=['flask', 'flask_cors', 'pandas', 'openpyxl', 'yfinance', 'plotly', 'pypdf', 'sqlite3', 'statistics', 'decimal', 'config', 'database', 'import_data', 'normalize', 'grading', 'create_template'],
     hookspath=[],
     hooksconfig={},

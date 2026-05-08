@@ -1,4 +1,55 @@
+import os
+import sys
+
 from config import get_connection
+
+
+def _seed_db_candidates():
+    """Return likely locations for bundled provider seed data."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(here, "seed", "etf_providers.db"),
+        os.path.join(os.getcwd(), "seed", "etf_providers.db"),
+        os.path.join(os.getcwd(), "_internal", "seed", "etf_providers.db"),
+    ]
+    bundle_dir = getattr(sys, "_MEIPASS", None)
+    if bundle_dir:
+        candidates.append(os.path.join(bundle_dir, "seed", "etf_providers.db"))
+    return candidates
+
+
+def _seed_etf_provider_data(conn):
+    """Load ETF provider reference data into a fresh database."""
+    has_funds = conn.execute("SELECT COUNT(*) FROM etf_provider_funds").fetchone()[0]
+    if has_funds:
+        return
+
+    seed_path = next((p for p in _seed_db_candidates() if os.path.exists(p)), None)
+    if not seed_path:
+        return
+
+    conn.execute("ATTACH DATABASE ? AS etf_seed", (seed_path,))
+    try:
+        seed_funds = conn.execute("SELECT COUNT(*) FROM etf_seed.etf_provider_funds").fetchone()[0]
+        if not seed_funds:
+            return
+        conn.execute("""
+            INSERT OR IGNORE INTO etf_providers
+                (id, provider, total_assets, num_funds, avg_expense)
+            SELECT id, provider, total_assets, num_funds, avg_expense
+            FROM etf_seed.etf_providers
+        """)
+        conn.execute("""
+            INSERT OR IGNORE INTO etf_provider_funds
+                (id, provider_id, symbol, fund_name, assets, div_yield, exp_ratio,
+                 change_1y, annual_div, ex_div_date, frequency, payout_ratio, div_growth)
+            SELECT id, provider_id, symbol, fund_name, assets, div_yield, exp_ratio,
+                   change_1y, annual_div, ex_div_date, frequency, payout_ratio, div_growth
+            FROM etf_seed.etf_provider_funds
+        """)
+        conn.commit()
+    finally:
+        conn.execute("DETACH DATABASE etf_seed")
 
 
 def ensure_tables_exist(conn=None):
@@ -941,6 +992,8 @@ def ensure_tables_exist(conn=None):
             UNIQUE (provider_id, symbol)
         )
     """)
+
+    _seed_etf_provider_data(conn)
 
     conn.commit()
     if close:

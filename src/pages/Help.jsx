@@ -3622,11 +3622,19 @@ function PortfoliosHelp() {
         <li><strong>Rename</strong> — click a portfolio name (underlined in blue) to edit it inline. Press Enter or click away to save.</li>
         <li><strong>Select</strong> — switches the active portfolio in the navbar without leaving the page.</li>
         <li><strong>Clear</strong> — removes all holdings and data from the portfolio but keeps the portfolio itself. Useful before a clean reimport.</li>
-        <li><strong>Delete</strong> — permanently deletes the portfolio and all its data. The default portfolio (ID 1) cannot be deleted.</li>
+        <li><strong>Delete</strong> — permanently deletes the portfolio and all its data. The Owner/default portfolio (ID 1) cannot be deleted, so its row does not show a Delete button.</li>
         <li><strong>Owner checkbox</strong> — marks a portfolio for inclusion in the Owner aggregate. Portfolios checked here are used for Owner reconciliation and for calculating the DRIP/Cash income split on the Dashboard.</li>
         <li><strong>Combined checkbox</strong> — marks a portfolio for inclusion in the Combined Portfolios aggregate. This can include accounts not part of Owner (e.g. a separate brokerage account).</li>
         <li><strong>+ New Portfolio</strong> button (top-right) — creates a new empty portfolio. New portfolios are automatically included in both Owner and Combined.</li>
       </ul>
+
+      <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>Owner and broker imports:</strong> Owner is a permanent portfolio, but it is not locked to one broker.
+        To use a different broker for Owner, select Owner, clear or export first if needed, then import that broker's
+        positions or transaction file. If Owner represents multiple source portfolios, import broker files into the
+        underlying source portfolios instead, then use Reconcile Owner to roll those accounts back up into Owner.
+        Broker and Snowball imports into Owner are blocked when Owner is made up of more than one source account.
+      </div>
 
       <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
         <strong>Owner vs Combined:</strong> These are independent configurations. Owner typically represents your primary

@@ -34,7 +34,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "[3/3] Initializing blank database..."
+echo "[3/3] Initializing seeded database..."
 cd "$SCRIPT_DIR/backend"
 python3 -c "from database import ensure_tables_exist; from config import get_connection; conn = get_connection(); ensure_tables_exist(conn); conn.close(); print('Database created: portfolio.db')"
 if [ $? -ne 0 ]; then

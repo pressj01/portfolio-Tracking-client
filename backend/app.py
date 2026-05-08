@@ -781,29 +781,40 @@ def list_profiles():
 def create_profile():
     data = request.get_json()
     name = data.get("name", "").strip()
+    broker_source = (data.get("broker_source") or "").strip()
     if not name:
         return jsonify({"error": "Name is required"}), 400
     conn = get_connection()
     cur = conn.execute(
-        "INSERT INTO profiles (name, include_in_owner) VALUES (?, 0)", (name,)
+        "INSERT INTO profiles (name, broker_source, include_in_owner) VALUES (?, ?, 0)",
+        (name, broker_source),
     )
     pid = cur.lastrowid
     conn.commit()
     conn.close()
-    return jsonify({"id": pid, "name": name}), 201
+    return jsonify({"id": pid, "name": name, "broker_source": broker_source}), 201
 
 
 @app.route("/api/profiles/<int:pid>", methods=["PUT"])
 def update_profile(pid):
-    data = request.get_json()
+    data = request.get_json() or {}
     name = data.get("name", "").strip()
     if not name:
         return jsonify({"error": "Name is required"}), 400
     conn = get_connection()
-    conn.execute("UPDATE profiles SET name = ? WHERE id = ?", (name, pid))
+    if "broker_source" in data:
+        broker_source = (data.get("broker_source") or "").strip()
+        conn.execute(
+            "UPDATE profiles SET name = ?, broker_source = ? WHERE id = ?",
+            (name, broker_source, pid),
+        )
+    else:
+        conn.execute("UPDATE profiles SET name = ? WHERE id = ?", (name, pid))
+        row = conn.execute("SELECT broker_source FROM profiles WHERE id = ?", (pid,)).fetchone()
+        broker_source = row["broker_source"] if row else ""
     conn.commit()
     conn.close()
-    return jsonify({"id": pid, "name": name})
+    return jsonify({"id": pid, "name": name, "broker_source": broker_source})
 
 
 @app.route("/api/profiles/<int:pid>", methods=["DELETE"])
@@ -881,7 +892,7 @@ def profiles_summary():
     """Return per-profile stats for the Manage Portfolios page."""
     conn = get_connection()
     rows = conn.execute("""
-        SELECT p.id, p.name, p.created_at, p.include_in_owner,
+        SELECT p.id, p.name, p.broker_source, p.created_at, p.include_in_owner,
                COUNT(a.ticker) as holdings_count,
                COALESCE(SUM(a.current_value), 0) as total_value
         FROM profiles p
@@ -26425,4 +26436,9 @@ def etf_funds_search():
 
 if __name__ == "__main__":
     is_packaged = getattr(sys, "frozen", False) or os.environ.get("ELECTRON_RUN_AS_NODE")
+    conn = get_connection()
+    try:
+        ensure_tables_exist(conn)
+    finally:
+        conn.close()
     app.run(debug=not is_packaged, port=5001, use_reloader=False)

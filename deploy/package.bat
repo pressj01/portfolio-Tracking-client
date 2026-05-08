@@ -16,6 +16,8 @@ echo [1/6] Copying backend...
 xcopy "%PROJECT_DIR%\backend\*.py" "%OUTPUT%\backend\" /q
 copy "%PROJECT_DIR%\backend\requirements.txt" "%OUTPUT%\backend\" >nul
 mkdir "%OUTPUT%\backend\uploads" 2>nul
+mkdir "%OUTPUT%\backend\seed" 2>nul
+copy "%PROJECT_DIR%\backend\seed\etf_providers.db" "%OUTPUT%\backend\seed\" >nul
 
 echo [2/6] Building frontend...
 cd /d "%PROJECT_DIR%"
@@ -45,7 +47,7 @@ echo ============================================
 echo  Done! Package created at:
 echo  %OUTPUT%.zip
 echo.
-echo  Contents (no database, no node_modules):
+echo  Contents (provider seed database included, no node_modules):
 echo    backend/        - Flask API + Python source
 echo    dist/           - Built React frontend
 echo    electron/       - Electron launcher
