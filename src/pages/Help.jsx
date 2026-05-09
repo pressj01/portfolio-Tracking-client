@@ -3934,6 +3934,10 @@ function MacroDashboardHelp() {
         Dollar Index, and Credit Spreads, each with 3-month trend direction and change.
       </p>
 
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/macro-dashboard/Screenshot 2026-05-09 124802.jpg" alt="Macro Conditions tab showing economic indicators" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 2: Portfolio Exposure</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Analyzes how each holding is classified by macro sensitivity (e.g., Rate Sensitive, Inflation Hedge,
@@ -3946,12 +3950,20 @@ function MacroDashboardHelp() {
         <li>Click any sensitivity category to expand and see which holdings fall into it.</li>
       </ul>
 
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/macro-dashboard/Screenshot 2026-05-09 124826.jpg" alt="Portfolio Exposure breakdown by macro sensitivity" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 3: Rebalancing Tilts</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Based on current macro conditions, suggests which sensitivity categories to overweight or
         underweight. Provides per-holding action recommendations (increase, hold, reduce, sell)
         to better align your portfolio with the macro environment.
       </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/macro-dashboard/Screenshot 2026-05-09 124844.jpg" alt="Rebalancing Tilts recommendations" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 4: Income Benchmark</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -3968,6 +3980,10 @@ function MacroDashboardHelp() {
         <li><strong>Excluded Holdings</strong> — Holdings excluded from the benchmark appear at the bottom with a dropdown to reassign them.</li>
       </ul>
 
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/macro-dashboard/Screenshot 2026-05-09 124904.jpg" alt="Income Benchmark allocation comparison" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 5: Classifications</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Lets you override the system's automatic macro sensitivity classification for any holding.
@@ -3980,6 +3996,10 @@ function MacroDashboardHelp() {
         <li><strong>Exclude</strong> — Removes a holding from macro exposure calculations.</li>
         <li><strong>Revert</strong> — Removes the override and returns to auto-classification.</li>
       </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/macro-dashboard/Screenshot 2026-05-09 124932.jpg" alt="Classifications tab for macro sensitivity overrides" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 6: Regime Quadrants</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -3995,6 +4015,10 @@ function MacroDashboardHelp() {
         <li><strong>Q3 Stagflation</strong> — Growth DOWN + Inflation UP. Favors gold, TIPS, and utilities.</li>
         <li><strong>Q4 Deflation</strong> — Growth DOWN + Inflation DOWN. Favors long-term bonds, cash, and defensives.</li>
       </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/macro-dashboard/Screenshot 2026-05-09 124944.jpg" alt="Regime Quadrants showing macro classification" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
 
       <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How Classification Works</h4>
       <p style={{ marginBottom: '0.75rem' }}>
