@@ -4160,6 +4160,10 @@ function DividendCalculatorHelp() {
         funds side-by-side, or modeling what-if scenarios before you buy.
       </p>
 
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/dividend-calculator/Screenshot 2026-05-09 102110.jpg" alt="Dividend Calculator projections interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calculation Settings</h3>
       <p style={{ marginBottom: '0.5rem' }}>
         Set your global assumptions once at the top of the page. These apply to every ticker you add and can be
