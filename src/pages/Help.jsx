@@ -3212,6 +3212,10 @@ function IncomeSimHelp() {
         <li><strong>Save Settings</strong> — Persist your current panel configuration for future sessions.</li>
       </ul>
 
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 113238.jpg" alt="Income Simulator settings and filters panel" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Simulation Modes</h3>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Historical Mode</h4>
@@ -3220,6 +3224,10 @@ function IncomeSimHelp() {
         grown over the selected horizon. Set start and end dates, then run. Results show year-by-year
         income growth including the compounding effect of DRIP and monthly contributions.
       </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 113309.jpg" alt="Income Simulator historical projection results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Simulate Mode</h4>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -3235,6 +3243,10 @@ function IncomeSimHelp() {
         Adjust the reinvestment slider. Click <strong>Run Analysis</strong>.
       </p>
 
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 113942.jpg" alt="Income Simulator forward projection with market bias" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <h4 style={{ marginBottom: '0.4rem' }}>Comparison Mode</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Toggle <strong>Compare Tickers</strong> to enable side-by-side analysis. Add tickers
@@ -3242,6 +3254,10 @@ function IncomeSimHelp() {
         chart comparing projected income growth and cumulative value across all tickers.
         Use this to decide between alternative income ETFs or strategies.
       </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 114242.jpg" alt="Income Simulator comparison mode with multiple tickers" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
       <p style={{ marginBottom: '0.75rem' }}>
         You can also turn on <strong>Compare Reinvestment Impact</strong> to show baseline vs. reinvested
         results for the same holdings. In that mode, the charts and results table split each holding into
@@ -3262,6 +3278,18 @@ function IncomeSimHelp() {
         <li><strong>Results Table</strong> — Year-by-year or ticker-by-ticker breakdown with columns for Amount, Reinvest %, Price, Distributions, Reinvested, Final Value, Gain/Loss, Annualized Return, and Yield. Hover over any column header for a tooltip explaining what that column measures (e.g., Hist &mu;% = historical mean monthly return, Hist &sigma;% = volatility, Skew = downside tail risk).</li>
         <li><strong>Dividend Chart</strong> — Shows monthly dividend distributions with a trailing-3-month smoothing to eliminate pay-month spikes from quarterly or semi-annual payers.</li>
       </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 114346.jpg" alt="Income Simulator results table and charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 115416.jpg" alt="Income projection chart with dividend distributions" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 115453.jpg" alt="Monthly dividend chart with smoothing" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
     </div>
   )
 }
