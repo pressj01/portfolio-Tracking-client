@@ -3094,6 +3094,10 @@ function NavScreenerHelp() {
         named backtest scenarios to compare strategies over time.
       </p>
 
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/nav-erosion-portfolio/Screenshot 2026-05-09 112656.jpg" alt="NAV Erosion Screener portfolio backtest grid" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Building Your Backtest Grid</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Each row in the grid represents one ETF. Enter the <strong>Ticker</strong>, <strong>Initial Investment $</strong>, and <strong>% of Divs to Reinvest</strong> (0–100).</li>
@@ -3149,6 +3153,10 @@ function SingleStrategyHelp() {
         The Single Strategy Scanner runs a focused technical setup across a saved list of tickers.
         It is built for quick repeat scans using the same rules over and over.
       </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/scanner/Screenshot 2026-05-09 125056.jpg" alt="Single Strategy Scanner results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Ticker List and Saved Settings</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
