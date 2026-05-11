@@ -510,7 +510,7 @@ function DashboardHelp() {
         <li><strong>Portfolio Value</strong> — total current market value.</li>
         <li><strong>Avg Yield on Cost / Current Yield</strong> — dividend yield based on cost basis vs current price.</li>
         <li><strong>Price Return / Total Return</strong> — portfolio returns excluding and including dividends.</li>
-        <li><strong>NAV Erosion Ratio</strong> — benchmark-adjusted NAV erosion context for income-oriented funds. The ratio still uses 0.25/0.75 low/moderate/high thresholds, but severity is forced High when price falls 50% or more, or when the ending share deficit is 5% or more.</li>
+        <li><strong>NAV Erosion Ratio</strong> — dollar-weighted benchmark-adjusted NAV erosion context for income-oriented funds. The portfolio severity follows the aggregate ratio thresholds: low at 0.25 or below, moderate from 0.25-0.75, and high above 0.75.</li>
       </ul>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP$ and Cash$ Columns</h3>
@@ -3447,7 +3447,7 @@ function AnalyticsHelp() {
       <p style={{ marginBottom: '0.75rem' }}>Click <strong>Analyze</strong> to run the base analysis. Results include:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Portfolio Grade Card</strong> — Letter grade (A+ through F) and numeric score with a breakdown bar showing individual grades and weights for Risk, Income, Diversification, and other dimensions.</li>
-        <li><strong>NAV Erosion Ratio</strong> — Colored display of benchmark-adjusted NAV erosion context for the portfolio. Ratio is lower-is-better, but severity is High if any tested holding has a 50%+ price decline or 5%+ ending share deficit.</li>
+        <li><strong>NAV Erosion Ratio</strong> — Colored display of dollar-weighted benchmark-adjusted NAV erosion context for the portfolio. Ratio is lower-is-better, and portfolio severity follows the aggregate ratio rather than the worst individual holding.</li>
         <li><strong>NAV Erosion Bar Chart</strong> — Per-ticker NAV ratios with low/moderate/high thresholds. Tickers above 0.75, down 50%+, or carrying a 5%+ share deficit deserve a closer look.</li>
         <li><strong>Per-Ticker Metrics Table</strong> — One row per ticker with all risk metrics (see columns below). Sortable by any column.</li>
       </ul>

@@ -8452,8 +8452,7 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
             results.append({"ticker": tk, "coverage_ratio": None, "benchmark": None, "nav_tested": False})
 
     agg_coverage = round(total_price_return_dollars / total_dist_dollars, 4) if total_dist_dollars > 0 else None
-    severities = [r.get("nav_erosion_severity") for r in results if r.get("nav_erosion_severity")]
-    aggregate_severity = "High" if "High" in severities else _nav_erosion_from_adjusted_ratio(agg_coverage)
+    aggregate_severity = _nav_aggregate_severity(agg_coverage, results)
     payload = {
         "results": results,
         "aggregate_coverage": agg_coverage,
@@ -8462,6 +8461,12 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
     if cache_key and use_cache:
         _PORTFOLIO_COVERAGE_CACHE[cache_key] = (time.time(), payload)
     return payload
+
+
+def _nav_aggregate_severity(aggregate_coverage, results=None):
+    """Classify portfolio NAV erosion from the dollar-weighted aggregate ratio."""
+    del results
+    return _nav_erosion_from_adjusted_ratio(aggregate_coverage)
 
 
 @app.route("/api/portfolio-coverage", methods=["GET"])
