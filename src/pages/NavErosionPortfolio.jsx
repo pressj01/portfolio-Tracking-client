@@ -266,7 +266,6 @@ export default function NavErosionPortfolio() {
     let erosionCount = 0, validCount = 0, errorCount = 0
     let best = null, worst = null
     let covWeightedSum = 0, covWeightTotal = 0
-    let hasHighSeverity = false
     results.forEach(r => {
       if (r.error && !r.start_price) { errorCount++; return }
       validCount++
@@ -277,7 +276,6 @@ export default function NavErosionPortfolio() {
       totGL += r.gain_loss_dollar || 0
       totTR += r.total_return_dollar || 0
       if (r.has_erosion) erosionCount++
-      if (r.nav_erosion_severity === 'High') hasHighSeverity = true
       if (r.coverage_ratio != null) {
         covWeightedSum += r.coverage_ratio * (r.amount || 0)
         covWeightTotal += r.amount || 0
@@ -287,7 +285,7 @@ export default function NavErosionPortfolio() {
     })
     const totGLPct = totAmount > 0 ? totGL / totAmount * 100 : 0
     const aggCoverage = covWeightTotal > 0 ? covWeightedSum / covWeightTotal : null
-    const aggSeverity = hasHighSeverity ? 'High' : navSeverityFromRatio(aggCoverage)
+    const aggSeverity = navSeverityFromRatio(aggCoverage)
     return {
       totAmount, totDist, totReinv, totFinal, totGL, totTR, totGLPct,
       erosionCount, validCount, errorCount, best, worst, aggCoverage, aggSeverity,

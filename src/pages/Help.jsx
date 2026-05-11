@@ -3186,7 +3186,7 @@ function NavScreenerHelp() {
         <li>Total Invested, Total Final Value, Total Gain/Loss, Portfolio Return %</li>
         <li>Total Distributions, Total Reinvested</li>
         <li>NAV Erosion count (e.g., "3 of 8 funds eroding")</li>
-        <li>Portfolio NAV erosion ratio (dollar-weighted average across all funds)</li>
+        <li>Portfolio NAV erosion ratio (dollar-weighted average across all funds); the portfolio severity follows this weighted ratio rather than the worst individual fund.</li>
         <li>Best Performer (ticker + return %), Worst Performer</li>
         <li>Error Count (tickers where no data was found)</li>
       </ul>
