@@ -419,6 +419,7 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
   const [lotAlloc, setLotAlloc] = useState({})   // {buy_txn_id: shares_to_sell}
   const [lotMode, setLotMode] = useState('FIFO') // 'FIFO' or 'SPECIFIC'
   const lotTotal = Object.values(lotAlloc).reduce((sum, value) => sum + (parseFloat(value) || 0), 0)
+  const openLotTotal = openLots.reduce((sum, lot) => sum + (parseFloat(lot.shares_remaining) || 0), 0)
 
   useEffect(() => {
     if (isNew) {
@@ -521,6 +522,14 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
       transaction_date: form.transaction_date || null,
       notes: form.notes || null,
     }
+    if (!Number.isFinite(payload.shares) || payload.shares <= 0) {
+      setError('Shares must be greater than 0')
+      return
+    }
+    if (payload.transaction_type === 'SELL' && openLots.length > 0 && payload.shares - openLotTotal > 0.000001) {
+      setError(`Cannot sell ${payload.shares.toFixed(6)} shares; only ${openLotTotal.toFixed(6)} shares are available.`)
+      return
+    }
     // Include lot allocations for SELL with specific lots
     if (payload.transaction_type === 'SELL' && lotMode === 'SPECIFIC') {
       const allocs = Object.entries(lotAlloc)
@@ -532,6 +541,12 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
       }
       if (Math.abs(lotTotal - payload.shares) > 0.000001) {
         setError(`Specific-lot shares must add up to the sell quantity (${lotTotal.toFixed(6)} allocated vs ${payload.shares.toFixed(6)} entered)`)
+        return
+      }
+      const availableByLot = Object.fromEntries(openLots.map(lot => [String(lot.id), parseFloat(lot.shares_remaining) || 0]))
+      const overAllocated = allocs.find(alloc => alloc.shares - (availableByLot[String(alloc.buy_txn_id)] || 0) > 0.000001)
+      if (overAllocated) {
+        setError(`Lot ${overAllocated.buy_txn_id} only has ${(availableByLot[String(overAllocated.buy_txn_id)] || 0).toFixed(6)} shares available.`)
         return
       }
       payload.lot_allocations = allocs
@@ -824,7 +839,21 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
             </div>
             <div className="form-group">
               <label>{form.transaction_type === 'SELL' ? 'Shares Sold *' : 'Shares *'}</label>
-              <input type="number" step="any" value={form.shares} onChange={(e) => setForm(prev => ({ ...prev, shares: e.target.value }))} required style={{ width: '100%' }} />
+              <input
+                type="number"
+                step="any"
+                min="0"
+                max={form.transaction_type === 'SELL' && openLots.length > 0 ? openLotTotal : undefined}
+                value={form.shares}
+                onChange={(e) => setForm(prev => ({ ...prev, shares: e.target.value }))}
+                required
+                style={{ width: '100%' }}
+              />
+              {form.transaction_type === 'SELL' && openLots.length > 0 && (
+                <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginTop: '0.25rem' }}>
+                  Available: {fmt(openLotTotal, 3)} shares
+                </div>
+              )}
             </div>
             <div className="form-group">
               <label>Price Per Share</label>

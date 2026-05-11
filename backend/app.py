@@ -4,6 +4,7 @@ import sys
 import time
 import sqlite3
 import json
+import hashlib
 
 # Ensure backend directory is on the Python path so sibling imports work
 # regardless of the working directory (e.g. when launched from project root).
@@ -468,6 +469,65 @@ def _current_dividend_paid(quantity, div):
     if qty <= 0 or per_share <= 0:
         return 0.0
     return round(qty * per_share, 6)
+
+
+def _optional_float(value):
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _prepare_manual_holding_payload(data, existing=None):
+    """Recalculate direct holding value fields from the final edited inputs."""
+    payload = dict(data or {})
+
+    def final_value(field):
+        if field in payload:
+            return payload[field]
+        if existing is None:
+            return None
+        return existing[field] if hasattr(existing, "keys") and field in existing.keys() else None
+
+    quantity = _optional_float(final_value("quantity"))
+    price_paid = _optional_float(final_value("price_paid"))
+    current_price = _optional_float(final_value("current_price"))
+    total_divs = _optional_float(final_value("total_divs_received"))
+
+    if quantity is not None and price_paid is not None:
+        payload["purchase_value"] = round(quantity * price_paid, 2)
+    elif "quantity" in payload or "price_paid" in payload:
+        payload["purchase_value"] = None
+
+    if quantity is not None and current_price is not None:
+        payload["current_value"] = round(quantity * current_price, 2)
+    elif "quantity" in payload or "current_price" in payload:
+        payload["current_value"] = None
+
+    purchase_value = _optional_float(final_value("purchase_value"))
+    current_value = _optional_float(final_value("current_value"))
+    if "purchase_value" in payload:
+        purchase_value = _optional_float(payload["purchase_value"])
+    if "current_value" in payload:
+        current_value = _optional_float(payload["current_value"])
+
+    if purchase_value is not None and current_value is not None:
+        gain = round(current_value - purchase_value, 2)
+        gain_pct = round(gain / purchase_value, 6) if purchase_value > 0 else 0
+        payload["gain_or_loss"] = gain
+        payload["gain_or_loss_percentage"] = gain_pct
+        payload["percent_change"] = gain_pct
+    elif any(field in payload for field in ("quantity", "price_paid", "current_price", "purchase_value", "current_value")):
+        payload["gain_or_loss"] = None
+        payload["gain_or_loss_percentage"] = None
+        payload["percent_change"] = None
+
+    if total_divs is not None and purchase_value is not None:
+        payload["paid_for_itself"] = round(total_divs / purchase_value, 6) if purchase_value > 0 else 0
+
+    return payload
 
 
 def _recompute_position_income_fields(
@@ -5911,7 +5971,7 @@ def list_holdings():
 def add_holding():
     """Add a single holding manually."""
     profile_id = get_profile_id()
-    data = request.get_json()
+    data = _prepare_manual_holding_payload(request.get_json() or {})
     ticker = (data.get("ticker") or "").strip().upper()
     if not ticker:
         return jsonify({"error": "Ticker is required"}), 400
@@ -5935,6 +5995,7 @@ def add_holding():
         "ex_div_date", "div_pay_date", "div", "dividend_paid", "estim_payment_per_year",
         "approx_monthly_income", "annual_yield_on_cost", "current_annual_yield",
         "purchase_date", "ytd_divs", "total_divs_received", "paid_for_itself",
+        "cash_not_reinvested", "total_cash_reinvested", "shares_bought_from_dividend",
         "nav_erosion_scope", "nav_benchmark_override",
     ]
     for field in allowed_fields:
@@ -5983,7 +6044,7 @@ def add_holding():
 def update_holding(ticker):
     """Update a holding's fields."""
     is_agg, pids = get_profile_filter()
-    data = request.get_json()
+    data = request.get_json() or {}
     ticker = ticker.upper()
 
     if is_agg:
@@ -5993,12 +6054,15 @@ def update_holding(ticker):
 
     conn = get_connection()
     existing = conn.execute(
-        "SELECT quantity, estim_payment_per_year FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        "SELECT quantity, price_paid, current_price, purchase_value, current_value, "
+        "       total_divs_received, estim_payment_per_year "
+        "FROM all_account_info WHERE ticker = ? AND profile_id = ?",
         (ticker, profile_id),
     ).fetchone()
     if not existing:
         conn.close()
         return jsonify({"error": f"{ticker} not found"}), 404
+    data = _prepare_manual_holding_payload(data, existing)
 
     allowed_fields = [
         "description", "classification_type", "price_paid", "current_price",
@@ -6056,7 +6120,7 @@ def update_holding(ticker):
                 )
 
     previous_quantity = existing["quantity"] if isinstance(existing, dict) else existing[0]
-    previous_annual_income = existing["estim_payment_per_year"] if isinstance(existing, dict) else existing[1]
+    previous_annual_income = existing["estim_payment_per_year"] if isinstance(existing, dict) else existing[6]
     _recompute_position_income_fields(
         conn,
         profile_id,
@@ -6358,6 +6422,11 @@ def _rollup_transactions(ticker, profile_id, conn):
             "SELECT current_price FROM all_account_info WHERE ticker = ? AND profile_id = ?",
             (ticker, profile_id),
         ).fetchone()
+        if not cp_row:
+            conn.execute(
+                "INSERT INTO all_account_info (ticker, profile_id, import_date) VALUES (?, ?, ?)",
+                (ticker, profile_id, _date.today().isoformat()),
+            )
         cp = (cp_row["current_price"] if isinstance(cp_row, dict) else cp_row[0]) if cp_row else None
         cur_val = round(total_shares * cp, 2) if cp else None
         gl = round(cur_val - total_cost, 2) if cur_val is not None else None
@@ -6417,7 +6486,6 @@ def _seed_transaction_if_needed(ticker, profile_id, conn):
         "VALUES (?, ?, ?, ?, ?, 0, 'Initial seed from existing holding')",
         (ticker, profile_id, pdate, qty, price),
     )
-    conn.commit()
 
 
 def _load_lot_alloc_map(conn, sell_ids):
@@ -6506,6 +6574,64 @@ def _normalize_transaction_shares(raw_shares):
     if shares <= 1e-9:
         raise ValueError("Shares must be greater than 0")
     return shares
+
+
+def _validate_sell_quantity_available(
+    conn,
+    ticker,
+    profile_id,
+    shares,
+    transaction_date=None,
+    exclude_txn_id=None,
+    sort_txn_id=None,
+):
+    """Reject a sell that would make the position negative at that point in time."""
+    rows = conn.execute(
+        "SELECT id, transaction_type, transaction_date, shares "
+        "FROM transactions WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchall()
+
+    max_id = 0
+    events = []
+    for row in rows:
+        txn_id = row["id"] if isinstance(row, dict) else row[0]
+        max_id = max(max_id, int(txn_id or 0))
+        if exclude_txn_id is not None and txn_id == exclude_txn_id:
+            continue
+        events.append({
+            "id": txn_id,
+            "type": ((row["transaction_type"] if isinstance(row, dict) else row[1]) or "BUY").upper(),
+            "date": row["transaction_date"] if isinstance(row, dict) else row[2],
+            "shares": abs(float((row["shares"] if isinstance(row, dict) else row[3]) or 0)),
+            "proposed": False,
+        })
+
+    events.append({
+        "id": sort_txn_id if sort_txn_id is not None else max_id + 1,
+        "type": "SELL",
+        "date": transaction_date,
+        "shares": float(shares or 0),
+        "proposed": True,
+    })
+
+    events.sort(key=lambda e: ((e["date"] or ""), int(e["id"] or 0)))
+    running_shares = 0.0
+    seen_proposed = False
+    for event in events:
+        if event["type"] == "BUY":
+            running_shares += event["shares"]
+            continue
+
+        if (event["proposed"] or seen_proposed) and event["shares"] - running_shares > 1e-6:
+            date_label = event["date"] or "the selected date"
+            raise ValueError(
+                f"Cannot sell {event['shares']:.6f} shares on {date_label}; "
+                f"only {max(0.0, running_shares):.6f} shares are available."
+            )
+        running_shares -= event["shares"]
+        if event["proposed"]:
+            seen_proposed = True
 
 
 def _get_open_lots(conn, ticker, profile_ids, exclude_txn_id=None):
@@ -6717,6 +6843,23 @@ def add_transaction(ticker):
 
     conn = get_connection()
 
+    txn_type = (data.get("transaction_type") or "BUY").upper()
+    if txn_type not in ("BUY", "SELL"):
+        conn.close()
+        return jsonify({"error": "transaction_type must be BUY or SELL"}), 400
+
+    # Validate date year if provided before creating or seeding any rows.
+    txn_date = data.get("transaction_date")
+    if txn_date:
+        try:
+            year = int(str(txn_date).split("-")[0])
+            if year < 1900 or year > 2099:
+                conn.close()
+                return jsonify({"error": f"Invalid year {year} - must be between 1900 and 2099"}), 400
+        except (ValueError, IndexError):
+            conn.close()
+            return jsonify({"error": "Invalid date format"}), 400
+
     # Check if the holding exists; if not, create it (new ticker via transaction flow)
     existing = conn.execute(
         "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
@@ -6724,6 +6867,9 @@ def add_transaction(ticker):
     ).fetchone()
     if not existing:
         # Create a minimal holding — the rollup will fill in quantity/price/value
+        if txn_type == "SELL":
+            conn.close()
+            return jsonify({"error": f"Cannot sell {ticker} because no holding exists yet"}), 400
         from datetime import date as _date
         conn.execute(
             "INSERT INTO all_account_info (ticker, profile_id, description, import_date) VALUES (?, ?, ?, ?)",
@@ -6755,27 +6901,16 @@ def add_transaction(ticker):
         # Auto-seed existing holding's current data as the first transaction
         _seed_transaction_if_needed(ticker, profile_id, conn)
 
-    # Validate date year if provided
-    txn_date = data.get("transaction_date")
-    if txn_date:
-        try:
-            year = int(str(txn_date).split("-")[0])
-            if year < 1900 or year > 2099:
-                conn.close()
-                return jsonify({"error": f"Invalid year {year} — must be between 1900 and 2099"}), 400
-        except (ValueError, IndexError):
-            conn.close()
-            return jsonify({"error": "Invalid date format"}), 400
-
-    # Insert the new transaction
-    txn_type = (data.get("transaction_type") or "BUY").upper()
-    if txn_type not in ("BUY", "SELL"):
-        conn.close()
-        return jsonify({"error": "transaction_type must be BUY or SELL"}), 400
-
     try:
         normalized_allocs = []
         if txn_type == "SELL":
+            _validate_sell_quantity_available(
+                conn,
+                ticker,
+                profile_id,
+                shares,
+                transaction_date=data.get("transaction_date"),
+            )
             normalized_allocs = _normalize_lot_allocations(
                 conn,
                 ticker,
@@ -6836,7 +6971,7 @@ def update_transaction(ticker, txn_id):
     conn = get_connection()
 
     existing = conn.execute(
-        "SELECT id, ticker, profile_id, transaction_type, shares FROM transactions WHERE id = ?",
+        "SELECT id, ticker, profile_id, transaction_type, shares, transaction_date FROM transactions WHERE id = ?",
         (txn_id,),
     ).fetchone()
     if not existing:
@@ -6846,6 +6981,7 @@ def update_transaction(ticker, txn_id):
     existing_profile_id = existing["profile_id"] if isinstance(existing, dict) else existing[2]
     existing_type = ((existing["transaction_type"] if isinstance(existing, dict) else existing[3]) or "BUY").upper()
     existing_shares = existing["shares"] if isinstance(existing, dict) else existing[4]
+    existing_date = existing["transaction_date"] if isinstance(existing, dict) else existing[5]
     if existing_ticker != ticker or existing_profile_id != profile_id:
         conn.close()
         return jsonify({"error": "Transaction does not belong to this holding/profile"}), 404
@@ -6865,6 +7001,15 @@ def update_transaction(ticker, txn_id):
     try:
         normalized_allocs = []
         if new_type == "SELL":
+            _validate_sell_quantity_available(
+                conn,
+                ticker,
+                profile_id,
+                new_shares,
+                transaction_date=data.get("transaction_date", existing_date),
+                exclude_txn_id=txn_id,
+                sort_txn_id=txn_id,
+            )
             if "lot_allocations" in data:
                 normalized_allocs = _normalize_lot_allocations(
                     conn,
@@ -6926,6 +7071,19 @@ def delete_transaction(ticker, txn_id):
         profile_id = pids[0]
 
     conn = get_connection()
+    existing = conn.execute(
+        "SELECT ticker, profile_id FROM transactions WHERE id = ?",
+        (txn_id,),
+    ).fetchone()
+    if not existing:
+        conn.close()
+        return jsonify({"error": "Transaction not found"}), 404
+    existing_ticker = (existing["ticker"] if isinstance(existing, dict) else existing[0]).upper()
+    existing_profile_id = existing["profile_id"] if isinstance(existing, dict) else existing[1]
+    if existing_ticker != ticker or existing_profile_id != profile_id:
+        conn.close()
+        return jsonify({"error": "Transaction does not belong to this holding/profile"}), 404
+
     conn.execute("DELETE FROM transactions WHERE id = ?", (txn_id,))
     conn.commit()
 
@@ -8125,36 +8283,15 @@ def upcoming_dividends():
 
 # ── Portfolio Summary Data (grades) ────────────────────────────────────────────
 
-@app.route("/api/portfolio-coverage", methods=["GET"])
-def portfolio_coverage():
-    """Compute benchmark-adjusted NAV erosion ratio for each ticker and aggregate.
-
-    Ratio = fund price decline / TTM distribution yield, only when the benchmark is flat/up.
-    Lower is better: <= 0.25 low erosion, <= 0.75 medium, > 0.75 high.
-    """
-    import warnings
-    warnings.filterwarnings("ignore")
-
-    pid = get_profile_id()
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT ticker, current_price, quantity, description, classification_type, "
-        "       estim_payment_per_year, current_value, nav_erosion_scope, nav_benchmark_override "
-        "FROM all_account_info "
-        "WHERE profile_id = ? AND quantity > 0",
-        (pid,),
-    ).fetchall()
-    conn.close()
-
-    import yfinance as yf
-    from datetime import datetime as _dt, timedelta as _td
-
-    # Deduplicate tickers, aggregate quantities and dollar values
+def _ticker_info_from_holding_rows(rows):
+    """Deduplicate DB holding rows into the NAV coverage input shape."""
     ticker_info = {}
     for r in rows:
-        tk = r[0]
-        cur_price = float(r[1] or 0)
-        qty = float(r[2] or 0)
+        tk = str(r["ticker"] if "ticker" in r.keys() else r[0]).strip().upper()
+        if not tk:
+            continue
+        cur_price = float(r["current_price"] or 0) if "current_price" in r.keys() else 0.0
+        qty = float(r["quantity"] or 0) if "quantity" in r.keys() else 0.0
         annual_income = float(r["estim_payment_per_year"] or 0) if "estim_payment_per_year" in r.keys() else 0.0
         current_value = float(r["current_value"] or 0) if "current_value" in r.keys() else cur_price * qty
         if tk not in ticker_info:
@@ -8181,35 +8318,29 @@ def portfolio_coverage():
             bench_override = r["nav_benchmark_override"] if "nav_benchmark_override" in r.keys() else None
             if bench_override and not ticker_info[tk].get("nav_benchmark_override"):
                 ticker_info[tk]["nav_benchmark_override"] = bench_override
+    return ticker_info
+
+
+def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
+    """Shared benchmark-adjusted NAV erosion payload for dashboard and analytics."""
+    import yfinance as yf
+    from datetime import datetime as _dt, timedelta as _td
 
     tickers = list(ticker_info.keys())
-
-    # Cache keyed on profile + ticker set; TTL matches portfolio-summary (30 min).
-    # Intraday price movement doesn't invalidate — weights/coverage are only re-
-    # computed on a buy/sell (ticker set change) or after the TTL expires.
-    coverage_cache_key = (
-        pid,
-        "destructive-nav-v12",
-        tuple(sorted((
-            t,
-            ticker_info[t].get("nav_erosion_scope", "auto"),
-            ticker_info[t].get("nav_benchmark_override") or "",
-        ) for t in tickers)),
-    )
-    _ccache = _PORTFOLIO_COVERAGE_CACHE.get(coverage_cache_key)
-    if _ccache and (time.time() - _ccache[0]) < _PORTFOLIO_SUMMARY_TTL_SEC:
-        return jsonify(_ccache[1])
+    if cache_key and use_cache:
+        cached = _PORTFOLIO_COVERAGE_CACHE.get(cache_key)
+        if cached and (time.time() - cached[0]) < _PORTFOLIO_SUMMARY_TTL_SEC:
+            return cached[1]
 
     one_year_ago = (_dt.now() - _td(days=365)).strftime("%Y-%m-%d")
-
     results = []
     total_price_return_dollars = 0.0
     total_dist_dollars = 0.0
 
     for tk in tickers:
         info = ticker_info[tk]
-        cur_price = info["current_price"]
-        qty = info["quantity"]
+        cur_price = info.get("current_price", 0.0)
+        qty = info.get("quantity", 0.0)
         nav_scope = info.get("nav_erosion_scope", "auto")
         if not _should_test_nav_erosion(
             tk,
@@ -8250,8 +8381,6 @@ def portfolio_coverage():
                 continue
 
             fund_return = (cur_price - price_1yr_ago) / price_1yr_ago
-
-            # TTM distributions per share, or all available history for funds under 12 months old.
             divs = yf_tk.dividends
             ttm_dist_yield, ttm_dist_per_share = _nav_distribution_yield_from_history(divs, cur_price, close)
             annual_income = max(0.0, float(info.get("annual_income") or 0.0))
@@ -8267,8 +8396,8 @@ def portfolio_coverage():
                 info.get("classification_type", ""),
             )
             benchmark_return = fund_return
+            component_returns = []
             try:
-                component_returns = []
                 for bench in _nav_benchmark_parts(benchmark):
                     bench_hist = yf.Ticker(bench).history(start=close.index[0], interval="1d", auto_adjust=True)
                     if bench_hist is not None and not bench_hist.empty and "Close" in bench_hist.columns:
@@ -8297,14 +8426,15 @@ def portfolio_coverage():
                 continue
 
             numerator = _nav_erosion_numerator(fund_return, benchmark_return)
-            if ttm_dist_yield > 0 and numerator is not None:
-                coverage = round(numerator / ttm_dist_yield, 4)
-            else:
-                coverage = None
+            coverage = round(numerator / ttm_dist_yield, 4) if ttm_dist_yield > 0 and numerator is not None else None
+            price_change_pct = fund_return * 100
+            severity = _nav_erosion_from_adjusted_ratio(coverage, price_change_pct=price_change_pct)
 
             results.append({
                 "ticker": tk,
                 "coverage_ratio": coverage,
+                "price_change_pct": round(price_change_pct, 2),
+                "nav_erosion_severity": severity,
                 "benchmark": benchmark,
                 "benchmark_valid": True,
                 "nav_tested": coverage is not None,
@@ -8312,7 +8442,6 @@ def portfolio_coverage():
                 "nav_benchmark_override": info.get("nav_benchmark_override"),
             })
 
-            # Dollar-weight for aggregate, including tested holdings with no erosion.
             dist_dollars = ttm_dist_per_share * qty
             if dist_dollars > 0:
                 erosion_dollars = (numerator or 0.0) * price_1yr_ago * qty
@@ -8322,14 +8451,47 @@ def portfolio_coverage():
         except Exception:
             results.append({"ticker": tk, "coverage_ratio": None, "benchmark": None, "nav_tested": False})
 
-    if total_dist_dollars > 0:
-        agg_coverage = round(total_price_return_dollars / total_dist_dollars, 4)
-    else:
-        agg_coverage = None
+    agg_coverage = round(total_price_return_dollars / total_dist_dollars, 4) if total_dist_dollars > 0 else None
+    severities = [r.get("nav_erosion_severity") for r in results if r.get("nav_erosion_severity")]
+    aggregate_severity = "High" if "High" in severities else _nav_erosion_from_adjusted_ratio(agg_coverage)
+    payload = {
+        "results": results,
+        "aggregate_coverage": agg_coverage,
+        "aggregate_severity": aggregate_severity,
+    }
+    if cache_key and use_cache:
+        _PORTFOLIO_COVERAGE_CACHE[cache_key] = (time.time(), payload)
+    return payload
 
-    payload = {"results": results, "aggregate_coverage": agg_coverage}
-    _PORTFOLIO_COVERAGE_CACHE[coverage_cache_key] = (time.time(), payload)
-    return jsonify(payload)
+
+@app.route("/api/portfolio-coverage", methods=["GET"])
+def portfolio_coverage():
+    """Compute benchmark-adjusted NAV erosion ratio for each ticker and aggregate."""
+    import warnings
+    warnings.filterwarnings("ignore")
+
+    pid = get_profile_id()
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT ticker, current_price, quantity, description, classification_type, "
+        "       estim_payment_per_year, current_value, nav_erosion_scope, nav_benchmark_override "
+        "FROM all_account_info "
+        "WHERE profile_id = ? AND quantity > 0",
+        (pid,),
+    ).fetchall()
+    conn.close()
+
+    ticker_info = _ticker_info_from_holding_rows(rows)
+    coverage_cache_key = (
+        pid,
+        "destructive-nav-v14",
+        tuple(sorted((
+            t,
+            ticker_info[t].get("nav_erosion_scope", "auto"),
+            ticker_info[t].get("nav_benchmark_override") or "",
+        ) for t in ticker_info)),
+    )
+    return jsonify(_build_nav_coverage_payload(ticker_info, coverage_cache_key))
 
 
 @app.route("/api/portfolio-summary/data", methods=["GET"])
@@ -10038,7 +10200,17 @@ def _nav_distribution_yield_from_history(divs_series, current_price, close_serie
     return dist_per_share / cur_price, dist_per_share
 
 
-def _nav_erosion_from_adjusted_ratio(ratio):
+def _nav_erosion_from_adjusted_ratio(ratio, price_change_pct=None, deficit_pct=None):
+    try:
+        if price_change_pct is not None and float(price_change_pct) <= -50:
+            return "High"
+    except (TypeError, ValueError):
+        pass
+    try:
+        if deficit_pct is not None and float(deficit_pct) >= 5:
+            return "High"
+    except (TypeError, ValueError):
+        pass
     try:
         if ratio is None:
             return None
@@ -10052,8 +10224,8 @@ def _nav_erosion_from_adjusted_ratio(ratio):
     return "High"
 
 
-def _nav_signal_from_adjusted_ratio(ratio):
-    erosion = _nav_erosion_from_adjusted_ratio(ratio)
+def _nav_signal_from_adjusted_ratio(ratio, price_change_pct=None, deficit_pct=None):
+    erosion = _nav_erosion_from_adjusted_ratio(ratio, price_change_pct, deficit_pct)
     if erosion == "Low":
         return "BUY"
     if erosion == "High":
@@ -14206,7 +14378,8 @@ def _build_cal_events():
     conn = get_connection()
     try:
         df = pd.read_sql("""
-            SELECT ticker, description, ex_div_date, div_pay_date, div, div_frequency
+            SELECT ticker, description, ex_div_date, div_pay_date, div, div_frequency,
+                   quantity, current_price, estim_payment_per_year
             FROM all_account_info
             WHERE ex_div_date IS NOT NULL
               AND ex_div_date NOT IN ('', '--')
@@ -14223,6 +14396,7 @@ def _build_cal_events():
     today_d = datetime.today().date()
     cache_columns = (
         "ticker", "description", "ex_div_date", "div_pay_date", "div", "div_frequency",
+        "quantity", "current_price", "estim_payment_per_year",
     )
     cache_rows = df.to_dict("records")
     cache_key = (
@@ -14263,6 +14437,13 @@ def _build_cal_events():
         description = str(row["description"]) if pd.notna(row["description"]) else ""
         freq = str(row["div_frequency"]).strip() if pd.notna(row["div_frequency"]) else ""
         amount = float(row["div"]) if pd.notna(row["div"]) and row["div"] else None
+        quantity = float(row["quantity"]) if pd.notna(row["quantity"]) and row["quantity"] else 0.0
+        current_price = float(row["current_price"]) if pd.notna(row["current_price"]) and row["current_price"] else 0.0
+        annual_income = (
+            float(row["estim_payment_per_year"])
+            if pd.notna(row["estim_payment_per_year"]) and row["estim_payment_per_year"]
+            else 0.0
+        )
         ex_value = row["ex_div_date"]
         pay_value = row.get("div_pay_date")
         official_pay_ts = None
@@ -14338,6 +14519,9 @@ def _build_cal_events():
             "month":         dt.strftime("%b"),
             "weekday":       dt.strftime("%a"),
             "amount":        round(amount, 4) if amount is not None else None,
+            "quantity":      round(quantity, 6),
+            "current_price": round(current_price, 4) if current_price > 0 else None,
+            "annual_income": round(annual_income, 2) if annual_income > 0 else None,
             "freq":          freq,
             "freq_label":    FREQ_LABEL.get(freq, freq.lower() if freq else ""),
             "color":         FREQ_COLOR.get(freq, "#8899aa"),
@@ -15088,7 +15272,18 @@ def _bss_coverage(close, divs_series, benchmark_close=None):
     Returns (ratio, signal, nav_erosion_label).
     """
     ratio = _nav_adjusted_erosion_ratio(close, divs_series, benchmark_close if benchmark_close is not None else close)
-    return ratio, _nav_signal_from_adjusted_ratio(ratio), _nav_erosion_from_adjusted_ratio(ratio)
+    price_change_pct = None
+    try:
+        clean = close.dropna()
+        if len(clean) >= 2 and float(clean.iloc[0]) > 0:
+            price_change_pct = (float(clean.iloc[-1]) - float(clean.iloc[0])) / float(clean.iloc[0]) * 100
+    except Exception:
+        price_change_pct = None
+    return (
+        ratio,
+        _nav_signal_from_adjusted_ratio(ratio, price_change_pct=price_change_pct),
+        _nav_erosion_from_adjusted_ratio(ratio, price_change_pct=price_change_pct),
+    )
 
 
 def _bss_sharpe(close, risk_free_annual=0.05):
@@ -15992,6 +16187,16 @@ def nav_erosion_data():
             total_coverage = round(numerator / period_dist_yield, 4)
         else:
             total_coverage = None
+        deficit_pct = (
+            final_row["shares_deficit"] / final_row["breakeven_sh"] * 100
+            if final_row.get("breakeven_sh", 0) and final_row["shares_deficit"] > 0
+            else 0.0
+        )
+        total_severity = _nav_erosion_from_adjusted_ratio(
+            total_coverage,
+            price_change_pct=final_row["price_delta_pct"],
+            deficit_pct=deficit_pct,
+        )
         summary = {
             "benchmark": benchmark,
             "total_dist": round(cumulative_dist, 2),
@@ -16001,7 +16206,9 @@ def nav_erosion_data():
             "price_chg_pct": final_row["price_delta_pct"],
             "has_erosion": final_row["shares_deficit"] > 0,
             "final_deficit": final_row["shares_deficit"],
+            "final_deficit_pct": round(deficit_pct, 2),
             "total_coverage": total_coverage,
+            "nav_erosion_severity": total_severity,
         }
 
         dates_list = [r["date"] for r in rows]
@@ -16402,6 +16609,12 @@ def nav_erosion_portfolio_data():
             coverage_ratio = round(numerator / period_dist_yield, 4)
         else:
             coverage_ratio = None
+        deficit_pct = final_deficit / breakeven_final * 100 if breakeven_final > 0 and final_deficit > 0 else 0.0
+        nav_erosion_severity = _nav_erosion_from_adjusted_ratio(
+            coverage_ratio,
+            price_change_pct=price_delta_pct,
+            deficit_pct=deficit_pct,
+        )
 
         results.append({
             "ticker": sym,
@@ -16420,7 +16633,9 @@ def nav_erosion_portfolio_data():
             "total_return_pct": round(total_return_pct, 2),
             "has_erosion": has_erosion_at_end,
             "final_deficit": round(final_deficit, 4),
+            "final_deficit_pct": round(deficit_pct, 2),
             "coverage_ratio": coverage_ratio,
+            "nav_erosion_severity": nav_erosion_severity,
             "warning": warning,
             "error": None,
         })
@@ -16999,8 +17214,10 @@ def _pis_run_inner():
             # Monte-Carlo GBM — 300 paths with skew-adjusted returns
             N_PATHS = 300
             drift = mu - 0.5 * sigma ** 2
-            np.random.seed(None)
-            Z = np.random.normal(0.0, 1.0, (N_PATHS, duration_months))
+            seed_material = f"pis-forward|{sym}|{duration_months}".encode("utf-8")
+            seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big") % (2 ** 32)
+            rng = np.random.default_rng(seed)
+            Z = rng.normal(0.0, 1.0, (N_PATHS, duration_months))
             # Cornish-Fisher expansion: adjust for skewness and excess kurtosis
             # This transforms normal draws to approximate the historical return shape
             skew_c = max(-2.0, min(2.0, hist_skew))   # clamp to avoid extreme distortion
@@ -17035,7 +17252,11 @@ def _pis_run_inner():
                         factor = 0.70
                     else:
                         factor = max(0.40, 1.0 + pct_chg * 0.02)
-                    dist_ps = (ttm_yield_v / 12) * cur_price * factor
+                    # Keep forward distributions tied to the simulated price.
+                    # Using the starting price here made high-yield funds explode
+                    # when the simulated price fell, because the same dollar
+                    # distribution bought more and more shares at lower prices.
+                    dist_ps = (ttm_yield_v / 12) * price * factor
                     total_d = dist_ps * cs
                     ra = total_d * (reinvest_pct_v / 100)
                     sb = ra / price if price > 0 else 0.0
@@ -17758,7 +17979,9 @@ def analytics_data():
     conn = get_connection()
     try:
         db_rows = conn.execute(
-            "SELECT ticker, current_value, estim_payment_per_year FROM all_account_info "
+            "SELECT ticker, current_price, quantity, description, classification_type, "
+            "       current_value, estim_payment_per_year, nav_erosion_scope, nav_benchmark_override "
+            "FROM all_account_info "
             "WHERE current_value IS NOT NULL AND current_value > 0 AND profile_id = ?",
             (profile_id,)
         ).fetchall()
@@ -17779,34 +18002,29 @@ def analytics_data():
         yield_map[t] = ep / cv
         income_map[t] = ep
 
-    # Per-ticker benchmark-adjusted NAV erosion ratio. Lower is better.
-    coverage_map = {}
+    coverage_info = _ticker_info_from_holding_rows(db_rows)
     for t in tickers:
-        if not _is_nav_erosion_candidate(t):
-            continue
-        if t not in nav_close.columns:
-            continue
-        tc = nav_close[t].dropna()
-        if len(tc) < 2:
-            continue
-        divs_series = pd.Series(dtype=float)
-        if divs_all is not None:
-            try:
-                divs_series = divs_all[t].dropna() if t in divs_all.columns else divs_series
-                divs_series = divs_series[divs_series > 0]
-            except Exception:
-                divs_series = pd.Series(dtype=float)
-        if divs_series.empty and yield_map.get(t, 0) > 0:
-            divs_series = pd.Series([yield_map[t] * float(tc.iloc[-1])])
-        bt = benchmark_map.get(t) or benchmark
-        bc = _nav_benchmark_close_from_df(
-            close,
-            bt,
-            close[benchmark].dropna() if benchmark in close.columns else close[t].dropna(),
-        )
-        ratio = _nav_adjusted_erosion_ratio(tc, divs_series, bc)
-        if ratio is not None:
-            coverage_map[t] = ratio
+        if t not in coverage_info:
+            coverage_info[t] = {
+                "current_price": 1.0,
+                "quantity": 1.0,
+                "description": "",
+                "classification_type": "",
+                "annual_income": 0.0,
+                "current_value": 0.0,
+                "nav_erosion_scope": "auto",
+                "nav_benchmark_override": None,
+            }
+    coverage_payload = _build_nav_coverage_payload(
+        {t: coverage_info[t] for t in tickers if t in coverage_info},
+        cache_key=None,
+        use_cache=False,
+    )
+    coverage_map = {
+        r["ticker"]: r.get("coverage_ratio")
+        for r in coverage_payload.get("results", [])
+        if r.get("coverage_ratio") is not None
+    }
 
     bench_close = close[benchmark] if benchmark in close.columns else None
     bench_ret = bench_close.pct_change().dropna() if bench_close is not None else None
@@ -17905,25 +18123,15 @@ def analytics_data():
             "values": [round(float(v) * 100, 2) for v in dd_sampled.values],
         }
 
-    # Include per-ticker coverage and aggregate in response
-    cov_results = [{"ticker": t, "coverage_ratio": coverage_map.get(t)} for t in available_tickers]
-    # Portfolio-level ratio: candidate erosion weighted across the full portfolio,
-    # so a small risky sleeve does not imply the whole portfolio has NAV erosion.
-    _cov_num = 0.0
-    _cov_den = 0.0
-    _cov_seen = False
-    for t in available_tickers:
-        cov = coverage_map.get(t)
-        w = weight_map.get(t, 0)
-        if w > 0:
-            _cov_den += w
-        if cov is not None and w > 0:
-            _cov_seen = True
-            _cov_num += cov * w
-    agg_cov = round(_cov_num / _cov_den, 4) if _cov_seen and _cov_den > 0 else None
+    coverage_by_ticker = {r.get("ticker"): r for r in coverage_payload.get("results", [])}
+    cov_results = [coverage_by_ticker.get(t, {"ticker": t, "coverage_ratio": None}) for t in available_tickers]
 
     result = {"metrics": metrics, "portfolio_metrics": port_metrics,
-              "coverage": {"results": cov_results, "aggregate_coverage": agg_cov}}
+              "coverage": {
+                  "results": cov_results,
+                  "aggregate_coverage": coverage_payload.get("aggregate_coverage"),
+                  "aggregate_severity": coverage_payload.get("aggregate_severity"),
+              }}
     if result_corr:
         result["correlation"] = result_corr
         result["drawdown_series"] = result_dd
@@ -18213,8 +18421,8 @@ def correlation_data():
     if len(available) < 2:
         return jsonify(error="Need at least 2 tickers with sufficient data.")
 
-    daily_returns = close[available].pct_change().dropna()
-    corr = daily_returns.corr()
+    daily_returns = close[available].pct_change()
+    corr = daily_returns.corr(min_periods=30).fillna(0)
 
     def _safe(v):
         if v is None:
@@ -18330,26 +18538,24 @@ def analytics_backtest():
     if close.empty:
         return jsonify({"dates": [], "series": []})
 
-    series = []
-    for t in req_tickers:
-        if t not in close.columns:
-            continue
-        col = close[t].dropna()
-        if len(col) < 2:
-            continue
-        normalized = (col / col.iloc[0]) * 10000
-        step = max(1, len(normalized) // 200)
-        sampled = normalized.iloc[::step]
-        series.append({"ticker": t, "values": [round(float(v), 2) for v in sampled.values]})
+    valid_tickers = [t for t in req_tickers if t in close.columns and close[t].dropna().size >= 2]
+    if not valid_tickers:
+        return jsonify({"dates": [], "series": []})
 
-    # Use the longest ticker's dates
-    if series:
-        longest = max(req_tickers, key=lambda t: len(close[t].dropna()) if t in close.columns else 0)
-        col = close[longest].dropna()
-        step = max(1, len(col) // 200)
-        dates = [d.strftime("%Y-%m-%d") for d in col.index[::step]]
-    else:
-        dates = []
+    aligned = close[valid_tickers].dropna(how="all").ffill()
+    step = max(1, len(aligned) // 200)
+    sampled = aligned.iloc[::step]
+    dates = [d.strftime("%Y-%m-%d") for d in sampled.index]
+
+    series = []
+    for t in valid_tickers:
+        col = sampled[t]
+        first_valid = col.first_valid_index()
+        if first_valid is None:
+            continue
+        base = col.loc[first_valid]
+        normalized = (col / base) * 10000
+        series.append({"ticker": t, "values": [round(float(v), 2) if pd.notna(v) else None for v in normalized.values]})
 
     return jsonify({"dates": dates, "series": series})
 
@@ -21238,8 +21444,8 @@ def consolidation_clusters():
             })
         return jsonify(clusters=[], unclustered=unclustered, correlation_matrix={})
 
-    daily_returns = close[available].pct_change().dropna()
-    corr = daily_returns.corr()
+    daily_returns = close[available].pct_change()
+    corr = daily_returns.corr(min_periods=30).fillna(0)
 
     # Build correlation matrix response
     corr_matrix = {}

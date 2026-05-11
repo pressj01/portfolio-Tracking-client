@@ -37,6 +37,66 @@ function CategoryModal({ category, onSave, onCancel }) {
   )
 }
 
+function QualityDetailsModal({ row, onClose, fmt, fmtPct }) {
+  if (!row) return null
+  const tickers = row.quality?.tickers || []
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" style={{ maxWidth: 820 }} onClick={e => e.stopPropagation()}>
+        <button className="modal-close" onClick={onClose}>&times;</button>
+        <h2 style={{ marginBottom: '0.35rem' }}>{row.name} Quality Details</h2>
+        <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+          Score {row.quality.score} {row.quality.label} based on the suggested {fmtPct(row.suggested_pct)} allocation.
+        </p>
+        <p style={{ color: '#b0bec5', marginBottom: '1rem', fontSize: '0.86rem' }}>
+          Confirmed NAV risk means the ticker has a high benchmark-adjusted NAV ratio. NAV-monitor tickers are products the app keeps an eye on for NAV erosion, but they are not scored as high NAV risk unless that ratio is above the high-risk threshold.
+        </p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '1rem' }}>
+          {(row.quality.reasons || []).map(reason => (
+            <span key={reason} style={{ border: '1px solid #0f3460', background: '#1a1a2e', color: '#b0bec5', borderRadius: 4, padding: '0.25rem 0.45rem', fontSize: '0.78rem', fontWeight: 700 }}>
+              {reason}
+            </span>
+          ))}
+        </div>
+        {tickers.length === 0 ? (
+          <p style={{ color: '#b0bec5' }}>No individual ticker is driving a quality flag at this suggested allocation.</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="pb-table">
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left' }}>Ticker</th>
+                  <th style={{ textAlign: 'left' }}>Drivers</th>
+                  <th>Portfolio</th>
+                  <th>Category</th>
+                  <th>Income Share</th>
+                  <th>Yield</th>
+                  <th>Gain/Loss</th>
+                  <th>Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tickers.map(ticker => (
+                  <tr key={ticker.ticker}>
+                    <td style={{ textAlign: 'left', fontWeight: 700, color: '#7ecfff' }}>{ticker.ticker}</td>
+                    <td style={{ textAlign: 'left', color: '#b0bec5' }}>{ticker.drivers.join('; ')}</td>
+                    <td>{fmtPct(ticker.portfolio_pct)}</td>
+                    <td>{fmtPct(ticker.category_pct)}</td>
+                    <td>{fmtPct(ticker.income_share_pct)}</td>
+                    <td>{fmtPct(ticker.yield_pct)}</td>
+                    <td style={{ color: ticker.gain_loss_pct < -10 ? '#ff6b6b' : '#b0bec5' }}>{fmtPct(ticker.gain_loss_pct)}</td>
+                    <td>{fmt(ticker.current_value)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function AllocationBar({ categories, totalValue }) {
   if (!totalValue) return null
   const colors = ['#7ecfff', '#00e89a', '#ffc107', '#ff6b6b', '#bb86fc', '#ff8a65', '#4dd0e1', '#aed581', '#f48fb1', '#90a4ae']
@@ -112,9 +172,13 @@ function ConstraintSlider({ label, value, min, max, step = 1, unit = '%', prefix
   )
 }
 
-function enrichCategoryData(categoryData, holdings = []) {
+function enrichCategoryData(categoryData, holdings = [], navCoverage = null) {
   const activeHoldings = holdings.filter(h => Number(h.quantity || 0) > 0)
   const holdingMap = Object.fromEntries(activeHoldings.map(h => [String(h.ticker || '').toUpperCase(), h]))
+  const navCoverageMap = Object.fromEntries((navCoverage?.results || []).map(row => [
+    String(row.ticker || '').toUpperCase(),
+    row,
+  ]))
   const totalValue = Number(categoryData.total_value || 0) || activeHoldings.reduce((s, h) => s + Number(h.current_value || 0), 0)
   const totalMonthlyIncome = activeHoldings.reduce((s, h) => s + Number(h.approx_monthly_income || 0), 0)
   const totalAnnualIncome = activeHoldings.reduce((s, h) => s + Number(h.estim_payment_per_year || 0), 0) || totalMonthlyIncome * 12
@@ -128,6 +192,11 @@ function enrichCategoryData(categoryData, holdings = []) {
     const value = Number(tickerRow.current_value ?? holding.current_value ?? 0)
     const monthlyIncome = Number(tickerRow.monthly_income ?? holding.approx_monthly_income ?? 0)
     const freq = tickerRow.div_frequency ?? holding.div_frequency
+    const navMeta = navCoverageMap[key] || {}
+    const navCoverageRatio = Number(navMeta.coverage_ratio)
+    const hasNavCoverageRatio = Number.isFinite(navCoverageRatio)
+    const navScope = String(tickerRow.nav_erosion_scope ?? holding.nav_erosion_scope ?? 'auto').trim().toLowerCase()
+    const navCandidate = Boolean(tickerRow.nav_risk) || navScope === 'test' || Boolean(navMeta.nav_tested)
     return {
       ...tickerRow,
       classification_type: tickerRow.classification_type ?? holding.classification_type,
@@ -137,7 +206,11 @@ function enrichCategoryData(categoryData, holdings = []) {
       div_frequency: freq,
       weekly: tickerRow.weekly ?? isWeekly(freq),
       nav_erosion_scope: tickerRow.nav_erosion_scope ?? holding.nav_erosion_scope,
-      nav_risk: tickerRow.nav_risk ?? String(holding.nav_erosion_scope || '').trim().toLowerCase() === 'test',
+      nav_candidate: navCandidate,
+      nav_coverage_ratio: hasNavCoverageRatio ? navCoverageRatio : null,
+      nav_tested: Boolean(navMeta.nav_tested),
+      nav_benchmark: navMeta.benchmark,
+      nav_risk: hasNavCoverageRatio && navCoverageRatio > 0.75,
       gain_or_loss_percentage: Number(tickerRow.gain_or_loss_percentage ?? holding.gain_or_loss_percentage ?? 0),
     }
   }
@@ -206,6 +279,7 @@ export default function Categories() {
   const [selectedUnalloc, setSelectedUnalloc] = useState(new Set())
   const [error, setError] = useState(null)
   const [assistantMode, setAssistantMode] = useState('balanced')
+  const [qualityDetail, setQualityDetail] = useState(null)
   const [constraints, setConstraints] = useState({
     minimumMonthlyIncome: 0,
     maxCategoryPct: 35,
@@ -219,14 +293,16 @@ export default function Categories() {
 
   const reload = useCallback(async () => {
     try {
-      const [catRes, holdingsRes] = await Promise.all([
+      const [catRes, holdingsRes, navCoverageRes] = await Promise.all([
         pf('/api/categories/data'),
         pf('/api/holdings').catch(() => null),
+        pf('/api/portfolio-coverage').catch(() => null),
       ])
       const d = await catRes.json()
       const holdings = holdingsRes ? await holdingsRes.json() : []
+      const navCoverage = navCoverageRes ? await navCoverageRes.json() : null
       setData({
-        ...enrichCategoryData(d, Array.isArray(holdings) ? holdings : []),
+        ...enrichCategoryData(d, Array.isArray(holdings) ? holdings : [], navCoverage),
         _selection: selection,
       })
     } catch (e) {
@@ -451,39 +527,81 @@ export default function Categories() {
       return rows
     }
 
-    const qualityFor = (cat) => {
+    const qualityTickerRows = (cat, allocationPct = Number(cat.actual_pct || 0)) => {
+      const categoryValue = Number(cat.actual_value || 0)
+      return (cat.tickers || []).map(ticker => {
+        const currentValue = Number(ticker.current_value || 0)
+        const categoryPct = categoryValue > 0 ? currentValue / categoryValue * 100 : 0
+        const portfolioPct = allocationPct * categoryPct / 100
+        const monthlyIncome = Number(ticker.monthly_income ?? ticker.approx_monthly_income ?? 0)
+        const incomeSharePct = currentMonthly > 0 ? monthlyIncome / currentMonthly * 100 : 0
+        const yieldPct = currentValue > 0 ? monthlyIncome * 12 / currentValue * 100 : Number(ticker.current_yield || 0)
+        const gainLossPct = Number(ticker.gain_or_loss_percentage || 0)
+        const navCoverageRatio = Number(ticker.nav_coverage_ratio)
+        const drivers = []
+        if (ticker.nav_risk) drivers.push(Number.isFinite(navCoverageRatio) ? `${ticker.ticker} high NAV ratio ${navCoverageRatio.toFixed(2)}` : `${ticker.ticker} high NAV erosion`)
+        else if (ticker.nav_candidate) drivers.push(Number.isFinite(navCoverageRatio) ? `${ticker.ticker} NAV monitor, ratio ${navCoverageRatio.toFixed(2)}` : `${ticker.ticker} NAV monitor, ratio unavailable`)
+        if (ticker.weekly) drivers.push('weekly payer')
+        if (portfolioPct > 12) drivers.push('large portfolio position')
+        if (incomeSharePct > 12) drivers.push('large income source')
+        if (yieldPct > suspiciousYield) drivers.push('high-yield reliance')
+        if (gainLossPct < -10) drivers.push('weak recent return')
+        return {
+          ticker: ticker.ticker,
+          current_value: currentValue,
+          category_pct: categoryPct,
+          portfolio_pct: portfolioPct,
+          income_share_pct: incomeSharePct,
+          yield_pct: yieldPct,
+          gain_loss_pct: gainLossPct,
+          nav_coverage_ratio: Number.isFinite(navCoverageRatio) ? navCoverageRatio : null,
+          drivers,
+        }
+      })
+        .filter(ticker => ticker.drivers.length)
+        .sort((a, b) => b.drivers.length - a.drivers.length || b.portfolio_pct - a.portfolio_pct)
+    }
+
+    const qualityFor = (cat, allocationPct = Number(cat.actual_pct || 0)) => {
       const y = categoryYield(cat)
       const nav = Number(cat.nav_risk_value_pct || 0)
       const largest = Number(cat.largest_holding_pct || 0)
       const incomeConc = Number(cat.income_concentration_pct || 0)
       const weekly = Number(cat.weekly_value_pct || 0)
       const gain = Number(cat.weighted_gain_loss_pct || 0)
-      let score = 74
-      if (y >= portfolioYield * 0.8 && y <= suspiciousYield) score += 8
-      if (y > suspiciousYield) score -= 14
-      if (nav > 50) score -= 16
-      else if (nav > 25) score -= 8
-      if (largest > 50) score -= 12
-      else if (largest > 35) score -= 6
-      if (incomeConc > 55) score -= 10
-      else if (incomeConc > 35) score -= 5
-      if (weekly > 60) score -= 8
-      else if (weekly > 35) score -= 4
+      const portfolioNav = allocationPct * nav / 100
+      const portfolioLargest = allocationPct * largest / 100
+      const categoryIncomeShare = currentMonthly > 0 ? categoryMonthlyIncome(cat) / currentMonthly * 100 : 0
+      const portfolioIncomeConcentration = categoryIncomeShare * incomeConc / 100
+      const portfolioWeekly = allocationPct * weekly / 100
+      let score = 82
+      if (portfolioYield != null && y >= portfolioYield * 0.8 && y <= suspiciousYield) score += 6
+      if (y > suspiciousYield) score -= 12
+      if (portfolioNav > 15) score -= 14
+      else if (portfolioNav > 8) score -= 8
+      else if (portfolioNav > 4) score -= 4
+      if (portfolioLargest > 20) score -= 10
+      else if (portfolioLargest > 12) score -= 5
+      if (portfolioIncomeConcentration > 20) score -= 10
+      else if (portfolioIncomeConcentration > 12) score -= 5
+      if (portfolioWeekly > 20) score -= 8
+      else if (portfolioWeekly > 12) score -= 4
       if (gain > 10) score += 5
       else if (gain < -10) score -= 5
       score = Math.max(0, Math.min(100, Math.round(score)))
       const reasons = []
       if (y > suspiciousYield) reasons.push('high-yield reliance')
-      if (nav > 25) reasons.push('NAV-risk exposure')
-      if (largest > 35) reasons.push('concentrated holdings')
-      if (incomeConc > 35) reasons.push('concentrated income')
-      if (weekly > 35) reasons.push('weekly-payer reliance')
+      if (portfolioNav > 4) reasons.push(`NAV-risk ${portfolioNav.toFixed(1)}% of portfolio`)
+      if (portfolioLargest > 12) reasons.push(`largest holding ${portfolioLargest.toFixed(1)}% of portfolio`)
+      if (portfolioIncomeConcentration > 12) reasons.push(`largest income source ${portfolioIncomeConcentration.toFixed(1)}% of income`)
+      if (portfolioWeekly > 12) reasons.push(`weekly payers ${portfolioWeekly.toFixed(1)}% of portfolio`)
       if (gain < -10) reasons.push('weak recent return')
-      if (!reasons.length) reasons.push('balanced profile')
+      if (!reasons.length) reasons.push('balanced portfolio impact')
       return {
         score,
-        label: score >= 80 ? 'Strong' : score >= 65 ? 'Watch' : 'Risky',
+        label: score >= 78 ? 'Strong' : score >= 60 ? 'Watch' : 'Risky',
         reasons,
+        tickers: qualityTickerRows(cat, allocationPct),
       }
     }
 
@@ -550,7 +668,7 @@ export default function Categories() {
         has_income_projection: hasIncomeProjection,
         has_weekly_projection: hasWeeklyProjection,
         projected_weekly_pct: projectedWeeklyPct,
-        quality: qualityFor(cat),
+        quality: qualityFor(cat, suggested),
         rationale: reasons.slice(0, 2).join('; ') + '.',
       }
       })
@@ -862,8 +980,27 @@ export default function Categories() {
                     <td style={{ color: '#00e89a', fontWeight: 700 }}>{fmtPct(row.suggested_pct)}</td>
                     <td>{fmtPct(row.current_yield)}</td>
                     <td>{fmtPct(row.weekly_value_pct)}</td>
-                    <td title={row.quality.reasons.join(', ')} style={{ color: row.quality.score >= 80 ? '#00e89a' : row.quality.score >= 65 ? '#ffc107' : '#ff6b6b', fontWeight: 700 }}>
-                      {row.quality.score} {row.quality.label}
+                    <td title={row.quality.reasons.join(', ')} style={{ color: row.quality.score >= 78 ? '#00e89a' : row.quality.score >= 60 ? '#ffc107' : '#ff6b6b', fontWeight: 700, textAlign: 'center', verticalAlign: 'middle', minWidth: 340, maxWidth: 380 }}>
+                      <button
+                        type="button"
+                        onClick={() => setQualityDetail(row)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: 0,
+                          color: 'inherit',
+                          cursor: 'pointer',
+                          font: 'inherit',
+                          fontWeight: 700,
+                          textAlign: 'center',
+                          width: '100%',
+                        }}
+                      >
+                        <div>{row.quality.score} {row.quality.label}</div>
+                        <div style={{ color: '#8899aa', fontSize: '0.68rem', fontWeight: 600, marginTop: 2, lineHeight: 1.3, whiteSpace: 'normal' }}>
+                          {row.quality.reasons.slice(0, 2).join('; ')}
+                        </div>
+                      </button>
                     </td>
                     <td style={{ color: row.drift_dollars >= 0 ? '#00e89a' : '#ff6b6b', fontWeight: 700 }}>
                       {row.drift_dollars >= 0 ? '+' : '-'}{fmt(Math.abs(row.drift_dollars))}
@@ -907,16 +1044,22 @@ export default function Categories() {
                       <span style={{ fontSize: '0.8rem', color: '#8899aa' }}>Target: {cat.target_pct.toFixed(1)}%</span>
                     )}
                     {assistantRow?.quality && (
-                      <span
+                      <button
+                        type="button"
                         title={assistantRow.quality.reasons.join(', ')}
+                        onClick={(e) => { e.stopPropagation(); setQualityDetail(assistantRow) }}
                         style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: 0,
                           fontSize: '0.8rem',
-                          color: assistantRow.quality.score >= 80 ? '#00e89a' : assistantRow.quality.score >= 65 ? '#ffc107' : '#ff6b6b',
+                          color: assistantRow.quality.score >= 78 ? '#00e89a' : assistantRow.quality.score >= 60 ? '#ffc107' : '#ff6b6b',
                           fontWeight: 700,
+                          cursor: 'pointer',
                         }}
                       >
                         Quality: {assistantRow.quality.score}
-                      </span>
+                      </button>
                     )}
                     <span style={{ fontWeight: 700, color: barColor(cat), fontSize: '0.95rem' }}>
                       {cat.actual_pct.toFixed(1)}%
@@ -1072,6 +1215,15 @@ export default function Categories() {
           category={editCat}
           onSave={handleSave}
           onCancel={() => setShowModal(false)}
+        />
+      )}
+
+      {qualityDetail && (
+        <QualityDetailsModal
+          row={qualityDetail}
+          onClose={() => setQualityDetail(null)}
+          fmt={fmt}
+          fmtPct={fmtPct}
         />
       )}
     </div>

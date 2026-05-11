@@ -643,9 +643,15 @@ function DripProjectionsPanel() {
                   { key: 'yield_pct', label: 'Yield%', right: true },
                   { key: '_reinvest', label: 'Reinvest%', right: true, noSort: true },
                   { key: 'projected_shares', label: 'Proj Shares', right: true },
-                  { key: 'projected_annual_income', label: 'Proj Annual', right: true },
+                  {
+                    key: 'projected_annual_income',
+                    label: 'Projected Annual Income',
+                    right: true,
+                    tip: `Estimated yearly dividend income at the end of the ${years}-year projection after DRIP and contribution assumptions.`,
+                  },
                 ].map(col => (
                   <th key={col.key}
+                    title={col.tip || undefined}
                     style={{ cursor: col.noSort ? 'default' : 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: col.right ? 'right' : 'left' }}
                     onClick={() => !col.noSort && handleSort(col.key)}>
                     {col.label}{!col.noSort ? sortIcon(col.key) : ''}
@@ -1607,6 +1613,9 @@ export default function PortfolioIncomeSim() {
               )
             })}
           </div>
+          <div style={{ color: '#888', fontSize: '0.76rem', lineHeight: 1.4 }}>
+            Bias adjusts the ticker's own historical return path. Bullish improves the scenario, but funds with severe historical price decay can still decline.
+          </div>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="ne-label" style={{ marginRight: '0.3rem' }}>Duration:</span>
             {[{ l: '1yr', m: 12 }, { l: '3yr', m: 36 }, { l: '5yr', m: 60 }, { l: '10yr', m: 120 }].map(d => (
@@ -2203,6 +2212,11 @@ export default function PortfolioIncomeSim() {
           {chartableResults.length > 0 && (
             <div style={{ marginTop: '1.2rem' }}>
               <h3 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem', color: '#ccc' }}>Charts</h3>
+              <p style={{ margin: '0 0 0.75rem', color: '#aaa', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                The first chart compares ending portfolio value with no reinvestment versus your selected reinvestment rate.
+                The second chart compares cumulative dividend distributions over the same period. Red is the 0% reinvestment
+                baseline; green is the reinvestment scenario.
+              </p>
               <>
                   <Plot
                     data={valueChartTraces}
@@ -2217,21 +2231,12 @@ export default function PortfolioIncomeSim() {
                         font: { size: 14 },
                       },
                       height: 420, autosize: true,
-                      margin: { t: 60, l: 60, r: 60, b: 80 },
+                      margin: { t: 60, l: 60, r: 60, b: 95 },
                       legend: { orientation: 'h', y: 1.15, x: 0 },
                       hoverlabel: { bgcolor: '#111124', bordercolor: '#3a3a5c', font: { color: '#e0e0e0', size: 13 } },
                       hovermode: 'x unified',
                       xaxis: { tickangle: -45, nticks: 20, automargin: true },
                       yaxis: { title: 'Value ($)', tickprefix: '$' },
-                      annotations: hasCompareGroups ? [{
-                        text: 'Red = No reinvestment  |  Green = With reinvestment',
-                        showarrow: false, xref: 'paper', yref: 'paper', x: 0.5, y: -0.13,
-                        font: { size: 11, color: '#888' },
-                      }] : compTickers.length > 0 ? [{
-                        text: 'Solid = Simulated Tickers (Aggregate) (aggregated)  |  Dashed = Comparison benchmarks',
-                        showarrow: false, xref: 'paper', yref: 'paper', x: 0.5, y: -0.13,
-                        font: { size: 11, color: '#888' },
-                      }] : [],
                     }}
                     useResizeHandler
                     style={{ width: '100%', height: 420 }}
@@ -2252,21 +2257,12 @@ export default function PortfolioIncomeSim() {
                         font: { size: 14 },
                       },
                       height: 340, autosize: true,
-                      margin: { t: 60, l: 60, r: 30, b: 80 },
+                      margin: { t: 60, l: 60, r: 30, b: 95 },
                       legend: { orientation: 'h', y: 1.15, x: 0 },
                       hoverlabel: { bgcolor: '#111124', bordercolor: '#3a3a5c', font: { color: '#e0e0e0', size: 13 } },
                       hovermode: 'x unified',
                       xaxis: { tickangle: -45, nticks: 20, automargin: true },
                       yaxis: { title: 'Distribution ($)', tickprefix: '$' },
-                      annotations: hasCompareGroups ? [{
-                        text: 'Red = No reinvestment  |  Green = With reinvestment',
-                        showarrow: false, xref: 'paper', yref: 'paper', x: 0.5, y: -0.15,
-                        font: { size: 11, color: '#888' },
-                      }] : compTickers.length > 0 ? [{
-                        text: 'Solid = Simulated Tickers (Aggregate) (aggregated)  |  Dashed = Comparison benchmarks',
-                        showarrow: false, xref: 'paper', yref: 'paper', x: 0.5, y: -0.15,
-                        font: { size: 11, color: '#888' },
-                      }] : [],
                     }}
                     useResizeHandler
                     style={{ width: '100%', height: 340, marginTop: '1rem' }}

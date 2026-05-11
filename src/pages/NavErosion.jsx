@@ -8,15 +8,42 @@ function fmt$(v) {
 function fmt4(v) {
   return v.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })
 }
+function fmtAbs4(v) {
+  return Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+}
 function fmtPct(v) {
   return (v >= 0 ? '+' : '') + v.toFixed(2) + '%'
 }
+function fmtAbsPct(v) {
+  return Math.abs(v).toFixed(2) + '%'
+}
+function navSeverityFromRatio(v) {
+  if (v == null) return null
+  return v > 0.75 ? 'High' : v > 0.25 ? 'Medium' : 'Low'
+}
+function navSeverityColor(severity) {
+  return severity === 'High' ? '#e05555' : severity === 'Medium' ? '#ffb300' : severity === 'Low' ? '#00c853' : '#666'
+}
+function navSeverityText(severity) {
+  return severity === 'High' ? 'High Benchmark-Adjusted NAV Erosion' : severity === 'Medium' ? 'Moderate Benchmark-Adjusted NAV Erosion' : 'Low Benchmark-Adjusted NAV Erosion'
+}
 
-function StatTile({ label, value, color }) {
+function shareGapPct(deficit, breakevenShares) {
+  return breakevenShares ? (deficit / breakevenShares) * 100 : 0
+}
+
+function shareGapKind(deficit) {
+  if (deficit > 0) return 'needed'
+  if (deficit < 0) return 'extra'
+  return 'at break-even'
+}
+
+function StatTile({ label, value, color, subtext }) {
   return (
     <div className="ne-stat-tile">
       <div className="ne-stat-val" style={{ color }}>{value}</div>
       <div className="ne-stat-lbl">{label}</div>
+      {subtext && <div className="ne-stat-lbl" style={{ marginTop: 1 }}>{subtext}</div>}
     </div>
   )
 }
@@ -101,9 +128,13 @@ export default function NavErosion() {
   const arrow = (col) => sortCol === col ? (sortAsc ? ' \u25B2' : ' \u25BC') : ''
 
   const headers = ['Date', 'Price', 'Price \u0394%', 'Div / Share', 'Total Dist',
-    'Reinvested', 'Shares Bought', 'Total Shares', 'Portfolio Value', 'Break-Even Shares', 'Shares Deficit', 'NAV Ratio']
+    'Reinvested', 'Shares Bought', 'Total Shares', 'Portfolio Value', 'Break-Even Shares', 'Shares Needed / Extra To Breakeven', 'NAV Ratio']
 
   const s = summary || {}
+  const totalSeverity = s.nav_erosion_severity || navSeverityFromRatio(s.total_coverage)
+  const totalSeverityColor = navSeverityColor(totalSeverity)
+  const finalRow = rows.length ? rows[rows.length - 1] : null
+  const finalGapPct = finalRow ? shareGapPct(s.final_deficit || 0, finalRow.breakeven_sh || 0) : 0
 
   return (
     <div className="ne-page">
@@ -117,11 +148,15 @@ export default function NavErosion() {
         <span style={{ color: '#00e89a' }}>Green line</span> = portfolio value &nbsp;&middot;&nbsp;
         <span style={{ color: '#888' }}>Dashed gray</span> = initial investment (break-even)
         <br /><br />
-        <strong style={{ color: '#ccc' }}>Shares Deficit</strong> ={' '}
-        <em>Break-Even Shares</em> &minus; <em>Total Shares Held</em>, where
-        Break-Even Shares = Initial Investment &divide; Current Price.
-        A <span style={{ color: '#e05555', fontWeight: 600 }}>positive (red)</span> deficit means NAV erosion is winning.
-        A <span style={{ color: '#00c853', fontWeight: 600 }}>negative (green)</span> surplus means your portfolio exceeds your initial investment.
+        <strong style={{ color: '#ccc' }}>Shares Needed / Extra To Breakeven</strong> compares your shares held to break-even shares
+        (Initial Investment &divide; Current Price).
+        <span style={{ color: '#e05555', fontWeight: 600 }}> Red needed</span> means you are short that many shares.
+        <span style={{ color: '#00c853', fontWeight: 600 }}> Green extra</span> means you have that many shares above break-even.
+        The percent is the gap as a share of break-even shares.
+        <br /><br />
+        <strong style={{ color: '#ccc' }}>Severity</strong> uses the benchmark-adjusted NAV ratio, but is forced
+        <span style={{ color: '#e05555', fontWeight: 600 }}> High</span> when price falls 50%+ or the final
+        share deficit is 5%+ of break-even shares.
       </p>
 
       {/* Input form */}
@@ -232,27 +267,28 @@ export default function NavErosion() {
             <div className="ne-stat-lbl">NAV Erosion</div>
           </div>
           <StatTile
-            label={s.final_deficit > 0 ? 'Final Shares Deficit' : 'Final Shares Surplus'}
-            value={fmt4(s.final_deficit || 0)}
-            color={s.final_deficit > 0 ? '#e05555' : '#00c853'}
+            label={s.final_deficit > 0 ? 'Final Shares Needed' : s.final_deficit < 0 ? 'Final Extra Shares' : 'Final Share Gap'}
+            value={`${fmtAbs4(s.final_deficit || 0)} (${fmtAbsPct(finalGapPct)})`}
+            color={s.final_deficit > 0 ? '#e05555' : s.final_deficit < 0 ? '#00c853' : '#7ecfff'}
+            subtext={s.final_deficit > 0 ? 'short of break-even' : s.final_deficit < 0 ? 'above break-even' : 'at break-even'}
           />
           <StatTile
             label="Total NAV Erosion Ratio"
             value={s.total_coverage != null ? s.total_coverage.toFixed(4) : '\u2014'}
-            color={s.total_coverage == null ? '#666' : s.total_coverage > 0.75 ? '#e05555' : s.total_coverage > 0.25 ? '#ffb300' : '#00c853'}
+            color={totalSeverityColor}
           />
           {s.total_coverage != null && (
             <div className="ne-stat-tile" style={{
-              border: s.total_coverage > 0.75 ? '2px solid #e05555' : s.total_coverage > 0.25 ? '2px solid #ffb300' : '2px solid #00c853',
+              border: `2px solid ${totalSeverityColor}`,
               borderRadius: '8px',
-              background: s.total_coverage > 0.75 ? 'rgba(224,85,85,0.12)' : s.total_coverage > 0.25 ? 'rgba(255,179,0,0.12)' : 'rgba(0,200,83,0.12)',
+              background: totalSeverity === 'High' ? 'rgba(224,85,85,0.12)' : totalSeverity === 'Medium' ? 'rgba(255,179,0,0.12)' : 'rgba(0,200,83,0.12)',
             }}>
               <div className="ne-stat-val" style={{
-                color: s.total_coverage > 0.75 ? '#e05555' : s.total_coverage > 0.25 ? '#ffb300' : '#00c853',
+                color: totalSeverityColor,
                 fontSize: '0.85rem',
                 lineHeight: 1.3,
               }}>
-                {s.total_coverage > 0.75 ? 'High Benchmark-Adjusted NAV Erosion' : s.total_coverage > 0.25 ? 'Moderate Benchmark-Adjusted NAV Erosion' : 'Low Benchmark-Adjusted NAV Erosion'}
+                {navSeverityText(totalSeverity)}
               </div>
             </div>
           )}
@@ -358,6 +394,8 @@ export default function NavErosion() {
                 {sorted.map(r => {
                   const pctCls = r.price_delta_pct < 0 ? 'pct-down' : (r.price_delta_pct > 0 ? 'pct-up' : '')
                   const defCls = r.shares_deficit > 0 ? 'ne-deficit' : 'ne-surplus'
+                  const gapPct = shareGapPct(r.shares_deficit, r.breakeven_sh)
+                  const gapKind = shareGapKind(r.shares_deficit)
                   return (
                     <tr key={r.date}>
                       <td className="ne-date-col"><strong>{r.date}</strong></td>
@@ -370,8 +408,13 @@ export default function NavErosion() {
                       <td className="grp-left">{fmt4(r.total_shares)}</td>
                       <td>{fmt$(r.portfolio_val)}</td>
                       <td className="grp-left">{fmt4(r.breakeven_sh)}</td>
-                      <td className={defCls}>{fmt4(r.shares_deficit)}</td>
-                      <td style={{ color: r.coverage_ratio == null ? '#666' : r.coverage_ratio > 0.75 ? '#e05555' : r.coverage_ratio > 0.25 ? '#ffb300' : '#00c853', fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
+                      <td
+                        className={defCls}
+                        title={`Break-even shares minus total shares held: ${fmt4(r.shares_deficit)} (${fmtPct(gapPct)})`}
+                      >
+                        {fmtAbs4(r.shares_deficit)} {gapKind} <span style={{ opacity: 0.8 }}>({fmtAbsPct(gapPct)})</span>
+                      </td>
+                      <td style={{ color: r.coverage_ratio == null ? '#666' : navSeverityColor(navSeverityFromRatio(r.coverage_ratio)), fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
                         {r.coverage_ratio != null ? r.coverage_ratio.toFixed(4) : '\u2014'}
                       </td>
                     </tr>

@@ -808,12 +808,17 @@ export default function DividendCalculator() {
                 paper_bgcolor: '#16213e',
                 plot_bgcolor: '#16213e',
                 font: { color: '#e0e8f5' },
-                margin: { l: 70, r: 30, t: 45, b: 50 },
-                height: 300,
-                title: { text: 'Shares Over Time', font: { size: 16, color: '#cfe5ff' } },
+                margin: { l: 70, r: 30, t: 55, b: 80 },
+                height: 330,
+                title: {
+                  text: 'Shares Over Time',
+                  font: { size: 16, color: '#cfe5ff' },
+                  x: 0.5,
+                  xanchor: 'center',
+                },
                 xaxis: { title: 'Years', gridcolor: '#1a2a3e' },
                 yaxis: { title: projections.length > 1 ? 'Shares by Ticker' : 'Shares Owned', gridcolor: '#1a2a3e' },
-                legend: { orientation: 'h', y: 1.12, x: 0.5, xanchor: 'center' },
+                legend: { orientation: 'h', y: -0.22, x: 0.5, xanchor: 'center', yanchor: 'top' },
                 hovermode: 'x unified',
               }}
               config={{ responsive: true, displayModeBar: false }}

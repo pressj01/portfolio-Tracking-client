@@ -28,7 +28,7 @@ const YEAR_PRESETS = [
 
 export default function IncomeGrowthSim() {
   const pf = useProfileFetch()
-  const { selection } = useProfile()
+  const { selection, currentProfileName, isAggregate } = useProfile()
 
   const [years, setYears] = useState(5)
   const [marketType, setMarketType] = useState('neutral')
@@ -251,6 +251,23 @@ export default function IncomeGrowthSim() {
       <p style={{ color: '#90a4ae', fontSize: '0.82rem', marginBottom: '1rem' }}>
         Project how your portfolio income changes over time with scenario-based growth rates.
       </p>
+      <div style={{
+        background: '#111124',
+        border: '1px solid #2a2a3e',
+        borderRadius: 8,
+        padding: '0.75rem 1rem',
+        marginBottom: '1rem',
+        color: '#b0bec5',
+        fontSize: '0.82rem',
+        lineHeight: 1.55,
+      }}>
+        <strong style={{ color: '#7ecfff' }}>Portfolio source:</strong>{' '}
+        This screen starts from the portfolio you are currently viewing:{' '}
+        <strong style={{ color: '#e0e8f5' }}>{currentProfileName}</strong>
+        {isAggregate ? ' (aggregate view).' : '.'} The holdings list below is the working set for the simulation.
+        If you edit shares, toggle DRIP, disable holdings, or add a custom ticker, the next run uses those on-screen
+        assumptions until you click Reset.
+      </div>
 
       {/* Controls */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center', marginBottom: '1rem',
@@ -340,6 +357,32 @@ export default function IncomeGrowthSim() {
               opacity: loading ? 0.6 : 1 }}>
             {loading ? 'Running...' : 'Run Simulation'}
           </button>
+        </div>
+      </div>
+
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+        gap: '0.75rem',
+        marginBottom: '1rem',
+      }}>
+        <div style={{ background: '#111124', border: '1px solid #2a2a3e', borderRadius: 8, padding: '0.75rem 1rem' }}>
+          <div style={{ color: '#f9a825', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem' }}>
+            Deterministic
+          </div>
+          <div style={{ color: '#aaa', fontSize: '0.78rem', lineHeight: 1.5 }}>
+            Runs one fixed projection using the selected scenario's dividend growth and price drift. Same inputs
+            produce the same output, which makes it best for a clean base case.
+          </div>
+        </div>
+        <div style={{ background: '#111124', border: '1px solid #2a2a3e', borderRadius: 8, padding: '0.75rem 1rem' }}>
+          <div style={{ color: '#7ecfff', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem' }}>
+            Monte Carlo (300 paths)
+          </div>
+          <div style={{ color: '#aaa', fontSize: '0.78rem', lineHeight: 1.5 }}>
+            Runs 300 randomized paths around the same scenario. The chart uses the median path and shows a
+            10th-90th percentile band; P10/P90 columns show the lower and upper range from those paths.
+          </div>
         </div>
       </div>
 

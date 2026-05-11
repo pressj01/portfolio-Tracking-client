@@ -284,6 +284,19 @@ export default function TotalReturn() {
     { key: 'total_return_dollar', label: 'Total Ret $', fmt },
     { key: 'total_return_pct', label: 'Total Ret %', fmt: fmtPct },
   ]
+  const numericColumns = new Set([
+    'quantity',
+    'price_paid',
+    'current_price',
+    'purchase_value',
+    'current_value',
+    'gain_or_loss',
+    'price_return_pct',
+    'total_divs_received',
+    'total_return_dollar',
+    'total_return_pct',
+  ])
+  const columnAlign = (key) => numericColumns.has(key) ? 'right' : 'left'
 
   const t = summary?.totals || {}
 
@@ -465,7 +478,7 @@ export default function TotalReturn() {
               <thead>
                 <tr>
                   {columns.map(col => (
-                    <th key={col.key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} onClick={() => handleSort(col.key)}>
+                    <th key={col.key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: columnAlign(col.key) }} onClick={() => handleSort(col.key)}>
                       {col.label}
                       <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === col.key ? '#7ecfff' : '#8899aa' }}>
                         {sortIcon(col.key)}
@@ -481,7 +494,7 @@ export default function TotalReturn() {
                       const val = row[col.key]
                       const isNum = typeof val === 'number'
                       let display = col.fmt ? col.fmt(val) : (val ?? '')
-                      let style = isNum ? { textAlign: 'right' } : {}
+                      let style = { textAlign: columnAlign(col.key) }
 
                       if (col.key === 'ticker') display = <strong>{val}</strong>
                       if (col.key === 'gain_or_loss' || col.key === 'price_return_pct' || col.key === 'total_return_dollar' || col.key === 'total_return_pct') {

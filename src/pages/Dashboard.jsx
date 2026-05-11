@@ -50,6 +50,10 @@ const shortDate = (value) => {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 const pct = (v) => (v == null ? '—' : (Number(v) * 100).toFixed(2) + '%')
+const navSeverityFromRatio = (v) => v == null ? null : v > 0.75 ? 'High' : v > 0.25 ? 'Medium' : 'Low'
+const navSeverityColor = (severity) => severity === 'High' ? '#ff6b6b' : severity === 'Medium' ? '#ffb300' : severity === 'Low' ? '#4dff91' : '#6f7890'
+const navSeverityBg = (severity) => severity === 'High' ? 'rgba(255,107,107,0.12)' : severity === 'Medium' ? 'rgba(255,179,0,0.12)' : 'rgba(77,255,145,0.12)'
+const navSeverityText = (severity) => severity === 'High' ? 'High Benchmark-Adjusted NAV Erosion' : severity === 'Medium' ? 'Moderate Benchmark-Adjusted NAV Erosion' : 'Low Benchmark-Adjusted NAV Erosion'
 
 function SummaryCard({ label, value, sub, color, className }) {
   return (
@@ -388,6 +392,7 @@ export default function Dashboard() {
   const [sortAsc, setSortAsc] = useState(true)
   const [modalTicker, setModalTicker] = useState(null)
   const [portfolioCoverage, setPortfolioCoverage] = useState(null)
+  const [portfolioCoverageSeverity, setPortfolioCoverageSeverity] = useState(null)
   const [tickerCoverage, setTickerCoverage] = useState({})
   const [tickerCoverageMeta, setTickerCoverageMeta] = useState({})
   const [overviewGroups, setOverviewGroups] = useState(null)
@@ -420,6 +425,7 @@ export default function Dashboard() {
       setTickerGrades(cached.tickerGrades || {})
       setPortfolioGrade(cached.portfolioGrade || {})
       setPortfolioCoverage(cached.portfolioCoverage ?? null)
+      setPortfolioCoverageSeverity(cached.portfolioCoverageSeverity ?? null)
       setTickerCoverage(cached.tickerCoverage || {})
       setTickerCoverageMeta(cached.tickerCoverageMeta || {})
       setOverviewGroups(cached.overviewGroups || null)
@@ -431,6 +437,7 @@ export default function Dashboard() {
       setTickerGrades({})
       setPortfolioGrade({})
       setPortfolioCoverage(null)
+      setPortfolioCoverageSeverity(null)
       setTickerCoverage({})
       setTickerCoverageMeta({})
       setOverviewGroups(null)
@@ -494,6 +501,7 @@ export default function Dashboard() {
             .then(d => {
               if (stale) return
               setPortfolioCoverage(d.aggregate_coverage ?? null)
+              setPortfolioCoverageSeverity(d.aggregate_severity ?? null)
               if (d.results) {
                 const map = {}
                 const meta = {}
@@ -505,6 +513,8 @@ export default function Dashboard() {
                     benchmark_valid: r.benchmark_valid !== false,
                     nav_erosion_scope: r.nav_erosion_scope || 'auto',
                     nav_benchmark_override: r.nav_benchmark_override || '',
+                    nav_erosion_severity: r.nav_erosion_severity || null,
+                    price_change_pct: r.price_change_pct,
                     warning: r.warning || null,
                   }
                 })
@@ -575,6 +585,7 @@ export default function Dashboard() {
       tickerGrades,
       portfolioGrade,
       portfolioCoverage,
+      portfolioCoverageSeverity,
       tickerCoverage,
       tickerCoverageMeta,
       overviewGroups,
@@ -588,6 +599,7 @@ export default function Dashboard() {
     tickerGrades,
     portfolioGrade,
     portfolioCoverage,
+    portfolioCoverageSeverity,
     tickerCoverage,
     tickerCoverageMeta,
     overviewGroups,
@@ -649,6 +661,8 @@ export default function Dashboard() {
         }
       })
   }, [holdings, totals, tickerCoverage, tickerCoverageMeta, tickerGrades])
+  const portfolioNavSeverity = portfolioCoverageSeverity || navSeverityFromRatio(portfolioCoverage)
+  const portfolioNavColor = navSeverityColor(portfolioNavSeverity)
 
   // Sorting
   const sorted = useMemo(() => {
@@ -676,6 +690,7 @@ export default function Dashboard() {
       .then(safeJson)
       .then(d => {
         setPortfolioCoverage(d.aggregate_coverage ?? null)
+        setPortfolioCoverageSeverity(d.aggregate_severity ?? null)
         if (d.results) {
           const map = {}
           const meta = {}
@@ -687,6 +702,8 @@ export default function Dashboard() {
               benchmark_valid: r.benchmark_valid !== false,
               nav_erosion_scope: r.nav_erosion_scope || 'auto',
               nav_benchmark_override: r.nav_benchmark_override || '',
+              nav_erosion_severity: r.nav_erosion_severity || null,
+              price_change_pct: r.price_change_pct,
               warning: r.warning || null,
             }
           })
@@ -826,22 +843,22 @@ export default function Dashboard() {
         <SummaryCard
           label="NAV Erosion Ratio"
           value={portfolioCoverage != null ? portfolioCoverage.toFixed(4) : '—'}
-          color={portfolioCoverage == null ? undefined : portfolioCoverage > 0.75 ? '#ff6b6b' : portfolioCoverage > 0.25 ? '#ffb300' : '#4dff91'}
+          color={portfolioCoverage == null ? undefined : portfolioNavColor}
         />
         {portfolioCoverage != null && (
           <div className={`summary-card`} style={{
-            border: portfolioCoverage > 0.75 ? '2px solid #ff6b6b' : portfolioCoverage > 0.25 ? '2px solid #ffb300' : '2px solid #4dff91',
+            border: `2px solid ${portfolioNavColor}`,
             borderRadius: '8px',
-            background: portfolioCoverage > 0.75 ? 'rgba(255,107,107,0.12)' : portfolioCoverage > 0.25 ? 'rgba(255,179,0,0.12)' : 'rgba(77,255,145,0.12)',
+            background: navSeverityBg(portfolioNavSeverity),
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
             <div className="summary-value" style={{
-              color: portfolioCoverage > 0.75 ? '#ff6b6b' : portfolioCoverage > 0.25 ? '#ffb300' : '#4dff91',
+              color: portfolioNavColor,
               fontSize: '0.82rem',
               lineHeight: 1.3,
               textAlign: 'center',
             }}>
-              {portfolioCoverage > 0.75 ? 'High Benchmark-Adjusted NAV Erosion' : portfolioCoverage > 0.25 ? 'Moderate Benchmark-Adjusted NAV Erosion' : 'Low Benchmark-Adjusted NAV Erosion'}
+              {navSeverityText(portfolioNavSeverity)}
             </div>
           </div>
         )}
@@ -926,7 +943,7 @@ export default function Dashboard() {
               <SortHeader col="estim_payment_per_year" align="right" tip="Estimated annual dividend income">Yr$</SortHeader>
               <SortHeader col="drip_shares_yearly" align="right" tip="Estimated shares bought per year if 100% of annual dividend income is reinvested at the current price">YrShr</SortHeader>
               <SortHeader col="paid_for_itself" align="right" tip="Percentage of original cost recovered through dividends">PFI%</SortHeader>
-              <SortHeader col="_coverage" align="right" tip="Benchmark-adjusted NAV erosion ratio. Lower is better: <=0.25 low, <=0.75 medium, >0.75 high">NAV</SortHeader>
+              <SortHeader col="_coverage" align="right" tip="NAV severity uses the benchmark-adjusted ratio, and is forced High for a 50%+ price decline or a 5%+ ending share deficit.">NAV</SortHeader>
               <SortHeader col="_grade_sort" align="center" tip="Composite grade based on yield, growth, and risk metrics">Grd</SortHeader>
             </tr>
           </thead>
@@ -934,8 +951,10 @@ export default function Dashboard() {
             {sorted.map(h => {
               const g = tickerGrades[h.ticker]
               const cov = h._coverage
-              const covBad = cov != null && cov > 0.75
               const navMeta = h._coverage_meta || {}
+              const navSeverity = navMeta.nav_erosion_severity || navSeverityFromRatio(cov)
+              const navColor = navSeverityColor(navSeverity)
+              const covBad = navSeverity === 'High'
               const navScope = h.nav_erosion_scope || navMeta.nav_erosion_scope || 'auto'
               const navBenchmark = h.nav_benchmark_override || navMeta.nav_benchmark_override || ''
               const navLabel = navScope === 'test' ? 'Test' : navScope === 'skip' ? 'Skip' : 'Auto'
@@ -988,7 +1007,7 @@ export default function Dashboard() {
                   <td
                     style={{
                       textAlign: 'right',
-                      color: cov == null ? '#6f7890' : cov > 0.75 ? '#ff6b6b' : cov > 0.25 ? '#ffb300' : '#4dff91',
+                      color: cov == null ? '#6f7890' : navColor,
                       fontWeight: cov != null ? 600 : 400,
                       minWidth: 92,
                     }}

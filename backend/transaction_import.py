@@ -79,6 +79,70 @@ def _rows_to_dicts(rows, header_idx=0):
     return header, data_rows
 
 
+def _header_key(value):
+    """Normalize broker header labels so small punctuation/casing changes do not matter."""
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def _canonical_header(header, aliases):
+    alias_map = {}
+    for canonical, alias_list in aliases.items():
+        for alias in [canonical, *alias_list]:
+            key = _header_key(alias)
+            if key and key not in alias_map:
+                alias_map[key] = canonical
+    return [alias_map.get(_header_key(col), str(col or "").strip()) for col in header]
+
+
+def _find_header_row(rows, aliases, required, max_scan=40):
+    """Find the best header row by matching required canonical columns."""
+    required = set(required)
+    best_idx = None
+    best_header = None
+    best_score = -1
+
+    for idx, row in enumerate(rows[:max_scan]):
+        if not _row_has_values(row):
+            continue
+        header = _canonical_header([str(c or "").strip() for c in row], aliases)
+        present = {col for col in header if col}
+        if not required.issubset(present):
+            continue
+        score = (len(required & present) * 10) + len(present & set(aliases.keys()))
+        if score > best_score:
+            best_idx = idx
+            best_header = header
+            best_score = score
+
+    return best_idx, best_header
+
+
+def _row_record(header, row):
+    values = list(row) + [None] * max(0, len(header) - len(row))
+    record = {}
+    for key, value in zip(header, values):
+        if not key:
+            continue
+        existing = record.get(key)
+        existing_blank = existing is None or str(existing).strip() == ""
+        value_blank = value is None or str(value).strip() == ""
+        if key not in record or (existing_blank and not value_blank):
+            record[key] = value
+    return record
+
+
+def _rows_to_flexible_dicts(rows, aliases, required, max_scan=40):
+    header_idx, header = _find_header_row(rows, aliases, required, max_scan=max_scan)
+    if header_idx is None:
+        return None, [], []
+    data_rows = []
+    for row in rows[header_idx + 1:]:
+        if not _row_has_values(row):
+            continue
+        data_rows.append(_row_record(header, row))
+    return header_idx, header, data_rows
+
+
 def _parse_reinvest_bool(value):
     """Return True/False for common broker DRIP flag values, or None if blank."""
     if value is None:
@@ -420,6 +484,19 @@ _SCHWAB_SKIP_SYMBOLS = {
     "Cash & Cash Investments", "Positions Total",
 }
 
+_SCHWAB_POSITION_ALIASES = {
+    "Symbol": ["Ticker"],
+    "Description": ["Security Description", "Security Name", "Name"],
+    "Asset Type": ["Type", "Security Type", "Holding Type"],
+    "Qty (Quantity)": ["Qty", "Quantity", "Shares", "Qty #", "Quantity #"],
+    "Cost/Share": ["Cost Share", "Cost Basis/Share", "Average Cost", "Average Cost Basis", "Price Paid $"],
+    "Price": ["Last Price", "Current Price", "Market Price", "Price $"],
+    "Mkt Val (Market Value)": ["Mkt Val", "Market Value", "Current Value", "Value", "Value $"],
+    "Gain $ (Gain/Loss $)": ["Gain $", "Gain/Loss $", "Total Gain $", "Unrealized Gain/Loss"],
+    "Div Yld (Dividend Yield)": ["Div Yld", "Dividend Yield", "Dividend Yield %", "Yield"],
+    "Reinvest?": ["Reinvest", "Reinvest Dividends", "DRIP"],
+}
+
 
 def parse_schwab_csv(file_path, filename):
     """Parse a Schwab Positions CSV/XLSX export.
@@ -439,31 +516,26 @@ def parse_schwab_csv(file_path, filename):
     # First line is a header like "Positions for account ..." — skip it
     # Second line is blank, then the CSV header follows
     rows = _read_table_rows(file_path, filename)
+    _, _, reader = _rows_to_flexible_dicts(
+        rows,
+        _SCHWAB_POSITION_ALIASES,
+        required={"Symbol", "Qty (Quantity)"},
+    )
 
-    # Find the positions header row (starts with "Symbol")
-    header_idx = None
-    for i, row in enumerate(rows):
-        first = str(_row_cell(row, 0)).strip().strip('"')
-        if first == "Symbol":
-            header_idx = i
-            break
-
-    if header_idx is None:
+    if not reader:
         raise ValueError(
             "Could not find the positions header row. "
-            "Make sure this is a Schwab Positions export."
+            "Make sure this is a Schwab Positions export or a table with Symbol and Quantity columns."
         )
-
-    _, reader = _rows_to_dicts(rows, header_idx)
 
     positions = []
     filtered_count = 0
     options_count = 0
 
     for row in reader:
-        sym = (row.get("Symbol") or "").strip()
-        desc = (row.get("Description") or "").strip()
-        asset_type = (row.get("Asset Type") or "").strip()
+        sym = str(row.get("Symbol") or "").strip()
+        desc = str(row.get("Description") or "").strip()
+        asset_type = str(row.get("Asset Type") or "").strip()
 
         # Skip summary rows
         if sym in _SCHWAB_SKIP_SYMBOLS or not sym:
@@ -480,20 +552,12 @@ def parse_schwab_csv(file_path, filename):
             filtered_count += 1
             continue
 
-        qty = _safe_float((row.get("Qty (Quantity)") or "").replace(",", ""))
-        cost_per_share = _safe_float(
-            (row.get("Cost/Share") or "").replace("$", "").replace(",", "")
-        )
-        price = _safe_float(
-            (row.get("Price") or "").replace("$", "").replace(",", "")
-        )
-        mkt_val = _safe_float(
-            (row.get("Mkt Val (Market Value)") or "").replace("$", "").replace(",", "")
-        )
-        gain = _safe_float(
-            (row.get("Gain $ (Gain/Loss $)") or "").replace("$", "").replace(",", "")
-        )
-        div_yield = (row.get("Div Yld (Dividend Yield)") or "").replace("%", "").strip()
+        qty = _safe_float(row.get("Qty (Quantity)"))
+        cost_per_share = _safe_float(row.get("Cost/Share"))
+        price = _safe_float(row.get("Price"))
+        mkt_val = _safe_float(row.get("Mkt Val (Market Value)"))
+        gain = _safe_float(row.get("Gain $ (Gain/Loss $)"))
+        div_yield = str(row.get("Div Yld (Dividend Yield)") or "").replace("%", "").strip()
         div_yield = _safe_float(div_yield)
         reinvest = _parse_reinvest_bool(row.get("Reinvest?"))
 
@@ -559,6 +623,19 @@ def parse_schwab_csv(file_path, filename):
     }
 
 
+_ETRADE_POSITION_ALIASES = {
+    "Symbol": ["Ticker"],
+    "Description": ["Security Description", "Security Name", "Name"],
+    "Qty #": ["Qty", "Quantity", "Shares", "Quantity #", "Qty (Quantity)"],
+    "Price Paid $": ["Price Paid", "Cost/Share", "Average Cost", "Average Cost Basis", "Cost Basis/Share"],
+    "Last Price $": ["Last Price", "Current Price", "Market Price", "Price", "Price $"],
+    "Value $": ["Value", "Market Value", "Current Value", "Mkt Val", "Mkt Val (Market Value)"],
+    "Total Cost": ["Cost Basis", "Cost Basis Total", "Total Cost $", "Purchase Value"],
+    "Total Gain $": ["Total Gain", "Gain $", "Gain/Loss $", "Total Gain/Loss $"],
+    "Dividend Yield %": ["Dividend Yield", "Div Yld", "Div Yld (Dividend Yield)", "Yield"],
+}
+
+
 def parse_etrade_csv(file_path, filename):
     """Parse an E*TRADE portfolio download CSV/XLSX as current positions.
 
@@ -573,6 +650,7 @@ def parse_etrade_csv(file_path, filename):
     account_value = 0.0
     cash_value = 0.0
     header_idx = None
+    header = None
 
     for idx, row in enumerate(rows):
         first = str(_row_cell(row, 0)).strip()
@@ -588,17 +666,18 @@ def parse_etrade_csv(file_path, filename):
                 account_value = _safe_float(account_row[1] if len(account_row) > 1 else None) or 0.0
                 cash_value = _safe_float(account_row[7] if len(account_row) > 7 else None) or 0.0
 
-        if first == "Symbol" and second == "Price Paid $":
-            header_idx = idx
-            break
+    header_idx, header = _find_header_row(
+        rows,
+        _ETRADE_POSITION_ALIASES,
+        required={"Symbol", "Qty #"},
+    )
 
     if header_idx is None:
         raise ValueError(
             "Could not find the E*TRADE holdings table. "
-            "Make sure this is an E*TRADE portfolio download export."
+            "Make sure this is an E*TRADE portfolio download export or a table with Symbol and Quantity columns."
         )
 
-    header = rows[header_idx]
     positions = []
     filtered_count = 0
 
@@ -610,10 +689,9 @@ def parse_etrade_csv(file_path, filename):
         if first.startswith("Generated at"):
             break
 
-        padded = list(row) + [""] * max(0, len(header) - len(row))
-        record = dict(zip(header, padded))
+        record = _row_record(header, row)
 
-        ticker = (record.get("Symbol") or "").strip().upper()
+        ticker = str(record.get("Symbol") or "").strip().upper()
         if not ticker or ticker in {"CASH", "TOTAL"}:
             filtered_count += 1
             if ticker == "CASH":
@@ -644,7 +722,7 @@ def parse_etrade_csv(file_path, filename):
 
         positions.append({
             "ticker": ticker,
-            "description": "",
+            "description": str(record.get("Description") or "").strip(),
             "quantity": qty,
             "cost_per_share": cost_per_share or 0.0,
             "current_price": current_price or 0.0,
@@ -694,38 +772,49 @@ def _fidelity_read_rows(file_path, filename, sheet_name=None):
     return _fidelity_read_xlsx(file_path, sheet_name)
 
 
-def _fidelity_header_key(value):
-    return re.sub(r"[^a-z0-9]+", " ", str(value or "").strip().lower()).strip()
-
-
-def _fidelity_canonical_header(header, aliases):
-    alias_map = {
-        _fidelity_header_key(alias): canonical
-        for canonical, alias_list in aliases.items()
-        for alias in [canonical, *alias_list]
-    }
-    return [alias_map.get(_fidelity_header_key(col), str(col or "").strip()) for col in header]
-
-
 def _fidelity_row_record(header, row):
-    values = list(row) + [None] * max(0, len(header) - len(row))
-    record = {}
-    for key, value in zip(header, values):
-        if not key:
-            continue
-        existing = record.get(key)
-        existing_blank = existing is None or str(existing).strip() == ""
-        value_blank = value is None or str(value).strip() == ""
-        if key not in record or (existing_blank and not value_blank):
-            record[key] = value
-    return record
+    return _row_record(header, row)
 
 
 def _fidelity_parse_percent_fraction(raw):
+    if isinstance(raw, str) and raw.strip().endswith("%"):
+        return _safe_float(raw.strip().rstrip("%"))
     val = _safe_float(raw)
     if val is None:
         return None
     return val * 100.0
+
+
+_FIDELITY_POSITION_ALIASES = {
+    "Account Number": ["Account #", "Acct #", "Account No", "Account Number"],
+    "Account Name": ["Account", "Account Description", "Portfolio"],
+    "Symbol": ["Ticker"],
+    "Description": ["Security Description", "Security name", "Name"],
+    "Last Price": ["Last price", "Price", "Current Price", "Market Price"],
+    "Current value": ["Current Value", "Market Value", "Market value", "Value", "Value $"],
+    "Cost basis total": ["Cost Basis Total", "Cost basis", "Cost Basis", "Total Cost", "Purchase Value"],
+    "Average cost basis": ["Average Cost Basis", "Average cost", "Cost/Share", "Price Paid $"],
+    "Total gain/loss $": ["Total Gain/Loss Dollar", "Total gain/loss dollar", "Gain/Loss $", "Total Gain $"],
+    "Dist. yield": ["Distribution Yield", "Distribution yield", "Dist yield", "Dividend Yield", "Yield"],
+    "Amount per share": ["Amount Per Share", "Dividend Amount", "Dividend Per Share"],
+    "Ex-date": ["Ex Date", "Ex-dividend Date", "Ex Dividend Date"],
+    "Pay date": ["Pay Date", "Payment Date"],
+    "Est. annual income": ["Estimated Annual Income", "Est Annual Income", "Annual Income"],
+    "Type": ["Asset Type", "Security Type", "Holding Type"],
+    "Quantity": ["Qty", "Shares", "Qty #", "Quantity #"],
+}
+
+
+_FIDELITY_TRANSACTION_ALIASES = {
+    "Run Date": ["Date", "Settlement Date", "Trade Date", "Activity Date"],
+    "Action": ["Transaction Type", "Type", "Activity Type"],
+    "Symbol": ["Ticker"],
+    "Quantity": ["Qty", "Shares", "Qty #", "Quantity #"],
+    "Price ($)": ["Price", "Price $", "Price Paid $"],
+    "Amount ($)": ["Amount", "Amount $", "Net Amount"],
+    "Commission ($)": ["Commission", "Commissions", "Commission $"],
+    "Fees ($)": ["Fees", "Fee", "Fees $"],
+}
 
 
 def parse_fidelity_positions_xlsx(file_path, filename):
@@ -734,28 +823,15 @@ def parse_fidelity_positions_xlsx(file_path, filename):
     if not rows:
         raise ValueError("The Fidelity positions file is empty.")
 
-    header = _fidelity_canonical_header([str(c or "").strip() for c in rows[0]], {
-        "Account Number": ["Account #", "Account"],
-        "Account Name": ["Account"],
-        "Symbol": ["Ticker"],
-        "Description": ["Security Description", "Security name"],
-        "Last Price": ["Last price", "Price"],
-        "Current value": ["Current Value", "Market Value", "Market value"],
-        "Cost basis total": ["Cost Basis Total", "Cost basis", "Cost Basis"],
-        "Average cost basis": ["Average Cost Basis", "Average cost", "Cost/Share"],
-        "Total gain/loss $": ["Total Gain/Loss Dollar", "Total gain/loss dollar", "Gain/Loss $"],
-        "Dist. yield": ["Distribution Yield", "Distribution yield", "Dist yield"],
-        "Amount per share": ["Amount Per Share", "Dividend Amount"],
-        "Ex-date": ["Ex Date", "Ex-date"],
-        "Pay date": ["Pay Date"],
-        "Est. annual income": ["Estimated Annual Income", "Est Annual Income"],
-        "Type": ["Asset Type"],
-        "Quantity": ["Qty", "Shares"],
-    })
-    if "Account Name" not in header or "Symbol" not in header or "Current value" not in header:
+    header_idx, header = _find_header_row(
+        rows,
+        _FIDELITY_POSITION_ALIASES,
+        required={"Symbol", "Quantity"},
+    )
+    if header_idx is None:
         raise ValueError(
             "Could not find the Fidelity positions columns. "
-            "Make sure this is a Fidelity positions export file."
+            "Make sure this is a Fidelity positions export or a table with Symbol and Quantity columns."
         )
 
     positions = []
@@ -764,7 +840,7 @@ def parse_fidelity_positions_xlsx(file_path, filename):
     account_names = set()
     account_numbers = set()
 
-    for row in rows[1:]:
+    for row in rows[header_idx + 1:]:
         if not any(v is not None and str(v).strip() != "" for v in row):
             continue
         record = _fidelity_row_record(header, row)
@@ -778,11 +854,11 @@ def parse_fidelity_positions_xlsx(file_path, filename):
         ticker = (str(record.get("Symbol") or "")).strip().upper()
         description = (str(record.get("Description") or "")).strip()
         holding_type = (str(record.get("Type") or "")).strip()
-        current_value = _safe_float(record.get("Current value")) or 0.0
+        current_value = _safe_float(record.get("Current value"))
         quantity = _safe_float(record.get("Quantity"))
 
         if holding_type.lower() == "cash" or ticker.endswith("**") or quantity is None or quantity <= 0:
-            cash_value += current_value
+            cash_value += current_value or 0.0
             filtered_count += 1
             continue
 
@@ -791,6 +867,8 @@ def parse_fidelity_positions_xlsx(file_path, filename):
             continue
 
         current_price = _safe_float(record.get("Last Price")) or 0.0
+        if current_value is None:
+            current_value = quantity * current_price if quantity is not None else 0.0
         purchase_value = _safe_float(record.get("Cost basis total"))
         cost_per_share = _safe_float(record.get("Average cost basis"))
         gain_or_loss = _safe_float(record.get("Total gain/loss $"))
@@ -849,26 +927,15 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
     if not rows:
         raise ValueError("The Fidelity transactions file is empty.")
 
-    header_idx = None
-    for idx, row in enumerate(rows):
-        vals = _fidelity_canonical_header([str(c or "").strip() for c in row], {
-            "Run Date": ["Date", "Settlement Date"],
-            "Action": ["Transaction Type", "Type"],
-            "Symbol": ["Ticker"],
-            "Quantity": ["Qty", "Shares"],
-            "Price ($)": ["Price", "Price $"],
-            "Amount ($)": ["Amount", "Amount $"],
-            "Commission ($)": ["Commission", "Commissions", "Commission $"],
-            "Fees ($)": ["Fees", "Fee", "Fees $"],
-        })
-        if "Run Date" in vals and "Action" in vals and "Symbol" in vals:
-            header_idx = idx
-            header = vals
-            break
+    header_idx, header = _find_header_row(
+        rows,
+        _FIDELITY_TRANSACTION_ALIASES,
+        required={"Run Date", "Action", "Symbol"},
+    )
     if header_idx is None:
         raise ValueError(
             "Could not find the Fidelity transaction header row. "
-            "Make sure this is a Fidelity transactions export file."
+            "Make sure this is a Fidelity transactions export or a table with Date, Action, and Symbol columns."
         )
 
     kept = []
@@ -897,7 +964,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
         total_fees = round(commission + fees, 2)
         action_upper = action.upper()
 
-        if "DIVIDEND RECEIVED" in action_upper:
+        if "DIVIDEND RECEIVED" in action_upper or action_upper in {"DIVIDEND", "DIVIDENDS", "CASH DIVIDEND"}:
             if amount_val is None:
                 filtered_count += 1
                 continue
@@ -913,7 +980,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
             })
             continue
 
-        if "REINVESTMENT" in action_upper:
+        if "REINVESTMENT" in action_upper or "REINVEST" in action_upper:
             if qty_val is None or qty_val == 0:
                 filtered_count += 1
                 continue
@@ -929,7 +996,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
             })
             continue
 
-        if "YOU BOUGHT" in action_upper:
+        if "YOU BOUGHT" in action_upper or action_upper in {"BUY", "BOUGHT"}:
             if qty_val is None or qty_val == 0:
                 filtered_count += 1
                 continue
@@ -945,7 +1012,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
             })
             continue
 
-        if "YOU SOLD" in action_upper:
+        if "YOU SOLD" in action_upper or action_upper in {"SELL", "SOLD"}:
             if qty_val is None or qty_val == 0:
                 filtered_count += 1
                 continue
@@ -997,12 +1064,23 @@ _SCHWAB_DRIP_ACTIONS = {"Reinvest Shares"}
 # Action types that are adjustments to reinvestments (share corrections)
 _SCHWAB_REINVEST_ADJ_ACTIONS = {"Reinvestment Adj"}
 
+_SCHWAB_TRANSACTION_ALIASES = {
+    "Date": ["Run Date", "Trade Date", "Settlement Date", "Activity Date"],
+    "Action": ["Transaction Type", "Type", "Activity Type"],
+    "Symbol": ["Ticker"],
+    "Description": ["Security Description", "Name"],
+    "Quantity": ["Qty", "Shares", "Qty #", "Quantity #"],
+    "Price": ["Price $", "Price ($)", "Share Price"],
+    "Fees & Commissions": ["Fees & Comm", "Fees", "Fee", "Commission", "Commissions"],
+    "Amount": ["Amount $", "Amount ($)", "Net Amount"],
+}
+
 
 def _schwab_parse_amount(raw):
     """Parse a Schwab Amount field like '$1,234.56 ' or '($33.02)' → float."""
     if not raw:
         return None
-    s = raw.strip()
+    s = str(raw).strip()
     negative = s.startswith("(") and s.endswith(")")
     s = s.strip("()").replace("$", "").replace(",", "").strip()
     val = _safe_float(s)
@@ -1020,7 +1098,7 @@ def _schwab_parse_date_field(raw):
     if not raw:
         return None
     # Take the first date when "as of" is present
-    date_part = raw.split(" as of ")[0].strip()
+    date_part = str(raw).split(" as of ")[0].strip()
     return _parse_date_str(date_part)
 
 
@@ -1043,32 +1121,29 @@ def parse_schwab_transactions_csv(file_path, filename):
     # Schwab transaction CSVs start directly with the header row
     # (Date,Action,Symbol,...) — no preamble lines like the positions file.
     # Find the header row to be safe.
-    header_idx = None
-    for i, row in enumerate(rows):
-        vals = [str(c or "").strip() for c in row]
-        if vals and vals[0] == "Date" and "Action" in vals and "Symbol" in vals:
-            header_idx = i
-            break
-
-    if header_idx is None:
+    _, _, reader = _rows_to_flexible_dicts(
+        rows,
+        _SCHWAB_TRANSACTION_ALIASES,
+        required={"Date", "Action", "Symbol"},
+    )
+    if not reader:
         raise ValueError(
             "Could not find the transaction header row (Date,Action,Symbol,...). "
-            "Make sure this is a Schwab Transactions export."
+            "Make sure this is a Schwab Transactions export or a table with Date, Action, and Symbol columns."
         )
-
-    _, reader = _rows_to_dicts(rows, header_idx)
 
     kept = []
     filtered_count = 0
 
     for row in reader:
-        action = (row.get("Action") or "").strip()
-        symbol = (row.get("Symbol") or "").strip().upper()
-        raw_date = (row.get("Date") or "").strip()
-        raw_qty = (row.get("Quantity") or "").strip()
-        raw_price = (row.get("Price") or "").replace("$", "").replace(",", "").strip()
-        raw_fees = (row.get("Fees & Commissions") or row.get("Fees & Comm") or "").replace("$", "").replace(",", "").strip()
-        raw_amount = (row.get("Amount") or "").strip()
+        action = str(row.get("Action") or "").strip()
+        action_key = action.lower()
+        symbol = str(row.get("Symbol") or "").strip().upper()
+        raw_date = row.get("Date")
+        raw_qty = row.get("Quantity")
+        raw_price = row.get("Price")
+        raw_fees = row.get("Fees & Commissions") or row.get("Fees & Comm")
+        raw_amount = row.get("Amount")
 
         # Skip rows without a valid ticker
         if not symbol or not TICKER_RE.match(symbol):
@@ -1086,7 +1161,7 @@ def parse_schwab_transactions_csv(file_path, filename):
         fees = _safe_float(raw_fees) or 0.0
 
         # ── Dividend / distribution ──────────────────────────────────────
-        if action in _SCHWAB_DIVIDEND_ACTIONS:
+        if action in _SCHWAB_DIVIDEND_ACTIONS or action_key in {"dividend", "dividends", "cash dividend"}:
             div_amount = abs(amount) if amount is not None else 0.0
             # Div Adjustment can be negative (reversal)
             if action == "Div Adjustment" and amount is not None and amount < 0:
@@ -1104,7 +1179,7 @@ def parse_schwab_transactions_csv(file_path, filename):
             continue
 
         # ── DRIP reinvestment shares ─────────────────────────────────────
-        if action in _SCHWAB_DRIP_ACTIONS:
+        if action in _SCHWAB_DRIP_ACTIONS or "reinvest" in action_key and "adj" not in action_key:
             if qty is None or qty == 0:
                 filtered_count += 1
                 continue
@@ -1121,7 +1196,7 @@ def parse_schwab_transactions_csv(file_path, filename):
             continue
 
         # ── Reinvestment adjustment (share correction) ───────────────────
-        if action in _SCHWAB_REINVEST_ADJ_ACTIONS:
+        if action in _SCHWAB_REINVEST_ADJ_ACTIONS or "reinvestment adj" in action_key:
             if qty is None or qty == 0:
                 filtered_count += 1
                 continue
@@ -1140,7 +1215,7 @@ def parse_schwab_transactions_csv(file_path, filename):
             continue
 
         # ── Buy ──────────────────────────────────────────────────────────
-        if action == "Buy":
+        if action_key in {"buy", "bought", "you bought"}:
             if qty is None or qty == 0:
                 filtered_count += 1
                 continue
@@ -1157,7 +1232,7 @@ def parse_schwab_transactions_csv(file_path, filename):
             continue
 
         # ── Sell ─────────────────────────────────────────────────────────
-        if action == "Sell":
+        if action_key in {"sell", "sold", "you sold"}:
             if qty is None or qty == 0:
                 filtered_count += 1
                 continue
@@ -1201,6 +1276,18 @@ def parse_schwab_transactions_csv(file_path, filename):
 
 # ── E*Trade (Transaction History — Buys & Sells) ─────────────────────────────
 
+_ETRADE_TRANSACTION_ALIASES = {
+    "Activity/Trade Date": ["Date", "Trade Date", "Activity Date", "Run Date"],
+    "Activity Type": ["Action", "Transaction Type", "Type"],
+    "Symbol": ["Ticker"],
+    "Description": ["Security Description", "Name"],
+    "Quantity #": ["Quantity", "Qty", "Shares", "Qty #"],
+    "Price $": ["Price", "Price ($)", "Share Price"],
+    "Amount $": ["Amount", "Amount ($)", "Net Amount"],
+    "Commission": ["Commissions", "Commission $", "Fees", "Fee", "Fees & Commissions"],
+}
+
+
 def _etrade_read_rows(file_path, filename):
     """Read an E*Trade transaction history CSV/XLSX and return (account_info, data_rows).
 
@@ -1213,26 +1300,42 @@ def _etrade_read_rows(file_path, filename):
     """
     rows = _read_table_rows(file_path, filename)
 
-    if len(rows) < 8:
-        raise ValueError("File has too few rows to be an E*TRADE transaction export.")
+    if not rows:
+        raise ValueError("The E*TRADE transaction file is empty.")
 
-    account_info = str(rows[2][0] or "").strip()  # Row 3
-    header = [str(c or "").strip() for c in rows[6]]  # Row 7
+    account_info = ""
+    for row in rows[:20]:
+        first = str(_row_cell(row, 0)).strip()
+        if first.lower().startswith("account activity for"):
+            account_info = first
+            break
+
+    header_idx, header = _find_header_row(
+        rows,
+        _ETRADE_TRANSACTION_ALIASES,
+        required={"Activity/Trade Date", "Activity Type", "Symbol"},
+    )
+    if header_idx is None:
+        raise ValueError(
+            "Could not find the E*TRADE transaction header row. "
+            "Make sure this is an E*TRADE transaction export or a table with Date, Activity Type, and Symbol columns."
+        )
 
     data_rows = []
-    for row in rows[7:]:  # Row 8+
+    for row in rows[header_idx + 1:]:
         # Stop at empty rows or disclaimer text
-        if not row[0]:
+        if not _row_has_values(row):
             continue
-        val = str(row[0]).strip()
+        val = str(_row_cell(row, 0)).strip()
         # Skip disclaimer/legal text at the bottom
         if val.startswith("The information") or val.startswith("E*TRADE") or val.startswith("Under the"):
             continue
         # Must have an activity type
-        activity = row[3] if len(row) > 3 else None
+        record = _row_record(header, row)
+        activity = record.get("Activity Type")
         if not activity:
             continue
-        data_rows.append(dict(zip(header, row)))
+        data_rows.append(record)
 
     return account_info, data_rows
 
@@ -1302,7 +1405,8 @@ def parse_etrade_buys_sells_xlsx(file_path, filename):
         price_val = _safe_float(price)
         fees = _safe_float(commission) or 0.0
 
-        if activity == "Bought":
+        activity_key = activity.strip().lower()
+        if activity_key in {"bought", "buy", "you bought"}:
             if qty_val is None or qty_val == 0:
                 filtered_count += 1
                 continue
@@ -1316,7 +1420,7 @@ def parse_etrade_buys_sells_xlsx(file_path, filename):
                 "dividend_amount": None,
                 "notes": "",
             })
-        elif activity == "Sold":
+        elif activity_key in {"sold", "sell", "you sold"}:
             if qty_val is None or qty_val == 0:
                 filtered_count += 1
                 continue
@@ -1737,6 +1841,9 @@ def _parse_date(raw):
     if raw is None:
         return None
 
+    if isinstance(raw, datetime):
+        return raw.date()
+
     raw = str(raw).strip()
     if not raw:
         return None
@@ -1747,9 +1854,6 @@ def _parse_date(raw):
             return datetime.strptime(snowball_match.group(0), "%a %b %d %Y").date()
         except ValueError:
             pass
-
-    if isinstance(raw, datetime):
-        return raw.date()
 
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%m/%d/%Y", "%m/%d/%Y %H:%M:%S", "%b-%d-%Y"):
         try:
@@ -1770,7 +1874,15 @@ def _safe_float(val):
     if val is None:
         return None
     try:
-        return float(str(val).strip().strip('"').replace(",", ""))
+        text = str(val).strip().strip('"')
+        if not text or text in {"-", "--"}:
+            return None
+        negative = text.startswith("(") and text.endswith(")")
+        text = text.strip("()").replace("$", "").replace(",", "").strip()
+        if text.endswith("%"):
+            text = text[:-1].strip()
+        parsed = float(text)
+        return -parsed if negative else parsed
     except (ValueError, TypeError):
         return None
 

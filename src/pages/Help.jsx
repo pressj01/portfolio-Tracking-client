@@ -121,6 +121,11 @@ function ImportHelp() {
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Brokerage Position Templates</h3>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/import/Screenshot 2026-05-10 144007.jpg" alt="Import Brokerage Positions and Snowball Data tab showing format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>E*TRADE template</strong> — use this when you want a worksheet laid out for E*TRADE position data before importing.</li>
         <li><strong>Charles Schwab (Positions) template</strong> — use this when preparing Schwab position exports or copy/paste data for import.</li>
@@ -130,6 +135,18 @@ function ImportHelp() {
         <li><strong>Snowball Holdings template</strong> — use this for a migration-style holdings snapshot when moving from Snowball into the app.</li>
         <li><strong>Generic template</strong> — use this when your source does not match a brokerage template and you want the broadest flexible import format.</li>
       </ul>
+
+      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem', marginTop: '0.5rem' }}>
+        <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
+          <img src="/help-screenshots/import/Screenshot 2026-05-10 144111.jpg" alt="Charles Schwab Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        </div>
+        <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
+          <img src="/help-screenshots/import/Screenshot 2026-05-10 144201.jpg" alt="E*TRADE Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        </div>
+        <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
+          <img src="/help-screenshots/import/Screenshot 2026-05-10 144335.jpg" alt="Fidelity Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        </div>
+      </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>What Broker Position Imports Populate</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
@@ -197,12 +214,20 @@ function ImportHelp() {
         <li>DRIP reinvestments are tagged as <code>[DRIP]</code> buys.</li>
       </ul>
 
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/import/Screenshot 2026-05-10 144133.jpg" alt="Partial history warning and Charles Schwab Transactions format" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <h4 style={{ marginBottom: '0.4rem' }}>E*TRADE (Buys &amp; Sells)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>In E*TRADE, go to <strong>Accounts &gt; Transaction History</strong>, filter to "Buys &amp; Sells", then download the XLSX.</li>
         <li>Set the format selector to <strong>E*TRADE (Buys &amp; Sells)</strong>.</li>
         <li>Imports: BUY and SELL transactions with date, shares, price, and commission.</li>
       </ul>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/import/Screenshot 2026-05-10 144254.jpg" alt="E*TRADE Buys and Sells format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>E*TRADE (Dividends)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -211,6 +236,10 @@ function ImportHelp() {
         <li>Imports: cash dividend payments and DRIP reinvestment buys. Positive amounts are recorded as dividends; negative amounts with shares are recorded as <code>[DRIP]</code> buys.</li>
         <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
       </ul>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/import/Screenshot 2026-05-10 144224.jpg" alt="E*TRADE Dividends format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Fidelity (Transactions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -221,6 +250,10 @@ function ImportHelp() {
         <li>If the portfolio already has holdings from a positions import, the transaction import preserves those holdings and stores the Fidelity history for recordkeeping.</li>
       </ul>
 
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/import/Screenshot 2026-05-10 144401.jpg" alt="Fidelity Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <h4 style={{ marginBottom: '0.4rem' }}>Robinhood (Positions PDF)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>In Robinhood, download your <strong>Holdings PDF</strong> from the app or website.</li>
@@ -228,6 +261,10 @@ function ImportHelp() {
         <li>Imports: current positions with ticker, shares, and current value.</li>
         <li><strong>Note:</strong> Robinhood does not include cost basis in the Holdings PDF, so the current value is used as the initial cost basis. Update cost basis manually on the Holdings page or import Robinhood Transactions to build lot-level cost basis.</li>
       </ul>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/import/Screenshot 2026-05-10 144418.jpg" alt="Robinhood Positions PDF format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Robinhood (Transactions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -237,6 +274,10 @@ function ImportHelp() {
         <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
       </ul>
 
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/import/Screenshot 2026-05-10 144437.jpg" alt="Robinhood Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <h4 style={{ marginBottom: '0.4rem' }}>Snowball Transactions</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Set the format selector to <strong>Snowball Transactions</strong>.</li>
@@ -244,6 +285,10 @@ function ImportHelp() {
         <li>Imports: BUY, SELL, and DIVIDEND transactions. Stock splits are applied to pre-split lots automatically.</li>
         <li>Snowball exports may not exactly match the broker's live positions — use Positions imports for accurate current holdings.</li>
       </ul>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/import/Screenshot 2026-05-10 144023.jpg" alt="Snowball Transactions format selector with automatic backup notice" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Common Steps (All Transaction Formats)</h4>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2', marginBottom: '1rem' }}>
@@ -268,8 +313,17 @@ function ImportHelp() {
         <li>You can navigate away and come back — backups persist across sessions.</li>
       </ul>
 
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/import/Screenshot 2026-05-10 144051.jpg" alt="Automatic database backup notice shown before each import" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       {/* ── My Spreadsheet ──────────────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: My Spreadsheet (Owner Format)</h3>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/import/My_Spreadsheet.jpg" alt="My Spreadsheet tab showing the owner-format import interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <p style={{ marginBottom: '0.75rem' }}>
         This mode is designed for the developer's personal dividend-tracking Excel file. It expects a specific column layout
         (the "All Accounts" sheet) and can also import auxiliary sheets for weekly payouts, monthly payouts, and dividend-month data.
@@ -323,6 +377,11 @@ function ImportHelp() {
 
       {/* ── Generic Upload ──────────────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 2: Generic Upload</h3>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/import/Screenshot 2026-05-10 143859.jpg" alt="Generic Upload tab showing portfolio upload and watchlist import sections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <p style={{ marginBottom: '0.75rem' }}>
         This mode accepts any Excel file with at minimum a <strong>Ticker</strong> and <strong>Shares</strong> column.
         Missing data (prices, dividends, descriptions) is automatically enriched from Yahoo Finance.
@@ -343,6 +402,9 @@ function ImportHelp() {
           give you matching columns for supported broker export/paste workflows. Fill in at least the Ticker and Shares columns. Optional columns include:
           Price Paid, Current Price, Dividend, Frequency, Ex-Div Date, Pay Date, DRIP, Category, Purchase Date,
           Dividends Paid, YTD Divs, Total Divs Received, and more.
+          <div style={{ marginBottom: '0.75rem', marginTop: '0.75rem' }}>
+            <img src="/help-screenshots/import/Screenshot 2026-05-10 143932.jpg" alt="Upload Your Portfolio section with Download Template button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+          </div>
         </li>
         <li>
           <strong>Drag & drop your file</strong> (.xlsx, .xlsm, .xls, or .csv) onto the drop zone, or click to browse.
@@ -411,6 +473,10 @@ function ImportHelp() {
         <li>The "Import as Transactions" option is ideal when you want to track individual purchase lots and calculate realized gains on sells.</li>
         <li>Refresh Prices & Divs after a large import if you want the latest prices, dividend fields, and estimated pay dates recalculated immediately.</li>
       </ul>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/import/Screenshot 2026-05-10 143951.jpg" alt="Generic Upload merge mode notice and Merge Portfolio button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
     </div>
   )
 }
@@ -3831,6 +3897,10 @@ function PortfoliosHelp() {
         the combined totals of sub-portfolios.
       </p>
 
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/portfolios/manage-portfolios-overview-blurred.jpg" alt="Manage Portfolios page showing portfolio table with total values blurred" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Each row shows a portfolio's name, holding count, total value, and creation date.
@@ -4306,16 +4376,38 @@ function ETFProviderUpdateHelp() {
         ETF Provider Update refreshes fund-level metadata (total assets, number of funds, average expense ratio)
         for a selected ETF provider by pulling the latest data from StockAnalysis.com.
       </p>
+
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Select a provider from the dropdown (e.g. YieldMax, NEOS, Global X).</li>
         <li>Review the current summary cards showing provider name, fund count, total assets, and average expense ratio.</li>
         <li>Click <strong>Update Provider</strong> to fetch the latest data. A confirmation message shows how many funds were updated or inserted.</li>
       </ul>
+
       <p style={{ marginBottom: '0.75rem' }}>
         Updated provider data is used by the ETF Comparer and Security Research pages for expected yield calculations
         and distribution source attribution.
       </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Examples</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Here are some examples of the ETF Provider Update screen with different ETF providers:
+      </p>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <p style={{ fontSize: '0.9rem', color: '#90a4ae', marginBottom: '0.5rem', fontStyle: 'italic' }}>BlackRock provider showing 484 funds with $4.3T in assets</p>
+        <img src="/help-screenshots/etf-provider-update/blackrock-example.jpg" alt="ETF Provider Update example showing BlackRock provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <p style={{ fontSize: '0.9rem', color: '#90a4ae', marginBottom: '0.5rem', fontStyle: 'italic' }}>State Street provider showing 183 funds with $1.8T in assets</p>
+        <img src="/help-screenshots/etf-provider-update/state-street-example.jpg" alt="ETF Provider Update example showing State Street provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <p style={{ fontSize: '0.9rem', color: '#90a4ae', marginBottom: '0.5rem', fontStyle: 'italic' }}>Invesco provider showing 238 funds with $871B in assets</p>
+        <img src="/help-screenshots/etf-provider-update/invesco-example.jpg" alt="ETF Provider Update example showing Invesco provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
     </div>
   )
 }
@@ -4360,6 +4452,10 @@ function AnnualTaxReportHelp() {
         <li><strong>Lots Sold</strong> — number of individual tax lots closed during the year.</li>
       </ul>
 
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/tax-report/tax-report-summary-form-previews.jpg" alt="Annual Tax Report summary cards and Form 1099-DIV and Form 8949 previews" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <h3 style={{ marginBottom: '0.5rem' }}>Tabs</h3>
 
       <p><strong>Form Previews</strong></p>
@@ -4381,12 +4477,20 @@ function AnnualTaxReportHelp() {
         override is in effect for that ticker and year.
       </p>
 
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/tax-report/tax-report-dividends-overrides.jpg" alt="Annual Tax Report Dividends tab with per-ticker tax treatment overrides" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
       <p><strong>Realized Lots</strong></p>
       <p style={{ marginBottom: '1rem' }}>
         One row per closed lot with: Ticker, Sell Date, Buy Date (shown as <em>unmatched</em> if
         no BUY was found), Shares, Buy Price, Sell Price, Cost, Proceeds, Gain/Loss (colored
         green/red), holding Days, and Term badge (Long-Term or Short-Term).
       </p>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img src="/help-screenshots/tax-report/tax-report-realized-lots.jpg" alt="Annual Tax Report Realized Lots tab with closed tax lots and gain or loss detail" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
 
       <h3 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Where the numbers come from</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>

@@ -10,6 +10,32 @@ function fmt$(v) {
 function fmtPct(v) {
   return (v >= 0 ? '+' : '') + parseFloat(v).toFixed(2) + '%'
 }
+function fmtAbs4(v) {
+  return Math.abs(parseFloat(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+}
+function fmtAbsPct(v) {
+  return Math.abs(parseFloat(v || 0)).toFixed(2) + '%'
+}
+function shareGapPct(deficit, amount, endPrice) {
+  const breakevenShares = endPrice > 0 ? amount / endPrice : 0
+  return breakevenShares ? (deficit / breakevenShares) * 100 : 0
+}
+function shareGapKind(deficit) {
+  if (deficit > 0) return 'needed'
+  if (deficit < 0) return 'extra'
+  return 'at breakeven'
+}
+function navSeverityFromRatio(v) {
+  if (v == null) return null
+  return v > 0.75 ? 'High' : v > 0.25 ? 'Medium' : 'Low'
+}
+function navSeverityColor(severity) {
+  return severity === 'High' ? '#e05555' : severity === 'Medium' ? '#ffb300' : severity === 'Low' ? '#00c853' : '#666'
+}
+function navSeverityText(severity, portfolio = false) {
+  const scope = portfolio ? 'Portfolio NAV Erosion' : 'NAV Erosion'
+  return severity === 'High' ? `High Benchmark-Adjusted ${scope}` : severity === 'Medium' ? `Moderate Benchmark-Adjusted ${scope}` : `Low Benchmark-Adjusted ${scope}`
+}
 
 function StatTile({ label, value, color, sub }) {
   return (
@@ -240,6 +266,7 @@ export default function NavErosionPortfolio() {
     let erosionCount = 0, validCount = 0, errorCount = 0
     let best = null, worst = null
     let covWeightedSum = 0, covWeightTotal = 0
+    let hasHighSeverity = false
     results.forEach(r => {
       if (r.error && !r.start_price) { errorCount++; return }
       validCount++
@@ -250,6 +277,7 @@ export default function NavErosionPortfolio() {
       totGL += r.gain_loss_dollar || 0
       totTR += r.total_return_dollar || 0
       if (r.has_erosion) erosionCount++
+      if (r.nav_erosion_severity === 'High') hasHighSeverity = true
       if (r.coverage_ratio != null) {
         covWeightedSum += r.coverage_ratio * (r.amount || 0)
         covWeightTotal += r.amount || 0
@@ -259,16 +287,17 @@ export default function NavErosionPortfolio() {
     })
     const totGLPct = totAmount > 0 ? totGL / totAmount * 100 : 0
     const aggCoverage = covWeightTotal > 0 ? covWeightedSum / covWeightTotal : null
+    const aggSeverity = hasHighSeverity ? 'High' : navSeverityFromRatio(aggCoverage)
     return {
       totAmount, totDist, totReinv, totFinal, totGL, totTR, totGLPct,
-      erosionCount, validCount, errorCount, best, worst, aggCoverage,
+      erosionCount, validCount, errorCount, best, worst, aggCoverage, aggSeverity,
     }
   }, [results])
 
   const headers = ['Ticker', 'Amount', 'Reinvest %', 'Start Price', 'End Price',
     'Price \u0394%', 'Total Distributions', 'Total Reinvested', 'Final Value',
     'Gain/Loss $', 'Gain/Loss %', 'Total Return $', 'Total Return %',
-    'NAV Erosion', 'Shares Deficit', 'NAV Ratio', 'Note']
+    'NAV Erosion', 'Shares Needed / Extra To Breakeven', 'NAV Ratio', 'Note']
 
   return (
     <div className="nep-page">
@@ -281,6 +310,10 @@ export default function NavErosionPortfolio() {
         <span style={{ color: '#e05555', fontWeight: 600 }}>NAV Erosion = Yes</span> means the ETF's share-price
         decline has outpaced distributions — you'd need more shares than you hold to recover your principal
         at the ending price.
+        <br />
+        <span style={{ color: '#e05555', fontWeight: 600 }}>Red needed</span> means shares still needed to breakeven.
+        <span style={{ color: '#00c853', fontWeight: 600 }}> Green extra</span> means shares above breakeven.
+        The percent is the gap as a share of break-even shares.
       </p>
 
       {/* Global date inputs */}
@@ -313,13 +346,23 @@ export default function NavErosionPortfolio() {
 
       {/* ETF input grid */}
       <div className="nep-grid-panel">
+        <div style={{ color: '#aaa', fontSize: '0.78rem', marginBottom: '0.55rem', lineHeight: 1.5 }}>
+          Each row is one ETF. The two number boxes are the starting dollars assigned to that ETF and the
+          percent of its distributions to reinvest during the backtest.
+        </div>
         <div style={{ overflowX: 'auto' }}>
-          <table className="nep-grid-tbl">
+          <table className="nep-grid-tbl" style={{ width: 'auto', minWidth: 640 }}>
+            <colgroup>
+              <col style={{ width: 140 }} />
+              <col style={{ width: 210 }} />
+              <col style={{ width: 250 }} />
+              <col style={{ width: 40 }} />
+            </colgroup>
             <thead>
               <tr>
-                <th style={{ textAlign: 'left', width: 120 }}>Ticker</th>
-                <th style={{ textAlign: 'right', width: 180 }}>Initial Investment ($)</th>
-                <th style={{ textAlign: 'right', width: 220 }}>% of Divs to Reinvest</th>
+                <th style={{ textAlign: 'left' }}>ETF Ticker</th>
+                <th style={{ textAlign: 'left' }}>Starting Dollars ($)</th>
+                <th style={{ textAlign: 'left' }}>Dividends Reinvested (%)</th>
                 <th style={{ width: 40 }}></th>
               </tr>
             </thead>
@@ -331,7 +374,9 @@ export default function NavErosionPortfolio() {
                       className="ne-input"
                       style={{ width: 90, textTransform: 'uppercase' }}
                       maxLength={10}
-                      placeholder="e.g. JEPI"
+                      placeholder="Ticker"
+                      title="ETF ticker to include in this portfolio NAV erosion backtest"
+                      aria-label="ETF ticker"
                       value={r.ticker}
                       onChange={e => updateRow(i, 'ticker', e.target.value.toUpperCase())}
                     />
@@ -343,7 +388,9 @@ export default function NavErosionPortfolio() {
                       min="1"
                       step="100"
                       style={{ width: 120, textAlign: 'right' }}
-                      placeholder="e.g. 10000"
+                      placeholder="10000"
+                      title="Starting investment amount for this ETF in the backtest"
+                      aria-label="Starting dollars for this ETF"
                       value={r.amount}
                       onChange={e => updateRow(i, 'amount', e.target.value)}
                     />
@@ -355,8 +402,10 @@ export default function NavErosionPortfolio() {
                       min="0"
                       max="100"
                       step="1"
-                      style={{ width: 220, textAlign: 'right' }}
-                      placeholder="0 = cash, 100 = full DRIP"
+                      style={{ width: 120, textAlign: 'right' }}
+                      placeholder="0-100"
+                      title="Percent of this ETF's distributions to reinvest. 0 keeps distributions as cash; 100 reinvests all distributions."
+                      aria-label="Percent of dividends reinvested"
                       value={r.reinvest_pct}
                       onChange={e => updateRow(i, 'reinvest_pct', e.target.value)}
                     />
@@ -457,23 +506,27 @@ export default function NavErosionPortfolio() {
               <StatTile
                 label="Portfolio NAV Erosion Ratio"
                 value={summary.aggCoverage != null ? summary.aggCoverage.toFixed(4) : '\u2014'}
-                color={summary.aggCoverage == null ? '#666' : summary.aggCoverage > 0.75 ? '#e05555' : summary.aggCoverage > 0.25 ? '#ffb300' : '#00c853'}
+                color={navSeverityColor(summary.aggSeverity)}
                 sub="dollar-weighted avg"
               />
               {summary.aggCoverage != null && (
                 <div className="nep-stat-tile" style={{
-                  border: summary.aggCoverage > 0.75 ? '2px solid #e05555' : summary.aggCoverage > 0.25 ? '2px solid #ffb300' : '2px solid #00c853',
+                  border: `2px solid ${navSeverityColor(summary.aggSeverity)}`,
                   borderRadius: '8px',
-                  background: summary.aggCoverage > 0.75 ? 'rgba(224,85,85,0.12)' : summary.aggCoverage > 0.25 ? 'rgba(255,179,0,0.12)' : 'rgba(0,200,83,0.12)',
+                  background: summary.aggSeverity === 'High' ? 'rgba(224,85,85,0.12)' : summary.aggSeverity === 'Medium' ? 'rgba(255,179,0,0.12)' : 'rgba(0,200,83,0.12)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  flex: '1 1 190px',
                 }}>
                   <div className="nep-stat-val" style={{
-                    color: summary.aggCoverage > 0.75 ? '#e05555' : summary.aggCoverage > 0.25 ? '#ffb300' : '#00c853',
+                    color: navSeverityColor(summary.aggSeverity),
                     fontSize: '0.85rem',
                     lineHeight: 1.3,
                     textAlign: 'center',
+                    whiteSpace: 'normal',
+                    overflow: 'visible',
+                    textOverflow: 'clip',
                   }}>
-                    {summary.aggCoverage > 0.75 ? 'High Benchmark-Adjusted Portfolio NAV Erosion' : summary.aggCoverage > 0.25 ? 'Moderate Benchmark-Adjusted Portfolio NAV Erosion' : 'Low Benchmark-Adjusted Portfolio NAV Erosion'}
+                    {navSeverityText(summary.aggSeverity, true)}
                   </div>
                 </div>
               )}
@@ -533,6 +586,9 @@ export default function NavErosionPortfolio() {
                   const trCls = (r.total_return_dollar || 0) < 0 ? 'pct-down' : 'pct-up'
                   const trPCls = (r.total_return_pct || 0) < 0 ? 'pct-down' : 'pct-up'
                   const defCls = r.final_deficit > 0 ? 'ne-deficit' : 'ne-surplus'
+                  const gapPct = shareGapPct(r.final_deficit || 0, r.amount || 0, r.end_price || 0)
+                  const gapKind = shareGapKind(r.final_deficit || 0)
+                  const navSeverity = r.nav_erosion_severity || navSeverityFromRatio(r.coverage_ratio)
                   return (
                     <tr key={idx}>
                       <td><strong>{r.ticker}</strong></td>
@@ -553,8 +609,13 @@ export default function NavErosionPortfolio() {
                           ? <span style={{ color: '#e05555', fontWeight: 700 }}>Yes</span>
                           : <span style={{ color: '#00c853', fontWeight: 700 }}>No</span>}
                       </td>
-                      <td className={defCls}>{parseFloat(r.final_deficit).toFixed(4)}</td>
-                      <td style={{ color: r.coverage_ratio == null ? '#666' : r.coverage_ratio > 0.75 ? '#e05555' : r.coverage_ratio > 0.25 ? '#ffb300' : '#00c853', fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
+                      <td
+                        className={defCls}
+                        title={`Break-even shares minus total shares held: ${parseFloat(r.final_deficit || 0).toFixed(4)} (${fmtPct(gapPct)})`}
+                      >
+                        {fmtAbs4(r.final_deficit)} {gapKind} <span style={{ opacity: 0.8 }}>({fmtAbsPct(gapPct)})</span>
+                      </td>
+                      <td style={{ color: r.coverage_ratio == null ? '#666' : navSeverityColor(navSeverity), fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
                         {r.coverage_ratio != null ? r.coverage_ratio.toFixed(4) : '\u2014'}
                       </td>
                       <td style={{ textAlign: 'left', fontSize: '0.78rem', color: '#aaa' }}>
@@ -579,7 +640,7 @@ export default function NavErosionPortfolio() {
                     <td></td>
                     <td className={summary.totTR >= 0 ? 'pct-up' : 'pct-down'}>{fmt$(summary.totTR)}</td>
                     <td></td><td></td>
-                    <td style={{ color: summary.aggCoverage == null ? '#666' : summary.aggCoverage > 0.75 ? '#e05555' : summary.aggCoverage > 0.25 ? '#ffb300' : '#00c853', fontWeight: 600 }}>
+                    <td style={{ color: navSeverityColor(summary.aggSeverity), fontWeight: 600 }}>
                       {summary.aggCoverage != null ? summary.aggCoverage.toFixed(4) : '\u2014'}
                     </td>
                     <td></td>
