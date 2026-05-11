@@ -397,7 +397,7 @@ export default function Dashboard() {
   const [tickerCoverageMeta, setTickerCoverageMeta] = useState({})
   const [overviewGroups, setOverviewGroups] = useState(null)
   const [sp500, setSp500] = useState(null)
-  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v10_${selection}`, [selection])
+  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v11_${selection}`, [selection])
 
   useEffect(() => {
     const cached = readDashboardCache(SP500_CACHE_KEY)
