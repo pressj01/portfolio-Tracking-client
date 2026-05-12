@@ -64,6 +64,7 @@ const GROUPS = [
       { id: 'consolidation', label: 'Consolidation' },
       { id: 'macro-dashboard', label: 'Macro Dashboard' },
       { id: 'income-growth', label: 'Income Growth' },
+      { id: 'retirement-readiness', label: 'Retirement Readiness' },
       { id: 'rebalance-wizard', label: 'Rebalance Wizard' },
     ],
   },
@@ -4279,6 +4280,47 @@ function IncomeGrowthHelp() {
   )
 }
 
+function RetirementReadinessHelp() {
+  return (
+    <div>
+      <h2>Retirement Readiness</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Retirement Readiness compares your current portfolio income against monthly living expenses and a
+        Monthly Expense Protection Buffer (MEPB). It starts from the currently selected portfolio, applies stress
+        assumptions, then projects how surplus reinvestment can change the income path over time.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Core Inputs</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Monthly Expenses</strong> - how much cash you need every month to live on. This is the baseline income target.</li>
+        <li><strong>MEPB Ratio</strong> - your Monthly Expense Protection Buffer safety multiplier. If expenses are $4,500 and MEPB is 3, the model wants stressed portfolio income of $13,500 per month.</li>
+        <li><strong>Reinvest Surplus</strong> - the percent of income above monthly expenses that gets reinvested. If income is $6,000, expenses are $4,500, and this is 100%, the extra $1,500 is reinvested.</li>
+        <li><strong>Cash Reserve</strong> - cash you already have set aside outside the portfolio for shortfalls or emergencies.</li>
+        <li><strong>Cash Target Months</strong> - how many months of expenses you want in reserve. If expenses are $4,500 and this is 6, the target reserve is $27,000.</li>
+        <li><strong>Years</strong> - how far forward the model projects income, expenses, surplus reinvestment, and cash reserve.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Stress Inputs</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Expense Inflation %</strong> - annual rate at which monthly expenses increase over time.</li>
+        <li><strong>Income Growth %</strong> - annual growth or decline assumption for portfolio income after the initial stress cuts.</li>
+        <li><strong>Dividend Cut %</strong> - immediate stress cut to current income. If current income is $8,000 per month and this is 20%, stressed income starts at $6,400 per month.</li>
+        <li><strong>Income Haircut %</strong> - an extra safety discount after the dividend cut, useful for volatile funds where distributions may vary month to month.</li>
+        <li><strong>Price Drawdown %</strong> - stress reduction to portfolio value. It mainly affects the assumed yield of reinvested surplus during the stressed period.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Readiness badge</strong> - Covered, Ready, Close, Building, or Risky based on stressed income, buffer target, cash runway, and whether non-investment inflows already cover expenses.</li>
+        <li><strong>Bear Buffer Ratio</strong> - bear-market after-tax income divided by the expenses the portfolio must pay.</li>
+        <li><strong>Buffer Gap</strong> - additional stressed monthly income needed to reach the selected MEPB target.</li>
+        <li><strong>Passive Income - MEPB Trend Lines</strong> - compares total expenses, expenses after non-investment inflows, good-market income, bear-market income, and the MEPB target.</li>
+        <li><strong>Monthly MEPB Projection Table</strong> - month-by-month good and bear market projections with yearly totals.</li>
+      </ul>
+    </div>
+  )
+}
+
 function DividendCalculatorHelp() {
   return (
     <div>
@@ -4861,6 +4903,7 @@ const CONTENT_MAP = {
   consolidation: ConsolidationHelp,
   'macro-dashboard': MacroDashboardHelp,
   'income-growth': IncomeGrowthHelp,
+  'retirement-readiness': RetirementReadinessHelp,
   'rebalance-wizard': RebalanceWizardHelp,
 }
 

@@ -69,6 +69,8 @@ a:hover {
   border: 1px solid #0f3460;
   border-radius: 6px;
   min-width: 140px;
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
   z-index: 50;
   box-shadow: 0 4px 12px rgba(0,0,0,0.4);
 }
