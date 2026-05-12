@@ -161,6 +161,23 @@ export default function ETFComparer() {
     setReturnXRange([null, null])
   }, [])
 
+  const dataDateBounds = useMemo(() => {
+    if (!data?.series) return [null, null]
+    const allDates = Object.values(data.series).flatMap(s => s.dates || [])
+    if (!allDates.length) return [null, null]
+    return [dateKey(allDates.reduce((a, b) => a < b ? a : b)), dateKey(allDates.reduce((a, b) => a > b ? a : b))]
+  }, [data])
+
+  const rangeStart = returnXRange[0] || dataDateBounds[0] || ''
+  const rangeEnd = returnXRange[1] || dataDateBounds[1] || ''
+
+  const handleRangeDateChange = useCallback((which, value) => {
+    if (!value) { setReturnXRange([null, null]); return }
+    const s = which === 'start' ? value : (returnXRange[0] || dataDateBounds[0])
+    const e = which === 'end' ? value : (returnXRange[1] || dataDateBounds[1])
+    if (s && e) setReturnXRange(normalizeReturnRange([s, e]) || [s, e])
+  }, [returnXRange, dataDateBounds])
+
   useEffect(() => {
     reinvestRef.current = reinvest
   }, [reinvest])
@@ -301,6 +318,8 @@ export default function ETFComparer() {
     const minDate = allDates.reduce((a, b) => a < b ? a : b)
     const maxDate = allDates.reduce((a, b) => a > b ? a : b)
     const activeReturnRange = normalizeReturnRange(returnXRange)
+    const fallbackRange = dataDateBounds[0] && dataDateBounds[1] ? dataDateBounds : null
+    const effectiveReturnRange = activeReturnRange || fallbackRange
     const [visibleStart, visibleEnd] = visibleDateRange(data, returnXRange, showRangeSlider)
 
     symbols.forEach((sym, idx) => {
@@ -417,14 +436,14 @@ export default function ETFComparer() {
           type: 'date',
           gridcolor: '#333',
           rangeslider: showRangeSlider ? { visible: true, bgcolor: '#252540', bordercolor: '#555', borderwidth: 1, thickness: 0.08 } : { visible: false },
-          ...(showRangeSlider && activeReturnRange ? { range: activeReturnRange } : {}),
+          ...(effectiveReturnRange ? { range: effectiveReturnRange, autorange: false } : {}),
           showspikes: true,
           spikemode: 'across',
         },
         annotations,
       },
     }
-  }, [data, symbols, reinvest, returnPctMode, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange])
+  }, [data, symbols, reinvest, returnPctMode, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds])
 
   const rows = useMemo(() => {
     const profiles = data?.profiles || {}
@@ -619,6 +638,19 @@ export default function ETFComparer() {
           {PERIODS.map(p => (
               <button key={p.value} className={`btn btn-sm${period === p.value ? ' btn-active' : ''}`} onClick={() => { setPeriod(p.value); resetReturnRange() }}>{p.label}</button>
           ))}
+          {dataDateBounds[0] && (
+            <>
+              <span className="etfc-date-sep">|</span>
+              <input type="date" className="range-date-input" value={rangeStart} min={dataDateBounds[0]} max={rangeEnd}
+                onChange={e => handleRangeDateChange('start', e.target.value)} title="Start date" />
+              <span className="range-date-arrow">→</span>
+              <input type="date" className="range-date-input" value={rangeEnd} min={rangeStart} max={dataDateBounds[1]}
+                onChange={e => handleRangeDateChange('end', e.target.value)} title="End date" />
+              {(returnXRange[0] || returnXRange[1]) && (
+                <button className="btn btn-sm" onClick={resetReturnRange} title="Clear custom dates">&times;</button>
+              )}
+            </>
+          )}
         </div>
       </div>
 
@@ -659,7 +691,7 @@ export default function ETFComparer() {
             useResizeHandler
             style={{ width: '100%' }}
             onRelayout={(e) => {
-              if (!showRangeSlider) return
+              if (e?.['xaxis.autorange']) { setReturnXRange([null, null]); return }
               const range = e?.['xaxis.range'] || (e?.['xaxis.range[0]'] && e?.['xaxis.range[1]'] ? [e['xaxis.range[0]'], e['xaxis.range[1]']] : null)
               const next = normalizeReturnRange(range)
               if (next) {

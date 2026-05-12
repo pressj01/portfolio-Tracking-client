@@ -2219,6 +2219,27 @@ export default function ETFScreen() {
     returnXRangeRef.current = returnXRange
   }, [returnXRange])
 
+  const returnDataDateBounds = useMemo(() => {
+    if (!returnData?.series) return [null, null]
+    const allDates = Object.values(returnData.series).flatMap(s => s.dates || [])
+    if (!allDates.length) return [null, null]
+    return [dateKey(allDates.reduce((a, b) => a < b ? a : b)), dateKey(allDates.reduce((a, b) => a > b ? a : b))]
+  }, [returnData])
+
+  const rangeStart = returnXRange[0] || returnDataDateBounds[0] || ''
+  const rangeEnd = returnXRange[1] || returnDataDateBounds[1] || ''
+
+  const handleRangeDateChange = useCallback((which, value) => {
+    if (!value) { returnXRangeRef.current = [null, null]; setReturnXRange([null, null]); return }
+    const s = which === 'start' ? value : (returnXRange[0] || returnDataDateBounds[0])
+    const e = which === 'end' ? value : (returnXRange[1] || returnDataDateBounds[1])
+    if (s && e) {
+      const next = normalizeReturnRange([s, e]) || [s, e]
+      returnXRangeRef.current = next
+      setReturnXRange(next)
+    }
+  }, [returnXRange, returnDataDateBounds])
+
   useEffect(() => {
     resetReturnRange()
   }, [ticker, period, compareTickers, resetReturnRange])
@@ -2545,6 +2566,8 @@ export default function ETFScreen() {
     const compColors = ['#a0f0c0', '#FFD700', '#ff7eb3', '#b39ddb', '#ff8a65', '#4dd0e1', '#aed581', '#f48fb1']
     const compDashes = ['solid', 'dash', 'dot', 'dashdot', 'longdash']
     const activeReturnRange = normalizeReturnRange(returnXRange)
+    const fallbackRange = returnDataDateBounds[0] && returnDataDateBounds[1] ? returnDataDateBounds : null
+    const effectiveReturnRange = activeReturnRange || fallbackRange
     const [visibleStart, visibleEnd] = getVisibleDateRange(returnData, returnXRange, showRangeSlider)
 
     allSymbols.forEach((sym, si) => {
@@ -2695,7 +2718,7 @@ export default function ETFScreen() {
       xaxis: {
         type: 'date',
         rangeslider: showRangeSlider ? { visible: true, bgcolor: '#252540', bordercolor: '#555', borderwidth: 1 } : { visible: false },
-        ...(showRangeSlider && activeReturnRange ? { range: activeReturnRange } : {}),
+        ...(effectiveReturnRange ? { range: effectiveReturnRange, autorange: false } : {}),
         gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot',
       },
       yaxis: {
@@ -2708,14 +2731,18 @@ export default function ETFScreen() {
       annotations,
     }
     return { data: traces, layout }
-  }, [returnData, ticker, period, showReturnLabels, returnHoverMode, returnPctMode, showRangeSlider, returnXRange])
+  }, [returnData, ticker, period, showReturnLabels, returnHoverMode, returnPctMode, showRangeSlider, returnXRange, returnDataDateBounds])
 
 
-  const handleReturnUpdate = useCallback((figure) => {
-    if (!showRangeSlider) return
-    const range = figure?.layout?.xaxis?.range || figure?.['xaxis.range'] || (
-      figure?.['xaxis.range[0]'] && figure?.['xaxis.range[1]']
-        ? [figure['xaxis.range[0]'], figure['xaxis.range[1]']]
+  const handleReturnRelayout = useCallback((eventData) => {
+    if (eventData?.['xaxis.autorange']) {
+      returnXRangeRef.current = [null, null]
+      setReturnXRange([null, null])
+      return
+    }
+    const range = eventData?.['xaxis.range'] || (
+      eventData?.['xaxis.range[0]'] && eventData?.['xaxis.range[1]']
+        ? [eventData['xaxis.range[0]'], eventData['xaxis.range[1]']]
         : null
     )
     const normalized = normalizeReturnRange(range)
@@ -2726,22 +2753,7 @@ export default function ETFScreen() {
         setReturnXRange([s, e])
       }
     }
-  }, [showRangeSlider])
-
-  const returnDateDisplay = useMemo(() => {
-    if (!showRangeSlider || !returnData?.series) return null
-    let s, e
-    const activeReturnRange = normalizeReturnRange(returnXRange)
-    if (activeReturnRange) { [s, e] = activeReturnRange }
-    else {
-      const allD = Object.values(returnData.series).flatMap(sr => sr.dates)
-      if (!allD.length) return null
-      s = allD.reduce((a, b) => a < b ? a : b)
-      e = allD.reduce((a, b) => a > b ? a : b)
-    }
-    const fmt = d => new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-    return `${fmt(s)}  →  ${fmt(e)}`
-  }, [showRangeSlider, returnData, returnXRange])
+  }, [])
 
   const sliderDisabled = !['all3', 'all4'].includes(returnMode)
 
@@ -2777,6 +2789,19 @@ export default function ETFScreen() {
             <button key={p.value} className={`btn btn-sm${period === p.value && !interval ? ' btn-active' : ''}`} onClick={() => { setPeriod(p.value); setInterval_(''); setDrawnShapes([]); setFibSets([]); setFibClicks([]) }}>{p.label}</button>
           ))}
           <span className="etf-draw-sep">|</span>
+          {tab === 'returns' && returnDataDateBounds[0] && (
+            <>
+              <input type="date" className="range-date-input" value={rangeStart} min={returnDataDateBounds[0]} max={rangeEnd}
+                onChange={e => handleRangeDateChange('start', e.target.value)} title="Start date" />
+              <span className="range-date-arrow">→</span>
+              <input type="date" className="range-date-input" value={rangeEnd} min={rangeStart} max={returnDataDateBounds[1]}
+                onChange={e => handleRangeDateChange('end', e.target.value)} title="End date" />
+              {(returnXRange[0] || returnXRange[1]) && (
+                <button className="btn btn-sm" onClick={resetReturnRange} title="Clear custom dates">&times;</button>
+              )}
+              <span className="etf-draw-sep">|</span>
+            </>
+          )}
           {tab === 'technical' && (
             <select className="etf-draw-select" value={period === '1d' || period === '5d' ? `${period}|${interval}` : ''} onChange={e => {
               if (!e.target.value) return
@@ -3224,12 +3249,7 @@ export default function ETFScreen() {
                     Reinvest is 100% — the Custom and DRIP lines are identical and overlap. Adjust the slider below 100% to see them diverge.
                   </div>
                 )}
-                {returnDateDisplay && (
-                  <div style={{ textAlign: 'right', fontSize: '0.9rem', color: '#90caf9', padding: '0.25rem 0.5rem 0', fontWeight: 500 }}>
-                    {returnDateDisplay}
-                  </div>
-                )}
-                <Plot data={returnPlotData} layout={returnPlotLayout} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} onUpdate={handleReturnUpdate} onRelayout={handleReturnUpdate} />
+                <Plot data={returnPlotData} layout={returnPlotLayout} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} onRelayout={handleReturnRelayout} />
               </>
             ) : (
               !returnLoading && <div className="etf-placeholder">Select a return mode and click Load to compare returns.</div>
