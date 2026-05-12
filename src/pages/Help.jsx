@@ -64,6 +64,7 @@ const GROUPS = [
       { id: 'consolidation', label: 'Consolidation' },
       { id: 'macro-dashboard', label: 'Macro Dashboard' },
       { id: 'income-growth', label: 'Income Growth' },
+      { id: 'retirement-readiness', label: 'Retirement Readiness' },
       { id: 'rebalance-wizard', label: 'Rebalance Wizard' },
     ],
   },
@@ -2643,30 +2644,50 @@ function SafeWithdrawalHelp() {
     <div>
       <h2>Safe Withdrawal Amount</h2>
       <p style={{ marginBottom: '1rem' }}>
-        This page compares your current estimated monthly dividend income to a configurable percent-of-cost withdrawal rule
-        (default 8%). It is a quick planning view, not a Monte Carlo retirement model.
+        This page answers: "Can my dividend income support a target withdrawal rate without eating into principal?"
+        You pick a percent-of-cost withdrawal rate (default 8%) and the page shows how much cash your dividends
+        generate, how much would be withdrawn at that rate, and how much is left over — all broken down weekly, monthly,
+        and yearly. It is a quick planning view, not a Monte Carlo retirement model.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="/help-screenshots/safe-withdrawal/Screenshot 2026-05-09 101918.jpg" alt="Safe Withdrawal Rate calculator" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What It Shows</h3>
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Strip</h3>
+      <p style={{ marginBottom: '0.5rem' }}>The cards across the top show the portfolio-level cash flow picture. All amounts recalculate live when you change the withdrawal rate or category filter.</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>N% of Cost / Week, Month, Year</strong> — withdrawal amounts at the selected percent of original cost basis.</li>
-        <li><strong>Est Monthly Dividends</strong> — current estimated monthly income from the selected holdings.</li>
-        <li><strong>Break-even % (Portfolio YoC)</strong> — aggregate yield on cost for the selected holdings. Any withdrawal rate above this eats into principal. The card turns <span style={{ color: '#4ade80' }}>green</span> when your selected percent is below break-even and <span style={{ color: '#ff6b6b' }}>red</span> when it exceeds it.</li>
-        <li><strong>Yield on Cost / Current Yield</strong> — side-by-side context for each holding.</li>
-        <li><strong>Sustainable flag</strong> — highlights holdings where current income meets or exceeds the selected percent-of-cost target.</li>
+        <li><strong>Monthly Dividend Estimate</strong> — total estimated monthly dividends from the selected holdings. If any holdings use DRIP, the label changes to "Before DRIP" to clarify this is gross income.</li>
+        <li><strong>Monthly Dividends Reinvested by DRIP</strong> — appears only when DRIP holdings are present. Shows how much of the monthly income is being automatically reinvested and is therefore not available as cash.</li>
+        <li><strong>Cash Available (Weekly / Monthly / Yearly)</strong> — dividend income minus any DRIP reinvestment. This is the actual cash hitting your account that could fund withdrawals. When no holdings use DRIP, this equals total dividends.</li>
+        <li><strong>N% of Cost Withdrawn (Weekly / Monthly / Yearly)</strong> — withdrawal target amounts at the selected rate, applied to the cost basis of dividend-paying holdings. For holdings with DRIP, the withdrawal target is proportionally reduced to reflect only the cash-generating portion of the cost basis.</li>
+        <li><strong>Cash Left After Withdrawal (Weekly / Monthly / Yearly)</strong> — cash available minus the withdrawal target. Turns <span style={{ color: '#ff6b6b' }}>red</span> if the withdrawal exceeds available cash. A "No more cash left to withdraw" card appears when monthly cash is fully consumed.</li>
+        <li><strong>Break-even % (Portfolio YoC)</strong> — aggregate yield on cost for the selected holdings. Any withdrawal rate above this eats into principal. The card turns <span style={{ color: '#4ade80' }}>green</span> when your selected percent is at or below break-even and <span style={{ color: '#ff6b6b' }}>red</span> when it exceeds it.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters and Table</h3>
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Percent of Cost dropdown</strong> — pick any rate from 1% to 30% (default 8%). All column labels, row amounts, totals, and the break-even comparison recalculate live.</li>
-        <li><strong>Category filter</strong> — focus the view on one or more categories. Break-even % reflects only the filtered holdings.</li>
-        <li><strong>Holdings table</strong> — shows each ticker's cost basis, estimated monthly dividends, yield on cost, current yield, sustainability status, and the percent-of-cost comparison.</li>
-        <li><strong>Totals row</strong> — rolls up the selected holdings so you can compare your portfolio-level income vs. the chosen benchmark.</li>
+        <li><strong>N% Cost / Week, Month, Year</strong> — per-holding withdrawal amounts at the selected rate. For DRIP holdings, these reflect the DRIP-adjusted cost so the per-row amounts sum to the totals shown in the summary strip.</li>
+        <li><strong>Est Monthly Div</strong> — estimated monthly dividend income for each holding.</li>
+        <li><strong>Yield on Cost / Current Yield</strong> — side-by-side context: yield based on what you paid vs. yield at today's price.</li>
+        <li><strong>Status</strong> — flags holdings that cannot support the selected withdrawal rate. "No Distribution" means the holding pays no dividends. "Distribution rate too low" means the holding's yield on cost is below the selected percent.</li>
+        <li><strong>Totals row</strong> — sums estimated monthly dividends and the withdrawal columns for the selected holdings.</li>
       </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Percent of Cost</strong> — pick any rate from 1% to 30% (default 8%). All column labels, row amounts, totals, summary strip, and the break-even comparison recalculate live.</li>
+        <li><strong>Categories</strong> — focus the view on one or more categories. All summary cards and break-even reflect only the filtered holdings.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP Handling</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        When any holdings are marked as DRIP (reinvest = Y), the page adjusts automatically. Reinvested dividends are
+        subtracted from available cash, and each holding's withdrawal target is scaled by the fraction of income that is
+        actually paid as cash. For example, if a holding reinvests 50% of its dividends, only 50% of its cost basis
+        counts toward the withdrawal target. Holdings that reinvest 100% show a $0 withdrawal amount since no cash is
+        being distributed. Non-dividend holdings always show $0 in the withdrawal columns.
+      </p>
     </div>
   )
 }
@@ -4733,6 +4754,251 @@ function StockComparerHelp() {
   )
 }
 
+function RetirementReadinessHelp() {
+  return (
+    <div>
+      <h2>Retirement Readiness</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Retirement Readiness answers one question: can your portfolio income sustain your lifestyle — even during
+        a major bear market — without depleting your cash reserve? It loads your current holdings, applies your
+        yield and stress assumptions to project monthly income, then compares that income against your monthly
+        expenses and a configurable safety buffer. Every change you make to an input re-runs the model instantly.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="/help-screenshots/retirement-readiness/inputs-and-summary.jpg"
+          alt="Retirement Readiness inputs, summary strip, and calculation panels"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
+        />
+        <p style={{ color: '#8899aa', fontSize: '0.8rem', marginTop: '0.4rem' }}>
+          The three input sections at the top (Critical Monthly Inputs, Non-Investment Inflows, Passive Income
+          Assumptions), the summary strip of status tiles below them, and the two detailed calculation panels.
+        </p>
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Readiness Badge</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        The badge in the top-right corner summarises your readiness status at a glance. It updates every time
+        any input changes.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong style={{ color: '#00e89a' }}>Covered</strong> — Portfolio income is not needed: non-investment inflows cover 100% of expenses.</li>
+        <li><strong style={{ color: '#00e89a' }}>Ready</strong> — Bear-market income meets the LEPB target and your cash reserve equals or exceeds the cash target.</li>
+        <li><strong style={{ color: '#f9d66d' }}>Close</strong> — Bear income meets the LEPB target but cash is short, or good-market income meets the target but bear income does not.</li>
+        <li><strong style={{ color: '#7ecfff' }}>Building</strong> — Bear income covers bare expenses but does not yet reach the LEPB safety buffer.</li>
+        <li><strong style={{ color: '#ff6b6b' }}>Risky</strong> — Bear income does not cover expenses and the cash reserve runs out in under 12 months.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Critical Monthly Inputs</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        These inputs define your income target, safety margins, and projection horizon. Each field shows a
+        tooltip (?) when hovered that explains exactly how it is used in the model.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Monthly Expenses</strong> — Total cash needed to live on each month. Everything is measured relative to this number.</li>
+        <li><strong>LEPB Ratio</strong> — Living Expense Protection Buffer multiplier. A ratio of 3 means the model wants stressed portfolio income of 3× the amount the portfolio must pay. For example, with $4,500 in expenses, $1,000 in non-investment inflows (after tax), the portfolio must pay $3,500. An LEPB of 3 means the buffer target is $10,500/month.</li>
+        <li><strong>Excess Withdrawn %</strong> — Percentage of surplus income (above expenses) to withdraw to cash rather than reinvest. Set to 0 to reinvest everything, 100 to withdraw all surplus.</li>
+        <li><strong>Excess Reinvested %</strong> — Percentage of surplus income to reinvest back into the portfolio, compounding future income.</li>
+        <li><strong>Expense Inflation %</strong> — Annual rate at which your living expenses grow. Applied monthly in the projection loop.</li>
+        <li><strong>Cash Reserve $</strong> — Cash already set aside outside the portfolio. Used to cover shortfalls in bear-market months.</li>
+        <li><strong>Cash Reserve Months</strong> — How many months of expenses you want to hold in reserve. Monthly expenses × this value = cash target.</li>
+        <li><strong>Years</strong> — How many years forward to project (1–50). Controls the length of the Yearly and Monthly tables.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Non-Investment Monthly Inflows</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Employment Income / Company Pension / Gov. Pension / Annuities / Other Recurring</strong> — Five separate boxes for non-portfolio income. All are entered as gross (before-tax) monthly amounts. They reduce the share of expenses the portfolio must cover.</li>
+        <li><strong>Inflows Tax Rate %</strong> — Tax rate applied to the sum of all non-investment inflows. The after-tax total is what offsets your expenses.</li>
+        <li><strong>Indexing Factor %</strong> — Annual cost-of-living increase applied to non-investment inflows (e.g. a pension indexed to inflation).</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Passive Income Assumptions</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Portfolio Book NAV</strong> — Book value used as the base for all income calculations. Leave at 0 to use the live portfolio value from your holdings. Override this when you want to model a future portfolio size.</li>
+        <li><strong>Target Yield Good %</strong> — Annual passive income yield in normal or good markets (e.g. 20% means the portfolio generates 20% of its value per year as income). This drives the "good market" income column throughout the model.</li>
+        <li><strong>NAV Erosion %</strong> — Annual portfolio value decay that needs to be offset by reinvestment. High-yield covered-call ETFs often erode NAV over time. Setting this to 3% tells the model to reinvest at least 3% of NAV per year just to stay even.</li>
+        <li><strong>Bear Decline %</strong> — Portfolio value drop assumed in a bear market. This reduces the base from which bear-market yield is calculated. For example, a $500,000 portfolio with 25% bear decline becomes $375,000 for bear calculations.</li>
+        <li><strong>Bear Yield %</strong> — Annual passive income yield during a bear market. Funds that cut distributions in downturns will yield less than in good markets.</li>
+        <li><strong>Investment Tax %</strong> — Tax rate applied to portfolio distributions before reinvestment or withdrawal. Reduces both good and bear income.</li>
+        <li><strong>Income Haircut %</strong> — An extra conservative discount applied on top of the bear-market yield, after tax. Useful for high-volatility funds where monthly distributions can vary significantly.</li>
+        <li><strong>Direct Contribution</strong> — Monthly cash contribution added directly to the portfolio from outside income. Compounds book NAV forward in the projection.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Strip</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        The row of tiles immediately below the inputs summarises the key numbers at a glance. Tile colors
+        shift from green to yellow to red to show whether each metric is on-target.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Current Monthly Income</strong> — Actual monthly income from your holdings today, before any model assumptions.</li>
+        <li><strong>Good Market After Tax</strong> — Projected monthly income if the portfolio hits the Target Yield Good %, after investment tax.</li>
+        <li><strong>Bear Market After Tax</strong> — Stressed monthly income: portfolio shrinks by Bear Decline %, earns Bear Yield %, taxed, then Income Haircut % applied. Yellow if it covers bare expenses; red if it does not.</li>
+        <li><strong>Non-Investment Inflows</strong> — Total monthly non-portfolio income after the Inflows Tax Rate is applied.</li>
+        <li><strong>Monthly Expenses</strong> — Your input value for total monthly living costs.</li>
+        <li><strong>Portfolio Must Pay</strong> — Monthly Expenses minus Non-Investment Inflows (after tax). The amount the portfolio is solely responsible for.</li>
+        <li><strong>LEPB Target</strong> — Portfolio Must Pay × LEPB Ratio. The stressed monthly income the portfolio needs to reach to be considered "Ready."</li>
+        <li><strong>Bear Buffer Ratio</strong> — Bear-market income divided by Portfolio Must Pay. Green ≥ LEPB Ratio, yellow ≥ 1×, red below 1×.</li>
+        <li><strong>Buffer Gap</strong> — Dollar shortfall between LEPB Target and current bear-market income. Zero or negative means the buffer is met.</li>
+        <li><strong>Cash Target</strong> — Monthly Expenses × Cash Reserve Months.</li>
+        <li><strong>Cash Runway</strong> — How many months the current cash reserve covers a monthly bear-market shortfall. Red if under 12 months.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calculation Panels</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        Two detail panels show the intermediate maths behind the summary tiles.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Passive Income Calculations</strong> — Shows book NAV, before-tax and after-tax income at target yield, minimum monthly reinvestment needed for NAV erosion and inflation, income remaining after tax and minimum reinvestment, and bear-market income after tax and haircut.</li>
+        <li><strong>Important Monthly Metrics</strong> — Shows buffer targets, good/bear buffer ratios, 3-year average annual income, taxes, and withdrawals, plus how much excess income is left after meeting expenses and minimum reinvestment obligations in both good and bear scenarios.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="/help-screenshots/retirement-readiness/lepb-chart-and-milestones.jpg"
+          alt="LEPB Trend Lines chart and Milestones panel"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
+        />
+        <p style={{ color: '#8899aa', fontSize: '0.8rem', marginTop: '0.4rem' }}>
+          Left: the LEPB Trend Lines chart plotting projected income and expense lines over the selected horizon.
+          Right: the Milestones panel showing when key thresholds are first reached in the projection.
+        </p>
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>LEPB Trend Lines Chart</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        An interactive Plotly chart showing five lines over the projection horizon (in months). Hover to see
+        exact values for any month.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong style={{ color: '#b8d8ea' }}>Avg Monthly Expenses (dashed blue)</strong> — Monthly living costs growing with inflation over time.</li>
+        <li><strong style={{ color: '#315f83' }}>Net Exp After Inflows (dotted dark blue)</strong> — Monthly expenses minus non-investment inflows after tax — what the portfolio must actually cover each month.</li>
+        <li><strong style={{ color: '#ff6b6b' }}>Dist. @ Bear Yield After Tax (red)</strong> — Stressed portfolio income if a bear market hits at that point in the projection.</li>
+        <li><strong style={{ color: '#39c686' }}>Dist. @ Target Yield After Tax (green)</strong> — Portfolio income in good market conditions, growing as reinvestment compounds the NAV.</li>
+        <li><strong style={{ color: '#c57aa8' }}>Target LEPB $ (dashed purple)</strong> — The LEPB buffer target (net expenses × LEPB ratio). When the red bear line crosses above this, the buffer is met.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Milestones</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Income covers expenses</strong> — First month (or "Now") when projected bear-market income is enough to pay the portfolio's share of expenses without touching cash.</li>
+        <li><strong>Income reaches LEPB target</strong> — First month when bear-market income equals or exceeds the full LEPB buffer target.</li>
+        <li><strong>Cash reserve depletion</strong> — First month the cash reserve hits zero while there is still a bear-market shortfall. "Not in horizon" if the reserve never depletes within the selected years.</li>
+        <li><strong>Final monthly income / expenses / cash reserve</strong> — Values at the last month of the projection horizon.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="/help-screenshots/retirement-readiness/yearly-projection-table.jpg"
+          alt="Yearly Projection table"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
+        />
+        <p style={{ color: '#8899aa', fontSize: '0.8rem', marginTop: '0.4rem' }}>
+          The Yearly Projection table: one row per year showing end-of-year portfolio NAV, income (good and bear),
+          expenses, coverage ratios, reinvestment, and cash reserve.
+        </p>
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Yearly Projection Table</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        A compact summary table with one row per projection year. End-of-year values are shown for NAV and cash;
+        income, surplus, and reinvestment columns are the end-of-year monthly run-rate figures.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Book NAV / Current NAV</strong> — Book NAV grows with contributions and reinvestment; Current NAV also decays by the NAV erosion rate.</li>
+        <li><strong>Good Income / Bear Income</strong> — Monthly income at target yield and stressed bear yield respectively, at end-of-year.</li>
+        <li><strong>Portfolio Pays</strong> — Net monthly expenses after non-investment inflows.</li>
+        <li><strong>LEPB Target</strong> — Portfolio Pays × LEPB Ratio for that year.</li>
+        <li><strong>Good Ratio / Bear Ratio</strong> — Income divided by Portfolio Pays. Color-coded: green ≥ LEPB, yellow ≥ 1×, red &lt; 1×.</li>
+        <li><strong>Annual Surplus</strong> — Total annual surplus income above net expenses across all months of that year.</li>
+        <li><strong>Min Reinvest</strong> — Annual minimum reinvestment needed to offset NAV erosion and inflation.</li>
+        <li><strong>Reinvested</strong> — Actual reinvestment (minimum + discretionary from surplus reinvestment setting).</li>
+        <li><strong>To Cash</strong> — Portion of surplus directed to the cash reserve based on the Excess Withdrawn % setting.</li>
+        <li><strong>Cash Reserve</strong> — Running cash balance at end of year.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="/help-screenshots/retirement-readiness/monthly-projection-table.jpg"
+          alt="Monthly LEPB Projection table"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
+        />
+        <p style={{ color: '#8899aa', fontSize: '0.8rem', marginTop: '0.4rem' }}>
+          The Monthly LEPB Projection table: month-by-month detail split into a Good Markets section and a Bear
+          Markets section side-by-side. Annual TOTALS rows appear at the end of each year.
+        </p>
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Monthly LEPB Projection Table</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        The most detailed view: a row for every month in the projection horizon, plus an annual TOTALS row
+        (shown in green) at the end of each year. The table is split into three column groups.
+      </p>
+      <p style={{ marginBottom: '0.5rem' }}><strong>Expenses & Inflows columns</strong></p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Avg Monthly Expenses</strong> — Living expenses for that month, grown by inflation.</li>
+        <li><strong>Non-Inv Inflows</strong> — Non-investment income for that month, grown by the indexing factor.</li>
+        <li><strong>Net Exp. After Inflows</strong> — What the portfolio must cover (expenses minus after-tax inflows).</li>
+      </ul>
+      <p style={{ marginBottom: '0.5rem' }}><strong>Good Markets columns (blue header)</strong></p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Book NAV / Curr NAV</strong> — Portfolio values at the start of the month, after reinvestment from prior months.</li>
+        <li><strong>Dist. Before Tax / After Tax</strong> — Monthly distributions at target yield, before and after the investment tax rate.</li>
+        <li><strong>LEPB Target</strong> — Net expenses × LEPB ratio for that month.</li>
+        <li><strong>LEPB Ratio</strong> — After-tax income ÷ net expenses. Color-coded: green ≥ LEPB ratio, yellow ≥ 1, red &lt; 1.</li>
+        <li><strong>Excess After Exp</strong> — After-tax income minus net expenses. Positive = income surplus.</li>
+        <li><strong>Minimum Reinvest</strong> — Monthly amount reinvested just to maintain NAV against erosion and inflation.</li>
+        <li><strong>Actual Reinvested</strong> — Total reinvested: minimum plus discretionary surplus reinvestment.</li>
+        <li><strong>To Cash Reserve</strong> — Surplus income directed to cash reserve per the Excess Withdrawn % setting.</li>
+        <li><strong>Direct Contrib.</strong> — Your monthly direct contribution into the portfolio.</li>
+      </ul>
+      <p style={{ marginBottom: '0.5rem' }}><strong>Bear Markets columns (purple header)</strong></p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Book NAV / Curr NAV</strong> — Portfolio values reduced by the Bear Decline % setting.</li>
+        <li><strong>Dist. Before Tax / After Tax</strong> — Bear-market distributions (bear NAV × bear yield), taxed, then income haircut applied.</li>
+        <li><strong>LEPB Ratio</strong> — Bear income ÷ net expenses. The most important stress test column.</li>
+        <li><strong>Excess After Exp</strong> — Bear income minus net expenses. Negative means shortfall; cash reserve is drawn down.</li>
+        <li><strong>Minimum Reinvest / Amt Reinvested</strong> — Reinvestment in a bear scenario (capped at available bear income).</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="/help-screenshots/retirement-readiness/top-income-sources.jpg"
+          alt="Top Income Sources table"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
+        />
+        <p style={{ color: '#8899aa', fontSize: '0.8rem', marginTop: '0.4rem' }}>
+          The Top Income Sources table showing up to 15 of your highest-income holdings with current and
+          stressed monthly income, yield, and share of total portfolio income.
+        </p>
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Top Income Sources</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Lists up to 15 of your highest monthly income contributors. The stressed income column scales each
+        holding's current income by the same ratio that the model's bear assumptions apply to the overall portfolio
+        — giving a per-holding view of how income concentration affects the bear-case result.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Value</strong> — Current market value of the holding.</li>
+        <li><strong>Monthly Income</strong> — Estimated monthly income from this holding today.</li>
+        <li><strong>Stress Income</strong> — Monthly income scaled by the portfolio-level bear-market stress factor.</li>
+        <li><strong>Yield</strong> — Annual income yield based on current value.</li>
+        <li><strong>Income Share</strong> — This holding's monthly income as a percentage of total portfolio monthly income. Helps spot concentration risk.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tips</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Start by entering your real monthly expenses and setting the LEPB ratio to 3. Work backwards from the "Buffer Gap" tile to understand how much more portfolio income you need to reach Ready status.</li>
+        <li>Adjust Bear Decline % and Bear Yield % to match historical bear markets for your fund mix. Covered-call ETFs typically preserve yield better than growth funds in downturns.</li>
+        <li>The Income Haircut % is a conservative planning margin — increasing it from 10% to 20% roughly doubles the buffer gap, showing how sensitive the model is to distribution volatility.</li>
+        <li>Set Excess Reinvested % to 100% and watch the trend lines — the green "good market" line rising above the purple LEPB target line shows when compounding closes the buffer gap.</li>
+        <li>If you have a pension or other recurring inflow, entering it under Non-Investment Monthly Inflows immediately reduces Portfolio Must Pay and the LEPB Target, often flipping the readiness status from Building to Close.</li>
+        <li>Use Portfolio Book NAV to model a future portfolio size — for example, enter a target portfolio value to see what income it could generate and whether it would meet your LEPB.</li>
+      </ul>
+    </div>
+  )
+}
+
 function RebalanceWizardHelp() {
   return (
     <div>
@@ -4861,6 +5127,7 @@ const CONTENT_MAP = {
   consolidation: ConsolidationHelp,
   'macro-dashboard': MacroDashboardHelp,
   'income-growth': IncomeGrowthHelp,
+  'retirement-readiness': RetirementReadinessHelp,
   'rebalance-wizard': RebalanceWizardHelp,
 }
 
