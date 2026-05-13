@@ -299,7 +299,7 @@ export default function StockComparer() {
 
   useEffect(() => {
     resetReturnRange()
-  }, [period, returnMode, reinvest, resetReturnRange])
+  }, [period, resetReturnRange])
 
   useEffect(() => {
     const symbols = tickers.map(normalize).filter(Boolean)
