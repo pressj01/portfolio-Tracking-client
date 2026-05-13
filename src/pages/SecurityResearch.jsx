@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import { API_BASE } from '../config'
+import { distributionYieldPeriodLabel } from '../utils/distributionPeriod'
 
 const fmtMoney = (v) => {
   if (v == null) return '-'
@@ -224,7 +225,8 @@ function DistributionChart({ history, ticker, price }) {
     const annualMult = annual ? 12 : 1
     const values = showPct ? dollarAmounts.map(v => (v / priceNum) * 100 * annualMult) : dollarAmounts
     const avg = values.reduce((s, v) => s + v, 0) / values.length
-    const pctLabel = annual ? 'Annual Yield %' : 'Yield %'
+    const pctLabel = annual ? 'Annual Yield %' : `${distributionYieldPeriodLabel(sortedKeys)} Yield %`
+    const pctAxisTitle = pctLabel.replace(' %', ' (%)')
     const titleSuffix = showPct ? ` (${pctLabel})` : ''
 
     const traces = [{
@@ -248,7 +250,7 @@ function DistributionChart({ history, ticker, price }) {
       height: 380,
       xaxis: { title: 'Month', gridcolor: '#1a2a3e', tickangle: -45 },
       yaxis: {
-        title: showPct ? (annual ? 'Annual Yield (%)' : 'Yield (%)') : 'Distribution ($)',
+        title: showPct ? pctAxisTitle : 'Distribution ($)',
         gridcolor: '#1a2a3e',
         ...(showPct ? { ticksuffix: '%', tickformat: '.2f' } : { tickprefix: '$' }),
       },

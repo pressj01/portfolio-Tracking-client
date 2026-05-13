@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Plot from 'react-plotly.js'
 import { useProfileFetch } from '../context/ProfileContext'
+import { distributionYieldPeriodLabel } from '../utils/distributionPeriod'
 
 const PERIODS = [
   { value: '1mo', label: '1M' },
@@ -583,22 +584,22 @@ export default function StockComparer() {
       byMonth.set(key, (byMonth.get(key) || 0) + amount)
     })
 
-    const monthly = [...byMonth.entries()]
+    const sortedMonths = [...byMonth.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .slice(-36)
-      .map(([key, amount]) => {
-        const [y, m] = key.split('-').map(Number)
-        return {
-          label: `${monthNames[m - 1]} ${String(y).slice(-2)}`,
-          amount: Number(amount.toFixed(4)),
-        }
-      })
+    const monthly = sortedMonths.map(([key, amount]) => {
+      const [y, m] = key.split('-').map(Number)
+      return {
+        label: `${monthNames[m - 1]} ${String(y).slice(-2)}`,
+        amount: Number(amount.toFixed(4)),
+      }
+    })
     const dollarValues = monthly.map(item => item.amount)
     const showPct = distPctMode && price > 0
     const annualMult = distAnnual ? 12 : 1
     const values = showPct ? dollarValues.map(v => (v / price) * 100 * annualMult) : dollarValues
     const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
-    const pctLabel = distAnnual ? 'Annual Yield %' : 'Yield %'
+    const pctLabel = distAnnual ? 'Annual Yield %' : `${distributionYieldPeriodLabel(sortedMonths.map(([key]) => key))} Yield %`
     const titleSuffix = showPct ? ` (${pctLabel})` : ''
 
     return {
