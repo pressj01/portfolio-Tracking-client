@@ -2738,11 +2738,10 @@ export default function ETFScreen() {
       setReturnXRange([null, null])
       return
     }
-    const range = eventData?.['xaxis.range'] || (
-      eventData?.['xaxis.range[0]'] && eventData?.['xaxis.range[1]']
-        ? [eventData['xaxis.range[0]'], eventData['xaxis.range[1]']]
-        : null
-    )
+    // Only capture user interactions (slider drag / zoom) which use separate keys.
+    // Ignore xaxis.range array form — that's Plotly echoing back a programmatic range change.
+    if (!eventData?.['xaxis.range[0]'] || !eventData?.['xaxis.range[1]']) return
+    const range = [eventData['xaxis.range[0]'], eventData['xaxis.range[1]']]
     const normalized = normalizeReturnRange(range)
     if (normalized) {
       const [s, e] = normalized
