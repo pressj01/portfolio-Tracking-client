@@ -2208,6 +2208,7 @@ export default function ETFScreen() {
   const [indicatorSearch, setIndicatorSearch] = useState('')
   const [visibleAnalysisColumns, setVisibleAnalysisColumns] = useState(DEFAULT_ANALYSIS_COLUMNS)
   const returnXRangeRef = useRef([null, null])
+  const returnDataDateBoundsRef = useRef([null, null])
   const returnAbortRef = useRef(null)
 
   const resetReturnRange = useCallback(() => {
@@ -2226,6 +2227,7 @@ export default function ETFScreen() {
     return [dateKey(allDates.reduce((a, b) => a < b ? a : b)), dateKey(allDates.reduce((a, b) => a > b ? a : b))]
   }, [returnData])
 
+  returnDataDateBoundsRef.current = returnDataDateBounds
   const rangeStart = returnXRange[0] || returnDataDateBounds[0] || ''
   const rangeEnd = returnXRange[1] || returnDataDateBounds[1] || ''
 
@@ -2738,13 +2740,18 @@ export default function ETFScreen() {
       setReturnXRange([null, null])
       return
     }
-    // Only capture user interactions (slider drag / zoom) which use separate keys.
-    // Ignore xaxis.range array form — that's Plotly echoing back a programmatic range change.
-    if (!eventData?.['xaxis.range[0]'] || !eventData?.['xaxis.range[1]']) return
-    const range = [eventData['xaxis.range[0]'], eventData['xaxis.range[1]']]
+    // Accept both array form (xaxis.range) and separate keys (xaxis.range[0]/[1])
+    const range = eventData?.['xaxis.range'] || (
+      eventData?.['xaxis.range[0]'] && eventData?.['xaxis.range[1]']
+        ? [eventData['xaxis.range[0]'], eventData['xaxis.range[1]']]
+        : null
+    )
     const normalized = normalizeReturnRange(range)
     if (normalized) {
       const [s, e] = normalized
+      // Skip if no custom range is set and this matches data bounds (programmatic echo)
+      const bounds = returnDataDateBoundsRef.current
+      if (!returnXRangeRef.current[0] && !returnXRangeRef.current[1] && s === bounds[0] && e === bounds[1]) return
       if (s !== returnXRangeRef.current[0] || e !== returnXRangeRef.current[1]) {
         returnXRangeRef.current = [s, e]
         setReturnXRange([s, e])

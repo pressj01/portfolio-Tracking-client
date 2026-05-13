@@ -701,10 +701,14 @@ export default function ETFComparer() {
             style={{ width: '100%' }}
             onRelayout={(e) => {
               if (e?.['xaxis.autorange']) { setReturnXRange([null, null]); return }
-              if (!e?.['xaxis.range[0]'] || !e?.['xaxis.range[1]']) return
-              const next = normalizeReturnRange([e['xaxis.range[0]'], e['xaxis.range[1]']])
+              const range = e?.['xaxis.range'] || (e?.['xaxis.range[0]'] && e?.['xaxis.range[1]'] ? [e['xaxis.range[0]'], e['xaxis.range[1]']] : null)
+              const next = normalizeReturnRange(range)
               if (next) {
-                setReturnXRange(prev => (prev[0] === next[0] && prev[1] === next[1] ? prev : next))
+                setReturnXRange(prev => {
+                  if (prev[0] === next[0] && prev[1] === next[1]) return prev
+                  if (!prev[0] && !prev[1] && next[0] === dataDateBounds[0] && next[1] === dataDateBounds[1]) return prev
+                  return next
+                })
               }
             }}
           />
