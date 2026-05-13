@@ -2242,7 +2242,7 @@ export default function ETFScreen() {
 
   useEffect(() => {
     resetReturnRange()
-  }, [ticker, period, compareTickers, resetReturnRange])
+  }, [ticker, period, resetReturnRange])
 
   // Debounce the reinvest slider — wait 300ms after user stops dragging
   useEffect(() => {
@@ -2327,7 +2327,6 @@ export default function ETFScreen() {
       .map(normalizeTicker)
       .filter(Boolean)
     if (!symbols.length) return
-    resetReturnRange()
     setCompareTickers(prev => {
       const next = [...prev]
       symbols.forEach(s => {
@@ -2344,7 +2343,6 @@ export default function ETFScreen() {
     setCompareInput('')
   }
   const removeCompare = (s) => {
-    resetReturnRange()
     setCompareTickers(prev => prev.filter(t => t !== s))
   }
 

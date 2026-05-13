@@ -295,7 +295,7 @@ export default function StockComparer() {
 
   useEffect(() => {
     resetReturnRange()
-  }, [tickers, period, returnMode, reinvest, resetReturnRange])
+  }, [period, returnMode, reinvest, resetReturnRange])
 
   useEffect(() => {
     const symbols = tickers.map(normalize).filter(Boolean)
@@ -367,14 +367,12 @@ export default function StockComparer() {
       inputRef.current?.focus()
       return
     }
-    resetReturnRange()
     setTickers(prev => [...new Set([...prev, ...symbols])])
     setInput('')
     setTimeout(() => inputRef.current?.focus(), 0)
   }
 
   const removeTicker = (sym) => {
-    resetReturnRange()
     setTickers(prev => prev.filter(t => t !== sym))
     setTimeout(() => inputRef.current?.focus(), 0)
   }
