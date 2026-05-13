@@ -155,6 +155,7 @@ export default function ETFComparer() {
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_COLUMNS)
   const [showDistributionChart, setShowDistributionChart] = useState(true)
   const [distributionSymbol, setDistributionSymbol] = useState('')
+  const [distPctMode, setDistPctMode] = useState(false)
   const [downloadStatus, setDownloadStatus] = useState('')
 
   const resetReturnRange = useCallback(() => {
@@ -469,6 +470,7 @@ export default function ETFComparer() {
   const distributionChart = useMemo(() => {
     const profile = data?.profiles?.[distributionSymbol] || {}
     const history = Array.isArray(profile.distribution_history) ? profile.distribution_history : []
+    const price = Number(profile.price) || 0
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
     const byMonth = new Map()
 
@@ -493,23 +495,27 @@ export default function ETFComparer() {
           amount: Number(amount.toFixed(4)),
         }
       })
-    const values = monthly.map(item => item.amount)
+    const dollarValues = monthly.map(item => item.amount)
+    const showPct = distPctMode && price > 0
+    const values = showPct ? dollarValues.map(v => (v / price) * 100) : dollarValues
     const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
+    const titleSuffix = showPct ? ' (Yield %)' : ''
 
     return {
       hasData: values.length > 0,
+      canShowPct: price > 0,
       source: profile.distribution_source || profile.expected_yield_source || '',
       layout: {
         template: 'plotly_dark',
         paper_bgcolor: '#16213e',
         plot_bgcolor: '#16213e',
         font: { color: '#e0e8f5', size: 12 },
-        title: { text: `${distributionSymbol || 'ETF'} - Distribution History`, x: 0.5, font: { size: 18, color: '#e0e8f5' } },
+        title: { text: `${distributionSymbol || 'ETF'} - Distribution History${titleSuffix}`, x: 0.5, font: { size: 18, color: '#e0e8f5' } },
         height: 360,
         margin: { l: 58, r: 36, t: 58, b: 72 },
         bargap: 0.18,
         yaxis: {
-          tickprefix: '$',
+          ...(showPct ? { ticksuffix: '%', tickformat: '.2f' } : { tickprefix: '$' }),
           gridcolor: '#293a5f',
           zerolinecolor: '#6a7892',
           fixedrange: true,
@@ -529,10 +535,12 @@ export default function ETFComparer() {
           color: values.map(value => value >= average ? '#62f27b' : '#82c7f5'),
           line: { color: 'rgba(255, 255, 255, 0.12)', width: 1 },
         },
-        hovertemplate: `<b>${distributionSymbol}</b><br>%{x}<br>$%{y:.4f}<extra></extra>`,
+        hovertemplate: showPct
+          ? `<b>${distributionSymbol}</b><br>%{x}<br>%{y:.3f}%<extra></extra>`
+          : `<b>${distributionSymbol}</b><br>%{x}<br>$%{y:.4f}<extra></extra>`,
       }] : [],
     }
-  }, [data, distributionSymbol])
+  }, [data, distributionSymbol, distPctMode])
 
   const averageChart = useMemo(() => {
     const periods = averageData?.periods || []
@@ -639,10 +647,10 @@ export default function ETFComparer() {
           {dataDateBounds[0] && (
             <>
               <span className="etfc-date-sep">|</span>
-              <input type="date" className="range-date-input" value={rangeStart} min={dataDateBounds[0]} max={rangeEnd}
+              <input type="date" className="range-date-input" value={rangeStart} max={rangeEnd}
                 onChange={e => handleRangeDateChange('start', e.target.value)} title="Start date" />
               <span className="range-date-arrow">→</span>
-              <input type="date" className="range-date-input" value={rangeEnd} min={rangeStart} max={dataDateBounds[1]}
+              <input type="date" className="range-date-input" value={rangeEnd} min={rangeStart}
                 onChange={e => handleRangeDateChange('end', e.target.value)} title="End date" />
               {(returnXRange[0] || returnXRange[1]) && (
                 <button className="btn btn-sm" onClick={resetReturnRange} title="Clear custom dates">&times;</button>
@@ -723,6 +731,14 @@ export default function ETFComparer() {
                   </button>
                 ))}
               </div>
+              {distributionChart.canShowPct && (
+                <button
+                  className={`btn btn-sm${distPctMode ? ' btn-active' : ''}`}
+                  onClick={() => setDistPctMode(v => !v)}
+                >
+                  {distPctMode ? '$ Amount' : 'Yield %'}
+                </button>
+              )}
               {distributionChart.source && (
                 <span className="etfc-distribution-source">Source: {distributionChart.source}</span>
               )}

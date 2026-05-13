@@ -642,10 +642,10 @@ export default function StockComparer() {
           {dataDateBounds[0] && (
             <>
               <span className="etfc-date-sep">|</span>
-              <input type="date" className="range-date-input" value={rangeStart} min={dataDateBounds[0]} max={rangeEnd}
+              <input type="date" className="range-date-input" value={rangeStart} max={rangeEnd}
                 onChange={e => handleRangeDateChange('start', e.target.value)} title="Start date" />
               <span className="range-date-arrow">→</span>
-              <input type="date" className="range-date-input" value={rangeEnd} min={rangeStart} max={dataDateBounds[1]}
+              <input type="date" className="range-date-input" value={rangeEnd} min={rangeStart}
                 onChange={e => handleRangeDateChange('end', e.target.value)} title="End date" />
               {(returnXRange[0] || returnXRange[1]) && (
                 <button className="btn btn-sm" onClick={resetReturnRange} title="Clear custom dates">&times;</button>

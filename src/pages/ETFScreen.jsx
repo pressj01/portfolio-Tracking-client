@@ -2789,10 +2789,10 @@ export default function ETFScreen() {
           <span className="etf-draw-sep">|</span>
           {tab === 'returns' && returnDataDateBounds[0] && (
             <>
-              <input type="date" className="range-date-input" value={rangeStart} min={returnDataDateBounds[0]} max={rangeEnd}
+              <input type="date" className="range-date-input" value={rangeStart} max={rangeEnd}
                 onChange={e => handleRangeDateChange('start', e.target.value)} title="Start date" />
               <span className="range-date-arrow">→</span>
-              <input type="date" className="range-date-input" value={rangeEnd} min={rangeStart} max={returnDataDateBounds[1]}
+              <input type="date" className="range-date-input" value={rangeEnd} min={rangeStart}
                 onChange={e => handleRangeDateChange('end', e.target.value)} title="End date" />
               {(returnXRange[0] || returnXRange[1]) && (
                 <button className="btn btn-sm" onClick={resetReturnRange} title="Clear custom dates">&times;</button>
