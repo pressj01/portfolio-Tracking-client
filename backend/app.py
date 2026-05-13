@@ -9733,6 +9733,16 @@ def security_research(kind, ticker):
         "fifty_two_week_high": _research_money(_research_info_value(info, "fiftyTwoWeekHigh")),
         "data_source": "Yahoo Finance",
     }
+    # Include dividend distribution history for stocks (same as ETF branch)
+    response["distribution_history"] = []
+    if dividends is not None and not dividends.empty:
+        divs = dividends[dividends > 0].dropna()
+        if not divs.empty:
+            for dt, amt in divs.items():
+                response["distribution_history"].append({
+                    "date": dt.strftime("%Y-%m-%d"),
+                    "amount": round(float(amt), 4),
+                })
     # Compute yield from TTM dividends / price — avoids yfinance field scaling inconsistencies
     try:
         price_val = response.get("price")

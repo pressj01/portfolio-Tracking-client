@@ -197,12 +197,15 @@ function AverageReturnChart({ kind, ticker, benchmark }) {
   )
 }
 
-function DistributionChart({ history, ticker }) {
+function DistributionChart({ history, ticker, price }) {
   const chartRef = useRef(null)
+  const [pctMode, setPctMode] = useState(false)
+  const canShowPct = (Number(price) || 0) > 0
 
   useEffect(() => {
     if (!history?.length || !window.Plotly || !chartRef.current) return
 
+    const priceNum = Number(price) || 0
     const monthly = {}
     for (const h of history) {
       const dt = new Date(h.date + 'T00:00:00')
@@ -215,40 +218,59 @@ function DistributionChart({ history, ticker }) {
       const dt = new Date(Number(y), Number(m) - 1, 1)
       return dt.toLocaleDateString(undefined, { year: '2-digit', month: 'short' })
     })
-    const amounts = sortedKeys.map(k => Math.round(monthly[k] * 10000) / 10000)
-    const avg = amounts.reduce((s, v) => s + v, 0) / amounts.length
+    const dollarAmounts = sortedKeys.map(k => Math.round(monthly[k] * 10000) / 10000)
+    const showPct = pctMode && priceNum > 0
+    const values = showPct ? dollarAmounts.map(v => (v / priceNum) * 100) : dollarAmounts
+    const avg = values.reduce((s, v) => s + v, 0) / values.length
+    const titleSuffix = showPct ? ' (Yield %)' : ''
 
     const traces = [{
       x: labels,
-      y: amounts,
+      y: values,
       type: 'bar',
       marker: {
-        color: amounts.map(a => a >= avg ? '#4dff91' : '#7ecfff'),
+        color: values.map(a => a >= avg ? '#4dff91' : '#7ecfff'),
       },
-      hovertemplate: '<b>%{x}</b><br>$%{y:.4f}<extra></extra>',
+      hovertemplate: showPct
+        ? '<b>%{x}</b><br>%{y:.3f}%<extra></extra>'
+        : '<b>%{x}</b><br>$%{y:.4f}<extra></extra>',
     }]
 
     const layout = {
       template: 'plotly_dark',
       paper_bgcolor: '#16213e',
       plot_bgcolor: '#16213e',
-      title: { text: `${ticker} - Distribution History`, font: { size: 16, color: '#e0e8f5' } },
+      title: { text: `${ticker} - Distribution History${titleSuffix}`, font: { size: 16, color: '#e0e8f5' } },
       margin: { l: 60, r: 20, t: 56, b: 64 },
       height: 380,
       xaxis: { title: 'Month', gridcolor: '#1a2a3e', tickangle: -45 },
-      yaxis: { title: 'Distribution ($)', gridcolor: '#1a2a3e', tickprefix: '$' },
+      yaxis: {
+        title: showPct ? 'Yield (%)' : 'Distribution ($)',
+        gridcolor: '#1a2a3e',
+        ...(showPct ? { ticksuffix: '%', tickformat: '.2f' } : { tickprefix: '$' }),
+      },
       showlegend: false,
       hovermode: 'x unified',
     }
 
     window.Plotly.newPlot(chartRef.current, traces, layout, { responsive: true, displayModeBar: false })
     return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
-  }, [history, ticker])
+  }, [history, ticker, price, pctMode])
 
   if (!history?.length) return null
 
   return (
     <section className="research-chart-section" id="distribution-chart">
+      {canShowPct && (
+        <div style={{ textAlign: 'right', marginBottom: 4 }}>
+          <button
+            className={`btn btn-sm${pctMode ? ' btn-active' : ''}`}
+            onClick={() => setPctMode(v => !v)}
+          >
+            {pctMode ? '$ Amount' : 'Yield %'}
+          </button>
+        </div>
+      )}
       <div ref={chartRef} className="research-chart" />
     </section>
   )
@@ -298,7 +320,7 @@ function ETFResult({ data, onOpenChart }) {
         {metrics.map(([label, value]) => <Field key={label} label={label} value={value} />)}
       </section>
 
-      <DistributionChart history={data.distribution_history} ticker={data.ticker} />
+      <DistributionChart history={data.distribution_history} ticker={data.ticker} price={data.nav_price || data.price} />
 
       <section className="research-two-col">
         <div>
@@ -394,6 +416,8 @@ function StockResult({ data, onOpenChart }) {
           {dividend.map(([label, value]) => <Field key={label} label={label} value={value} />)}
         </div>
       </section>
+
+      <DistributionChart history={data.distribution_history} ticker={data.ticker} price={data.price} />
     </div>
   )
 }

@@ -234,6 +234,9 @@ export default function StockComparer() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_COLUMNS)
+  const [showDistributionChart, setShowDistributionChart] = useState(true)
+  const [distributionSymbol, setDistributionSymbol] = useState('')
+  const [distPctMode, setDistPctMode] = useState(false)
 
   const resetReturnRange = useCallback(() => {
     setReturnXRange([null, null])
@@ -555,6 +558,86 @@ export default function StockComparer() {
     })
   }, [data, symbols, stockData])
 
+  useEffect(() => {
+    if (symbols.length && !symbols.includes(distributionSymbol)) {
+      setDistributionSymbol(symbols[0])
+    }
+  }, [symbols, distributionSymbol])
+
+  const distributionChart = useMemo(() => {
+    const research = stockData[distributionSymbol] || {}
+    const history = Array.isArray(research.distribution_history) ? research.distribution_history : []
+    const price = Number(research.price) || 0
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    const byMonth = new Map()
+
+    history.forEach(item => {
+      const amount = Number(item?.amount)
+      const parts = String(item?.date || '').slice(0, 10).split('-')
+      if (!Number.isFinite(amount) || amount <= 0 || parts.length < 2) return
+      const year = Number(parts[0])
+      const month = Number(parts[1])
+      if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return
+      const key = `${year}-${String(month).padStart(2, '0')}`
+      byMonth.set(key, (byMonth.get(key) || 0) + amount)
+    })
+
+    const monthly = [...byMonth.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-36)
+      .map(([key, amount]) => {
+        const [y, m] = key.split('-').map(Number)
+        return {
+          label: `${monthNames[m - 1]} ${String(y).slice(-2)}`,
+          amount: Number(amount.toFixed(4)),
+        }
+      })
+    const dollarValues = monthly.map(item => item.amount)
+    const showPct = distPctMode && price > 0
+    const values = showPct ? dollarValues.map(v => (v / price) * 100) : dollarValues
+    const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
+    const titleSuffix = showPct ? ' (Yield %)' : ''
+
+    return {
+      hasData: values.length > 0,
+      canShowPct: price > 0,
+      layout: {
+        template: 'plotly_dark',
+        paper_bgcolor: '#16213e',
+        plot_bgcolor: '#16213e',
+        font: { color: '#e0e8f5', size: 12 },
+        title: { text: `${distributionSymbol || 'Stock'} - Distribution History${titleSuffix}`, x: 0.5, font: { size: 18, color: '#e0e8f5' } },
+        height: 360,
+        margin: { l: 58, r: 36, t: 58, b: 72 },
+        bargap: 0.18,
+        yaxis: {
+          ...(showPct ? { ticksuffix: '%', tickformat: '.2f' } : { tickprefix: '$' }),
+          gridcolor: '#293a5f',
+          zerolinecolor: '#6a7892',
+          fixedrange: true,
+        },
+        xaxis: {
+          gridcolor: '#1c2a4b',
+          tickangle: -45,
+          fixedrange: true,
+        },
+        showlegend: false,
+      },
+      data: values.length ? [{
+        x: monthly.map(item => item.label),
+        y: values,
+        type: 'bar',
+        marker: {
+          color: values.map(value => value >= average ? '#62f27b' : '#82c7f5'),
+          line: { color: 'rgba(255, 255, 255, 0.12)', width: 1 },
+        },
+        hovertemplate: showPct
+          ? `<b>${distributionSymbol}</b><br>%{x}<br>%{y:.3f}%<extra></extra>`
+          : `<b>${distributionSymbol}</b><br>%{x}<br>$%{y:.4f}<extra></extra>`,
+      }] : [],
+    }
+  }, [stockData, distributionSymbol, distPctMode])
+
   const activeColumns = COLUMNS.filter(col => col.locked || visibleColumns.includes(col.key))
   const filteredColumns = COLUMNS.filter(col => !search || col.label.toLowerCase().includes(search.toLowerCase()))
 
@@ -784,6 +867,55 @@ export default function StockComparer() {
               </tbody>
             </table>
           </div>
+        )}
+      </section>}
+
+      {symbols.length > 0 && <section className="etfc-section etfc-distribution-section">
+        <div className="etfc-section-head">
+          <h2>Distribution History</h2>
+          <button className="btn btn-sm" onClick={() => setShowDistributionChart(v => !v)}>
+            {showDistributionChart ? 'Hide Chart' : 'Show Chart'}
+          </button>
+        </div>
+        {showDistributionChart && (
+          <>
+            <div className="etfc-distribution-toolbar">
+              <div className="etfc-distribution-tabs" aria-label="Distribution history ticker">
+                {symbols.map((sym, idx) => (
+                  <button
+                    key={sym}
+                    type="button"
+                    className={`btn btn-sm${distributionSymbol === sym ? ' btn-active' : ''}`}
+                    style={{ borderColor: COLORS[idx % COLORS.length] }}
+                    onClick={() => setDistributionSymbol(sym)}
+                  >
+                    {sym}
+                  </button>
+                ))}
+              </div>
+              {distributionChart.canShowPct && (
+                <button
+                  className={`btn btn-sm${distPctMode ? ' btn-active' : ''}`}
+                  onClick={() => setDistPctMode(v => !v)}
+                >
+                  {distPctMode ? '$ Amount' : 'Yield %'}
+                </button>
+              )}
+            </div>
+            {distributionChart.hasData ? (
+              <Plot
+                data={distributionChart.data}
+                layout={distributionChart.layout}
+                config={{ responsive: true, displayModeBar: false }}
+                useResizeHandler
+                style={{ width: '100%' }}
+              />
+            ) : (
+              <div className="etfc-empty etfc-distribution-empty">
+                No distribution history available for {distributionSymbol || 'this stock'}.
+              </div>
+            )}
+          </>
         )}
       </section>}
 
