@@ -237,6 +237,7 @@ export default function StockComparer() {
   const [showDistributionChart, setShowDistributionChart] = useState(true)
   const [distributionSymbol, setDistributionSymbol] = useState('')
   const [distPctMode, setDistPctMode] = useState(false)
+  const [distAnnual, setDistAnnual] = useState(false)
 
   const resetReturnRange = useCallback(() => {
     setReturnXRange([null, null])
@@ -594,9 +595,11 @@ export default function StockComparer() {
       })
     const dollarValues = monthly.map(item => item.amount)
     const showPct = distPctMode && price > 0
-    const values = showPct ? dollarValues.map(v => (v / price) * 100) : dollarValues
+    const annualMult = distAnnual ? 12 : 1
+    const values = showPct ? dollarValues.map(v => (v / price) * 100 * annualMult) : dollarValues
     const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
-    const titleSuffix = showPct ? ' (Yield %)' : ''
+    const pctLabel = distAnnual ? 'Annual Yield %' : 'Yield %'
+    const titleSuffix = showPct ? ` (${pctLabel})` : ''
 
     return {
       hasData: values.length > 0,
@@ -636,7 +639,7 @@ export default function StockComparer() {
           : `<b>${distributionSymbol}</b><br>%{x}<br>$%{y:.4f}<extra></extra>`,
       }] : [],
     }
-  }, [stockData, distributionSymbol, distPctMode])
+  }, [stockData, distributionSymbol, distPctMode, distAnnual])
 
   const activeColumns = COLUMNS.filter(col => col.locked || visibleColumns.includes(col.key))
   const filteredColumns = COLUMNS.filter(col => !search || col.label.toLowerCase().includes(search.toLowerCase()))
@@ -896,9 +899,17 @@ export default function StockComparer() {
               {distributionChart.canShowPct && (
                 <button
                   className={`btn btn-sm${distPctMode ? ' btn-active' : ''}`}
-                  onClick={() => setDistPctMode(v => !v)}
+                  onClick={() => { setDistPctMode(v => !v); setDistAnnual(false) }}
                 >
                   {distPctMode ? '$ Amount' : 'Yield %'}
+                </button>
+              )}
+              {distPctMode && distributionChart.canShowPct && (
+                <button
+                  className={`btn btn-sm${distAnnual ? ' btn-active' : ''}`}
+                  onClick={() => setDistAnnual(v => !v)}
+                >
+                  {distAnnual ? 'Monthly' : 'Annual'}
                 </button>
               )}
             </div>

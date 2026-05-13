@@ -200,6 +200,7 @@ function AverageReturnChart({ kind, ticker, benchmark }) {
 function DistributionChart({ history, ticker, price }) {
   const chartRef = useRef(null)
   const [pctMode, setPctMode] = useState(false)
+  const [annual, setAnnual] = useState(false)
   const canShowPct = (Number(price) || 0) > 0
 
   useEffect(() => {
@@ -220,9 +221,11 @@ function DistributionChart({ history, ticker, price }) {
     })
     const dollarAmounts = sortedKeys.map(k => Math.round(monthly[k] * 10000) / 10000)
     const showPct = pctMode && priceNum > 0
-    const values = showPct ? dollarAmounts.map(v => (v / priceNum) * 100) : dollarAmounts
+    const annualMult = annual ? 12 : 1
+    const values = showPct ? dollarAmounts.map(v => (v / priceNum) * 100 * annualMult) : dollarAmounts
     const avg = values.reduce((s, v) => s + v, 0) / values.length
-    const titleSuffix = showPct ? ' (Yield %)' : ''
+    const pctLabel = annual ? 'Annual Yield %' : 'Yield %'
+    const titleSuffix = showPct ? ` (${pctLabel})` : ''
 
     const traces = [{
       x: labels,
@@ -245,7 +248,7 @@ function DistributionChart({ history, ticker, price }) {
       height: 380,
       xaxis: { title: 'Month', gridcolor: '#1a2a3e', tickangle: -45 },
       yaxis: {
-        title: showPct ? 'Yield (%)' : 'Distribution ($)',
+        title: showPct ? (annual ? 'Annual Yield (%)' : 'Yield (%)') : 'Distribution ($)',
         gridcolor: '#1a2a3e',
         ...(showPct ? { ticksuffix: '%', tickformat: '.2f' } : { tickprefix: '$' }),
       },
@@ -255,20 +258,28 @@ function DistributionChart({ history, ticker, price }) {
 
     window.Plotly.newPlot(chartRef.current, traces, layout, { responsive: true, displayModeBar: false })
     return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
-  }, [history, ticker, price, pctMode])
+  }, [history, ticker, price, pctMode, annual])
 
   if (!history?.length) return null
 
   return (
     <section className="research-chart-section" id="distribution-chart">
       {canShowPct && (
-        <div style={{ textAlign: 'right', marginBottom: 4 }}>
+        <div style={{ textAlign: 'right', marginBottom: 4, display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
           <button
             className={`btn btn-sm${pctMode ? ' btn-active' : ''}`}
-            onClick={() => setPctMode(v => !v)}
+            onClick={() => { setPctMode(v => !v); setAnnual(false) }}
           >
             {pctMode ? '$ Amount' : 'Yield %'}
           </button>
+          {pctMode && (
+            <button
+              className={`btn btn-sm${annual ? ' btn-active' : ''}`}
+              onClick={() => setAnnual(v => !v)}
+            >
+              {annual ? 'Monthly' : 'Annual'}
+            </button>
+          )}
         </div>
       )}
       <div ref={chartRef} className="research-chart" />
