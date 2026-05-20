@@ -5,6 +5,7 @@ import time
 import sqlite3
 import json
 import hashlib
+import datetime
 
 # Ensure backend directory is on the Python path so sibling imports work
 # regardless of the working directory (e.g. when launched from project root).
@@ -48,6 +49,7 @@ from normalize import (
     populate_dividends,
     populate_income_tracking,
     populate_pillar_weights,
+    snapshot_nav,
 )
 from transaction_import import PARSERS as TXN_PARSERS
 import tax_report
@@ -319,6 +321,78 @@ def _get_owner_source_profile_ids(conn):
         "SELECT id FROM profiles WHERE id != 1 AND include_in_owner = 1 ORDER BY id"
     ).fetchall()
     return [r["id"] if isinstance(r, dict) else r[0] for r in rows]
+
+
+def _get_aggregate_member_profile_ids(conn):
+    """Return profile ids that feed the user-configured aggregate portfolio."""
+    rows = conn.execute(
+        "SELECT member_profile_id FROM aggregate_config ORDER BY member_profile_id"
+    ).fetchall()
+    return [r["member_profile_id"] if isinstance(r, dict) else r[0] for r in rows]
+
+
+def _request_nav_date():
+    raw = (request.form.get("nav_date") or request.args.get("nav_date") or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.date.fromisoformat(raw).isoformat()
+    except ValueError:
+        raise ValueError("NAV snapshot date must use YYYY-MM-DD format.")
+
+
+def _is_backdated_nav(nav_date):
+    return bool(nav_date and nav_date != datetime.date.today().isoformat())
+
+
+def _snapshot_nav_after_profile_update(profile_id, nav_date=None):
+    """Snapshot NAV rows affected by an import/update for a single profile."""
+    conn = get_connection()
+    try:
+        if _is_backdated_nav(nav_date):
+            profile_ids = [profile_id]
+        else:
+            aggregate_ids = set(_get_aggregate_member_profile_ids(conn))
+            if profile_id == 1:
+                profile_ids = [1, *_get_owner_source_profile_ids(conn), *aggregate_ids]
+            else:
+                profile_ids = [profile_id, 1]
+                if profile_id in aggregate_ids:
+                    profile_ids.extend(aggregate_ids)
+    finally:
+        conn.close()
+
+    for pid in dict.fromkeys(profile_ids):
+        snapshot_nav(pid, nav_date=nav_date)
+
+
+def _snapshot_nav_after_multi_profile_update(profile_ids, nav_date=None):
+    """Snapshot NAV rows affected by a multi-profile import/update."""
+    affected = [int(pid) for pid in profile_ids if pid is not None]
+    if not affected:
+        return
+    if _is_backdated_nav(nav_date):
+        for pid in dict.fromkeys(affected):
+            snapshot_nav(pid, nav_date=nav_date)
+        return
+
+    conn = get_connection()
+    try:
+        owner_source_ids = set(_get_owner_source_profile_ids(conn))
+        aggregate_ids = set(_get_aggregate_member_profile_ids(conn))
+    finally:
+        conn.close()
+
+    if 1 in affected:
+        affected.extend(owner_source_ids)
+        affected.extend(aggregate_ids)
+    if any(pid in aggregate_ids for pid in affected):
+        affected.extend(aggregate_ids)
+    if 1 in affected or any(pid in owner_source_ids for pid in affected):
+        affected.append(1)
+
+    for pid in dict.fromkeys(affected):
+        snapshot_nav(pid, nav_date=nav_date)
 
 
 def _broker_import_target_error(profile_id, conn):
@@ -1157,6 +1231,7 @@ def api_import_excel():
     """Import the owner's Excel spreadsheet (All Accounts sheet)."""
     _create_import_backup()
     profile_id = get_profile_id()
+    nav_date = _request_nav_date()
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     f = request.files["file"]
@@ -1196,6 +1271,10 @@ def api_import_excel():
             conn2.close()
             # Auto-reconcile Owner quantities from sub-profiles
             _auto_reconcile_owner()
+            _snapshot_nav_after_multi_profile_update(
+                (r["profile_id"] for r in results if r["rows"] > 0),
+                nav_date=nav_date,
+            )
             return jsonify({"rows": total, "message": f"Imported {len(results)} sheets ({total} total holdings)", "details": results})
         else:
             sheet = request.form.get("sheet_name", "All Accounts")
@@ -1218,6 +1297,7 @@ def api_import_excel():
             conn2.close()
             # Auto-reconcile Owner quantities from sub-profiles
             _auto_reconcile_owner()
+            _snapshot_nav_after_profile_update(profile_id, nav_date=nav_date)
             return jsonify({"rows": count, "message": msg})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -1234,6 +1314,7 @@ def api_import_generic():
     """Import a generic user spreadsheet (Ticker + Shares minimum)."""
     _create_import_backup()
     profile_id = get_profile_id()
+    nav_date = _request_nav_date()
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     f = request.files["file"]
@@ -1266,6 +1347,10 @@ def api_import_generic():
             total = sum(r["rows"] for r in results)
             # Auto-reconcile Owner quantities from sub-profiles
             _auto_reconcile_owner()
+            _snapshot_nav_after_multi_profile_update(
+                (r["profile_id"] for r in results if r["rows"] > 0),
+                nav_date=nav_date,
+            )
             return jsonify({"rows": total, "message": f"Imported {len(results)} portfolios ({total} total holdings)", "details": results})
         else:
             # Snapshot BEFORE import
@@ -1282,6 +1367,7 @@ def api_import_generic():
             # Auto-reconcile Owner if a sub-profile was imported
             if profile_id != 1:
                 _auto_reconcile_owner()
+            _snapshot_nav_after_profile_update(profile_id, nav_date=nav_date)
             return jsonify({"rows": count, "message": msg})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -1517,7 +1603,7 @@ def api_import_transactions_preview():
             pass
 
 
-def _import_positions(parsed, profile_id):
+def _import_positions(parsed, profile_id, nav_date=None):
     """Import holdings from a positions-based file (e.g. Schwab Positions CSV).
 
     Writes directly to all_account_info — sets quantity, cost basis, price,
@@ -1672,6 +1758,7 @@ def _import_positions(parsed, profile_id):
         msg = f"Imported {updated + inserted} positions ({updated} updated, {inserted} new)."
         if removed:
             msg += f" Removed {removed} stale holdings."
+        _snapshot_nav_after_profile_update(profile_id, nav_date=nav_date)
         return jsonify({"message": msg, "updated": updated, "inserted": inserted, "removed": removed})
 
     except Exception as e:
@@ -1681,10 +1768,38 @@ def _import_positions(parsed, profile_id):
         conn.close()
 
 
+def _record_positions_nav_only(parsed, profile_id, nav_date):
+    """Record NAV from a positions file without changing current holdings."""
+    if not nav_date:
+        raise ValueError("NAV snapshot date is required for NAV-only imports.")
+    total_value = round(sum(float(pos.get("current_value") or 0) for pos in parsed.get("positions", [])), 2)
+    if total_value <= 0:
+        raise ValueError("No positive position value found to record.")
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO portfolio_nav (profile_id, nav_date, total_value)
+               VALUES (?, ?, ?)
+               ON CONFLICT(profile_id, nav_date) DO UPDATE SET total_value = excluded.total_value""",
+            (profile_id, nav_date, total_value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({
+        "message": f"Recorded NAV snapshot for {nav_date}: ${total_value:,.2f}",
+        "profile_id": profile_id,
+        "nav_date": nav_date,
+        "value": total_value,
+        "nav_only": True,
+    })
+
+
 @app.route("/api/import/transactions", methods=["POST"])
 def api_import_transactions():
     """Import transaction history from a CSV into the transactions + dividend_payments tables."""
     profile_id = get_profile_id()
+    nav_date = _request_nav_date()
     conn = get_connection()
     try:
         blocked_msg = _broker_import_target_error(profile_id, conn)
@@ -1729,7 +1844,16 @@ def api_import_transactions():
 
     # ── Positions-based import (e.g. Schwab) ─────────────────────────────────
     if parsed.get("format_type") == "positions":
-        return _import_positions(parsed, profile_id)
+        if request.form.get("nav_only", "false").lower() == "true":
+            return _record_positions_nav_only(parsed, profile_id, nav_date)
+        if _is_backdated_nav(nav_date):
+            return jsonify({
+                "error": (
+                    "Backdated position files can only be imported with Record NAV only. "
+                    "This prevents an older file from replacing current holdings."
+                )
+            }), 400
+        return _import_positions(parsed, profile_id, nav_date=nav_date)
 
     # ── Transaction-based import (e.g. Snowball) ─────────────────────────────
     conn = get_connection()
@@ -1878,6 +2002,7 @@ def api_import_transactions():
         populate_holdings(profile_id)
         populate_dividends(profile_id)
         populate_income_tracking(profile_id)
+        _snapshot_nav_after_profile_update(profile_id, nav_date=nav_date)
 
     except Exception as e:
         conn.close()
@@ -1898,6 +2023,75 @@ def api_import_transactions():
                 if preserve_positions else ""
             )
         ),
+    })
+
+
+@app.route("/api/nav/history", methods=["GET"])
+def api_nav_history():
+    """Return portfolio NAV snapshots for the current profile."""
+    start = request.args.get("start")
+    conn = get_connection()
+    try:
+        if request.args.get("aggregate") == "true":
+            profile_ids = _get_aggregate_member_profile_ids(conn)
+            if not profile_ids:
+                return jsonify([])
+            placeholders = ",".join("?" * len(profile_ids))
+            query = (
+                "SELECT nav_date, SUM(total_value) AS total_value "
+                f"FROM portfolio_nav WHERE profile_id IN ({placeholders})"
+            )
+            params = list(profile_ids)
+            if start:
+                query += " AND nav_date >= ?"
+                params.append(start)
+            query += " GROUP BY nav_date HAVING COUNT(DISTINCT profile_id) = ? ORDER BY nav_date"
+            params.append(len(profile_ids))
+            rows = conn.execute(query, params).fetchall()
+            return jsonify([{"date": r["nav_date"], "value": r["total_value"]} for r in rows])
+        else:
+            profile_id = get_profile_id()
+            query = "SELECT nav_date, total_value FROM portfolio_nav WHERE profile_id = ?"
+            params = [profile_id]
+            if start:
+                query += " AND nav_date >= ?"
+                params.append(start)
+            query += " ORDER BY nav_date"
+            rows = conn.execute(query, params).fetchall()
+            return jsonify([{"date": r["nav_date"], "value": r["total_value"]} for r in rows])
+    finally:
+        conn.close()
+
+
+def _nav_snapshot_profile_ids(conn, profile_id):
+    """Return profiles that should be snapshotted for the active NAV scope."""
+    if request.args.get("aggregate") == "true":
+        return _get_aggregate_member_profile_ids(conn)
+    if profile_id == 1:
+        source_ids = _get_owner_source_profile_ids(conn)
+        return [1, *source_ids] if source_ids else [1]
+    return [profile_id, 1]
+
+
+@app.route("/api/nav/snapshot", methods=["POST"])
+def api_nav_snapshot():
+    """Record today's NAV for the current profile (and Owner if different)."""
+    profile_id = get_profile_id()
+    conn = get_connection()
+    try:
+        profile_ids = _nav_snapshot_profile_ids(conn, profile_id)
+    finally:
+        conn.close()
+
+    values = {}
+    for pid in dict.fromkeys(profile_ids):
+        values[str(pid)] = snapshot_nav(pid)
+
+    return jsonify({
+        "profile_id": profile_id,
+        "value": values.get(str(profile_id)),
+        "owner_value": values.get("1") if profile_id != 1 else values.get("1"),
+        "values": values,
     })
 
 
@@ -5742,6 +5936,356 @@ def get_accrual_summary():
 
     conn.close()
     return jsonify({"accounts": accounts})
+
+
+# Action Center
+
+def _action_iso_date(value):
+    if not value:
+        return None
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    raw = str(value).strip()
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return datetime.datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            pass
+    return None
+
+
+def _action_days_from_today(value, today):
+    iso = _action_iso_date(value)
+    if not iso:
+        return None, None
+    try:
+        dt = datetime.date.fromisoformat(iso)
+    except ValueError:
+        return None, None
+    return iso, (dt - today).days
+
+
+def _action_money(value):
+    return f"${float(value or 0):,.2f}"
+
+
+def _action_pct(value, digits=1):
+    return f"{float(value or 0):.{digits}f}%"
+
+
+def _action_item(items, kind, priority, title, detail, route, **extra):
+    priority_rank = {"critical": 0, "warning": 1, "info": 2, "success": 3}
+    items.append({
+        "id": extra.pop("id", f"{kind}-{len(items) + 1}"),
+        "kind": kind,
+        "priority": priority,
+        "priority_rank": priority_rank.get(priority, 9),
+        "title": title,
+        "detail": detail,
+        "route": route,
+        **extra,
+    })
+
+
+def _action_center_profile_info(conn):
+    is_agg, pids = get_profile_filter()
+    placeholders = ",".join("?" * len(pids))
+    rows = conn.execute(
+        f"SELECT id, name FROM profiles WHERE id IN ({placeholders})",
+        pids,
+    ).fetchall()
+    names = {r["id"]: r["name"] for r in rows}
+    profile_name = "Aggregate" if is_agg else names.get(pids[0], "Portfolio")
+    return is_agg, pids, names, profile_name
+
+
+@app.route("/api/action-center", methods=["GET"])
+def action_center():
+    """Return prioritized portfolio follow-up items assembled from existing data."""
+    today = datetime.date.today()
+    limit = max(1, min(50, int(request.args.get("limit", 50))))
+    conn = get_connection()
+    try:
+        is_agg, pids, profile_names, profile_name = _action_center_profile_info(conn)
+        placeholders = ",".join("?" * len(pids))
+        items = []
+
+        holding_rows = conn.execute(
+            f"""SELECT a.ticker, a.profile_id, a.description, a.quantity,
+                       a.current_value, a.purchase_value, a.gain_or_loss_percentage,
+                       a.approx_monthly_income, a.estim_payment_per_year,
+                       a.current_annual_yield, a.div, a.div_frequency,
+                       a.ex_div_date, a.div_pay_date, a.purchase_date,
+                       a.dividend_actuals_source, a.import_date, a.nav_erosion_scope,
+                       a.nav_benchmark_override, a.reinvest
+                FROM all_account_info a
+                WHERE a.profile_id IN ({placeholders})
+                  AND COALESCE(a.quantity, 0) > 1e-9
+                ORDER BY COALESCE(a.current_value, 0) DESC""",
+            pids,
+        ).fetchall()
+        holdings = rows_to_dicts(holding_rows)
+        total_value = sum(float(h.get("current_value") or 0) for h in holdings)
+        total_monthly_income = sum(float(h.get("approx_monthly_income") or 0) for h in holdings)
+
+        refresh_items = []
+        for pid in pids:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = ?",
+                (f"last_refresh_{pid}",),
+            ).fetchone()
+            last_refresh = row["value"] if row else None
+            days = None
+            if last_refresh:
+                try:
+                    days = (datetime.datetime.now() - datetime.datetime.fromisoformat(last_refresh)).days
+                except ValueError:
+                    days = None
+            if days is None or days >= 3:
+                refresh_items.append({
+                    "profile_id": pid,
+                    "name": profile_names.get(pid, f"Profile {pid}"),
+                    "days": days,
+                })
+        if refresh_items:
+            oldest = max((r["days"] for r in refresh_items if r["days"] is not None), default=None)
+            label = "No refresh recorded" if oldest is None else f"Oldest refresh is {oldest} day{'s' if oldest != 1 else ''} old"
+            _action_item(
+                items,
+                "data",
+                "warning" if oldest is None or oldest >= 7 else "info",
+                "Refresh market data",
+                f"{len(refresh_items)} account{'s' if len(refresh_items) != 1 else ''} may be stale. {label}.",
+                "/holdings",
+                cta="Refresh Prices & Divs",
+                metric=oldest,
+            )
+
+        upcoming = []
+        for h in holdings:
+            iso, days = _action_days_from_today(h.get("div_pay_date"), today)
+            if iso and days is not None and 0 <= days <= 14:
+                upcoming.append({
+                    "ticker": h["ticker"],
+                    "date": iso,
+                    "days": days,
+                    "income": float(h.get("approx_monthly_income") or 0),
+                })
+        upcoming.sort(key=lambda r: (r["date"], r["ticker"]))
+        for ev in upcoming[:5]:
+            when = "today" if ev["days"] == 0 else f"in {ev['days']} day{'s' if ev['days'] != 1 else ''}"
+            _action_item(
+                items,
+                "dividend",
+                "info",
+                f"{ev['ticker']} payment {when}",
+                f"Estimated pay date {ev['date']}. Monthly estimate: {_action_money(ev['income'])}.",
+                "/div-calendar",
+                ticker=ev["ticker"],
+                date=ev["date"],
+                metric=ev["days"],
+            )
+
+        missing_meta = [
+            h for h in holdings
+            if not h.get("div_frequency") or not _action_iso_date(h.get("div_pay_date"))
+            or (float(h.get("div") or 0) <= 0 and float(h.get("estim_payment_per_year") or 0) <= 0)
+        ]
+        if missing_meta:
+            examples = ", ".join(h["ticker"] for h in missing_meta[:6])
+            _action_item(
+                items,
+                "data",
+                "warning",
+                "Complete dividend metadata",
+                f"{len(missing_meta)} holding{'s' if len(missing_meta) != 1 else ''} need frequency, pay date, or dividend amount review: {examples}.",
+                "/holdings",
+                cta="Review holdings",
+                metric=len(missing_meta),
+            )
+
+        if total_monthly_income > 0 and holdings:
+            top_income = sorted(
+                holdings,
+                key=lambda h: float(h.get("approx_monthly_income") or 0),
+                reverse=True,
+            )[0]
+            top_income_value = float(top_income.get("approx_monthly_income") or 0)
+            top_income_pct = top_income_value / total_monthly_income * 100
+            if top_income_pct >= 25:
+                _action_item(
+                    items,
+                    "income",
+                    "warning" if top_income_pct >= 35 else "info",
+                    f"{top_income['ticker']} drives {_action_pct(top_income_pct)} of monthly income",
+                    f"{_action_money(top_income_value)} of {_action_money(total_monthly_income)} estimated monthly income comes from one holding.",
+                    "/dividends",
+                    ticker=top_income["ticker"],
+                    metric=top_income_pct,
+                )
+
+        if total_value > 0:
+            cat_rows = conn.execute(
+                f"""SELECT COALESCE(c.name, 'Unallocated') AS category,
+                           MAX(COALESCE(c.target_pct, 0)) AS target_pct,
+                           SUM(COALESCE(a.current_value, 0)) AS current_value,
+                           COUNT(DISTINCT a.ticker) AS holding_count
+                    FROM all_account_info a
+                    LEFT JOIN ticker_categories tc
+                      ON tc.ticker = a.ticker AND tc.profile_id = a.profile_id
+                    LEFT JOIN categories c ON c.id = tc.category_id
+                    WHERE a.profile_id IN ({placeholders})
+                      AND COALESCE(a.quantity, 0) > 1e-9
+                    GROUP BY COALESCE(c.name, 'Unallocated')""",
+                pids,
+            ).fetchall()
+            drift_rows = []
+            unallocated_value = 0.0
+            for r in cat_rows:
+                category = r["category"]
+                value = float(r["current_value"] or 0)
+                actual = value / total_value * 100
+                target = float(r["target_pct"] or 0)
+                if category == "Unallocated":
+                    unallocated_value += value
+                if target > 0:
+                    drift = actual - target
+                    if abs(drift) >= 5:
+                        drift_rows.append((abs(drift), drift, category, actual, target, value))
+            if unallocated_value > 0:
+                _action_item(
+                    items,
+                    "allocation",
+                    "warning",
+                    "Assign unallocated holdings",
+                    f"{_action_money(unallocated_value)} is not assigned to a category, which weakens drift and rebalance guidance.",
+                    "/categories",
+                    cta="Assign categories",
+                    metric=unallocated_value,
+                )
+            for _, drift, category, actual, target, value in sorted(drift_rows, reverse=True)[:4]:
+                direction = "over" if drift > 0 else "under"
+                _action_item(
+                    items,
+                    "allocation",
+                    "warning" if abs(drift) >= 10 else "info",
+                    f"{category} is {_action_pct(abs(drift))} {direction} target",
+                    f"Actual {_action_pct(actual)} vs target {_action_pct(target)} on {_action_money(value)}.",
+                    "/rebalance-wizard",
+                    cta="Open Rebalance Wizard",
+                    metric=abs(drift),
+                )
+
+        near_long_term = []
+        for h in holdings:
+            iso = _action_iso_date(h.get("purchase_date"))
+            if not iso:
+                continue
+            held_days = (today - datetime.date.fromisoformat(iso)).days
+            days_left = 366 - held_days
+            if 0 <= days_left <= 45:
+                near_long_term.append((days_left, h))
+        near_long_term.sort(key=lambda pair: pair[0])
+        for days_left, h in near_long_term[:3]:
+            _action_item(
+                items,
+                "tax",
+                "info",
+                f"{h['ticker']} approaches long-term status",
+                f"Purchase date {h.get('purchase_date')} is about {days_left} day{'s' if days_left != 1 else ''} from the one-year mark.",
+                "/tax-report",
+                ticker=h["ticker"],
+                metric=days_left,
+            )
+
+        year_start = today.replace(month=1, day=1).isoformat()
+        sell_row = conn.execute(
+            f"""SELECT COUNT(*) AS sell_count, COALESCE(SUM(realized_gain), 0) AS realized_gain
+                FROM transactions
+                WHERE profile_id IN ({placeholders})
+                  AND UPPER(COALESCE(transaction_type, '')) = 'SELL'
+                  AND transaction_date >= ?""",
+            pids + [year_start],
+        ).fetchone()
+        if sell_row and int(sell_row["sell_count"] or 0) > 0:
+            realized = float(sell_row["realized_gain"] or 0)
+            sell_count = int(sell_row["sell_count"] or 0)
+            _action_item(
+                items,
+                "tax",
+                "info",
+                "Review realized gains for this tax year",
+                f"{sell_count} sell transaction{'s' if sell_count != 1 else ''} recorded YTD. Estimated realized gain/loss: {_action_money(realized)}.",
+                "/tax-report",
+                cta="Open Tax Report",
+                metric=abs(realized),
+            )
+
+        plan_rows = conn.execute(
+            f"""SELECT id, name, summary_json, updated_at
+                FROM rebalance_saved_plans
+                WHERE profile_id IN ({placeholders})
+                ORDER BY updated_at DESC
+                LIMIT 5""",
+            pids,
+        ).fetchall()
+        for row in plan_rows:
+            try:
+                summary = json.loads(row["summary_json"] or "{}")
+            except json.JSONDecodeError:
+                summary = {}
+            execution = summary.get("execution") or {}
+            trade_count = int(summary.get("trade_count") or 0)
+            filled = int(execution.get("filled") or 0)
+            placed = int(execution.get("placed") or 0)
+            reviewed = int(execution.get("reviewed") or 0)
+            pending_work = max(0, trade_count - filled)
+            if pending_work > 0:
+                _action_item(
+                    items,
+                    "rebalance",
+                    "warning" if placed or reviewed else "info",
+                    f"Finish rebalance plan: {row['name']}",
+                    f"{pending_work} of {trade_count} trade{'s' if trade_count != 1 else ''} not filled. {reviewed} reviewed, {placed} placed.",
+                    "/rebalance-wizard",
+                    cta="Load plan",
+                    metric=pending_work,
+                    plan_id=row["id"],
+                    updated_at=row["updated_at"],
+                )
+
+        if not items and holdings:
+            _action_item(
+                items,
+                "portfolio",
+                "success",
+                "No urgent follow-ups",
+                "Current data did not surface stale refreshes, large allocation drift, metadata gaps, or unfinished rebalance work.",
+                "/",
+                metric=0,
+            )
+
+        items.sort(key=lambda item: (item["priority_rank"], -float(item.get("metric") or 0), item["title"]))
+        for item in items:
+            item.pop("priority_rank", None)
+        counts = {}
+        for item in items:
+            counts[item["priority"]] = counts.get(item["priority"], 0) + 1
+        summary = {
+            "profile": profile_name,
+            "is_aggregate": is_agg,
+            "holding_count": len(holdings),
+            "total_value": round(total_value, 2),
+            "monthly_income": round(total_monthly_income, 2),
+            "item_count": len(items),
+            "counts": counts,
+            "as_of": today.isoformat(),
+        }
+        return jsonify({"summary": summary, "items": items[:limit]})
+    finally:
+        conn.close()
 
 
 # ── Holdings CRUD ──────────────────────────────────────────────────────────────
@@ -26655,8 +27199,70 @@ def etf_funds_search():
 
 # ── Run ────────────────────────────────────────────────────────────────────────
 
+def _kill_stale_backend(port=5001):
+    """Kill any prior Flask backend left squatting on our port.
+
+    Conservatively only kills the process if it is a python interpreter
+    running our own app.py, to avoid taking out unrelated services.
+    """
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(0.3)
+    try:
+        in_use = s.connect_ex(("127.0.0.1", port)) == 0
+    finally:
+        s.close()
+    if not in_use:
+        return
+
+    import subprocess, time
+    pids = []
+    try:
+        if sys.platform == "win32":
+            # Find PIDs listening on the port via netstat (no admin needed)
+            out = subprocess.check_output(
+                ["netstat", "-ano", "-p", "TCP"], text=True, stderr=subprocess.DEVNULL
+            )
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and parts[3] == "LISTENING" and parts[1].endswith(f":{port}"):
+                    try:
+                        pids.append(int(parts[4]))
+                    except ValueError:
+                        pass
+        else:
+            out = subprocess.check_output(["lsof", "-ti", f"tcp:{port}"], text=True, stderr=subprocess.DEVNULL)
+            pids = [int(p) for p in out.split() if p.strip().isdigit()]
+    except Exception:
+        return
+
+    own_pid = os.getpid()
+    for pid in set(pids):
+        if pid == own_pid:
+            continue
+        try:
+            if sys.platform == "win32":
+                info = subprocess.check_output(
+                    ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine", "/format:list"],
+                    text=True, stderr=subprocess.DEVNULL,
+                )
+            else:
+                info = subprocess.check_output(["ps", "-p", str(pid), "-o", "command="], text=True, stderr=subprocess.DEVNULL)
+            if "app.py" not in info or "python" not in info.lower():
+                continue  # not our backend — leave it alone
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                os.kill(pid, 9)
+            print(f"[startup] killed stale backend PID {pid} on port {port}")
+        except Exception:
+            pass
+    time.sleep(0.5)
+
+
 if __name__ == "__main__":
     is_packaged = getattr(sys, "frozen", False) or os.environ.get("ELECTRON_RUN_AS_NODE")
+    _kill_stale_backend(5001)
     conn = get_connection()
     try:
         ensure_tables_exist(conn)

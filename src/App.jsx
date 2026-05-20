@@ -45,6 +45,7 @@ import ETFProviderUpdate from './pages/ETFProviderUpdate'
 import ETFComparer from './pages/ETFComparer'
 import StockComparer from './pages/StockComparer'
 import RebalanceWizard from './pages/RebalanceWizard'
+import ActionCenter from './pages/ActionCenter'
 // Option Trading Tools and Option Education are intentionally excluded from
 // deployed builds — still in development, not ready for production.
 // import OptionTradingTools from './pages/OptionTradingTools'
@@ -90,6 +91,7 @@ function App() {
       <Nav />
       <Routes>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/action-center" element={<ActionCenter />} />
         <Route path="/import" element={<Import />} />
         <Route path="/holdings" element={<ManageHoldings />} />
         <Route path="/settings" element={<Settings />} />
@@ -162,6 +164,7 @@ function Nav() {
   return (
     <nav className="nav-bar">
       <NavLink to="/">Dashboard</NavLink>
+      <NavLink to="/action-center">Action Center</NavLink>
       <NavDropdown label="Portfolio">
         <NavLink to="/holdings">Holdings</NavLink>
         <NavLink to="/categories">Categories</NavLink>

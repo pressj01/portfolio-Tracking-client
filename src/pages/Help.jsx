@@ -1,6 +1,6 @@
 ﻿import React, { useState } from 'react'
 
-const APP_VERSION = '1.27.0'
+const APP_VERSION = '1.28.0'
 
 const GROUPS = [
   {
@@ -8,6 +8,13 @@ const GROUPS = [
     label: 'Overview',
     sections: [
       { id: 'overview', label: 'Overview' },
+    ],
+  },
+  {
+    id: 'action-center-group',
+    label: 'Action Center',
+    sections: [
+      { id: 'action-center', label: 'Action Center' },
     ],
   },
   {
@@ -91,7 +98,8 @@ function Overview() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li><strong>Import</strong> — Bulk-load brokerage positions and transaction history from your own spreadsheet, a generic template, or brokerage exports. Supports Schwab (Positions &amp; Transactions), E*TRADE (Positions, Buys &amp; Sells, Dividends), Fidelity (Positions &amp; Transactions), Robinhood (Positions PDF &amp; Transactions), and Snowball (Holdings Migration &amp; Transactions). Automatic database backups before every import and dividend repair with one-click restore.</li>
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
-        <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation.</li>
+        <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation. Includes an Action Center preview panel showing the top follow-up items.</li>
+        <li><strong>Action Center</strong> — Automatically generated follow-up items drawn from your portfolio data, categorized by priority (Needs Review, Watch, Clear) and kind (Allocation, Dividend, Income, Rebalance, Tax, etc.).</li>
         <li><strong>Dividends</strong> — Dividend analysis, calendar view, dividend history, dividend compare, and dividend calculator.</li>
         <li><strong>Growth</strong> — Portfolio growth charts, total return tracking, gains &amp; losses breakdown, and safe withdrawal rate analysis.</li>
         <li><strong>Watchlist</strong> — Track tickers outside your portfolio with live price and dividend data.</li>
@@ -482,6 +490,68 @@ function ImportHelp() {
   )
 }
 
+function ActionCenterHelp() {
+  return (
+    <div>
+      <h2>Action Center</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Action Center aggregates follow-up items generated automatically from your portfolio data —
+        things that may need attention, things to keep an eye on, and confirmations that something looks healthy.
+        It is accessible from the top navigation bar and also shows a preview panel on the Dashboard.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        At the top of the page, five cards give a quick status snapshot:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Items</strong> — total number of action items as of the last calculation.</li>
+        <li><strong>Needs Review</strong> — items flagged as requiring attention (shown in amber when non-zero).</li>
+        <li><strong>Watch</strong> — items worth monitoring but not immediately urgent.</li>
+        <li><strong>Portfolio Value</strong> — current total value across the active portfolio's holdings.</li>
+        <li><strong>Monthly Income</strong> — estimated monthly dividend income for the portfolio.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Priority Filters</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Use the filter buttons to focus the list:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>All</strong> — shows every item regardless of priority.</li>
+        <li><strong>Needs Review</strong> — shows only warning-priority items that need action.</li>
+        <li><strong>Watch</strong> — shows info-priority items to monitor.</li>
+        <li><strong>Clear</strong> — shows success-priority items that are in good shape.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Action Items</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each item card shows:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Kind</strong> — the category of the item: Allocation, Data, Dividend, Income, Portfolio, Rebalance, or Tax.</li>
+        <li><strong>Priority badge</strong> — Needs Review (warning), Watch (info), or Clear (success).</li>
+        <li><strong>Title &amp; Detail</strong> — a plain-English description of the issue or observation.</li>
+        <li><strong>Open button</strong> — navigates directly to the relevant page in the app so you can act on the item.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Dashboard Preview</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The Dashboard shows a compact preview of up to four Action Center items at the top of the page.
+        Each preview card links directly to the relevant page. Click <strong>Open Action Center</strong> to
+        see the full list with filters and details.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When Action Items Are Generated</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Items are computed from the data already in the app — holdings, dividend history, category weights,
+        and income estimates. They are recalculated each time you open the Action Center or Dashboard.
+        No manual refresh is needed; click <strong>Refresh Data</strong> (links to Holdings) if you want
+        to ensure market data is current before reviewing items.
+      </p>
+    </div>
+  )
+}
+
 function DashboardHelp() {
   return (
     <div>
@@ -588,6 +658,34 @@ function DashboardHelp() {
         These controls affect the Dashboard's per-holding NAV value and portfolio-level NAV Erosion Ratio.
         The standalone NAV Erosion backtest and NAV Erosion Screener still use their own ticker inputs and
         automatic benchmark rules.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Value Over Time</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Below the summary cards, an equity curve chart tracks your portfolio's total market value over time.
+        Each data point is a NAV (Net Asset Value) snapshot — the sum of <code>shares × current price</code>
+        across all holdings on that date. Once you have two or more snapshots, the chart draws a line; a single
+        snapshot appears as a dot.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '1rem' }}>
+        <li><strong>Record NAV button</strong> — click at any time to save today's portfolio value using the prices already refreshed on page load. No import required. The button records a snapshot for the active portfolio and, if it is a sub-portfolio, also records one for Owner automatically.</li>
+        <li><strong>Import trigger</strong> — any holdings import (Owner spreadsheet, generic upload, broker positions, or broker transactions) automatically records a snapshot for the imported portfolio and Owner.</li>
+        <li><strong>One snapshot per day</strong> — clicking the button or importing multiple times on the same day simply updates that day's value rather than creating duplicates.</li>
+        <li><strong>Accuracy</strong> — snapshots from the button and from imports use identical logic. Both reflect the prices currently stored in the database, which are refreshed from yfinance on each page load or import.</li>
+      </ul>
+      <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>How often should I snapshot?</strong> Monthly snapshots give a smooth long-term trend.
+        Weekly or daily snapshots reveal drawdowns and recovery patterns. The <strong>Record NAV</strong> button
+        makes it easy to capture a value on any day without running a full import.
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Action Center Preview</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Near the top of the Dashboard, an <strong>Action Center</strong> card shows up to four follow-up items
+        generated automatically from your portfolio data. Items are grouped by priority: amber for "Needs Review",
+        blue for "Watch", and green for "Clear". Each card links directly to the relevant page. Click
+        <strong> Open Action Center</strong> to see the full list with priority filters and details.
+        The preview is hidden when the portfolio has no action items.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Upcoming Dividends</h3>
@@ -2784,6 +2882,16 @@ function SecurityResearchHelp() {
         This helps you quickly assess whether the ticker has outperformed its reference index over multiple time horizons.
       </p>
 
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Distribution History Chart</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Below the average return chart, a <strong>Distribution History</strong> bar chart shows recent dividend
+        or distribution payments for the looked-up ticker. When the chart is in <strong>Yield %</strong> mode,
+        an <strong>Annual / Monthly</strong> toggle appears. <em>Monthly</em> shows the per-period yield
+        (distribution ÷ price × 100). <em>Annual</em> multiplies by 12 for an annualized approximation,
+        making payers of different frequencies easier to compare. Switching back to <strong>$ Amount</strong>
+        resets to Monthly.
+      </p>
+
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>When to Use It</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>Use Security Research for a fast first pass on a single ticker.</li>
@@ -4647,6 +4755,13 @@ function ETFComparerHelp() {
         data first and fall back to Yahoo Finance when official data is unavailable. The source label shows where the chart
         data came from.
       </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        When the chart is in <strong>Yield %</strong> mode, an <strong>Annual / Monthly</strong> toggle appears.
+        <em>Monthly</em> shows each distribution's per-period yield (distribution ÷ price × 100).
+        <em>Annual</em> multiplies the per-period yield by 12 to approximate an annualized rate, making monthly
+        and less-frequent payers directly comparable. Switching back to <strong>$ Amount</strong> mode
+        resets the toggle to Monthly automatically.
+      </p>
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="/help-screenshots/etf-comparer/distribution-history.jpg" alt="ETF Comparer distribution history chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
@@ -4754,6 +4869,12 @@ function StockComparerHelp() {
         Use the ticker buttons to switch which stock is displayed, or use <strong>Hide Chart</strong> to collapse the section.
         Bars are colored green when the dividend amount is at or above the rolling average, and blue when below.
         Data is sourced from Yahoo Finance, and the source label is shown in the top-right corner of the chart.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        When the chart is in <strong>Yield %</strong> mode, an <strong>Annual / Monthly</strong> toggle appears.
+        <em>Monthly</em> shows each payment's per-period yield (distribution ÷ price × 100).
+        <em>Annual</em> multiplies by 12 to approximate an annualized rate for direct comparison across payers
+        with different frequencies. Switching back to <strong>$ Amount</strong> resets to Monthly.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Key Fundamentals Cards</h3>
@@ -4864,6 +4985,7 @@ function RebalanceWizardHelp() {
 
 const CONTENT_MAP = {
   overview: Overview,
+  'action-center': ActionCenterHelp,
   import: ImportHelp,
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,

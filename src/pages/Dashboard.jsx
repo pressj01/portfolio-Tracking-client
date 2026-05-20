@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { API_BASE } from '../config'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
@@ -397,6 +397,10 @@ export default function Dashboard() {
   const [tickerCoverageMeta, setTickerCoverageMeta] = useState({})
   const [overviewGroups, setOverviewGroups] = useState(null)
   const [sp500, setSp500] = useState(null)
+  const [navHistory, setNavHistory] = useState([])
+  const [navSnapping, setNavSnapping] = useState(false)
+  const [actionCenter, setActionCenter] = useState(null)
+  const navChartRef = useRef(null)
   const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v11_${selection}`, [selection])
 
   useEffect(() => {
@@ -460,6 +464,14 @@ export default function Dashboard() {
           pf('/api/income-summary')
             .then(safeJson)
             .then(d => { if (!stale) setIncomeSummary(d) })
+            .catch(() => {})
+          pf('/api/nav/history')
+            .then(safeJson)
+            .then(d => { if (!stale && Array.isArray(d)) setNavHistory(d) })
+            .catch(() => {})
+          pf('/api/action-center?limit=4')
+            .then(safeJson)
+            .then(d => { if (!stale) setActionCenter(d) })
             .catch(() => {})
           // Build portfolio overview groups from categories or classification_type
           pf('/api/categories/data')
@@ -774,6 +786,86 @@ export default function Dashboard() {
     return 'Holding estimates'
   }, [incomeSummary])
 
+  useEffect(() => {
+    const el = navChartRef.current
+    if (!el || !window.Plotly || navHistory.length < 1) return
+    const points = navHistory
+      .map(r => ({ date: r.date, value: Number(r.value) }))
+      .filter(r => r.date && Number.isFinite(r.value))
+    if (points.length < 1) return
+
+    const dates = points.map(r => r.date)
+    const values = points.map(r => r.value)
+    const dateTimes = points
+      .map(r => new Date(`${r.date}T00:00:00`).getTime())
+      .filter(Number.isFinite)
+    const minDate = Math.min(...dateTimes)
+    const maxDate = Math.max(...dateTimes)
+    const datePadding = dateTimes.length > 1
+      ? Math.max(24 * 60 * 60 * 1000, (maxDate - minDate) * 0.15)
+      : 24 * 60 * 60 * 1000
+    const xRange = Number.isFinite(minDate) && Number.isFinite(maxDate)
+      ? [
+          new Date(minDate - datePadding).toISOString().slice(0, 10),
+          new Date(maxDate + datePadding).toISOString().slice(0, 10),
+        ]
+      : undefined
+    const minValue = Math.min(...values)
+    const maxValue = Math.max(...values)
+    const valuePadding = minValue === maxValue
+      ? Math.max(Math.abs(maxValue) * 0.02, 1)
+      : Math.max((maxValue - minValue) * 0.25, Math.abs(maxValue) * 0.01, 1)
+    const yRange = [
+      Math.max(0, minValue - valuePadding),
+      maxValue + valuePadding,
+    ]
+    const singlePoint = points.length === 1
+    const dateFormatter = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
+    const tickText = points.map(r => dateFormatter.format(new Date(`${r.date}T00:00:00`)))
+    const valueTrace = {
+      x: dates, y: values,
+      mode: singlePoint ? 'markers+text' : 'lines+markers',
+      line: { color: '#7ecfff', width: 2 },
+      marker: { color: '#7ecfff', size: 8 },
+      textposition: 'top center',
+      hovertemplate: '%{x|%b %d, %Y}<br>$%{y:,.2f}<extra></extra>',
+    }
+    if (singlePoint) {
+      valueTrace.text = values.map(v => fmt(v))
+    }
+    const traces = [valueTrace]
+    const xaxis = {
+      gridcolor: '#1a2233',
+      color: '#8899aa',
+      type: 'date',
+      tickmode: 'array',
+      tickvals: dates,
+      ticktext: tickText,
+    }
+    if (xRange) xaxis.range = xRange
+    const layout = {
+      template: 'plotly_dark',
+      paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
+      xaxis,
+      yaxis: { title: { text: 'Portfolio Value ($)', font: { size: 12, color: '#8899aa' } }, gridcolor: '#1a2233', color: '#8899aa', tickprefix: '$', range: yRange },
+      margin: { l: 90, r: 20, t: 10, b: 40 },
+      height: 300,
+      hovermode: 'x unified',
+    }
+    try {
+      window.Plotly.newPlot(el, traces, layout, { responsive: true, displayModeBar: false })
+    } catch (err) {
+      console.warn('Unable to render NAV history chart', err)
+    }
+    return () => {
+      try {
+        if (el) window.Plotly.purge(el)
+      } catch {
+        // Plot cleanup should not affect dashboard rendering.
+      }
+    }
+  }, [navHistory])
+
   if (loading) {
     return <div className="page" style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
   }
@@ -812,6 +904,48 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {actionCenter?.items?.length > 0 && (
+        <div className="card" style={{ padding: '0.85rem 1rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', marginBottom: '0.65rem', flexWrap: 'wrap' }}>
+            <div>
+              <h3 style={{ color: '#90caf9', margin: 0, fontSize: '1rem' }}>Action Center</h3>
+              <p style={{ color: '#8899aa', margin: '0.15rem 0 0', fontSize: '0.82rem' }}>
+                {actionCenter.summary?.item_count || actionCenter.items.length} follow-up{(actionCenter.summary?.item_count || actionCenter.items.length) !== 1 ? 's' : ''} found for this portfolio.
+              </p>
+            </div>
+            <NavLink className="btn btn-secondary" style={{ padding: '0.35rem 0.7rem', fontSize: '0.82rem' }} to="/action-center">
+              Open Action Center
+            </NavLink>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.5rem' }}>
+            {actionCenter.items.slice(0, 4).map(item => {
+              const color = item.priority === 'warning' ? '#ffd54f' : item.priority === 'success' ? '#4dff91' : '#7ecfff'
+              return (
+                <NavLink
+                  key={item.id}
+                  to={item.route || '/action-center'}
+                  style={{
+                    display: 'block',
+                    border: `1px solid ${color}55`,
+                    borderLeft: `3px solid ${color}`,
+                    borderRadius: 6,
+                    padding: '0.55rem 0.65rem',
+                    background: '#10192e',
+                    color: '#e0e8f5',
+                  }}
+                >
+                  <div style={{ color, fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', marginBottom: 2 }}>
+                    {item.kind || 'portfolio'}
+                  </div>
+                  <div style={{ fontWeight: 700, fontSize: '0.88rem', lineHeight: 1.25 }}>{item.title}</div>
+                  <div style={{ color: '#9aa8bd', fontSize: '0.76rem', marginTop: 3, lineHeight: 1.35 }}>{item.detail}</div>
+                </NavLink>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Summary Cards Strip */}
       <div className="summary-strip">
@@ -883,6 +1017,33 @@ export default function Dashboard() {
               </span>
             }
           />
+        )}
+      </div>
+
+      {/* Portfolio Equity Curve */}
+      <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+          <h3 style={{ color: '#90caf9', margin: 0, fontSize: '1rem' }}>Portfolio Value Over Time</h3>
+          <button
+            className="btn btn-secondary"
+            style={{ fontSize: '0.8rem', padding: '0.25rem 0.6rem' }}
+            disabled={navSnapping}
+            onClick={() => {
+              setNavSnapping(true)
+              pf('/api/nav/snapshot', { method: 'POST' })
+                .then(safeJson)
+                .then(() => pf('/api/nav/history').then(safeJson).then(d => { if (Array.isArray(d)) setNavHistory(d) }))
+                .catch(() => {})
+                .finally(() => setNavSnapping(false))
+            }}
+          >
+            {navSnapping ? 'Recording...' : 'Record NAV'}
+          </button>
+        </div>
+        {navHistory.length >= 1 ? <div ref={navChartRef} /> : (
+          <p style={{ color: '#8899aa', fontSize: '0.85rem', margin: '1rem 0' }}>
+            No NAV snapshots yet. Click "Record NAV" or import data to start tracking.
+          </p>
         )}
       </div>
 

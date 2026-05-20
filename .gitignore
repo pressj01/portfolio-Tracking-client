@@ -9,6 +9,8 @@ venv/
 
 # Database
 *.db
+*.db-shm
+*.db-wal
 !backend/seed/
 !backend/seed/etf_providers.db
 
@@ -19,6 +21,7 @@ dist-electron/
 # Environment
 .env
 .env.local
+tmp_*.log
 
 # IDE
 .vscode/

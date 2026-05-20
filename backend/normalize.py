@@ -1,3 +1,4 @@
+from datetime import date
 from config import get_connection
 
 
@@ -109,6 +110,32 @@ def populate_income_tracking(profile_id=1):
     conn.commit()
     conn.close()
     return row_count, f"Income tracking: {row_count} rows inserted."
+
+
+def snapshot_nav(profile_id=1, nav_date=None):
+    """Upsert a portfolio value snapshot into portfolio_nav."""
+    snapshot_date = nav_date or date.today().isoformat()
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """SELECT COALESCE(SUM(COALESCE(current_value, quantity * current_price)), 0)
+               FROM all_account_info
+               WHERE profile_id = ? AND COALESCE(quantity, 0) > 1e-9""",
+            (profile_id,),
+        ).fetchone()
+        total_value = row[0] if row else 0.0
+        if total_value <= 0:
+            return 0.0
+        conn.execute(
+            """INSERT INTO portfolio_nav (profile_id, nav_date, total_value)
+               VALUES (?, ?, ?)
+               ON CONFLICT(profile_id, nav_date) DO UPDATE SET total_value = excluded.total_value""",
+            (profile_id, snapshot_date, round(total_value, 2)),
+        )
+        conn.commit()
+        return round(total_value, 2)
+    finally:
+        conn.close()
 
 
 def populate_pillar_weights(profile_id=1):

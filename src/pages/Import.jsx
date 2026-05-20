@@ -2,6 +2,14 @@ import React, { useState, useRef, useEffect } from 'react'
 import { API_BASE } from '../config'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
+const dateInputToday = () => {
+  const d = new Date()
+  const yyyy = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
 function FileUpload({ onFileSelect, accept, file }) {
   const inputRef = useRef()
   const [dragOver, setDragOver] = useState(false)
@@ -50,6 +58,7 @@ export default function Import() {
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [multiSheet, setMultiSheet] = useState(false)
+  const [navSnapshotDate, setNavSnapshotDate] = useState(dateInputToday)
 
   const [hasData, setHasData] = useState(false)
 
@@ -65,6 +74,7 @@ export default function Import() {
   const [txnPreview, setTxnPreview] = useState(null)
   const [txnPreviewLoading, setTxnPreviewLoading] = useState(false)
   const [txnImporting, setTxnImporting] = useState(false)
+  const [txnNavOnly, setTxnNavOnly] = useState(false)
 
   // Backup / restore state
   const [backups, setBackups] = useState([])
@@ -107,6 +117,7 @@ export default function Import() {
     resetState()
     setTxnFile(null)
     setTxnPreview(null)
+    setTxnNavOnly(false)
   }
 
   const uploadFile = async (endpoint, extraFields = {}) => {
@@ -141,6 +152,7 @@ export default function Import() {
     try {
       // Main import
       const extraFields = multiSheet ? { multi_sheet: 'true' } : { sheet_name: sheetName }
+      extraFields.nav_date = navSnapshotDate
       if (asTransactions) extraFields.as_transactions = 'true'
       const main = await uploadFile(`/api/import/excel`, extraFields)
       results.push(main.message)
@@ -191,6 +203,7 @@ export default function Import() {
 
     try {
       const extraFields = multiSheet ? { multi_sheet: 'true' } : {}
+      extraFields.nav_date = navSnapshotDate
       if (asTransactions) extraFields.as_transactions = 'true'
       const data = await uploadFile(`/api/import/generic`, extraFields)
       setResult([data.message])
@@ -286,6 +299,18 @@ export default function Import() {
     )
   }
 
+  const snapshotDateControl = (
+    <div className="form-group" style={{ marginTop: '1rem', marginBottom: '1rem' }}>
+      <label>NAV Snapshot Date</label>
+      <input
+        type="date"
+        value={navSnapshotDate}
+        onChange={(e) => setNavSnapshotDate(e.target.value)}
+        style={{ width: '180px' }}
+      />
+    </div>
+  )
+
   return (
     <div className="page">
       <h1>Import Portfolio Data</h1>
@@ -328,6 +353,7 @@ export default function Import() {
             accept=".xlsx,.xlsm,.xls"
             file={file}
           />
+          {snapshotDateControl}
 
           <div style={{ marginTop: '1rem' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '1rem' }}>
@@ -432,6 +458,7 @@ export default function Import() {
             accept=".xlsx,.xlsm,.xls,.csv"
             file={file}
           />
+          {snapshotDateControl}
 
           <div style={{ marginTop: '1rem' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '1rem' }}>
@@ -709,6 +736,7 @@ export default function Import() {
             accept={txnFormat === 'robinhood' ? '.pdf' : '.xlsx,.xls,.csv'}
             file={txnFile}
           />
+          {snapshotDateControl}
 
           <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem' }}>
             <button
@@ -748,6 +776,8 @@ export default function Import() {
                   const formData = new FormData()
                   formData.append('file', txnFile)
                   formData.append('format', txnFormat)
+                  formData.append('nav_date', navSnapshotDate)
+                  if (txnNavOnly && txnPreview?.format_type === 'positions') formData.append('nav_only', 'true')
                   try {
                     const res = await pf(`/api/import/transactions`, { method: 'POST', body: formData })
                     const data = await res.json()
@@ -771,6 +801,17 @@ export default function Import() {
           {/* ── Positions preview (Schwab) ── */}
           {txnPreview && txnPreview.format_type === 'positions' && (
             <div style={{ marginTop: '1rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '0.75rem' }}>
+                <input
+                  type="checkbox"
+                  checked={txnNavOnly}
+                  onChange={(e) => setTxnNavOnly(e.target.checked)}
+                />
+                <strong>Record NAV only</strong>
+                <span style={{ color: '#90a4ae', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+                  (adds a chart snapshot for the selected NAV date without changing current holdings)
+                </span>
+              </label>
               {txnPreview.account_name && (
                 <div className={txnAccountMismatch ? 'alert alert-error' : 'alert alert-info'} style={{ marginBottom: '0.75rem' }}>
                   File account: <strong>{txnPreview.account_name}</strong> → importing into <strong>{currentProfileName}</strong>.

@@ -993,6 +993,17 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS portfolio_nav (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id  INTEGER NOT NULL DEFAULT 1,
+            nav_date    DATE NOT NULL,
+            total_value REAL NOT NULL,
+            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (profile_id, nav_date)
+        )
+    """)
+
     _seed_etf_provider_data(conn)
 
     conn.commit()
