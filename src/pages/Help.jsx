@@ -562,8 +562,15 @@ function DashboardHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/dashboard/dashboard-page.jpg" alt="Dashboard overview showing summary cards and holdings table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="/help-screenshots/dashboard/dashboard-page.jpg" alt="Dashboard showing Action Center preview, summary cards strip, Portfolio Value Over Time chart, Grade Thresholds guide, and Upcoming Dividends this week" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
+      <p style={{ marginBottom: '0.75rem', color: '#90a4ae', fontSize: '0.9rem' }}>
+        The screenshot above shows (top to bottom): the <strong>Action Center</strong> preview panel with follow-up items;
+        the <strong>summary cards strip</strong> covering portfolio grade, risk ratios, income totals, NAV erosion, and returns;
+        the <strong>Portfolio Value Over Time</strong> equity-curve chart with the Record NAV button;
+        the collapsible <strong>Grade Thresholds Guide</strong>; and the <strong>Upcoming Dividends This Week</strong>
+        section. The full holdings table continues below.
+      </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
       <p style={{ marginBottom: '0.75rem' }}>
