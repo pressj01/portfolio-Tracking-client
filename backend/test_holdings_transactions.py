@@ -189,6 +189,14 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 buy_txn_id INTEGER,
                 shares REAL
             );
+            CREATE TABLE profiles (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                include_in_owner INTEGER DEFAULT 0
+            );
+            CREATE TABLE aggregate_config (
+                member_profile_id INTEGER PRIMARY KEY
+            );
             CREATE TABLE categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT,
@@ -237,6 +245,62 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             return row[0] if row else None
         finally:
             conn.close()
+
+    def test_owner_transaction_list_includes_owner_member_accounts_with_source_notes(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 1)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Schwab IRA', 1)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (3, 'Outside Account', 0)")
+        self._execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('ABC', 1, 'BUY', '2026-01-01', 1, 10, 0, 'owner note')"
+        )
+        self._execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('ABC', 2, 'BUY', '2026-01-02', 2, 11, 0, 'member note')"
+        )
+        self._execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('ABC', 3, 'BUY', '2026-01-03', 3, 12, 0, 'excluded note')"
+        )
+
+        res = self.client.get("/api/holdings/ABC/transactions?profile_id=1")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual([row["profile_id"] for row in data], [1, 2])
+        self.assertEqual(data[0]["notes"], "Account: Owner; owner note")
+        self.assertEqual(data[0]["raw_notes"], "owner note")
+        self.assertEqual(data[1]["notes"], "Account: Schwab IRA; member note")
+        self.assertEqual(data[1]["source_account_name"], "Schwab IRA")
+
+    def test_aggregate_transaction_list_adds_source_account_to_notes(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Schwab IRA', 0)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (3, 'Fidelity Taxable', 0)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (4, 'Outside Account', 0)")
+        self._execute("INSERT INTO aggregate_config (member_profile_id) VALUES (2)")
+        self._execute("INSERT INTO aggregate_config (member_profile_id) VALUES (3)")
+        self._execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('ABC', 2, 'BUY', '2026-01-01', 1, 10, 0, '')"
+        )
+        self._execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('ABC', 3, 'BUY', '2026-01-02', 2, 11, 0, 'drip buy')"
+        )
+        self._execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('ABC', 4, 'BUY', '2026-01-03', 3, 12, 0, 'excluded note')"
+        )
+
+        res = self.client.get("/api/holdings/ABC/transactions?aggregate=true")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual([row["profile_id"] for row in data], [2, 3])
+        self.assertEqual(data[0]["notes"], "Account: Schwab IRA")
+        self.assertEqual(data[0]["raw_notes"], "")
+        self.assertEqual(data[1]["notes"], "Account: Fidelity Taxable; drip buy")
+        self.assertEqual(data[1]["source_account_name"], "Fidelity Taxable")
 
     def test_post_sell_without_holding_is_rejected_without_creating_rows(self):
         res = self.client.post(

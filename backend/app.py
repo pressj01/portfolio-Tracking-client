@@ -331,6 +331,49 @@ def _get_aggregate_member_profile_ids(conn):
     return [r["member_profile_id"] if isinstance(r, dict) else r[0] for r in rows]
 
 
+def _get_transaction_read_scope(conn, is_aggregate, profile_ids):
+    """Return profile ids and whether rows should be source-account labeled."""
+    if is_aggregate:
+        return list(dict.fromkeys(profile_ids or [1])), True
+
+    profile_id = int(profile_ids[0]) if profile_ids else 1
+    if profile_id == 1:
+        source_ids = _get_owner_source_profile_ids(conn)
+        if source_ids:
+            return list(dict.fromkeys([1, *source_ids])), True
+
+    return [profile_id], False
+
+
+def _load_profile_name_map(conn, profile_ids):
+    ids = list(dict.fromkeys(int(pid) for pid in profile_ids if pid is not None))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"SELECT id, name FROM profiles WHERE id IN ({placeholders})",
+        ids,
+    ).fetchall()
+    return {
+        int(row["id"] if isinstance(row, dict) else row[0]): (row["name"] if isinstance(row, dict) else row[1])
+        for row in rows
+    }
+
+
+def _add_transaction_source_notes(transactions, profile_names, include_account_note):
+    """Decorate virtual aggregate/Owner rows with their source account in notes."""
+    for txn in transactions:
+        profile_id = int(txn.get("profile_id") or 1)
+        account_name = profile_names.get(profile_id)
+        raw_notes = txn.get("notes") or ""
+        txn["source_profile_id"] = profile_id
+        txn["source_account_name"] = account_name
+        txn["raw_notes"] = raw_notes
+        if include_account_note and account_name:
+            txn["notes"] = f"Account: {account_name}; {raw_notes}" if raw_notes else f"Account: {account_name}"
+    return transactions
+
+
 def _request_nav_date():
     raw = (request.form.get("nav_date") or request.args.get("nav_date") or "").strip()
     if not raw:
@@ -7353,10 +7396,11 @@ def list_transactions(ticker):
     is_agg, pids = get_profile_filter()
     ticker = ticker.upper()
     conn = get_connection()
-    placeholders = ",".join("?" * len(pids))
+    read_pids, include_account_note = _get_transaction_read_scope(conn, is_agg, pids)
+    placeholders = ",".join("?" * len(read_pids))
     rows = conn.execute(
         f"SELECT * FROM transactions WHERE ticker = ? AND profile_id IN ({placeholders}) ORDER BY transaction_date, id",
-        [ticker] + pids,
+        [ticker] + read_pids,
     ).fetchall()
     sell_ids = [
         row["id"] if isinstance(row, dict) else row[0]
@@ -7364,8 +7408,10 @@ def list_transactions(ticker):
         if ((row["transaction_type"] if hasattr(row, "keys") else row[1]) or "BUY").upper() == "SELL"
     ]
     alloc_map = _load_lot_alloc_map(conn, sell_ids)
+    profile_names = _load_profile_name_map(conn, read_pids) if include_account_note else {}
     conn.close()
-    return jsonify(_annotate_transaction_rows(rows, alloc_map))
+    transactions = _annotate_transaction_rows(rows, alloc_map)
+    return jsonify(_add_transaction_source_notes(transactions, profile_names, include_account_note))
 
 
 @app.route("/api/holdings/<ticker>/transactions", methods=["POST"])

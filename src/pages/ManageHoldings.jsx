@@ -597,7 +597,7 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
       price_per_share: txn.price_per_share || '',
       fees: txn.fees || '',
       transaction_date: txn.transaction_date || '',
-      notes: txn.notes || '',
+      notes: txn.raw_notes ?? txn.notes ?? '',
     }))
     if ((txn.transaction_type || 'BUY') === 'SELL') {
       const initialAlloc = Object.fromEntries(
