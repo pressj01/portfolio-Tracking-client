@@ -6,7 +6,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as app_module
-from app import _rollup_transactions, _validate_sell_quantity_available
+from app import (
+    _refresh_transaction_realized_gains,
+    _rollup_transactions,
+    _validate_sell_quantity_available,
+    _yahoo_symbol_for_ticker,
+)
 
 
 class HoldingsTransactionTest(unittest.TestCase):
@@ -131,6 +136,39 @@ class HoldingsTransactionTest(unittest.TestCase):
         self.assertEqual(row["purchase_value"], 201)
         self.assertEqual(row["purchase_date"], "2026-01-10")
 
+    def test_preserved_position_realized_gain_refresh_does_not_change_holding(self):
+        self.conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, current_value, gain_or_loss) "
+            "VALUES ('ABC', 1, 8, 10, 80, 96, 16)"
+        )
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES ('ABC', 1, 'BUY', '2026-01-01', 10, 10, 0)"
+        )
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES ('ABC', 1, 'SELL', '2026-01-10', 2, 15, 1)"
+        )
+
+        _refresh_transaction_realized_gains("ABC", 1, self.conn)
+
+        sell_gain = self.conn.execute(
+            "SELECT realized_gain FROM transactions WHERE ticker = 'ABC' AND transaction_type = 'SELL'"
+        ).fetchone()["realized_gain"]
+        holding = self.conn.execute(
+            "SELECT quantity, purchase_value, current_value, gain_or_loss FROM all_account_info WHERE ticker = 'ABC'"
+        ).fetchone()
+        self.assertEqual(sell_gain, 9)
+        self.assertEqual(holding["quantity"], 8)
+        self.assertEqual(holding["purchase_value"], 80)
+        self.assertEqual(holding["current_value"], 96)
+        self.assertEqual(holding["gain_or_loss"], 16)
+
+    def test_yahoo_symbol_normalizes_common_broker_spellings(self):
+        self.assertEqual(_yahoo_symbol_for_ticker("BRKB"), "BRK-B")
+        self.assertEqual(_yahoo_symbol_for_ticker("CODIPRB"), "CODI-PB")
+        self.assertEqual(_yahoo_symbol_for_ticker("MSFT"), "MSFT")
+
 
 class HoldingsTransactionApiTest(unittest.TestCase):
     def setUp(self):
@@ -167,6 +205,7 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 current_annual_yield REAL,
                 current_month_income REAL,
                 dividend_paid REAL,
+                total_divs_received REAL,
                 classification_type TEXT,
                 reinvest TEXT
             );
@@ -192,7 +231,8 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             CREATE TABLE profiles (
                 id INTEGER PRIMARY KEY,
                 name TEXT,
-                include_in_owner INTEGER DEFAULT 0
+                include_in_owner INTEGER DEFAULT 0,
+                positions_managed INTEGER DEFAULT 0
             );
             CREATE TABLE aggregate_config (
                 member_profile_id INTEGER PRIMARY KEY
@@ -200,12 +240,32 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             CREATE TABLE categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT,
-                profile_id INTEGER
+                profile_id INTEGER,
+                sort_order INTEGER
             );
             CREATE TABLE ticker_categories (
                 ticker TEXT,
                 category_id INTEGER,
                 profile_id INTEGER
+            );
+            CREATE TABLE dividends (
+                ticker TEXT,
+                profile_id INTEGER,
+                total_divs_received REAL
+            );
+            CREATE TABLE watchlist_sold (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT,
+                buy_price REAL,
+                sell_price REAL,
+                shares_sold REAL,
+                sell_date TEXT,
+                divs_received REAL,
+                notes TEXT
+            );
+            CREATE TABLE settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
             );
             """
         )
@@ -214,15 +274,18 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self._orig_get_connection = app_module.get_connection
         self._orig_populate_holdings = app_module.populate_holdings
         self._orig_populate_dividends = app_module.populate_dividends
+        self._orig_db_initialized = getattr(app_module.app, "_db_initialized", False)
         app_module.get_connection = self._get_connection
         app_module.populate_holdings = lambda profile_id: None
         app_module.populate_dividends = lambda profile_id: None
+        app_module.app._db_initialized = True
         self.client = app_module.app.test_client()
 
     def tearDown(self):
         app_module.get_connection = self._orig_get_connection
         app_module.populate_holdings = self._orig_populate_holdings
         app_module.populate_dividends = self._orig_populate_dividends
+        app_module.app._db_initialized = self._orig_db_initialized
         Path(self.db_path).unlink(missing_ok=True)
 
     def _get_connection(self):
@@ -301,6 +364,62 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(data[0]["raw_notes"], "")
         self.assertEqual(data[1]["notes"], "Account: Fidelity Taxable; drip buy")
         self.assertEqual(data[1]["source_account_name"], "Fidelity Taxable")
+
+    def test_accrual_summary_includes_expected_payment_details(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Schwab IRA', 1)")
+        self._execute(
+            "INSERT INTO settings (key, value) VALUES ('last_refresh_2', '2026-05-19T08:00:00')"
+        )
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, div, div_frequency, ex_div_date) "
+            "VALUES ('CSHI', 2, 10, 0.25, 'M', '05/13/26')"
+        )
+
+        res = self.client.get("/api/holdings/accrual-summary?profile_id=1")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        account = data["accounts"][0]
+        self.assertEqual(account["confirmed_payments"], 1)
+        self.assertEqual(account["payment_details"][0]["ticker"], "CSHI")
+        self.assertEqual(account["payment_details"][0]["expected_pay_date"], "2026-05-20")
+        self.assertEqual(account["payment_details"][0]["amount"], 2.5)
+
+    def test_gains_losses_summary_combines_aggregate_member_broker_positions_and_transactions(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Broker One', 0)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (3, 'Broker Two', 0)")
+        self._execute("INSERT INTO aggregate_config (member_profile_id) VALUES (2)")
+        self._execute("INSERT INTO aggregate_config (member_profile_id) VALUES (3)")
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, purchase_value, current_price, current_value, gain_or_loss, total_divs_received) "
+            "VALUES ('ABC', 2, 'ABC Fund', 10, 10, 100, 12, 120, 20, 5)"
+        )
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, purchase_value, current_price, current_value, gain_or_loss, total_divs_received) "
+            "VALUES ('ABC', 3, 'ABC Fund', 5, 14, 70, 18, 90, 20, 7)"
+        )
+        self._execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, realized_gain) "
+            "VALUES ('ABC', 3, 'SELL', '2026-01-10', 2, 20, 0, 12)"
+        )
+
+        res = self.client.get("/api/gains-losses/summary?aggregate=true")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(len(data["unrealized"]), 1)
+        row = data["unrealized"][0]
+        self.assertEqual(row["ticker"], "ABC")
+        self.assertEqual(row["quantity"], 15)
+        self.assertEqual(row["purchase_value"], 170)
+        self.assertEqual(row["current_value"], 210)
+        self.assertEqual(row["price_gl"], 40)
+        self.assertEqual(row["divs_received"], 12)
+        self.assertEqual(data["totals"]["unrealized_total_gl"], 52)
+        self.assertEqual(data["realized"][0]["price_gl"], 12)
 
     def test_post_sell_without_holding_is_rejected_without_creating_rows(self):
         res = self.client.post(

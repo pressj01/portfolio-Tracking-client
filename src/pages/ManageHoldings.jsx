@@ -1439,6 +1439,14 @@ export default function ManageHoldings() {
       : parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
   }
 
+  const fmtShortDate = (v) => {
+    if (!v) return '-'
+    const parsed = new Date(`${v}T00:00:00`)
+    return Number.isNaN(parsed.getTime())
+      ? v
+      : parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  }
+
   const sourceBadge = (source) => {
     const value = source || 'none'
     const meta = DIV_SOURCE_META[value]
@@ -1591,9 +1599,10 @@ export default function ManageHoldings() {
             {accrualSummary.map(account => {
               const days = account.days_since_last_refresh
               const hasData = days != null
+              const payments = Array.isArray(account.payment_details) ? account.payment_details : []
               return (
                 <div key={account.profile_id} className="card" style={{
-                  flex: '1 1 160px', minWidth: 140, padding: '0.65rem 1rem',
+                  flex: '1 1 250px', minWidth: 220, padding: '0.65rem 1rem',
                   borderTop: '3px solid #1565c0',
                 }}>
                   <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.2rem' }}>
@@ -1609,6 +1618,31 @@ export default function ManageHoldings() {
                         : `est. over ${days < 1 ? '<1' : Math.round(days)} day${Math.round(days) !== 1 ? 's' : ''}`
                       : 'no prior refresh'}
                   </div>
+                  {payments.length > 0 && (
+                    <div style={{ display: 'grid', gap: '0.25rem', marginTop: '0.5rem' }}>
+                      {payments.map((payment, idx) => (
+                        <div
+                          key={`${account.profile_id}-${payment.ticker}-${payment.expected_pay_date}-${idx}`}
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'minmax(3.25rem, 1fr) auto auto',
+                            alignItems: 'center',
+                            gap: '0.45rem',
+                            fontSize: '0.72rem',
+                            color: '#b7c7d9',
+                          }}
+                        >
+                          <strong style={{ color: '#81d4fa', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {payment.ticker}
+                          </strong>
+                          <span style={{ color: '#90a4ae', whiteSpace: 'nowrap' }}>{fmtShortDate(payment.expected_pay_date)}</span>
+                          <span style={{ color: '#c8e6c9', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                            {fmtCurrency(payment.amount)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )
             })}

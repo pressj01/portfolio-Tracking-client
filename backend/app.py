@@ -474,6 +474,45 @@ def _should_preserve_positions_for_transaction_import(profile_id, fmt, conn):
     return existing_holdings > 0
 
 
+def _get_gains_losses_profile_scope(conn):
+    """Return holding and transaction profile scopes for Gains & Losses views."""
+    is_agg, pids = get_profile_filter()
+    if is_agg:
+        profile_ids = list(dict.fromkeys(pids or [1]))
+        return {
+            "is_aggregate": True,
+            "primary_profile_id": profile_ids[0],
+            "holding_profile_ids": profile_ids,
+            "transaction_profile_ids": profile_ids,
+        }
+
+    profile_id = int(pids[0]) if pids else 1
+    transaction_profile_ids, _ = _get_transaction_read_scope(conn, False, [profile_id])
+    return {
+        "is_aggregate": False,
+        "primary_profile_id": profile_id,
+        "holding_profile_ids": [profile_id],
+        "transaction_profile_ids": transaction_profile_ids,
+    }
+
+
+def _yahoo_symbol_for_ticker(ticker):
+    """Convert common broker ticker spellings to Yahoo Finance symbols."""
+    symbol = (ticker or "").strip().upper()
+    explicit = {
+        "BRKA": "BRK-A",
+        "BRKB": "BRK-B",
+    }
+    if symbol in explicit:
+        return explicit[symbol]
+
+    preferred = re.match(r"^([A-Z]+)PR([A-Z])$", symbol)
+    if preferred:
+        return f"{preferred.group(1)}-P{preferred.group(2)}"
+
+    return symbol
+
+
 def _get_refresh_target_info(conn):
     """Resolve which profiles a holdings refresh should update."""
     if request.args.get("aggregate") == "true":
@@ -1906,6 +1945,7 @@ def api_import_transactions():
     dividends_applied = 0
     duplicates_skipped = 0
     tickers_with_txns = set()
+    tickers_seen_txns = set()
     tickers_with_divs = set()
 
     from collections import Counter
@@ -1956,6 +1996,7 @@ def api_import_transactions():
         # Insert BUY/SELL transactions
         for txn in non_div_txns:
             ticker = txn["ticker"]
+            tickers_seen_txns.add(ticker)
             # Count-based duplicate check so legitimate identical transactions
             # (same day/qty/price) are preserved while re-imports are deduped.
             # DB count includes uncommitted inserts from this batch (same conn).
@@ -2007,6 +2048,10 @@ def api_import_transactions():
         if not preserve_positions:
             for ticker in tickers_with_txns:
                 _rollup_transactions(ticker, profile_id, conn)
+        else:
+            for ticker in tickers_seen_txns:
+                _refresh_transaction_realized_gains(ticker, profile_id, conn)
+            conn.commit()
 
         # Recompute dividend totals from dividend_payments for affected tickers
         current_year = str(_date.today().year)
@@ -5938,11 +5983,12 @@ def get_accrual_summary():
         days_elapsed = None
         accrued = 0.0
         confirmed_payments = 0
+        payment_details = []
         if last_refresh_dt:
             days_elapsed = max(0.0, (_dt2.now() - last_refresh_dt).total_seconds() / 86400.0)
             last_refresh_date = last_refresh_dt.date()
             holdings = conn.execute(
-                "SELECT div, quantity, div_frequency, ex_div_date FROM all_account_info "
+                "SELECT ticker, div, quantity, div_frequency, ex_div_date FROM all_account_info "
                 "WHERE profile_id = ? AND quantity > 0",
                 (pid,),
             ).fetchall()
@@ -5962,8 +6008,17 @@ def get_accrual_summary():
                     lag = pay_lag_days.get(freq, 10)
                     expected_pay = ex_date + _td(days=lag)
                     if last_refresh_date <= expected_pay <= today:
-                        accrued += div * qty
+                        amount = div * qty
+                        accrued += amount
                         confirmed_payments += 1
+                        payment_details.append({
+                            "ticker": h["ticker"],
+                            "expected_pay_date": expected_pay.isoformat(),
+                            "ex_div_date": ex_date.isoformat(),
+                            "amount": round(amount, 2),
+                            "div_per_share": round(div, 6),
+                            "shares": round(qty, 6),
+                        })
                         confirmed = True
                 if not confirmed and fd > 0:
                     accrued += div * qty * (days_elapsed / fd)
@@ -5973,6 +6028,10 @@ def get_accrual_summary():
             "name": profile_names.get(pid) or f"Profile {pid}",
             "accrued_dividends": round(accrued, 2),
             "confirmed_payments": confirmed_payments,
+            "payment_details": sorted(
+                payment_details,
+                key=lambda p: (p["expected_pay_date"], p["ticker"]),
+            ),
             "days_since_last_refresh": round(days_elapsed, 1) if days_elapsed is not None else None,
             "last_refresh": last_refresh_dt.isoformat() if last_refresh_dt else None,
         })
@@ -6044,6 +6103,17 @@ def _action_center_profile_info(conn):
     return is_agg, pids, names, profile_name
 
 
+def _action_center_refresh_profile_ids(conn, is_agg, pids):
+    """Return the accounts whose refresh timestamps should drive stale-data alerts."""
+    if is_agg:
+        return pids
+    profile_id = int(pids[0]) if pids else 1
+    if profile_id == 1:
+        source_ids = _get_owner_source_profile_ids(conn)
+        return source_ids or [1]
+    return [profile_id]
+
+
 @app.route("/api/action-center", methods=["GET"])
 def action_center():
     """Return prioritized portfolio follow-up items assembled from existing data."""
@@ -6073,8 +6143,18 @@ def action_center():
         total_value = sum(float(h.get("current_value") or 0) for h in holdings)
         total_monthly_income = sum(float(h.get("approx_monthly_income") or 0) for h in holdings)
 
+        refresh_pids = _action_center_refresh_profile_ids(conn, is_agg, pids)
+        missing_names = [pid for pid in refresh_pids if pid not in profile_names]
+        if missing_names:
+            name_placeholders = ",".join("?" * len(missing_names))
+            name_rows = conn.execute(
+                f"SELECT id, name FROM profiles WHERE id IN ({name_placeholders})",
+                missing_names,
+            ).fetchall()
+            profile_names.update({r["id"]: r["name"] for r in name_rows})
+
         refresh_items = []
-        for pid in pids:
+        for pid in refresh_pids:
             row = conn.execute(
                 "SELECT value FROM settings WHERE key = ?",
                 (f"last_refresh_{pid}",),
@@ -6911,6 +6991,57 @@ def _import_as_transactions(profile_id, pre_snapshot):
             _rollup_transactions(ticker, profile_id, conn)
 
     conn.close()
+
+
+def _refresh_transaction_realized_gains(ticker, profile_id, conn):
+    """Recompute realized gains from transactions without changing holdings."""
+    rows = conn.execute(
+        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
+        "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
+        (ticker, profile_id),
+    ).fetchall()
+    if not rows:
+        return
+
+    def _val(r, key, idx):
+        return r[key] if isinstance(r, dict) else r[idx]
+
+    sell_ids = [
+        _val(r, "id", 0)
+        for r in rows
+        if (_val(r, "transaction_type", 1) or "BUY").upper() == "SELL"
+    ]
+    alloc_map = _load_lot_alloc_map(conn, sell_ids)
+
+    lots = []
+    share_deficit = 0.0
+    for r in rows:
+        txn_id = _val(r, "id", 0)
+        txn_type = (_val(r, "transaction_type", 1) or "BUY").upper()
+        shares = abs(float(_val(r, "shares", 2) or 0))
+        price = _val(r, "price_per_share", 3) or 0
+        fees = _val(r, "fees", 4) or 0
+        tdate = _val(r, "transaction_date", 5)
+
+        if txn_type == "BUY":
+            if share_deficit > 1e-9:
+                covered = min(share_deficit, shares)
+                share_deficit -= covered
+                shares -= covered
+            _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id, txn_date=tdate)
+            conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
+        else:
+            sell_proceeds = (shares * price) - fees
+            cost_of_sold, sell_remaining = _consume_sell_lots(
+                lots,
+                shares,
+                alloc_map.get(txn_id),
+            )
+            share_deficit += sell_remaining
+            conn.execute(
+                "UPDATE transactions SET realized_gain = ? WHERE id = ?",
+                (round(sell_proceeds - cost_of_sold, 2), txn_id),
+            )
 
 
 def _rollup_transactions(ticker, profile_id, conn):
@@ -13456,12 +13587,17 @@ def gains_losses_summary():
     """Unified unrealized + realized gains/losses with price-only and total (price+divs) columns."""
     import math
 
-    profile_id = get_profile_id()
     conn = get_connection()
+    scope = _get_gains_losses_profile_scope(conn)
+    profile_id = scope["primary_profile_id"]
+    holding_profile_ids = scope["holding_profile_ids"]
+    transaction_profile_ids = scope["transaction_profile_ids"]
+    holding_placeholders = ",".join("?" * len(holding_profile_ids))
+    txn_placeholders = ",".join("?" * len(transaction_profile_ids))
 
     cats = conn.execute(
-        "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
-        (profile_id,),
+        f"SELECT id, name FROM categories WHERE profile_id IN ({holding_placeholders}) ORDER BY sort_order, name",
+        holding_profile_ids,
     ).fetchall()
     categories = [{"id": c["id"], "name": c["name"]} for c in cats]
 
@@ -13470,16 +13606,28 @@ def gains_losses_summary():
 
     # ── Unrealized (current holdings) ──
     rows = conn.execute(
-        """SELECT ticker, description, classification_type,
-                  price_paid, current_price, quantity,
-                  purchase_value, current_value,
-                  gain_or_loss, total_divs_received, purchase_date
+        f"""SELECT ticker,
+                  MAX(description) AS description,
+                  MAX(classification_type) AS classification_type,
+                  CASE WHEN SUM(COALESCE(quantity, 0)) > 0
+                       THEN SUM(COALESCE(purchase_value, 0)) / SUM(COALESCE(quantity, 0))
+                       ELSE 0 END AS price_paid,
+                  CASE WHEN SUM(COALESCE(quantity, 0)) > 0
+                       THEN SUM(COALESCE(current_value, 0)) / SUM(COALESCE(quantity, 0))
+                       ELSE 0 END AS current_price,
+                  SUM(COALESCE(quantity, 0)) AS quantity,
+                  SUM(COALESCE(purchase_value, 0)) AS purchase_value,
+                  SUM(COALESCE(current_value, 0)) AS current_value,
+                  SUM(COALESCE(gain_or_loss, 0)) AS gain_or_loss,
+                  SUM(COALESCE(total_divs_received, 0)) AS total_divs_received,
+                  MIN(purchase_date) AS purchase_date
            FROM all_account_info
            WHERE purchase_value IS NOT NULL AND purchase_value > 0
              AND COALESCE(quantity, 0) > 1e-9
-             AND profile_id = ?
+             AND profile_id IN ({holding_placeholders})
+           GROUP BY ticker
            ORDER BY ticker""",
-        (profile_id,),
+        holding_profile_ids,
     ).fetchall()
     udf = pd.DataFrame([dict(r) for r in rows])
 
@@ -13489,7 +13637,8 @@ def gains_losses_summary():
             cat_map_rows = conn.execute(
                 "SELECT tc.ticker, c.name AS category_name "
                 "FROM ticker_categories tc JOIN categories c ON c.id = tc.category_id "
-                "WHERE tc.profile_id = ?", (profile_id,)
+                f"WHERE tc.profile_id IN ({holding_placeholders})",
+                holding_profile_ids,
             ).fetchall()
             cat_map = pd.DataFrame([dict(r) for r in cat_map_rows])
             if not cat_map.empty:
@@ -13520,27 +13669,17 @@ def gains_losses_summary():
     ).fetchall()
     rdf = pd.DataFrame([dict(r) for r in sold_rows]) if sold_rows else pd.DataFrame()
 
-    # 2) Transactions-based SELL records
-    # Owner (profile 1) is the master combined view — show sells from all profiles
-    if profile_id == 1:
-        txn_sell_rows = conn.execute(
-            """SELECT t.ticker, t.profile_id, t.price_per_share AS sell_price,
-                      t.shares AS shares_sold, t.transaction_date AS sell_date,
-                      t.realized_gain, t.fees, t.notes
-               FROM transactions t
-               WHERE t.transaction_type = 'SELL'
-               ORDER BY t.transaction_date DESC, t.id DESC"""
-        ).fetchall()
-    else:
-        txn_sell_rows = conn.execute(
-            """SELECT t.ticker, t.profile_id, t.price_per_share AS sell_price,
-                      t.shares AS shares_sold, t.transaction_date AS sell_date,
-                      t.realized_gain, t.fees, t.notes
-               FROM transactions t
-               WHERE t.transaction_type = 'SELL' AND t.profile_id = ?
-               ORDER BY t.transaction_date DESC, t.id DESC""",
-            (profile_id,),
-        ).fetchall()
+    # 2) Transactions-based SELL records for the selected account scope.
+    txn_sell_rows = conn.execute(
+        f"""SELECT t.ticker, t.profile_id, t.price_per_share AS sell_price,
+                  t.shares AS shares_sold, t.transaction_date AS sell_date,
+                  t.realized_gain, t.fees, t.notes
+           FROM transactions t
+           WHERE t.transaction_type = 'SELL'
+             AND t.profile_id IN ({txn_placeholders})
+           ORDER BY t.transaction_date DESC, t.id DESC""",
+        transaction_profile_ids,
+    ).fetchall()
     if txn_sell_rows:
         # Look up total_divs_received per ticker/profile from dividends table
         div_lookup = {}
@@ -13753,19 +13892,32 @@ def gains_losses_chart():
     warnings.filterwarnings("ignore")
 
     period = request.args.get("period", "1y")
-    profile_id = get_profile_id()
     conn = get_connection()
+    scope = _get_gains_losses_profile_scope(conn)
+    profile_id = scope["primary_profile_id"]
+    holding_profile_ids = scope["holding_profile_ids"]
+    transaction_profile_ids = scope["transaction_profile_ids"]
+    holding_placeholders = ",".join("?" * len(holding_profile_ids))
+    txn_placeholders = ",".join("?" * len(transaction_profile_ids))
 
     cat_param = request.args.get("category", "").strip()
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
 
     rows = conn.execute(
-        """SELECT ticker, quantity, price_paid, purchase_value, total_divs_received,
-                  classification_type
+        f"""SELECT ticker,
+                  SUM(COALESCE(quantity, 0)) AS quantity,
+                  CASE WHEN SUM(COALESCE(quantity, 0)) > 0
+                       THEN SUM(COALESCE(purchase_value, 0)) / SUM(COALESCE(quantity, 0))
+                       ELSE 0 END AS price_paid,
+                  SUM(COALESCE(purchase_value, 0)) AS purchase_value,
+                  SUM(COALESCE(total_divs_received, 0)) AS total_divs_received,
+                  MAX(classification_type) AS classification_type
            FROM all_account_info
-           WHERE purchase_value IS NOT NULL AND purchase_value > 0 AND profile_id = ?
+           WHERE purchase_value IS NOT NULL AND purchase_value > 0
+             AND profile_id IN ({holding_placeholders})
+           GROUP BY ticker
            ORDER BY ticker""",
-        (profile_id,),
+        holding_profile_ids,
     ).fetchall()
     hdf = pd.DataFrame([dict(r) for r in rows])
 
@@ -13779,10 +13931,12 @@ def gains_losses_chart():
             cat_map_rows = conn.execute(
                 "SELECT tc.ticker, c.name AS category_name "
                 "FROM ticker_categories tc JOIN categories c ON c.id = tc.category_id "
-                "WHERE tc.profile_id = ?", (profile_id,)
+                f"WHERE tc.profile_id IN ({holding_placeholders})",
+                holding_profile_ids,
             ).fetchall()
             cat_map = pd.DataFrame([dict(r) for r in cat_map_rows])
             if not cat_map.empty:
+                cat_map = cat_map.drop_duplicates(subset="ticker", keep="first")
                 hdf = hdf.merge(cat_map, on="ticker", how="left")
             else:
                 hdf["category_name"] = None
@@ -13794,8 +13948,8 @@ def gains_losses_chart():
             hdf["category_name"] = hdf["category_name"].fillna("Other")
 
             cats = conn.execute(
-                "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
-                (profile_id,),
+                f"SELECT id, name FROM categories WHERE profile_id IN ({holding_placeholders}) ORDER BY sort_order, name",
+                holding_profile_ids,
             ).fetchall()
             cat_names = [c["name"] for c in cats if str(c["id"]) in cat_ids]
             if cat_names:
@@ -13826,27 +13980,17 @@ def gains_losses_chart():
         except (TypeError, ValueError):
             pass
 
-    # Also include SELL transactions
-    # Owner (profile 1) is the master combined view — show sells from all profiles
-    if profile_id == 1:
-        txn_sell = conn.execute(
-            """SELECT t.ticker, t.profile_id, t.price_per_share, t.shares,
-                      t.transaction_date, t.realized_gain
-               FROM transactions t
-               WHERE t.transaction_type = 'SELL'
-                 AND t.transaction_date IS NOT NULL AND t.transaction_date != ''
-               ORDER BY t.transaction_date"""
-        ).fetchall()
-    else:
-        txn_sell = conn.execute(
-            """SELECT t.ticker, t.profile_id, t.price_per_share, t.shares,
-                      t.transaction_date, t.realized_gain
-               FROM transactions t
-               WHERE t.transaction_type = 'SELL' AND t.profile_id = ?
-                 AND t.transaction_date IS NOT NULL AND t.transaction_date != ''
-               ORDER BY t.transaction_date""",
-            (profile_id,),
-        ).fetchall()
+    # Also include SELL transactions for the selected account scope.
+    txn_sell = conn.execute(
+        f"""SELECT t.ticker, t.profile_id, t.price_per_share, t.shares,
+                  t.transaction_date, t.realized_gain
+           FROM transactions t
+           WHERE t.transaction_type = 'SELL'
+             AND t.profile_id IN ({txn_placeholders})
+             AND t.transaction_date IS NOT NULL AND t.transaction_date != ''
+           ORDER BY t.transaction_date""",
+        transaction_profile_ids,
+    ).fetchall()
     # Look up dividends for total G/L
     chart_div_lookup = {}
     chart_div_rows = conn.execute(
@@ -22845,6 +22989,28 @@ CANDIDATE_ETFS = {
 _macro_cache = {"data": None, "timestamp": 0, "ttl": 1800}  # 30 min TTL
 _quadrant_cache = {"data": None, "timestamp": 0, "ttl": 1800}  # 30 min TTL
 
+
+def _classify_soft(g, inf, g_scale, i_scale):
+    """Soft probability distribution over the 4 macro quadrants.
+
+    Replaces a hard 0-threshold split with a logistic on each axis so weeks
+    near the boundary contribute proportionally to neighbouring quadrants
+    rather than flipping discretely. Scale = ~half a historical std of the
+    input axis — within that band the classification is meaningfully fuzzy;
+    well beyond it the soft probs converge to the hard label.
+    """
+    import math
+    gs = max(float(g_scale), 1e-6)
+    isc = max(float(i_scale), 1e-6)
+    p_g_up = 1.0 / (1.0 + math.exp(-float(g) / gs))
+    p_i_up = 1.0 / (1.0 + math.exp(-float(inf) / isc))
+    return [
+        p_g_up * (1.0 - p_i_up),         # Q1 Goldilocks  (g>0, inf<=0)
+        p_g_up * p_i_up,                 # Q2 Reflation   (g>0, inf>0)
+        (1.0 - p_g_up) * p_i_up,         # Q3 Stagflation (g<=0, inf>0)
+        (1.0 - p_g_up) * (1.0 - p_i_up), # Q4 Deflation   (g<=0, inf<=0)
+    ]
+
 # In-memory cache for yfinance ticker info (sector/category) — 24hr TTL
 _ticker_info_cache = {}
 
@@ -24576,8 +24742,12 @@ def macro_quadrant():
             fred_inflation_z = None
 
         # ── B. Market proxy data for historical transition matrix ─────────
+        # 20y window: TIP launched 2003-12 and IEF 2002-07, so ~2005 is the
+        # earliest all four tickers overlap. ~1,000 weekly observations vs
+        # the prior 260 — gives the rare quadrants (especially stagflation
+        # 2022, deflation 2008/2020) actual representation in the matrix.
         tickers = ["SPY", "XLI", "TIP", "IEF"]
-        raw = yf.download(tickers, period="5y", auto_adjust=True, progress=False)
+        raw = yf.download(tickers, period="20y", auto_adjust=True, progress=False)
         close = raw["Close"].dropna(how="all")
 
         # Resample to weekly (Friday close) for noise reduction
@@ -24630,21 +24800,30 @@ def macro_quadrant():
         if len(regimes) < 2:
             return jsonify({"error": "Insufficient data for transition matrix"}), 502
 
-        # Step 4: Persist to regime_history
+        # Step 4: Persist to regime_history (with soft-prob distribution).
+        # Sigmoid scale = ~half a std of each axis — fuzzy at the boundary,
+        # crisp far from zero.
+        g_scale_soft = max(float(np.std(g_vals)) * 0.5, 1e-6)
+        i_scale_soft = max(float(np.std(i_vals)) * 0.5, 1e-6)
         conn = get_connection()
         for idx in range(len(dates)):
             d_str = dates[idx].strftime("%Y-%m-%d")
             g_dir = "up" if g_vals[idx] > 0 else "down"
             i_dir = "up" if i_vals[idx] > 0 else "down"
+            soft = _classify_soft(float(g_vals[idx]), float(i_vals[idx]),
+                                  g_scale_soft, i_scale_soft)
             conn.execute(
                 """INSERT OR REPLACE INTO regime_history
                    (date, quadrant, growth_score, inflation_score,
-                    growth_direction, inflation_direction)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                    growth_direction, inflation_direction,
+                    prob_q1, prob_q2, prob_q3, prob_q4)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (d_str, regimes[idx],
                  round(float(g_vals[idx]), 4),
                  round(float(i_vals[idx]), 4),
-                 g_dir, i_dir),
+                 g_dir, i_dir,
+                 round(soft[0], 6), round(soft[1], 6),
+                 round(soft[2], 6), round(soft[3], 6)),
             )
         conn.commit()
         conn.close()
@@ -24831,25 +25010,40 @@ def macro_quadrant():
         adjusted_matrix = [list(r) for r in transition_matrix]
         adjusted_matrix[transition_anchor_quad - 1] = adjusted_row
 
-        # Step 6: Forward projections via matrix exponentiation
-        # Use adjusted matrix for projections
+        # Step 6: Forward projections via week-by-week iteration with a
+        # decaying blend toward the static Markov baseline. The heuristic
+        # adjustments encode FRED Z-scores, credit-spread stress and
+        # sentiment — signals with an economic shelf-life of weeks, not a
+        # quarter. Compounding the same tilted matrix 13 times (the old
+        # matrix_power approach) over-extrapolated those signals and was
+        # the main suspect behind the poor 4/8-week Brier.
+        #
+        # alpha(n) = exp(-(n-1)/tau):  n=1 → 1.00, n=4 → 0.55, n=13 → 0.09
+        import math as _math
         P_static = np.array(transition_matrix)
         P_adj = np.array(adjusted_matrix)
-        current_vec = np.zeros(4)
-        current_vec[transition_anchor_quad - 1] = 1.0
+        vec = np.zeros(4)
+        vec[transition_anchor_quad - 1] = 1.0
+
+        horizons = [(1, "1_week"), (2, "2_week"),
+                    (4, "4_week"), (8, "8_week"),
+                    (13, "13_week")]
+        horizon_lookup = {h: label for h, label in horizons}
+        max_horizon = max(h for h, _ in horizons)
+        adjustment_decay_tau = 5.0  # weeks
 
         projections = {}
-        for n_weeks, label in [(1, "1_week"), (2, "2_week"),
-                                (4, "4_week"), (8, "8_week"),
-                                (13, "13_week")]:
-            Pn = np.linalg.matrix_power(P_adj, n_weeks)
-            probs = current_vec @ Pn
-            projections[label] = {
-                "Q1": round(float(probs[0]), 4),
-                "Q2": round(float(probs[1]), 4),
-                "Q3": round(float(probs[2]), 4),
-                "Q4": round(float(probs[3]), 4),
-            }
+        for n in range(1, max_horizon + 1):
+            alpha = _math.exp(-(n - 1) / adjustment_decay_tau)
+            P_step = alpha * P_adj + (1.0 - alpha) * P_static
+            vec = vec @ P_step
+            if n in horizon_lookup:
+                projections[horizon_lookup[n]] = {
+                    "Q1": round(float(vec[0]), 4),
+                    "Q2": round(float(vec[1]), 4),
+                    "Q3": round(float(vec[2]), 4),
+                    "Q4": round(float(vec[3]), 4),
+                }
 
         # Step 7: Confidence = adjusted self-transition probability
         confidence = round(adjusted_row[transition_anchor_quad - 1] * 100, 1)
@@ -25067,23 +25261,44 @@ def macro_quadrant():
                  p["Q1"], p["Q2"], p["Q3"], p["Q4"]),
             )
 
-        # Back-fill actuals: find past predictions whose target_date has arrived
-        _pred_conn.execute(
-            """UPDATE regime_predictions SET actual_quadrant = (
-                   SELECT rh.quadrant FROM regime_history rh
-                   WHERE rh.date = regime_predictions.target_date
-               )
-               WHERE actual_quadrant IS NULL
-                 AND target_date <= ?""",
+        # Back-fill actuals: pull hard quadrant AND the soft distribution
+        # at the target date so Brier can be evaluated against a smooth label.
+        _unfilled = _pred_conn.execute(
+            """SELECT prediction_date, horizon, target_date
+               FROM regime_predictions
+               WHERE actual_quadrant IS NULL AND target_date <= ?""",
             (_today_str,),
-        )
+        ).fetchall()
+        for _pr in _unfilled:
+            _rh = _pred_conn.execute(
+                """SELECT quadrant, prob_q1, prob_q2, prob_q3, prob_q4
+                   FROM regime_history WHERE date = ?""",
+                (_pr["target_date"],),
+            ).fetchone()
+            if _rh is None:
+                continue
+            _pred_conn.execute(
+                """UPDATE regime_predictions
+                   SET actual_quadrant = ?,
+                       actual_prob_q1 = ?, actual_prob_q2 = ?,
+                       actual_prob_q3 = ?, actual_prob_q4 = ?
+                   WHERE prediction_date = ? AND horizon = ?""",
+                (_rh["quadrant"],
+                 _rh["prob_q1"], _rh["prob_q2"],
+                 _rh["prob_q3"], _rh["prob_q4"],
+                 _pr["prediction_date"], _pr["horizon"]),
+            )
         _pred_conn.commit()
 
-        # Compute Brier scores per horizon
+        # Compute Brier scores per horizon. Prefer soft actuals when present
+        # (smoother labels → less noise from boundary weeks); fall back to
+        # one-hot for legacy rows written before the soft-label migration.
         brier_scores = {}
         for label in ["1_week", "4_week", "8_week"]:
             rows = _pred_conn.execute(
-                """SELECT prob_q1, prob_q2, prob_q3, prob_q4, actual_quadrant
+                """SELECT prob_q1, prob_q2, prob_q3, prob_q4, actual_quadrant,
+                          actual_prob_q1, actual_prob_q2,
+                          actual_prob_q3, actual_prob_q4
                    FROM regime_predictions
                    WHERE horizon = ? AND actual_quadrant IS NOT NULL""",
                 (label,),
@@ -25093,11 +25308,14 @@ def macro_quadrant():
                 for row in rows:
                     probs = [row["prob_q1"], row["prob_q2"],
                              row["prob_q3"], row["prob_q4"]]
-                    actual = row["actual_quadrant"]
-                    # Brier score: sum of (predicted - actual)^2 across classes
+                    if row["actual_prob_q1"] is not None:
+                        actuals = [row["actual_prob_q1"], row["actual_prob_q2"],
+                                   row["actual_prob_q3"], row["actual_prob_q4"]]
+                    else:
+                        a = row["actual_quadrant"]
+                        actuals = [1.0 if (qi + 1) == a else 0.0 for qi in range(4)]
                     for qi in range(4):
-                        outcome = 1.0 if (qi + 1) == actual else 0.0
-                        total_bs += (probs[qi] - outcome) ** 2
+                        total_bs += (probs[qi] - actuals[qi]) ** 2
                 total_bs /= len(rows)
                 brier_scores[label] = {
                     "score": round(total_bs, 4),
@@ -25108,10 +25326,27 @@ def macro_quadrant():
                 }
         _pred_conn.close()
 
+        # Soft distribution over the 4 quadrants at the current state.
+        # FRED Z-scores are already standardized (std≈1), so a 0.5-unit
+        # sigmoid scale ≈ half-a-std fuzziness — matches the convention
+        # used for market-proxy history above.
+        if classification_source == "FRED" and fred_growth_z is not None and fred_inflation_z is not None:
+            _soft_now = _classify_soft(fred_growth_z, fred_inflation_z, 0.5, 0.5)
+        else:
+            _soft_now = _classify_soft(float(g_vals[-1]), float(i_vals[-1]),
+                                       g_scale_soft, i_scale_soft)
+        current_soft_distribution = {
+            "Q1": round(_soft_now[0], 4),
+            "Q2": round(_soft_now[1], 4),
+            "Q3": round(_soft_now[2], 4),
+            "Q4": round(_soft_now[3], 4),
+        }
+
         result = {
             "current_quadrant": current_quad,
             "current_quadrant_name": QUADRANT_NAMES[current_quad],
             "current_quadrant_description": QUADRANT_DESCRIPTIONS[current_quad],
+            "current_soft_distribution": current_soft_distribution,
             "confidence_pct": confidence,
             "classification_source": classification_source,
             "growth_score": round(float(current_growth), 4),
@@ -26705,10 +26940,14 @@ def growth_2_data():
     active_tickers = [r["ticker"] for r in active_rows]
     quantities = {r["ticker"]: float(r["quantity"] or 0) for r in active_rows}
     cost_basis = {r["ticker"]: float(r["purchase_value"] or 0) for r in active_rows}
+    current_values = {r["ticker"]: float(r["current_value"] or 0) for r in active_rows}
+    yahoo_by_ticker = {t: _yahoo_symbol_for_ticker(t) for t in active_tickers}
+    ticker_by_yahoo = {yf_t: t for t, yf_t in yahoo_by_ticker.items()}
+    yahoo_tickers = list(dict.fromkeys(yahoo_by_ticker.values()))
 
     try:
         raw = yf.download(
-            " ".join(active_tickers), period=yf_period, auto_adjust=True,
+            " ".join(yahoo_tickers), period=yf_period, auto_adjust=True,
             actions=True, progress=False
         )
         if raw.empty:
@@ -26721,11 +26960,13 @@ def growth_2_data():
         divs_raw = raw["Dividends"].fillna(0) if "Dividends" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
     else:
         close = raw[["Close"]].dropna(how="all")
-        close.columns = [active_tickers[0]]
-        divs_raw = raw[["Dividends"]].fillna(0) if "Dividends" in raw.columns else pd.DataFrame(0, index=close.index, columns=[active_tickers[0]])
-        divs_raw.columns = [active_tickers[0]]
+        close.columns = [yahoo_tickers[0]]
+        divs_raw = raw[["Dividends"]].fillna(0) if "Dividends" in raw.columns else pd.DataFrame(0, index=close.index, columns=[yahoo_tickers[0]])
+        divs_raw.columns = [yahoo_tickers[0]]
 
-    avail = [t for t in active_tickers if t in close.columns]
+    close = close.rename(columns=ticker_by_yahoo)
+    divs_raw = divs_raw.rename(columns=ticker_by_yahoo)
+    avail = [t for t in active_tickers if t in close.columns and not close[t].dropna().empty]
     if not avail:
         return jsonify({"error": "No price data for selected holdings", "tickers": all_tickers}), 500
 
@@ -26744,8 +26985,15 @@ def growth_2_data():
 
     # ── Portfolio value timeline (current shares * historical prices) ──
     port_value = pd.Series(0.0, index=close_a.index)
+    value_scale = {}
     for t in avail:
-        port_value += close_a[t] * quantities.get(t, 0)
+        q = quantities.get(t, 0)
+        series = close_a[t] * q
+        latest_market_value = float(series.dropna().iloc[-1]) if not series.dropna().empty else 0
+        stored_current_value = current_values.get(t, 0)
+        scale = stored_current_value / latest_market_value if latest_market_value > 0 and stored_current_value > 0 else 1.0
+        value_scale[t] = scale
+        port_value += series * scale
 
     total_invested = sum(cost_basis.get(t, 0) for t in avail)
     invested_series = pd.Series(total_invested, index=close_a.index)
@@ -26880,7 +27128,7 @@ def growth_2_data():
         per_ticker = {}
         for t in avail:
             q = quantities.get(t, 0)
-            tv = close_a[t] * q
+            tv = close_a[t] * q * value_scale.get(t, 1.0)
             td_div = divs_a[t].cumsum() * q
             if pl_basis == "first_trade":
                 t_cg = tv - cost_basis.get(t, 0)
@@ -26910,7 +27158,7 @@ def growth_2_data():
             if cat_name not in per_cat:
                 per_cat[cat_name] = {"value": np.zeros(len(dates_idx)), "cg": np.zeros(len(dates_idx)), "div": np.zeros(len(dates_idx)), "cost": 0.0, "start_val": 0.0}
             q = quantities.get(t, 0)
-            tv = (close_a[t] * q).values
+            tv = (close_a[t] * q * value_scale.get(t, 1.0)).values
             td_div = (divs_a[t].cumsum() * q).values
             per_cat[cat_name]["value"] += tv
             per_cat[cat_name]["div"] += td_div

@@ -809,6 +809,10 @@ def ensure_tables_exist(conn=None):
         CREATE INDEX IF NOT EXISTS idx_regime_history_date
         ON regime_history(date)
     """)
+    _rh_cols = {r[1] for r in cur.execute("PRAGMA table_info(regime_history)").fetchall()}
+    for _c in ("prob_q1", "prob_q2", "prob_q3", "prob_q4"):
+        if _c not in _rh_cols:
+            cur.execute(f"ALTER TABLE regime_history ADD COLUMN {_c} REAL")
 
     # ── settings ──────────────────────────────────────────────────────────────
     cur.execute("""
@@ -860,6 +864,10 @@ def ensure_tables_exist(conn=None):
             PRIMARY KEY (prediction_date, horizon)
         )
     """)
+    _rp_cols = {r[1] for r in cur.execute("PRAGMA table_info(regime_predictions)").fetchall()}
+    for _c in ("actual_prob_q1", "actual_prob_q2", "actual_prob_q3", "actual_prob_q4"):
+        if _c not in _rp_cols:
+            cur.execute(f"ALTER TABLE regime_predictions ADD COLUMN {_c} REAL")
 
     # ── general_scanner_cache ────────────────────────────────────────────────
     cur.execute("""
