@@ -167,6 +167,9 @@ class HoldingsTransactionTest(unittest.TestCase):
     def test_yahoo_symbol_normalizes_common_broker_spellings(self):
         self.assertEqual(_yahoo_symbol_for_ticker("BRKB"), "BRK-B")
         self.assertEqual(_yahoo_symbol_for_ticker("CODIPRB"), "CODI-PB")
+        self.assertEqual(_yahoo_symbol_for_ticker("CODI-PRB"), "CODI-PB")
+        self.assertEqual(_yahoo_symbol_for_ticker("CODI-PB"), "CODI-PB")
+        self.assertEqual(_yahoo_symbol_for_ticker("CODIPRD"), "CODI-PD")
         self.assertEqual(_yahoo_symbol_for_ticker("MSFT"), "MSFT")
 
 

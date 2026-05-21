@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Plot from 'react-plotly.js'
 import { useProfileFetch } from '../context/ProfileContext'
-import { distributionYieldPeriodLabel } from '../utils/distributionPeriod'
+import DistributionHistoryChart from '../components/DistributionHistoryChart'
 
 const PERIODS = [
   { value: '1mo', label: '1M' },
@@ -469,82 +469,7 @@ export default function ETFComparer() {
     return value
   }
 
-  const distributionChart = useMemo(() => {
-    const profile = data?.profiles?.[distributionSymbol] || {}
-    const history = Array.isArray(profile.distribution_history) ? profile.distribution_history : []
-    const price = Number(profile.price) || 0
-    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    const byMonth = new Map()
-
-    history.forEach(item => {
-      const amount = Number(item?.amount)
-      const parts = String(item?.date || '').slice(0, 10).split('-')
-      if (!Number.isFinite(amount) || amount <= 0 || parts.length < 2) return
-      const year = Number(parts[0])
-      const month = Number(parts[1])
-      if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return
-      const key = `${year}-${String(month).padStart(2, '0')}`
-      byMonth.set(key, (byMonth.get(key) || 0) + amount)
-    })
-
-    const sortedMonths = [...byMonth.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .slice(-36)
-    const monthly = sortedMonths.map(([key, amount]) => {
-      const [year, month] = key.split('-').map(Number)
-      return {
-        label: `${monthNames[month - 1]} ${String(year).slice(-2)}`,
-        amount: Number(amount.toFixed(4)),
-      }
-    })
-    const dollarValues = monthly.map(item => item.amount)
-    const showPct = distPctMode && price > 0
-    const annualMult = distAnnual ? 12 : 1
-    const values = showPct ? dollarValues.map(v => (v / price) * 100 * annualMult) : dollarValues
-    const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
-    const pctLabel = distAnnual ? 'Annual Yield %' : `${distributionYieldPeriodLabel(sortedMonths.map(([key]) => key))} Yield %`
-    const titleSuffix = showPct ? ` (${pctLabel})` : ''
-
-    return {
-      hasData: values.length > 0,
-      canShowPct: price > 0,
-      source: profile.distribution_source || profile.expected_yield_source || '',
-      layout: {
-        template: 'plotly_dark',
-        paper_bgcolor: '#16213e',
-        plot_bgcolor: '#16213e',
-        font: { color: '#e0e8f5', size: 12 },
-        title: { text: `${distributionSymbol || 'ETF'} - Distribution History${titleSuffix}`, x: 0.5, font: { size: 18, color: '#e0e8f5' } },
-        height: 360,
-        margin: { l: 58, r: 36, t: 58, b: 72 },
-        bargap: 0.18,
-        yaxis: {
-          ...(showPct ? { ticksuffix: '%', tickformat: '.2f' } : { tickprefix: '$' }),
-          gridcolor: '#293a5f',
-          zerolinecolor: '#6a7892',
-          fixedrange: true,
-        },
-        xaxis: {
-          gridcolor: '#1c2a4b',
-          tickangle: -45,
-          fixedrange: true,
-        },
-        showlegend: false,
-      },
-      data: values.length ? [{
-        x: monthly.map(item => item.label),
-        y: values,
-        type: 'bar',
-        marker: {
-          color: values.map(value => value >= average ? '#62f27b' : '#82c7f5'),
-          line: { color: 'rgba(255, 255, 255, 0.12)', width: 1 },
-        },
-        hovertemplate: showPct
-          ? `<b>${distributionSymbol}</b><br>%{x}<br>%{y:.3f}%<extra></extra>`
-          : `<b>${distributionSymbol}</b><br>%{x}<br>$%{y:.4f}<extra></extra>`,
-      }] : [],
-    }
-  }, [data, distributionSymbol, distPctMode, distAnnual])
+  const distributionProfile = data?.profiles?.[distributionSymbol] || {}
 
   const averageChart = useMemo(() => {
     const periods = averageData?.periods || []
@@ -724,8 +649,17 @@ export default function ETFComparer() {
           </button>
         </div>
         {showDistributionChart && (
-          <>
-            <div className="etfc-distribution-toolbar">
+          <DistributionHistoryChart
+            history={distributionProfile.distribution_history}
+            ticker={distributionSymbol}
+            price={distributionProfile.price}
+            source={distributionProfile.distribution_source || distributionProfile.expected_yield_source || ''}
+            pctMode={distPctMode}
+            annual={distAnnual}
+            onTogglePctMode={() => { setDistPctMode(v => !v); setDistAnnual(false) }}
+            onToggleAnnual={() => setDistAnnual(v => !v)}
+            emptyLabel="this ETF"
+            toolbarStart={
               <div className="etfc-distribution-tabs" aria-label="Distribution history ticker">
                 {symbols.map((sym, idx) => (
                   <button
@@ -739,40 +673,8 @@ export default function ETFComparer() {
                   </button>
                 ))}
               </div>
-              {distributionChart.canShowPct && (
-                <button
-                  className={`btn btn-sm${distPctMode ? ' btn-active' : ''}`}
-                  onClick={() => { setDistPctMode(v => !v); setDistAnnual(false) }}
-                >
-                  {distPctMode ? '$ Amount' : 'Yield %'}
-                </button>
-              )}
-              {distPctMode && distributionChart.canShowPct && (
-                <button
-                  className={`btn btn-sm${distAnnual ? ' btn-active' : ''}`}
-                  onClick={() => setDistAnnual(v => !v)}
-                >
-                  {distAnnual ? 'Monthly' : 'Annual'}
-                </button>
-              )}
-              {distributionChart.source && (
-                <span className="etfc-distribution-source">Source: {distributionChart.source}</span>
-              )}
-            </div>
-            {distributionChart.hasData ? (
-              <Plot
-                data={distributionChart.data}
-                layout={distributionChart.layout}
-                config={{ responsive: true, displayModeBar: false }}
-                useResizeHandler
-                style={{ width: '100%' }}
-              />
-            ) : (
-              <div className="etfc-empty etfc-distribution-empty">
-                No distribution history available for {distributionSymbol || 'this ETF'}.
-              </div>
-            )}
-          </>
+            }
+          />
         )}
       </section>}
 

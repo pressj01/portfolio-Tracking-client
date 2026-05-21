@@ -54,6 +54,7 @@ from normalize import (
 from transaction_import import PARSERS as TXN_PARSERS
 import tax_report
 from options_api import register_routes as register_options_routes
+from market_symbols import yahoo_symbol_for_ticker as _yahoo_symbol_for_ticker
 from dividend_safety import (
     apply_nav_coverage_overlay,
     get_dividend_safety_for_holdings,
@@ -494,23 +495,6 @@ def _get_gains_losses_profile_scope(conn):
         "holding_profile_ids": [profile_id],
         "transaction_profile_ids": transaction_profile_ids,
     }
-
-
-def _yahoo_symbol_for_ticker(ticker):
-    """Convert common broker ticker spellings to Yahoo Finance symbols."""
-    symbol = (ticker or "").strip().upper()
-    explicit = {
-        "BRKA": "BRK-A",
-        "BRKB": "BRK-B",
-    }
-    if symbol in explicit:
-        return explicit[symbol]
-
-    preferred = re.match(r"^([A-Z]+)PR([A-Z])$", symbol)
-    if preferred:
-        return f"{preferred.group(1)}-P{preferred.group(2)}"
-
-    return symbol
 
 
 def _get_refresh_target_info(conn):
@@ -9472,13 +9456,13 @@ def ticker_return_1y(ticker):
     ticker = ticker.strip().upper()
     start_date = (pd.Timestamp.now() - pd.DateOffset(years=1)).strftime("%Y-%m-%d")
 
-    dl_ticker = ticker
+    dl_ticker = _yahoo_symbol_for_ticker(ticker)
     description = ticker
     try:
-        _info = yf.Ticker(ticker).info or {}
+        _info = yf.Ticker(dl_ticker).info or {}
         description = _info.get("longName") or _info.get("shortName") or ticker
         _new_sym = (_info.get("symbol") or "").upper()
-        if _new_sym and _new_sym != ticker:
+        if _new_sym and _new_sym != dl_ticker:
             dl_ticker = _new_sym
     except Exception:
         pass
@@ -9506,7 +9490,8 @@ def ticker_return_1y(ticker):
         total_return = ((close_col - start_price + cum_divs) / start_price * 100).round(2)
 
         return jsonify({
-            "ticker": ticker,
+            "ticker": dl_ticker,
+            "requested_ticker": ticker,
             "description": description,
             "start_price": round(start_price, 2),
             "dates": close_col.index.strftime("%Y-%m-%d").tolist(),
@@ -9763,13 +9748,13 @@ def _research_adjusted_close_series(ticker):
     if not symbol:
         return None, symbol
 
-    dl_symbol = symbol
+    dl_symbol = _yahoo_symbol_for_ticker(symbol)
     description = symbol
     try:
-        info = yf.Ticker(symbol).info or {}
+        info = yf.Ticker(dl_symbol).info or {}
         description = info.get("longName") or info.get("shortName") or info.get("displayName") or symbol
         info_symbol = (info.get("symbol") or "").upper()
-        if info_symbol and info_symbol != symbol:
+        if info_symbol and info_symbol != dl_symbol:
             dl_symbol = info_symbol
     except Exception:
         pass
@@ -10220,14 +10205,20 @@ def security_research(kind, ticker):
 
     kind = (kind or "").strip().lower()
     ticker = (ticker or "").strip().upper()
+    lookup_symbol = _yahoo_symbol_for_ticker(ticker)
     if kind not in {"etf", "stock"}:
         return jsonify({"error": "kind must be etf or stock"}), 400
     if not ticker:
         return jsonify({"error": "ticker is required"}), 400
 
     try:
-        yf_ticker = yf.Ticker(ticker)
+        yf_ticker = yf.Ticker(lookup_symbol)
         info = yf_ticker.info or {}
+        info_symbol = (info.get("symbol") or "").upper()
+        if info_symbol and info_symbol != lookup_symbol:
+            lookup_symbol = info_symbol
+            yf_ticker = yf.Ticker(lookup_symbol)
+            info = yf_ticker.info or {}
     except Exception as exc:
         return jsonify({"error": f"Could not load {ticker}: {exc}"}), 404
 
@@ -10306,6 +10297,7 @@ def security_research(kind, ticker):
             if total_assets is not None:
                 total_assets_label = "Market Cap"
 
+        market_price = _research_money(_research_info_value(info, "regularMarketPrice", "currentPrice"))
         nav_price = _research_money(_research_info_value(info, "navPrice"))
         nav_label = "NAV"
         if nav_price is None:
@@ -10314,13 +10306,14 @@ def security_research(kind, ticker):
                 nav_price = book_value
                 nav_label = "NAV / Share" if is_traded_fund else "Book Value / Share"
         if nav_price is None and is_traded_fund:
-            nav_price = _research_money(_research_info_value(info, "regularMarketPrice", "currentPrice"))
+            nav_price = market_price
             if nav_price is not None:
                 nav_label = "Market Price"
 
         response = {
             "kind": "etf",
-            "ticker": ticker,
+            "ticker": lookup_symbol,
+            "requested_ticker": ticker,
             "name": name,
             "quote_type": quote_type,
             "fund_type": fund_type,
@@ -10335,6 +10328,7 @@ def security_research(kind, ticker):
             ),
             "total_assets": total_assets,
             "total_assets_label": total_assets_label,
+            "price": market_price,
             "nav_price": nav_price,
             "nav_label": nav_label,
             "inception_date": None,
@@ -10343,12 +10337,12 @@ def security_research(kind, ticker):
             "ttm_dividend_per_share": ttm_dividend,
             "estimated_yield_pct": _research_pct(_research_info_value(info, "yield", "dividendYield", "trailingAnnualDividendYield")),
             "target_yield_label": "Estimated forward yield",
-            "top_holdings": _research_top_holdings(fund_data, ticker=ticker, description=f"{name} {summary}") if fund_data is not None else _fetch_neos_top_holdings(ticker, 25) if _is_neos_fund(ticker, f"{name} {summary}") else [],
+            "top_holdings": _research_top_holdings(fund_data, ticker=lookup_symbol, description=f"{name} {summary}") if fund_data is not None else _fetch_neos_top_holdings(lookup_symbol, 25) if _is_neos_fund(lookup_symbol, f"{name} {summary}") else [],
             "sector_weightings": _research_weight_map(getattr(fund_data, "sector_weightings", None)) if fund_data is not None else [],
             "asset_classes": _research_weight_map(getattr(fund_data, "asset_classes", None)) if fund_data is not None else [],
             "data_source": "Yahoo Finance",
         }
-        official_profile = _fetch_provider_etf_profile(ticker, response) if _research_needs_provider_fallback(response) else None
+        official_profile = _fetch_provider_etf_profile(lookup_symbol, response) if _research_needs_provider_fallback(response) else None
         if official_profile:
             for key, value in official_profile.items():
                 if value not in (None, "", []):
@@ -10358,7 +10352,7 @@ def security_research(kind, ticker):
         description_text = f"{name} {summary}"
         official_snapshot = None
         try:
-            official_snapshot = _fetch_official_distribution_snapshot(ticker, description_text)
+            official_snapshot = _fetch_official_distribution_snapshot(lookup_symbol, description_text)
         except Exception:
             pass
 
@@ -10381,12 +10375,14 @@ def security_research(kind, ticker):
                 if last_entry and ex_date:
                     response["last_dividend"] = {"amount": round(float(last_entry), 4), "date": ex_date}
                 response["yield_source"] = official_snapshot.get("source") or "Fund Site"
+                response["distribution_source"] = response["yield_source"]
 
         if dist_history_series is None and dividends is not None and not dividends.empty:
             divs = dividends[dividends > 0].dropna()
             if not divs.empty:
                 dist_history_series = divs
                 response["yield_source"] = "Yahoo Finance"
+                response["distribution_source"] = "Yahoo Finance"
 
         response["distribution_history"] = []
         if dist_history_series is not None and not dist_history_series.empty:
@@ -10413,7 +10409,8 @@ def security_research(kind, ticker):
 
     response = {
         "kind": "stock",
-        "ticker": ticker,
+        "ticker": lookup_symbol,
+        "requested_ticker": ticker,
         "name": name,
         "quote_type": quote_type,
         "business_summary": summary,
@@ -10459,6 +10456,7 @@ def security_research(kind, ticker):
     if dividends is not None and not dividends.empty:
         divs = dividends[dividends > 0].dropna()
         if not divs.empty:
+            response["distribution_source"] = "Yahoo Finance"
             for dt, amt in divs.items():
                 response["distribution_history"].append({
                     "date": dt.strftime("%Y-%m-%d"),
@@ -14621,6 +14619,8 @@ def etf_screen_data():
             s = s.strip().upper()
             if s and s not in symbols:
                 symbols.append(s)
+    yahoo_by_symbol = {sym: _yahoo_symbol_for_ticker(sym) for sym in symbols}
+    yahoo_symbols = list(dict.fromkeys(yahoo_by_symbol.values()))
 
     # Auto-select interval
     if not interval:
@@ -14633,8 +14633,9 @@ def etf_screen_data():
 
     # ---------- OHLCV mode (for candlestick / technical chart) ----------
     if mode == "ohlcv":
+        dl_ticker = yahoo_by_symbol.get(ticker, ticker)
         try:
-            tk = yf.Ticker(ticker)
+            tk = yf.Ticker(dl_ticker)
             df = tk.history(period=period, interval=interval, auto_adjust=False)
             if df.empty:
                 return jsonify(error=f"No data found for {ticker}"), 404
@@ -14690,7 +14691,8 @@ def etf_screen_data():
                 pass  # Options data not available for all tickers
 
             return jsonify(
-                ticker=ticker,
+                ticker=dl_ticker,
+                requested_ticker=ticker,
                 name=info.get("longName") or info.get("shortName") or ticker,
                 records=records,
                 iv=iv_data,
@@ -14702,17 +14704,26 @@ def etf_screen_data():
     frac = reinvest_pct / 100.0
     try:
         # Download price data (unadjusted)
-        price_df = yf.download(symbols, period=period, interval=interval, auto_adjust=False, progress=False)
+        price_df = yf.download(yahoo_symbols, period=period, interval=interval, auto_adjust=False, progress=False)
         if price_df.empty:
             return jsonify(error="No price data found"), 404
 
         # Download daily data with dividends for return calcs
-        div_df = yf.download(symbols, period=period, interval="1d", auto_adjust=False, actions=True, progress=False)
+        div_df = yf.download(yahoo_symbols, period=period, interval="1d", auto_adjust=False, actions=True, progress=False)
 
-        result = {"mode": mode, "reinvest_pct": reinvest_pct, "series": {}, "stats": {}, "profiles": {}, "warnings": []}
+        result = {
+            "mode": mode,
+            "reinvest_pct": reinvest_pct,
+            "series": {},
+            "stats": {},
+            "profiles": {},
+            "warnings": [],
+            "symbol_map": yahoo_by_symbol,
+        }
         saved_fund_data = {}
         try:
-            placeholders = ",".join("?" for _ in symbols)
+            lookup_symbols = list(dict.fromkeys(symbols + yahoo_symbols))
+            placeholders = ",".join("?" for _ in lookup_symbols)
             conn = get_connection()
             conn.row_factory = __import__("sqlite3").Row
             for row in conn.execute(
@@ -14722,7 +14733,7 @@ def etf_screen_data():
                    FROM etf_provider_funds f
                    JOIN etf_providers p ON p.id = f.provider_id
                    WHERE UPPER(f.symbol) IN ({placeholders})""",
-                symbols,
+                lookup_symbols,
             ).fetchall():
                 saved_fund_data[str(row["symbol"]).upper()] = dict(row)
             for row in conn.execute(
@@ -14731,7 +14742,7 @@ def etf_screen_data():
                           country, updated_at
                    FROM general_scanner_cache
                    WHERE UPPER(ticker) IN ({placeholders})""",
-                symbols,
+                lookup_symbols,
             ).fetchall():
                 current = saved_fund_data.setdefault(str(row["ticker"]).upper(), {})
                 updated_at = row["updated_at"]
@@ -14785,16 +14796,17 @@ def etf_screen_data():
                 return None
 
         for sym in symbols:
-            close = _extract_col(price_df, "Close", sym)
-            div_close = _extract_col(div_df, "Close", sym)
+            dl_sym = yahoo_by_symbol.get(sym, sym)
+            close = _extract_col(price_df, "Close", dl_sym)
+            div_close = _extract_col(div_df, "Close", dl_sym)
             if div_close.empty:
                 div_close = close
-            divs_raw = _extract_col(div_df, "Dividends", sym)
+            divs_raw = _extract_col(div_df, "Dividends", dl_sym)
             divs = divs_raw.reindex(div_close.index, fill_value=0.0) if not divs_raw.empty else pd.Series(0.0, index=div_close.index)
 
             if close.empty and div_close.empty:
                 try:
-                    fallback = yf.Ticker(sym).history(period=period, interval="1d", auto_adjust=False, actions=True)
+                    fallback = yf.Ticker(dl_sym).history(period=period, interval="1d", auto_adjust=False, actions=True)
                 except Exception:
                     fallback = pd.DataFrame()
                 if fallback is not None and not fallback.empty and "Close" in fallback.columns:
@@ -14885,7 +14897,7 @@ def etf_screen_data():
             }
 
             try:
-                tk_obj = yf.Ticker(sym)
+                tk_obj = yf.Ticker(dl_sym)
                 info = tk_obj.info or {}
             except Exception:
                 tk_obj = None
@@ -14913,7 +14925,7 @@ def etf_screen_data():
             dividend_yield = info.get("yield")
             if dividend_yield is None:
                 dividend_yield = info.get("dividendYield")
-            saved = saved_fund_data.get(sym, {})
+            saved = saved_fund_data.get(sym) or saved_fund_data.get(dl_sym, {})
             expected_dividend_yield = None
             expected_annual_dividend = None
             expected_yield_source = None
@@ -14946,7 +14958,7 @@ def etf_screen_data():
             ))
             official_snapshot = None
             try:
-                official_snapshot = _fetch_official_distribution_snapshot(sym, description_text)
+                official_snapshot = _fetch_official_distribution_snapshot(dl_sym, description_text)
             except Exception:
                 official_snapshot = None
             if official_snapshot and official_snapshot.get("has_dividend"):
@@ -14978,7 +14990,7 @@ def etf_screen_data():
 
             if expected_dividend_yield is None:
                 try:
-                    provider_profile = _fetch_provider_etf_profile(sym, {
+                    provider_profile = _fetch_provider_etf_profile(dl_sym, {
                         "name": saved.get("fund_name") or saved.get("name") or info.get("longName") or info.get("shortName") or sym,
                         "issuer": saved.get("provider") or info.get("fundFamily"),
                         "data_source": saved.get("provider") or "Yahoo Finance",
@@ -15033,7 +15045,8 @@ def etf_screen_data():
             pe_ratio = info.get("trailingPE") or info.get("forwardPE")
 
             result["profiles"][sym] = {
-                "symbol": sym,
+                "symbol": dl_sym,
+                "requested_symbol": sym,
                 "name": saved.get("fund_name") or saved.get("name") or info.get("longName") or info.get("shortName") or sym,
                 "price": round(last_price, 2) if last_price is not None else saved.get("price"),
                 "change_pct": day_change_pct if day_change_pct is not None else saved.get("change_pct"),

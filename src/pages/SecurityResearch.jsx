@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import { API_BASE } from '../config'
-import { distributionYieldPeriodLabel } from '../utils/distributionPeriod'
+import DistributionHistoryChart from '../components/DistributionHistoryChart'
 
 const fmtMoney = (v) => {
   if (v == null) return '-'
@@ -198,98 +198,31 @@ function AverageReturnChart({ kind, ticker, benchmark }) {
   )
 }
 
-function DistributionChart({ history, ticker, price }) {
-  const chartRef = useRef(null)
+function DistributionChart({ history, ticker, price, source }) {
   const [pctMode, setPctMode] = useState(false)
   const [annual, setAnnual] = useState(false)
-  const canShowPct = (Number(price) || 0) > 0
-
-  useEffect(() => {
-    if (!history?.length || !window.Plotly || !chartRef.current) return
-
-    const priceNum = Number(price) || 0
-    const monthly = {}
-    for (const h of history) {
-      const dt = new Date(h.date + 'T00:00:00')
-      const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`
-      monthly[key] = (monthly[key] || 0) + h.amount
-    }
-    const sortedKeys = Object.keys(monthly).sort().slice(-36)
-    const labels = sortedKeys.map(k => {
-      const [y, m] = k.split('-')
-      const dt = new Date(Number(y), Number(m) - 1, 1)
-      return dt.toLocaleDateString(undefined, { year: '2-digit', month: 'short' })
-    })
-    const dollarAmounts = sortedKeys.map(k => Math.round(monthly[k] * 10000) / 10000)
-    const showPct = pctMode && priceNum > 0
-    const annualMult = annual ? 12 : 1
-    const values = showPct ? dollarAmounts.map(v => (v / priceNum) * 100 * annualMult) : dollarAmounts
-    const avg = values.reduce((s, v) => s + v, 0) / values.length
-    const pctLabel = annual ? 'Annual Yield %' : `${distributionYieldPeriodLabel(sortedKeys)} Yield %`
-    const pctAxisTitle = pctLabel.replace(' %', ' (%)')
-    const titleSuffix = showPct ? ` (${pctLabel})` : ''
-
-    const traces = [{
-      x: labels,
-      y: values,
-      type: 'bar',
-      marker: {
-        color: values.map(a => a >= avg ? '#4dff91' : '#7ecfff'),
-      },
-      hovertemplate: showPct
-        ? '<b>%{x}</b><br>%{y:.3f}%<extra></extra>'
-        : '<b>%{x}</b><br>$%{y:.4f}<extra></extra>',
-    }]
-
-    const layout = {
-      template: 'plotly_dark',
-      paper_bgcolor: '#16213e',
-      plot_bgcolor: '#16213e',
-      title: { text: `${ticker} - Distribution History${titleSuffix}`, font: { size: 16, color: '#e0e8f5' } },
-      margin: { l: 60, r: 20, t: 56, b: 64 },
-      height: 380,
-      xaxis: { title: 'Month', gridcolor: '#1a2a3e', tickangle: -45 },
-      yaxis: {
-        title: showPct ? pctAxisTitle : 'Distribution ($)',
-        gridcolor: '#1a2a3e',
-        ...(showPct ? { ticksuffix: '%', tickformat: '.2f' } : { tickprefix: '$' }),
-      },
-      showlegend: false,
-      hovermode: 'x unified',
-    }
-
-    window.Plotly.newPlot(chartRef.current, traces, layout, { responsive: true, displayModeBar: false })
-    return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
-  }, [history, ticker, price, pctMode, annual])
 
   if (!history?.length) return null
 
   return (
     <section className="research-chart-section" id="distribution-chart">
-      {canShowPct && (
-        <div style={{ textAlign: 'right', marginBottom: 4, display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-          <button
-            className={`btn btn-sm${pctMode ? ' btn-active' : ''}`}
-            onClick={() => { setPctMode(v => !v); setAnnual(false) }}
-          >
-            {pctMode ? '$ Amount' : 'Yield %'}
-          </button>
-          {pctMode && (
-            <button
-              className={`btn btn-sm${annual ? ' btn-active' : ''}`}
-              onClick={() => setAnnual(v => !v)}
-            >
-              {annual ? 'Monthly' : 'Annual'}
-            </button>
-          )}
-        </div>
-      )}
-      <div ref={chartRef} className="research-chart" />
+      <DistributionHistoryChart
+        history={history}
+        ticker={ticker}
+        price={price}
+        source={source}
+        pctMode={pctMode}
+        annual={annual}
+        onTogglePctMode={() => { setPctMode(v => !v); setAnnual(false) }}
+        onToggleAnnual={() => setAnnual(v => !v)}
+        emptyLabel="this symbol"
+      />
     </section>
   )
 }
 
 function ETFResult({ data, onOpenChart }) {
+  const chartPrice = Number(data.price) > 0 ? data.price : data.nav_price
   const yieldLabel = data.yield_source && data.yield_source !== 'Yahoo Finance'
     ? `${data.target_yield_label || 'Estimated Yield'} (${data.yield_source})`
     : (data.target_yield_label || 'Estimated Yield')
@@ -333,7 +266,12 @@ function ETFResult({ data, onOpenChart }) {
         {metrics.map(([label, value]) => <Field key={label} label={label} value={value} />)}
       </section>
 
-      <DistributionChart history={data.distribution_history} ticker={data.ticker} price={data.nav_price || data.price} />
+      <DistributionChart
+        history={data.distribution_history}
+        ticker={data.ticker}
+        price={chartPrice}
+        source={data.distribution_source || data.yield_source || data.data_source}
+      />
 
       <section className="research-two-col">
         <div>
@@ -430,7 +368,12 @@ function StockResult({ data, onOpenChart }) {
         </div>
       </section>
 
-      <DistributionChart history={data.distribution_history} ticker={data.ticker} price={data.price} />
+      <DistributionChart
+        history={data.distribution_history}
+        ticker={data.ticker}
+        price={data.price}
+        source={data.distribution_source || data.yield_source || data.data_source}
+      />
     </div>
   )
 }

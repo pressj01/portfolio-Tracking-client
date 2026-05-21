@@ -15,6 +15,11 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+try:
+    from market_symbols import yahoo_symbol_for_ticker
+except ImportError:
+    from .market_symbols import yahoo_symbol_for_ticker
+
 
 # ── Config ────────────────────────────────────────────────────────────────────
 MAX_TICKERS_PER_PORTFOLIO = 75
@@ -43,29 +48,35 @@ def fetch_prices(tickers: List[str], start: str, end: str
     if hit and time.time() - hit[0] < _CACHE_TTL:
         return hit[1].copy(), hit[2].copy()
 
+    yahoo_by_ticker = {t: yahoo_symbol_for_ticker(t) for t in tickers}
+    yahoo_tickers = list(dict.fromkeys(yahoo_by_ticker.values()))
     raw = yf.download(
-        " ".join(tickers),
+        " ".join(yahoo_tickers),
         start=start,
         end=end,
         auto_adjust=False,
         actions=True,
         progress=False,
-        group_by="ticker" if len(tickers) > 1 else "column",
+        group_by="ticker" if len(yahoo_tickers) > 1 else "column",
     )
     if raw is None or raw.empty:
         raise ValueError("yfinance returned no data for the requested range.")
 
     close = pd.DataFrame()
     divs = pd.DataFrame()
-    if len(tickers) == 1:
-        t = tickers[0]
-        close[t] = raw["Close"]
-        divs[t] = raw["Dividends"] if "Dividends" in raw.columns else 0.0
+    if len(yahoo_tickers) == 1:
+        yf_t = yahoo_tickers[0]
+        requested = [t for t, mapped in yahoo_by_ticker.items() if mapped == yf_t]
+        div_values = raw["Dividends"] if "Dividends" in raw.columns else 0.0
+        for t in requested:
+            close[t] = raw["Close"]
+            divs[t] = div_values
     else:
         for t in tickers:
-            if t not in raw.columns.get_level_values(0):
+            yf_t = yahoo_by_ticker.get(t, t)
+            if yf_t not in raw.columns.get_level_values(0):
                 continue
-            sub = raw[t]
+            sub = raw[yf_t]
             close[t] = sub["Close"] if "Close" in sub.columns else np.nan
             divs[t] = sub["Dividends"] if "Dividends" in sub.columns else 0.0
 
