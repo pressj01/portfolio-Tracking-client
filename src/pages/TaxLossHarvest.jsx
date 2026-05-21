@@ -11,6 +11,11 @@ const fmtSigned = (v) => {
   return n < 0 ? `-${s}` : s
 }
 const fmtPct = (v) => v != null ? `${(Number(v) * 100).toFixed(2)}%` : '—'
+const fmtPctDelta = (v) => {
+  if (v == null) return null
+  const n = Number(v) * 100
+  return `${n >= 0 ? '+' : ''}${n.toFixed(2)} pts`
+}
 const fmtShares = (v) => Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 6 })
 const fmtDate = (s) => s ? String(s).slice(0, 10) : '—'
 
@@ -68,18 +73,29 @@ function ReplacementBox({ ticker }) {
   if (loading) return <div style={{ color: '#8899aa', fontSize: '0.85rem' }}>Loading suggestions...</div>
   if (err) return <div style={{ color: '#ff6b6b', fontSize: '0.85rem' }}>{err}</div>
   if (!data?.suggestions?.length) {
-    return <div style={{ color: '#8899aa', fontSize: '0.85rem' }}>No replacement candidates found in the same category.</div>
+    return <div style={{ color: '#8899aa', fontSize: '0.85rem' }}>No close replacement candidates found for this holding's type and income profile.</div>
   }
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
       {data.suggestions.map(s => (
         <div key={s.ticker} style={{
           background: 'rgba(123,140,255,0.08)', border: '1px solid rgba(123,140,255,0.3)',
-          padding: '0.4rem 0.7rem', borderRadius: 4, fontSize: '0.85rem',
+          padding: '0.55rem 0.75rem', borderRadius: 4, fontSize: '0.85rem', maxWidth: 360,
         }}>
-          <strong style={{ color: '#7B8CFF' }}>{s.ticker}</strong>
-          <span style={{ color: '#8899aa', marginLeft: '0.5rem' }}>{s.category}</span>
-          {s.yield != null && <span style={{ color: '#2EFDB5', marginLeft: '0.5rem' }}>{fmtPct(s.yield)}</span>}
+          <div>
+            <strong style={{ color: '#7B8CFF' }}>{s.ticker}</strong>
+            {s.type && <span style={{ color: '#8899aa', marginLeft: '0.5rem' }}>{s.type}</span>}
+            {s.yield != null && <span style={{ color: '#2EFDB5', marginLeft: '0.5rem' }}>{fmtPct(s.yield)}</span>}
+            {fmtPctDelta(s.yield_delta) && <span style={{ color: '#90caf9', marginLeft: '0.4rem' }}>({fmtPctDelta(s.yield_delta)})</span>}
+          </div>
+          {s.name && <div style={{ color: '#c0cdd8', marginTop: 3 }}>{s.name}</div>}
+          <div style={{ color: '#8899aa', marginTop: 4 }}>{s.category}</div>
+          {s.match_reasons?.length > 0 && (
+            <div style={{ color: '#90caf9', marginTop: 4, fontSize: '0.78rem' }}>{s.match_reasons.join(' | ')}</div>
+          )}
+          {s.warnings?.length > 0 && (
+            <div style={{ color: '#FFB86C', marginTop: 4, fontSize: '0.78rem' }}>{s.warnings.join(' | ')}</div>
+          )}
         </div>
       ))}
     </div>
@@ -113,7 +129,7 @@ function CandidateRow({ row, expanded, onToggle, onPlan }) {
         <tr>
           <td colSpan={11} style={{ background: 'rgba(255,255,255,0.02)', padding: '1rem 1.5rem' }}>
             <div style={{ marginBottom: '0.8rem' }}>
-              <h4 style={{ color: '#90caf9', marginBottom: '0.4rem', fontSize: '0.95rem' }}>Replacement candidates (same category, not substantially identical)</h4>
+              <h4 style={{ color: '#90caf9', marginBottom: '0.4rem', fontSize: '0.95rem' }}>Replacement candidates (similar type and income profile)</h4>
               <ReplacementBox ticker={row.ticker} />
             </div>
             {row.wash_status !== 'clear' && row.wash_offenders?.length > 0 && (
