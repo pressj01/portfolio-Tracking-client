@@ -32,6 +32,7 @@ import IncomeGrowthSim from './pages/IncomeGrowthSim'
 import RetirementReadiness from './pages/RetirementReadiness'
 import DividendHistory from './pages/DividendHistory'
 import GainsLosses from './pages/GainsLosses'
+import TaxLossHarvest from './pages/TaxLossHarvest'
 import SafeWithdrawal from './pages/SafeWithdrawal'
 import Help from './pages/Help'
 import TechnicalScanner from './pages/TechnicalScanner'
@@ -132,6 +133,7 @@ function App() {
         <Route path="/stock-comparer" element={<StockComparer />} />
         <Route path="/rebalance-wizard" element={<RebalanceWizard />} />
         <Route path="/tax-report" element={<AnnualTaxReport />} />
+        <Route path="/tax-loss" element={<TaxLossHarvest />} />
         {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
         <Route path="/help" element={<Help />} />
       </Routes>
@@ -205,6 +207,7 @@ function Nav() {
       </NavDropdown>
       <NavDropdown label="Taxes">
         <NavLink to="/tax-report">Annual Tax Report</NavLink>
+        <NavLink to="/tax-loss">Tax-Loss Harvest</NavLink>
       </NavDropdown>
       {/* Option Trading Tools and Option Education hidden from deployed build — not ready */}
       <NavDropdown label="Admin">

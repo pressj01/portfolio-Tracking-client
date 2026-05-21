@@ -850,6 +850,31 @@ def ensure_tables_exist(conn=None):
     if "total_amount" not in _tax_cols:
         cur.execute("ALTER TABLE dividend_tax_overrides ADD COLUMN total_amount REAL")
 
+    # ── tax_loss_plan ────────────────────────────────────────────────────────
+    # Persists user-planned tax-loss harvests. Drives Action Center entries.
+    # buy_txn_id NULL means "all open lots of this ticker".
+    # status: planned | executed | dismissed
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS tax_loss_plan (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id    INTEGER NOT NULL,
+            ticker        TEXT NOT NULL,
+            buy_txn_id    INTEGER,
+            shares        REAL NOT NULL,
+            est_loss      REAL NOT NULL,
+            est_tax_saved REAL,
+            replacement   TEXT,
+            status        TEXT NOT NULL DEFAULT 'planned',
+            notes         TEXT,
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tax_loss_plan_profile
+        ON tax_loss_plan (profile_id, status)
+    """)
+
     # ── regime_predictions (Brier score tracking) ─────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS regime_predictions (

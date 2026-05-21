@@ -53,6 +53,7 @@ from normalize import (
 )
 from transaction_import import PARSERS as TXN_PARSERS
 import tax_report
+import tax_loss
 from options_api import register_routes as register_options_routes
 from market_symbols import yahoo_symbol_for_ticker as _yahoo_symbol_for_ticker
 from dividend_safety import (
@@ -6362,6 +6363,34 @@ def action_center():
                     plan_id=row["id"],
                     updated_at=row["updated_at"],
                 )
+
+        # Tax-loss harvest plans (status='planned')
+        try:
+            plan_rows = conn.execute(
+                f"""SELECT id, ticker, shares, est_loss, est_tax_saved
+                    FROM tax_loss_plan
+                    WHERE profile_id IN ({placeholders})
+                      AND status = 'planned'
+                    ORDER BY est_loss ASC""",
+                pids,
+            ).fetchall()
+        except sqlite3.OperationalError:
+            plan_rows = []
+        for pr in plan_rows[:5]:
+            pr = dict(pr)
+            tax_saved = float(pr.get("est_tax_saved") or 0)
+            loss = float(pr.get("est_loss") or 0)
+            _action_item(
+                items,
+                "tax",
+                "warning",
+                f"Harvest {pr['ticker']} for tax loss",
+                f"Plan to realize ${abs(loss):,.2f} loss (~${tax_saved:,.2f} tax saved).",
+                "/tax-loss",
+                cta="Open Tax-Loss Harvest",
+                metric=tax_saved,
+                plan_id=pr["id"],
+            )
 
         if not items and holdings:
             _action_item(
@@ -14116,6 +14145,147 @@ def gains_losses_chart():
 
 
 # ── Annual Tax Report ──────────────────────────────────────────────────────────
+
+# ── Tax-Loss Harvesting ────────────────────────────────────────────────────────
+
+@app.route("/api/tax-loss/candidates", methods=["GET"])
+def tax_loss_candidates():
+    """Per-lot tax-loss harvest candidates with wash-sale status."""
+    conn = get_connection()
+    try:
+        scope = _get_gains_losses_profile_scope(conn)
+        result = tax_loss.build_candidates(conn, scope)
+        return jsonify(result)
+    finally:
+        conn.close()
+
+
+@app.route("/api/tax-loss/summary", methods=["GET"])
+def tax_loss_summary():
+    """Combined summary: harvestable loss, YTD realized, net after harvest."""
+    conn = get_connection()
+    try:
+        scope = _get_gains_losses_profile_scope(conn)
+        cands = tax_loss.build_candidates(conn, scope)
+        ytd = tax_loss.ytd_realized(conn, scope)
+        s = cands["summary"]
+        net_after = float(ytd["ytd_realized"]) + float(s["harvestable_loss"])
+        return jsonify({
+            "harvestable_loss": s["harvestable_loss"],
+            "blocked_loss": s["blocked_loss"],
+            "candidate_count": s["candidate_count"],
+            "est_tax_saved": s["est_tax_saved"],
+            "ytd_realized": ytd["ytd_realized"],
+            "ytd_sell_count": ytd["ytd_sell_count"],
+            "net_after_harvest": round(net_after, 2),
+            "year": ytd["year"],
+            "rates": cands["rates"],
+            "as_of": cands["as_of"],
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/api/tax-loss/replacements", methods=["GET"])
+def tax_loss_replacements():
+    """Replacement suggestions for a losing ticker."""
+    ticker = (request.args.get("ticker") or "").strip().upper()
+    if not ticker:
+        return jsonify(error="ticker query parameter is required"), 400
+    conn = get_connection()
+    try:
+        scope = _get_gains_losses_profile_scope(conn)
+        suggestions = tax_loss.candidate_replacements(conn, ticker, scope)
+        return jsonify({"ticker": ticker, "suggestions": suggestions})
+    finally:
+        conn.close()
+
+
+@app.route("/api/tax-loss/plan", methods=["GET"])
+def tax_loss_plan_list():
+    """List planned/dismissed harvests for the current profile scope."""
+    conn = get_connection()
+    try:
+        scope = _get_gains_losses_profile_scope(conn)
+        pids = scope["transaction_profile_ids"]
+        placeholders = ",".join("?" * len(pids))
+        rows = conn.execute(
+            f"""SELECT id, profile_id, ticker, buy_txn_id, shares,
+                       est_loss, est_tax_saved, replacement, status, notes, created_at
+                FROM tax_loss_plan
+                WHERE profile_id IN ({placeholders})
+                ORDER BY created_at DESC, id DESC""",
+            pids,
+        ).fetchall()
+        return jsonify({"plans": [dict(r) for r in rows]})
+    finally:
+        conn.close()
+
+
+@app.route("/api/tax-loss/plan", methods=["POST"])
+def tax_loss_plan_create():
+    """Add or update a planned harvest."""
+    data = request.get_json(force=True, silent=True) or {}
+    ticker = (data.get("ticker") or "").strip().upper()
+    if not ticker:
+        return jsonify(error="ticker is required"), 400
+    try:
+        shares = float(data.get("shares") or 0)
+        est_loss = float(data.get("est_loss") or 0)
+    except (TypeError, ValueError):
+        return jsonify(error="shares and est_loss must be numeric"), 400
+    if shares <= 0:
+        return jsonify(error="shares must be > 0"), 400
+
+    buy_txn_id = data.get("buy_txn_id")
+    est_tax_saved = data.get("est_tax_saved")
+    replacement = (data.get("replacement") or "").strip().upper() or None
+    notes = data.get("notes")
+    status = (data.get("status") or "planned").strip().lower()
+    if status not in ("planned", "executed", "dismissed"):
+        status = "planned"
+
+    conn = get_connection()
+    try:
+        scope = _get_gains_losses_profile_scope(conn)
+        profile_id = scope["primary_profile_id"]
+
+        plan_id = data.get("id")
+        if plan_id:
+            conn.execute(
+                """UPDATE tax_loss_plan
+                   SET ticker = ?, buy_txn_id = ?, shares = ?, est_loss = ?,
+                       est_tax_saved = ?, replacement = ?, status = ?, notes = ?
+                   WHERE id = ?""",
+                (ticker, buy_txn_id, shares, est_loss, est_tax_saved,
+                 replacement, status, notes, plan_id),
+            )
+        else:
+            cur = conn.execute(
+                """INSERT INTO tax_loss_plan
+                   (profile_id, ticker, buy_txn_id, shares, est_loss,
+                    est_tax_saved, replacement, status, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (profile_id, ticker, buy_txn_id, shares, est_loss,
+                 est_tax_saved, replacement, status, notes),
+            )
+            plan_id = cur.lastrowid
+        conn.commit()
+        return jsonify({"ok": True, "id": plan_id})
+    finally:
+        conn.close()
+
+
+@app.route("/api/tax-loss/plan/<int:plan_id>", methods=["DELETE"])
+def tax_loss_plan_delete(plan_id):
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM tax_loss_plan WHERE id = ?", (plan_id,))
+        conn.commit()
+        return jsonify({"ok": True})
+    finally:
+        conn.close()
+
 
 def _check_tax_advantaged(conn, profile_id):
     """Return profile name if the selected profile is tax-advantaged, else None."""

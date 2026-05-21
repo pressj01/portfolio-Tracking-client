@@ -9,6 +9,11 @@ export default function Settings() {
   const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(false)
 
+  // Tax-loss harvesting rates
+  const [taxRates, setTaxRates] = useState({ short: '32', long: '15', state: '0' })
+  const [taxStatus, setTaxStatus] = useState(null)
+  const [taxSaving, setTaxSaving] = useState(false)
+
   // Single-stock ETF state
   const [builtinEtfs, setBuiltinEtfs] = useState([])
   const [userEtfs, setUserEtfs] = useState([])
@@ -56,8 +61,48 @@ export default function Settings() {
         } catch {
           setNavOverrides({})
         }
+        // Tax rates ride on the same settings endpoint. Stored as fractions (e.g. 0.32);
+        // displayed as percentages.
+        const toPct = (v, fallback) => {
+          const n = Number(v)
+          if (!Number.isFinite(n)) return fallback
+          return String(+(n * 100).toFixed(2))
+        }
+        setTaxRates({
+          short: toPct(data.tax_short_term_rate, '32'),
+          long: toPct(data.tax_long_term_rate, '15'),
+          state: toPct(data.tax_state_rate, '0'),
+        })
       })
       .catch(() => {})
+  }
+
+  const saveTaxRates = async () => {
+    setTaxSaving(true)
+    setTaxStatus(null)
+    const toFrac = (v) => {
+      const n = parseFloat(v)
+      return Number.isFinite(n) ? (n / 100).toString() : '0'
+    }
+    try {
+      const res = await pf('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tax_short_term_rate: toFrac(taxRates.short),
+          tax_long_term_rate: toFrac(taxRates.long),
+          tax_state_rate: toFrac(taxRates.state),
+        }),
+      })
+      if (res.ok) {
+        setTaxStatus({ type: 'success', msg: 'Saved tax rates.' })
+      } else {
+        setTaxStatus({ type: 'error', msg: 'Failed to save tax rates.' })
+      }
+    } catch (e) {
+      setTaxStatus({ type: 'error', msg: 'Server error: ' + e.message })
+    }
+    setTaxSaving(false)
   }
 
   useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides() }, [selection])
@@ -315,6 +360,52 @@ export default function Settings() {
           />
           <button className="btn btn-primary" onClick={handleAddEtf} disabled={etfSaving || !etfInput.trim()}>
             Add
+          </button>
+        </div>
+      </div>
+
+      {/* Tax-Loss Harvesting Rates */}
+      <div className="card">
+        <h2>Tax-Loss Harvesting Rates</h2>
+        <p style={{ color: '#90a4ae', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+          Used by the Tax-Loss Harvest page to estimate the tax saved when realizing a loss.
+          Enter as percentages (e.g. 32 for 32%).
+        </p>
+
+        {taxStatus && (
+          <div className={`alert alert-${taxStatus.type}`} style={{ marginBottom: '0.75rem' }}>{taxStatus.msg}</div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(110px, 1fr)) auto', gap: '0.5rem', alignItems: 'end' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.85rem', color: '#c0cdd8' }}>
+            Short-term (%)
+            <input
+              type="number" step="0.01" min="0" max="100"
+              value={taxRates.short}
+              onChange={e => setTaxRates({ ...taxRates, short: e.target.value })}
+              disabled={taxSaving}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.85rem', color: '#c0cdd8' }}>
+            Long-term (%)
+            <input
+              type="number" step="0.01" min="0" max="100"
+              value={taxRates.long}
+              onChange={e => setTaxRates({ ...taxRates, long: e.target.value })}
+              disabled={taxSaving}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.85rem', color: '#c0cdd8' }}>
+            State (%)
+            <input
+              type="number" step="0.01" min="0" max="100"
+              value={taxRates.state}
+              onChange={e => setTaxRates({ ...taxRates, state: e.target.value })}
+              disabled={taxSaving}
+            />
+          </label>
+          <button className="btn btn-primary" onClick={saveTaxRates} disabled={taxSaving}>
+            {taxSaving ? 'Saving...' : 'Save'}
           </button>
         </div>
       </div>

@@ -80,6 +80,7 @@ const GROUPS = [
     label: 'Taxes',
     sections: [
       { id: 'tax-report', label: 'Annual Tax Report' },
+      { id: 'tax-loss', label: 'Tax-Loss Harvest' },
     ],
   },
 ]
@@ -4990,6 +4991,97 @@ function RebalanceWizardHelp() {
   )
 }
 
+function TaxLossHarvestHelp() {
+  return (
+    <div>
+      <h2>Tax-Loss Harvest</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The <strong>Tax-Loss Harvest</strong> page scans every open BUY lot in your portfolio
+        for unrealized losses you can realize to offset capital gains and reduce taxable income.
+        Each lot is evaluated individually — so if you bought the same ticker across multiple
+        dates you can harvest the losing lots while holding the profitable ones.
+      </p>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        <strong>Estimates only.</strong> Wash-sale rules, cross-account household treatments,
+        and "substantially identical" determinations can be complex. This tool surfaces
+        candidates for review — confirm any harvest with a tax professional before trading.
+      </div>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Summary cards</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Harvestable Loss</strong> — Total unrealized loss across all wash-sale-clear candidate lots. Candidate count shown below.</li>
+        <li><strong>YTD Realized</strong> — Gains and losses already booked this calendar year from SELL transactions.</li>
+        <li><strong>Net After Harvest</strong> — YTD Realized plus Harvestable Loss. Shows whether harvesting would flip you to a net loss for the year.</li>
+        <li><strong>Est. Tax Saved</strong> — Loss × (short-term or long-term rate + state rate), summed across clear candidates. Rates are set in <strong>Settings → Tax-Loss Harvesting Rates</strong>.</li>
+        <li><strong>Blocked by Wash Sale</strong> — Loss amount in lots that are currently blocked. These will become harvestable once the 30-day window passes.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img
+          src="/help-screenshots/Tax-loss/tax-loss-harvest-overview.jpg"
+          alt="Tax-Loss Harvest page showing summary cards and candidate table with wash-sale status badges"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
+        />
+      </div>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Candidate table</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        Each row is one BUY lot with an unrealized loss. Columns:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Ticker</strong> — The holding. Lots bought via DRIP reinvestment are tagged with a DRIP label.</li>
+        <li><strong>Buy Date</strong> — The date that specific lot was purchased, which determines the holding period.</li>
+        <li><strong>Shares</strong> — Open shares remaining in that lot (after any prior partial sells).</li>
+        <li><strong>Cost/sh</strong> — Average cost per share including fees for this lot.</li>
+        <li><strong>Current</strong> — Current market price from the most recent holdings refresh.</li>
+        <li><strong>Unrealized $</strong> — The dollar loss at current price. Shown in red.</li>
+        <li><strong>Term</strong> — <strong>ST</strong> (short-term, held ≤ 365 days) or <strong>LT</strong> (long-term, held &gt; 365 days). Determines which tax rate applies.</li>
+        <li><strong>Wash</strong> — <span style={{ color: '#4dff91' }}>Clear</span> means no conflicting buy in the last 30 days; <span style={{ color: '#ff6b6b' }}>Wash sale → date</span> means a buy of the same ticker occurred within the window and the harvest is blocked until that date.</li>
+        <li><strong>Tax Saved</strong> — Estimated tax saved if this lot is harvested, using your configured marginal rates.</li>
+        <li><strong>Plan button</strong> — Only enabled for Clear lots. Click to add the harvest to your plan.</li>
+      </ul>
+
+      <p style={{ marginBottom: '1rem' }}>
+        Click any row to expand it. The expanded panel shows <strong>replacement candidate suggestions</strong>
+        (tickers in the same category that aren't substantially identical to what you're selling)
+        and, for blocked lots, the specific BUY transactions causing the wash-sale conflict along
+        with the exact date the window clears.
+      </p>
+
+      <p style={{ marginBottom: '1rem' }}>
+        Use the <strong>Hide wash-sale-blocked lots</strong> checkbox to filter the table to
+        actionable candidates only.
+      </p>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Planned tab</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Harvests you've planned are listed here. Each planned harvest also surfaces as a
+        <strong> Needs Review</strong> item in the <strong>Action Center</strong> so it stays
+        visible until you act on it. After executing the trade in your brokerage, re-import
+        your transactions — the lot will close and the candidate will disappear automatically.
+        Use the <strong>Remove</strong> button to dismiss a plan without executing it.
+      </p>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Wash-sale rules</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        The IRS disallows a loss if you buy the same (or substantially identical) security
+        within 30 days before or after the sale. This page checks the 30-day window looking
+        backward from today against all BUY transactions for that ticker across all accounts
+        in scope — including DRIP reinvestments, which count as acquisitions. A buy in any
+        account blocks the loss, not just the one holding the losing lot.
+      </p>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Setting your tax rates</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Go to <strong>Settings → Tax-Loss Harvesting Rates</strong> and enter your marginal
+        short-term rate, long-term rate, and state rate as percentages (e.g. 32, 15, 5).
+        The page defaults to 32% short-term and 15% long-term until you save your own rates.
+      </p>
+    </div>
+  )
+}
+
 const CONTENT_MAP = {
   overview: Overview,
   'action-center': ActionCenterHelp,
@@ -4999,6 +5091,7 @@ const CONTENT_MAP = {
   portfolios: PortfoliosHelp,
   settings: SettingsHelp,
   'tax-report': AnnualTaxReportHelp,
+  'tax-loss': TaxLossHarvestHelp,
   dashboard: DashboardHelp,
   holdings: HoldingsHelp,
   categories: CategoriesHelp,
