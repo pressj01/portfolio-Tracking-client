@@ -97,7 +97,7 @@ function Overview() {
       </p>
       <h3 style={{ marginBottom: '0.5rem' }}>Key Capabilities</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
-        <li><strong>Import</strong> — Bulk-load brokerage positions and transaction history from your own spreadsheet, a generic template, or brokerage exports. Supports Schwab (Positions &amp; Transactions), E*TRADE (Positions, Buys &amp; Sells, Dividends), Fidelity (Positions &amp; Transactions), Robinhood (Positions PDF &amp; Transactions), and Snowball (Holdings Migration &amp; Transactions). Automatic database backups before every import and dividend repair with one-click restore.</li>
+        <li><strong>Import</strong> — Bulk-load brokerage positions and transaction history from your own spreadsheet, a generic template, brokerage exports, or the app's own combined holdings + transactions workbook. Supports Schwab (Positions &amp; Transactions), E*TRADE (Positions, Buys &amp; Sells, Dividends), Fidelity (Positions &amp; Transactions), Robinhood (Positions PDF &amp; Transactions), Snowball (Holdings Migration &amp; Transactions), and Portfolio Export (Holdings + Transactions). Automatic database backups before every import and dividend repair with one-click restore.</li>
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
         <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation. Includes an Action Center preview panel showing the top follow-up items.</li>
         <li><strong>Action Center</strong> — Automatically generated follow-up items drawn from your portfolio data, categorized by priority (Needs Review, Watch, Clear) and kind (Allocation, Dividend, Income, Rebalance, Tax, etc.).</li>
@@ -128,6 +128,12 @@ function ImportHelp() {
         <strong>Brokerage templates:</strong> The Generic Upload area also includes downloadable brokerage-position templates.
         Use the matching template if you want to paste or export positions from a broker first, then import them into the app.
         The app currently provides templates for <strong>E*TRADE</strong>, <strong>Charles Schwab</strong>, <strong>Fidelity</strong>, and <strong>Robinhood</strong>, plus a generic template and Snowball holdings migration template.
+      </div>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+        <strong>App export import:</strong> The <strong>Import Brokerage Positions and Snowball Data</strong> tab also includes
+        <strong> Portfolio Export (Holdings + Transactions)</strong>. Use it to round-trip a workbook exported from the app's Export page;
+        the preview shows both the holdings sheets and the Transactions sheet before import.
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Brokerage Position Templates</h3>
@@ -294,6 +300,14 @@ function ImportHelp() {
         <li>Upload a <strong>single-account CSV export</strong>. Combined or merged exports are rejected.</li>
         <li>Imports: BUY, SELL, and DIVIDEND transactions. Stock splits are applied to pre-split lots automatically.</li>
         <li>Snowball exports may not exactly match the broker's live positions — use Positions imports for accurate current holdings.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Portfolio Export (Holdings + Transactions)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Use the workbook exported from the <strong>Export</strong> page's <strong>Export Holdings with Transactions</strong> option.</li>
+        <li>Set the format selector to <strong>Portfolio Export (Holdings + Transactions)</strong>.</li>
+        <li>The preview shows the portfolio sheet(s) and the Transactions sheet together so you can confirm both before importing.</li>
+        <li>Import restores the holdings sheets and transaction history from the same workbook in one pass.</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
@@ -3968,8 +3982,8 @@ function ExportHelp() {
       <h2>Export</h2>
       <p style={{ marginBottom: '1rem' }}>
         The Export page lets you download your current portfolio data as an Excel or CSV file.
-        The exported format matches the Generic Upload template, so you can use the file as a backup
-        or reimport it into any portfolio later.
+        The exported format matches the Generic Upload template, and the combined workbook also includes
+        a Transactions sheet so you can round-trip holdings and lot history from one file.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Export</h3>
@@ -3984,6 +3998,10 @@ function ExportHelp() {
           A spinner shows while the file is being generated.
         </li>
         <li>
+          <strong>Export Holdings with Transactions</strong> downloads one Excel workbook with holdings sheets plus a Transactions sheet.
+          Use the <strong>Portfolio Export (Holdings + Transactions)</strong> import format to restore it later.
+        </li>
+        <li>
           The file downloads automatically. A green success message confirms the filename.
         </li>
       </ol>
@@ -3991,14 +4009,17 @@ function ExportHelp() {
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Aggregate Mode</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         When the <strong>Aggregate</strong> portfolio is selected, the Excel export creates one sheet per
-        sub-portfolio. To reimport it later, use the <em>Generic Upload</em> tab with
-        <strong> "Import all tabs as separate portfolios"</strong> checked.
+        sub-portfolio. The combined holdings + transactions export also keeps one sheet per portfolio and adds a Transactions sheet.
+        To reimport it later, use the <em>Generic Upload</em> tab with
+        <strong> "Import all tabs as separate portfolios"</strong> checked for the holdings-only workbook, or the
+        <strong> Portfolio Export (Holdings + Transactions)</strong> format on the Import page for the combined workbook.
         The CSV export combines all portfolios into a single flat file.
       </p>
 
       <div className="alert alert-info" style={{ marginTop: '1rem' }}>
         <strong>Tip:</strong> Export is a great way to back up your data before a major reimport or
-        before clearing a portfolio. The Excel file is fully compatible with the Generic Upload importer.
+        before clearing a portfolio. The holdings-only Excel file is fully compatible with the Generic Upload importer,
+        and the combined workbook is compatible with the Portfolio Export importer.
       </div>
     </div>
   )

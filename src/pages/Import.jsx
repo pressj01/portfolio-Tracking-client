@@ -100,7 +100,9 @@ export default function Import() {
   }, [pf, selection])
 
   const txnHasRows = txnPreview
-    ? (txnPreview.format_type === 'positions'
+    ? (txnPreview.format_type === 'combined_export'
+        ? ((txnPreview.summary?.holdings || 0) > 0 || (txnPreview.summary?.transactions || 0) > 0)
+        : txnPreview.format_type === 'positions'
         ? txnPreview.positions.length > 0
         : txnPreview.transactions.length > 0)
     : false
@@ -554,7 +556,9 @@ export default function Import() {
         <div className="card">
           <h2>Import Brokerage Positions, Transactions, and Snowball Data</h2>
           <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
-            {txnFormat === 'schwab'
+            {txnFormat === 'portfolio_export'
+              ? <>Import the app's <strong>Holdings + Transactions Excel export</strong>. Preview shows the portfolio sheets and the Transactions sheet, then import restores both together from one file.</>
+            : txnFormat === 'schwab'
               ? <>Import current positions from a Schwab <strong>Positions CSV or XLSX</strong> export. In Schwab, go to Accounts {'>'} Positions, then export to CSV or Excel. This sets holdings, cost basis, and current prices directly.</>
               : txnFormat === 'snowball_holdings'
                 ? <>Import a Snowball <strong>Holdings CSV or XLSX</strong> as a migration snapshot. This keeps only the holdings, dividend, and category fields the app can actually use, and ignores Snowball-only analytics columns.</>
@@ -717,6 +721,7 @@ export default function Import() {
               onChange={(e) => { setTxnFormat(e.target.value); setTxnPreview(null); setTxnFile(null); setResult(null); setError(null) }}
               style={{ width: '250px' }}
             >
+              <option value="portfolio_export">Portfolio Export (Holdings + Transactions)</option>
               <option value="snowball_holdings">Snowball Holdings (Migration)</option>
               <option value="snowball">Snowball Transactions</option>
               <option value="schwab">Charles Schwab (Positions)</option>
@@ -733,7 +738,7 @@ export default function Import() {
 
           <FileUpload
             onFileSelect={(f) => { setTxnFile(f); setTxnPreview(null); setResult(null); setError(null) }}
-            accept={txnFormat === 'robinhood' ? '.pdf' : '.xlsx,.xls,.csv'}
+            accept={txnFormat === 'robinhood' ? '.pdf' : txnFormat === 'portfolio_export' ? '.xlsx' : '.xlsx,.xls,.csv'}
             file={txnFile}
           />
           {snapshotDateControl}
@@ -799,6 +804,93 @@ export default function Import() {
           </div>
 
           {/* ── Positions preview (Schwab) ── */}
+          {txnPreview && txnPreview.format_type === 'combined_export' && (
+            <div style={{ marginTop: '1rem' }}>
+              {txnPreview.preserve_positions_message && (
+                <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
+                  {txnPreview.preserve_positions_message}
+                </div>
+              )}
+              <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
+                <strong>{txnPreview.summary?.portfolios || 0}</strong> portfolio sheet{(txnPreview.summary?.portfolios || 0) === 1 ? '' : 's'},{' '}
+                <strong>{txnPreview.summary?.holdings || 0}</strong> holdings,{' '}
+                <strong>{txnPreview.summary?.transactions || 0}</strong> transactions found.{' '}
+                <strong>{txnPreview.summary?.buys || 0}</strong> buys and <strong>{txnPreview.summary?.sells || 0}</strong> sells.
+              </div>
+
+              <div style={{ maxHeight: '260px', overflow: 'auto', border: '1px solid #333', borderRadius: '6px', marginBottom: '1rem' }}>
+                <table className="data-table" style={{ fontSize: '0.85rem' }}>
+                  <thead>
+                    <tr>
+                      <th>Portfolio Sheet</th>
+                      <th style={{ textAlign: 'right' }}>Holdings</th>
+                      <th style={{ textAlign: 'right' }}>Current Value</th>
+                      <th>Sample Tickers</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(txnPreview.portfolios || []).map((p, i) => (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 600 }}>{p.sheet_name}</td>
+                        <td style={{ textAlign: 'right' }}>{p.rows}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          ${(p.total_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td style={{ maxWidth: '420px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {(p.tickers || []).join(', ')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {(txnPreview.transactions || []).length > 0 && (
+                <div style={{ maxHeight: '360px', overflow: 'auto', border: '1px solid #333', borderRadius: '6px' }}>
+                  <table className="data-table" style={{ fontSize: '0.8rem' }}>
+                    <thead>
+                      <tr>
+                        <th>Profile</th>
+                        <th>Type</th>
+                        <th>Date</th>
+                        <th>Ticker</th>
+                        <th style={{ textAlign: 'right' }}>Shares</th>
+                        <th style={{ textAlign: 'right' }}>Price</th>
+                        <th style={{ textAlign: 'right' }}>Fees</th>
+                        <th>Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {txnPreview.transactions.slice(0, 100).map((t, i) => (
+                        <tr key={i}>
+                          <td>{t.profile || txnPreview.target_profile_name || currentProfileName}</td>
+                          <td>
+                            <span style={{ color: t.type === 'BUY' ? '#4caf50' : '#f44336', fontWeight: 600 }}>
+                              {t.type}
+                            </span>
+                          </td>
+                          <td>{t.date}</td>
+                          <td style={{ fontWeight: 600 }}>{t.ticker}</td>
+                          <td style={{ textAlign: 'right' }}>{t.shares != null ? Number(t.shares).toFixed(4) : 'â€”'}</td>
+                          <td style={{ textAlign: 'right' }}>{t.price_per_share != null ? `$${Number(t.price_per_share).toFixed(2)}` : 'â€”'}</td>
+                          <td style={{ textAlign: 'right' }}>{t.fees > 0 ? `$${Number(t.fees).toFixed(2)}` : 'â€”'}</td>
+                          <td style={{ maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {(t.notes || '').substring(0, 70)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {(txnPreview.transactions || []).length > 100 && (
+                <p style={{ color: '#90a4ae', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                  Showing first 100 of {txnPreview.transactions.length} transactions.
+                </p>
+              )}
+            </div>
+          )}
+
           {txnPreview && txnPreview.format_type === 'positions' && (
             <div style={{ marginTop: '1rem' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '0.75rem' }}>
@@ -876,7 +968,7 @@ export default function Import() {
           )}
 
           {/* ── Transactions preview (Snowball) ── */}
-          {txnPreview && txnPreview.format_type !== 'positions' && (
+          {txnPreview && txnPreview.format_type !== 'positions' && txnPreview.format_type !== 'combined_export' && (
             <div style={{ marginTop: '1rem' }}>
               {txnPreview.preserve_positions && txnPreview.preserve_positions_message && (
                 <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>

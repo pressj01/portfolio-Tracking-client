@@ -7,6 +7,7 @@ export default function Export() {
   const { selection, isAggregate, currentProfileName, profileQueryString } = useProfile()
   const [loading, setLoading] = useState(null)   // null | 'excel' | 'csv'
   const [wlLoading, setWlLoading] = useState(null) // null | 'excel' | 'csv'
+  const [combinedLoading, setCombinedLoading] = useState(false)
   const [hasData, setHasData] = useState(false)
   const [watchlistCount, setWatchlistCount] = useState(0)
   const [error, setError] = useState(null)
@@ -105,6 +106,42 @@ export default function Export() {
     }
   }
 
+  const handleCombinedExport = async () => {
+    setCombinedLoading(true)
+    setError(null)
+    setSuccess(null)
+
+    const fallbackName = 'portfolio_with_transactions.xlsx'
+
+    try {
+      const url = `${API_BASE}/api/export/holdings-transactions?${profileQueryString}`
+      const res = await fetch(url)
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Export failed')
+      }
+
+      const disposition = res.headers.get('Content-Disposition') || ''
+      const match = disposition.match(/filename=([^;]+)/)
+      const filename = match ? match[1].trim() : fallbackName
+
+      const blob = await res.blob()
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(link.href)
+
+      setSuccess(`Holdings and transactions exported successfully as ${filename}`)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setCombinedLoading(false)
+    }
+  }
+
   return (
     <div className="page">
       <h1>Export Portfolio Data</h1>
@@ -186,6 +223,37 @@ export default function Export() {
               </button>
             </div>
           </>
+        )}
+      </div>
+
+      <div className="card" style={{ marginTop: '1.5rem' }}>
+        <h2>Export Holdings with Transactions</h2>
+        <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+          Download one Excel workbook containing your holdings plus a Transactions sheet
+          for the related ticker activity in the selected portfolio.
+        </p>
+
+        {isAggregate && (
+          <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+            Aggregate mode: holdings are split by portfolio sheet, and transactions are
+            combined into one Transactions sheet with the source portfolio included.
+          </p>
+        )}
+
+        {!hasData ? (
+          <div className="alert alert-info">
+            No holdings data to export. Import a portfolio first.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: '1rem' }}>
+            <button
+              className="btn btn-primary"
+              onClick={handleCombinedExport}
+              disabled={combinedLoading}
+            >
+              {combinedLoading ? <><span className="spinner" /> Exporting...</> : 'Export Holdings + Transactions'}
+            </button>
+          </div>
         )}
       </div>
 
