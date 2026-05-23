@@ -6711,8 +6711,15 @@ def action_center():
 
         missing_meta = [
             h for h in holdings
-            if not h.get("div_frequency") or not _action_iso_date(h.get("div_pay_date"))
-            or (float(h.get("div") or 0) <= 0 and float(h.get("estim_payment_per_year") or 0) <= 0)
+            if (
+                float(h.get("div") or 0) > 0
+                or float(h.get("estim_payment_per_year") or 0) > 0
+                or float(h.get("current_annual_yield") or 0) > 0
+                or float(h.get("approx_monthly_income") or 0) > 0
+            ) and (
+                not h.get("div_frequency")
+                or not _action_iso_date(h.get("div_pay_date"))
+            )
         ]
         if missing_meta:
             examples = ", ".join(h["ticker"] for h in missing_meta[:6])
