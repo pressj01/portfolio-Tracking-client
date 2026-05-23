@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import { API_BASE } from '../config'
 import DistributionHistoryChart from '../components/DistributionHistoryChart'
+import { returnVsYield } from '../utils/returnVsYield'
 
 const fmtMoney = (v) => {
   if (v == null) return '-'
@@ -221,11 +222,13 @@ function DistributionChart({ history, ticker, price, source }) {
   )
 }
 
-function ETFResult({ data, onOpenChart }) {
+function ETFResult({ data, onOpenChart, return1y }) {
   const chartPrice = Number(data.price) > 0 ? data.price : data.nav_price
   const yieldLabel = data.yield_source && data.yield_source !== 'Yahoo Finance'
     ? `${data.target_yield_label || 'Estimated Yield'} (${data.yield_source})`
     : (data.target_yield_label || 'Estimated Yield')
+
+  const rvy = returnVsYield(return1y, data.estimated_yield_pct ?? data.sec_30_day_yield_pct)
 
   const metrics = [
     ['Issuer', data.issuer],
@@ -238,6 +241,7 @@ function ETFResult({ data, onOpenChart }) {
     ['Dividend Frequency', data.dividend_frequency || '-'],
     [yieldLabel, fmtPct(data.estimated_yield_pct)],
     ['30-Day SEC Yield', fmtPct(data.sec_30_day_yield_pct)],
+    ['1Y Ret vs Yield', return1y == null ? '-' : <span style={{ color: rvy?.color || '#6f7890' }} title={rvy ? `1Y Return ${rvy.totalReturnPct?.toFixed(2)}% vs Yield ${rvy.yieldOnCost?.toFixed(2)}% (spread ${rvy.spread?.toFixed(2)}%)` : undefined}>{rvy?.label || '-'}</span>],
     ['TTM Dividend/Share', data.ttm_dividend_per_share == null ? '-' : '$' + fmtNum(data.ttm_dividend_per_share, 4)],
     ['Last Dividend', data.last_dividend ? `${fmtMoney(data.last_dividend.amount)} on ${data.last_dividend.date}` : '-'],
     ['Source', (() => {
@@ -307,7 +311,7 @@ function ETFResult({ data, onOpenChart }) {
   )
 }
 
-function StockResult({ data, onOpenChart }) {
+function StockResult({ data, onOpenChart, return1y }) {
   const valuation = [
     ['Price', fmtMoney(data.price)],
     ['Market Cap', fmtMoney(data.market_cap)],
@@ -328,10 +332,13 @@ function StockResult({ data, onOpenChart }) {
     ['Free Cash Flow', fmtMoney(data.free_cash_flow)],
     ['Debt/Equity', fmtNum(data.debt_to_equity)],
   ]
+  const rvyStock = returnVsYield(return1y, data.dividend_yield_pct)
+
   const dividend = [
     ['Dividend Frequency', data.dividend_frequency || '-'],
     ['Dividend Rate', fmtMoney(data.dividend_rate)],
     ['Dividend Yield', fmtPct(data.dividend_yield_pct)],
+    ['1Y Ret vs Yield', return1y == null ? '-' : <span style={{ color: rvyStock?.color || '#6f7890' }} title={rvyStock ? `1Y Return ${rvyStock.totalReturnPct?.toFixed(2)}% vs Yield ${rvyStock.yieldOnCost?.toFixed(2)}% (spread ${rvyStock.spread?.toFixed(2)}%)` : undefined}>{rvyStock?.label || '-'}</span>],
     ['Payout Ratio', fmtPct(data.payout_ratio_pct)],
     ['TTM Dividend/Share', data.ttm_dividend_per_share == null ? '-' : '$' + fmtNum(data.ttm_dividend_per_share, 4)],
     ['Last Dividend', data.last_dividend ? `${fmtMoney(data.last_dividend.amount)} on ${data.last_dividend.date}` : '-'],
@@ -662,12 +669,24 @@ export default function SecurityResearch() {
   const [ticker, setTicker] = useState('')
   const [benchmark, setBenchmark] = useState('SPY')
   const [data, setData] = useState(null)
+  const [return1y, setReturn1y] = useState(null)
   const [chartTicker, setChartTicker] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   const normalizedTicker = useMemo(() => ticker.trim().toUpperCase(), [ticker])
   const normalizedBenchmark = useMemo(() => benchmark.trim().toUpperCase() || 'SPY', [benchmark])
+
+  useEffect(() => {
+    setReturn1y(null)
+    if (!data?.ticker) return
+    pf(`/api/ticker-return-1y/${encodeURIComponent(data.ticker)}?_=${Date.now()}`, { cache: 'no-store' })
+      .then(r => r.json())
+      .then(d => {
+        if (!d.error && d.total_return?.length) setReturn1y(d.total_return[d.total_return.length - 1])
+      })
+      .catch(() => {})
+  }, [data?.ticker, pf])
 
   const runLookup = () => {
     if (!normalizedTicker) return
@@ -740,8 +759,8 @@ export default function SecurityResearch() {
           {loading && <div className="research-loading"><span className="spinner" /> Loading research data...</div>}
 
           {data?.kind && <AverageReturnChart kind={data.kind} ticker={data?.ticker || normalizedTicker} benchmark={normalizedBenchmark} />}
-          {data?.kind === 'etf' && <ETFResult data={data} onOpenChart={openChart} />}
-          {data?.kind === 'stock' && <StockResult data={data} onOpenChart={openChart} />}
+          {data?.kind === 'etf' && <ETFResult data={data} onOpenChart={openChart} return1y={return1y} />}
+          {data?.kind === 'stock' && <StockResult data={data} onOpenChart={openChart} return1y={return1y} />}
           {chartTicker && <ResearchChart ticker={chartTicker} />}
         </>
       )}

@@ -33,6 +33,7 @@ import RetirementReadiness from './pages/RetirementReadiness'
 import DividendHistory from './pages/DividendHistory'
 import GainsLosses from './pages/GainsLosses'
 import TaxLossHarvest from './pages/TaxLossHarvest'
+import BlendedYield from './pages/BlendedYield'
 import SafeWithdrawal from './pages/SafeWithdrawal'
 import Help from './pages/Help'
 import TechnicalScanner from './pages/TechnicalScanner'
@@ -134,6 +135,7 @@ function App() {
         <Route path="/rebalance-wizard" element={<RebalanceWizard />} />
         <Route path="/tax-report" element={<AnnualTaxReport />} />
         <Route path="/tax-loss" element={<TaxLossHarvest />} />
+        <Route path="/blended-yield" element={<BlendedYield />} />
         {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
         <Route path="/help" element={<Help />} />
       </Routes>
@@ -157,6 +159,24 @@ function ProfileSelector() {
           <option key={p.id} value={String(p.id)}>{p.name}</option>
         ))}
         {aggregateConfig.length > 0 && <option value="aggregate">{aggregateName}</option>}
+      </select>
+    </div>
+  )
+}
+
+function BasisModeSelector() {
+  const { basisMode, setBasisMode } = useProfile()
+
+  return (
+    <div className="basis-selector">
+      <span>Basis</span>
+      <select
+        value={basisMode}
+        onChange={(e) => setBasisMode(e.target.value)}
+        title="Cost basis mode"
+      >
+        <option value="original">Original cost</option>
+        <option value="broker_adjusted">Broker adjusted cost</option>
       </select>
     </div>
   )
@@ -208,6 +228,7 @@ function Nav() {
       <NavDropdown label="Taxes">
         <NavLink to="/tax-report">Annual Tax Report</NavLink>
         <NavLink to="/tax-loss">Tax-Loss Harvest</NavLink>
+        <NavLink to="/blended-yield">Blended Yield</NavLink>
       </NavDropdown>
       {/* Option Trading Tools and Option Education hidden from deployed build — not ready */}
       <NavDropdown label="Admin">
@@ -218,6 +239,7 @@ function Nav() {
         <NavLink to="/settings">Settings</NavLink>
         <NavLink to="/help">Help</NavLink>
       </NavDropdown>
+      <BasisModeSelector />
       <ProfileSelector />
     </nav>
   )

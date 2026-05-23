@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Plot from 'react-plotly.js'
 import { useProfileFetch } from '../context/ProfileContext'
 import DistributionHistoryChart from '../components/DistributionHistoryChart'
+import { returnVsYield } from '../utils/returnVsYield'
 
 const PERIODS = [
   { value: '1mo', label: '1M' },
@@ -54,9 +55,10 @@ const COLUMNS = [
   { key: 'issuer', label: 'Issuer' },
   { key: 'category', label: 'Category' },
   { key: 'max_drawdown', label: 'Max Drawdown' },
+  { key: 'ret_vs_yld', label: 'Ret vs Yld' },
 ]
 
-const DEFAULT_COLUMNS = ['symbol', 'name', 'price', 'change_pct', 'assets', 'expense_ratio', 'pe_ratio', 'expected_dividend_yield', 'dividend_yield', 'volume', 'dollar_volume', 'open', 'return_1y']
+const DEFAULT_COLUMNS = ['symbol', 'name', 'price', 'change_pct', 'assets', 'expense_ratio', 'pe_ratio', 'expected_dividend_yield', 'dividend_yield', 'volume', 'dollar_volume', 'open', 'return_1y', 'ret_vs_yld']
 const AVERAGE_PERIOD_ORDER = ['1 Month', 'YTD', '1 Year', '5 Years', '10 Years', 'Inception']
 
 function pct(v) {
@@ -449,12 +451,19 @@ export default function ETFComparer() {
   const rows = useMemo(() => {
     const profiles = data?.profiles || {}
     const stats = data?.stats || {}
-    return symbols.map(sym => ({
-      symbol: sym,
-      ...(profiles[sym] || {}),
-      return_1y: profiles[sym]?.return_1y ?? stats[sym]?.total_ret,
-      max_drawdown: profiles[sym]?.max_drawdown ?? stats[sym]?.max_drawdown,
-    }))
+    return symbols.map(sym => {
+      const rtn1y = profiles[sym]?.return_1y ?? stats[sym]?.total_ret
+      const yldRaw = profiles[sym]?.expected_dividend_yield ?? profiles[sym]?.dividend_yield
+      const yldPct = yldRaw != null ? (Math.abs(yldRaw) <= 1 ? yldRaw * 100 : yldRaw) : null
+      const rvy = returnVsYield(rtn1y, yldPct)
+      return {
+        symbol: sym,
+        ...(profiles[sym] || {}),
+        return_1y: rtn1y,
+        max_drawdown: profiles[sym]?.max_drawdown ?? stats[sym]?.max_drawdown,
+        ret_vs_yld: rvy,
+      }
+    })
   }, [data, symbols])
 
   const activeColumns = COLUMNS.filter(col => col.locked || visibleColumns.includes(col.key))
@@ -715,11 +724,22 @@ export default function ETFComparer() {
             <tbody>
               {rows.map(row => (
                 <tr key={row.symbol}>
-                  {activeColumns.map(col => (
-                    <td key={col.key} style={['change_pct', 'return_1y', 'max_drawdown'].includes(col.key) ? { color: pctColor(row[col.key]) } : undefined}>
-                      {col.key === 'symbol' ? <strong>{row.symbol}</strong> : format(col.key, row[col.key])}
-                    </td>
-                  ))}
+                  {activeColumns.map(col => {
+                    if (col.key === 'ret_vs_yld') {
+                      const rvy = row.ret_vs_yld
+                      return (
+                        <td key={col.key} style={{ color: rvy?.color || '#6f7890', textAlign: 'center' }}
+                          title={rvy ? `1Y Return ${rvy.totalReturnPct?.toFixed(2)}% vs Yield ${rvy.yieldOnCost?.toFixed(2)}% (spread ${rvy.spread?.toFixed(2)}%)` : undefined}>
+                          {rvy?.label || '-'}
+                        </td>
+                      )
+                    }
+                    return (
+                      <td key={col.key} style={['change_pct', 'return_1y', 'max_drawdown'].includes(col.key) ? { color: pctColor(row[col.key]) } : undefined}>
+                        {col.key === 'symbol' ? <strong>{row.symbol}</strong> : format(col.key, row[col.key])}
+                      </td>
+                    )
+                  })}
                 </tr>
               ))}
             </tbody>

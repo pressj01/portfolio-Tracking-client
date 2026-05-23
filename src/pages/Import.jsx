@@ -10,6 +10,14 @@ const dateInputToday = () => {
   return `${yyyy}-${mm}-${dd}`
 }
 
+const blankValue = '-'
+const formatMoney = (value, decimals = 2) => (
+  value != null && Number.isFinite(Number(value)) ? `$${Number(value).toFixed(decimals)}` : blankValue
+)
+const formatShares = (value) => (
+  value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(4) : blankValue
+)
+
 function FileUpload({ onFileSelect, accept, file }) {
   const inputRef = useRef()
   const [dragOver, setDragOver] = useState(false)
@@ -871,9 +879,9 @@ export default function Import() {
                           </td>
                           <td>{t.date}</td>
                           <td style={{ fontWeight: 600 }}>{t.ticker}</td>
-                          <td style={{ textAlign: 'right' }}>{t.shares != null ? Number(t.shares).toFixed(4) : 'â€”'}</td>
-                          <td style={{ textAlign: 'right' }}>{t.price_per_share != null ? `$${Number(t.price_per_share).toFixed(2)}` : 'â€”'}</td>
-                          <td style={{ textAlign: 'right' }}>{t.fees > 0 ? `$${Number(t.fees).toFixed(2)}` : 'â€”'}</td>
+                          <td style={{ textAlign: 'right' }}>{formatShares(t.shares)}</td>
+                          <td style={{ textAlign: 'right' }}>{formatMoney(t.price_per_share)}</td>
+                          <td style={{ textAlign: 'right' }}>{formatMoney(t.fees || 0)}</td>
                           <td style={{ maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {(t.notes || '').substring(0, 70)}
                           </td>
@@ -1014,16 +1022,16 @@ export default function Import() {
                         </td>
                         <td>{t.date}</td>
                         <td style={{ fontWeight: 600 }}>{t.ticker}</td>
-                        <td style={{ textAlign: 'right' }}>{t.shares != null ? t.shares.toFixed(4) : '—'}</td>
-                        <td style={{ textAlign: 'right' }}>{t.price_per_share != null ? `$${t.price_per_share.toFixed(2)}` : '—'}</td>
+                        <td style={{ textAlign: 'right' }}>{formatShares(t.shares)}</td>
+                        <td style={{ textAlign: 'right' }}>{formatMoney(t.price_per_share)}</td>
                         <td style={{ textAlign: 'right' }}>
                           {t.dividend_amount != null
-                            ? `$${t.dividend_amount.toFixed(2)}`
+                            ? formatMoney(t.dividend_amount)
                             : t.shares != null && t.price_per_share != null
-                              ? `$${(t.shares * t.price_per_share).toFixed(2)}`
-                              : '—'}
+                              ? formatMoney(t.shares * t.price_per_share)
+                              : blankValue}
                         </td>
-                        <td style={{ textAlign: 'right' }}>{t.fees > 0 ? `$${t.fees.toFixed(2)}` : '—'}</td>
+                        <td style={{ textAlign: 'right' }}>{formatMoney(t.fees || 0)}</td>
                         <td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {(t.notes || '').substring(0, 60)}
                         </td>

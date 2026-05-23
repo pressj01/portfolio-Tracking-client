@@ -164,6 +164,65 @@ class HoldingsTransactionTest(unittest.TestCase):
         self.assertEqual(holding["current_value"], 96)
         self.assertEqual(holding["gain_or_loss"], 16)
 
+    def test_original_basis_refresh_updates_only_when_transaction_shares_match(self):
+        app_module._ensure_basis_columns(self.conn)
+        self.conn.execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, purchase_value, original_price_paid, "
+            "original_purchase_value, broker_price_paid, broker_purchase_value, current_value) "
+            "VALUES ('ABC', 1, 8, 20, 160, 20, 160, 20, 160, 200)"
+        )
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES ('ABC', 1, 'BUY', '2026-01-01', 10, 10, 0)"
+        )
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES ('ABC', 1, 'SELL', '2026-01-10', 2, 15, 0)"
+        )
+
+        result = app_module._refresh_original_basis_from_transactions("ABC", 1, self.conn)
+
+        self.assertEqual(result["status"], "updated")
+        row = self.conn.execute(
+            "SELECT quantity, price_paid, purchase_value, original_price_paid, "
+            "original_purchase_value, broker_price_paid, broker_purchase_value, realized_gains "
+            "FROM all_account_info WHERE ticker = 'ABC'"
+        ).fetchone()
+        self.assertEqual(row["quantity"], 8)
+        self.assertEqual(row["price_paid"], 20)
+        self.assertEqual(row["purchase_value"], 160)
+        self.assertEqual(row["broker_price_paid"], 20)
+        self.assertEqual(row["broker_purchase_value"], 160)
+        self.assertEqual(row["original_price_paid"], 10)
+        self.assertEqual(row["original_purchase_value"], 80)
+        self.assertEqual(row["realized_gains"], 10)
+
+    def test_original_basis_refresh_skips_when_transaction_shares_do_not_match(self):
+        app_module._ensure_basis_columns(self.conn)
+        self.conn.execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, purchase_value, original_price_paid, "
+            "original_purchase_value, broker_price_paid, broker_purchase_value) "
+            "VALUES ('ABC', 1, 8, 20, 160, 20, 160, 20, 160)"
+        )
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES ('ABC', 1, 'BUY', '2026-01-01', 10, 10, 0)"
+        )
+
+        result = app_module._refresh_original_basis_from_transactions("ABC", 1, self.conn)
+
+        self.assertEqual(result["status"], "share_mismatch")
+        row = self.conn.execute(
+            "SELECT original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value "
+            "FROM all_account_info WHERE ticker = 'ABC'"
+        ).fetchone()
+        self.assertEqual(row["original_price_paid"], 20)
+        self.assertEqual(row["original_purchase_value"], 160)
+        self.assertEqual(row["broker_price_paid"], 20)
+        self.assertEqual(row["broker_purchase_value"], 160)
+
     def test_yahoo_symbol_normalizes_common_broker_spellings(self):
         self.assertEqual(_yahoo_symbol_for_ticker("BRKB"), "BRK-B")
         self.assertEqual(_yahoo_symbol_for_ticker("CODIPRB"), "CODI-PB")
@@ -209,6 +268,9 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 current_month_income REAL,
                 dividend_paid REAL,
                 total_divs_received REAL,
+                ytd_divs REAL,
+                paid_for_itself REAL,
+                dividend_actuals_source TEXT,
                 classification_type TEXT,
                 reinvest TEXT
             );
@@ -230,6 +292,17 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 sell_txn_id INTEGER,
                 buy_txn_id INTEGER,
                 shares REAL
+            );
+            CREATE TABLE dividend_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT,
+                profile_id INTEGER,
+                payment_date TEXT,
+                amount REAL,
+                source TEXT,
+                notes TEXT,
+                created_at TEXT,
+                UNIQUE (ticker, profile_id, payment_date)
             );
             CREATE TABLE profiles (
                 id INTEGER PRIMARY KEY,
@@ -423,6 +496,263 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(row["divs_received"], 12)
         self.assertEqual(data["totals"]["unrealized_total_gl"], 52)
         self.assertEqual(data["realized"][0]["price_gl"], 12)
+
+    def test_single_sheet_portfolio_export_imports_into_selected_profile(self):
+        import pandas as pd
+
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Snowball_Studwell', 0)"
+        )
+        workbook = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        workbook.close()
+        workbook_path = Path(workbook.name)
+        try:
+            with pd.ExcelWriter(workbook_path, engine="openpyxl") as writer:
+                pd.DataFrame([{
+                    "Ticker": "ABC",
+                    "Shares": 3,
+                    "Price Paid": 10,
+                    "Current Price": 12,
+                    "Purchase Value": 30,
+                    "Current Value": 36,
+                }]).to_excel(writer, sheet_name="Trust", index=False)
+                pd.DataFrame([{
+                    "Transaction ID": 1,
+                    "Profile": "Trust",
+                    "Ticker": "ABC",
+                    "Type": "BUY",
+                    "Date": "2026-01-02",
+                    "Shares": 3,
+                    "Price/Share": 10,
+                    "Fees": 0,
+                    "Realized Gain": None,
+                    "Notes": "exported transaction",
+                    "Created At": "2026-01-02",
+                }, {
+                    "Transaction ID": "DIV-1",
+                    "Profile": "Trust",
+                    "Ticker": "ABC",
+                    "Type": "DIVIDEND",
+                    "Date": "2026-02-15",
+                    "Shares": None,
+                    "Price/Share": None,
+                    "Fees": None,
+                    "Realized Gain": None,
+                    "Dividend Amount": 4.25,
+                    "Notes": "exported dividend",
+                    "Created At": "2026-02-15",
+                }]).to_excel(writer, sheet_name="Transactions", index=False)
+
+            parsed = app_module._parse_portfolio_export_workbook(str(workbook_path), workbook_path.name)
+            self.assertEqual(parsed["summary"]["dividends"], 1)
+
+            imported_profiles = []
+            orig_import_from_upload = app_module.import_from_upload
+            orig_populate_income_tracking = app_module.populate_income_tracking
+            orig_snapshot_nav = app_module._snapshot_nav_after_profile_update
+            orig_auto_reconcile_owner = app_module._auto_reconcile_owner
+            try:
+                def fake_import_from_upload(df, profile_id):
+                    imported_profiles.append(profile_id)
+                    return len(df), f"Imported {len(df)} holdings for profile {profile_id}."
+
+                app_module.import_from_upload = fake_import_from_upload
+                app_module.populate_income_tracking = lambda profile_id: None
+                app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+                app_module._auto_reconcile_owner = lambda: None
+
+                with app_module.app.app_context():
+                    res = app_module._import_portfolio_export_workbook(parsed, str(workbook_path), 20)
+                    data = res.get_json()
+            finally:
+                app_module.import_from_upload = orig_import_from_upload
+                app_module.populate_income_tracking = orig_populate_income_tracking
+                app_module._snapshot_nav_after_profile_update = orig_snapshot_nav
+                app_module._auto_reconcile_owner = orig_auto_reconcile_owner
+
+            self.assertEqual(imported_profiles, [20])
+            self.assertEqual(data["details"][0]["profile_id"], 20)
+            self.assertEqual(data["details"][0]["profile_name"], "Snowball_Studwell")
+            self.assertEqual(data["details"][0]["source_sheet"], "Trust")
+            self.assertEqual(
+                self._scalar("SELECT profile_id FROM transactions WHERE ticker = 'ABC'"),
+                20,
+            )
+            self.assertEqual(
+                self._scalar("SELECT COUNT(*) FROM dividend_payments WHERE ticker = 'ABC' AND profile_id = 20"),
+                1,
+            )
+            self.assertEqual(
+                self._scalar("SELECT amount FROM dividend_payments WHERE ticker = 'ABC' AND profile_id = 20"),
+                4.25,
+            )
+            self.assertEqual(self._scalar("SELECT COUNT(*) FROM profiles WHERE name = 'Trust'"), 0)
+        finally:
+            workbook_path.unlink(missing_ok=True)
+
+    def test_snowball_parser_accepts_minute_precision_dates(self):
+        csv_file = tempfile.NamedTemporaryFile(suffix=".csv", mode="w", newline="", delete=False)
+        csv_path = Path(csv_file.name)
+        try:
+            csv_file.write("Event,Date,Symbol,Price,Quantity,Currency,FeeTax,Exchange,FeeCurrency,DoNotAdjustCash,Note\n")
+            csv_file.write("BUY,3/23/2021 0:00,VMBS,53.3887,2247,USD,0,NASDAQ,,FALSE,Buy\n")
+            csv_file.write("DIVIDEND,4/9/2021 0:00,VMBS,0,95.72,USD,0,NASDAQ,,FALSE,DIVPLUG\n")
+            csv_file.close()
+
+            parsed = app_module.TXN_PARSERS["snowball"](str(csv_path), csv_path.name)
+
+            self.assertEqual(parsed["summary"]["buys"], 1)
+            self.assertEqual(parsed["summary"]["dividends"], 1)
+            self.assertEqual(parsed["transactions"][0]["date"], "2021-03-23")
+            self.assertEqual(parsed["transactions"][1]["date"], "2021-04-09")
+        finally:
+            csv_file.close()
+            csv_path.unlink(missing_ok=True)
+
+    def test_combined_export_includes_closed_ticker_transactions_and_dividends(self):
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Trust', 0)"
+        )
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, purchase_value, current_value) "
+            "VALUES ('ABC', 20, 5, 10, 50, 60)"
+        )
+        self._execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('XYZ', 20, 'BUY', '2021-03-23', 10, 11, 0, 'closed position buy')"
+        )
+        self._execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('XYZ', 20, 'SELL', '2022-03-23', 10, 12, 0, 'closed position sell')"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('XYZ', 20, '2021-04-09', 3.21, 'snowball', 'closed position dividend')"
+        )
+
+        conn = self._get_connection()
+        try:
+            rows = app_module._read_transaction_export_rows(conn, False, [20])
+        finally:
+            conn.close()
+
+        xyz_rows = [r for r in rows if r["Ticker"] == "XYZ"]
+        self.assertEqual([r["Type"] for r in xyz_rows], ["BUY", "DIVIDEND", "SELL"])
+        self.assertEqual(xyz_rows[0]["Date"], "2021-03-23")
+        self.assertEqual(xyz_rows[1]["Dividend Amount"], 3.21)
+
+    def test_portfolio_export_backfills_original_basis_from_transactions(self):
+        import pandas as pd
+
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Snowball_Studwell', 0)"
+        )
+        workbook = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        workbook.close()
+        workbook_path = Path(workbook.name)
+        try:
+            with pd.ExcelWriter(workbook_path, engine="openpyxl") as writer:
+                pd.DataFrame([{
+                    "Ticker": "ABC",
+                    "Shares": 8,
+                    "Price Paid": 20,
+                    "Current Price": 25,
+                    "Purchase Value": 160,
+                    "Current Value": 200,
+                }]).to_excel(writer, sheet_name="Trust", index=False)
+                pd.DataFrame([
+                    {
+                        "Transaction ID": 1,
+                        "Profile": "Trust",
+                        "Ticker": "ABC",
+                        "Type": "BUY",
+                        "Date": "2026-01-01",
+                        "Shares": 10,
+                        "Price/Share": 10,
+                        "Fees": 0,
+                        "Realized Gain": None,
+                        "Notes": "",
+                        "Created At": "2026-01-01",
+                    },
+                    {
+                        "Transaction ID": 2,
+                        "Profile": "Trust",
+                        "Ticker": "ABC",
+                        "Type": "SELL",
+                        "Date": "2026-01-10",
+                        "Shares": 2,
+                        "Price/Share": 15,
+                        "Fees": 0,
+                        "Realized Gain": None,
+                        "Notes": "",
+                        "Created At": "2026-01-10",
+                    },
+                ]).to_excel(writer, sheet_name="Transactions", index=False)
+
+            parsed = app_module._parse_portfolio_export_workbook(str(workbook_path), workbook_path.name)
+
+            orig_import_from_upload = app_module.import_from_upload
+            orig_populate_holdings = app_module.populate_holdings
+            orig_populate_dividends = app_module.populate_dividends
+            orig_populate_income_tracking = app_module.populate_income_tracking
+            orig_snapshot_nav = app_module._snapshot_nav_after_profile_update
+            orig_auto_reconcile_owner = app_module._auto_reconcile_owner
+            try:
+                def fake_import_from_upload(df, profile_id):
+                    conn = self._get_connection()
+                    try:
+                        app_module._ensure_basis_columns(conn)
+                        conn.execute(
+                            "INSERT INTO all_account_info "
+                            "(ticker, profile_id, quantity, price_paid, purchase_value, "
+                            "original_price_paid, original_purchase_value, broker_price_paid, "
+                            "broker_purchase_value, current_value) "
+                            "VALUES ('ABC', ?, 8, 20, 160, 20, 160, 20, 160, 200)",
+                            (profile_id,),
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
+                    return len(df), f"Imported {len(df)} holdings for profile {profile_id}."
+
+                app_module.import_from_upload = fake_import_from_upload
+                app_module.populate_holdings = lambda profile_id: None
+                app_module.populate_dividends = lambda profile_id: None
+                app_module.populate_income_tracking = lambda profile_id: None
+                app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+                app_module._auto_reconcile_owner = lambda: None
+
+                with app_module.app.app_context():
+                    res = app_module._import_portfolio_export_workbook(parsed, str(workbook_path), 20)
+                    data = res.get_json()
+            finally:
+                app_module.import_from_upload = orig_import_from_upload
+                app_module.populate_holdings = orig_populate_holdings
+                app_module.populate_dividends = orig_populate_dividends
+                app_module.populate_income_tracking = orig_populate_income_tracking
+                app_module._snapshot_nav_after_profile_update = orig_snapshot_nav
+                app_module._auto_reconcile_owner = orig_auto_reconcile_owner
+
+            self.assertEqual(data["original_basis_updated"], 1)
+            conn = self._get_connection()
+            try:
+                row = conn.execute(
+                    "SELECT price_paid, purchase_value, original_price_paid, original_purchase_value, "
+                    "broker_price_paid, broker_purchase_value, realized_gains "
+                    "FROM all_account_info WHERE ticker = 'ABC' AND profile_id = 20"
+                ).fetchone()
+            finally:
+                conn.close()
+            self.assertEqual(row["price_paid"], 20)
+            self.assertEqual(row["purchase_value"], 160)
+            self.assertEqual(row["broker_price_paid"], 20)
+            self.assertEqual(row["broker_purchase_value"], 160)
+            self.assertEqual(row["original_price_paid"], 10)
+            self.assertEqual(row["original_purchase_value"], 80)
+            self.assertEqual(row["realized_gains"], 10)
+        finally:
+            workbook_path.unlink(missing_ok=True)
 
     def test_post_sell_without_holding_is_rejected_without_creating_rows(self):
         res = self.client.post(

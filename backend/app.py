@@ -202,6 +202,85 @@ def rows_to_dicts(rows):
     return [dict(r) for r in rows]
 
 
+def _basis_mode():
+    mode = (request.args.get("basis_mode") or "original").strip().lower()
+    return "broker_adjusted" if mode in {"broker", "broker_adjusted", "adjusted"} else "original"
+
+
+def _basis_total_expr(alias="a"):
+    prefix = f"{alias}." if alias else ""
+    if _basis_mode() == "broker_adjusted":
+        return f"COALESCE({prefix}broker_purchase_value, {prefix}purchase_value, {prefix}original_purchase_value)"
+    return f"COALESCE({prefix}original_purchase_value, {prefix}purchase_value, {prefix}broker_purchase_value)"
+
+
+def _basis_fallback_total(row, mode=None):
+    mode = mode or _basis_mode()
+    if mode == "broker_adjusted":
+        return row.get("broker_purchase_value") or row.get("purchase_value") or row.get("original_purchase_value")
+    return row.get("original_purchase_value") or row.get("purchase_value") or row.get("broker_purchase_value")
+
+
+def _basis_fallback_price(row, mode=None):
+    mode = mode or _basis_mode()
+    if mode == "broker_adjusted":
+        return row.get("broker_price_paid") or row.get("price_paid") or row.get("original_price_paid")
+    return row.get("original_price_paid") or row.get("price_paid") or row.get("broker_price_paid")
+
+
+def _ensure_basis_columns(conn):
+    """Make older/minimal databases understand the split basis fields."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(all_account_info)").fetchall()}
+    needed = {
+        "original_price_paid": "REAL",
+        "original_purchase_value": "REAL",
+        "broker_price_paid": "REAL",
+        "broker_purchase_value": "REAL",
+    }
+    changed = False
+    for col, col_type in needed.items():
+        if col not in cols:
+            conn.execute(f"ALTER TABLE all_account_info ADD COLUMN {col} {col_type}")
+            changed = True
+    if changed:
+        conn.execute("""
+            UPDATE all_account_info
+               SET original_price_paid = COALESCE(original_price_paid, price_paid),
+                   original_purchase_value = COALESCE(original_purchase_value, purchase_value),
+                   broker_price_paid = COALESCE(broker_price_paid, price_paid),
+                   broker_purchase_value = COALESCE(broker_purchase_value, purchase_value)
+        """)
+        conn.commit()
+
+
+def _apply_basis_mode_to_holdings(results):
+    """Expose selected basis through the legacy price_paid/purchase_value fields."""
+    mode = _basis_mode()
+    for r in results:
+        selected_total = _basis_fallback_total(r, mode)
+        selected_price = _basis_fallback_price(r, mode)
+        current_value = r.get("current_value")
+        total_divs = r.get("total_divs_received")
+        annual = r.get("estim_payment_per_year")
+
+        r["basis_mode"] = mode
+        r["selected_basis_mode"] = mode
+        r["price_paid"] = selected_price
+        r["purchase_value"] = selected_total
+
+        if selected_total is not None and current_value is not None:
+            gain = round(float(current_value or 0) - float(selected_total or 0), 2)
+            gain_pct = round(gain / float(selected_total), 6) if float(selected_total or 0) > 0 else 0
+            r["gain_or_loss"] = gain
+            r["gain_or_loss_percentage"] = gain_pct
+            r["percent_change"] = gain_pct
+        if selected_total is not None and total_divs is not None:
+            r["paid_for_itself"] = round(float(total_divs or 0) / float(selected_total), 6) if float(selected_total or 0) > 0 else 0
+        if selected_total is not None and annual is not None:
+            r["annual_yield_on_cost"] = round(float(annual or 0) / float(selected_total), 6) if float(selected_total or 0) > 0 else 0
+    return results
+
+
 _ACCOUNT_MATCH_IGNORED_TOKENS = {
     "account", "acct", "portfolio",
     "etrade", "e", "trade",
@@ -667,6 +746,15 @@ def _prepare_manual_holding_payload(data, existing=None):
 
     if total_divs is not None and purchase_value is not None:
         payload["paid_for_itself"] = round(total_divs / purchase_value, 6) if purchase_value > 0 else 0
+
+    if "price_paid" in payload:
+        payload["original_price_paid"] = payload.get("price_paid")
+        if existing is None or final_value("broker_price_paid") is None:
+            payload["broker_price_paid"] = payload.get("price_paid")
+    if "purchase_value" in payload:
+        payload["original_purchase_value"] = payload.get("purchase_value")
+        if existing is None or final_value("broker_purchase_value") is None:
+            payload["broker_purchase_value"] = payload.get("purchase_value")
 
     return payload
 
@@ -1711,12 +1799,38 @@ def _parse_portfolio_export_workbook(path, filename=None):
 
     if txn_sheet:
         txdf = pd.read_excel(path, sheet_name=txn_sheet, engine="openpyxl")
-        if not txdf.empty and _combined_export_has_columns(txdf, ["Ticker", "Type", "Date", "Shares"]):
+        if not txdf.empty and _combined_export_has_columns(txdf, ["Ticker", "Type", "Date"]):
             colmap = {str(c).strip().lower(): c for c in txdf.columns}
             for _, row in txdf.iterrows():
                 ticker = str(row.get(colmap["ticker"], "") or "").strip().upper()
                 txn_type = str(row.get(colmap["type"], "") or "BUY").strip().upper()
-                if not ticker or txn_type not in {"BUY", "SELL"}:
+                if not ticker or txn_type not in {"BUY", "SELL", "DIVIDEND"}:
+                    continue
+                if txn_type == "DIVIDEND":
+                    amount = _combined_export_clean_float(
+                        row.get(colmap.get("dividend amount"))
+                        if colmap.get("dividend amount") else None
+                    )
+                    if amount is None and colmap.get("amount"):
+                        amount = _combined_export_clean_float(row.get(colmap.get("amount")))
+                    if amount is None and colmap.get("shares"):
+                        amount = _combined_export_clean_float(row.get(colmap.get("shares")))
+                    if amount is None:
+                        continue
+                    transactions.append({
+                        "id": row.get(colmap.get("transaction id")) if colmap.get("transaction id") else None,
+                        "profile": str(row.get(colmap.get("profile"), "") or "").strip(),
+                        "ticker": ticker,
+                        "type": "DIVIDEND",
+                        "date": _combined_export_clean_date(row.get(colmap["date"])),
+                        "shares": None,
+                        "price_per_share": None,
+                        "fees": 0,
+                        "realized_gain": None,
+                        "dividend_amount": amount,
+                        "notes": str(row.get(colmap.get("notes"), "") or "").strip(),
+                        "created_at": _combined_export_clean_date(row.get(colmap.get("created at"))),
+                    })
                     continue
                 shares = _combined_export_clean_float(row.get(colmap["shares"]))
                 if shares is None or shares <= 0:
@@ -1731,12 +1845,14 @@ def _parse_portfolio_export_workbook(path, filename=None):
                     "price_per_share": _combined_export_clean_float(row.get(colmap.get("price/share"))),
                     "fees": _combined_export_clean_float(row.get(colmap.get("fees"))) or 0,
                     "realized_gain": _combined_export_clean_float(row.get(colmap.get("realized gain"))),
+                    "dividend_amount": None,
                     "notes": str(row.get(colmap.get("notes"), "") or "").strip(),
                     "created_at": _combined_export_clean_date(row.get(colmap.get("created at"))),
                 })
 
     buys = sum(1 for t in transactions if t["type"] == "BUY")
     sells = sum(1 for t in transactions if t["type"] == "SELL")
+    divs = sum(1 for t in transactions if t["type"] == "DIVIDEND")
     return {
         "format_type": "combined_export",
         "source_format": "portfolio_export",
@@ -1749,6 +1865,7 @@ def _parse_portfolio_export_workbook(path, filename=None):
             "transactions": len(transactions),
             "buys": buys,
             "sells": sells,
+            "dividends": divs,
         },
     }
 
@@ -1762,30 +1879,86 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
     imported_profiles = []
     holding_messages = []
     transaction_profile_fallback = fallback_profile_id
+    portfolios = parsed.get("portfolios", [])
+    single_portfolio_export = len(portfolios) == 1 and fallback_profile_id is not None
 
     conn = get_connection()
     try:
-        for sheet in parsed.get("portfolios", []):
+        for sheet in portfolios:
             sheet_name = sheet["sheet_name"]
-            pid = _combined_export_profile_id(sheet_name, fallback_profile_id, conn)
+            if single_portfolio_export:
+                pid = fallback_profile_id
+                profile_names = _load_profile_name_map(conn, [pid])
+                target_profile_name = profile_names.get(int(pid), sheet_name)
+            else:
+                pid = _combined_export_profile_id(sheet_name, fallback_profile_id, conn)
+                target_profile_name = sheet_name
             profile_by_name[sheet_name.strip().lower()] = pid
-            if len(parsed.get("portfolios", [])) == 1:
+            profile_by_name[str(target_profile_name).strip().lower()] = pid
+            if single_portfolio_export:
                 transaction_profile_fallback = pid
             df = pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
             count, msg = import_from_upload(df, pid)
             imported_profiles.append(pid)
-            holding_messages.append({"profile_id": pid, "profile_name": sheet_name, "rows": count, "message": msg})
+            holding_messages.append({
+                "profile_id": pid,
+                "profile_name": target_profile_name,
+                "source_sheet": sheet_name,
+                "rows": count,
+                "message": msg,
+            })
         conn.commit()
     finally:
         conn.close()
 
     inserted_buys = 0
     inserted_sells = 0
+    dividends_applied = 0
     duplicates_skipped = 0
+    transaction_tickers_by_profile = {}
+    dividend_tickers_by_profile = {}
+    original_basis_updated = 0
+    original_basis_skipped = 0
+    original_basis_mismatches = []
 
     conn = get_connection()
     try:
-        for txn in parsed.get("transactions", []):
+        non_div_txns = [txn for txn in parsed.get("transactions", []) if txn.get("type") != "DIVIDEND"]
+        div_txns = [txn for txn in parsed.get("transactions", []) if txn.get("type") == "DIVIDEND"]
+
+        for txn in div_txns:
+            profile_key = str(txn.get("profile") or "").strip().lower()
+            profile_id = profile_by_name.get(profile_key, transaction_profile_fallback)
+            ticker = txn["ticker"]
+            date_str = txn.get("date") or None
+            amount = txn.get("dividend_amount")
+            if not ticker or not date_str or amount is None:
+                continue
+            notes = txn.get("notes") or "Imported from portfolio export"
+            existing = conn.execute(
+                "SELECT id, source FROM dividend_payments WHERE ticker = ? AND profile_id = ? AND payment_date = ?",
+                (ticker, profile_id, date_str),
+            ).fetchone()
+            if existing:
+                if (existing["source"] or "").lower() == "refresh_estimate":
+                    conn.execute(
+                        "UPDATE dividend_payments SET amount = ?, source = ?, notes = ? WHERE id = ?",
+                        (round(amount, 2), "portfolio_export", notes, existing["id"]),
+                    )
+                    dividends_applied += 1
+                    dividend_tickers_by_profile.setdefault(profile_id, set()).add(ticker)
+                else:
+                    duplicates_skipped += 1
+                continue
+            conn.execute(
+                "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (ticker, profile_id, date_str, round(amount, 2), "portfolio_export", notes),
+            )
+            dividends_applied += 1
+            dividend_tickers_by_profile.setdefault(profile_id, set()).add(ticker)
+
+        for txn in non_div_txns:
             profile_key = str(txn.get("profile") or "").strip().lower()
             profile_id = profile_by_name.get(profile_key, transaction_profile_fallback)
             ticker = txn["ticker"]
@@ -1805,8 +1978,20 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
                 "AND ABS(shares - ?) < 0.0001 AND price_per_share = ?",
                 (ticker, profile_id, txn_type, txn_date, shares, price),
             ).fetchone()[0]
-            if existing_count:
+            import_count = sum(
+                1
+                for t in non_div_txns
+                if t.get("type") == txn_type
+                and t.get("ticker") == ticker
+                and (t.get("date") or None) == txn_date
+                and _normalize_transaction_shares(t.get("shares")) is not None
+                and abs(_normalize_transaction_shares(t.get("shares")) - shares) < 0.0001
+                and (t.get("price_per_share") or 0) == price
+                and profile_by_name.get(str(t.get("profile") or "").strip().lower(), transaction_profile_fallback) == profile_id
+            )
+            if existing_count >= import_count:
                 duplicates_skipped += 1
+                transaction_tickers_by_profile.setdefault(profile_id, set()).add(ticker)
                 continue
 
             conn.execute(
@@ -1818,6 +2003,38 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
                 inserted_buys += 1
             else:
                 inserted_sells += 1
+            transaction_tickers_by_profile.setdefault(profile_id, set()).add(ticker)
+
+        for profile_id, tickers in transaction_tickers_by_profile.items():
+            for ticker in tickers:
+                basis_result = _refresh_original_basis_from_transactions(ticker, profile_id, conn)
+                if basis_result.get("status") == "updated":
+                    original_basis_updated += 1
+                elif basis_result.get("status") == "share_mismatch":
+                    original_basis_skipped += 1
+                    if len(original_basis_mismatches) < 10:
+                        original_basis_mismatches.append(basis_result)
+
+        current_year = str(datetime.date.today().year)
+        for profile_id, tickers in dividend_tickers_by_profile.items():
+            for ticker in tickers:
+                total = conn.execute(
+                    "SELECT COALESCE(SUM(amount), 0) FROM dividend_payments "
+                    "WHERE ticker = ? AND profile_id = ?",
+                    (ticker, profile_id),
+                ).fetchone()[0]
+                ytd = conn.execute(
+                    "SELECT COALESCE(SUM(amount), 0) FROM dividend_payments "
+                    "WHERE ticker = ? AND profile_id = ? AND payment_date LIKE ?",
+                    (ticker, profile_id, f"{current_year}%"),
+                ).fetchone()[0]
+                conn.execute(
+                    "UPDATE all_account_info SET total_divs_received = ?, ytd_divs = ?, "
+                    "paid_for_itself = CASE WHEN purchase_value > 0 THEN ? / purchase_value ELSE 0 END, "
+                    "dividend_actuals_source = ? "
+                    "WHERE ticker = ? AND profile_id = ?",
+                    (total, ytd, total, "portfolio_export", ticker, profile_id),
+                )
 
         conn.commit()
     finally:
@@ -1835,13 +2052,25 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
         "message": (
             f"Imported {sum(d['rows'] for d in holding_messages)} holdings across "
             f"{len(holding_messages)} portfolio{'s' if len(holding_messages) != 1 else ''}, "
-            f"plus {inserted_buys} buys and {inserted_sells} sells. "
+            f"plus {inserted_buys} buys, {inserted_sells} sells, "
+            f"and {dividends_applied} dividends. "
             f"{duplicates_skipped} duplicate transactions skipped."
+            f" Original basis updated for {original_basis_updated} ticker"
+            f"{'s' if original_basis_updated != 1 else ''}"
+            + (
+                f"; {original_basis_skipped} ticker"
+                f"{'s' if original_basis_skipped != 1 else ''} skipped because transaction shares did not match."
+                if original_basis_skipped else "."
+            )
         ),
         "details": holding_messages,
         "inserted_buys": inserted_buys,
         "inserted_sells": inserted_sells,
+        "dividends_applied": dividends_applied,
         "duplicates_skipped": duplicates_skipped,
+        "original_basis_updated": original_basis_updated,
+        "original_basis_skipped": original_basis_skipped,
+        "original_basis_mismatches": original_basis_mismatches,
     })
 
 
@@ -1920,6 +2149,7 @@ def _import_positions(parsed, profile_id, nav_date=None):
     """
     from datetime import date as _date
     conn = get_connection()
+    _ensure_basis_columns(conn)
 
     positions = parsed["positions"]
     positions_by_ticker = {pos["ticker"]: pos for pos in positions}
@@ -1946,6 +2176,10 @@ def _import_positions(parsed, profile_id, nav_date=None):
                     "price_paid = ?",
                     "current_price = ?",
                     "purchase_value = ?",
+                    "broker_price_paid = ?",
+                    "broker_purchase_value = ?",
+                    "original_price_paid = COALESCE(original_price_paid, ?)",
+                    "original_purchase_value = COALESCE(original_purchase_value, ?)",
                     "current_value = ?",
                     "gain_or_loss = ?",
                     "base_quantity = ?",
@@ -1955,7 +2189,9 @@ def _import_positions(parsed, profile_id, nav_date=None):
                 ]
                 update_values = [
                     pos["quantity"], pos["cost_per_share"], pos["current_price"],
-                    pos["purchase_value"], pos["current_value"], pos["gain_or_loss"],
+                    pos["purchase_value"], pos["cost_per_share"], pos["purchase_value"],
+                    pos["cost_per_share"], pos["purchase_value"],
+                    pos["current_value"], pos["gain_or_loss"],
                     pos["quantity"], _date.today().isoformat(),
                     pos["description"],
                 ]
@@ -1988,13 +2224,17 @@ def _import_positions(parsed, profile_id, nav_date=None):
             else:
                 columns = [
                     "ticker", "profile_id", "quantity", "base_quantity", "price_paid",
-                    "current_price", "purchase_value", "current_value", "gain_or_loss",
+                    "current_price", "purchase_value", "original_price_paid",
+                    "original_purchase_value", "broker_price_paid", "broker_purchase_value",
+                    "current_value", "gain_or_loss",
                     "description", "import_date",
                 ]
                 values = [
                     ticker, profile_id, pos["quantity"], pos["quantity"],
                     pos["cost_per_share"], pos["current_price"],
-                    pos["purchase_value"], pos["current_value"], pos["gain_or_loss"],
+                    pos["purchase_value"], pos["cost_per_share"], pos["purchase_value"],
+                    pos["cost_per_share"], pos["purchase_value"],
+                    pos["current_value"], pos["gain_or_loss"],
                     pos["description"], _date.today().isoformat(),
                 ]
                 optional_insert_fields = [
@@ -2186,6 +2426,9 @@ def api_import_transactions():
     tickers_with_txns = set()
     tickers_seen_txns = set()
     tickers_with_divs = set()
+    original_basis_updated = 0
+    original_basis_skipped = 0
+    original_basis_mismatches = []
 
     from collections import Counter
 
@@ -2289,7 +2532,13 @@ def api_import_transactions():
                 _rollup_transactions(ticker, profile_id, conn)
         else:
             for ticker in tickers_seen_txns:
-                _refresh_transaction_realized_gains(ticker, profile_id, conn)
+                basis_result = _refresh_original_basis_from_transactions(ticker, profile_id, conn)
+                if basis_result.get("status") == "updated":
+                    original_basis_updated += 1
+                elif basis_result.get("status") == "share_mismatch":
+                    original_basis_skipped += 1
+                    if len(original_basis_mismatches) < 10:
+                        original_basis_mismatches.append(basis_result)
             conn.commit()
 
         # Recompute dividend totals from dividend_payments for affected tickers
@@ -2342,11 +2591,21 @@ def api_import_transactions():
         "inserted_sells": inserted_sells,
         "dividends_applied": dividends_applied,
         "duplicates_skipped": duplicates_skipped,
+        "original_basis_updated": original_basis_updated,
+        "original_basis_skipped": original_basis_skipped,
+        "original_basis_mismatches": original_basis_mismatches,
         "message": (
             f"Imported {inserted_buys} buys, {inserted_sells} sells, "
             f"{dividends_applied} dividends. {duplicates_skipped} duplicates skipped."
             + (
                 " Current holdings were preserved from the broker positions import for this portfolio."
+                f" Original basis updated for {original_basis_updated} ticker"
+                f"{'s' if original_basis_updated != 1 else ''}"
+                + (
+                    f"; {original_basis_skipped} ticker"
+                    f"{'s' if original_basis_skipped != 1 else ''} skipped because transaction shares did not match."
+                    if original_basis_skipped else "."
+                )
                 if preserve_positions else ""
             )
         ),
@@ -6684,7 +6943,9 @@ def action_center():
 def list_holdings():
     is_agg, pids = get_profile_filter()
     conn = get_connection()
+    _ensure_basis_columns(conn)
     placeholders = ",".join("?" * len(pids))
+    basis_total = _basis_total_expr("a")
 
     if is_agg and len(pids) > 1:
         # Check if Owner import was used — if so, prefer Owner's per-ticker
@@ -6716,13 +6977,17 @@ def list_holdings():
                    MAX(a.description) as description,
                    MAX(a.classification_type) as classification_type,
                    SUM(a.quantity) as quantity,
-                   CASE WHEN SUM(a.quantity) > 0 THEN SUM(a.purchase_value) / SUM(a.quantity) ELSE 0 END as price_paid,
+                   CASE WHEN SUM(a.quantity) > 0 THEN SUM({basis_total}) / SUM(a.quantity) ELSE 0 END as price_paid,
                    MAX(a.current_price) as current_price,
-                   SUM(a.purchase_value) as purchase_value,
+                   SUM({basis_total}) as purchase_value,
+                   CASE WHEN SUM(a.quantity) > 0 THEN SUM(COALESCE(a.original_purchase_value, a.purchase_value)) / SUM(a.quantity) ELSE 0 END as original_price_paid,
+                   SUM(COALESCE(a.original_purchase_value, a.purchase_value)) as original_purchase_value,
+                   CASE WHEN SUM(a.quantity) > 0 THEN SUM(COALESCE(a.broker_purchase_value, a.purchase_value)) / SUM(a.quantity) ELSE 0 END as broker_price_paid,
+                   SUM(COALESCE(a.broker_purchase_value, a.purchase_value)) as broker_purchase_value,
                    SUM(a.current_value) as current_value,
-                   SUM(a.gain_or_loss) as gain_or_loss,
-                   CASE WHEN SUM(a.purchase_value) > 0 THEN SUM(a.gain_or_loss) / SUM(a.purchase_value) ELSE 0 END as gain_or_loss_percentage,
-                   CASE WHEN SUM(a.purchase_value) > 0 THEN SUM(a.gain_or_loss) / SUM(a.purchase_value) ELSE 0 END as percent_change,
+                   SUM(a.current_value) - SUM({basis_total}) as gain_or_loss,
+                   CASE WHEN SUM({basis_total}) > 0 THEN (SUM(a.current_value) - SUM({basis_total})) / SUM({basis_total}) ELSE 0 END as gain_or_loss_percentage,
+                   CASE WHEN SUM({basis_total}) > 0 THEN (SUM(a.current_value) - SUM({basis_total})) / SUM({basis_total}) ELSE 0 END as percent_change,
                    MAX(a.div_frequency) as div_frequency,
                    MAX(a.reinvest) as reinvest,
                    MAX(a.ex_div_date) as ex_div_date,
@@ -6737,7 +7002,7 @@ def list_holdings():
                    SUM(a.withdraw_8pct_per_month) as withdraw_8pct_per_month,
                    SUM(a.cash_not_reinvested) as cash_not_reinvested,
                    SUM(a.total_cash_reinvested) as total_cash_reinvested,
-                   CASE WHEN SUM(a.purchase_value) > 0 THEN SUM(a.estim_payment_per_year) / SUM(a.purchase_value) ELSE 0 END as annual_yield_on_cost,
+                   CASE WHEN SUM({basis_total}) > 0 THEN SUM(a.estim_payment_per_year) / SUM({basis_total}) ELSE 0 END as annual_yield_on_cost,
                    CASE WHEN SUM(a.current_value) > 0 THEN SUM(a.estim_payment_per_year) / SUM(a.current_value) ELSE 0 END as current_annual_yield,
                    NULL as percent_of_account,
                    SUM(a.shares_bought_from_dividend) as shares_bought_from_dividend,
@@ -6745,7 +7010,7 @@ def list_holdings():
                    SUM(a.shares_in_month) as shares_in_month,
                    {ytd} as ytd_divs,
                    {tot_div} as total_divs_received,
-                   CASE WHEN SUM(a.purchase_value) > 0 THEN {tot_div} / SUM(a.purchase_value) ELSE 0 END as paid_for_itself,
+                   CASE WHEN SUM({basis_total}) > 0 THEN {tot_div} / SUM({basis_total}) ELSE 0 END as paid_for_itself,
                    MAX(a.import_date) as import_date,
                    MIN(a.purchase_date) as purchase_date,
                    {cur_mo} as current_month_income,
@@ -6787,6 +7052,7 @@ def list_holdings():
 
     # Recalculate percent_of_account
     results = rows_to_dicts(rows)
+    _apply_basis_mode_to_holdings(results)
     total_value = sum(r.get("current_value") or 0 for r in results)
     if total_value > 0:
         for r in results:
@@ -6911,6 +7177,7 @@ def add_holding():
         return jsonify({"error": "Ticker is required"}), 400
 
     conn = get_connection()
+    _ensure_basis_columns(conn)
     # Check for duplicate
     existing = conn.execute(
         "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
@@ -6924,7 +7191,8 @@ def add_holding():
     vals = [ticker, profile_id]
     allowed_fields = [
         "description", "classification_type", "price_paid", "current_price",
-        "quantity", "purchase_value", "current_value", "gain_or_loss",
+        "quantity", "purchase_value", "original_price_paid", "original_purchase_value",
+        "broker_price_paid", "broker_purchase_value", "current_value", "gain_or_loss",
         "gain_or_loss_percentage", "percent_change", "div_frequency", "reinvest",
         "ex_div_date", "div_pay_date", "div", "dividend_paid", "estim_payment_per_year",
         "approx_monthly_income", "annual_yield_on_cost", "current_annual_yield",
@@ -6987,9 +7255,11 @@ def update_holding(ticker):
         profile_id = pids[0]
 
     conn = get_connection()
+    _ensure_basis_columns(conn)
     existing = conn.execute(
         "SELECT quantity, price_paid, current_price, purchase_value, current_value, "
-        "       total_divs_received, estim_payment_per_year "
+        "       total_divs_received, estim_payment_per_year, broker_price_paid, "
+        "       broker_purchase_value "
         "FROM all_account_info WHERE ticker = ? AND profile_id = ?",
         (ticker, profile_id),
     ).fetchone()
@@ -7000,7 +7270,8 @@ def update_holding(ticker):
 
     allowed_fields = [
         "description", "classification_type", "price_paid", "current_price",
-        "quantity", "purchase_value", "current_value", "gain_or_loss",
+        "quantity", "purchase_value", "original_price_paid", "original_purchase_value",
+        "broker_price_paid", "broker_purchase_value", "current_value", "gain_or_loss",
         "gain_or_loss_percentage", "percent_change", "div_frequency", "reinvest",
         "ex_div_date", "div_pay_date", "div", "dividend_paid", "estim_payment_per_year",
         "approx_monthly_income", "annual_yield_on_cost", "current_annual_yield",
@@ -7311,6 +7582,116 @@ def _refresh_transaction_realized_gains(ticker, profile_id, conn):
             )
 
 
+def _basis_share_tolerance(expected_shares):
+    return max(0.01, abs(float(expected_shares or 0)) * 0.001)
+
+
+def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
+    """Update original basis from transaction lots when they reconcile to broker shares."""
+    _ensure_basis_columns(conn)
+    rows = conn.execute(
+        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
+        "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
+        (ticker, profile_id),
+    ).fetchall()
+    if not rows:
+        return {"status": "no_transactions", "ticker": ticker}
+
+    holding = conn.execute(
+        "SELECT quantity FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    if not holding:
+        return {"status": "no_holding", "ticker": ticker}
+    holding_shares = holding["quantity"] if isinstance(holding, dict) else holding[0]
+    holding_shares = float(holding_shares or 0)
+
+    def _val(r, key, idx):
+        return r[key] if isinstance(r, dict) else r[idx]
+
+    sell_ids = [
+        _val(r, "id", 0)
+        for r in rows
+        if (_val(r, "transaction_type", 1) or "BUY").upper() == "SELL"
+    ]
+    alloc_map = _load_lot_alloc_map(conn, sell_ids)
+
+    lots = []
+    share_deficit = 0.0
+    total_realized = 0.0
+    for r in rows:
+        txn_id = _val(r, "id", 0)
+        txn_type = (_val(r, "transaction_type", 1) or "BUY").upper()
+        shares = abs(float(_val(r, "shares", 2) or 0))
+        price = _val(r, "price_per_share", 3) or 0
+        fees = _val(r, "fees", 4) or 0
+        tdate = _val(r, "transaction_date", 5)
+
+        if txn_type == "BUY":
+            if share_deficit > 1e-9:
+                covered = min(share_deficit, shares)
+                share_deficit -= covered
+                shares -= covered
+            _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id, txn_date=tdate)
+            conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
+        else:
+            sell_proceeds = (shares * price) - fees
+            cost_of_sold, sell_remaining = _consume_sell_lots(
+                lots,
+                shares,
+                alloc_map.get(txn_id),
+            )
+            share_deficit += sell_remaining
+            realized = sell_proceeds - cost_of_sold
+            total_realized += realized
+            conn.execute(
+                "UPDATE transactions SET realized_gain = ? WHERE id = ?",
+                (round(realized, 2), txn_id),
+            )
+
+    total_shares = sum(lot["shares"] for lot in lots) - share_deficit
+    total_cost = sum(lot["shares"] * lot["cost_per_share"] for lot in lots)
+    avg_price = total_cost / total_shares if total_shares > 1e-9 else 0
+    share_delta = round(total_shares - holding_shares, 6)
+    if abs(share_delta) > _basis_share_tolerance(holding_shares):
+        conn.execute(
+            """UPDATE all_account_info
+               SET realized_gains = ?
+               WHERE ticker = ? AND profile_id = ?""",
+            (round(total_realized, 2), ticker, profile_id),
+        )
+        return {
+            "status": "share_mismatch",
+            "ticker": ticker,
+            "holding_shares": round(holding_shares, 6),
+            "transaction_shares": round(total_shares, 6),
+            "share_delta": share_delta,
+        }
+
+    conn.execute(
+        """UPDATE all_account_info
+           SET original_price_paid = ?,
+               original_purchase_value = ?,
+               realized_gains = ?
+           WHERE ticker = ? AND profile_id = ?""",
+        (
+            round(avg_price, 4) if total_shares > 1e-9 else 0,
+            round(total_cost, 2) if total_shares > 1e-9 else 0,
+            round(total_realized, 2),
+            ticker,
+            profile_id,
+        ),
+    )
+    return {
+        "status": "updated",
+        "ticker": ticker,
+        "holding_shares": round(holding_shares, 6),
+        "transaction_shares": round(total_shares, 6),
+        "original_price_paid": round(avg_price, 4) if total_shares > 1e-9 else 0,
+        "original_purchase_value": round(total_cost, 2) if total_shares > 1e-9 else 0,
+    }
+
+
 def _rollup_transactions(ticker, profile_id, conn):
     """Recalculate all_account_info from transactions.
 
@@ -7320,6 +7701,7 @@ def _rollup_transactions(ticker, profile_id, conn):
     The remaining lots determine quantity, weighted-average price_paid, and
     purchase_value.  Realized gains are stored per-sell transaction and summed.
     """
+    _ensure_basis_columns(conn)
     rows = conn.execute(
         "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
         "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
@@ -7420,12 +7802,14 @@ def _rollup_transactions(ticker, profile_id, conn):
         conn.execute(
             """UPDATE all_account_info
                SET quantity = ?, price_paid = ?, purchase_value = ?,
+                   original_price_paid = ?, original_purchase_value = ?,
                    purchase_date = ?, base_quantity = ?, import_date = ?,
                    realized_gains = ?,
                    current_value = ?, gain_or_loss = ?,
                    gain_or_loss_percentage = ?, percent_change = ?
                WHERE ticker = ? AND profile_id = ?""",
             (round(total_shares, 6), round(avg_price, 4), round(total_cost, 2),
+             round(avg_price, 4), round(total_cost, 2),
              earliest_buy, round(total_shares, 6), _date.today().isoformat(),
              round(total_realized, 2),
              cur_val, gl, gl_pct, gl_pct,
@@ -8629,7 +9013,7 @@ def export_holdings_csv():
 
 _TRANSACTION_EXPORT_HEADERS = [
     "Transaction ID", "Profile", "Ticker", "Type", "Date", "Shares",
-    "Price/Share", "Fees", "Realized Gain", "Notes", "Created At",
+    "Price/Share", "Fees", "Realized Gain", "Dividend Amount", "Notes", "Created At",
 ]
 
 
@@ -8645,15 +9029,10 @@ def _safe_excel_sheet_title(name, used_titles):
     return title
 
 
-def _read_related_transaction_export_rows(conn, is_agg, profile_ids, tickers):
-    tickers = sorted({str(t).strip().upper() for t in tickers if str(t).strip()})
-    if not tickers:
-        return []
-
+def _read_transaction_export_rows(conn, is_agg, profile_ids):
     read_pids, include_account_note = _get_transaction_read_scope(conn, is_agg, profile_ids)
     profile_names = _load_profile_name_map(conn, read_pids)
     pid_placeholders = ",".join("?" * len(read_pids))
-    ticker_placeholders = ",".join("?" * len(tickers))
 
     txn_cols = {
         row["name"] if isinstance(row, sqlite3.Row) else row[1]
@@ -8671,10 +9050,9 @@ def _read_related_transaction_export_rows(conn, is_agg, profile_ids, tickers):
           FROM transactions t
           LEFT JOIN profiles p ON p.id = t.profile_id
          WHERE t.profile_id IN ({pid_placeholders})
-           AND UPPER(t.ticker) IN ({ticker_placeholders})
          ORDER BY p.name, UPPER(t.ticker), t.transaction_date, t.id
         """,
-        read_pids + tickers,
+        read_pids,
     ).fetchall()
 
     out_rows = []
@@ -8694,9 +9072,48 @@ def _read_related_transaction_export_rows(conn, is_agg, profile_ids, tickers):
             "Price/Share": row["price_per_share"] if row["price_per_share"] is not None else "",
             "Fees": row["fees"] if row["fees"] is not None else "",
             "Realized Gain": row["realized_gain"] if row["realized_gain"] is not None else "",
+            "Dividend Amount": "",
             "Notes": notes,
             "Created At": row["created_at"] or "",
         })
+    div_rows = conn.execute(
+        f"""
+        SELECT d.id, d.profile_id, p.name AS profile_name, d.ticker,
+               d.payment_date, d.amount, d.source, d.notes, d.created_at
+          FROM dividend_payments d
+          LEFT JOIN profiles p ON p.id = d.profile_id
+         WHERE d.profile_id IN ({pid_placeholders})
+         ORDER BY p.name, UPPER(d.ticker), d.payment_date, d.id
+        """,
+        read_pids,
+    ).fetchall()
+    for row in div_rows:
+        profile_id = int(row["profile_id"] or 1)
+        profile_name = row["profile_name"] or profile_names.get(profile_id) or f"Portfolio {profile_id}"
+        notes = row["notes"] or ""
+        if include_account_note and profile_name and "Account:" not in notes:
+            notes = f"Account: {profile_name}; {notes}" if notes else f"Account: {profile_name}"
+        out_rows.append({
+            "Transaction ID": f"DIV-{row['id']}",
+            "Profile": profile_name,
+            "Ticker": row["ticker"],
+            "Type": "DIVIDEND",
+            "Date": row["payment_date"] or "",
+            "Shares": "",
+            "Price/Share": "",
+            "Fees": "",
+            "Realized Gain": "",
+            "Dividend Amount": row["amount"] if row["amount"] is not None else "",
+            "Notes": notes,
+            "Created At": row["created_at"] or "",
+        })
+    out_rows.sort(key=lambda r: (
+        str(r.get("Profile") or ""),
+        str(r.get("Ticker") or "").upper(),
+        str(r.get("Date") or ""),
+        str(r.get("Type") or ""),
+        str(r.get("Transaction ID") or ""),
+    ))
     return out_rows
 
 
@@ -8721,7 +9138,6 @@ def export_holdings_transactions():
     txn_fill = PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid")
     thin_border = Border(bottom=Side(style="thin", color="90CAF9"))
 
-    exported_tickers = set()
     first_profile_name = None
 
     for pid in profile_ids:
@@ -8738,9 +9154,6 @@ def export_holdings_transactions():
             cell.alignment = Alignment(horizontal="center")
 
         for ri, row in enumerate(rows, 2):
-            ticker = str(row.get("Ticker") or "").strip().upper()
-            if ticker:
-                exported_tickers.add(ticker)
             for ci, header in enumerate(headers, 1):
                 cell = ws.cell(row=ri, column=ci, value=row[header])
                 cell.border = thin_border
@@ -8748,7 +9161,7 @@ def export_holdings_transactions():
         for i, header in enumerate(headers, 1):
             ws.column_dimensions[get_column_letter(i)].width = max(len(header) + 4, 12)
 
-    txn_rows = _read_related_transaction_export_rows(conn, is_agg, profile_ids, exported_tickers)
+    txn_rows = _read_transaction_export_rows(conn, is_agg, profile_ids)
     tx_ws = wb.create_sheet(title=_safe_excel_sheet_title("Transactions", wb.sheetnames))
     for ci, header in enumerate(_TRANSACTION_EXPORT_HEADERS, 1):
         cell = tx_ws.cell(row=1, column=ci, value=header)
@@ -9945,6 +10358,55 @@ def ticker_return_1y(ticker):
         })
     except Exception as e:
         return jsonify({"error": f"Could not compute return data for {ticker}: {str(e)}"}), 500
+
+
+@app.route("/api/ticker-return-1y-bulk", methods=["GET"])
+def ticker_return_1y_bulk():
+    """Return the last 1-year total return % for a list of tickers in one call."""
+    import warnings
+    import yfinance as yf
+    warnings.filterwarnings("ignore")
+
+    tickers_param = request.args.get("tickers", "")
+    tickers = [t.strip().upper() for t in tickers_param.split(",") if t.strip()]
+    if not tickers:
+        return jsonify({})
+
+    start_date = (pd.Timestamp.now() - pd.DateOffset(years=1)).strftime("%Y-%m-%d")
+
+    # Map each portfolio ticker to its Yahoo download symbol
+    dl_map = {t: _yahoo_symbol_for_ticker(t) for t in tickers}
+    dl_symbols = list(set(dl_map.values()))
+
+    try:
+        raw = yf.download(dl_symbols, start=start_date, progress=False,
+                          auto_adjust=False, actions=True, group_by="ticker")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    result = {}
+    for ticker, dl_ticker in dl_map.items():
+        try:
+            if len(dl_symbols) == 1:
+                ticker_raw = raw
+            else:
+                if dl_ticker not in raw.columns.get_level_values(0):
+                    continue
+                ticker_raw = raw[dl_ticker]
+
+            close_col, divs_col = _research_price_and_dividend_series(ticker_raw, dl_ticker)
+            if len(close_col) < 2:
+                continue
+            start_price = float(close_col.iloc[0])
+            if start_price <= 0:
+                continue
+            cum_divs = divs_col.cumsum()
+            total_ret = float((close_col.iloc[-1] - start_price + cum_divs.iloc[-1]) / start_price * 100)
+            result[ticker] = round(total_ret, 2)
+        except Exception:
+            pass
+
+    return jsonify(result)
 
 
 def _research_clean_value(value):
@@ -13564,7 +14026,7 @@ def total_return_summary():
                   purchase_value, current_value,
                   gain_or_loss, gain_or_loss_percentage,
                   total_divs_received, ytd_divs,
-                  estim_payment_per_year, annual_yield_on_cost
+                  estim_payment_per_year, annual_yield_on_cost, current_annual_yield
            FROM all_account_info
            WHERE purchase_value IS NOT NULL AND purchase_value > 0
              AND profile_id = ?
@@ -13621,7 +14083,7 @@ def total_return_summary():
     # Compute return columns
     num_cols = ["price_paid", "current_price", "quantity", "purchase_value",
                 "current_value", "gain_or_loss", "total_divs_received",
-                "annual_yield_on_cost"]
+                "annual_yield_on_cost", "current_annual_yield"]
     for c in num_cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -13665,6 +14127,8 @@ def total_return_summary():
             "total_divs_received": _safe(row.get("total_divs_received")),
             "total_return_dollar": _safe(row.get("total_return_dollar")),
             "total_return_pct": _safe(row.get("total_return_pct")),
+            "annual_yield_on_cost": _safe(row.get("annual_yield_on_cost")),
+            "current_annual_yield": _safe(row.get("current_annual_yield")),
         })
 
     # Scatter: Total Return % vs Yield on Cost
@@ -14031,12 +14495,14 @@ def gains_losses_summary():
     import math
 
     conn = get_connection()
+    _ensure_basis_columns(conn)
     scope = _get_gains_losses_profile_scope(conn)
     profile_id = scope["primary_profile_id"]
     holding_profile_ids = scope["holding_profile_ids"]
     transaction_profile_ids = scope["transaction_profile_ids"]
     holding_placeholders = ",".join("?" * len(holding_profile_ids))
     txn_placeholders = ",".join("?" * len(transaction_profile_ids))
+    basis_total = _basis_total_expr("")
 
     cats = conn.execute(
         f"SELECT id, name FROM categories WHERE profile_id IN ({holding_placeholders}) ORDER BY sort_order, name",
@@ -14053,19 +14519,25 @@ def gains_losses_summary():
                   MAX(description) AS description,
                   MAX(classification_type) AS classification_type,
                   CASE WHEN SUM(COALESCE(quantity, 0)) > 0
-                       THEN SUM(COALESCE(purchase_value, 0)) / SUM(COALESCE(quantity, 0))
+                       THEN SUM(COALESCE({basis_total}, 0)) / SUM(COALESCE(quantity, 0))
                        ELSE 0 END AS price_paid,
                   CASE WHEN SUM(COALESCE(quantity, 0)) > 0
                        THEN SUM(COALESCE(current_value, 0)) / SUM(COALESCE(quantity, 0))
                        ELSE 0 END AS current_price,
                   SUM(COALESCE(quantity, 0)) AS quantity,
-                  SUM(COALESCE(purchase_value, 0)) AS purchase_value,
+                  SUM(COALESCE({basis_total}, 0)) AS purchase_value,
                   SUM(COALESCE(current_value, 0)) AS current_value,
-                  SUM(COALESCE(gain_or_loss, 0)) AS gain_or_loss,
+                  SUM(COALESCE(current_value, 0)) - SUM(COALESCE({basis_total}, 0)) AS gain_or_loss,
                   SUM(COALESCE(total_divs_received, 0)) AS total_divs_received,
-                  MIN(purchase_date) AS purchase_date
+                  MIN(purchase_date) AS purchase_date,
+                  CASE WHEN SUM(COALESCE({basis_total}, 0)) > 0
+                       THEN SUM(COALESCE(estim_payment_per_year, 0)) / SUM(COALESCE({basis_total}, 0))
+                       ELSE 0 END AS annual_yield_on_cost,
+                  CASE WHEN SUM(COALESCE(current_value, 0)) > 0
+                       THEN SUM(COALESCE(estim_payment_per_year, 0)) / SUM(COALESCE(current_value, 0))
+                       ELSE 0 END AS current_annual_yield
            FROM all_account_info
-           WHERE purchase_value IS NOT NULL AND purchase_value > 0
+           WHERE {basis_total} IS NOT NULL AND {basis_total} > 0
              AND COALESCE(quantity, 0) > 1e-9
              AND profile_id IN ({holding_placeholders})
            GROUP BY ticker
@@ -14183,7 +14655,8 @@ def gains_losses_summary():
 
     if not udf.empty:
         for c in ["price_paid", "current_price", "quantity", "purchase_value",
-                   "current_value", "gain_or_loss", "total_divs_received"]:
+                   "current_value", "gain_or_loss", "total_divs_received",
+                   "annual_yield_on_cost", "current_annual_yield"]:
             if c in udf.columns:
                 udf[c] = pd.to_numeric(udf[c], errors="coerce")
 
@@ -14218,6 +14691,8 @@ def gains_losses_summary():
                 "divs_received": _safe(dvs),
                 "total_gl": _safe(tgl),
                 "total_gl_pct": _safe(row.get("total_gl_pct")),
+                "annual_yield_on_cost": _safe(row.get("annual_yield_on_cost")),
+                "current_annual_yield": _safe(row.get("current_annual_yield")),
                 "purchase_date": _safe_str(row.get("purchase_date")),
             })
 
@@ -14336,12 +14811,14 @@ def gains_losses_chart():
 
     period = request.args.get("period", "1y")
     conn = get_connection()
+    _ensure_basis_columns(conn)
     scope = _get_gains_losses_profile_scope(conn)
     profile_id = scope["primary_profile_id"]
     holding_profile_ids = scope["holding_profile_ids"]
     transaction_profile_ids = scope["transaction_profile_ids"]
     holding_placeholders = ",".join("?" * len(holding_profile_ids))
     txn_placeholders = ",".join("?" * len(transaction_profile_ids))
+    basis_total = _basis_total_expr("")
 
     cat_param = request.args.get("category", "").strip()
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
@@ -14350,13 +14827,13 @@ def gains_losses_chart():
         f"""SELECT ticker,
                   SUM(COALESCE(quantity, 0)) AS quantity,
                   CASE WHEN SUM(COALESCE(quantity, 0)) > 0
-                       THEN SUM(COALESCE(purchase_value, 0)) / SUM(COALESCE(quantity, 0))
+                       THEN SUM(COALESCE({basis_total}, 0)) / SUM(COALESCE(quantity, 0))
                        ELSE 0 END AS price_paid,
-                  SUM(COALESCE(purchase_value, 0)) AS purchase_value,
+                  SUM(COALESCE({basis_total}, 0)) AS purchase_value,
                   SUM(COALESCE(total_divs_received, 0)) AS total_divs_received,
                   MAX(classification_type) AS classification_type
            FROM all_account_info
-           WHERE purchase_value IS NOT NULL AND purchase_value > 0
+           WHERE {basis_total} IS NOT NULL AND {basis_total} > 0
              AND profile_id IN ({holding_placeholders})
            GROUP BY ticker
            ORDER BY ticker""",

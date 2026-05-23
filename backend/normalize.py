@@ -2,14 +2,43 @@ from datetime import date
 from config import get_connection
 
 
+def _ensure_basis_columns(conn):
+    basis_cols = {
+        "original_price_paid": "REAL",
+        "original_purchase_value": "REAL",
+        "broker_price_paid": "REAL",
+        "broker_purchase_value": "REAL",
+    }
+    for table in ("all_account_info", "holdings"):
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if not cols:
+            continue
+        changed = False
+        for col, col_type in basis_cols.items():
+            if col not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+                changed = True
+        if table == "all_account_info" and changed:
+            conn.execute("""
+                UPDATE all_account_info
+                   SET original_price_paid = COALESCE(original_price_paid, price_paid),
+                       original_purchase_value = COALESCE(original_purchase_value, purchase_value),
+                       broker_price_paid = COALESCE(broker_price_paid, price_paid),
+                       broker_purchase_value = COALESCE(broker_purchase_value, purchase_value)
+            """)
+
+
 def populate_holdings(profile_id=1):
     """Upsert from all_account_info into holdings (for the given profile)."""
     conn = get_connection()
+    _ensure_basis_columns(conn)
     cur = conn.cursor()
     cur.execute("""
         INSERT OR REPLACE INTO holdings (
             ticker, profile_id, description, classification_type, quantity,
             price_paid, current_price, purchase_value, current_value,
+            original_price_paid, original_purchase_value,
+            broker_price_paid, broker_purchase_value,
             gain_or_loss, gain_or_loss_percentage, percent_change,
             purchase_date
         )
@@ -17,6 +46,10 @@ def populate_holdings(profile_id=1):
                price_paid, current_price,
                COALESCE(purchase_value, ROUND(quantity * price_paid, 2)),
                COALESCE(current_value, ROUND(quantity * current_price, 2)),
+               COALESCE(original_price_paid, price_paid),
+               COALESCE(original_purchase_value, purchase_value, ROUND(quantity * price_paid, 2)),
+               COALESCE(broker_price_paid, price_paid),
+               COALESCE(broker_purchase_value, purchase_value, ROUND(quantity * price_paid, 2)),
                COALESCE(gain_or_loss,
                    ROUND(COALESCE(current_value, quantity * current_price) -
                          COALESCE(purchase_value, quantity * price_paid), 2)),

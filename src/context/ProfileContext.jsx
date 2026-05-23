@@ -24,13 +24,17 @@ export default function ProfileProvider({ children }) {
   })
   const [aggregateConfig, setAggregateConfig] = useState([])
   const [aggregateName, setAggregateName] = useState('Aggregate')
+  const [basisMode, setBasisModeState] = useState(() => {
+    return localStorage.getItem('portfolio_basisMode') || 'original'
+  })
 
   const isAggregate = selection === 'aggregate'
   const profileId = isAggregate ? null : parseInt(selection, 10)
 
   const profileQueryString = useMemo(() => {
-    return isAggregate ? 'aggregate=true' : `profile_id=${profileId}`
-  }, [isAggregate, profileId])
+    const basis = `basis_mode=${basisMode}`
+    return isAggregate ? `aggregate=true&${basis}` : `profile_id=${profileId}&${basis}`
+  }, [isAggregate, profileId, basisMode])
 
   const currentProfileName = useMemo(() => {
     if (isAggregate) return aggregateName
@@ -65,6 +69,12 @@ export default function ProfileProvider({ children }) {
     localStorage.setItem('portfolio_selectedProfileId', val)
   }, [])
 
+  const setBasisMode = useCallback((mode) => {
+    const val = mode === 'broker_adjusted' ? 'broker_adjusted' : 'original'
+    setBasisModeState(val)
+    localStorage.setItem('portfolio_basisMode', val)
+  }, [])
+
   useEffect(() => {
     refreshProfiles()
     refreshAggregateConfig()
@@ -91,12 +101,14 @@ export default function ProfileProvider({ children }) {
     aggregateConfig,
     aggregateName,
     selection,
+    basisMode,
     profileQueryString,
     currentProfileName,
     setProfileId,
+    setBasisMode,
     refreshProfiles,
     refreshAggregateConfig,
-  }), [profileId, profiles, isAggregate, aggregateConfig, aggregateName, selection, profileQueryString, currentProfileName, setProfileId, refreshProfiles, refreshAggregateConfig])
+  }), [profileId, profiles, isAggregate, aggregateConfig, aggregateName, selection, basisMode, profileQueryString, currentProfileName, setProfileId, setBasisMode, refreshProfiles, refreshAggregateConfig])
 
   return (
     <ProfileContext.Provider value={value}>

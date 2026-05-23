@@ -1855,7 +1855,15 @@ def _parse_date(raw):
         except ValueError:
             pass
 
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%m/%d/%Y", "%m/%d/%Y %H:%M:%S", "%b-%d-%Y"):
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%m/%d/%Y",
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+        "%b-%d-%Y",
+    ):
         try:
             return datetime.strptime(raw, fmt).date()
         except (ValueError, AttributeError):

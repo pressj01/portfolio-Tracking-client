@@ -1150,7 +1150,7 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
 
 export default function ManageHoldings() {
   const pf = useProfileFetch()
-  const { profileId, isAggregate, selection } = useProfile()
+  const { profileId, isAggregate, selection, basisMode } = useProfile()
   const dialog = useDialog()
   const holdingsRequestRef = useRef(0)
   const [holdings, setHoldings] = useState([])
@@ -1209,7 +1209,7 @@ export default function ManageHoldings() {
     setDividendRefreshDate(null)
     fetchHoldings()
     fetchAccrualSummary()
-  }, [selection])
+  }, [selection, basisMode])
 
   // Clear any stale repair preview when the selected portfolio changes,
   // so an Apply can't target a scope the preview wasn't built against.

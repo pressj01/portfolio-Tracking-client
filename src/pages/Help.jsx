@@ -81,6 +81,7 @@ const GROUPS = [
     sections: [
       { id: 'tax-report', label: 'Annual Tax Report' },
       { id: 'tax-loss', label: 'Tax-Loss Harvest' },
+      { id: 'blended-yield', label: 'Blended Yield Calculator' },
     ],
   },
 ]
@@ -649,9 +650,29 @@ function DashboardHelp() {
         <li><strong>DRIP$</strong> — monthly income being reinvested (blue). Only present for shares in DRIP-enabled accounts.</li>
         <li><strong>YrShr</strong> — estimated fractional shares acquired per year if the annual dividend is fully reinvested at the current price.</li>
         <li><strong>PFI%</strong> — "Paid For Itself" — percentage of original cost recovered through dividends.</li>
+        <li><strong>RvY</strong> — Return vs. Yield. Compares each holding's all-time total return to its dividend yield. <strong>Good</strong> (green) means total return exceeds yield; <strong>Poor</strong> (red) means yield exceeds total return, suggesting price decline is eroding dividend income. A toggle in the column header switches between <strong>CYld</strong> (current yield, the default) and <strong>YOC</strong> (yield on cost).</li>
         <li><strong>NAV</strong> — benchmark-adjusted NAV erosion ratio plus controls for whether the holding should be tested and what benchmark it should use.</li>
         <li><strong>Grd</strong> — composite grade for the holding.</li>
       </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Return vs. Yield (RvY)</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>RvY</strong> column answers a single question: is the total return on this holding exceeding what the yield alone would suggest, or is price erosion eating into the dividend income?
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Good</strong> (green) — all-time total return % is greater than the yield. Price appreciation is adding value on top of the dividend income.</li>
+        <li><strong>Poor</strong> (red) — yield is greater than total return. The position is paying income, but price decline is reducing the net result below what the yield implies.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The column header has a small toggle that switches the yield reference:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>CYld (default)</strong> — uses the current annual yield based on today's market price. This is the stricter measure. When a stock's price drops, current yield rises (same dollar dividend, lower price denominator), making Good harder to achieve. It reflects what a buyer today would receive and does not allow an old cost basis to inflate the result.</li>
+        <li><strong>YOC</strong> — uses yield on cost, based on your original purchase price. YOC is often higher than current yield for long-held positions and can show Good even when the current yield exceeds total return. This is useful for seeing whether dividends collected over the life of the position justify the original investment, but it can mask current-price erosion in high-income holdings.</li>
+      </ul>
+      <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>Why CYld is the default:</strong> For income-focused funds (covered call ETFs, high-yield payers), YOC can appear very high when the price has drifted lower, producing a Good reading even as NAV erodes. Current yield keeps the comparison anchored to today's reality and is consistent with what a new investor would experience.
+      </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>NAV Testing Controls</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -2546,6 +2567,7 @@ function TotalReturnHelp() {
         <li><strong>Divs Rcvd</strong> — Total dividends received since purchase.</li>
         <li><strong>Total Ret $</strong> — Price G/L + Dividends Received. Green/red colored.</li>
         <li><strong>Total Ret %</strong> — Total Return $ as a percentage of Invested. Green/red colored.</li>
+        <li><strong>RvY</strong> — Return vs. Yield. Compares the all-time Total Ret % to the holding's dividend yield. <strong>Good</strong> (green) when total return exceeds yield; <strong>Poor</strong> (red) when yield exceeds total return. A toggle in the column header switches between <strong>CYld</strong> (current yield, default) and <strong>YOC</strong> (yield on cost). See the Dashboard help section for a full explanation of the metric.</li>
       </ul>
 
       {/* ── How to Use ──────────────────────────────────────────── */}
@@ -2648,6 +2670,7 @@ function GainsLossesHelp() {
         <li><strong>Divs Rcvd</strong> — Total dividends received while holding this position.</li>
         <li><strong>Total G/L</strong> — Price G/L + Dividends Received.</li>
         <li><strong>Total G/L %</strong> — Total G/L as a percentage of Invested.</li>
+        <li><strong>RvY</strong> — Return vs. Yield. Compares the Total G/L % to the holding's dividend yield. <strong>Good</strong> (green) when total return exceeds yield; <strong>Poor</strong> (red) when yield exceeds total return. A toggle in the column header switches between <strong>CYld</strong> (current yield, default) and <strong>YOC</strong> (yield on cost). See the Dashboard help section for a full explanation.</li>
       </ul>
       <p style={{ marginBottom: '1rem', color: '#90a4ae', fontSize: '0.9rem' }}>
         A Portfolio Total footer row sums key columns across all holdings.
@@ -2877,7 +2900,7 @@ function SecurityResearchHelp() {
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>ETF Research Results</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Name &amp; Description</strong> summarizes the fund objective or description.</li>
-        <li><strong>Metric grid</strong> shows issuer, category, legal type, expense ratio, total assets, NAV, inception date, dividend frequency, estimated yield, SEC yield, TTM dividend per share, and source link when available.</li>
+        <li><strong>Metric grid</strong> shows issuer, category, legal type, expense ratio, total assets, NAV, inception date, dividend frequency, estimated yield, SEC yield, <strong>1Y Ret vs Yield</strong>, TTM dividend per share, and source link when available.</li>
         <li><strong>Top Holdings</strong> lists the largest reported positions with weights.</li>
         <li><strong>Allocation</strong> displays sector or asset-class weights as horizontal bars.</li>
       </ul>
@@ -2887,8 +2910,22 @@ function SecurityResearchHelp() {
         <li><strong>Business Description</strong> gives a plain-language company summary.</li>
         <li><strong>Valuation</strong> includes price, market cap, enterprise value, beta, trailing and forward P/E, price/book, and price/sales.</li>
         <li><strong>Fundamentals</strong> includes revenue, revenue growth, margins, net income, free cash flow, and debt/equity.</li>
-        <li><strong>Dividends</strong> includes dividend frequency, rate, yield, payout ratio, TTM dividend per share, and last dividend when available.</li>
+        <li><strong>Dividends</strong> includes dividend frequency, rate, yield, <strong>1Y Ret vs Yield</strong>, payout ratio, TTM dividend per share, and last dividend when available.</li>
       </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>1Y Return vs. Yield</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>1Y Ret vs Yield</strong> field appears in the ETF metric grid (next to the yield fields) and in the Stock dividends section.
+        It compares the ticker's trailing one-year total return to its current dividend yield to give a quick signal on whether the return justifies the income:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Good</strong> (green) — the 1-year total return exceeds the current yield. Price appreciation is adding return on top of the income the fund pays.</li>
+        <li><strong>Poor</strong> (red) — the current yield is higher than the 1-year total return. The position is paying income, but price decline over the past year has offset more than the dividend provided.</li>
+        <li><strong>—</strong> — shown when 1-year return data has not yet loaded or the ticker pays no dividend.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem', color: '#90a4ae', fontSize: '0.9rem' }}>
+        The 1-year return data is fetched from the same source as the Annual Chart (Yahoo Finance total return). The value populates a few seconds after the research result loads. No toggle is available here because there is no portfolio cost basis — only current market yield is used.
+      </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Annual Chart</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -4801,11 +4838,18 @@ function ETFComparerHelp() {
         all other columns are optional. Click <strong>Indicators</strong> to open the column picker and toggle which fields appear.
         Available columns include: stock price, daily % change, assets under management, expense ratio, PE ratio,
         expected dividend yield, dividend yield, expected yield source, volume, dollar volume, open price, 1Y CAGR,
-        52-week high/low, issuer, category, and max drawdown.
+        52-week high/low, issuer, category, max drawdown, and <strong>Ret vs Yld</strong>.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
         <strong>Expected Div. Yield</strong> is a forward-looking estimate based on official issuer distribution rates,
         official distribution history, saved provider data, or Yahoo Finance fallback data, depending on what is available.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Ret vs Yld</strong> compares each ETF's 1-year total return to its expected dividend yield.
+        <strong> Good</strong> (green) means the 1-year return exceeds the yield — price appreciation is contributing
+        value on top of the income. <strong>Poor</strong> (red) means the yield exceeds the 1-year return — the price
+        declined enough over the past year to offset more than the dividend provided. Hover a cell for the exact
+        return, yield, and spread values. This column is on by default and can be hidden via the Indicators menu.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="/help-screenshots/etf-comparer/comparison-table.jpg" alt="ETF Comparer comparison table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
@@ -5103,6 +5147,126 @@ function TaxLossHarvestHelp() {
   )
 }
 
+function BlendedYieldHelp() {
+  return (
+    <div>
+      <h2>Blended Yield Calculator</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The <strong>Blended Yield Calculator</strong> shows the true after-tax yield of your investment portfolio
+        accounting for Federal and state progressive tax brackets. It calculates what you actually <em>keep</em> from
+        each fund after taxes, then blends them weighted by allocation to show your portfolio's real income.
+      </p>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Key Concepts</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>After-Tax Yield (ATY)</strong> — The yield you actually receive after paying taxes. What you keep.</li>
+        <li><strong>Tax-Equivalent Yield (TEY)</strong> — What a fully taxable bond would need to yield to give you the same after-tax income. Used to compare tax-exempt funds apples-to-apples.</li>
+        <li><strong>Blended Yield</strong> — Your portfolio's weighted-average tax-equivalent yield across all holdings. The single best metric to compare different allocations.</li>
+        <li><strong>Six Tax Classifications</strong> — Fully Taxable, Treasury (State Exempt), Fed Exempt (Muni), Fed+State Exempt, Return of Capital (ROC), and Qualified/LTCG.</li>
+      </ul>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>How to Use</h3>
+
+      <h4 style={{ marginBottom: '0.5rem' }}>Step 1: Set Tax Profile</h4>
+      <p style={{ marginBottom: '1rem' }}>
+        Select your state (California, Arizona, or Pennsylvania), filing status, taxable income, and total portfolio amount.
+        The calculator displays your current Federal, State, Combined, and LTCG marginal tax rates.
+      </p>
+
+      <h4 style={{ marginBottom: '0.5rem' }}>Step 2: Add Funds</h4>
+      <p style={{ marginBottom: '1rem' }}>
+        Enter a ticker (e.g., SGOV, JEPI, MUB, TDAQ) and click <strong>Add Fund</strong>. The calculator looks up the fund
+        in its built-in database of 100+ common income funds. If found, the name, yield, and tax type fill automatically.
+        If not found, you'll be prompted to enter the yield manually (saves to your browser).
+      </p>
+
+      <h4 style={{ marginBottom: '0.5rem' }}>Step 3: Configure Each Fund</h4>
+      <p style={{ marginBottom: '1rem' }}>
+        For each fund card, enter:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Distribution Yield %</strong> — Annual yield (verify current yield from your broker)</li>
+        <li><strong>Tax Classification</strong> — The appropriate tax type for this fund</li>
+        <li><strong>Allocation % or $</strong> — Your position size (one calculates the other)</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Results update in real-time: Annual/monthly income, After-Tax Yield (ATY), Tax-Equiv Yield (TEY), and effective tax rate.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img
+          src="/help-screenshots/blended-yield/01-portfolio-setup.jpg"
+          alt="Blended Yield Calculator tax profile and fund cards"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
+        />
+      </div>
+
+      <h4 style={{ marginBottom: '0.5rem' }}>Step 4: Review Portfolio Summary</h4>
+      <p style={{ marginBottom: '1rem' }}>
+        The <strong>Portfolio Summary</strong> shows your blended yield (TEY), after-tax yield, annual and monthly income.
+        A color-coded allocation bar shows fund weights. A detailed breakdown table lists every fund with yields,
+        tax rates, allocations, and income contributions.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img
+          src="/help-screenshots/blended-yield/02-portfolio-summary.jpg"
+          alt="Portfolio Summary results, allocation bar, and breakdown table"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
+        />
+      </div>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Customizing Tax Brackets</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Click <strong>Tax Bracket Settings</strong> to expand the editor. You can customize Federal, State, and LTCG brackets
+        if tax rates change. Toggle between Single and Married Filing Jointly to edit brackets for different statuses.
+        Edit thresholds and rates, add/remove bracket rows, and click <strong>Save Brackets</strong> to persist to your browser.
+        Click <strong>Restore 2025 Defaults</strong> to reset to 2025 tax rates.
+      </p>
+
+      <p style={{ marginBottom: '1rem' }}>
+        A "Custom" badge appears when custom brackets are saved. An "Unsaved" badge appears when you've made changes
+        but haven't saved yet.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img
+          src="/help-screenshots/blended-yield/03-tax-bracket-settings.jpg"
+          alt="Tax Bracket Settings editor with editable Federal, LTCG, California, Arizona, and Pennsylvania brackets"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
+        />
+      </div>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Built-in Fund Database</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        The calculator includes 100+ common income funds: Covered-Call ETFs (JEPI, XYLD, QYLD, RYLD), YieldMax single-stock
+        option funds (TSLY, NVDY, CONY, PLTY, etc.), CEFs (PDI, PTY, TRIN, ARCC), BDCs, municipal bonds, Treasuries, REITs, and growth ETFs.
+      </p>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Important Notes</h3>
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        <strong>Yields are approximate.</strong> The built-in database has approximate yields as of early 2025.
+        <strong> Always verify current yields from your broker or fund provider</strong> before relying on calculations.
+        Update any yield manually in the card — it saves to your browser.
+      </div>
+
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>State-Specific Muni Funds</strong> — CA muni funds (CMF, NKX, VCV) auto-reclassify when you switch states.</li>
+        <li><strong>Pennsylvania Special Rule</strong> — PA exempts all municipal bond interest from state tax, even national muni funds.</li>
+        <li><strong>Not Financial Advice</strong> — This is a calculator only. Tax situations vary widely. Consult a tax professional for your specific situation.</li>
+      </ul>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Tips</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Compare Allocations:</strong> Adjust allocation % or $ in any card to test different portfolio mixes. Find the best after-tax income for your goals.</li>
+        <li><strong>Verify Tax Classifications:</strong> Wrong tax type = wrong after-tax yield. Double-check corporate bonds (Fully Taxable), Treasuries (State Exempt), national munis (Fed Exempt), and option funds (ROC).</li>
+        <li><strong>Save Custom Brackets Once:</strong> If rates change, edit and save custom brackets once. They persist until you click Restore 2025 Defaults.</li>
+        <li><strong>Manual Fund Lookup:</strong> If a ticker doesn't auto-populate, search your broker for the current yield and enter it manually. It saves with a blue ★ badge for next time.</li>
+      </ul>
+    </div>
+  )
+}
+
 const CONTENT_MAP = {
   overview: Overview,
   'action-center': ActionCenterHelp,
@@ -5113,6 +5277,7 @@ const CONTENT_MAP = {
   settings: SettingsHelp,
   'tax-report': AnnualTaxReportHelp,
   'tax-loss': TaxLossHarvestHelp,
+  'blended-yield': BlendedYieldHelp,
   dashboard: DashboardHelp,
   holdings: HoldingsHelp,
   categories: CategoriesHelp,

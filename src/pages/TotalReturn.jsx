@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { returnVsYield } from '../utils/returnVsYield'
 
 // 30 bright, high-contrast colors for dark backgrounds
 const PALETTE = [
@@ -39,6 +40,8 @@ export default function TotalReturn() {
 
   const [sortCol, setSortCol] = useState('total_return_pct')
   const [sortAsc, setSortAsc] = useState(false)
+  const [rvyMode, setRvyMode] = useState('cur')
+  const [return1yMap, setReturn1yMap] = useState({})
 
   // Comparison chart state
   const [cmpTickers, setCmpTickers] = useState([])
@@ -77,6 +80,15 @@ export default function TotalReturn() {
       .catch(e => setSummaryError(e.message))
       .finally(() => setSummaryLoading(false))
   }, [categories, selection])
+
+  useEffect(() => {
+    const tickers = [...new Set((summary?.rows || []).map(r => r.ticker).filter(Boolean))]
+    if (!tickers.length) return
+    pf(`/api/ticker-return-1y-bulk?tickers=${encodeURIComponent(tickers.join(','))}`)
+      .then(r => r.json())
+      .then(d => { if (!d.error) setReturn1yMap(d) })
+      .catch(() => {})
+  }, [summary, pf])
 
   // Fetch yfinance charts
   useEffect(() => {
@@ -245,15 +257,25 @@ export default function TotalReturn() {
     if (sortCol === col) { setSortAsc(a => !a) }
     else {
       setSortCol(col)
-      const numCols = ['quantity', 'price_paid', 'current_price', 'purchase_value', 'current_value', 'gain_or_loss', 'price_return_pct', 'total_divs_received', 'total_return_dollar', 'total_return_pct']
+      const numCols = ['quantity', 'price_paid', 'current_price', 'purchase_value', 'current_value', 'gain_or_loss', 'price_return_pct', 'total_divs_received', 'total_return_dollar', 'total_return_pct', 'ret_vs_yld_sort']
       setSortAsc(!numCols.includes(col))
     }
   }
 
-  const sortedRows = useMemo(() => {
+  const enrichedRows = useMemo(() => {
     if (!summary?.rows) return []
-    if (!sortCol) return summary.rows
-    const rows = [...summary.rows]
+    return summary.rows.map(r => {
+      const r1y = return1yMap[r.ticker]
+      const yld = rvyMode === 'yoc' ? (r.annual_yield_on_cost || 0) * 100 : (r.current_annual_yield || 0) * 100
+      const rvy = r1y != null ? returnVsYield(r1y, yld) : null
+      return { ...r, ret_vs_yld: rvy, ret_vs_yld_sort: rvy ? rvy.spread : -999 }
+    })
+  }, [summary, rvyMode, return1yMap])
+
+  const sortedRows = useMemo(() => {
+    if (!enrichedRows.length) return []
+    if (!sortCol) return enrichedRows
+    const rows = [...enrichedRows]
     rows.sort((a, b) => {
       let av = a[sortCol] ?? '', bv = b[sortCol] ?? ''
       if (typeof av === 'number' && typeof bv === 'number') return sortAsc ? av - bv : bv - av
@@ -283,6 +305,7 @@ export default function TotalReturn() {
     { key: 'total_divs_received', label: 'Divs Rcvd', fmt },
     { key: 'total_return_dollar', label: 'Total Ret $', fmt },
     { key: 'total_return_pct', label: 'Total Ret %', fmt: fmtPct },
+    { key: 'ret_vs_yld', label: 'RvY', sortKey: 'ret_vs_yld_sort' },
   ]
   const numericColumns = new Set([
     'quantity',
@@ -477,14 +500,32 @@ export default function TotalReturn() {
             <table>
               <thead>
                 <tr>
-                  {columns.map(col => (
-                    <th key={col.key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: columnAlign(col.key) }} onClick={() => handleSort(col.key)}>
-                      {col.label}
-                      <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === col.key ? '#7ecfff' : '#8899aa' }}>
-                        {sortIcon(col.key)}
-                      </span>
-                    </th>
-                  ))}
+                  {columns.map(col => {
+                    const sk = col.sortKey || col.key
+                    if (col.key === 'ret_vs_yld') {
+                      return (
+                        <th key={col.key} style={{ textAlign: 'center', whiteSpace: 'nowrap', cursor: 'default', userSelect: 'none' }} title="Total return vs yield — Good means total return exceeds yield, Poor means yield exceeds total return">
+                          <span style={{ cursor: 'pointer' }} onClick={() => handleSort(sk)}>RvY{sortIcon(sk)}</span>
+                          {' '}
+                          <span
+                            onClick={() => setRvyMode(m => m === 'yoc' ? 'cur' : 'yoc')}
+                            title={rvyMode === 'yoc' ? 'Using Yield on Cost — click to switch to Current Yield' : 'Using Current Yield — click to switch to Yield on Cost'}
+                            style={{ fontSize: '0.65rem', background: rvyMode === 'yoc' ? '#1a3a5c' : '#1a3a2a', color: rvyMode === 'yoc' ? '#7ecfff' : '#4dff91', border: `1px solid ${rvyMode === 'yoc' ? '#294b73' : '#2a5c3a'}`, borderRadius: 3, padding: '1px 4px', cursor: 'pointer', fontWeight: 600 }}
+                          >
+                            {rvyMode === 'yoc' ? 'YOC' : 'CYld'}
+                          </span>
+                        </th>
+                      )
+                    }
+                    return (
+                      <th key={col.key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: columnAlign(col.key) }} onClick={() => handleSort(sk)}>
+                        {col.label}
+                        <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === sk ? '#7ecfff' : '#8899aa' }}>
+                          {sortIcon(sk)}
+                        </span>
+                      </th>
+                    )
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -500,7 +541,12 @@ export default function TotalReturn() {
                       if (col.key === 'gain_or_loss' || col.key === 'price_return_pct' || col.key === 'total_return_dollar' || col.key === 'total_return_pct') {
                         style = { textAlign: 'right', color: (val || 0) >= 0 ? '#4dff91' : '#ff6b6b' }
                       }
-                      return <td key={col.key} style={style}>{display}</td>
+                      if (col.key === 'ret_vs_yld') {
+                        const rvy = row.ret_vs_yld
+                        display = rvy ? rvy.label : '—'
+                        style = { textAlign: 'center', color: rvy?.color || '#6f7890', fontWeight: 600 }
+                      }
+                      return <td key={col.key} style={style} title={col.key === 'ret_vs_yld' && row.ret_vs_yld ? `Spread: ${row.ret_vs_yld.spread.toFixed(2)}%` : undefined}>{display}</td>
                     })}
                   </tr>
                 ))}
@@ -515,6 +561,7 @@ export default function TotalReturn() {
                   <td style={{ textAlign: 'right' }}><strong>{fmt(t.total_divs)}</strong></td>
                   <td style={{ textAlign: 'right', color: (t.total_return_dollar || 0) >= 0 ? '#4dff91' : '#ff6b6b' }}><strong>{fmt(t.total_return_dollar)}</strong></td>
                   <td style={{ textAlign: 'right', color: (t.total_return_pct || 0) >= 0 ? '#4dff91' : '#ff6b6b' }}><strong>{fmtPct(t.total_return_pct)}</strong></td>
+                  <td></td>
                 </tr>
               </tfoot>
             </table>

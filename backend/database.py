@@ -97,6 +97,10 @@ def ensure_tables_exist(conn=None):
             percent_change             REAL,
             quantity                   REAL,
             purchase_value             REAL,
+            original_price_paid        REAL,
+            original_purchase_value    REAL,
+            broker_price_paid          REAL,
+            broker_purchase_value      REAL,
             current_value              REAL,
             gain_or_loss               REAL,
             gain_or_loss_percentage    REAL,
@@ -152,6 +156,25 @@ def ensure_tables_exist(conn=None):
     except Exception:
         pass  # column already exists
 
+    for _col in (
+        ("original_price_paid", "REAL"),
+        ("original_purchase_value", "REAL"),
+        ("broker_price_paid", "REAL"),
+        ("broker_purchase_value", "REAL"),
+    ):
+        try:
+            cur.execute(f"ALTER TABLE all_account_info ADD COLUMN {_col[0]} {_col[1]}")
+        except Exception:
+            pass  # column already exists
+
+    cur.execute("""
+        UPDATE all_account_info
+           SET original_price_paid = COALESCE(original_price_paid, price_paid),
+               original_purchase_value = COALESCE(original_purchase_value, purchase_value),
+               broker_price_paid = COALESCE(broker_price_paid, price_paid),
+               broker_purchase_value = COALESCE(broker_purchase_value, purchase_value)
+    """)
+
     # Initialize base_quantity from quantity where not yet set
     cur.execute("UPDATE all_account_info SET base_quantity = quantity WHERE base_quantity IS NULL")
 
@@ -197,6 +220,10 @@ def ensure_tables_exist(conn=None):
             price_paid          REAL,
             current_price       REAL,
             purchase_value      REAL,
+            original_price_paid REAL,
+            original_purchase_value REAL,
+            broker_price_paid   REAL,
+            broker_purchase_value REAL,
             current_value       REAL,
             gain_or_loss        REAL,
             gain_or_loss_percentage REAL,
@@ -219,6 +246,10 @@ def ensure_tables_exist(conn=None):
                 price_paid          REAL,
                 current_price       REAL,
                 purchase_value      REAL,
+                original_price_paid REAL,
+                original_purchase_value REAL,
+                broker_price_paid   REAL,
+                broker_purchase_value REAL,
                 current_value       REAL,
                 gain_or_loss        REAL,
                 gain_or_loss_percentage REAL,
@@ -227,6 +258,18 @@ def ensure_tables_exist(conn=None):
                 UNIQUE (ticker, profile_id)
             )
         """)
+    else:
+        for _col in (
+            ("original_price_paid", "REAL"),
+            ("original_purchase_value", "REAL"),
+            ("broker_price_paid", "REAL"),
+            ("broker_purchase_value", "REAL"),
+        ):
+            if _col[0] not in _h_cols:
+                try:
+                    cur.execute(f"ALTER TABLE holdings ADD COLUMN {_col[0]} {_col[1]}")
+                except Exception:
+                    pass
 
     # ── dividends ──────────────────────────────────────────────────────────────
     cur.execute("""

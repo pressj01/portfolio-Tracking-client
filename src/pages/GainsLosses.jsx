@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { returnVsYield } from '../utils/returnVsYield'
 
 const PALETTE = [
   '#7B8CFF','#FF6F61','#2EFDB5','#C98FFF','#FFB86C','#4DE8FF','#FF80A8','#D4FF9A',
@@ -22,7 +23,7 @@ function MetricCard({ label, value, className }) {
 
 export default function GainsLosses() {
   const pf = useProfileFetch()
-  const { selection } = useProfile()
+  const { selection, basisMode } = useProfile()
   const [categories, setCategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const catRef = useRef(null)
@@ -39,6 +40,8 @@ export default function GainsLosses() {
   const [tab, setTab] = useState('unrealized')
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(false)
+  const [rvyMode, setRvyMode] = useState('cur')
+  const [return1yMap, setReturn1yMap] = useState({})
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -63,7 +66,16 @@ export default function GainsLosses() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [categories, selection])
+  }, [categories, selection, basisMode])
+
+  useEffect(() => {
+    const tickers = [...new Set((data?.unrealized || []).map(r => r.ticker).filter(Boolean))]
+    if (!tickers.length) return
+    pf(`/api/ticker-return-1y-bulk?tickers=${encodeURIComponent(tickers.join(','))}`)
+      .then(r => r.json())
+      .then(d => { if (!d.error) setReturn1yMap(d) })
+      .catch(() => {})
+  }, [data, pf])
 
   // Fetch chart data
   useEffect(() => {
@@ -79,7 +91,7 @@ export default function GainsLosses() {
       })
       .catch(e => setChartError(e.message))
       .finally(() => setChartLoading(false))
-  }, [chartPeriod, categories, selection])
+  }, [chartPeriod, categories, selection, basisMode])
 
   // Render Plotly charts
   useEffect(() => {
@@ -263,6 +275,7 @@ export default function GainsLosses() {
     { key: 'divs_received', label: 'Divs Rcvd', tip: 'Total lifetime dividends received from this holding', fmt, numeric: true },
     { key: 'total_gl', label: 'Total G/L', tip: 'Total gain or loss including dividends (price G/L + dividends received)', fmt, gl: true },
     { key: 'total_gl_pct', label: 'Total G/L %', tip: 'Total gain/loss as a percentage of amount invested', fmt: fmtPct, gl: true },
+    { key: 'ret_vs_yld', label: 'RvY', tip: 'Total return vs yield on cost — Good means total return exceeds yield, Poor means yield exceeds total return', rvy: true },
   ]
 
   const realizedCols = [
@@ -295,8 +308,18 @@ export default function GainsLosses() {
     { key: 'net_total_gl', label: 'Net Total G/L', tip: 'Combined total gain/loss across all open and closed positions', fmt, gl: true },
   ]
 
+  const enrichedUnrealized = useMemo(() => {
+    if (!data?.unrealized) return []
+    return data.unrealized.map(r => {
+      const r1y = return1yMap[r.ticker]
+      const yld = rvyMode === 'yoc' ? (r.annual_yield_on_cost || 0) * 100 : (r.current_annual_yield || 0) * 100
+      const rvy = r1y != null ? returnVsYield(r1y, yld) : null
+      return { ...r, ret_vs_yld: rvy, ret_vs_yld_sort: rvy ? rvy.spread : -999 }
+    })
+  }, [data, rvyMode, return1yMap])
+
   const tabConfig = {
-    unrealized: { cols: unrealizedCols, rows: data?.unrealized },
+    unrealized: { cols: unrealizedCols, rows: enrichedUnrealized },
     realized: { cols: realizedCols, rows: data?.realized },
     combined: { cols: combinedCols, rows: data?.combined },
   }
@@ -315,14 +338,32 @@ export default function GainsLosses() {
         <table>
           <thead>
             <tr>
-              {activeCols.map(col => (
-                <th key={col.key} title={col.tip} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: (col.numeric || col.gl) ? 'right' : undefined }} onClick={() => handleSort(col.key)}>
-                  {col.label}
-                  <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === col.key ? '#7ecfff' : '#8899aa' }}>
-                    {sortIcon(col.key)}
-                  </span>
-                </th>
-              ))}
+              {activeCols.map(col => {
+                const sk = col.rvy ? 'ret_vs_yld_sort' : col.key
+                if (col.rvy) {
+                  return (
+                    <th key={col.key} title={col.tip} style={{ textAlign: 'center', whiteSpace: 'nowrap', cursor: 'default', userSelect: 'none' }}>
+                      <span style={{ cursor: 'pointer' }} onClick={() => handleSort(sk)}>RvY{sortIcon(sk)}</span>
+                      {' '}
+                      <span
+                        onClick={() => setRvyMode(m => m === 'yoc' ? 'cur' : 'yoc')}
+                        title={rvyMode === 'yoc' ? 'Using Yield on Cost — click to switch to Current Yield' : 'Using Current Yield — click to switch to Yield on Cost'}
+                        style={{ fontSize: '0.65rem', background: rvyMode === 'yoc' ? '#1a3a5c' : '#1a3a2a', color: rvyMode === 'yoc' ? '#7ecfff' : '#4dff91', border: `1px solid ${rvyMode === 'yoc' ? '#294b73' : '#2a5c3a'}`, borderRadius: 3, padding: '1px 4px', cursor: 'pointer', fontWeight: 600 }}
+                      >
+                        {rvyMode === 'yoc' ? 'YOC' : 'CYld'}
+                      </span>
+                    </th>
+                  )
+                }
+                return (
+                  <th key={col.key} title={col.tip} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: (col.numeric || col.gl) ? 'right' : undefined }} onClick={() => handleSort(sk)}>
+                    {col.label}
+                    <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === sk ? '#7ecfff' : '#8899aa' }}>
+                      {sortIcon(sk)}
+                    </span>
+                  </th>
+                )
+              })}
             </tr>
           </thead>
           <tbody>
@@ -334,7 +375,12 @@ export default function GainsLosses() {
                   let style = (col.numeric || col.gl) ? { textAlign: 'right' } : {}
                   if (col.key === 'ticker') display = <strong>{val}</strong>
                   if (col.gl) style = { textAlign: 'right', color: glColor(val) }
-                  return <td key={col.key} style={style}>{display}</td>
+                  if (col.rvy) {
+                    const rvy = row.ret_vs_yld
+                    display = rvy ? rvy.label : '—'
+                    style = { textAlign: 'center', color: rvy?.color || '#6f7890', fontWeight: 600 }
+                  }
+                  return <td key={col.key} style={style} title={col.rvy && row.ret_vs_yld ? `Spread: ${row.ret_vs_yld.spread.toFixed(2)}%` : undefined}>{display}</td>
                 })}
               </tr>
             ))}
@@ -349,6 +395,7 @@ export default function GainsLosses() {
                 <td></td>
                 <td style={{ textAlign: 'right' }}><strong>{fmt(t.unrealized_divs)}</strong></td>
                 <td style={{ textAlign: 'right', color: glColor(t.unrealized_total_gl) }}><strong>{fmt(t.unrealized_total_gl)}</strong></td>
+                <td></td>
                 <td></td>
               </tr>
             </tfoot>
