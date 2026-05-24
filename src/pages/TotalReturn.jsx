@@ -41,7 +41,6 @@ export default function TotalReturn() {
   const [sortCol, setSortCol] = useState('total_return_pct')
   const [sortAsc, setSortAsc] = useState(false)
   const [rvyMode, setRvyMode] = useState('cur')
-  const [return1yMap, setReturn1yMap] = useState({})
 
   // Comparison chart state
   const [cmpTickers, setCmpTickers] = useState([])
@@ -80,15 +79,6 @@ export default function TotalReturn() {
       .catch(e => setSummaryError(e.message))
       .finally(() => setSummaryLoading(false))
   }, [categories, selection])
-
-  useEffect(() => {
-    const tickers = [...new Set((summary?.rows || []).map(r => r.ticker).filter(Boolean))]
-    if (!tickers.length) return
-    pf(`/api/ticker-return-1y-bulk?tickers=${encodeURIComponent(tickers.join(','))}`)
-      .then(r => r.json())
-      .then(d => { if (!d.error) setReturn1yMap(d) })
-      .catch(() => {})
-  }, [summary, pf])
 
   // Fetch yfinance charts
   useEffect(() => {
@@ -265,12 +255,12 @@ export default function TotalReturn() {
   const enrichedRows = useMemo(() => {
     if (!summary?.rows) return []
     return summary.rows.map(r => {
-      const r1y = return1yMap[r.ticker]
-      const yld = rvyMode === 'yoc' ? (r.annual_yield_on_cost || 0) * 100 : (r.current_annual_yield || 0) * 100
-      const rvy = r1y != null ? returnVsYield(r1y, yld) : null
+      const primaryYld = rvyMode === 'yoc' ? (r.annual_yield_on_cost || 0) : (r.current_annual_yield || 0)
+      const yld = (primaryYld || (r.annual_yield_on_cost || 0)) * 100
+      const rvy = r.total_return_pct != null ? returnVsYield(r.total_return_pct, yld) : null
       return { ...r, ret_vs_yld: rvy, ret_vs_yld_sort: rvy ? rvy.spread : -999 }
     })
-  }, [summary, rvyMode, return1yMap])
+  }, [summary, rvyMode])
 
   const sortedRows = useMemo(() => {
     if (!enrichedRows.length) return []
@@ -283,7 +273,7 @@ export default function TotalReturn() {
       return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av)
     })
     return rows
-  }, [summary, sortCol, sortAsc])
+  }, [enrichedRows, sortCol, sortAsc])
 
   const sortIcon = (col) => {
     if (sortCol !== col) return ' \u21C5'

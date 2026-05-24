@@ -392,7 +392,6 @@ export default function Dashboard() {
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
   const [rvyMode, setRvyMode] = useState('cur')
-  const [return1yMap, setReturn1yMap] = useState({})
   const [modalTicker, setModalTicker] = useState(null)
   const [portfolioCoverage, setPortfolioCoverage] = useState(null)
   const [portfolioCoverageSeverity, setPortfolioCoverageSeverity] = useState(null)
@@ -663,21 +662,25 @@ export default function Dashboard() {
         const td = h.total_divs_received || 0
         const cv = h.current_value || 0
         const totalCv = totals.currentValue || 1
+        const priceReturn = pv ? (gl / pv) : 0
+        const totalReturn = pv ? ((gl + td) / pv) : 0
+        const rvyYield = rvyMode === 'yoc' ? h.annual_yield_on_cost : h.current_annual_yield
+        const rvy = returnVsYield(totalReturn * 100, (rvyYield || 0) * 100)
         return {
           ...h,
-          price_return_pct: pv ? (gl / pv) : 0,
-          total_return_pct: pv ? ((gl + td) / pv) : 0,
+          price_return_pct: priceReturn,
+          total_return_pct: totalReturn,
           pct_of_account: totalCv ? (cv / totalCv) : 0,
           drip_shares_monthly: sharesFromDrip(h.approx_monthly_income, h),
           drip_shares_yearly: sharesFromDrip(h.estim_payment_per_year, h),
-          ret_vs_yld: (() => { const r1y = return1yMap[h.ticker]; const yldPct = (rvyMode === 'yoc' ? h.annual_yield_on_cost : h.current_annual_yield) * 100; return r1y != null ? returnVsYield(r1y, yldPct) : null })(),
-          ret_vs_yld_sort: (() => { const r1y = return1yMap[h.ticker]; const yldPct = (rvyMode === 'yoc' ? h.annual_yield_on_cost : h.current_annual_yield) * 100; const r = r1y != null ? returnVsYield(r1y, yldPct) : null; return r ? r.spread : -999 })(),
+          ret_vs_yld: rvy,
+          ret_vs_yld_sort: rvy ? rvy.spread : -999,
           _coverage: tickerCoverage[h.ticker] ?? null,
           _coverage_meta: tickerCoverageMeta[h.ticker] || null,
           _grade_sort: ({ 'A+': 13, 'A': 12, 'A-': 11, 'B+': 10, 'B': 9, 'B-': 8, 'C+': 7, 'C': 6, 'C-': 5, 'D+': 4, 'D': 3, 'D-': 2, 'F': 1 })[tickerGrades[h.ticker]?.grade] || 0,
         }
       })
-  }, [holdings, totals, tickerCoverage, tickerCoverageMeta, tickerGrades, rvyMode, return1yMap])
+  }, [holdings, totals, tickerCoverage, tickerCoverageMeta, tickerGrades, rvyMode])
   const portfolioNavSeverity = portfolioCoverageSeverity || navSeverityFromRatio(portfolioCoverage)
   const portfolioNavColor = navSeverityColor(portfolioNavSeverity)
 
@@ -733,16 +736,6 @@ export default function Dashboard() {
       })
       .catch(() => {})
   }, [pf])
-
-  useEffect(() => {
-    if (!holdings?.length) return
-    const tickers = [...new Set(holdings.map(h => h.ticker).filter(Boolean))]
-    if (!tickers.length) return
-    pf(`/api/ticker-return-1y-bulk?tickers=${encodeURIComponent(tickers.join(','))}`)
-      .then(r => r.json())
-      .then(d => { if (!d.error) setReturn1yMap(d) })
-      .catch(() => {})
-  }, [holdings, pf])
 
   const updateNavScope = useCallback((ticker, scope, benchmark = '') => {
     const navBenchmark = String(benchmark || '').trim().toUpperCase()
@@ -1177,7 +1170,7 @@ export default function Dashboard() {
                   <td style={{ textAlign: 'right', color: gradeColor(h.gain_or_loss_percentage) }}>{pct(h.gain_or_loss_percentage)}</td>
                   <td style={{ textAlign: 'right', color: gradeColor(h.price_return_pct) }}>{pct(h.price_return_pct)}</td>
                   <td style={{ textAlign: 'right', color: gradeColor(h.total_return_pct) }}>{pct(h.total_return_pct)}</td>
-                  <td style={{ textAlign: 'center', color: h.ret_vs_yld?.color || '#6f7890', fontWeight: 600 }} title={h.ret_vs_yld ? `1Y Total Return ${h.ret_vs_yld.totalReturnPct?.toFixed(2)}% vs Yield ${h.ret_vs_yld.yieldOnCost?.toFixed(2)}% (spread ${h.ret_vs_yld.spread?.toFixed(2)}%)` : 'N/A'}>{h.ret_vs_yld?.label || '—'}</td>
+                  <td style={{ textAlign: 'center', color: h.ret_vs_yld?.color || '#6f7890', fontWeight: 600 }} title={h.ret_vs_yld ? `Total Return ${h.ret_vs_yld.totalReturnPct?.toFixed(2)}% vs Yield ${h.ret_vs_yld.yieldOnCost?.toFixed(2)}% (spread ${h.ret_vs_yld.spread?.toFixed(2)}%)` : 'N/A'}>{h.ret_vs_yld?.label || '—'}</td>
                   <td style={{ textAlign: 'right' }}>{h.div != null && h.div > 0 ? `$${Number(h.div).toFixed(4)}` : '—'}</td>
                   <td style={{ textAlign: 'right' }}>{pct(h.current_annual_yield)}</td>
                   <td style={{ textAlign: 'right' }}>{pct(h.annual_yield_on_cost)}</td>

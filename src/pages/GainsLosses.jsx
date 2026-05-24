@@ -41,7 +41,6 @@ export default function GainsLosses() {
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(false)
   const [rvyMode, setRvyMode] = useState('cur')
-  const [return1yMap, setReturn1yMap] = useState({})
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -67,15 +66,6 @@ export default function GainsLosses() {
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [categories, selection, basisMode])
-
-  useEffect(() => {
-    const tickers = [...new Set((data?.unrealized || []).map(r => r.ticker).filter(Boolean))]
-    if (!tickers.length) return
-    pf(`/api/ticker-return-1y-bulk?tickers=${encodeURIComponent(tickers.join(','))}`)
-      .then(r => r.json())
-      .then(d => { if (!d.error) setReturn1yMap(d) })
-      .catch(() => {})
-  }, [data, pf])
 
   // Fetch chart data
   useEffect(() => {
@@ -311,12 +301,11 @@ export default function GainsLosses() {
   const enrichedUnrealized = useMemo(() => {
     if (!data?.unrealized) return []
     return data.unrealized.map(r => {
-      const r1y = return1yMap[r.ticker]
       const yld = rvyMode === 'yoc' ? (r.annual_yield_on_cost || 0) * 100 : (r.current_annual_yield || 0) * 100
-      const rvy = r1y != null ? returnVsYield(r1y, yld) : null
+      const rvy = r.total_gl_pct != null ? returnVsYield(r.total_gl_pct, yld) : null
       return { ...r, ret_vs_yld: rvy, ret_vs_yld_sort: rvy ? rvy.spread : -999 }
     })
-  }, [data, rvyMode, return1yMap])
+  }, [data, rvyMode])
 
   const tabConfig = {
     unrealized: { cols: unrealizedCols, rows: enrichedUnrealized },

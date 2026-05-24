@@ -62,6 +62,58 @@ from dividend_safety import (
     summarize_dividend_safety,
 )
 
+def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
+    """Drop-in replacement for yf.download that batches large ticker lists.
+
+    yfinance silently drops tickers when downloading 50+ at once.
+    This splits into chunks and merges the results.
+    Single-ticker and small lists pass through unchanged.
+    Caller's group_by preference is fully preserved across all paths.
+    """
+    import yfinance as yf
+
+    if isinstance(tickers, str):
+        tickers = tickers.split()
+    if isinstance(tickers, (list, tuple)):
+        tickers = [t.strip() for t in tickers if t.strip()]
+
+    if not tickers:
+        return pd.DataFrame()
+
+    kwargs.setdefault("progress", False)
+    # Do NOT default group_by — preserve caller's intent
+
+    if len(tickers) <= chunk_size:
+        return yf.download(tickers if len(tickers) > 1 else tickers[0], **kwargs)
+
+    # Multi-chunk path: use caller's group_by (if any) in each chunk.
+    # Single-ticker chunks return flat columns and must be normalized to match
+    # what a multi-ticker download with the same group_by setting would return.
+    caller_group_by = kwargs.get("group_by", None)
+    frames = []
+    for i in range(0, len(tickers), chunk_size):
+        chunk = tickers[i:i + chunk_size]
+        try:
+            raw = yf.download(chunk if len(chunk) > 1 else chunk[0], **kwargs)
+            if not raw.empty:
+                if len(chunk) == 1 and not isinstance(raw.columns, pd.MultiIndex):
+                    if caller_group_by == "ticker":
+                        # Caller wants (ticker, price_type) MultiIndex
+                        raw = pd.concat({chunk[0]: raw}, axis=1)
+                    else:
+                        # Default yfinance format: (price_type, ticker) MultiIndex
+                        raw.columns = pd.MultiIndex.from_tuples(
+                            [(col, chunk[0]) for col in raw.columns]
+                        )
+                frames.append(raw)
+        except Exception:
+            pass
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, axis=1)
+
+
 app = Flask(__name__)
 app.json = NanSafeJSONProvider(app)
 app.secret_key = "portfolio-tracking-client-secret-key"
@@ -3261,7 +3313,7 @@ def _fetch_yahoo_dividend_history_for_tickers(tickers):
 
     histories = {}
     try:
-        raw = yf.download(
+        raw = _chunked_yf_download(
             " ".join(tickers),
             period="1y",
             progress=False,
@@ -5717,7 +5769,7 @@ def refresh_market_data():
     raw = pd.DataFrame()
 
     try:
-        raw = yf.download(ticker_str, period="1y", progress=False, auto_adjust=False, actions=True)
+        raw = _chunked_yf_download(ticker_str, period="1y", progress=False, auto_adjust=False, actions=True)
         if not raw.empty:
             def _col(name):
                 if isinstance(raw.columns, pd.MultiIndex):
@@ -5795,7 +5847,7 @@ def refresh_market_data():
                     # If still no data, try a separate download for the new symbol
                     if t not in price_map:
                         try:
-                            r2 = yf.download(new_sym, period="1y", progress=False, auto_adjust=False, actions=True)
+                            r2 = _chunked_yf_download(new_sym, period="1y", progress=False, auto_adjust=False, actions=True)
                             if not r2.empty:
                                 c2 = r2["Close"] if "Close" in r2.columns else (r2["Close"][new_sym] if isinstance(r2.columns, pd.MultiIndex) else None)
                                 if c2 is not None:
@@ -9552,7 +9604,7 @@ def dividend_compare_holdings():
     # Batch download dividend history (one yfinance call for TTM)
     ttm_map = {}
     try:
-        raw = yf.download(" ".join(tickers), period="1y", progress=False, auto_adjust=False, actions=True)
+        raw = _chunked_yf_download(" ".join(tickers), period="1y", progress=False, auto_adjust=False, actions=True)
         if not raw.empty:
             if isinstance(raw.columns, pd.MultiIndex):
                 divs = raw["Dividends"] if "Dividends" in raw.columns.get_level_values(0) else None
@@ -10118,7 +10170,7 @@ def portfolio_summary_data():
             pass
 
     try:
-        raw = yf.download(" ".join(all_dl), period="1y", auto_adjust=True, progress=False, threads=False)
+        raw = _chunked_yf_download(" ".join(all_dl), period="1y", auto_adjust=True, progress=False, threads=False)
         if raw.empty:
             if cached:
                 return jsonify(cached)
@@ -10280,7 +10332,7 @@ def ticker_return_chart(ticker):
         pass
 
     try:
-        raw = yf.download(dl_ticker, start=start_str, progress=False, auto_adjust=False, actions=True)
+        raw = _chunked_yf_download(dl_ticker, start=start_str, progress=False, auto_adjust=False, actions=True)
     except Exception as e:
         return jsonify({"error": f"Yahoo Finance error for {ticker}: {str(e)}"}), 404
 
@@ -10333,7 +10385,7 @@ def ticker_return_1y(ticker):
         pass
 
     try:
-        raw = yf.download(dl_ticker, start=start_date, progress=False, auto_adjust=False, actions=True)
+        raw = _chunked_yf_download(dl_ticker, start=start_date, progress=False, auto_adjust=False, actions=True)
     except Exception as e:
         return jsonify({"error": f"Yahoo Finance error for {ticker}: {str(e)}"}), 404
 
@@ -10386,8 +10438,8 @@ def ticker_return_1y_bulk():
     dl_symbols = list(set(dl_map.values()))
 
     try:
-        raw = yf.download(dl_symbols, start=start_date, progress=False,
-                          auto_adjust=False, actions=True, group_by="ticker")
+        raw = _chunked_yf_download(dl_symbols, start=start_date,
+                                   auto_adjust=False, actions=True, group_by="ticker")
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -10674,7 +10726,7 @@ def _research_adjusted_close_series(ticker):
         pass
 
     try:
-        raw = yf.download(dl_symbol, period="max", auto_adjust=True, progress=False)
+        raw = _chunked_yf_download(dl_symbol, period="max", auto_adjust=True, progress=False)
     except Exception:
         return None, description
 
@@ -12427,7 +12479,7 @@ def dividend_analysis_data():
                   dividend_paid, estim_payment_per_year, approx_monthly_income,
                   annual_yield_on_cost, current_annual_yield,
                   purchase_value, current_value, gain_or_loss,
-                  div_frequency, ex_div_date, reinvest, div, current_price,
+                  div_frequency, ex_div_date, div_pay_date, reinvest, div, current_price,
                   quantity
            FROM all_account_info
            WHERE purchase_value IS NOT NULL AND purchase_value > 0
@@ -12527,6 +12579,11 @@ def dividend_analysis_data():
             "ticker": row["ticker"],
             "description": row["description"],
             "category_name": row["category_name"],
+            "div_frequency": row.get("div_frequency") or None,
+            "ex_div_date": row.get("ex_div_date"),
+            "div_pay_date": row.get("div_pay_date"),
+            "quantity": _clean(row.get("quantity")),
+            "div_per_share": _clean(row.get("div")),
             "ytd_divs": _clean(row.get("ytd_divs")),
             "total_divs_received": _clean(row.get("total_divs_received")),
             "paid_for_itself": _clean(row.get("paid_for_itself")),
@@ -12783,7 +12840,7 @@ def dividend_analysis_data():
     values_map = {row["ticker"]: float(row["current_value"] or 0) for _, row in df.iterrows()}
     try:
         all_dl = list(set(tickers + ["SPY"]))
-        raw = yf.download(" ".join(all_dl), period="1y", auto_adjust=True, progress=False)
+        raw = _chunked_yf_download(" ".join(all_dl), period="1y", auto_adjust=True, progress=False)
         if not raw.empty:
             if isinstance(raw.columns, pd.MultiIndex):
                 close = raw["Close"].dropna(how="all")
@@ -14279,7 +14336,7 @@ def total_return_charts():
         extra = list(set(["SPY"] + compare_tickers))
         all_dl = list(set(tickers_list + extra))
 
-        raw = yf.download(
+        raw = _chunked_yf_download(
             " ".join(all_dl), **yf_kwargs, interval=yf_interval,
             progress=False, auto_adjust=True,
         )
@@ -14432,7 +14489,7 @@ def total_return_compare():
     period_label = period_labels.get(period, period)
 
     try:
-        raw = yf.download(
+        raw = _chunked_yf_download(
             " ".join(all_tickers), **yf_kwargs,
             auto_adjust=False, actions=True, progress=False,
         )
@@ -14971,7 +15028,7 @@ def gains_losses_chart():
 
     try:
         tickers_list = hdf["ticker"].tolist()
-        raw = yf.download(
+        raw = _chunked_yf_download(
             " ".join(tickers_list), **yf_kwargs, interval="1d",
             progress=False, auto_adjust=True,
         )
@@ -15473,7 +15530,7 @@ def growth_data():
     yahoo_symbols = list(dict.fromkeys(yahoo_by_symbol.values()))
 
     try:
-        raw = yf.download(
+        raw = _chunked_yf_download(
             " ".join(yahoo_symbols), period=period, auto_adjust=True,
             actions=True, progress=False
         )
@@ -15794,12 +15851,12 @@ def etf_screen_data():
     frac = reinvest_pct / 100.0
     try:
         # Download price data (unadjusted)
-        price_df = yf.download(yahoo_symbols, period=period, interval=interval, auto_adjust=False, progress=False)
+        price_df = _chunked_yf_download(yahoo_symbols, period=period, interval=interval, auto_adjust=False, progress=False)
         if price_df.empty:
             return jsonify(error="No price data found"), 404
 
         # Download daily data with dividends for return calcs
-        div_df = yf.download(yahoo_symbols, period=period, interval="1d", auto_adjust=False, actions=True, progress=False)
+        div_df = _chunked_yf_download(yahoo_symbols, period=period, interval="1d", auto_adjust=False, actions=True, progress=False)
 
         result = {
             "mode": mode,
@@ -17248,7 +17305,7 @@ def buy_sell_signals_data():
     table_rows = []
 
     try:
-        raw = yf.download(
+        raw = _chunked_yf_download(
             " ".join(all_tickers),
             period="1y",
             interval="1d",
@@ -17668,7 +17725,7 @@ def watchlist_data():
             return None
 
     try:
-        raw = yf.download(
+        raw = _chunked_yf_download(
             " ".join(download_tickers),
             period="1y",
             interval="1d",
@@ -18324,7 +18381,7 @@ def nav_erosion_portfolio_data():
     # Batch download all tickers
     try:
         from datetime import datetime as _dt
-        raw = yf.download(
+        raw = _chunked_yf_download(
             download_tickers,
             start=start_date, end=end_date,
             interval="1d", auto_adjust=False, actions=True,
@@ -18819,7 +18876,7 @@ def _pis_run_inner():
 
         try:
             from datetime import datetime as _dt
-            raw = yf.download(
+            raw = _chunked_yf_download(
                 unique_tickers,
                 start=start_date, end=end_date,
                 interval="1d", auto_adjust=False, actions=True,
@@ -19798,7 +19855,7 @@ def analytics_data():
     benchmark_downloads = [part for b in benchmark_map.values() for part in _nav_benchmark_parts(b)]
     all_dl = list(set(tickers + [benchmark] + benchmark_downloads))
     try:
-        raw = yf.download(
+        raw = _chunked_yf_download(
             " ".join(all_dl),
             period=period,
             auto_adjust=False,
@@ -20255,7 +20312,7 @@ def correlation_data():
     unique = list(dict.fromkeys(tickers))
 
     try:
-        raw = yf.download(" ".join(unique), period=period, auto_adjust=True, progress=False)
+        raw = _chunked_yf_download(" ".join(unique), period=period, auto_adjust=True, progress=False)
         if raw.empty:
             return jsonify(error="No price data returned from Yahoo Finance.")
     except Exception as e:
@@ -20378,7 +20435,7 @@ def analytics_backtest():
         return jsonify({"dates": [], "series": []})
 
     try:
-        close = yf.download(req_tickers, period=period, auto_adjust=True, progress=False)
+        close = _chunked_yf_download(req_tickers, period=period, auto_adjust=True, progress=False)
         if hasattr(close, "columns") and isinstance(close.columns, pd.MultiIndex):
             close = close["Close"]
         elif "Close" in close.columns:
@@ -20473,7 +20530,7 @@ def analytics_rolling_metrics():
         return jsonify({"dates": [], "sharpe": [], "sortino": []})
 
     try:
-        close = yf.download(req_tickers, period=period, auto_adjust=True, progress=False)
+        close = _chunked_yf_download(req_tickers, period=period, auto_adjust=True, progress=False)
         if hasattr(close, "columns") and isinstance(close.columns, pd.MultiIndex):
             close = close["Close"]
         elif "Close" in close.columns:
@@ -21567,7 +21624,7 @@ def builder_analyze(port_id):
 
     # Download price data
     try:
-        df = yf.download(all_tickers, period=period, auto_adjust=True, progress=False)
+        df = _chunked_yf_download(all_tickers, period=period, auto_adjust=True, progress=False)
     except Exception as e:
         return jsonify({"error": f"yfinance download failed: {e}"}), 500
 
@@ -21864,7 +21921,7 @@ def builder_compare():
 
     all_tickers = list(all_tickers_set)
     try:
-        df = yf.download(all_tickers, period=period, auto_adjust=True, progress=False)
+        df = _chunked_yf_download(all_tickers, period=period, auto_adjust=True, progress=False)
     except Exception as e:
         return jsonify({"error": f"yfinance download failed: {e}"}), 500
 
@@ -22644,7 +22701,7 @@ def _distribution_compare_compute():
         unique_tickers = list(dict.fromkeys(tickers))
 
         try:
-            raw = yf.download(
+            raw = _chunked_yf_download(
                 unique_tickers, period="max", interval="1d",
                 auto_adjust=False, actions=True, group_by="ticker", progress=False,
             )
@@ -23267,7 +23324,7 @@ def consolidation_clusters():
 
     # Download 1 year of daily close prices
     try:
-        raw = yf.download(" ".join(tickers), period="1y", auto_adjust=True, progress=False)
+        raw = _chunked_yf_download(" ".join(tickers), period="1y", auto_adjust=True, progress=False)
         if raw.empty:
             return jsonify(error="No price data returned from Yahoo Finance.")
     except Exception as e:
@@ -23568,7 +23625,7 @@ def consolidation_simulate():
     # Download historical data for performance comparison
     both_tickers = list(set([sell_ticker, buy_ticker]))
     try:
-        raw = yf.download(" ".join(both_tickers), period=period, auto_adjust=True,
+        raw = _chunked_yf_download(" ".join(both_tickers), period=period, auto_adjust=True,
                           actions=True, progress=False)
         if raw.empty:
             return jsonify(error="No historical data returned from Yahoo Finance.")
@@ -23723,7 +23780,7 @@ def consolidation_regimes():
     # Download SPY, VIX, and all requested tickers
     all_dl = list(set(tickers + ["SPY", "^VIX"]))
     try:
-        raw = yf.download(" ".join(all_dl), period=period, auto_adjust=True,
+        raw = _chunked_yf_download(" ".join(all_dl), period=period, auto_adjust=True,
                           actions=True, progress=False)
         if raw.empty:
             return jsonify(error="No price data returned from Yahoo Finance.")
@@ -24268,7 +24325,7 @@ def macro_conditions():
     # Download all macro proxy tickers
     all_symbols = list(MACRO_TICKERS.values())
     try:
-        raw = yf.download(" ".join(all_symbols), period="1y", auto_adjust=True, progress=False)
+        raw = _chunked_yf_download(" ".join(all_symbols), period="1y", auto_adjust=True, progress=False)
         if raw.empty:
             return jsonify(error="No macro data returned from Yahoo Finance.")
     except Exception as e:
@@ -25850,7 +25907,7 @@ def macro_quadrant():
         # the prior 260 — gives the rare quadrants (especially stagflation
         # 2022, deflation 2008/2020) actual representation in the matrix.
         tickers = ["SPY", "XLI", "TIP", "IEF"]
-        raw = yf.download(tickers, period="20y", auto_adjust=True, progress=False)
+        raw = _chunked_yf_download(tickers, period="20y", auto_adjust=True, progress=False)
         close = raw["Close"].dropna(how="all")
 
         # Resample to weekly (Friday close) for noise reduction
@@ -26593,7 +26650,7 @@ def scanner_scan():
         return jsonify(rows=[], error=None)
 
     try:
-        df = yf.download(tickers, period=period, interval=interval,
+        df = _chunked_yf_download(tickers, period=period, interval=interval,
                          auto_adjust=True, progress=False)
     except Exception as e:
         return jsonify(rows=[], error=str(e))
@@ -26671,7 +26728,7 @@ def scanner_chart(ticker):
     fetch_period = warmup_map.get(period, "max")
 
     try:
-        df = yf.download(ticker, period=fetch_period, interval=interval,
+        df = _chunked_yf_download(ticker, period=fetch_period, interval=interval,
                          auto_adjust=True, progress=False)
     except Exception as e:
         return jsonify(error=str(e)), 502
@@ -26790,7 +26847,7 @@ def general_scanner_chart(ticker):
     fetch_period = warmup_map.get(period, "max")
 
     try:
-        df = yf.download(ticker, period=fetch_period, interval="1d",
+        df = _chunked_yf_download(ticker, period=fetch_period, interval="1d",
                          auto_adjust=True, progress=False)
     except Exception as e:
         return jsonify(error=str(e)), 502
@@ -26994,7 +27051,7 @@ def _general_scanner_refresh_impl(tickers, type_map, force_info=False):
     for i in range(0, len(tickers), BATCH_SIZE):
         batch = tickers[i:i + BATCH_SIZE]
         try:
-            hist = yf.download(batch, period="1y", interval="1d",
+            hist = _chunked_yf_download(batch, period="1y", interval="1d",
                                auto_adjust=True, progress=False, threads=True)
             multi = len(batch) > 1
             for t in batch:
@@ -28049,7 +28106,7 @@ def growth_2_data():
     yahoo_tickers = list(dict.fromkeys(yahoo_by_ticker.values()))
 
     try:
-        raw = yf.download(
+        raw = _chunked_yf_download(
             " ".join(yahoo_tickers), period=yf_period, auto_adjust=True,
             actions=True, progress=False
         )
