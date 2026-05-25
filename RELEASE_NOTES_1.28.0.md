@@ -75,6 +75,14 @@ Version 1.28.0 packages the recent tax, dividend-income, market-calendar, and di
 - Duplicate transaction detection helps avoid re-adding the same imported transaction records when restoring from an export.
 - Help content was updated to explain how to export holdings with transactions and how to re-import the combined workbook later.
 
+## Dashboard Equity Curve
+
+- Added a Portfolio Value Over Time equity-curve chart to the Dashboard.
+- The chart tracks portfolio value from recorded NAV snapshots so users can see how the active portfolio changes over time.
+- Added a Record NAV workflow from the Dashboard so users can capture the current portfolio value as a new equity-curve data point.
+- The chart supports single-point and multi-point histories, drawing the equity curve once at least two snapshots are available.
+- The dashboard help content now explains how the equity curve works and how NAV snapshots drive the chart.
+
 ## Market Calendar And Dashboard
 
 - Added a market calendar helper for NYSE trading-day detection and closure reasons.
@@ -97,6 +105,7 @@ Version 1.28.0 packages the recent tax, dividend-income, market-calendar, and di
 - Macro Regime Dashboard endpoints and tabs were reviewed for release-note coverage.
 - Cost basis mode coverage was reviewed across the shared profile query string and affected portfolio pages.
 - Combined positions and transactions export/import coverage was reviewed in the export/import workflow and release package notes.
+- Dashboard equity-curve coverage was reviewed in the Dashboard and help documentation.
 
 ## Deployment Artifacts
 
