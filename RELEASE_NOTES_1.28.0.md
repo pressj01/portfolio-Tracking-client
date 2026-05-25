@@ -46,6 +46,17 @@ Version 1.28.0 packages the recent tax, dividend-income, market-calendar, and di
 - Added smarter distribution-period labeling so the chart can label monthly and quarterly distribution histories appropriately.
 - Updated help content for the comparer and research pages so the new distribution percentage modes are documented.
 
+## Macro Regime Dashboard
+
+- Added the Macro Regime Dashboard route and navigation entry for macro conditions, portfolio exposure, rebalancing tilts, income benchmarking, classification overrides, and regime quadrant analysis.
+- Added macro condition APIs that pull market proxy data, cache macro conditions, classify the current environment, and surface active macro components such as inflation, rates, oil, volatility, dollar, and credit-spread signals.
+- Added portfolio exposure analysis that classifies holdings by macro sensitivity, scores favorable/neutral/unfavorable positioning, and summarizes value exposure by sensitivity category.
+- Added macro rebalancing tilt suggestions that identify overweight/underweight sensitivity areas and produce holding-level action guidance.
+- Added an income benchmark view that compares portfolio income allocation against target buckets, including covered call, BDC, CEF, REIT, preferred stock, dividend growth, commodities/gold, and fixed-income categories.
+- Added per-profile macro classification overrides so holdings can be manually tagged, excluded from macro analysis, or reverted back to automatic classification.
+- Added regime quadrant analysis using FRED economic indicators and market-proxy transition modeling, including current quadrant classification, transition probabilities, forward projections, and asset-class performance guidance.
+- Added help content for the Macro Regime Dashboard, including screenshots and explanations for all six tabs.
+
 ## Market Calendar And Dashboard
 
 - Added a market calendar helper for NYSE trading-day detection and closure reasons.
@@ -65,6 +76,7 @@ Version 1.28.0 packages the recent tax, dividend-income, market-calendar, and di
 - Dividend-history monthly endpoint returns a multi-month series rather than a single current-month point.
 - Dividend Calculator was manually checked with a large account loaded with 66 selected tickers.
 - Distribution History percentage modes were verified across the comparer/research chart implementation.
+- Macro Regime Dashboard endpoints and tabs were reviewed for release-note coverage.
 
 ## Deployment Artifacts
 
