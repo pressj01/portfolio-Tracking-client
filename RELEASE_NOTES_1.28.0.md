@@ -31,7 +31,7 @@ Version 1.28.0 packages the recent tax, dividend-income, market-calendar, and di
 
 ## Dividend History
 
-- Fixed Snowball_Studwell and other refresh-only accounts that had only current-month `refresh_estimate` rows in `dividend_payments`.
+- Fixed refresh-only accounts that had only current-month `refresh_estimate` rows in `dividend_payments`.
 - When an account has refresh-only payments and no monthly payout history, the monthly dividend-history chart now backfills prior months from holding-level dividend estimates.
 - The current refresh month still uses the latest refresh payment data when available.
 - Yearly refresh-only views now use holding-level YTD totals instead of showing only the current refresh rows.
@@ -53,8 +53,8 @@ Version 1.28.0 packages the recent tax, dividend-income, market-calendar, and di
 
 - `npm run build` passes.
 - `py -m py_compile backend/app.py` passes.
-- Snowball_Studwell dividend-history monthly endpoint returns a multi-month series rather than a single current-month point.
-- Dividend Calculator was manually checked with Snowball_Studwell loaded with 66 selected tickers.
+- Dividend-history monthly endpoint returns a multi-month series rather than a single current-month point.
+- Dividend Calculator was manually checked with a large account loaded with 66 selected tickers.
 
 ## Deployment Artifacts
 
