@@ -5169,7 +5169,7 @@ function BlendedYieldHelp() {
 
       <h4 style={{ marginBottom: '0.5rem' }}>Step 1: Set Tax Profile</h4>
       <p style={{ marginBottom: '1rem' }}>
-        Select your state (California, Arizona, or Pennsylvania), filing status, taxable income, and total portfolio amount.
+        Select your state, filing status, taxable income, and total portfolio amount.
         The calculator displays your current Federal, State, Combined, and LTCG marginal tax rates.
       </p>
 

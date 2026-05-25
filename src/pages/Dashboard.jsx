@@ -1040,8 +1040,17 @@ export default function Dashboard() {
               setNavSnapping(true)
               pf('/api/nav/snapshot', { method: 'POST' })
                 .then(safeJson)
-                .then(() => pf('/api/nav/history').then(safeJson).then(d => { if (Array.isArray(d)) setNavHistory(d) }))
-                .catch(() => {})
+                .then(d => {
+                  if (d?.skipped) {
+                    setRefreshStatus(d.reason || 'NAV snapshot skipped because the market is closed.')
+                    setTimeout(() => setRefreshStatus(null), 4500)
+                  }
+                  return pf('/api/nav/history').then(safeJson).then(history => { if (Array.isArray(history)) setNavHistory(history) })
+                })
+                .catch(() => {
+                  setRefreshStatus('Could not record NAV snapshot.')
+                  setTimeout(() => setRefreshStatus(null), 3000)
+                })
                 .finally(() => setNavSnapping(false))
             }}
           >

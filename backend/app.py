@@ -56,6 +56,7 @@ import tax_report
 import tax_loss
 from options_api import register_routes as register_options_routes
 from market_symbols import yahoo_symbol_for_ticker as _yahoo_symbol_for_ticker
+from market_calendar import is_nyse_trading_day, nyse_closure_reason
 from dividend_safety import (
     apply_nav_coverage_overlay,
     get_dividend_safety_for_holdings,
@@ -2668,6 +2669,13 @@ def api_import_transactions():
 def api_nav_history():
     """Return portfolio NAV snapshots for the current profile."""
     start = request.args.get("start")
+    def history_payload(rows):
+        return [
+            {"date": r["nav_date"], "value": r["total_value"]}
+            for r in rows
+            if is_nyse_trading_day(r["nav_date"])
+        ]
+
     conn = get_connection()
     try:
         if request.args.get("aggregate") == "true":
@@ -2686,7 +2694,7 @@ def api_nav_history():
             query += " GROUP BY nav_date HAVING COUNT(DISTINCT profile_id) = ? ORDER BY nav_date"
             params.append(len(profile_ids))
             rows = conn.execute(query, params).fetchall()
-            return jsonify([{"date": r["nav_date"], "value": r["total_value"]} for r in rows])
+            return jsonify(history_payload(rows))
         else:
             profile_id = get_profile_id()
             query = "SELECT nav_date, total_value FROM portfolio_nav WHERE profile_id = ?"
@@ -2696,7 +2704,7 @@ def api_nav_history():
                 params.append(start)
             query += " ORDER BY nav_date"
             rows = conn.execute(query, params).fetchall()
-            return jsonify([{"date": r["nav_date"], "value": r["total_value"]} for r in rows])
+            return jsonify(history_payload(rows))
     finally:
         conn.close()
 
@@ -2715,6 +2723,20 @@ def _nav_snapshot_profile_ids(conn, profile_id):
 def api_nav_snapshot():
     """Record today's NAV for the current profile (and Owner if different)."""
     profile_id = get_profile_id()
+    today = datetime.date.today()
+    closure_reason = nyse_closure_reason(today)
+    if closure_reason:
+        label = "a weekend" if closure_reason == "weekend" else closure_reason
+        return jsonify({
+            "profile_id": profile_id,
+            "value": None,
+            "owner_value": None,
+            "values": {},
+            "skipped": True,
+            "reason": f"NAV snapshot skipped because {today.isoformat()} is {label}.",
+            "nav_date": today.isoformat(),
+        })
+
     conn = get_connection()
     try:
         profile_ids = _nav_snapshot_profile_ids(conn, profile_id)
@@ -3103,25 +3125,52 @@ def _div_calc_annual_dividend(divs, freq_code):
 
 
 def _div_calc_growth_pct(divs, freq_code):
-    """Annualized dividend per-share growth using comparable recent/prior windows."""
+    """Annualized dividend growth using median-based CAGR over up to 5 years.
+
+    Median per window filters out special/year-end distributions.
+    Structural-break detection (>3× jump between consecutive years) prevents
+    reverse-split or distribution-restructure artifacts from skewing the rate.
+    """
     pos = _div_calc_positive_dividends(divs)
     if pos.empty:
         return 0.0
     _, per_year = _DIV_CALC_FREQ_MAP.get(freq_code, ("Quarterly", 4))
     tz = pos.index.tz
     now = pd.Timestamp.now(tz=tz) if tz is not None else pd.Timestamp.now()
-    recent_window = pos[pos.index >= now - pd.DateOffset(years=1)]
-    prior_window = pos[(pos.index >= now - pd.DateOffset(years=2)) & (pos.index < now - pd.DateOffset(years=1))]
     min_count = max(1, int(per_year * 0.75))
-    if len(recent_window) < min_count or len(prior_window) < min_count:
+
+    # Build annual windows with median-normalized annual dividends
+    windows = []
+    for y in range(5):
+        start = now - pd.DateOffset(years=y + 1)
+        end = now - pd.DateOffset(years=y)
+        w = pos[(pos.index >= start) & (pos.index < end)]
+        if len(w) >= min_count:
+            windows.append(float(w.median()) * per_year)
+        else:
+            break
+
+    if len(windows) < 2:
         return 0.0
-    if recent_window.empty or prior_window.empty:
+
+    # Trim at structural breaks (ratio >3× between consecutive years)
+    usable = 1
+    for i in range(1, len(windows)):
+        if windows[i] <= 0:
+            break
+        ratio = windows[i - 1] / windows[i]
+        if ratio > 3.0 or ratio < 1.0 / 3.0:
+            break
+        usable = i + 1
+
+    if usable < 2 or windows[usable - 1] <= 0:
         return 0.0
-    recent_total = float(recent_window.mean()) * per_year
-    prior_total = float(prior_window.mean()) * per_year
-    if prior_total <= 0:
-        return 0.0
-    return round((recent_total / prior_total - 1.0) * 100.0, 4)
+
+    newest = windows[0]
+    oldest = windows[usable - 1]
+    span = usable - 1
+    cagr = (newest / oldest) ** (1.0 / span) - 1.0
+    return round(cagr * 100.0, 4)
 
 
 @app.route("/api/dividend-calc/lookup/<ticker>", methods=["GET"])

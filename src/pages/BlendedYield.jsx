@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react'
+import { API_BASE } from '../config'
 
 // ── Default 2025 Federal Income Tax Brackets ──────────────────────
 
@@ -36,45 +37,116 @@ const DEFAULT_FED_LTCG = {
   ],
 }
 
-// ── Default State Tax Data (CA includes Mental Health Surcharge) ──
+// ── Default 2025 State Tax Data ───────────────────────────────────
 
-const DEFAULT_CA_BRACKETS = {
-  single: [
-    { max: 10756, rate: 0.01 },
-    { max: 25499, rate: 0.02 },
-    { max: 40245, rate: 0.04 },
-    { max: 55866, rate: 0.06 },
-    { max: 70606, rate: 0.08 },
-    { max: 360659, rate: 0.093 },
-    { max: 432787, rate: 0.103 },
-    { max: 721314, rate: 0.113 },
-    { max: 1000000, rate: 0.123 },
-    { max: Infinity, rate: 0.133 },
-  ],
-  mfj: [
-    { max: 21512, rate: 0.01 },
-    { max: 50998, rate: 0.02 },
-    { max: 80490, rate: 0.04 },
-    { max: 111732, rate: 0.06 },
-    { max: 141212, rate: 0.08 },
-    { max: 721318, rate: 0.093 },
-    { max: 865574, rate: 0.103 },
-    { max: 1000000, rate: 0.113 },
-    { max: 1396542, rate: 0.123 },
-    { max: Infinity, rate: 0.133 },
-  ],
+const DEFAULT_STATE_TAX = {
+  AK: 0,
+  AL: { single: [{ max: 500, rate: 0.02 }, { max: 3000, rate: 0.04 }, { max: Infinity, rate: 0.05 }], mfj: [{ max: 1000, rate: 0.02 }, { max: 6000, rate: 0.04 }, { max: Infinity, rate: 0.05 }] },
+  AR: { single: [{ max: 4500, rate: 0.02 }, { max: Infinity, rate: 0.039 }], mfj: [{ max: 4500, rate: 0.02 }, { max: Infinity, rate: 0.039 }] },
+  AZ: 0.025,
+  CA: { single: [{ max: 10756, rate: 0.01 }, { max: 25499, rate: 0.02 }, { max: 40245, rate: 0.04 }, { max: 55866, rate: 0.06 }, { max: 70606, rate: 0.08 }, { max: 360659, rate: 0.093 }, { max: 432787, rate: 0.103 }, { max: 721314, rate: 0.113 }, { max: 1000000, rate: 0.123 }, { max: Infinity, rate: 0.133 }], mfj: [{ max: 21512, rate: 0.01 }, { max: 50998, rate: 0.02 }, { max: 80490, rate: 0.04 }, { max: 111732, rate: 0.06 }, { max: 141732, rate: 0.08 }, { max: 721318, rate: 0.093 }, { max: 865574, rate: 0.103 }, { max: 1000000, rate: 0.113 }, { max: 1442628, rate: 0.123 }, { max: Infinity, rate: 0.133 }] },
+  CO: 0.044,
+  CT: { single: [{ max: 10000, rate: 0.02 }, { max: 50000, rate: 0.045 }, { max: 100000, rate: 0.055 }, { max: 200000, rate: 0.06 }, { max: 250000, rate: 0.065 }, { max: 500000, rate: 0.069 }, { max: Infinity, rate: 0.0699 }], mfj: [{ max: 20000, rate: 0.02 }, { max: 100000, rate: 0.045 }, { max: 200000, rate: 0.055 }, { max: 400000, rate: 0.06 }, { max: 500000, rate: 0.065 }, { max: 1000000, rate: 0.069 }, { max: Infinity, rate: 0.0699 }] },
+  DE: { single: [{ max: 5000, rate: 0.022 }, { max: 10000, rate: 0.039 }, { max: 20000, rate: 0.048 }, { max: 25000, rate: 0.052 }, { max: 60000, rate: 0.0555 }, { max: Infinity, rate: 0.066 }], mfj: [{ max: 5000, rate: 0.022 }, { max: 10000, rate: 0.039 }, { max: 20000, rate: 0.048 }, { max: 25000, rate: 0.052 }, { max: 60000, rate: 0.0555 }, { max: Infinity, rate: 0.066 }] },
+  FL: 0,
+  GA: 0.0539,
+  HI: { single: [{ max: 9600, rate: 0.014 }, { max: 14400, rate: 0.032 }, { max: 19200, rate: 0.055 }, { max: 24000, rate: 0.064 }, { max: 36000, rate: 0.068 }, { max: 48000, rate: 0.072 }, { max: 125000, rate: 0.076 }, { max: 175000, rate: 0.079 }, { max: 225000, rate: 0.0825 }, { max: 275000, rate: 0.09 }, { max: 325000, rate: 0.1 }, { max: Infinity, rate: 0.11 }], mfj: [{ max: 19200, rate: 0.014 }, { max: 28800, rate: 0.032 }, { max: 38400, rate: 0.055 }, { max: 48000, rate: 0.064 }, { max: 72000, rate: 0.068 }, { max: 96000, rate: 0.072 }, { max: 250000, rate: 0.076 }, { max: 350000, rate: 0.079 }, { max: 450000, rate: 0.0825 }, { max: 550000, rate: 0.09 }, { max: 650000, rate: 0.1 }, { max: Infinity, rate: 0.11 }] },
+  IA: 0.038,
+  ID: 0.05695,
+  IL: 0.0495,
+  IN: 0.03,
+  KS: { single: [{ max: 23000, rate: 0.052 }, { max: Infinity, rate: 0.0558 }], mfj: [{ max: 46000, rate: 0.052 }, { max: Infinity, rate: 0.0558 }] },
+  KY: 0.04,
+  LA: 0.03,
+  MA: { single: [{ max: 1083150, rate: 0.05 }, { max: Infinity, rate: 0.09 }], mfj: [{ max: 1083150, rate: 0.05 }, { max: Infinity, rate: 0.09 }] },
+  MD: { single: [{ max: 1000, rate: 0.02 }, { max: 2000, rate: 0.03 }, { max: 3000, rate: 0.04 }, { max: 100000, rate: 0.0475 }, { max: 125000, rate: 0.05 }, { max: 150000, rate: 0.0525 }, { max: 250000, rate: 0.055 }, { max: Infinity, rate: 0.0575 }], mfj: [{ max: 1000, rate: 0.02 }, { max: 2000, rate: 0.03 }, { max: 3000, rate: 0.04 }, { max: 150000, rate: 0.0475 }, { max: 175000, rate: 0.05 }, { max: 225000, rate: 0.0525 }, { max: 300000, rate: 0.055 }, { max: Infinity, rate: 0.0575 }] },
+  ME: { single: [{ max: 26800, rate: 0.058 }, { max: 63450, rate: 0.0675 }, { max: Infinity, rate: 0.0715 }], mfj: [{ max: 53600, rate: 0.058 }, { max: 126900, rate: 0.0675 }, { max: Infinity, rate: 0.0715 }] },
+  MI: 0.0425,
+  MN: { single: [{ max: 32570, rate: 0.0535 }, { max: 106990, rate: 0.068 }, { max: 198630, rate: 0.0785 }, { max: Infinity, rate: 0.0985 }], mfj: [{ max: 47620, rate: 0.0535 }, { max: 189180, rate: 0.068 }, { max: 330410, rate: 0.0785 }, { max: Infinity, rate: 0.0985 }] },
+  MO: { single: [{ max: 2626, rate: 0.02 }, { max: 3939, rate: 0.025 }, { max: 5252, rate: 0.03 }, { max: 6565, rate: 0.035 }, { max: 7878, rate: 0.04 }, { max: 9191, rate: 0.045 }, { max: Infinity, rate: 0.047 }], mfj: [{ max: 2626, rate: 0.02 }, { max: 3939, rate: 0.025 }, { max: 5252, rate: 0.03 }, { max: 6565, rate: 0.035 }, { max: 7878, rate: 0.04 }, { max: 9191, rate: 0.045 }, { max: Infinity, rate: 0.047 }] },
+  MS: 0.044,
+  MT: { single: [{ max: 21100, rate: 0.047 }, { max: Infinity, rate: 0.059 }], mfj: [{ max: 42200, rate: 0.047 }, { max: Infinity, rate: 0.059 }] },
+  NC: 0.0425,
+  ND: { single: [{ max: 244825, rate: 0.0195 }, { max: Infinity, rate: 0.025 }], mfj: [{ max: 298075, rate: 0.0195 }, { max: Infinity, rate: 0.025 }] },
+  NE: { single: [{ max: 4030, rate: 0.0246 }, { max: 24120, rate: 0.0351 }, { max: 38870, rate: 0.0501 }, { max: Infinity, rate: 0.052 }], mfj: [{ max: 8040, rate: 0.0246 }, { max: 48250, rate: 0.0351 }, { max: 77730, rate: 0.0501 }, { max: Infinity, rate: 0.052 }] },
+  NH: 0,
+  NJ: { single: [{ max: 20000, rate: 0.014 }, { max: 35000, rate: 0.0175 }, { max: 40000, rate: 0.035 }, { max: 75000, rate: 0.05525 }, { max: 500000, rate: 0.0637 }, { max: 1000000, rate: 0.0897 }, { max: Infinity, rate: 0.1075 }], mfj: [{ max: 20000, rate: 0.014 }, { max: 50000, rate: 0.0175 }, { max: 70000, rate: 0.0245 }, { max: 80000, rate: 0.035 }, { max: 150000, rate: 0.05525 }, { max: 500000, rate: 0.0637 }, { max: 1000000, rate: 0.0897 }, { max: Infinity, rate: 0.1075 }] },
+  NM: { single: [{ max: 5500, rate: 0.015 }, { max: 16500, rate: 0.032 }, { max: 33500, rate: 0.043 }, { max: 66500, rate: 0.047 }, { max: 210000, rate: 0.049 }, { max: Infinity, rate: 0.059 }], mfj: [{ max: 8000, rate: 0.015 }, { max: 25000, rate: 0.032 }, { max: 50000, rate: 0.043 }, { max: 100000, rate: 0.047 }, { max: 315000, rate: 0.049 }, { max: Infinity, rate: 0.059 }] },
+  NV: 0,
+  NY: { single: [{ max: 8500, rate: 0.04 }, { max: 11700, rate: 0.045 }, { max: 13900, rate: 0.0525 }, { max: 80650, rate: 0.055 }, { max: 215400, rate: 0.06 }, { max: 1077550, rate: 0.0685 }, { max: 5000000, rate: 0.0965 }, { max: 25000000, rate: 0.103 }, { max: Infinity, rate: 0.109 }], mfj: [{ max: 17150, rate: 0.04 }, { max: 23600, rate: 0.045 }, { max: 27900, rate: 0.0525 }, { max: 161550, rate: 0.055 }, { max: 323200, rate: 0.06 }, { max: 2155350, rate: 0.0685 }, { max: 5000000, rate: 0.0965 }, { max: 25000000, rate: 0.103 }, { max: Infinity, rate: 0.109 }] },
+  OH: { single: [{ max: 100000, rate: 0.0275 }, { max: Infinity, rate: 0.035 }], mfj: [{ max: 100000, rate: 0.0275 }, { max: Infinity, rate: 0.035 }] },
+  OK: { single: [{ max: 1000, rate: 0.0025 }, { max: 2500, rate: 0.0075 }, { max: 3750, rate: 0.0175 }, { max: 4900, rate: 0.0275 }, { max: 7200, rate: 0.0375 }, { max: Infinity, rate: 0.0475 }], mfj: [{ max: 2000, rate: 0.0025 }, { max: 5000, rate: 0.0075 }, { max: 7500, rate: 0.0175 }, { max: 9800, rate: 0.0275 }, { max: 14400, rate: 0.0375 }, { max: Infinity, rate: 0.0475 }] },
+  OR: { single: [{ max: 4400, rate: 0.0475 }, { max: 11050, rate: 0.0675 }, { max: 125000, rate: 0.0875 }, { max: Infinity, rate: 0.099 }], mfj: [{ max: 8800, rate: 0.0475 }, { max: 22100, rate: 0.0675 }, { max: 250000, rate: 0.0875 }, { max: Infinity, rate: 0.099 }] },
+  PA: 0.0307,
+  RI: { single: [{ max: 79900, rate: 0.0375 }, { max: 181650, rate: 0.0475 }, { max: Infinity, rate: 0.0599 }], mfj: [{ max: 79900, rate: 0.0375 }, { max: 181650, rate: 0.0475 }, { max: Infinity, rate: 0.0599 }] },
+  SC: { single: [{ max: 3560, rate: 0 }, { max: 17830, rate: 0.03 }, { max: Infinity, rate: 0.062 }], mfj: [{ max: 3560, rate: 0 }, { max: 17830, rate: 0.03 }, { max: Infinity, rate: 0.062 }] },
+  SD: 0,
+  TN: 0,
+  TX: 0,
+  UT: 0.0455,
+  VA: { single: [{ max: 3000, rate: 0.02 }, { max: 5000, rate: 0.03 }, { max: 17000, rate: 0.05 }, { max: Infinity, rate: 0.0575 }], mfj: [{ max: 3000, rate: 0.02 }, { max: 5000, rate: 0.03 }, { max: 17000, rate: 0.05 }, { max: Infinity, rate: 0.0575 }] },
+  VT: { single: [{ max: 47900, rate: 0.0335 }, { max: 116000, rate: 0.066 }, { max: 242000, rate: 0.076 }, { max: Infinity, rate: 0.0875 }], mfj: [{ max: 79950, rate: 0.0335 }, { max: 193300, rate: 0.066 }, { max: 294600, rate: 0.076 }, { max: Infinity, rate: 0.0875 }] },
+  WA: 0,
+  WI: { single: [{ max: 14680, rate: 0.035 }, { max: 29370, rate: 0.044 }, { max: 323290, rate: 0.053 }, { max: Infinity, rate: 0.0765 }], mfj: [{ max: 19580, rate: 0.035 }, { max: 39150, rate: 0.044 }, { max: 431060, rate: 0.053 }, { max: Infinity, rate: 0.0765 }] },
+  WV: { single: [{ max: 10000, rate: 0.0222 }, { max: 25000, rate: 0.0296 }, { max: 40000, rate: 0.0333 }, { max: 60000, rate: 0.0444 }, { max: Infinity, rate: 0.0482 }], mfj: [{ max: 10000, rate: 0.0222 }, { max: 25000, rate: 0.0296 }, { max: 40000, rate: 0.0333 }, { max: 60000, rate: 0.0444 }, { max: Infinity, rate: 0.0482 }] },
+  WY: 0,
 }
-
-const DEFAULT_AZ_RATE = 0.025
-const DEFAULT_PA_RATE = 0.0307
 
 // ── State Metadata (non-bracket) ──────────────────────────────────
 
 const STATES = {
-  CA: { name: 'California', abbr: 'CA', allMuniExempt: false },
+  AL: { name: 'Alabama', abbr: 'AL', allMuniExempt: false },
+  AK: { name: 'Alaska', abbr: 'AK', allMuniExempt: false },
   AZ: { name: 'Arizona', abbr: 'AZ', allMuniExempt: false },
+  AR: { name: 'Arkansas', abbr: 'AR', allMuniExempt: false },
+  CA: { name: 'California', abbr: 'CA', allMuniExempt: false },
+  CO: { name: 'Colorado', abbr: 'CO', allMuniExempt: false },
+  CT: { name: 'Connecticut', abbr: 'CT', allMuniExempt: false },
+  DE: { name: 'Delaware', abbr: 'DE', allMuniExempt: false },
+  FL: { name: 'Florida', abbr: 'FL', allMuniExempt: false },
+  GA: { name: 'Georgia', abbr: 'GA', allMuniExempt: false },
+  HI: { name: 'Hawaii', abbr: 'HI', allMuniExempt: false },
+  ID: { name: 'Idaho', abbr: 'ID', allMuniExempt: false },
+  IL: { name: 'Illinois', abbr: 'IL', allMuniExempt: false },
+  IN: { name: 'Indiana', abbr: 'IN', allMuniExempt: false },
+  IA: { name: 'Iowa', abbr: 'IA', allMuniExempt: false },
+  KS: { name: 'Kansas', abbr: 'KS', allMuniExempt: false },
+  KY: { name: 'Kentucky', abbr: 'KY', allMuniExempt: false },
+  LA: { name: 'Louisiana', abbr: 'LA', allMuniExempt: false },
+  ME: { name: 'Maine', abbr: 'ME', allMuniExempt: false },
+  MD: { name: 'Maryland', abbr: 'MD', allMuniExempt: false },
+  MA: { name: 'Massachusetts', abbr: 'MA', allMuniExempt: false },
+  MI: { name: 'Michigan', abbr: 'MI', allMuniExempt: false },
+  MN: { name: 'Minnesota', abbr: 'MN', allMuniExempt: false },
+  MS: { name: 'Mississippi', abbr: 'MS', allMuniExempt: false },
+  MO: { name: 'Missouri', abbr: 'MO', allMuniExempt: false },
+  MT: { name: 'Montana', abbr: 'MT', allMuniExempt: false },
+  NE: { name: 'Nebraska', abbr: 'NE', allMuniExempt: false },
+  NV: { name: 'Nevada', abbr: 'NV', allMuniExempt: false },
+  NH: { name: 'New Hampshire', abbr: 'NH', allMuniExempt: false },
+  NJ: { name: 'New Jersey', abbr: 'NJ', allMuniExempt: false },
+  NM: { name: 'New Mexico', abbr: 'NM', allMuniExempt: false },
+  NY: { name: 'New York', abbr: 'NY', allMuniExempt: false },
+  NC: { name: 'North Carolina', abbr: 'NC', allMuniExempt: false },
+  ND: { name: 'North Dakota', abbr: 'ND', allMuniExempt: false },
+  OH: { name: 'Ohio', abbr: 'OH', allMuniExempt: false },
+  OK: { name: 'Oklahoma', abbr: 'OK', allMuniExempt: false },
+  OR: { name: 'Oregon', abbr: 'OR', allMuniExempt: false },
   PA: { name: 'Pennsylvania', abbr: 'PA', allMuniExempt: true },
+  RI: { name: 'Rhode Island', abbr: 'RI', allMuniExempt: false },
+  SC: { name: 'South Carolina', abbr: 'SC', allMuniExempt: false },
+  SD: { name: 'South Dakota', abbr: 'SD', allMuniExempt: false },
+  TN: { name: 'Tennessee', abbr: 'TN', allMuniExempt: false },
+  TX: { name: 'Texas', abbr: 'TX', allMuniExempt: false },
+  UT: { name: 'Utah', abbr: 'UT', allMuniExempt: false },
+  VT: { name: 'Vermont', abbr: 'VT', allMuniExempt: false },
+  VA: { name: 'Virginia', abbr: 'VA', allMuniExempt: false },
+  WA: { name: 'Washington', abbr: 'WA', allMuniExempt: false },
+  WV: { name: 'West Virginia', abbr: 'WV', allMuniExempt: false },
+  WI: { name: 'Wisconsin', abbr: 'WI', allMuniExempt: false },
+  WY: { name: 'Wyoming', abbr: 'WY', allMuniExempt: false },
 }
+const STATE_EDITOR_CODES = Object.keys(STATES)
 
 const TAX_TYPES = [
   { code: 'TAXABLE',    label: 'Fully Taxable' },
@@ -125,6 +197,7 @@ const FUND_DB = {
   YMAX: { name: 'YieldMax Universe Fund of Option', yield: 28.0, taxType: 'ROC' },
   YMAG: { name: 'YieldMax Magnificent 7', yield: 25.0, taxType: 'ROC' },
   BLOX: { name: 'YieldMax Innovation Option', yield: 30.0, taxType: 'ROC' },
+  CHPY: { name: 'YieldMax Semiconductor Portfolio Option Income ETF', yield: 45.62, taxType: 'ROC' },
   // YieldMax — single-stock option income
   MSFO: { name: 'YieldMax MSFT Option Income', yield: 28.0, taxType: 'ROC' },
   AMZY: { name: 'YieldMax AMZN Option Income', yield: 26.0, taxType: 'ROC' },
@@ -213,14 +286,18 @@ const FUND_DB = {
 const STORAGE_KEY = 'blendedYield_brackets'
 
 const copyBrackets = arr => arr.map(b => ({ ...b }))
+const copyTaxData = value => typeof value === 'number'
+  ? value
+  : { single: copyBrackets(value.single), mfj: copyBrackets(value.mfj) }
 
 function defaultBracketData() {
+  const stateDefaults = Object.fromEntries(
+    STATE_EDITOR_CODES.map(code => [code, copyTaxData(DEFAULT_STATE_TAX[code])])
+  )
   return {
     fed:  { single: copyBrackets(DEFAULT_FED_BRACKETS.single), mfj: copyBrackets(DEFAULT_FED_BRACKETS.mfj) },
     ltcg: { single: copyBrackets(DEFAULT_FED_LTCG.single), mfj: copyBrackets(DEFAULT_FED_LTCG.mfj) },
-    CA:   { single: copyBrackets(DEFAULT_CA_BRACKETS.single), mfj: copyBrackets(DEFAULT_CA_BRACKETS.mfj) },
-    AZ:   DEFAULT_AZ_RATE,
-    PA:   DEFAULT_PA_RATE,
+    ...stateDefaults,
   }
 }
 
@@ -235,23 +312,30 @@ function loadSavedBrackets() {
       return { single: fix(saved.single || fallback.single), mfj: fix(saved.mfj || fallback.mfj) }
     }
     const defaults = defaultBracketData()
-    return {
+    const saved = STATE_EDITOR_CODES.reduce((acc, code) => {
+      acc[code] = typeof defaults[code] === 'number'
+        ? (data[code] ?? defaults[code])
+        : fixSet(data[code], defaults[code])
+      return acc
+    }, {
       fed:  fixSet(data.fed, defaults.fed),
       ltcg: fixSet(data.ltcg, defaults.ltcg),
-      CA:   fixSet(data.CA, defaults.CA),
-      AZ:   data.AZ ?? defaults.AZ,
-      PA:   data.PA ?? defaults.PA,
-    }
+    })
+    return { ...defaults, ...saved }
   } catch { return null }
 }
 
 function saveBracketsToStorage(data) {
   const ser = arr => arr.map(b => ({ ...b, max: b.max === Infinity ? null : b.max }))
   const serSet = s => ({ single: ser(s.single), mfj: ser(s.mfj) })
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    fed: serSet(data.fed), ltcg: serSet(data.ltcg), CA: serSet(data.CA),
-    AZ: data.AZ, PA: data.PA,
-  }))
+  const payload = STATE_EDITOR_CODES.reduce((acc, code) => {
+    acc[code] = typeof data[code] === 'number' ? data[code] : serSet(data[code])
+    return acc
+  }, {
+    fed: serSet(data.fed),
+    ltcg: serSet(data.ltcg),
+  })
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
 }
 
 // ── Tax Computation ───────────────────────────────────────────────
@@ -300,6 +384,14 @@ function shortTaxLabel(code, abbr) {
     case 'LTCG':       return 'Qual/LTCG'
     default:           return code
   }
+}
+
+function inferLookupTaxType(ticker, name) {
+  const text = `${ticker || ''} ${name || ''}`.toUpperCase()
+  if (text.includes('YIELDMAX')) return 'ROC'
+  if (text.includes('TREASURY') || text.includes('T-BILL') || text.includes('T BILL')) return 'TREASURY'
+  if (text.includes('MUNI') || text.includes('MUNICIPAL') || text.includes('TAX-EXEMPT')) return 'MUNI_NAT'
+  return 'TAXABLE'
 }
 
 // ── Bracket Table Editor ──────────────────────────────────────────
@@ -428,18 +520,30 @@ export default function BlendedYield() {
     }))
   }, [])
 
-  const addFund = useCallback((ticker) => {
+  const addFund = useCallback(async (ticker) => {
     const sym = (ticker || '').trim().toUpperCase()
     if (!sym) return
     if (funds.some(f => f.ticker === sym)) return
     const db = FUND_DB[sym]
     let taxType = 'TAXABLE', name = '', yieldPct = 0
-    if (db) {
-      name = db.name
-      yieldPct = db.yield
-      taxType = (db.taxType === 'MUNI_STATE' && db.muniState && db.muniState !== stateCode)
-        ? 'MUNI_NAT' : db.taxType
+
+    try {
+      const r = await fetch(`${API_BASE}/api/dividend-calc/lookup/${encodeURIComponent(sym)}`)
+      const d = await r.json()
+      if (!r.ok || d.error) throw new Error(d.error || 'Lookup failed')
+      name = d.name || db?.name || ''
+      yieldPct = Number(d.yield_pct || 0) || db?.yield || 0
+      taxType = db?.taxType || inferLookupTaxType(d.ticker || sym, name)
+    } catch {
+      if (db) {
+        name = db.name
+        yieldPct = db.yield
+        taxType = db.taxType
+      }
     }
+
+    taxType = (taxType === 'MUNI_STATE' && db?.muniState && db.muniState !== stateCode)
+      ? 'MUNI_NAT' : taxType
     setFunds(prev => [...prev, {
       id: nextFundId++, ticker: sym, name, yieldPct, taxType,
       allocPct: 0, allocDollar: 0,
@@ -501,7 +605,7 @@ export default function BlendedYield() {
     return { totalAllocPct, totalGrossIncome, totalNetIncome, blendedTEY, blendedATY, blendedGross }
   }, [fundMetrics])
 
-  const handleAdd = (e) => { e?.preventDefault(); addFund(tickerInput); setTickerInput('') }
+  const handleAdd = async (e) => { e?.preventDefault(); const sym = tickerInput; setTickerInput(''); await addFund(sym) }
   const muniStateLabel = `Fed+State Exempt (${state.abbr} Muni)`
   return (
     <div className="page by-page">
@@ -590,40 +694,34 @@ export default function BlendedYield() {
                   onChange={b => updateLtcgBrackets(editorFiling, b)} />
               </div>
 
-              {typeof bracketData.CA !== 'number' && (
-                <div className="by-bracket-section">
-                  <h4>California</h4>
-                  <BracketTable
-                    brackets={bracketData.CA[editorFiling]}
-                    onChange={b => updateStateBrackets('CA', editorFiling, b)} />
-                </div>
-              )}
-
-              <div className="by-bracket-section by-flat-section">
-                <h4>Arizona</h4>
-                <div className="by-flat-rate">
-                  <label>Flat Rate</label>
-                  <div className="by-input-wrap">
-                    <input type="number" className="by-input by-input-suffixed" step={0.01}
-                      value={Number((bracketData.AZ * 100).toFixed(3))}
-                      onChange={e => updateFlatRate('AZ', (Number(e.target.value) || 0) / 100)} />
-                    <span className="by-suffix">%</span>
+              {STATE_EDITOR_CODES.map(code => {
+                const stateData = bracketData[code]
+                const stateMeta = STATES[code]
+                if (typeof stateData === 'number') {
+                  return (
+                    <div className="by-bracket-section by-flat-section" key={code}>
+                      <h4>{stateMeta.name}</h4>
+                      <div className="by-flat-rate">
+                        <label>Flat Rate</label>
+                        <div className="by-input-wrap">
+                          <input type="number" className="by-input by-input-suffixed" step={0.01}
+                            value={Number((stateData * 100).toFixed(3))}
+                            onChange={e => updateFlatRate(code, (Number(e.target.value) || 0) / 100)} />
+                          <span className="by-suffix">%</span>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                }
+                return (
+                  <div className="by-bracket-section" key={code}>
+                    <h4>{stateMeta.name}</h4>
+                    <BracketTable
+                      brackets={stateData[editorFiling]}
+                      onChange={b => updateStateBrackets(code, editorFiling, b)} />
                   </div>
-                </div>
-              </div>
-
-              <div className="by-bracket-section by-flat-section">
-                <h4>Pennsylvania</h4>
-                <div className="by-flat-rate">
-                  <label>Flat Rate</label>
-                  <div className="by-input-wrap">
-                    <input type="number" className="by-input by-input-suffixed" step={0.01}
-                      value={Number((bracketData.PA * 100).toFixed(3))}
-                      onChange={e => updateFlatRate('PA', (Number(e.target.value) || 0) / 100)} />
-                    <span className="by-suffix">%</span>
-                  </div>
-                </div>
-              </div>
+                )
+              })}
             </div>
 
             <div className="by-editor-actions">

@@ -286,6 +286,20 @@ export default function DividendCalculator() {
   const [defaultPriceGrowthPct, setDefaultPriceGrowthPct] = useState(DEFAULT_SETTINGS.defaultPriceGrowthPct)
   const [tickerInput, setTickerInput] = useState('')
   const [calculation, setCalculation] = useState(null)
+  const [currentHoldings, setCurrentHoldings] = useState([])
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerSearch, setPickerSearch] = useState('')
+  const [picked, setPicked] = useState(() => new Set())
+
+  useEffect(() => {
+    pf('/api/holdings')
+      .then(r => r.json())
+      .then(d => {
+        const list = Array.isArray(d) ? d : (d.holdings || [])
+        setCurrentHoldings(list.filter(h => h && h.ticker))
+      })
+      .catch(() => {})
+  }, [pf])
 
   // Lookup a ticker by symbol and add a new row (or replace empty default)
   const lookupTicker = async (symbol) => {
@@ -327,6 +341,112 @@ export default function DividendCalculator() {
     } catch (e) {
       setRows(prev => prev.map(row => row.ticker === sym ? { ...row, status: 'error', message: e.message } : row))
     }
+  }
+
+  // Add multiple tickers atomically, then look each up.
+  // holdingsMap: optional { ticker: { quantity, current_price } } from portfolio picker
+  const loadTickers = (symbols, holdingsMap) => {
+    const sanitized = Array.from(new Set(
+      (symbols || []).map(s => (s || '').trim().toUpperCase()).filter(Boolean)
+    ))
+    if (!sanitized.length) return
+
+    const fallbackInvestment = Number(defaultInitialInvestment) || DEFAULT_SETTINGS.defaultInitialInvestment
+    const priceGrowth = Number(defaultPriceGrowthPct) || 0
+    const loadedSet = new Set(
+      rows.filter(r => r.status === 'loaded' || r.status === 'loading').map(r => r.ticker)
+    )
+    const toFetch = sanitized.filter(s => !loadedSet.has(s))
+    if (!toFetch.length) return
+    setRows(prev => {
+      const existing = new Set(prev.map(r => r.ticker))
+      const placeholders = toFetch
+        .filter(sym => !existing.has(sym))
+        .map(sym => newRow({ ticker: sym, status: 'loading' }))
+      if (!placeholders.length) return prev
+      const hasOnlyEmpty = prev.length === 1 && prev[0].status === 'empty'
+      return hasOnlyEmpty ? placeholders : [...prev, ...placeholders]
+    })
+
+    for (const sym of toFetch) {
+      ;(async () => {
+        try {
+          const r = await pf(`/api/dividend-calc/lookup/${encodeURIComponent(sym)}`)
+          const d = await r.json()
+          if (!r.ok || d.error) throw new Error(d.error || 'Lookup failed')
+          const price = d.price || 0
+          const h = holdingsMap?.[sym]
+          const shares = h?.quantity > 0 ? h.quantity : (price > 0 ? fallbackInvestment / price : 0)
+          const initialInvestment = shares * price
+          setRows(prev => prev.map(row => {
+            if (row.ticker !== sym) return row
+            return {
+              ...row,
+              ticker: d.ticker,
+              name: d.name,
+              sharePrice: price,
+              shares,
+              yieldPct: d.yield_pct || 0,
+              divGrowthPct: d.growth_pct || 0,
+              priceGrowthPct: priceGrowth,
+              payoutCode: d.frequency_code || 'Q',
+              initialInvestment,
+              status: 'loaded',
+              message: '',
+            }
+          }))
+        } catch (e) {
+          setRows(prev => prev.map(row =>
+            row.ticker === sym ? { ...row, status: 'error', message: e.message } : row
+          ))
+        }
+      })()
+    }
+  }
+
+  const togglePicked = (t) => {
+    setPicked(prev => {
+      const next = new Set(prev)
+      if (next.has(t)) next.delete(t); else next.add(t)
+      return next
+    })
+  }
+
+  const visiblePickerHoldings = useMemo(() => {
+    const q = pickerSearch.trim().toUpperCase()
+    return currentHoldings
+      .filter(h => !q || (h.ticker || '').toUpperCase().includes(q))
+      .sort((a, b) => (a.ticker || '').localeCompare(b.ticker || ''))
+  }, [currentHoldings, pickerSearch])
+
+  const togglePicker = () => {
+    setPickerOpen(open => {
+      if (!open) {
+        setPicked(new Set(rows.filter(r => r.status === 'loaded').map(r => r.ticker)))
+        setPickerSearch('')
+      }
+      return !open
+    })
+  }
+
+  const pickAllVisible = () => setPicked(prev => {
+    const next = new Set(prev)
+    for (const h of visiblePickerHoldings) next.add(h.ticker)
+    return next
+  })
+
+  const pickNone = () => setPicked(new Set())
+
+  const pickEntirePortfolio = () => setPicked(new Set(currentHoldings.map(h => h.ticker)))
+
+  const applyPicked = () => {
+    const symbols = [...picked]
+    setPickerOpen(false)
+    if (!symbols.length) return
+    const holdingsMap = Object.fromEntries(
+      currentHoldings.map(h => [h.ticker, { quantity: h.quantity, current_price: h.current_price }])
+    )
+    loadTickers(symbols, holdingsMap)
   }
 
   const removeRow = (idx) => {
@@ -571,11 +691,98 @@ export default function DividendCalculator() {
           />
         </div>
         <button type="submit" className="btn btn-secondary">Add Ticker</button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={togglePicker}
+          disabled={currentHoldings.length === 0}
+          title={currentHoldings.length === 0 ? 'No portfolio holdings available' : 'Pick from your portfolio holdings'}
+        >
+          From Portfolio{pickerOpen ? ' ▲' : ' ▼'}
+        </button>
         <button type="button" className="btn btn-primary" onClick={handleCalculate} disabled={!hasLoadedRows}>
           {calculation ? 'Recalculate' : 'Calculate'}
         </button>
         <button type="button" className="btn dc-reset" onClick={resetAll}>Reset</button>
       </form>
+
+      {pickerOpen && (
+        <div style={{
+          border: '1px solid #1a4480', borderRadius: 6, marginBottom: '1rem',
+          background: '#0f1a33', padding: '0.6rem 0.75rem',
+        }}>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+            <span style={{ color: '#9bb4d6', fontSize: '0.85rem' }}>
+              Test portfolio holdings ({currentHoldings.length} total):
+            </span>
+            <div style={{ flex: 1 }} />
+            <input
+              value={pickerSearch}
+              onChange={e => setPickerSearch(e.target.value)}
+              placeholder="Search ticker…"
+              style={{
+                width: 140, padding: '0.3rem 0.5rem', background: '#16213e',
+                border: '1px solid #1a4480', borderRadius: 4, color: '#e0e8f5', fontSize: '0.85rem',
+              }}
+            />
+            <button type="button" className="btn btn-sm" onClick={pickEntirePortfolio}>Select All</button>
+            <button type="button" className="btn btn-sm" onClick={pickNone}>Deselect All</button>
+          </div>
+          <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #1a2a3e', borderRadius: 4 }}>
+            <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: '#16213e', color: '#9bb4d6' }}>
+                  <th style={{ padding: '0.3rem 0.5rem', width: 32 }}></th>
+                  <th style={{ padding: '0.3rem 0.5rem', textAlign: 'left' }}>Ticker</th>
+                  <th style={{ padding: '0.3rem 0.5rem', textAlign: 'left' }}>Description</th>
+                  <th style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>Current Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visiblePickerHoldings.length === 0 && (
+                  <tr><td colSpan={4} style={{ padding: '0.6rem', color: '#6b7d99', textAlign: 'center' }}>
+                    {currentHoldings.length ? 'No tickers match your search' : 'No portfolio holdings available'}
+                  </td></tr>
+                )}
+                {visiblePickerHoldings.map(h => (
+                  <tr
+                    key={h.ticker}
+                    style={{ borderTop: '1px solid #1a2a3e', cursor: 'pointer' }}
+                    onClick={() => togglePicked(h.ticker)}
+                  >
+                    <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={picked.has(h.ticker)}
+                        onChange={() => togglePicked(h.ticker)}
+                        onClick={e => e.stopPropagation()}
+                      />
+                    </td>
+                    <td style={{ padding: '0.3rem 0.5rem', color: '#e0e8f5' }}>{h.ticker}</td>
+                    <td style={{ padding: '0.3rem 0.5rem', color: '#9bb4d6' }}>{h.description || ''}</td>
+                    <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: '#9bb4d6' }}>
+                      {h.current_value != null ? fmtMoneyShort(h.current_value) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+            <span style={{ color: '#9bb4d6', fontSize: '0.85rem' }}>{picked.size} selected</span>
+            <div style={{ flex: 1 }} />
+            <button type="button" className="btn" onClick={() => setPickerOpen(false)}>Cancel</button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={picked.size === 0}
+              onClick={applyPicked}
+            >
+              Add {picked.size || ''} Ticker{picked.size === 1 ? '' : 's'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {rows.some(r => r.status === 'error') && (
         <div className="alert alert-error">
@@ -693,6 +900,10 @@ export default function DividendCalculator() {
 
           <div className="dc-stat-row">
             <div className="dc-stat">
+              <div className="dc-stat-label">Starting Wealth</div>
+              <div className="dc-stat-value">{fmtMoneyShort(totals.totalInvested)}</div>
+            </div>
+            <div className="dc-stat">
               <div className="dc-stat-label">Ending Wealth</div>
               <div className="dc-stat-value">{fmtMoneyShort(totals.endingWealth)}</div>
               <div className={`dc-stat-delta ${totals.growthPct >= 0 ? 'pos' : 'neg'}`}>
@@ -716,6 +927,10 @@ export default function DividendCalculator() {
             <div className="dc-stat">
               <div className="dc-stat-label">Yield on Cost</div>
               <div className="dc-stat-value">{fmtPct(totals.yieldOnCost, 2)}</div>
+            </div>
+            <div className="dc-stat">
+              <div className="dc-stat-label">Current Yield</div>
+              <div className="dc-stat-value">{fmtPct(totals.final.portfolioValue > 0 ? (totals.final.annualIncome / totals.final.portfolioValue) * 100 : 0, 2)}</div>
             </div>
             <div className="dc-stat">
               <div className="dc-stat-label">Estimated Dividend Taxes</div>
