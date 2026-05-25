@@ -612,6 +612,13 @@ def parse_schwab_csv(file_path, filename):
 
     positions = list(merged.values())
 
+    if positions and all(p["cost_per_share"] == 0 for p in positions):
+        raise ValueError(
+            "No cost basis data found — every position has a $0 cost. "
+            "This usually means a Transactions file was selected with the Positions format. "
+            "Please use 'Charles Schwab (Transactions)' for transaction history files."
+        )
+
     return {
         "positions": positions,
         "summary": {
@@ -736,6 +743,13 @@ def parse_etrade_csv(file_path, filename):
 
     if not positions:
         raise ValueError("No holdings rows were found in the E*TRADE file.")
+
+    if all(p["cost_per_share"] == 0 for p in positions):
+        raise ValueError(
+            "No cost basis data found — every position has a $0 cost. "
+            "This usually means a Transactions file was selected with the Positions format. "
+            "Please use the correct Transactions format for transaction history files."
+        )
 
     return {
         "positions": positions,
@@ -903,6 +917,13 @@ def parse_fidelity_positions_xlsx(file_path, filename):
         )
     if not positions:
         raise ValueError("No holdings rows were found in the Fidelity positions file.")
+
+    if all(p["cost_per_share"] == 0 for p in positions):
+        raise ValueError(
+            "No cost basis data found — every position has a $0 cost. "
+            "This usually means a Transactions file was selected with the Positions format. "
+            "Please use 'Fidelity (Transactions)' for transaction history files."
+        )
 
     account_name = next(iter(account_names), "")
     positions_value = round(sum(p["current_value"] for p in positions), 2)

@@ -267,18 +267,25 @@ def _basis_total_expr(alias="a"):
     return f"COALESCE({prefix}original_purchase_value, {prefix}purchase_value, {prefix}broker_purchase_value)"
 
 
+def _first_not_none(*values):
+    for v in values:
+        if v is not None:
+            return v
+    return None
+
+
 def _basis_fallback_total(row, mode=None):
     mode = mode or _basis_mode()
     if mode == "broker_adjusted":
-        return row.get("broker_purchase_value") or row.get("purchase_value") or row.get("original_purchase_value")
-    return row.get("original_purchase_value") or row.get("purchase_value") or row.get("broker_purchase_value")
+        return _first_not_none(row.get("broker_purchase_value"), row.get("purchase_value"), row.get("original_purchase_value"))
+    return _first_not_none(row.get("original_purchase_value"), row.get("purchase_value"), row.get("broker_purchase_value"))
 
 
 def _basis_fallback_price(row, mode=None):
     mode = mode or _basis_mode()
     if mode == "broker_adjusted":
-        return row.get("broker_price_paid") or row.get("price_paid") or row.get("original_price_paid")
-    return row.get("original_price_paid") or row.get("price_paid") or row.get("broker_price_paid")
+        return _first_not_none(row.get("broker_price_paid"), row.get("price_paid"), row.get("original_price_paid"))
+    return _first_not_none(row.get("original_price_paid"), row.get("price_paid"), row.get("broker_price_paid"))
 
 
 def _ensure_basis_columns(conn):
@@ -290,20 +297,21 @@ def _ensure_basis_columns(conn):
         "broker_price_paid": "REAL",
         "broker_purchase_value": "REAL",
     }
-    changed = False
     for col, col_type in needed.items():
         if col not in cols:
             conn.execute(f"ALTER TABLE all_account_info ADD COLUMN {col} {col_type}")
-            changed = True
-    if changed:
-        conn.execute("""
-            UPDATE all_account_info
-               SET original_price_paid = COALESCE(original_price_paid, price_paid),
-                   original_purchase_value = COALESCE(original_purchase_value, purchase_value),
-                   broker_price_paid = COALESCE(broker_price_paid, price_paid),
-                   broker_purchase_value = COALESCE(broker_purchase_value, purchase_value)
-        """)
-        conn.commit()
+    conn.execute("""
+        UPDATE all_account_info
+           SET original_price_paid = COALESCE(original_price_paid, price_paid),
+               original_purchase_value = COALESCE(original_purchase_value, purchase_value),
+               broker_price_paid = COALESCE(broker_price_paid, price_paid),
+               broker_purchase_value = COALESCE(broker_purchase_value, purchase_value)
+         WHERE original_price_paid IS NULL
+            OR original_purchase_value IS NULL
+            OR broker_price_paid IS NULL
+            OR broker_purchase_value IS NULL
+    """)
+    conn.commit()
 
 
 def _apply_basis_mode_to_holdings(results):
@@ -321,16 +329,17 @@ def _apply_basis_mode_to_holdings(results):
         r["price_paid"] = selected_price
         r["purchase_value"] = selected_total
 
-        if selected_total is not None and current_value is not None:
-            gain = round(float(current_value or 0) - float(selected_total or 0), 2)
-            gain_pct = round(gain / float(selected_total), 6) if float(selected_total or 0) > 0 else 0
+        cost = float(selected_total) if selected_total else 0
+        if cost > 0 and current_value is not None:
+            gain = round(float(current_value) - cost, 2)
+            gain_pct = round(gain / cost, 6)
             r["gain_or_loss"] = gain
             r["gain_or_loss_percentage"] = gain_pct
             r["percent_change"] = gain_pct
-        if selected_total is not None and total_divs is not None:
-            r["paid_for_itself"] = round(float(total_divs or 0) / float(selected_total), 6) if float(selected_total or 0) > 0 else 0
-        if selected_total is not None and annual is not None:
-            r["annual_yield_on_cost"] = round(float(annual or 0) / float(selected_total), 6) if float(selected_total or 0) > 0 else 0
+        if cost > 0 and total_divs is not None:
+            r["paid_for_itself"] = round(float(total_divs) / cost, 6)
+        if cost > 0 and annual is not None:
+            r["annual_yield_on_cost"] = round(float(annual) / cost, 6)
     return results
 
 
@@ -8993,8 +9002,15 @@ _EXPORT_COL_MAP = [
 
 def _export_profile_data(conn, profile_id):
     """Fetch export rows for a single profile. Returns (profile_name, [row_dicts])."""
+    _ensure_basis_columns(conn)
     headers = [h for h, _ in _EXPORT_COL_MAP]
-    sql_cols = [c for _, c in _EXPORT_COL_MAP if c is not None]
+    sql_cols = list(dict.fromkeys(
+        [c for _, c in _EXPORT_COL_MAP if c is not None]
+        + [
+            "original_price_paid", "original_purchase_value",
+            "broker_price_paid", "broker_purchase_value",
+        ]
+    ))
 
     prof = conn.execute("SELECT name FROM profiles WHERE id = ?", (profile_id,)).fetchone()
     profile_name = prof["name"] if prof else f"Portfolio {profile_id}"
@@ -9014,14 +9030,17 @@ def _export_profile_data(conn, profile_id):
     for cr in cat_rows:
         cat_map.setdefault(cr["ticker"], []).append(cr["category_name"])
 
+    raw_rows = rows_to_dicts(rows)
+    _apply_basis_mode_to_holdings(raw_rows)
+
     out_rows = []
-    for row in rows:
+    for row in raw_rows:
         out = {}
         for header, sql_col in _EXPORT_COL_MAP:
             if header == "Category":
                 out[header] = ", ".join(cat_map.get(row["ticker"], []))
             else:
-                val = row[sql_col]
+                val = row.get(sql_col)
                 out[header] = val if val is not None else ""
         out_rows.append(out)
 
@@ -14121,12 +14140,15 @@ def total_return_summary():
     import plotly.graph_objects as go
     import plotly.utils
 
-    profile_id = get_profile_id()
     conn = get_connection()
+    _ensure_basis_columns(conn)
+    is_agg, profile_ids = get_profile_filter()
+    placeholders = ",".join("?" * len(profile_ids))
+    basis_total = _basis_total_expr("")
 
     cats = conn.execute(
-        "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
-        (profile_id,),
+        f"SELECT id, name FROM categories WHERE profile_id IN ({placeholders}) ORDER BY sort_order, name",
+        profile_ids,
     ).fetchall()
     categories = [{"id": c["id"], "name": c["name"]} for c in cats]
 
@@ -14134,17 +14156,35 @@ def total_return_summary():
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
 
     rows = conn.execute(
-        """SELECT ticker, description, classification_type,
-                  price_paid, current_price, quantity,
-                  purchase_value, current_value,
-                  gain_or_loss, gain_or_loss_percentage,
-                  total_divs_received, ytd_divs,
-                  estim_payment_per_year, annual_yield_on_cost, current_annual_yield
+        f"""SELECT ticker,
+                  MAX(description) AS description,
+                  MAX(classification_type) AS classification_type,
+                  CASE WHEN SUM(COALESCE(quantity, 0)) > 0
+                       THEN SUM(COALESCE({basis_total}, 0)) / SUM(COALESCE(quantity, 0))
+                       ELSE 0 END AS price_paid,
+                  CASE WHEN SUM(COALESCE(quantity, 0)) > 0
+                       THEN SUM(COALESCE(current_value, 0)) / SUM(COALESCE(quantity, 0))
+                       ELSE 0 END AS current_price,
+                  SUM(COALESCE(quantity, 0)) AS quantity,
+                  SUM(COALESCE({basis_total}, 0)) AS purchase_value,
+                  SUM(COALESCE(current_value, 0)) AS current_value,
+                  SUM(COALESCE(current_value, 0)) - SUM(COALESCE({basis_total}, 0)) AS gain_or_loss,
+                  SUM(COALESCE(total_divs_received, 0)) AS total_divs_received,
+                  SUM(COALESCE(ytd_divs, 0)) AS ytd_divs,
+                  SUM(COALESCE(estim_payment_per_year, 0)) AS estim_payment_per_year,
+                  CASE WHEN SUM(COALESCE({basis_total}, 0)) > 0
+                       THEN SUM(COALESCE(estim_payment_per_year, 0)) / SUM(COALESCE({basis_total}, 0))
+                       ELSE 0 END AS annual_yield_on_cost,
+                  CASE WHEN SUM(COALESCE(current_value, 0)) > 0
+                       THEN SUM(COALESCE(estim_payment_per_year, 0)) / SUM(COALESCE(current_value, 0))
+                       ELSE 0 END AS current_annual_yield
            FROM all_account_info
-           WHERE purchase_value IS NOT NULL AND purchase_value > 0
-             AND profile_id = ?
+           WHERE {basis_total} IS NOT NULL AND {basis_total} > 0
+             AND COALESCE(quantity, 0) > 1e-9
+             AND profile_id IN ({placeholders})
+           GROUP BY ticker
            ORDER BY ticker""",
-        (profile_id,),
+        profile_ids,
     ).fetchall()
     df = pd.DataFrame([dict(r) for r in rows])
 
@@ -14157,10 +14197,12 @@ def total_return_summary():
         cat_map_rows = conn.execute(
             "SELECT tc.ticker, c.name AS category_name "
             "FROM ticker_categories tc JOIN categories c ON c.id = tc.category_id "
-            "WHERE tc.profile_id = ?", (profile_id,)
+            f"WHERE tc.profile_id IN ({placeholders})",
+            profile_ids,
         ).fetchall()
         cat_map = pd.DataFrame([dict(r) for r in cat_map_rows])
         if not cat_map.empty:
+            cat_map = cat_map.drop_duplicates(subset="ticker", keep="first")
             df = df.merge(cat_map, on="ticker", how="left")
         else:
             df["category_name"] = None

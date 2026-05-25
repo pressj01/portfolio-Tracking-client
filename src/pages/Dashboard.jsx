@@ -403,7 +403,7 @@ export default function Dashboard() {
   const [navSnapping, setNavSnapping] = useState(false)
   const [actionCenter, setActionCenter] = useState(null)
   const navChartRef = useRef(null)
-  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v12_${selection}_${basisMode}`, [selection, basisMode])
+  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v13_${selection}_${basisMode}`, [selection, basisMode])
 
   useEffect(() => {
     const cached = readDashboardCache(SP500_CACHE_KEY)
