@@ -65,6 +65,16 @@ Version 1.28.0 packages the recent tax, dividend-income, market-calendar, and di
 - The selected basis mode is included in portfolio API requests and is used by affected dashboard, holdings, gains/losses, yield-on-cost, gain/loss, and invested-value calculations.
 - The selected basis mode is saved locally so the app keeps the user's preferred Original cost or Adjusted cost view between sessions.
 
+## Portfolio Export And Restore
+
+- Added the ability to export portfolio positions and transaction history together in one combined workbook.
+- The combined export includes holdings sheets plus a Transactions sheet so positions and transaction records can be backed up together.
+- Added support for re-importing the combined portfolio export through the Portfolio Export (Holdings + Transactions) import format.
+- Re-importing the combined workbook restores holdings first, then imports transaction history for recordkeeping while keeping the restored holdings in control of current position values.
+- Aggregate exports preserve one holdings sheet per source portfolio and include a shared Transactions sheet for the exported accounts.
+- Duplicate transaction detection helps avoid re-adding the same imported transaction records when restoring from an export.
+- Help content was updated to explain how to export holdings with transactions and how to re-import the combined workbook later.
+
 ## Market Calendar And Dashboard
 
 - Added a market calendar helper for NYSE trading-day detection and closure reasons.
@@ -86,6 +96,7 @@ Version 1.28.0 packages the recent tax, dividend-income, market-calendar, and di
 - Distribution History percentage modes were verified across the comparer/research chart implementation.
 - Macro Regime Dashboard endpoints and tabs were reviewed for release-note coverage.
 - Cost basis mode coverage was reviewed across the shared profile query string and affected portfolio pages.
+- Combined positions and transactions export/import coverage was reviewed in the export/import workflow and release package notes.
 
 ## Deployment Artifacts
 
