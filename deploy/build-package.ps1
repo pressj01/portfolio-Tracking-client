@@ -31,6 +31,7 @@ Copy-Item "$src\package.json" "$outWin\"
 Copy-Item "$src\package-lock.json" "$outWin\"
 Copy-Item "$src\index.html" "$outWin\"
 Copy-Item "$src\vite.config.js" "$outWin\"
+Copy-Item "$src\RELEASE_NOTES_$version.md" "$outWin\"
 
 # Windows startup scripts
 Copy-Item "$src\deploy\setup.bat" "$outWin\"
@@ -73,6 +74,7 @@ Copy-Item "$src\package.json" "$outMac\"
 Copy-Item "$src\package-lock.json" "$outMac\"
 Copy-Item "$src\index.html" "$outMac\"
 Copy-Item "$src\vite.config.js" "$outMac\"
+Copy-Item "$src\RELEASE_NOTES_$version.md" "$outMac\"
 
 # Mac startup scripts
 Copy-Item "$src\deploy\setup.sh" "$outMac\"
