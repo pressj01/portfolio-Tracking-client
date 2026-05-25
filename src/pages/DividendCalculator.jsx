@@ -257,7 +257,9 @@ const DEFAULT_ROW = {
   divGrowthPct: 0,
   returnOfCapitalPct: 0,
   priceGrowthPct: 3,
+  annualContribution: 0,
   payoutCode: 'Q',
+  source: 'manual', // 'manual' | 'portfolio'
   status: 'empty', // empty | loading | loaded | error
   message: '',
 }
@@ -321,23 +323,31 @@ export default function DividendCalculator() {
       const initialInvestment = Number(defaultInitialInvestment) || DEFAULT_SETTINGS.defaultInitialInvestment
       const price = d.price || 0
       const shares = price > 0 ? initialInvestment / price : 0
-      setRows(prev => prev.map(row => {
-        if (row.ticker !== sym) return row
-        return {
-          ...row,
-          ticker: d.ticker,
-          name: d.name,
-          sharePrice: price,
-          shares: shares,
-          yieldPct: d.yield_pct || 0,
-          divGrowthPct: d.growth_pct || 0,
-          priceGrowthPct: Number(defaultPriceGrowthPct) || 0,
-          payoutCode: d.frequency_code || 'Q',
-          initialInvestment,
-          status: 'loaded',
-          message: '',
-        }
-      }))
+      setRows(prev => {
+        const loadedCount = prev.filter(r => r.status === 'loaded' || r.ticker === sym).length
+        const perTicker = loadedCount > 0 ? (Number(annualContribution) || 0) / loadedCount : 0
+        return prev.map(row => {
+          if (row.ticker === sym) {
+            return {
+              ...row,
+              ticker: d.ticker,
+              name: d.name,
+              sharePrice: price,
+              shares: shares,
+              yieldPct: d.yield_pct || 0,
+              divGrowthPct: d.growth_pct || 0,
+              priceGrowthPct: Number(defaultPriceGrowthPct) || 0,
+              payoutCode: d.frequency_code || 'Q',
+              initialInvestment,
+              annualContribution: perTicker,
+              status: 'loaded',
+              message: '',
+            }
+          }
+          if (row.status === 'loaded') return { ...row, annualContribution: perTicker }
+          return row
+        })
+      })
     } catch (e) {
       setRows(prev => prev.map(row => row.ticker === sym ? { ...row, status: 'error', message: e.message } : row))
     }
@@ -376,25 +386,35 @@ export default function DividendCalculator() {
           if (!r.ok || d.error) throw new Error(d.error || 'Lookup failed')
           const price = d.price || 0
           const h = holdingsMap?.[sym]
-          const shares = h?.quantity > 0 ? h.quantity : (price > 0 ? fallbackInvestment / price : 0)
+          const isPortfolio = h?.quantity > 0
+          const shares = isPortfolio ? h.quantity : (price > 0 ? fallbackInvestment / price : 0)
           const initialInvestment = shares * price
-          setRows(prev => prev.map(row => {
-            if (row.ticker !== sym) return row
-            return {
-              ...row,
-              ticker: d.ticker,
-              name: d.name,
-              sharePrice: price,
-              shares,
-              yieldPct: d.yield_pct || 0,
-              divGrowthPct: d.growth_pct || 0,
-              priceGrowthPct: priceGrowth,
-              payoutCode: d.frequency_code || 'Q',
-              initialInvestment,
-              status: 'loaded',
-              message: '',
-            }
-          }))
+          setRows(prev => {
+            const loadedCount = prev.filter(r => r.status === 'loaded' || r.ticker === sym).length
+            const perTicker = loadedCount > 0 ? (Number(annualContribution) || 0) / loadedCount : 0
+            return prev.map(row => {
+              if (row.ticker === sym) {
+                return {
+                  ...row,
+                  ticker: d.ticker,
+                  name: d.name,
+                  sharePrice: price,
+                  shares,
+                  yieldPct: d.yield_pct || 0,
+                  divGrowthPct: d.growth_pct || 0,
+                  priceGrowthPct: priceGrowth,
+                  payoutCode: d.frequency_code || 'Q',
+                  initialInvestment,
+                  annualContribution: perTicker,
+                  source: isPortfolio ? 'portfolio' : 'manual',
+                  status: 'loaded',
+                  message: '',
+                }
+              }
+              if (row.status === 'loaded') return { ...row, annualContribution: perTicker }
+              return row
+            })
+          })
         } catch (e) {
           setRows(prev => prev.map(row =>
             row.ticker === sym ? { ...row, status: 'error', message: e.message } : row
@@ -487,7 +507,7 @@ export default function DividendCalculator() {
   const updateDefaultInitialInvestment = (value) => {
     setDefaultInitialInvestment(value)
     setRows(prev => prev.map(r => {
-      if (r.status !== 'loaded') return r
+      if (r.status !== 'loaded' || r.source === 'portfolio') return r
       const initialInvestment = Number(value) || 0
       return {
         ...r,
@@ -495,6 +515,17 @@ export default function DividendCalculator() {
         shares: Number(r.sharePrice) > 0 ? initialInvestment / r.sharePrice : r.shares,
       }
     }))
+  }
+
+  const updateGlobalContribution = (value) => {
+    setAnnualContribution(value)
+    const total = Number(value) || 0
+    setRows(prev => {
+      const loaded = prev.filter(r => r.status === 'loaded')
+      if (!loaded.length) return prev
+      const perTicker = total / loaded.length
+      return prev.map(r => r.status === 'loaded' ? { ...r, annualContribution: perTicker } : r)
+    })
   }
 
   const updateDefaultPriceGrowth = (value) => {
@@ -536,11 +567,11 @@ export default function DividendCalculator() {
       divGrowthPct: Number(r.divGrowthPct) || 0,
       returnOfCapitalPct: Number(r.returnOfCapitalPct) || 0,
       priceGrowthPct: Number(r.priceGrowthPct) || 0,
+      annualContribution: Number(r.annualContribution) || 0,
       payoutCode: r.payoutCode || 'Q',
     })),
     settings: {
       years: Number(years) || 0,
-      annualContribution: Number(annualContribution) || 0,
       taxRatePct: Number(taxRatePct) || 0,
       dripPct: clampPct(dripPct),
     },
@@ -556,6 +587,7 @@ export default function DividendCalculator() {
       divGrowthPct: Number(r.divGrowthPct) || 0,
       returnOfCapitalPct: Number(r.returnOfCapitalPct) || 0,
       priceGrowthPct: Number(r.priceGrowthPct) || 0,
+      annualContribution: Number(r.annualContribution) || 0,
       payoutCode: r.payoutCode || 'Q',
     })),
     settings: calculation.settings,
@@ -564,15 +596,17 @@ export default function DividendCalculator() {
   const activeRows = rows.filter(r => r.status === 'loaded' || r.status === 'loading' || r.status === 'error')
   const loadedRows = rows.filter(r => r.status === 'loaded')
   const hasLoadedRows = rows.some(r => r.status === 'loaded' && Number(r.shares) > 0 && Number(r.sharePrice) > 0)
+  const portfolioRows = loadedRows.filter(r => r.source === 'portfolio')
+  const manualRows = loadedRows.filter(r => r.source === 'manual')
+  const allPortfolio = loadedRows.length > 0 && manualRows.length === 0
+  const mixedSources = portfolioRows.length > 0 && manualRows.length > 0
+  const portfolioTotal = portfolioRows.reduce((s, r) => s + (Number(r.initialInvestment) || 0), 0)
   const resultsNeedUpdate = Boolean(calculation && currentInputsKey !== calculatedInputsKey)
 
   // Build per-row projections from the last explicit calculation.
   const projections = useMemo(() => {
     if (!calculation) return []
     const { settings } = calculation
-    const annualContributionPerTicker = calculation.rows.length > 0
-      ? settings.annualContribution / calculation.rows.length
-      : 0
     return calculation.rows
       .map(r => ({
         ticker: r.ticker,
@@ -587,7 +621,7 @@ export default function DividendCalculator() {
           returnOfCapitalPct: Number(r.returnOfCapitalPct) || 0,
           priceGrowthPct: Number(r.priceGrowthPct) || 0,
           years: settings.years,
-          annualContribution: annualContributionPerTicker,
+          annualContribution: Number(r.annualContribution) || 0,
           taxRatePct: settings.taxRatePct,
           payoutCode: r.payoutCode || 'Q',
           dripPct: settings.dripPct,
@@ -620,8 +654,14 @@ export default function DividendCalculator() {
     }
     return (
       <span>
-        Combined projection across <strong>{loadedRows.length}</strong> tickers. Each ticker uses its own price,
-        yield, growth, and payout frequency.
+        Combined projection across <strong>{loadedRows.length}</strong> tickers
+        {allPortfolio
+          ? <> using current portfolio values (<strong>{fmtMoneyShort(portfolioTotal)}</strong> total)</>
+          : mixedSources
+            ? <> ({portfolioRows.length} from portfolio, {manualRows.length} manual)</>
+            : null
+        }.
+        Each ticker uses its own price, yield, growth, and payout frequency.
         <span className="dc-hero-tickers">
           {loadedRows.slice(0, 16).map(r => r.ticker).join(', ')}
           {loadedRows.length > 16 ? `, +${loadedRows.length - 16} more` : ''}
@@ -656,12 +696,28 @@ export default function DividendCalculator() {
             <NumberInput value={years} onChange={setYears} min="1" max="50" step="1" />
           </div>
           <div className="dc-field">
-            <label>Initial Investment Per Ticker</label>
-            <NumberInput value={defaultInitialInvestment} onChange={updateDefaultInitialInvestment} prefix="$" step="100" />
+            {allPortfolio ? (
+              <>
+                <label>Portfolio Value</label>
+                <div className="dc-portfolio-summary">
+                  {fmtMoneyShort(portfolioTotal)} across {portfolioRows.length} ticker{portfolioRows.length === 1 ? '' : 's'}
+                </div>
+              </>
+            ) : (
+              <>
+                <label>{mixedSources ? 'Initial Investment (manual tickers only)' : 'Initial Investment Per Ticker'}</label>
+                <NumberInput value={defaultInitialInvestment} onChange={updateDefaultInitialInvestment} prefix="$" step="100" />
+                {mixedSources && (
+                  <div className="dc-field-note">
+                    Portfolio tickers use current values ({fmtMoneyShort(portfolioTotal)} across {portfolioRows.length})
+                  </div>
+                )}
+              </>
+            )}
           </div>
           <div className="dc-field">
             <label>Annual Investment (split equally)</label>
-            <NumberInput value={annualContribution} onChange={setAnnualContribution} prefix="$" step="100" />
+            <NumberInput value={annualContribution} onChange={updateGlobalContribution} prefix="$" step="100" />
           </div>
           <div className="dc-field">
             <label>Dividend Tax Rate</label>
@@ -819,7 +875,7 @@ export default function DividendCalculator() {
             </div>
             <div className="dc-grid">
               <div className="dc-field">
-                <label>Initial Investment</label>
+                <label>{r.source === 'portfolio' ? 'Current Value' : 'Initial Investment'}</label>
                 <NumberInput
                   value={r.initialInvestment}
                   onChange={(v) => updateRow(idx, { initialInvestment: v })}
@@ -874,6 +930,15 @@ export default function DividendCalculator() {
                 />
               </div>
               <div className="dc-field">
+                <label>Annual Contribution</label>
+                <NumberInput
+                  value={r.annualContribution}
+                  onChange={(v) => updateRow(idx, { annualContribution: v })}
+                  prefix="$"
+                  step="100"
+                />
+              </div>
+              <div className="dc-field">
                 <label>Stock Price Growth</label>
                 <NumberInput
                   value={r.priceGrowthPct}
@@ -913,7 +978,7 @@ export default function DividendCalculator() {
 
           <div className="dc-stat-row">
             <div className="dc-stat">
-              <div className="dc-stat-label">Starting Wealth</div>
+              <div className="dc-stat-label">{allPortfolio ? 'Current Portfolio Value' : 'Starting Wealth'}</div>
               <div className="dc-stat-value">{fmtMoneyShort(totals.totalInvested)}</div>
             </div>
             <div className="dc-stat">
