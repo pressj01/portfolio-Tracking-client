@@ -37,6 +37,15 @@ Version 1.28.0 packages the recent tax, dividend-income, market-calendar, and di
 - Yearly refresh-only views now use holding-level YTD totals instead of showing only the current refresh rows.
 - This prevents large accounts from collapsing to a single "May '26 partial" point in the dividend-history chart.
 
+## Dividend Comparer, ETF Research, And Security Research
+
+- Added distribution percentage views to the shared Distribution History chart used by the Dividend Comparer/Stock Comparer, ETF Comparer, and Security Research pages.
+- Added a Monthly Yield % mode so each distribution can be viewed as a percentage of the security price for that distribution period.
+- Added an Annual Yield % mode so monthly distribution percentages can be annualized for easier comparison across funds and securities.
+- Kept the original dollar distribution view, allowing users to switch between cash amounts, per-period yield percentages, and annualized yield percentages.
+- Added smarter distribution-period labeling so the chart can label monthly and quarterly distribution histories appropriately.
+- Updated help content for the comparer and research pages so the new distribution percentage modes are documented.
+
 ## Market Calendar And Dashboard
 
 - Added a market calendar helper for NYSE trading-day detection and closure reasons.
@@ -55,6 +64,7 @@ Version 1.28.0 packages the recent tax, dividend-income, market-calendar, and di
 - `py -m py_compile backend/app.py` passes.
 - Dividend-history monthly endpoint returns a multi-month series rather than a single current-month point.
 - Dividend Calculator was manually checked with a large account loaded with 66 selected tickers.
+- Distribution History percentage modes were verified across the comparer/research chart implementation.
 
 ## Deployment Artifacts
 
