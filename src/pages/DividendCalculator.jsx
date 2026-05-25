@@ -561,6 +561,8 @@ export default function DividendCalculator() {
     settings: calculation.settings,
   }) : ''
 
+  const activeRows = rows.filter(r => r.status === 'loaded' || r.status === 'loading' || r.status === 'error')
+  const loadedRows = rows.filter(r => r.status === 'loaded')
   const hasLoadedRows = rows.some(r => r.status === 'loaded' && Number(r.shares) > 0 && Number(r.sharePrice) > 0)
   const resultsNeedUpdate = Boolean(calculation && currentInputsKey !== calculatedInputsKey)
 
@@ -605,10 +607,9 @@ export default function DividendCalculator() {
     : ''
 
   const heroLine = useMemo(() => {
-    const loaded = rows.filter(r => r.status === 'loaded')
-    if (!loaded.length) return null
-    if (loaded.length === 1) {
-      const r = loaded[0]
+    if (!loadedRows.length) return null
+    if (loadedRows.length === 1) {
+      const r = loadedRows[0]
       return (
         <span>
           <strong>{r.name}</strong> ({r.ticker}) has a stock price of <strong>{fmtMoney(r.sharePrice)}</strong>,
@@ -619,11 +620,15 @@ export default function DividendCalculator() {
     }
     return (
       <span>
-        Combined projection across <strong>{loaded.length}</strong> tickers ({loaded.map(r => r.ticker).join(', ')}).
-        Each ticker uses its own price, yield, growth, and payout frequency.
+        Combined projection across <strong>{loadedRows.length}</strong> tickers. Each ticker uses its own price,
+        yield, growth, and payout frequency.
+        <span className="dc-hero-tickers">
+          {loadedRows.slice(0, 16).map(r => r.ticker).join(', ')}
+          {loadedRows.length > 16 ? `, +${loadedRows.length - 16} more` : ''}
+        </span>
       </span>
     )
-  }, [rows])
+  }, [loadedRows])
 
   return (
     <div className="page dc-page">
@@ -675,8 +680,14 @@ export default function DividendCalculator() {
       </div>
 
       <form className="dc-ticker-bar" onSubmit={handleAddTicker}>
-        <div className="dc-chip-input">
-          {rows.filter(r => r.status === 'loaded' || r.status === 'loading' || r.status === 'error').map((r, i) => (
+        <div className={`dc-chip-input${activeRows.length > 14 ? ' dc-chip-input-dense' : ''}`}>
+          {activeRows.length > 0 && (
+            <div className="dc-chip-input-head">
+              <span>{loadedRows.length} ticker{loadedRows.length === 1 ? '' : 's'} selected</span>
+              {activeRows.length > loadedRows.length && <span>{activeRows.length - loadedRows.length} pending</span>}
+            </div>
+          )}
+          {activeRows.map((r, i) => (
             <span key={`${r.ticker}-${i}`} className={`dc-chip dc-chip-${r.status}`}>
               {r.ticker || '...'}
               {r.status === 'loading' && <span className="dc-chip-spinner" />}
@@ -690,6 +701,7 @@ export default function DividendCalculator() {
             placeholder={rows.some(r => r.status === 'loaded') ? 'Add another ticker' : 'Enter a ticker (e.g. SCHD, AAPL)'}
           />
         </div>
+        <div className="dc-ticker-actions">
         <button type="submit" className="btn btn-secondary">Add Ticker</button>
         <button
           type="button"
@@ -704,6 +716,7 @@ export default function DividendCalculator() {
           {calculation ? 'Recalculate' : 'Calculate'}
         </button>
         <button type="button" className="btn dc-reset" onClick={resetAll}>Reset</button>
+        </div>
       </form>
 
       {pickerOpen && (

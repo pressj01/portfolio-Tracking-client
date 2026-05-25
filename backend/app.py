@@ -25632,6 +25632,50 @@ def dividend_history_data():
             for row in rows
         )
 
+    def _only_refresh_estimate_payments(rows):
+        return bool(rows) and not _has_non_refresh_payments(rows)
+
+    def _holding_rows_for_estimates():
+        clauses = [f"profile_id IN ({placeholders})", "IFNULL(quantity, 0) > 0"]
+        params = list(pids)
+        if filtered_tickers is not None:
+            if filtered_tickers:
+                ticker_ph = ",".join("?" * len(filtered_tickers))
+                clauses.append(f"ticker IN ({ticker_ph})")
+                params.extend(sorted(filtered_tickers))
+            else:
+                clauses.append("1 = 0")
+        return conn.execute(
+            f"""SELECT ticker, quantity, div, div_frequency, ex_div_date,
+                       ytd_divs, current_month_income
+                FROM all_account_info
+                WHERE {' AND '.join(clauses)}""",
+            params,
+        ).fetchall()
+
+    def _estimated_monthly_series(start_year, start_month, end_year, end_month):
+        holdings = [dict(row) for row in _holding_rows_for_estimates()]
+        series = {}
+        year, month = start_year, start_month
+        while (year * 100 + month) <= (end_year * 100 + end_month):
+            series[f"{year:04d}-{month:02d}"] = round(
+                sum(_estimate_month_income(h, month) for h in holdings),
+                2,
+            )
+            month += 1
+            if month > 12:
+                month = 1
+                year += 1
+        return series
+
+    def _estimated_ytd_total():
+        total = 0.0
+        for row in _holding_rows_for_estimates():
+            h = dict(row)
+            stored_ytd = h.get("ytd_divs")
+            total += _estimate_ytd_income(h) if stored_ytd is None else float(stored_ytd or 0)
+        return round(total, 2)
+
     if view == "yearly":
         where_sql, pay_params = _payment_query_parts()
         payment_rows = conn.execute(
@@ -25647,7 +25691,9 @@ def dividend_history_data():
             pids,
         ).fetchall()
 
-        if payment_rows and (not payout_rows or _has_non_refresh_payments(payment_rows)):
+        if payment_rows and not payout_rows and _only_refresh_estimate_payments(payment_rows):
+            series_by_year = {str(today.year): _estimated_ytd_total()}
+        elif payment_rows and (not payout_rows or _has_non_refresh_payments(payment_rows)):
             series_by_year = {str(r["year"]): round(float(r["total"] or 0), 2) for r in payment_rows}
         else:
             series_by_year = {str(r["year"]): round(float(r["total"]) * cat_ratio, 2) for r in payout_rows}
@@ -25689,7 +25735,11 @@ def dividend_history_data():
             pids + [start_key, end_key],
         ).fetchall()
 
-        if payment_rows and (not payout_rows or _has_non_refresh_payments(payment_rows)):
+        if payment_rows and not payout_rows and _only_refresh_estimate_payments(payment_rows):
+            series_by_month = _estimated_monthly_series(start_y, start_m, today.year, today.month)
+            for r in payment_rows:
+                series_by_month[r["ym"]] = round(float(r["total"] or 0), 2)
+        elif payment_rows and (not payout_rows or _has_non_refresh_payments(payment_rows)):
             series_by_month = {r["ym"]: round(float(r["total"] or 0), 2) for r in payment_rows}
         else:
             series_by_month = {
