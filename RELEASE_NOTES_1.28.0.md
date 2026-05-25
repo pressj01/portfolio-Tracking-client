@@ -57,6 +57,14 @@ Version 1.28.0 packages the recent tax, dividend-income, market-calendar, and di
 - Added regime quadrant analysis using FRED economic indicators and market-proxy transition modeling, including current quadrant classification, transition probabilities, forward projections, and asset-class performance guidance.
 - Added help content for the Macro Regime Dashboard, including screenshots and explanations for all six tabs.
 
+## Cost Basis Mode
+
+- Added an app-level cost basis selector so users can view portfolio data using either Original cost or Adjusted cost.
+- Original cost keeps the portfolio view anchored to the original transaction-derived basis when available.
+- Adjusted cost uses broker-adjusted basis fields when available, which helps compare holdings after broker-side cost-basis adjustments.
+- The selected basis mode is included in portfolio API requests and is used by affected dashboard, holdings, gains/losses, yield-on-cost, gain/loss, and invested-value calculations.
+- The selected basis mode is saved locally so the app keeps the user's preferred Original cost or Adjusted cost view between sessions.
+
 ## Market Calendar And Dashboard
 
 - Added a market calendar helper for NYSE trading-day detection and closure reasons.
@@ -77,6 +85,7 @@ Version 1.28.0 packages the recent tax, dividend-income, market-calendar, and di
 - Dividend Calculator was manually checked with a large account loaded with 66 selected tickers.
 - Distribution History percentage modes were verified across the comparer/research chart implementation.
 - Macro Regime Dashboard endpoints and tabs were reviewed for release-note coverage.
+- Cost basis mode coverage was reviewed across the shared profile query string and affected portfolio pages.
 
 ## Deployment Artifacts
 
