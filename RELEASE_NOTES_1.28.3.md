@@ -4,7 +4,7 @@ Release date: May 25, 2026
 
 ## Dividend Calculator - Portfolio Projection Accuracy
 
-- Fixed whole-portfolio dividend projections for high-yield option-income portfolios, including the Adam account scenario where a $25,343 starting portfolio could incorrectly project into multi-million-dollar results.
+- Fixed whole-portfolio dividend projections for high-yield option-income portfolios, including an account example where a $25,343 starting portfolio could incorrectly project into multi-million-dollar results.
 - KQQQ and other funds with short or noisy dividend histories no longer seed unrealistic default dividend-growth rates, such as the prior 153% annual growth estimate.
 - Portfolio-imported holdings now prefer the account's stored current income/yield data when available, so the calculator starts from the portfolio's actual income profile instead of relying only on live lookup estimates.
 - Return of Capital now affects modeled NAV during projection, not just taxes, preventing distributions from being counted as both reinvestable income and unchanged fund value.
