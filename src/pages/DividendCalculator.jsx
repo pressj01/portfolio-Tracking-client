@@ -1309,7 +1309,7 @@ export default function DividendCalculator() {
           <div className="dc-stat-row">
             <div className="dc-stat">
               <div className="dc-stat-label">{allPortfolio ? 'Current Portfolio Value' : 'Starting Wealth'}</div>
-              <div className="dc-stat-value">{fmtMoneyShort(totals.totalInvested)}</div>
+              <div className="dc-stat-value">{fmtMoneyShort(totals.initial.portfolioValue)}</div>
             </div>
             <div className="dc-stat">
               <div className="dc-stat-label">Ending Wealth</div>
