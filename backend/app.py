@@ -3186,6 +3186,141 @@ def _div_calc_growth_pct(divs, freq_code):
     return round(cagr * 100.0, 4)
 
 
+def _div_calc_yield_option(key, label, value, source, note=None, annual_dividend=None):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    option = {
+        "key": key,
+        "label": label,
+        "yield_pct": round(value, 4),
+        "source": source,
+        "note": note or "",
+    }
+    if annual_dividend is not None:
+        try:
+            option["annual_dividend"] = round(float(annual_dividend), 4)
+        except (TypeError, ValueError):
+            pass
+    return option
+
+
+def _div_calc_yield_options(ticker, name, info, divs, freq_code, price, annual_div, ttm_div, yield_source):
+    options = []
+    seen = set()
+
+    def add(option):
+        if not option or option["key"] in seen:
+            return
+        seen.add(option["key"])
+        options.append(option)
+
+    _, per_year = _DIV_CALC_FREQ_MAP.get(freq_code, ("Quarterly", 4))
+    pos = _div_calc_positive_dividends(divs)
+
+    if price > 0 and not pos.empty:
+        latest_div = float(pos.iloc[-1])
+        run_rate_div = latest_div * per_year
+        add(_div_calc_yield_option(
+            "current_run_rate",
+            "Current run-rate",
+            (run_rate_div / price) * 100.0,
+            "Latest distribution",
+            f"Latest distribution x {per_year} / price",
+            run_rate_div,
+        ))
+
+    if price > 0 and ttm_div > 0:
+        add(_div_calc_yield_option(
+            "ttm_paid",
+            "TTM paid",
+            (ttm_div / price) * 100.0,
+            "Yahoo dividend history",
+            "Last 12 months paid / price",
+            ttm_div,
+        ))
+
+    description = name or (info.get("longName") or info.get("shortName") or ticker)
+    official = None
+    try:
+        official = _fetch_official_distribution_snapshot(ticker, description)
+    except Exception:
+        official = None
+    if official and price > 0:
+        official_source = official.get("source") or "Fund site"
+        official_history = official.get("history")
+        official_freq = official.get("freq") or freq_code
+        _, official_per_year = _DIV_CALC_FREQ_MAP.get(official_freq, _DIV_CALC_FREQ_MAP.get(freq_code, ("Quarterly", 4)))
+        if official_history is not None and not official_history.empty:
+            official_pos = _div_calc_positive_dividends(official_history)
+            if not official_pos.empty:
+                latest_official = float(official_pos.iloc[-1])
+                official_run_rate = latest_official * official_per_year
+                add(_div_calc_yield_option(
+                    "provider_run_rate",
+                    "Provider run-rate",
+                    (official_run_rate / price) * 100.0,
+                    official_source,
+                    f"Latest provider distribution x {official_per_year} / price",
+                    official_run_rate,
+                ))
+        provider_rate = official.get("distribution_rate_pct")
+        add(_div_calc_yield_option(
+            "provider_rate",
+            "Provider rate",
+            provider_rate,
+            official_source,
+            "Published provider distribution rate",
+        ))
+
+    info_yield = info.get("dividendYield") or info.get("trailingAnnualDividendYield")
+    if info_yield:
+        try:
+            iy = float(info_yield)
+            quote_yield = iy * (100.0 if iy <= 1 else 1.0)
+            add(_div_calc_yield_option(
+                "yahoo_quote",
+                "Yahoo quote",
+                quote_yield,
+                "Yahoo quote summary",
+                "Quote yield as reported by Yahoo",
+            ))
+        except (TypeError, ValueError):
+            pass
+
+    if not options and price > 0 and annual_div > 0:
+        add(_div_calc_yield_option(
+            yield_source or "estimated",
+            "Estimated",
+            (annual_div / price) * 100.0,
+            "Dividend history",
+            "Estimated annual dividend / price",
+            annual_div,
+        ))
+
+    return options
+
+
+def _div_calc_recommended_yield_basis(ticker, name, options, fallback_source):
+    keys = {o.get("key") for o in options}
+    is_supported_income_family = _match_fund_family(ticker, name or "") is not None
+    high_yield = any((o.get("yield_pct") or 0) >= 20 for o in options)
+
+    if is_supported_income_family or high_yield:
+        for key in ("provider_run_rate", "provider_rate", "current_run_rate", "ttm_paid", "yahoo_quote"):
+            if key in keys:
+                return key
+
+    for key in (fallback_source, "ttm_paid", "current_run_rate", "yahoo_quote", "provider_run_rate", "provider_rate"):
+        if key in keys:
+            return key
+
+    return options[0]["key"] if options else fallback_source
+
+
 @app.route("/api/dividend-calc/lookup/<ticker>", methods=["GET"])
 def dividend_calc_lookup(ticker):
     """Return calculator-friendly facts for a ticker: name, price, yield, freq, growth."""
@@ -3229,10 +3364,20 @@ def dividend_calc_lookup(ticker):
                 except (TypeError, ValueError):
                     pass
 
-        growth_pct = _div_calc_growth_pct(divs, freq_code)
-
         name = (info.get("longName") or info.get("shortName") or ticker)
         quote_type = (info.get("quoteType") or "").upper() or "ETF"
+        growth_pct = _div_calc_growth_pct(divs, freq_code)
+        yield_options = _div_calc_yield_options(ticker, name, info, divs, freq_code, price, annual_div, ttm_div, yield_source)
+        recommended_yield_basis = _div_calc_recommended_yield_basis(ticker, name, yield_options, yield_source)
+        selected_yield = next((o for o in yield_options if o.get("key") == recommended_yield_basis), None)
+        if selected_yield:
+            yield_pct = selected_yield["yield_pct"]
+            annual_div = selected_yield.get("annual_dividend", annual_div)
+            yield_source = selected_yield.get("key") or yield_source
+
+        recommended_roc_pct = 0.0
+        if (_match_fund_family(ticker, name or "") is not None or yield_pct >= 20) and yield_pct >= 20:
+            recommended_roc_pct = 75.0 if yield_pct < 50 else 100.0
 
         return jsonify({
             "ticker": ticker,
@@ -3243,6 +3388,9 @@ def dividend_calc_lookup(ticker):
             "ttm_dividend": round(ttm_div, 4),
             "yield_pct": yield_pct,
             "yield_source": yield_source,
+            "yield_options": yield_options,
+            "recommended_yield_basis": recommended_yield_basis,
+            "recommended_roc_pct": recommended_roc_pct,
             "growth_pct": growth_pct,
             "frequency_code": freq_code,
             "frequency_label": freq_label,
@@ -4269,6 +4417,7 @@ def _fetch_yieldmax_distribution_snapshot(ticker):
         "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
         "freq": _infer_dividend_frequency_from_history(history),
         "history": history,
+        "source": "YieldMax",
     }
 
 

@@ -86,13 +86,30 @@ const estimatedPortfolioRocPct = (yieldPct) => {
 }
 
 function NumberInput({ value, onChange, min, max, step, prefix, suffix, placeholder }) {
+  const formatDisplayValue = (v) => (v === '' || v == null ? '' : String(v))
+  const [isEditing, setIsEditing] = useState(false)
+  const [draftValue, setDraftValue] = useState(formatDisplayValue(value))
+  const displayValue = formatDisplayValue(value)
+
+  useEffect(() => {
+    if (!isEditing) setDraftValue(displayValue)
+  }, [displayValue, isEditing])
+
+  const handleChange = (e) => {
+    const nextValue = e.target.value
+    setDraftValue(nextValue)
+    onChange(nextValue === '' ? '' : Number(nextValue))
+  }
+
   return (
     <div className="dc-input-wrap">
       {prefix && <span className="dc-input-affix dc-input-prefix">{prefix}</span>}
       <input
         type="number"
-        value={value === '' || value == null ? '' : value}
-        onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
+        value={isEditing ? draftValue : displayValue}
+        onFocus={() => setIsEditing(true)}
+        onBlur={() => setIsEditing(false)}
+        onChange={handleChange}
         min={min}
         max={max}
         step={step}
@@ -327,6 +344,9 @@ const DEFAULT_ROW = {
   priceGrowthPct: 3,
   annualContribution: 0,
   payoutCode: 'Q',
+  yieldBasis: '',
+  yieldOptions: [],
+  yieldNote: '',
   source: 'manual', // 'manual' | 'portfolio'
   status: 'empty', // empty | loading | loaded | error
   message: '',
@@ -345,6 +365,154 @@ function newRow(overrides = {}) {
   return { ...DEFAULT_ROW, ...overrides }
 }
 
+function normalizeYieldOptions(options = []) {
+  return (Array.isArray(options) ? options : [])
+    .filter(o => o && o.key && Number(o.yield_pct) > 0)
+    .map(o => ({
+      key: o.key,
+      label: o.label || o.key,
+      yieldPct: Number(o.yield_pct) || 0,
+      source: o.source || '',
+      note: o.note || '',
+    }))
+}
+
+function fallbackYieldOptionFromLookup(data) {
+  const yieldPct = Number(data?.yield_pct) || 0
+  if (!(yieldPct > 0)) return null
+  const source = data?.yield_source || ''
+  const key = source === 'quote_yield'
+    ? 'yahoo_quote'
+    : source === 'latest_distribution_rate' || source === 'annualized_average_distribution'
+      ? 'current_run_rate'
+      : source === 'trailing_12_month'
+        ? 'ttm_paid'
+        : 'estimated'
+  const labels = {
+    yahoo_quote: 'Yahoo quote',
+    current_run_rate: 'Current run-rate',
+    ttm_paid: 'TTM paid',
+    estimated: 'Estimated',
+  }
+  const notes = {
+    yahoo_quote: 'Quote yield as reported by Yahoo',
+    current_run_rate: 'Estimated annualized distribution / price',
+    ttm_paid: 'Last 12 months paid / price',
+    estimated: 'Estimated annual dividend / price',
+  }
+  const sources = {
+    yahoo_quote: 'Yahoo quote summary',
+    current_run_rate: 'Dividend history',
+    ttm_paid: 'Yahoo dividend history',
+    estimated: 'Dividend history',
+  }
+  return {
+    key,
+    label: labels[key],
+    yieldPct,
+    source: sources[key],
+    note: notes[key],
+  }
+}
+
+function yieldOptionNote(option) {
+  if (!option) return ''
+  const source = option.source ? ` (${option.source})` : ''
+  return `${option.label}: ${option.note || 'yield basis'}${source}`
+}
+
+function yieldSelectionFromLookup(data, portfolioYieldPct = null) {
+  let yieldOptions = normalizeYieldOptions(data?.yield_options)
+  if (!yieldOptions.length) {
+    const fallback = fallbackYieldOptionFromLookup(data)
+    if (fallback) yieldOptions = [fallback]
+  }
+
+  if (portfolioYieldPct != null) {
+    return {
+      yieldOptions,
+      yieldBasis: 'portfolio',
+      yieldPct: portfolioYieldPct,
+      yieldNote: 'Portfolio estimate: annual income / current value',
+    }
+  }
+
+  const yieldBasis = data?.recommended_yield_basis || yieldOptions[0]?.key || 'custom'
+  const yieldOption = yieldOptions.find(o => o.key === yieldBasis)
+  const yieldPct = yieldOption?.yieldPct ?? (Number(data?.yield_pct) || 0)
+  return {
+    yieldOptions,
+    yieldBasis,
+    yieldPct,
+    yieldNote: yieldOptionNote(yieldOption),
+  }
+}
+
+function selectedYieldOption(row) {
+  return (row.yieldOptions || []).find(o => o.key === row.yieldBasis) || null
+}
+
+function yieldBasisNote(row) {
+  if (row.yieldNote) return row.yieldNote
+  const option = selectedYieldOption(row)
+  if (!option) return ''
+  const source = option.source ? ` (${option.source})` : ''
+  return `${option.label}: ${option.note || 'yield basis'}${source}`
+}
+
+function applyYieldOption(row, basis) {
+  if (basis === 'custom') {
+    return { ...row, yieldBasis: 'custom', yieldNote: 'Manual yield override' }
+  }
+  const option = (row.yieldOptions || []).find(o => o.key === basis)
+  if (!option) return row
+  return {
+    ...row,
+    yieldBasis: basis,
+    yieldPct: option.yieldPct,
+    yieldNote: yieldOptionNote(option),
+  }
+}
+
+function normalizeLegacyYieldRow(row) {
+  const yieldPct = Number(row.yieldPct) || 0
+  const hasOptions = (row.yieldOptions || []).length > 0
+  if (hasOptions || !(yieldPct > 0) || row.yieldNote) return row
+
+  const option = {
+    key: 'estimated',
+    label: 'Estimated',
+    yieldPct,
+    source: 'Legacy lookup',
+    note: 'Estimated annual dividend / price',
+  }
+  return {
+    ...row,
+    yieldBasis: row.yieldBasis && row.yieldBasis !== 'custom' ? row.yieldBasis : option.key,
+    yieldOptions: [option],
+    yieldNote: yieldOptionNote(option),
+    returnOfCapitalPct: Number(row.returnOfCapitalPct) || estimatedPortfolioRocPct(yieldPct),
+  }
+}
+
+function rowCanCalculate(row) {
+  const sharePrice = Number(row.sharePrice) || 0
+  const shares = Number(row.shares) || 0
+  const initialInvestment = Number(row.initialInvestment) || 0
+  return row.status === 'loaded' && sharePrice > 0 && (shares > 0 || initialInvestment > 0)
+}
+
+function rowsForCalculation(rows) {
+  return rows.filter(rowCanCalculate).map(r => {
+    const sharePrice = Number(r.sharePrice) || 0
+    const initialInvestment = Number(r.initialInvestment) || 0
+    const shares = Number(r.shares) > 0
+      ? Number(r.shares)
+      : (sharePrice > 0 ? initialInvestment / sharePrice : 0)
+    return { ...r, sharePrice, initialInvestment, shares }
+  })
+}
+
 export default function DividendCalculator() {
   const pf = useProfileFetch()
   const [rows, setRows] = useState([newRow()])
@@ -360,6 +528,8 @@ export default function DividendCalculator() {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerSearch, setPickerSearch] = useState('')
   const [picked, setPicked] = useState(() => new Set())
+  const [calcMessage, setCalcMessage] = useState('')
+  const [calculateWhenReady, setCalculateWhenReady] = useState(false)
 
   useEffect(() => {
     pf('/api/holdings')
@@ -370,6 +540,18 @@ export default function DividendCalculator() {
       })
       .catch(() => {})
   }, [pf])
+
+  useEffect(() => {
+    setRows(prev => {
+      let changed = false
+      const next = prev.map(row => {
+        const normalized = normalizeLegacyYieldRow(row)
+        if (normalized !== row) changed = true
+        return normalized
+      })
+      return changed ? next : prev
+    })
+  }, [rows])
 
   // Lookup a ticker by symbol and add a new row (or replace empty default)
   const lookupTicker = async (symbol) => {
@@ -391,6 +573,9 @@ export default function DividendCalculator() {
       const initialInvestment = Number(defaultInitialInvestment) || DEFAULT_SETTINGS.defaultInitialInvestment
       const price = d.price || 0
       const shares = price > 0 ? initialInvestment / price : 0
+      const yieldSelection = yieldSelectionFromLookup(d)
+      const yieldPct = yieldSelection.yieldPct
+      const recommendedRocPct = Number(d.recommended_roc_pct) || estimatedPortfolioRocPct(yieldPct)
       setRows(prev => {
         const loadedCount = prev.filter(r => r.status === 'loaded' || r.ticker === sym).length
         const perTicker = loadedCount > 0 ? (Number(annualContribution) || 0) / loadedCount : 0
@@ -402,10 +587,14 @@ export default function DividendCalculator() {
               name: d.name,
               sharePrice: price,
               shares: shares,
-              yieldPct: d.yield_pct || 0,
+              yieldPct,
               divGrowthPct: cleanLookupDividendGrowthPct(d.growth_pct),
+              returnOfCapitalPct: recommendedRocPct || row.returnOfCapitalPct,
               priceGrowthPct: Number(defaultPriceGrowthPct) || 0,
               payoutCode: d.frequency_code || 'Q',
+              yieldBasis: yieldSelection.yieldBasis,
+              yieldOptions: yieldSelection.yieldOptions,
+              yieldNote: yieldSelection.yieldNote,
               initialInvestment,
               annualContribution: perTicker,
               status: 'loaded',
@@ -462,7 +651,9 @@ export default function DividendCalculator() {
           const initialInvestment = isPortfolio && holdingValue > 0 ? holdingValue : shares * price
           const sharePrice = isPortfolio && shares > 0 && holdingValue > 0 ? holdingValue / shares : price
           const portfolioYieldPct = portfolioYieldPctFromHolding(h, initialInvestment)
-          const yieldPct = portfolioYieldPct ?? (d.yield_pct || 0)
+          const yieldSelection = yieldSelectionFromLookup(d, portfolioYieldPct)
+          const yieldPct = yieldSelection.yieldPct
+          const recommendedRocPct = Number(d.recommended_roc_pct) || estimatedPortfolioRocPct(yieldPct)
           setRows(prev => {
             const loadedCount = prev.filter(r => r.status === 'loaded' || r.ticker === sym).length
             const perTicker = loadedCount > 0 ? (Number(annualContribution) || 0) / loadedCount : 0
@@ -476,9 +667,14 @@ export default function DividendCalculator() {
                   shares,
                   yieldPct,
                   divGrowthPct: cleanLookupDividendGrowthPct(d.growth_pct),
-                  returnOfCapitalPct: isPortfolio ? estimatedPortfolioRocPct(yieldPct) : row.returnOfCapitalPct,
+                  returnOfCapitalPct: isPortfolio
+                    ? estimatedPortfolioRocPct(yieldPct)
+                    : (recommendedRocPct || row.returnOfCapitalPct),
                   priceGrowthPct: priceGrowth,
                   payoutCode: d.frequency_code || 'Q',
+                  yieldBasis: yieldSelection.yieldBasis,
+                  yieldOptions: yieldSelection.yieldOptions,
+                  yieldNote: yieldSelection.yieldNote,
                   initialInvestment,
                   annualContribution: perTicker,
                   source: isPortfolio ? 'portfolio' : 'manual',
@@ -579,6 +775,12 @@ export default function DividendCalculator() {
     }))
   }
 
+  const updateRowYieldBasis = (idx, basis) => {
+    setRows(prev => prev.map((r, i) => (
+      i === idx ? applyYieldOption(r, basis) : r
+    )))
+  }
+
   const updateDefaultInitialInvestment = (value) => {
     setDefaultInitialInvestment(value)
     setRows(prev => prev.map(r => {
@@ -619,8 +821,20 @@ export default function DividendCalculator() {
   }
 
   const handleCalculate = () => {
-    const loadedRows = rows.filter(r => r.status === 'loaded' && Number(r.shares) > 0 && Number(r.sharePrice) > 0)
-    if (!loadedRows.length) return
+    const loadedRows = rowsForCalculation(rows)
+    if (!loadedRows.length) {
+      const sym = tickerInput.trim().toUpperCase()
+      if (sym) {
+        setCalcMessage(`Loading ${sym} before calculating...`)
+        setCalculateWhenReady(true)
+        setTickerInput('')
+        lookupTicker(sym)
+        return
+      }
+      setCalcMessage('Add at least one ticker before calculating. Enter a symbol or choose tickers from your portfolio.')
+      return
+    }
+    setCalcMessage('')
     setCalculation({
       rows: loadedRows.map(r => ({ ...r })),
       settings: {
@@ -632,6 +846,27 @@ export default function DividendCalculator() {
     })
   }
 
+  useEffect(() => {
+    if (!calculateWhenReady) return
+    if (rows.some(r => r.status === 'loading')) return
+    const loadedRows = rowsForCalculation(rows)
+    if (loadedRows.length) {
+      setCalculation({
+        rows: loadedRows.map(r => ({ ...r })),
+        settings: {
+          years: Number(years) || 0,
+          annualContribution: Number(annualContribution) || 0,
+          taxRatePct: Number(taxRatePct) || 0,
+          dripPct: clampPct(dripPct),
+        },
+      })
+      setCalcMessage('')
+      setCalculateWhenReady(false)
+    } else if (rows.some(r => r.status === 'error')) {
+      setCalculateWhenReady(false)
+    }
+  }, [annualContribution, calculateWhenReady, dripPct, rows, taxRatePct, years])
+
   const currentInputsKey = JSON.stringify({
     rows: rows.filter(r => r.status === 'loaded').map(r => ({
       ticker: r.ticker,
@@ -639,6 +874,7 @@ export default function DividendCalculator() {
       sharePrice: Number(r.sharePrice) || 0,
       shares: Number(r.shares) || 0,
       yieldPct: Number(r.yieldPct) || 0,
+      yieldBasis: r.yieldBasis || '',
       divGrowthPct: Number(r.divGrowthPct) || 0,
       returnOfCapitalPct: Number(r.returnOfCapitalPct) || 0,
       priceGrowthPct: Number(r.priceGrowthPct) || 0,
@@ -647,6 +883,7 @@ export default function DividendCalculator() {
     })),
     settings: {
       years: Number(years) || 0,
+      annualContribution: Number(annualContribution) || 0,
       taxRatePct: Number(taxRatePct) || 0,
       dripPct: clampPct(dripPct),
     },
@@ -659,6 +896,7 @@ export default function DividendCalculator() {
       sharePrice: Number(r.sharePrice) || 0,
       shares: Number(r.shares) || 0,
       yieldPct: Number(r.yieldPct) || 0,
+      yieldBasis: r.yieldBasis || '',
       divGrowthPct: Number(r.divGrowthPct) || 0,
       returnOfCapitalPct: Number(r.returnOfCapitalPct) || 0,
       priceGrowthPct: Number(r.priceGrowthPct) || 0,
@@ -670,7 +908,7 @@ export default function DividendCalculator() {
 
   const activeRows = rows.filter(r => r.status === 'loaded' || r.status === 'loading' || r.status === 'error')
   const loadedRows = rows.filter(r => r.status === 'loaded')
-  const hasLoadedRows = rows.some(r => r.status === 'loaded' && Number(r.shares) > 0 && Number(r.sharePrice) > 0)
+  const isLoadingTicker = rows.some(r => r.status === 'loading')
   const portfolioRows = loadedRows.filter(r => r.source === 'portfolio')
   const manualRows = loadedRows.filter(r => r.source === 'manual')
   const allPortfolio = loadedRows.length > 0 && manualRows.length === 0
@@ -723,7 +961,7 @@ export default function DividendCalculator() {
         <span>
           <strong>{r.name}</strong> ({r.ticker}) has a stock price of <strong>{fmtMoney(r.sharePrice)}</strong>,
           dividend yield of <strong>{fmtPct(r.yieldPct, 3)}</strong>, and dividend growth of <strong>{fmtPct(r.divGrowthPct, 2)}</strong>,
-          based on current and historical data.
+          using <strong>{selectedYieldOption(r)?.label || (r.yieldBasis === 'custom' ? 'custom yield' : 'the selected yield basis')}</strong>.
         </span>
       )
     }
@@ -843,12 +1081,14 @@ export default function DividendCalculator() {
         >
           From Portfolio{pickerOpen ? ' ▲' : ' ▼'}
         </button>
-        <button type="button" className="btn btn-primary" onClick={handleCalculate} disabled={!hasLoadedRows}>
-          {calculation ? 'Recalculate' : 'Calculate'}
+        <button type="button" className="btn btn-primary" onClick={handleCalculate} disabled={isLoadingTicker}>
+          {calculateWhenReady || isLoadingTicker ? 'Loading...' : (calculation ? 'Recalculate' : 'Calculate')}
         </button>
         <button type="button" className="btn dc-reset" onClick={resetAll}>Reset</button>
         </div>
       </form>
+
+      {calcMessage && <div className="alert alert-info">{calcMessage}</div>}
 
       {pickerOpen && (
         <div style={{
@@ -976,10 +1216,25 @@ export default function DividendCalculator() {
                 />
               </div>
               <div className="dc-field">
+                <label>Yield Basis</label>
+                <select
+                  className="dc-input"
+                  value={r.yieldBasis || 'custom'}
+                  onChange={(e) => updateRowYieldBasis(idx, e.target.value)}
+                >
+                  {r.yieldBasis === 'portfolio' && <option value="portfolio">Portfolio estimate</option>}
+                  {(r.yieldOptions || []).map(o => (
+                    <option key={o.key} value={o.key}>{o.label}</option>
+                  ))}
+                  {(r.yieldBasis === 'custom' || !(r.yieldOptions || []).length) && <option value="custom">Custom</option>}
+                </select>
+                {yieldBasisNote(r) && <div className="dc-field-note">{yieldBasisNote(r)}</div>}
+              </div>
+              <div className="dc-field">
                 <label>Initial Dividend Yield</label>
                 <NumberInput
                   value={fmtInputNumber(r.yieldPct, 2)}
-                  onChange={(v) => updateRow(idx, { yieldPct: v })}
+                  onChange={(v) => updateRow(idx, { yieldPct: v, yieldBasis: 'custom', yieldNote: 'Manual yield override' })}
                   suffix="%"
                   step="0.01"
                 />
@@ -1046,8 +1301,8 @@ export default function DividendCalculator() {
               <h2>Results After {Math.round(calculation.settings.years)} Years</h2>
               {resultsNeedUpdate && <div className="dc-muted">Inputs changed since these results were calculated.</div>}
             </div>
-            <button type="button" className="btn btn-primary" onClick={handleCalculate} disabled={!hasLoadedRows}>
-              Recalculate
+            <button type="button" className="btn btn-primary" onClick={handleCalculate} disabled={isLoadingTicker}>
+              {isLoadingTicker ? 'Loading...' : 'Recalculate'}
             </button>
           </div>
 
@@ -1113,15 +1368,6 @@ export default function DividendCalculator() {
                 },
                 {
                   x: totals.yearly.map(y => y.year),
-                  y: totals.yearly.map(y => y.cumDividends),
-                  name: 'Cumulative Dividends',
-                  type: 'scatter',
-                  mode: 'lines',
-                  line: { color: '#4dff91', width: 2 },
-                  hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra>Dividends</extra>',
-                },
-                {
-                  x: totals.yearly.map(y => y.year),
                   y: totals.yearly.map(y => y.annualIncome),
                   name: 'Annual Income',
                   type: 'scatter',
@@ -1129,6 +1375,15 @@ export default function DividendCalculator() {
                   line: { color: '#f9a825', width: 2, dash: 'dot' },
                   hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra>Annual Income</extra>',
                   yaxis: 'y2',
+                },
+                {
+                  x: totals.yearly.map(y => y.year),
+                  y: totals.yearly.map(y => y.cumDividends),
+                  name: 'Cumulative Dividends',
+                  type: 'scatter',
+                  mode: 'lines',
+                  line: { color: '#4dff91', width: 3 },
+                  hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra>Dividends</extra>',
                 },
               ]}
               layout={{
@@ -1187,7 +1442,13 @@ export default function DividendCalculator() {
                 xaxis: { title: 'Years', gridcolor: '#1a2a3e' },
                 yaxis: { title: projections.length > 1 ? 'Shares by Ticker' : 'Shares Owned', gridcolor: '#1a2a3e' },
                 legend: { orientation: 'h', y: -0.22, x: 0.5, xanchor: 'center', yanchor: 'top' },
-                hovermode: 'x unified',
+                hovermode: 'closest',
+                hoverlabel: {
+                  bgcolor: '#0f1a33',
+                  bordercolor: '#2f5ea8',
+                  font: { color: '#e0e8f5', size: 12 },
+                  align: 'left',
+                },
               }}
               config={{ responsive: true, displayModeBar: false }}
               style={{ width: '100%' }}
