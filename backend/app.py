@@ -1446,8 +1446,10 @@ def reconcile_owner():
 @app.route("/api/import/excel", methods=["POST"])
 def api_import_excel():
     """Import the owner's Excel spreadsheet (All Accounts sheet)."""
-    _create_import_backup()
     profile_id = get_profile_id()
+    multi = request.form.get("multi_sheet", "false").lower() == "true"
+    # Multi-sheet imports affect multiple profiles, so leave those backups untagged.
+    _create_import_backup(None if multi else profile_id)
     nav_date = _request_nav_date()
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
@@ -1455,7 +1457,6 @@ def api_import_excel():
     path = os.path.join(UPLOAD_FOLDER, f.filename)
     f.save(path)
     try:
-        multi = request.form.get("multi_sheet", "false").lower() == "true"
         as_txns = request.form.get("as_transactions", "false").lower() == "true"
         if multi:
             # Snapshot all existing profiles before import
@@ -1529,8 +1530,8 @@ def api_import_excel():
 @app.route("/api/import/generic", methods=["POST"])
 def api_import_generic():
     """Import a generic user spreadsheet (Ticker + Shares minimum)."""
-    _create_import_backup()
     profile_id = get_profile_id()
+    _create_import_backup(profile_id)
     nav_date = _request_nav_date()
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
@@ -1667,11 +1668,16 @@ def api_import_monthly_tickers():
 
 import shutil
 import glob as _glob
+import re as _re
 
 _BACKUP_DIR = os.path.join(os.path.dirname(DB_PATH), "backups")
-_MAX_BACKUPS = 5  # Keep at most this many backup files
+_MAX_BACKUPS_PER_PROFILE = 5  # Keep at most this many backups per profile (None = untagged group)
 _BACKUP_PREFIX = "portfolio_backup_"
 _LEGACY_BACKUP_PREFIX = "portfolio_pre_import_"
+# Tagged form: portfolio_backup_p<profile_id>_<timestamp>.db
+_TAGGED_BACKUP_RE = _re.compile(r"^portfolio_backup_p(\d+)_(\d{8}_\d{6})\.db$")
+# Untagged form: portfolio_backup_<timestamp>.db (also legacy portfolio_pre_import_<timestamp>.db)
+_UNTAGGED_BACKUP_RE = _re.compile(r"^(?:portfolio_backup_|portfolio_pre_import_)(\d{8}_\d{6})\.db$")
 
 
 def _database_backup_paths(reverse=False):
@@ -1683,36 +1689,78 @@ def _database_backup_paths(reverse=False):
     return unique_paths
 
 
-def _database_backup_timestamp_part(filename):
-    for prefix in (_BACKUP_PREFIX, _LEGACY_BACKUP_PREFIX):
-        if filename.startswith(prefix) and filename.endswith(".db"):
-            return filename[len(prefix):-3]
+def _parse_backup_filename(filename):
+    """Return (profile_id_or_None, timestamp_str) for a recognised backup filename, else None."""
+    m = _TAGGED_BACKUP_RE.match(filename)
+    if m:
+        return int(m.group(1)), m.group(2)
+    m = _UNTAGGED_BACKUP_RE.match(filename)
+    if m:
+        return None, m.group(1)
     return None
 
 
-def _create_import_backup():
+def _database_backup_timestamp_part(filename):
+    parsed = _parse_backup_filename(filename)
+    return parsed[1] if parsed else None
+
+
+def _create_import_backup(profile_id=None):
     """Create a timestamped copy of the database before a write operation.
+
+    When `profile_id` is given, the backup is tagged with that profile so
+    pruning keeps a separate history per profile. Untagged backups (used by
+    operations that affect multiple profiles) share their own retention bucket.
 
     Returns the backup file path, or None if the copy failed.
     """
     os.makedirs(_BACKUP_DIR, exist_ok=True)
     from datetime import datetime as _dt
     ts = _dt.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = os.path.join(_BACKUP_DIR, f"{_BACKUP_PREFIX}{ts}.db")
+    if profile_id is not None:
+        fname = f"{_BACKUP_PREFIX}p{int(profile_id)}_{ts}.db"
+    else:
+        fname = f"{_BACKUP_PREFIX}{ts}.db"
+    backup_path = os.path.join(_BACKUP_DIR, fname)
     try:
         shutil.copy2(DB_PATH, backup_path)
     except Exception:
         return None
 
-    # Prune old backups, keep only the newest _MAX_BACKUPS
-    backups = _database_backup_paths(reverse=True)
-    for old in backups[_MAX_BACKUPS:]:
-        try:
-            os.remove(old)
-        except OSError:
-            pass
+    # Group existing backups by profile (None = untagged) and prune each group
+    # independently so importing for one account never evicts another account's
+    # backups.
+    groups = {}
+    for bp in _database_backup_paths(reverse=True):
+        parsed = _parse_backup_filename(os.path.basename(bp))
+        key = parsed[0] if parsed else "unknown"
+        groups.setdefault(key, []).append(bp)
+    for key, files in groups.items():
+        for old in files[_MAX_BACKUPS_PER_PROFILE:]:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
 
     return backup_path
+
+
+def _profile_label_lookup():
+    """Return {profile_id: name} for labelling backup rows."""
+    try:
+        conn = get_connection()
+        try:
+            rows = conn.execute("SELECT id, name FROM profiles").fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return {}
+    out = {}
+    for r in rows:
+        pid = r["id"] if isinstance(r, dict) else r[0]
+        name = r["name"] if isinstance(r, dict) else r[1]
+        out[pid] = name
+    return out
 
 
 @app.route("/api/import/backups", methods=["GET"])
@@ -1721,19 +1769,33 @@ def list_import_backups():
     if not os.path.isdir(_BACKUP_DIR):
         return jsonify({"backups": []})
     backups = _database_backup_paths(reverse=True)
+    profile_names = _profile_label_lookup()
     result = []
     for bp in backups:
         fname = os.path.basename(bp)
         size_mb = round(os.path.getsize(bp) / (1024 * 1024), 1)
-        # Extract timestamp from filename
-        ts_part = _database_backup_timestamp_part(fname) or fname
+        parsed = _parse_backup_filename(fname)
+        if parsed:
+            profile_id, ts_part = parsed
+        else:
+            profile_id, ts_part = None, fname
         try:
             from datetime import datetime as _dt
             dt = _dt.strptime(ts_part, "%Y%m%d_%H%M%S")
             label = dt.strftime("%Y-%m-%d %I:%M:%S %p")
         except ValueError:
             label = ts_part
-        result.append({"filename": fname, "label": label, "size_mb": size_mb})
+        if profile_id is not None:
+            profile_label = profile_names.get(profile_id) or f"Profile {profile_id}"
+        else:
+            profile_label = "All profiles"
+        result.append({
+            "filename": fname,
+            "label": label,
+            "size_mb": size_mb,
+            "profile_id": profile_id,
+            "profile_label": profile_label,
+        })
     return jsonify({"backups": result})
 
 
@@ -2428,8 +2490,9 @@ def api_import_transactions():
     if blocked_msg:
         return jsonify({"error": blocked_msg}), 400
 
-    # Create a backup before any import so the user can roll back
-    backup_path = _create_import_backup()
+    # Create a backup before any import so the user can roll back. Portfolio
+    # export imports touch multiple profiles, so leave those backups untagged.
+    backup_path = _create_import_backup(None if fmt == "portfolio_export" else profile_id)
 
     import uuid
     path = os.path.join(UPLOAD_FOLDER, f"txn_{uuid.uuid4().hex}_{f.filename}")
@@ -11770,6 +11833,8 @@ def security_research_average_returns(kind):
 def clear_all_data():
     """Delete all holdings, dividends, and related data for the current profile."""
     profile_id = get_profile_id()
+    # Snapshot the database before a destructive operation so the user can roll back.
+    _create_import_backup(profile_id)
     conn = get_connection()
     tables = [
         "all_account_info", "holdings", "dividends", "income_tracking",
@@ -11777,14 +11842,11 @@ def clear_all_data():
     ]
     counts = {}
     for t in tables:
-        if t == "all_account_info":
-            r = conn.execute(f"DELETE FROM {t} WHERE profile_id = ?", (profile_id,))
-        else:
-            r = conn.execute(f"DELETE FROM {t}")
+        r = conn.execute(f"DELETE FROM {t} WHERE profile_id = ?", (profile_id,))
         counts[t] = r.rowcount
     conn.commit()
     conn.close()
-    return jsonify({"message": "All data cleared", "deleted": counts})
+    return jsonify({"message": "All data cleared for the current portfolio", "deleted": counts})
 
 
 @app.route("/api/data/stats", methods=["GET"])

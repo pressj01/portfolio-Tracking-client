@@ -1067,12 +1067,13 @@ export default function Import() {
         <div className="card" style={{ marginTop: '1.5rem' }}>
           <h3>Database Backups</h3>
           <p style={{ color: '#90a4ae', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
-            A backup is created automatically before every import and dividend repair. If a change caused problems, restore to a previous state.
+            A backup is created automatically before every import and dividend repair, and is kept separately per profile so imports for one account don't evict another account's history. If a change caused problems, restore to a previous state.
           </p>
           <table className="data-table" style={{ fontSize: '0.85rem' }}>
             <thead>
               <tr>
                 <th>Date</th>
+                <th>Profile</th>
                 <th>Size</th>
                 <th style={{ width: '100px' }}>Action</th>
               </tr>
@@ -1081,6 +1082,7 @@ export default function Import() {
               {backups.map(b => (
                 <tr key={b.filename}>
                   <td>{b.label}</td>
+                  <td>{b.profile_label || '—'}</td>
                   <td>{b.size_mb} MB</td>
                   <td>
                     <button

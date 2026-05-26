@@ -3,7 +3,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 export default function Settings() {
   const pf = useProfileFetch()
-  const { selection } = useProfile()
+  const { selection, currentProfileName, isAggregate } = useProfile()
   const [stats, setStats] = useState(null)
   const [confirming, setConfirming] = useState(false)
   const [status, setStatus] = useState(null)
@@ -414,8 +414,9 @@ export default function Settings() {
       <div className="card">
         <h2>Clear All Data</h2>
         <p style={{ color: '#90a4ae', marginBottom: '1rem', fontSize: '0.9rem' }}>
-          This will permanently delete all holdings, dividends, income tracking, and payout data.
-          You can re-import a spreadsheet after clearing.
+          This will permanently delete all holdings, dividends, income tracking, and payout data
+          for <strong>{isAggregate ? 'the active aggregate view' : (currentProfileName || 'the current portfolio')}</strong> only.
+          Other portfolios are not touched. A database backup is created automatically — you can restore it from the Import page.
         </p>
 
         {status && (
