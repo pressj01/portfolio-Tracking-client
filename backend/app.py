@@ -3179,6 +3179,10 @@ def _div_calc_growth_pct(divs, freq_code):
     oldest = windows[usable - 1]
     span = usable - 1
     cagr = (newest / oldest) ** (1.0 / span) - 1.0
+    # Short or structurally noisy fund histories can imply impossible default
+    # growth rates. Keep the editable calculator default conservative.
+    if abs(cagr) > 0.50:
+        return 0.0
     return round(cagr * 100.0, 4)
 
 

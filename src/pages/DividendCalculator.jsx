@@ -17,22 +17,73 @@ function freqPerYear(code) {
 const fmtMoney = (v) => {
   if (v == null || isNaN(v)) return '-'
   const n = Number(v)
+  if (!Number.isFinite(n)) return '-'
+  const abs = Math.abs(n)
+  if (abs >= 1e15) return '$' + n.toExponential(2)
+  if (abs >= 1e12) return '$' + (n / 1e12).toLocaleString('en-US', { maximumFractionDigits: 2 }) + 'T'
+  if (abs >= 1e9) return '$' + (n / 1e9).toLocaleString('en-US', { maximumFractionDigits: 2 }) + 'B'
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 const fmtMoneyShort = (v) => {
   if (v == null || isNaN(v)) return '-'
   const n = Number(v)
+  if (!Number.isFinite(n)) return '-'
+  const abs = Math.abs(n)
+  if (abs >= 1e15) return '$' + n.toExponential(2)
+  if (abs >= 1e12) return '$' + (n / 1e12).toLocaleString('en-US', { maximumFractionDigits: 2 }) + 'T'
+  if (abs >= 1e9) return '$' + (n / 1e9).toLocaleString('en-US', { maximumFractionDigits: 2 }) + 'B'
+  if (abs >= 1e6) return '$' + (n / 1e6).toLocaleString('en-US', { maximumFractionDigits: 2 }) + 'M'
   return '$' + Math.round(n).toLocaleString('en-US')
 }
 
-const fmtPct = (v, d = 2) => (v == null || isNaN(v)) ? '-' : Number(v).toFixed(d) + '%'
+const fmtPct = (v, d = 2) => {
+  if (v == null || isNaN(v)) return '-'
+  const n = Number(v)
+  if (!Number.isFinite(n)) return '-'
+  return Math.abs(n) >= 1e6 ? n.toExponential(2) + '%' : n.toFixed(d) + '%'
+}
 const fmtShares = (v) => {
   if (v == null || isNaN(v)) return '-'
-  return Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const n = Number(v)
+  if (!Number.isFinite(n)) return '-'
+  if (Math.abs(n) >= 1e15) return n.toExponential(2)
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+const fmtInputNumber = (v, decimals = 2) => {
+  if (v === '' || v == null || isNaN(v)) return ''
+  const n = Number(v)
+  if (!Number.isFinite(n)) return ''
+  return n.toFixed(decimals)
 }
 
 const clampPct = (v) => Math.min(100, Math.max(0, Number(v) || 0))
+const MAX_LOOKUP_DIV_GROWTH_PCT = 50
+
+const cleanLookupDividendGrowthPct = (value) => {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 0
+  return Math.abs(n) > MAX_LOOKUP_DIV_GROWTH_PCT ? 0 : n
+}
+
+const portfolioYieldPctFromHolding = (holding, currentValue) => {
+  if (!holding || !(currentValue > 0)) return null
+  const annualIncome = Number(holding.estim_payment_per_year) || ((Number(holding.approx_monthly_income) || 0) * 12)
+  if (annualIncome > 0) return (annualIncome / currentValue) * 100
+
+  const annualYield = Number(holding.current_annual_yield)
+  if (!Number.isFinite(annualYield) || annualYield <= 0) return null
+  return annualYield <= 3 ? annualYield * 100 : annualYield
+}
+
+const estimatedPortfolioRocPct = (yieldPct) => {
+  const y = Number(yieldPct) || 0
+  if (y >= 50) return 100
+  if (y >= 30) return 75
+  if (y >= 20) return 50
+  return 0
+}
 
 function NumberInput({ value, onChange, min, max, step, prefix, suffix, placeholder }) {
   return (
@@ -76,13 +127,15 @@ function projectDividends(input) {
   const periodDivGrowth = Math.pow(1 + (divGrowthPct || 0) / 100, 1 / ppy) - 1
   const periodContribution = (annualContribution || 0) / ppy
   const dividendTaxRate = clampPct(taxRatePct) / 100
-  const taxableDividendFactor = 1 - (clampPct(returnOfCapitalPct) / 100)
+  const rocRate = clampPct(returnOfCapitalPct) / 100
+  const taxableDividendFactor = 1 - rocRate
   const dripRate = clampPct(dripPct) / 100
 
   let curShares = shares
   let curPrice = sharePrice
   // Annual dividend per share at start
   let annualDivPerShare = sharePrice * (yieldPct / 100)
+  let divGrowthMultiplier = 1
 
   let cumGrossDivs = 0
   let cumNetDivs = 0
@@ -109,10 +162,18 @@ function projectDividends(input) {
 
   for (let p = 1; p <= periods; p++) {
     // Per-period dividend per share
-    const perPeriodDivPerShare = annualDivPerShare / ppy
+    const effectiveAnnualDivPerShare = rocRate > 0
+      ? curPrice * (yieldPct / 100) * divGrowthMultiplier
+      : annualDivPerShare
+    const perPeriodDivPerShare = effectiveAnnualDivPerShare / ppy
     const grossDiv = curShares * perPeriodDivPerShare
     const tax = grossDiv * taxableDividendFactor * dividendTaxRate
     const netDiv = grossDiv - tax
+    const rocDiv = grossDiv * rocRate
+    if (rocDiv > 0 && curShares > 0) {
+      const rocPerShare = rocDiv / curShares
+      curPrice = Math.max(0.01, curPrice - rocPerShare)
+    }
     cumGrossDivs += grossDiv
     cumNetDivs += netDiv
     cumTaxes += tax
@@ -132,13 +193,20 @@ function projectDividends(input) {
 
     // Grow price and dividend per share
     curPrice = curPrice * (1 + periodPriceGrowth)
-    annualDivPerShare = annualDivPerShare * (1 + periodDivGrowth)
+    if (rocRate > 0) {
+      divGrowthMultiplier = divGrowthMultiplier * (1 + periodDivGrowth)
+    } else {
+      annualDivPerShare = annualDivPerShare * (1 + periodDivGrowth)
+    }
 
     // End-of-year snapshot
     if (p % ppy === 0) {
       const year = p / ppy
       const portfolioValue = curShares * curPrice
-      const annualIncome = curShares * annualDivPerShare
+      const snapshotAnnualDivPerShare = rocRate > 0
+        ? curPrice * (yieldPct / 100) * divGrowthMultiplier
+        : annualDivPerShare
+      const annualIncome = curShares * snapshotAnnualDivPerShare
       yearly.push({
         year,
         portfolioValue,
@@ -335,7 +403,7 @@ export default function DividendCalculator() {
               sharePrice: price,
               shares: shares,
               yieldPct: d.yield_pct || 0,
-              divGrowthPct: d.growth_pct || 0,
+              divGrowthPct: cleanLookupDividendGrowthPct(d.growth_pct),
               priceGrowthPct: Number(defaultPriceGrowthPct) || 0,
               payoutCode: d.frequency_code || 'Q',
               initialInvestment,
@@ -354,7 +422,7 @@ export default function DividendCalculator() {
   }
 
   // Add multiple tickers atomically, then look each up.
-  // holdingsMap: optional { ticker: { quantity, current_price } } from portfolio picker
+  // holdingsMap: optional { ticker: holding } from portfolio picker
   const loadTickers = (symbols, holdingsMap) => {
     const sanitized = Array.from(new Set(
       (symbols || []).map(s => (s || '').trim().toUpperCase()).filter(Boolean)
@@ -384,11 +452,17 @@ export default function DividendCalculator() {
           const r = await pf(`/api/dividend-calc/lookup/${encodeURIComponent(sym)}`)
           const d = await r.json()
           if (!r.ok || d.error) throw new Error(d.error || 'Lookup failed')
-          const price = d.price || 0
+          const lookupPrice = Number(d.price) || 0
           const h = holdingsMap?.[sym]
           const isPortfolio = h?.quantity > 0
-          const shares = isPortfolio ? h.quantity : (price > 0 ? fallbackInvestment / price : 0)
-          const initialInvestment = shares * price
+          const holdingPrice = Number(h?.current_price) || 0
+          const price = isPortfolio ? (holdingPrice || lookupPrice) : lookupPrice
+          const shares = isPortfolio ? Number(h.quantity) : (price > 0 ? fallbackInvestment / price : 0)
+          const holdingValue = Number(h?.current_value) || 0
+          const initialInvestment = isPortfolio && holdingValue > 0 ? holdingValue : shares * price
+          const sharePrice = isPortfolio && shares > 0 && holdingValue > 0 ? holdingValue / shares : price
+          const portfolioYieldPct = portfolioYieldPctFromHolding(h, initialInvestment)
+          const yieldPct = portfolioYieldPct ?? (d.yield_pct || 0)
           setRows(prev => {
             const loadedCount = prev.filter(r => r.status === 'loaded' || r.ticker === sym).length
             const perTicker = loadedCount > 0 ? (Number(annualContribution) || 0) / loadedCount : 0
@@ -398,10 +472,11 @@ export default function DividendCalculator() {
                   ...row,
                   ticker: d.ticker,
                   name: d.name,
-                  sharePrice: price,
+                  sharePrice,
                   shares,
-                  yieldPct: d.yield_pct || 0,
-                  divGrowthPct: d.growth_pct || 0,
+                  yieldPct,
+                  divGrowthPct: cleanLookupDividendGrowthPct(d.growth_pct),
+                  returnOfCapitalPct: isPortfolio ? estimatedPortfolioRocPct(yieldPct) : row.returnOfCapitalPct,
                   priceGrowthPct: priceGrowth,
                   payoutCode: d.frequency_code || 'Q',
                   initialInvestment,
@@ -464,7 +539,7 @@ export default function DividendCalculator() {
     setPickerOpen(false)
     if (!symbols.length) return
     const holdingsMap = Object.fromEntries(
-      currentHoldings.map(h => [h.ticker, { quantity: h.quantity, current_price: h.current_price }])
+      currentHoldings.map(h => [h.ticker, h])
     )
     loadTickers(symbols, holdingsMap)
   }
@@ -706,7 +781,7 @@ export default function DividendCalculator() {
             ) : (
               <>
                 <label>{mixedSources ? 'Initial Investment (manual tickers only)' : 'Initial Investment Per Ticker'}</label>
-                <NumberInput value={defaultInitialInvestment} onChange={updateDefaultInitialInvestment} prefix="$" step="100" />
+                <NumberInput value={fmtInputNumber(defaultInitialInvestment, 2)} onChange={updateDefaultInitialInvestment} prefix="$" step="100" />
                 {mixedSources && (
                   <div className="dc-field-note">
                     Portfolio tickers use current values ({fmtMoneyShort(portfolioTotal)} across {portfolioRows.length})
@@ -717,20 +792,20 @@ export default function DividendCalculator() {
           </div>
           <div className="dc-field">
             <label>Annual Investment (split equally)</label>
-            <NumberInput value={annualContribution} onChange={updateGlobalContribution} prefix="$" step="100" />
+            <NumberInput value={fmtInputNumber(annualContribution, 0)} onChange={updateGlobalContribution} prefix="$" step="100" />
           </div>
           <div className="dc-field">
             <label>Dividend Tax Rate</label>
-            <NumberInput value={taxRatePct} onChange={setTaxRatePct} suffix="%" step="0.5" />
+            <NumberInput value={fmtInputNumber(taxRatePct, 2)} onChange={setTaxRatePct} suffix="%" step="0.5" />
           </div>
           <div className="dc-field">
             <label>Stock Price Growth (All Tickers)</label>
-            <NumberInput value={defaultPriceGrowthPct} onChange={updateDefaultPriceGrowth} suffix="%" step="0.1" />
+            <NumberInput value={fmtInputNumber(defaultPriceGrowthPct, 2)} onChange={updateDefaultPriceGrowth} suffix="%" step="0.1" />
             {negativeGrowthDripNote && <div className="dc-field-note">{negativeGrowthDripNote}</div>}
           </div>
           <div className="dc-field">
             <label>Dividends Reinvested (DRIP)</label>
-            <NumberInput value={dripPct} onChange={setDripPct} min="0" max="100" suffix="%" step="0.1" />
+            <NumberInput value={fmtInputNumber(dripPct, 2)} onChange={setDripPct} min="0" max="100" suffix="%" step="0.1" />
           </div>
         </div>
       </div>
@@ -877,7 +952,7 @@ export default function DividendCalculator() {
               <div className="dc-field">
                 <label>{r.source === 'portfolio' ? 'Current Value' : 'Initial Investment'}</label>
                 <NumberInput
-                  value={r.initialInvestment}
+                  value={fmtInputNumber(r.initialInvestment, 2)}
                   onChange={(v) => updateRow(idx, { initialInvestment: v })}
                   prefix="$"
                   step="100"
@@ -886,7 +961,7 @@ export default function DividendCalculator() {
               <div className="dc-field">
                 <label>Stock Price</label>
                 <NumberInput
-                  value={r.sharePrice}
+                  value={fmtInputNumber(r.sharePrice, 2)}
                   onChange={(v) => updateRow(idx, { sharePrice: v })}
                   prefix="$"
                   step="0.01"
@@ -895,7 +970,7 @@ export default function DividendCalculator() {
               <div className="dc-field">
                 <label>Number of Shares</label>
                 <NumberInput
-                  value={Number(r.shares).toFixed(2)}
+                  value={fmtInputNumber(r.shares, 2)}
                   onChange={(v) => updateRow(idx, { shares: v })}
                   step="0.01"
                 />
@@ -903,7 +978,7 @@ export default function DividendCalculator() {
               <div className="dc-field">
                 <label>Initial Dividend Yield</label>
                 <NumberInput
-                  value={r.yieldPct}
+                  value={fmtInputNumber(r.yieldPct, 2)}
                   onChange={(v) => updateRow(idx, { yieldPct: v })}
                   suffix="%"
                   step="0.01"
@@ -912,7 +987,7 @@ export default function DividendCalculator() {
               <div className="dc-field">
                 <label>Dividend Growth</label>
                 <NumberInput
-                  value={r.divGrowthPct}
+                  value={fmtInputNumber(r.divGrowthPct, 2)}
                   onChange={(v) => updateRow(idx, { divGrowthPct: v })}
                   suffix="%"
                   step="0.1"
@@ -921,7 +996,7 @@ export default function DividendCalculator() {
               <div className="dc-field">
                 <label>Return of Capital</label>
                 <NumberInput
-                  value={r.returnOfCapitalPct}
+                  value={fmtInputNumber(r.returnOfCapitalPct, 2)}
                   onChange={(v) => updateRow(idx, { returnOfCapitalPct: v })}
                   min="0"
                   max="100"
@@ -932,7 +1007,7 @@ export default function DividendCalculator() {
               <div className="dc-field">
                 <label>Annual Contribution</label>
                 <NumberInput
-                  value={r.annualContribution}
+                  value={fmtInputNumber(r.annualContribution, 0)}
                   onChange={(v) => updateRow(idx, { annualContribution: v })}
                   prefix="$"
                   step="100"
@@ -941,7 +1016,7 @@ export default function DividendCalculator() {
               <div className="dc-field">
                 <label>Stock Price Growth</label>
                 <NumberInput
-                  value={r.priceGrowthPct}
+                  value={fmtInputNumber(r.priceGrowthPct, 2)}
                   onChange={(v) => updateRow(idx, { priceGrowthPct: v })}
                   suffix="%"
                   step="0.1"

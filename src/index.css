@@ -3543,9 +3543,18 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
 .dc-stat {
   background: #16213e; border: 1px solid #1a4480; border-radius: 6px;
   padding: 1rem;
+  min-width: 0;
+  overflow: hidden;
 }
 .dc-stat-label { color: #7a8aa6; font-size: 0.8rem; margin-bottom: 0.4rem; }
-.dc-stat-value { color: #fff; font-size: 1.5rem; font-weight: 700; }
+.dc-stat-value {
+  color: #fff;
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
 .dc-stat-note { color: #7a8aa6; font-size: 0.76rem; margin-top: 0.45rem; }
 .dc-stat-delta {
   display: inline-block; margin-top: 0.45rem;
@@ -3556,11 +3565,21 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
 .dc-stat-delta.neg { background: rgba(255, 107, 107, 0.15); color: #ff6b6b; }
 
 .dc-section-head {
-  display: flex; justify-content: space-between; align-items: baseline;
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 1rem;
   margin: 1rem 0 0.5rem 0;
 }
 .dc-section-head h3 { margin: 0; color: #cfe5ff; font-size: 1.05rem; }
-.dc-total-return { font-size: 1.4rem; font-weight: 700; color: #fff; }
+.dc-total-return {
+  min-width: 0;
+  text-align: right;
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #fff;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
 .dc-chart-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
