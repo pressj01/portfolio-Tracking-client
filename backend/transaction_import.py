@@ -489,6 +489,7 @@ _SCHWAB_POSITION_ALIASES = {
     "Description": ["Security Description", "Security Name", "Name"],
     "Asset Type": ["Type", "Security Type", "Holding Type"],
     "Qty (Quantity)": ["Qty", "Quantity", "Shares", "Qty #", "Quantity #"],
+    "Cost Basis": ["Cost Basis Total", "Total Cost", "Purchase Value"],
     "Cost/Share": ["Cost Share", "Cost Basis/Share", "Average Cost", "Average Cost Basis", "Price Paid $"],
     "Price": ["Last Price", "Current Price", "Market Price", "Price $"],
     "Mkt Val (Market Value)": ["Mkt Val", "Market Value", "Current Value", "Value", "Value $"],
@@ -553,6 +554,7 @@ def parse_schwab_csv(file_path, filename):
             continue
 
         qty = _safe_float(row.get("Qty (Quantity)"))
+        cost_basis = _safe_float(row.get("Cost Basis"))
         cost_per_share = _safe_float(row.get("Cost/Share"))
         price = _safe_float(row.get("Price"))
         mkt_val = _safe_float(row.get("Mkt Val (Market Value)"))
@@ -565,7 +567,9 @@ def parse_schwab_csv(file_path, filename):
             filtered_count += 1
             continue
 
-        purchase_value = qty * (cost_per_share or 0)
+        purchase_value = cost_basis if cost_basis is not None else qty * (cost_per_share or 0)
+        if qty > 0 and purchase_value > 0:
+            cost_per_share = purchase_value / qty
         current_value = mkt_val or (qty * (price or 0))
 
         positions.append({
@@ -612,7 +616,7 @@ def parse_schwab_csv(file_path, filename):
 
     positions = list(merged.values())
 
-    if positions and all(p["cost_per_share"] == 0 for p in positions):
+    if positions and all(p["purchase_value"] == 0 for p in positions):
         raise ValueError(
             "No cost basis data found — every position has a $0 cost. "
             "This usually means a Transactions file was selected with the Positions format. "
