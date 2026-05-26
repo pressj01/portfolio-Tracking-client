@@ -2,9 +2,9 @@
 
 Release date: May 25, 2026
 
-This release combines the current v1.28.3 dividend-calculator fixes with the existing v1.28.2 release notes.
+This release combines the current dividend-calculator fixes with the existing release-note content so the full deployment inventory is visible in one place.
 
-## v1.28.3 - Dividend Calculator Projection Accuracy
+## Dividend Calculator - Projection Accuracy
 
 - Fixed whole-portfolio dividend projections for high-yield option-income portfolios, including an account example where a $25,343 starting portfolio could incorrectly project into multi-million-dollar results.
 - KQQQ and other funds with short or noisy dividend histories no longer seed unrealistic default dividend-growth rates, such as the prior 153% annual growth estimate.
@@ -20,7 +20,7 @@ This release combines the current v1.28.3 dividend-calculator fixes with the exi
   - Annual contributions: whole dollars
 - Result cards and the total return header now wrap long values cleanly.
 
-## v1.28.2 - Dividend Calculator Portfolio Source Awareness
+## Dividend Calculator - Portfolio Source Awareness
 
 - When loading tickers from the portfolio, the Calculation Settings card now shows a read-only **Portfolio Value** summary, such as "$25,343 across 21 tickers", instead of the misleading "Initial Investment Per Ticker" input.
 - Per-ticker row cards label the amount as **Current Value** for portfolio-sourced tickers, distinguishing them from manually entered tickers that show "Initial Investment."
@@ -28,14 +28,14 @@ This release combines the current v1.28.3 dividend-calculator fixes with the exi
 - Changing the global initial investment no longer silently overwrites portfolio-sourced rows; only manual tickers are affected.
 - The hero summary line and starting-wealth result stat update dynamically based on whether tickers come from the portfolio.
 
-## v1.28.2 - Per-Ticker Annual Contributions
+## Dividend Calculator - Per-Ticker Annual Contributions
 
 - Added an **Annual Contribution** field to each per-ticker row card, allowing users to set individual annual investment amounts per holding.
 - The global "Annual Investment (split equally)" field still works as a convenience; changing it distributes the total evenly across all loaded tickers.
 - Users can override any individual ticker's contribution after the global split, enabling scenarios like investing more into specific holdings.
 - Per-ticker contributions feed directly into the projection engine, so each ticker's growth calculation uses its own contribution amount.
 
-## v1.28.2 - Bug Fixes from v1.28.1
+## Basis Mode and Import Fixes
 
 ### Basis Mode Fallback - Zero Price Fix
 Fixed a bug where the basis-mode fallback logic used Python's `or` operator, which treated `0` as falsy. This caused legitimate `$0` cost basis values to be silently dropped, potentially resulting in empty or incorrect Price Paid and Purchase Value fields in exports and calculations.
@@ -55,7 +55,7 @@ The Total Return Summary endpoint now correctly aggregates holdings across multi
 ### Dashboard Cache
 Bumped the dashboard cache key to ensure stale cached data from prior versions is not reused.
 
-## v1.28.2 - v1.28.0 Features Included
+## Included Feature Set
 
 ### Blended Yield Calculator
 - Added all 50 U.S. states to the blended-yield state selector with 2025 state income tax defaults.
@@ -104,5 +104,3 @@ Bumped the dashboard cache key to ensure stale cached data from prior versions i
 - `Portfolio.Tracking.Client-1.28.3-arm64.dmg`
 
 The ZIP packages contain the built React frontend, Flask backend source, Electron launcher, provider seed database, and platform-specific setup/start scripts.
-
-**Full Changelog**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.28.2...v1.28.3
