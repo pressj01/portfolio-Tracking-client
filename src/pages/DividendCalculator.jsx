@@ -10,6 +10,12 @@ const FREQ_OPTIONS = [
   { code: 'A',  label: 'Annually',      per_year: 1  },
 ]
 
+const CONTRIBUTION_ALLOCATION_OPTIONS = [
+  { value: 'equal', label: 'Equal dollars' },
+  { value: 'weighted', label: 'By current value' },
+  { value: 'custom', label: 'Custom per ticker' },
+]
+
 function freqPerYear(code) {
   return (FREQ_OPTIONS.find(f => f.code === code) || FREQ_OPTIONS[2]).per_year
 }
@@ -59,6 +65,7 @@ const fmtInputNumber = (v, decimals = 2) => {
 }
 
 const clampPct = (v) => Math.min(100, Math.max(0, Number(v) || 0))
+const clampContributionPct = (v) => Math.min(100, Math.max(0, Number(v) || 0))
 const MAX_LOOKUP_DIV_GROWTH_PCT = 50
 
 const cleanLookupDividendGrowthPct = (value) => {
@@ -119,6 +126,60 @@ function NumberInput({ value, onChange, min, max, step, prefix, suffix, placehol
       {suffix && <span className="dc-input-affix dc-input-suffix">{suffix}</span>}
     </div>
   )
+}
+
+function contributionAllocatedTotal(rows) {
+  return rows
+    .filter(r => r.status === 'loaded')
+    .reduce((sum, r) => sum + (Number(r.annualContribution) || 0), 0)
+}
+
+function customContributionPct(row, total) {
+  const storedPct = Number(row.contributionWeightPct)
+  if (Number.isFinite(storedPct) && storedPct > 0) return storedPct
+  const amount = Number(row.annualContribution) || 0
+  return total > 0 && amount > 0 ? (amount / total) * 100 : 0
+}
+
+function applyContributionAllocation(rows, totalContribution, mode) {
+  const total = Math.max(0, Number(totalContribution) || 0)
+  const loadedRows = rows.filter(r => r.status === 'loaded')
+  if (!loadedRows.length) return rows
+
+  if (mode === 'custom') {
+    const hasCustomWeights = loadedRows.some(r => Number(r.contributionWeightPct) > 0)
+    if (!hasCustomWeights) return rows
+    return rows.map(r => {
+      if (r.status !== 'loaded') return r
+      const contributionWeightPct = customContributionPct(r, total)
+      return {
+        ...r,
+        contributionWeightPct,
+        annualContribution: total * (contributionWeightPct / 100),
+      }
+    })
+  }
+
+  if (mode === 'weighted') {
+    const totalInitial = loadedRows.reduce((sum, r) => sum + (Number(r.initialInvestment) || 0), 0)
+    if (totalInitial > 0) {
+      return rows.map(r => {
+        if (r.status !== 'loaded') return r
+        const contributionWeightPct = ((Number(r.initialInvestment) || 0) / totalInitial) * 100
+        return {
+          ...r,
+          contributionWeightPct,
+          annualContribution: total * (contributionWeightPct / 100),
+        }
+      })
+    }
+  }
+
+  const perTicker = total / loadedRows.length
+  const contributionWeightPct = 100 / loadedRows.length
+  return rows.map(r => (
+    r.status === 'loaded' ? { ...r, annualContribution: perTicker, contributionWeightPct } : r
+  ))
 }
 
 function Toggle({ checked, onChange, label }) {
@@ -343,6 +404,7 @@ const DEFAULT_ROW = {
   returnOfCapitalPct: 0,
   priceGrowthPct: 3,
   annualContribution: 0,
+  contributionWeightPct: 0,
   payoutCode: 'Q',
   yieldBasis: '',
   yieldOptions: [],
@@ -355,6 +417,7 @@ const DEFAULT_ROW = {
 const DEFAULT_SETTINGS = {
   years: 10,
   annualContribution: 0,
+  contributionMode: 'equal',
   taxRatePct: 15,
   dripPct: 100,
   defaultInitialInvestment: 10000,
@@ -518,6 +581,7 @@ export default function DividendCalculator() {
   const [rows, setRows] = useState([newRow()])
   const [years, setYears] = useState(DEFAULT_SETTINGS.years)
   const [annualContribution, setAnnualContribution] = useState(DEFAULT_SETTINGS.annualContribution)
+  const [contributionMode, setContributionMode] = useState(DEFAULT_SETTINGS.contributionMode)
   const [taxRatePct, setTaxRatePct] = useState(DEFAULT_SETTINGS.taxRatePct)
   const [dripPct, setDripPct] = useState(DEFAULT_SETTINGS.dripPct)
   const [defaultInitialInvestment, setDefaultInitialInvestment] = useState(DEFAULT_SETTINGS.defaultInitialInvestment)
@@ -577,9 +641,7 @@ export default function DividendCalculator() {
       const yieldPct = yieldSelection.yieldPct
       const recommendedRocPct = Number(d.recommended_roc_pct) || estimatedPortfolioRocPct(yieldPct)
       setRows(prev => {
-        const loadedCount = prev.filter(r => r.status === 'loaded' || r.ticker === sym).length
-        const perTicker = loadedCount > 0 ? (Number(annualContribution) || 0) / loadedCount : 0
-        return prev.map(row => {
+        const nextRows = prev.map(row => {
           if (row.ticker === sym) {
             return {
               ...row,
@@ -596,14 +658,13 @@ export default function DividendCalculator() {
               yieldOptions: yieldSelection.yieldOptions,
               yieldNote: yieldSelection.yieldNote,
               initialInvestment,
-              annualContribution: perTicker,
               status: 'loaded',
               message: '',
             }
           }
-          if (row.status === 'loaded') return { ...row, annualContribution: perTicker }
           return row
         })
+        return applyContributionAllocation(nextRows, annualContribution, contributionMode)
       })
     } catch (e) {
       setRows(prev => prev.map(row => row.ticker === sym ? { ...row, status: 'error', message: e.message } : row))
@@ -655,9 +716,7 @@ export default function DividendCalculator() {
           const yieldPct = yieldSelection.yieldPct
           const recommendedRocPct = Number(d.recommended_roc_pct) || estimatedPortfolioRocPct(yieldPct)
           setRows(prev => {
-            const loadedCount = prev.filter(r => r.status === 'loaded' || r.ticker === sym).length
-            const perTicker = loadedCount > 0 ? (Number(annualContribution) || 0) / loadedCount : 0
-            return prev.map(row => {
+            const nextRows = prev.map(row => {
               if (row.ticker === sym) {
                 return {
                   ...row,
@@ -676,15 +735,14 @@ export default function DividendCalculator() {
                   yieldOptions: yieldSelection.yieldOptions,
                   yieldNote: yieldSelection.yieldNote,
                   initialInvestment,
-                  annualContribution: perTicker,
                   source: isPortfolio ? 'portfolio' : 'manual',
                   status: 'loaded',
                   message: '',
                 }
               }
-              if (row.status === 'loaded') return { ...row, annualContribution: perTicker }
               return row
             })
+            return applyContributionAllocation(nextRows, annualContribution, contributionMode)
           })
         } catch (e) {
           setRows(prev => prev.map(row =>
@@ -743,7 +801,8 @@ export default function DividendCalculator() {
   const removeRow = (idx) => {
     setRows(prev => {
       const next = prev.filter((_, i) => i !== idx)
-      return next.length === 0 ? [newRow()] : next
+      if (next.length === 0) return [newRow()]
+      return applyContributionAllocation(next, annualContribution, contributionMode)
     })
   }
 
@@ -752,6 +811,7 @@ export default function DividendCalculator() {
     setTickerInput('')
     setYears(DEFAULT_SETTINGS.years)
     setAnnualContribution(DEFAULT_SETTINGS.annualContribution)
+    setContributionMode(DEFAULT_SETTINGS.contributionMode)
     setTaxRatePct(DEFAULT_SETTINGS.taxRatePct)
     setDripPct(DEFAULT_SETTINGS.dripPct)
     setDefaultInitialInvestment(DEFAULT_SETTINGS.defaultInitialInvestment)
@@ -760,19 +820,28 @@ export default function DividendCalculator() {
   }
 
   const updateRow = (idx, patch) => {
-    setRows(prev => prev.map((r, i) => {
-      if (i !== idx) return r
-      const next = { ...r, ...patch }
-      // keep shares <-> initial investment in sync if user edits one
-      if ('initialInvestment' in patch && next.sharePrice > 0) {
-        next.shares = (Number(next.initialInvestment) || 0) / next.sharePrice
-      } else if ('shares' in patch && next.sharePrice > 0) {
-        next.initialInvestment = (Number(next.shares) || 0) * next.sharePrice
-      } else if ('sharePrice' in patch && next.sharePrice > 0) {
-        next.shares = (Number(next.initialInvestment) || 0) / next.sharePrice
+    setRows(prev => {
+      const nextRows = prev.map((r, i) => {
+        if (i !== idx) return r
+        const next = { ...r, ...patch }
+        // keep shares <-> initial investment in sync if user edits one
+        if ('initialInvestment' in patch && next.sharePrice > 0) {
+          next.shares = (Number(next.initialInvestment) || 0) / next.sharePrice
+        } else if ('shares' in patch && next.sharePrice > 0) {
+          next.initialInvestment = (Number(next.shares) || 0) * next.sharePrice
+        } else if ('sharePrice' in patch && next.sharePrice > 0) {
+          next.shares = (Number(next.initialInvestment) || 0) / next.sharePrice
+        }
+        return next
+      })
+      if (
+        contributionMode === 'weighted' &&
+        ('initialInvestment' in patch || 'shares' in patch || 'sharePrice' in patch)
+      ) {
+        return applyContributionAllocation(nextRows, annualContribution, contributionMode)
       }
-      return next
-    }))
+      return nextRows
+    })
   }
 
   const updateRowYieldBasis = (idx, basis) => {
@@ -783,26 +852,71 @@ export default function DividendCalculator() {
 
   const updateDefaultInitialInvestment = (value) => {
     setDefaultInitialInvestment(value)
-    setRows(prev => prev.map(r => {
-      if (r.status !== 'loaded' || r.source === 'portfolio') return r
-      const initialInvestment = Number(value) || 0
-      return {
-        ...r,
-        initialInvestment,
-        shares: Number(r.sharePrice) > 0 ? initialInvestment / r.sharePrice : r.shares,
-      }
-    }))
+    setRows(prev => {
+      const nextRows = prev.map(r => {
+        if (r.status !== 'loaded' || r.source === 'portfolio') return r
+        const initialInvestment = Number(value) || 0
+        return {
+          ...r,
+          initialInvestment,
+          shares: Number(r.sharePrice) > 0 ? initialInvestment / r.sharePrice : r.shares,
+        }
+      })
+      return contributionMode === 'weighted'
+        ? applyContributionAllocation(nextRows, annualContribution, contributionMode)
+        : nextRows
+    })
   }
 
   const updateGlobalContribution = (value) => {
     setAnnualContribution(value)
-    const total = Number(value) || 0
+    setRows(prev => applyContributionAllocation(prev, value, contributionMode))
+  }
+
+  const updateContributionMode = (mode) => {
+    setContributionMode(mode)
+    setRows(prev => applyContributionAllocation(prev, annualContribution, mode))
+  }
+
+  const updateRowContributionAmount = (idx, value) => {
+    const amount = Math.max(0, Number(value) || 0)
+    setContributionMode('custom')
     setRows(prev => {
-      const loaded = prev.filter(r => r.status === 'loaded')
-      if (!loaded.length) return prev
-      const perTicker = total / loaded.length
-      return prev.map(r => r.status === 'loaded' ? { ...r, annualContribution: perTicker } : r)
+      const nextRows = prev.map((r, i) => (
+        i === idx
+          ? {
+              ...r,
+              annualContribution: value === '' ? '' : amount,
+              contributionWeightPct: Number(annualContribution) > 0 ? (amount / Number(annualContribution)) * 100 : 0,
+            }
+          : r
+      ))
+      const nextTotal = contributionAllocatedTotal(nextRows)
+      setAnnualContribution(nextTotal)
+      return nextRows.map(r => (
+        r.status === 'loaded'
+          ? {
+              ...r,
+              contributionWeightPct: nextTotal > 0 ? ((Number(r.annualContribution) || 0) / nextTotal) * 100 : 0,
+            }
+          : r
+      ))
     })
+  }
+
+  const updateRowContributionPct = (idx, value) => {
+    const contributionWeightPct = clampContributionPct(value)
+    const total = Math.max(0, Number(annualContribution) || 0)
+    setContributionMode('custom')
+    setRows(prev => prev.map((r, i) => (
+      i === idx
+        ? {
+            ...r,
+            contributionWeightPct: value === '' ? '' : contributionWeightPct,
+            annualContribution: total * (contributionWeightPct / 100),
+          }
+        : r
+    )))
   }
 
   const updateDefaultPriceGrowth = (value) => {
@@ -840,6 +954,7 @@ export default function DividendCalculator() {
       settings: {
         years: Number(years) || 0,
         annualContribution: Number(annualContribution) || 0,
+        contributionMode,
         taxRatePct: Number(taxRatePct) || 0,
         dripPct: clampPct(dripPct),
       },
@@ -856,6 +971,7 @@ export default function DividendCalculator() {
         settings: {
           years: Number(years) || 0,
           annualContribution: Number(annualContribution) || 0,
+          contributionMode,
           taxRatePct: Number(taxRatePct) || 0,
           dripPct: clampPct(dripPct),
         },
@@ -865,7 +981,7 @@ export default function DividendCalculator() {
     } else if (rows.some(r => r.status === 'error')) {
       setCalculateWhenReady(false)
     }
-  }, [annualContribution, calculateWhenReady, dripPct, rows, taxRatePct, years])
+  }, [annualContribution, calculateWhenReady, contributionMode, dripPct, rows, taxRatePct, years])
 
   const currentInputsKey = JSON.stringify({
     rows: rows.filter(r => r.status === 'loaded').map(r => ({
@@ -879,11 +995,13 @@ export default function DividendCalculator() {
       returnOfCapitalPct: Number(r.returnOfCapitalPct) || 0,
       priceGrowthPct: Number(r.priceGrowthPct) || 0,
       annualContribution: Number(r.annualContribution) || 0,
+      contributionWeightPct: Number(r.contributionWeightPct) || 0,
       payoutCode: r.payoutCode || 'Q',
     })),
     settings: {
       years: Number(years) || 0,
       annualContribution: Number(annualContribution) || 0,
+      contributionMode,
       taxRatePct: Number(taxRatePct) || 0,
       dripPct: clampPct(dripPct),
     },
@@ -901,6 +1019,7 @@ export default function DividendCalculator() {
       returnOfCapitalPct: Number(r.returnOfCapitalPct) || 0,
       priceGrowthPct: Number(r.priceGrowthPct) || 0,
       annualContribution: Number(r.annualContribution) || 0,
+      contributionWeightPct: Number(r.contributionWeightPct) || 0,
       payoutCode: r.payoutCode || 'Q',
     })),
     settings: calculation.settings,
@@ -914,6 +1033,9 @@ export default function DividendCalculator() {
   const allPortfolio = loadedRows.length > 0 && manualRows.length === 0
   const mixedSources = portfolioRows.length > 0 && manualRows.length > 0
   const portfolioTotal = portfolioRows.reduce((s, r) => s + (Number(r.initialInvestment) || 0), 0)
+  const allocatedContribution = contributionAllocatedTotal(loadedRows)
+  const contributionPctTotal = loadedRows.reduce((s, r) => s + (Number(r.contributionWeightPct) || 0), 0)
+  const contributionTarget = Number(annualContribution) || 0
   const resultsNeedUpdate = Boolean(calculation && currentInputsKey !== calculatedInputsKey)
 
   // Build per-row projections from the last explicit calculation.
@@ -1029,8 +1151,33 @@ export default function DividendCalculator() {
             )}
           </div>
           <div className="dc-field">
-            <label>Annual Investment (split equally)</label>
+            <label>Annual Investment Total</label>
             <NumberInput value={fmtInputNumber(annualContribution, 0)} onChange={updateGlobalContribution} prefix="$" step="100" />
+            {loadedRows.length > 0 && (
+              <div className="dc-field-note">
+                Allocated {fmtMoneyShort(allocatedContribution)}
+                {contributionMode === 'custom' && contributionTarget > 0
+                  ? ` (${fmtPct((allocatedContribution / contributionTarget) * 100, 1)} assigned)`
+                  : ''}
+              </div>
+            )}
+          </div>
+          <div className="dc-field">
+            <label>Contribution Split</label>
+            <select
+              className="dc-input"
+              value={contributionMode}
+              onChange={(e) => updateContributionMode(e.target.value)}
+            >
+              {CONTRIBUTION_ALLOCATION_OPTIONS.map(option => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <div className="dc-field-note">
+              {contributionMode === 'equal' && 'New dollars are divided evenly across loaded tickers.'}
+              {contributionMode === 'weighted' && 'New dollars follow each ticker current value or starting investment.'}
+              {contributionMode === 'custom' && `Use the per-ticker contribution fields below. ${fmtPct(contributionPctTotal, 1)} assigned.`}
+            </div>
           </div>
           <div className="dc-field">
             <label>Dividend Tax Rate</label>
@@ -1263,9 +1410,25 @@ export default function DividendCalculator() {
                 <label>Annual Contribution</label>
                 <NumberInput
                   value={fmtInputNumber(r.annualContribution, 0)}
-                  onChange={(v) => updateRow(idx, { annualContribution: v })}
+                  onChange={(v) => updateRowContributionAmount(idx, v)}
                   prefix="$"
                   step="100"
+                />
+                {contributionMode !== 'custom' && (
+                  <div className="dc-field-note">
+                    Editing this switches the split to custom.
+                  </div>
+                )}
+              </div>
+              <div className="dc-field">
+                <label>Contribution Allocation</label>
+                <NumberInput
+                  value={fmtInputNumber(r.contributionWeightPct, 2)}
+                  onChange={(v) => updateRowContributionPct(idx, v)}
+                  min="0"
+                  max="100"
+                  suffix="%"
+                  step="0.5"
                 />
               </div>
               <div className="dc-field">
