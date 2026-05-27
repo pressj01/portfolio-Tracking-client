@@ -35,3 +35,15 @@ export function clearAggregateDashboardCache() {
     // best-effort
   }
 }
+
+// Clear cache for a specific selection (e.g. 'p:1' for Owner, 'a:5' for an aggregate).
+export function clearDashboardCacheForSelection(selectionKey) {
+  if (!selectionKey) return
+  try {
+    const prefix = `${CACHE_PREFIX}${selectionKey}`
+    const toRemove = Object.keys(localStorage).filter(k => k.startsWith(prefix))
+    toRemove.forEach(k => { localStorage.removeItem(k); sessionStorage.removeItem(k) })
+  } catch {
+    // best-effort
+  }
+}

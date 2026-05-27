@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useProfile } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { API_BASE } from '../config'
+import { clearDashboardCacheForSelection } from '../utils/dashboardCache'
 
 const BROKER_OPTIONS = [
   { value: '', label: 'Not set' },
@@ -128,7 +129,10 @@ export default function ManagePortfolios() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ include: newVal }),
     })
-    if (res.ok) loadSummary()
+    if (res.ok) {
+      clearDashboardCacheForSelection('p:1')
+      loadSummary()
+    }
   }
 
   // ── Aggregate CRUD ────────────────────────────────────────────────────
@@ -217,6 +221,7 @@ export default function ManagePortfolios() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Sync failed')
+      clearDashboardCacheForSelection('p:1')
       await dialog.alert(data.message)
       loadSummary()
     } catch (e) {
