@@ -9,6 +9,7 @@ const BROKER_OPTIONS = [
   { value: 'etrade', label: 'E*TRADE' },
   { value: 'fidelity', label: 'Fidelity' },
   { value: 'robinhood', label: 'Robinhood' },
+  { value: 'shear_group', label: 'Shear Group' },
   { value: 'snowball', label: 'Snowball' },
   { value: 'other', label: 'Other / Manual' },
 ]

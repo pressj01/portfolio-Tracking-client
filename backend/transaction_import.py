@@ -1861,6 +1861,295 @@ def parse_robinhood_transactions_csv(file_path, filename):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+_SHEAR_GROUP_POSITION_ALIASES = {
+    "Account Number": ["Account #", "Acct #", "Account No"],
+    "Account Name": ["Account", "Account Description"],
+    "Account Nick Name": ["Account Nickname", "Account Nick"],
+    "Symbol/CUSIP": ["Symbol", "Ticker", "CUSIP"],
+    "Description": ["Security Description", "Security Name", "Name"],
+    "Quantity": ["Qty", "Shares", "Qty #", "Quantity #"],
+    "Price ($)": ["Price", "Current Price", "Market Price", "Last Price"],
+    "Value ($)": ["Value", "Market Value", "Current Value", "Mkt Val"],
+    "Unit Cost": ["Average Cost", "Average Cost Basis", "Cost/Share", "Cost Basis/Share"],
+    "Cost Basis ($)": ["Cost Basis", "Cost Basis Total", "Total Cost", "Purchase Value"],
+    "Unrealized G/L ($)": ["Unrealized Gain/Loss", "Gain/Loss $", "Total Gain $", "Gain $"],
+    "Security Type Description": ["Security Type", "Asset Type", "Type"],
+}
+
+_SHEAR_GROUP_ACTIVITY_ALIASES = {
+    "Date": ["Activity Date", "Trade Date", "Run Date"],
+    "Activity": ["Action", "Transaction Type", "Type", "Activity Type"],
+    "Symbol": ["Ticker", "Symbol/CUSIP"],
+    "Description": ["Security Description", "Name"],
+    "Quantity": ["Qty", "Shares", "Qty #", "Quantity #"],
+    "Unit Price": ["Price", "Price ($)", "Share Price"],
+    "Value": ["Amount", "Amount ($)", "Net Amount", "Value ($)"],
+    "Account Nickname": ["Account Nick Name", "Account Name", "Account"],
+    "Account Number": ["Account #", "Acct #", "Account No"],
+}
+
+
+def _shear_group_account_label(record):
+    nickname = str(record.get("Account Nick Name") or record.get("Account Nickname") or "").strip()
+    account_name = str(record.get("Account Name") or "").strip()
+    account_number = str(record.get("Account Number") or "").strip()
+    label = nickname or account_name
+    if label and account_number:
+        return f"{label}, {account_number}"
+    return label or account_number
+
+
+def _merge_positions_by_ticker(positions):
+    merged = {}
+    for pos in positions:
+        ticker = pos["ticker"]
+        if ticker not in merged:
+            merged[ticker] = dict(pos)
+            continue
+
+        existing = merged[ticker]
+        total_qty = (existing.get("quantity") or 0) + (pos.get("quantity") or 0)
+        total_purchase = (existing.get("purchase_value") or 0) + (pos.get("purchase_value") or 0)
+        total_current = (existing.get("current_value") or 0) + (pos.get("current_value") or 0)
+        total_gain = (existing.get("gain_or_loss") or 0) + (pos.get("gain_or_loss") or 0)
+
+        existing["quantity"] = total_qty
+        existing["purchase_value"] = round(total_purchase, 2)
+        existing["current_value"] = round(total_current, 2)
+        existing["gain_or_loss"] = round(total_gain, 2)
+        existing["cost_per_share"] = round(total_purchase / total_qty, 4) if total_qty else 0
+        existing["current_price"] = pos.get("current_price") or existing.get("current_price") or 0
+        if not existing.get("description"):
+            existing["description"] = pos.get("description") or ""
+        if not existing.get("asset_type"):
+            existing["asset_type"] = pos.get("asset_type") or ""
+
+    return list(merged.values())
+
+
+def parse_shear_group_positions(file_path, filename):
+    """Parse a Shear Group positions CSV/XLSX export as current holdings."""
+    rows = _read_table_rows(file_path, filename)
+    header_idx, header = _find_header_row(
+        rows,
+        _SHEAR_GROUP_POSITION_ALIASES,
+        required={"Symbol/CUSIP", "Quantity"},
+    )
+    if header_idx is None:
+        raise ValueError(
+            "Could not find the Shear Group positions columns. "
+            "Make sure this is a Positions CSV or Excel export with Symbol/CUSIP and Quantity columns."
+        )
+
+    positions = []
+    filtered_count = 0
+    cash_value = 0.0
+    account_labels = set()
+
+    for row in rows[header_idx + 1:]:
+        if not _row_has_values(row):
+            continue
+        record = _row_record(header, row)
+        account_label = _shear_group_account_label(record)
+        if account_label:
+            account_labels.add(account_label)
+
+        ticker = str(record.get("Symbol/CUSIP") or "").strip().upper()
+        asset_type = str(record.get("Security Type Description") or "").strip()
+        current_value = _safe_float(record.get("Value ($)")) or 0.0
+        quantity = _safe_float(record.get("Quantity"))
+
+        if asset_type.lower() in {"cash", "money market"} or ticker in {"CASH", "USD"}:
+            cash_value += current_value
+            filtered_count += 1
+            continue
+
+        if not ticker or not TICKER_RE.match(ticker) or quantity is None or quantity <= 0:
+            cash_value += current_value if ticker and ticker.isdigit() else 0.0
+            filtered_count += 1
+            continue
+
+        current_price = _safe_float(record.get("Price ($)")) or 0.0
+        cost_per_share = _safe_float(record.get("Unit Cost"))
+        purchase_value = _safe_float(record.get("Cost Basis ($)"))
+        current_value = current_value or (quantity * current_price)
+        purchase_value = purchase_value if purchase_value is not None else quantity * (cost_per_share or 0.0)
+        if quantity and purchase_value:
+            cost_per_share = purchase_value / quantity
+        gain_or_loss = _safe_float(record.get("Unrealized G/L ($)"))
+        if gain_or_loss is None:
+            gain_or_loss = current_value - purchase_value
+
+        positions.append({
+            "ticker": ticker,
+            "description": str(record.get("Description") or "").strip(),
+            "quantity": quantity,
+            "cost_per_share": cost_per_share or 0.0,
+            "current_price": current_price,
+            "purchase_value": round(purchase_value or 0.0, 2),
+            "current_value": round(current_value or 0.0, 2),
+            "gain_or_loss": round(gain_or_loss or 0.0, 2),
+            "dividend_yield": None,
+            "reinvest_dividends": None,
+            "asset_type": asset_type,
+        })
+
+    positions = _merge_positions_by_ticker(positions)
+    if not positions:
+        raise ValueError("No holdings rows were found in the Shear Group positions file.")
+    if all(p["purchase_value"] == 0 for p in positions):
+        raise ValueError(
+            "No cost basis data found - every position has a $0 cost. "
+            "This usually means an Activity file was selected with the Positions format. "
+            "Please use 'Shear Group (Activity)' for activity history files."
+        )
+
+    result = {
+        "positions": positions,
+        "summary": {
+            "holdings": len(positions),
+            "filtered": filtered_count,
+            "options": 0,
+            "cash": round(cash_value, 2),
+            "account_count": len(account_labels),
+            "account_value": round(sum(p["current_value"] for p in positions) + cash_value, 2),
+        },
+        "format_type": "positions",
+        "source_format": "shear_group",
+    }
+    return result
+
+
+def _shear_group_price_from_amount(price, amount, quantity):
+    price_val = _safe_float(price)
+    amount_val = _safe_float(amount)
+    qty_val = _safe_float(quantity)
+    if (price_val is None or price_val == 0) and amount_val is not None and qty_val:
+        return abs(amount_val) / abs(qty_val)
+    return price_val
+
+
+def parse_shear_group_activity(file_path, filename):
+    """Parse a Shear Group activity CSV/XLSX export as transactions and dividends."""
+    rows = _read_table_rows(file_path, filename)
+    _, _, data_rows = _rows_to_flexible_dicts(
+        rows,
+        _SHEAR_GROUP_ACTIVITY_ALIASES,
+        required={"Date", "Activity", "Symbol"},
+    )
+    if not data_rows:
+        raise ValueError(
+            "Could not find the Shear Group activity columns. "
+            "Make sure this is an Activity CSV or Excel export with Date, Activity, and Symbol columns."
+        )
+
+    kept = []
+    filtered_count = 0
+    account_names = set()
+    dividend_actions = {"cash dividend", "interest", "long term cap gain", "short term cap gain"}
+    drip_actions = {"dividend reinvest", "lt cap gain reinvest", "st cap gain reinvest", "reinvest interest"}
+
+    for row in data_rows:
+        account_name = str(row.get("Account Nickname") or "").strip()
+        if account_name:
+            account_names.add(account_name)
+
+        activity = str(row.get("Activity") or "").strip()
+        activity_key = activity.lower()
+        ticker = str(row.get("Symbol") or "").strip().upper()
+        if not ticker or not TICKER_RE.match(ticker):
+            filtered_count += 1
+            continue
+
+        date_str = _parse_date_str(row.get("Date"))
+        if not date_str:
+            filtered_count += 1
+            continue
+
+        quantity = _safe_float(row.get("Quantity"))
+        amount = _safe_float(row.get("Value"))
+        price = _shear_group_price_from_amount(row.get("Unit Price"), row.get("Value"), row.get("Quantity"))
+
+        if activity_key == "buy":
+            if quantity is None or quantity == 0:
+                filtered_count += 1
+                continue
+            kept.append({
+                "type": "BUY",
+                "ticker": ticker,
+                "date": date_str,
+                "shares": abs(quantity),
+                "price_per_share": price or 0.0,
+                "fees": 0.0,
+                "dividend_amount": None,
+                "notes": activity,
+            })
+        elif activity_key == "sell":
+            if quantity is None or quantity == 0:
+                filtered_count += 1
+                continue
+            kept.append({
+                "type": "SELL",
+                "ticker": ticker,
+                "date": date_str,
+                "shares": abs(quantity),
+                "price_per_share": price or 0.0,
+                "fees": 0.0,
+                "dividend_amount": None,
+                "notes": activity,
+            })
+        elif activity_key in dividend_actions:
+            if amount is None:
+                filtered_count += 1
+                continue
+            kept.append({
+                "type": "DIVIDEND",
+                "ticker": ticker,
+                "date": date_str,
+                "shares": None,
+                "price_per_share": None,
+                "fees": 0.0,
+                "dividend_amount": round(amount, 2),
+                "notes": activity,
+            })
+        elif activity_key in drip_actions:
+            if quantity is None or quantity == 0:
+                filtered_count += 1
+                continue
+            kept.append({
+                "type": "BUY",
+                "ticker": ticker,
+                "date": date_str,
+                "shares": abs(quantity),
+                "price_per_share": price or 0.0,
+                "fees": 0.0,
+                "dividend_amount": None,
+                "notes": f"[DRIP] {activity}",
+            })
+        else:
+            filtered_count += 1
+
+    buys = sum(1 for t in kept if t["type"] == "BUY")
+    sells = sum(1 for t in kept if t["type"] == "SELL")
+    divs = sum(1 for t in kept if t["type"] == "DIVIDEND")
+    drip_count = sum(1 for t in kept if t["type"] == "BUY" and "[DRIP]" in (t["notes"] or ""))
+
+    result = {
+        "transactions": kept,
+        "summary": {
+            "buys": buys,
+            "sells": sells,
+            "dividends": divs,
+            "filtered": filtered_count,
+            "drip_detected": drip_count,
+            "splits_applied": 0,
+        },
+    }
+    if account_names:
+        result["summary"]["account_count"] = len(account_names)
+    return result
+
+
 def _parse_date(raw):
     """Parse a date string to a datetime.date, or None."""
     if raw is None:
@@ -1934,6 +2223,8 @@ PARSERS = {
     "fidelity_transactions": parse_fidelity_transactions_xlsx,
     "robinhood": parse_robinhood_positions_pdf,
     "robinhood_transactions": parse_robinhood_transactions_csv,
+    "shear_group": parse_shear_group_positions,
+    "shear_group_activity": parse_shear_group_activity,
 }
 
 # Labels shown in the UI format dropdown
@@ -1949,4 +2240,6 @@ PARSER_LABELS = {
     "fidelity_transactions": "Fidelity (Transactions)",
     "robinhood": "Robinhood (Positions PDF)",
     "robinhood_transactions": "Robinhood (Transactions)",
+    "shear_group": "Shear Group (Positions)",
+    "shear_group_activity": "Shear Group (Activity)",
 }

@@ -926,6 +926,7 @@ const DIV_SOURCE_OPTIONS = [
   { value: 'snowball', label: 'Snowball' },
   { value: 'etrade', label: 'E*Trade' },
   { value: 'robinhood', label: 'Robinhood' },
+  { value: 'shear_group', label: 'Shear Group' },
   { value: 'snapshot', label: 'Snapshot' },
   { value: 'yahoo', label: 'Yahoo' },
   { value: 'mixed', label: 'Mixed' },
@@ -938,7 +939,7 @@ const DIV_REPAIR_MODES = [
   { value: 'yahoo', label: 'Yahoo only' },
 ]
 
-const IMPORTED_DIV_SOURCES = ['broker', 'schwab', 'fidelity', 'snowball', 'etrade', 'robinhood', 'imported']
+const IMPORTED_DIV_SOURCES = ['broker', 'schwab', 'fidelity', 'snowball', 'etrade', 'robinhood', 'shear_group', 'imported']
 
 const DIV_SOURCE_META = {
   broker: { label: 'Imported', color: '#81c784' },
@@ -947,6 +948,7 @@ const DIV_SOURCE_META = {
   snowball: { label: 'Snowball', color: '#4db6ac' },
   etrade: { label: 'E*Trade', color: '#80cbc4' },
   robinhood: { label: 'Robinhood', color: '#81c784' },
+  shear_group: { label: 'Shear Group', color: '#9fa8da' },
   imported: { label: 'Imported', color: '#81c784' },
   snapshot: { label: 'Snapshot', color: '#ce93d8' },
   yahoo: { label: 'Yahoo', color: '#64b5f6' },
@@ -960,11 +962,18 @@ const PREVIEW_SOURCE_COLUMNS = [
   { key: 'snowball', label: 'Snowball' },
   { key: 'etrade', label: 'E*Trade' },
   { key: 'robinhood', label: 'Robinhood' },
+  { key: 'shear_group', label: 'Shear Group' },
   { key: 'imported', label: 'Other' },
   { key: 'snapshot', label: 'Snapshot' },
   { key: 'yahoo', label: 'Yahoo' },
   { key: 'none', label: 'No source' },
 ]
+
+const normalizeDivSource = (source) => {
+  const value = (source || 'none').toString().toLowerCase()
+  if (value.startsWith('shear_group') || value.startsWith('shear group')) return 'shear_group'
+  return value
+}
 
 function DripMatrixModal({ onClose, onSynced, pf }) {
   const [profiles, setProfiles] = useState([])
@@ -1242,7 +1251,7 @@ export default function ManageHoldings() {
 
   const filteredHoldings = holdings.filter(h => {
     if (divSourceFilter === 'all') return true
-    const source = h.dividend_actuals_source || 'none'
+    const source = normalizeDivSource(h.dividend_actuals_source)
     if (divSourceFilter === 'imported') return IMPORTED_DIV_SOURCES.includes(source)
     return source === divSourceFilter
   })
@@ -1448,7 +1457,7 @@ export default function ManageHoldings() {
   }
 
   const sourceBadge = (source) => {
-    const value = source || 'none'
+    const value = normalizeDivSource(source)
     const meta = DIV_SOURCE_META[value]
     const label = meta ? meta.label : value
     const color = meta ? meta.color : DIV_SOURCE_META.none.color

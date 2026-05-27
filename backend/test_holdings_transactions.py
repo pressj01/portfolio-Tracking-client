@@ -307,6 +307,7 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             CREATE TABLE profiles (
                 id INTEGER PRIMARY KEY,
                 name TEXT,
+                broker_source TEXT,
                 include_in_owner INTEGER DEFAULT 0,
                 positions_managed INTEGER DEFAULT 0
             );
@@ -382,6 +383,31 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         try:
             row = conn.execute(sql, params).fetchone()
             return row[0] if row else None
+        finally:
+            conn.close()
+
+    def test_snowball_transactions_layer_on_broker_and_generic_positions(self):
+        sources = ["schwab", "etrade", "fidelity", "shear_group", "generic", "other"]
+        conn = self._get_connection()
+        try:
+            for idx, source in enumerate(sources, start=20):
+                conn.execute(
+                    "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+                    "VALUES (?, ?, ?, 0, 0)",
+                    (idx, f"{source} portfolio", source),
+                )
+                conn.execute(
+                    "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value) "
+                    "VALUES ('ABC', ?, 10, 20, 200)",
+                    (idx,),
+                )
+            conn.commit()
+
+            for idx, source in enumerate(sources, start=20):
+                self.assertTrue(
+                    app_module._should_preserve_positions_for_transaction_import(idx, "snowball", conn),
+                    source,
+                )
         finally:
             conn.close()
 

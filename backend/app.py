@@ -346,7 +346,7 @@ def _apply_basis_mode_to_holdings(results):
 _ACCOUNT_MATCH_IGNORED_TOKENS = {
     "account", "acct", "portfolio",
     "etrade", "e", "trade",
-    "schwab", "charles", "fidelity", "robinhood",
+    "schwab", "charles", "fidelity", "robinhood", "shear", "group",
     "snowball", "analytics",
     "traditional",
 }
@@ -600,19 +600,43 @@ def _broker_import_target_error(profile_id, conn):
     return None
 
 
+_SNOWBALL_LAYERED_BROKER_SOURCES = {"schwab", "etrade", "fidelity", "shear_group", "generic", "other"}
+
+
+def _profile_broker_source(profile_id, conn):
+    try:
+        row = conn.execute(
+            "SELECT broker_source FROM profiles WHERE id = ?",
+            (profile_id,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return ""
+    if not row:
+        return ""
+    value = row["broker_source"] if isinstance(row, dict) else row[0]
+    return (value or "").strip().lower()
+
+
 def _should_preserve_positions_for_transaction_import(profile_id, fmt, conn):
     """Return True when transaction imports should not recalculate holdings."""
     fmt = (fmt or "").strip().lower()
-    if fmt in {"schwab", "etrade", "fidelity", "snowball_holdings", "robinhood"}:
+    if fmt in {"schwab", "etrade", "fidelity", "snowball_holdings", "robinhood", "shear_group"}:
         return False
-
-    if _profile_is_positions_managed(profile_id, conn):
-        return True
 
     existing_holdings = conn.execute(
         "SELECT COUNT(*) FROM all_account_info WHERE profile_id = ? AND quantity > 0",
         (profile_id,),
     ).fetchone()[0]
+
+    if (
+        fmt == "snowball"
+        and existing_holdings > 0
+        and _profile_broker_source(profile_id, conn) in _SNOWBALL_LAYERED_BROKER_SOURCES
+    ):
+        return True
+
+    if _profile_is_positions_managed(profile_id, conn):
+        return True
 
     return existing_holdings > 0
 
@@ -4030,8 +4054,8 @@ def _clear_dividend_actuals(conn, profile_id, ticker):
     )
 
 
-DIVIDEND_REPAIR_SOURCE_KEYS = ("schwab", "fidelity", "snowball", "etrade", "robinhood", "imported", "snapshot", "yahoo", "none")
-IMPORTED_DIVIDEND_SOURCES = {"schwab", "fidelity", "snowball", "etrade", "robinhood", "imported"}
+DIVIDEND_REPAIR_SOURCE_KEYS = ("schwab", "fidelity", "snowball", "etrade", "robinhood", "shear_group", "imported", "snapshot", "yahoo", "none")
+IMPORTED_DIVIDEND_SOURCES = {"schwab", "fidelity", "snowball", "etrade", "robinhood", "shear_group", "imported"}
 REFRESH_ESTIMATE_DIVIDEND_SOURCE = "refresh_estimate"
 
 
@@ -4049,6 +4073,8 @@ def _normalise_dividend_payment_source(source):
         return "etrade"
     if value.startswith("robinhood"):
         return "robinhood"
+    if value.startswith("shear_group") or value.startswith("shear group"):
+        return "shear_group"
     return "imported"
 
 

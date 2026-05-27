@@ -4,6 +4,9 @@ Release date: May 26, 2026
 
 ## Transaction Import and Portfolio History Fixes
 
+### Shear Group Imports and Snowball History Layering
+Added Shear Group as a broker source and import format, with CSV and Excel support for Positions and Activity files. Shear Group activity imports now feed buys, sells, dividends, capital gains, and dividend reinvestments into the same transaction path used by Gains/Losses. Snowball transaction history can now be layered onto existing Schwab, E*TRADE, Fidelity, Shear Group, Generic, and Other/Manual portfolios without replacing broker-imported current positions.
+
 ### Realized Gain/Loss - Closed Positions Fixed
 Fixed a bug where the basis-refresh function exited early when a ticker's current quantity was zero, causing all closed positions to show $0 realized gain regardless of the actual buy/sell prices. The FIFO lot-matching engine now correctly processes all SELL transactions and computes realized gains even when no current holding remains.
 

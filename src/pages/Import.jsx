@@ -586,12 +586,16 @@ export default function Import() {
                     ? <>Import current positions from a Robinhood <strong>Holdings PDF</strong>. Robinhood does not include cost basis in this PDF, so current value is used as the initial cost basis.</>
                   : txnFormat === 'robinhood_transactions'
                     ? <>Import transaction history from a Robinhood <strong>Transactions CSV or XLSX</strong> export. This imports buys, sells, cash/manufactured dividends, capital gains, and ACAT share transfers.</>
+                  : txnFormat === 'shear_group'
+                    ? <>Import current positions from a Shear Group <strong>Positions CSV or Excel</strong> export. This sets holdings, cost basis, current prices, and unrealized gain/loss directly.</>
+                  : txnFormat === 'shear_group_activity'
+                    ? <>Import activity history from a Shear Group <strong>Activity CSV or Excel</strong> export. This imports buys, sells, cash dividends, capital gains, and dividend reinvestments.</>
                  : <>Import BUY/SELL transactions and dividend payments from your broker or tracking app.
                  Each file should be a <strong>single account</strong> export — combined/merged exports will be rejected.</>
             }
           </p>
 
-          {['snowball', 'schwab_transactions', 'etrade_buys_sells', 'etrade_dividends', 'fidelity_transactions', 'robinhood_transactions'].includes(txnFormat) && (
+          {['snowball', 'schwab_transactions', 'etrade_buys_sells', 'etrade_dividends', 'fidelity_transactions', 'robinhood_transactions', 'shear_group_activity'].includes(txnFormat) && (
             <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
               <strong>Partial history warning:</strong> If this file does not cover the full account history
               (e.g. only the last 1–2 years), imported buy/sell transactions will recalculate your share
@@ -600,7 +604,7 @@ export default function Import() {
                 {' '}Snowball Analytics exports may also not exactly match the broker's live positions or account value.
               </>)}
               <br /><br />
-              <strong>Recommended approach:</strong> Import a <em>Positions</em> file first (Schwab, E*TRADE, Fidelity, or Robinhood)
+              <strong>Recommended approach:</strong> Import a <em>Positions</em> file first (Schwab, E*TRADE, Fidelity, Robinhood, or Shear Group)
               to set accurate current holdings, then import transaction history for dividend tracking and
               realized gain records. When a Positions import has been done first, transaction imports store
               history without overwriting your holdings data.
@@ -741,6 +745,8 @@ export default function Import() {
               <option value="fidelity_transactions">Fidelity (Transactions)</option>
               <option value="robinhood">Robinhood (Positions PDF)</option>
               <option value="robinhood_transactions">Robinhood (Transactions)</option>
+              <option value="shear_group">Shear Group (Positions)</option>
+              <option value="shear_group_activity">Shear Group (Activity)</option>
             </select>
           </div>
 
