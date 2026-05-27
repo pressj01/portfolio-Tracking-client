@@ -26,6 +26,13 @@ export default function Settings() {
   const [navStatus, setNavStatus] = useState(null)
   const [navSaving, setNavSaving] = useState(false)
 
+  // Backup management
+  const [backups, setBackups] = useState([])
+  const [backupDir, setBackupDir] = useState('')
+  const [backupLoading, setBackupLoading] = useState(false)
+  const [backupStatus, setBackupStatus] = useState(null)
+  const [deletingBackup, setDeletingBackup] = useState(null)
+
   const navBenchmarkChoices = [
     'SPY', 'QQQ', 'IWM', 'DIA', 'EFA', 'EEM',
     'BTC-USD', 'ETH-USD', 'SOL-USD', 'BTC-USD+GLD', 'SPY+BTC-USD',
@@ -105,7 +112,36 @@ export default function Settings() {
     setTaxSaving(false)
   }
 
-  useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides() }, [selection])
+  const fetchBackups = () => {
+    setBackupLoading(true)
+    fetch('/api/backups')
+      .then(r => r.json())
+      .then(data => {
+        setBackups(data.backups || [])
+        setBackupDir(data.directory || '')
+      })
+      .catch(() => {})
+      .finally(() => setBackupLoading(false))
+  }
+
+  const deleteBackup = (filename) => {
+    setDeletingBackup(filename)
+    setBackupStatus(null)
+    fetch(`/api/backups/${encodeURIComponent(filename)}`, { method: 'DELETE' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) {
+          setBackupStatus({ type: 'error', msg: d.error })
+        } else {
+          setBackupStatus({ type: 'success', msg: d.message })
+          fetchBackups()
+        }
+      })
+      .catch(() => setBackupStatus({ type: 'error', msg: 'Delete failed.' }))
+      .finally(() => setDeletingBackup(null))
+  }
+
+  useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides(); fetchBackups() }, [selection])
 
   const handleClearAll = async () => {
     setLoading(true)
@@ -406,6 +442,74 @@ export default function Settings() {
           </label>
           <button className="btn btn-primary" onClick={saveTaxRates} disabled={taxSaving}>
             {taxSaving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      </div>
+
+      {/* Database Backups */}
+      <div className="card">
+        <h2>Database Backups</h2>
+        <p style={{ color: '#90a4ae', marginBottom: '0.5rem', fontSize: '0.85rem' }}>
+          Backups are stored in: <code style={{ color: '#80cbc4', fontSize: '0.8rem' }}>{backupDir || 'backend/backups/'}</code>
+        </p>
+        <p style={{ color: '#90a4ae', marginBottom: '1rem', fontSize: '0.85rem' }}>
+          Auto backups are created before each import. Pre-operation backups are created before repair/sync operations.
+          To restore, use the Import page's Restore tab.
+        </p>
+
+        {backupStatus && (
+          <div className={`alert alert-${backupStatus.type}`} style={{ marginBottom: '0.75rem' }}>{backupStatus.msg}</div>
+        )}
+
+        {backupLoading ? (
+          <p style={{ color: '#8899aa' }}>Loading...</p>
+        ) : backups.length === 0 ? (
+          <p style={{ color: '#8899aa' }}>No backups found.</p>
+        ) : (
+          <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+            <table style={{ width: '100%', fontSize: '0.8rem' }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left', padding: '0.3rem 0.5rem' }}>File</th>
+                  <th style={{ textAlign: 'left', padding: '0.3rem 0.5rem' }}>Date</th>
+                  <th style={{ textAlign: 'right', padding: '0.3rem 0.5rem' }}>Size</th>
+                  <th style={{ textAlign: 'left', padding: '0.3rem 0.5rem' }}>Type</th>
+                  <th style={{ padding: '0.3rem 0.5rem' }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {backups.map(b => (
+                  <tr key={b.filename}>
+                    <td style={{ padding: '0.3rem 0.5rem', maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        title={b.filename}>
+                      {b.filename}
+                    </td>
+                    <td style={{ padding: '0.3rem 0.5rem', whiteSpace: 'nowrap' }}>{b.label}</td>
+                    <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>{b.size_mb} MB</td>
+                    <td style={{ padding: '0.3rem 0.5rem' }}>
+                      <span style={{ color: b.kind === 'pre-operation' ? '#ffcc80' : '#a5d6a7', fontSize: '0.75rem' }}>
+                        {b.kind === 'pre-operation' ? 'pre-op' : 'auto'}
+                      </span>
+                    </td>
+                    <td style={{ padding: '0.3rem 0.5rem' }}>
+                      <button
+                        className="btn btn-danger"
+                        style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem' }}
+                        disabled={deletingBackup === b.filename}
+                        onClick={() => deleteBackup(b.filename)}
+                      >
+                        {deletingBackup === b.filename ? '...' : 'Delete'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
+          <button className="btn btn-secondary" onClick={fetchBackups} disabled={backupLoading}>
+            Refresh
           </button>
         </div>
       </div>

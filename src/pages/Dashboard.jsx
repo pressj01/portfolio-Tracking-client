@@ -401,6 +401,7 @@ export default function Dashboard() {
   const [sp500, setSp500] = useState(null)
   const [navHistory, setNavHistory] = useState([])
   const [navSnapping, setNavSnapping] = useState(false)
+  const [navBackfilling, setNavBackfilling] = useState(false)
   const [actionCenter, setActionCenter] = useState(null)
   const navChartRef = useRef(null)
   const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v13_${selection}_${basisMode}`, [selection, basisMode])
@@ -1055,6 +1056,29 @@ export default function Dashboard() {
             }}
           >
             {navSnapping ? 'Recording...' : 'Record NAV'}
+          </button>
+          <button
+            className="btn btn-secondary"
+            style={{ fontSize: '0.8rem', padding: '0.25rem 0.6rem' }}
+            disabled={navBackfilling || navHistory.length > 30}
+            title={navHistory.length > 30 ? 'History already populated' : 'Replay transactions against historical prices to populate the chart'}
+            onClick={() => {
+              setNavBackfilling(true)
+              pf('/api/nav/backfill', { method: 'POST' })
+                .then(safeJson)
+                .then(d => {
+                  setRefreshStatus(d?.message || `Backfilled ${d?.rows_added || 0} snapshots.`)
+                  setTimeout(() => setRefreshStatus(null), 5000)
+                  return pf('/api/nav/history').then(safeJson).then(history => { if (Array.isArray(history)) setNavHistory(history) })
+                })
+                .catch(() => {
+                  setRefreshStatus('NAV backfill failed.')
+                  setTimeout(() => setRefreshStatus(null), 3000)
+                })
+                .finally(() => setNavBackfilling(false))
+            }}
+          >
+            {navBackfilling ? 'Backfilling...' : 'Backfill History'}
           </button>
         </div>
         {navHistory.length >= 1 ? <div ref={navChartRef} /> : (

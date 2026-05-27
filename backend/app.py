@@ -1824,6 +1824,58 @@ def restore_import_backup():
     return jsonify({"message": f"Database restored from {fname}. Refresh your browser to see the changes."})
 
 
+@app.route("/api/backups", methods=["GET"])
+def list_all_backups():
+    """List ALL database backups including pre-operation snapshots."""
+    if not os.path.isdir(_BACKUP_DIR):
+        return jsonify({"backups": [], "directory": _BACKUP_DIR})
+    files = sorted(
+        _glob.glob(os.path.join(_BACKUP_DIR, "*.db")),
+        key=lambda p: os.path.getmtime(p),
+        reverse=True,
+    )
+    result = []
+    for bp in files:
+        fname = os.path.basename(bp)
+        try:
+            size_mb = round(os.path.getsize(bp) / (1024 * 1024), 1)
+        except OSError:
+            size_mb = 0
+        from datetime import datetime as _dt
+        try:
+            mtime = os.path.getmtime(bp)
+            label = _dt.fromtimestamp(mtime).strftime("%Y-%m-%d %I:%M:%S %p")
+        except Exception:
+            label = fname
+        kind = "auto"
+        if "before_" in fname:
+            kind = "pre-operation"
+        result.append({
+            "filename": fname,
+            "label": label,
+            "size_mb": size_mb,
+            "kind": kind,
+        })
+    return jsonify({"backups": result, "directory": _BACKUP_DIR})
+
+
+@app.route("/api/backups/<filename>", methods=["DELETE"])
+def delete_backup(filename):
+    """Delete a specific database backup file."""
+    if not filename or ".." in filename or "/" in filename or "\\" in filename:
+        return jsonify({"error": "Invalid filename"}), 400
+    if not filename.endswith(".db"):
+        return jsonify({"error": "Invalid backup filename"}), 400
+    backup_path = os.path.join(_BACKUP_DIR, filename)
+    if not os.path.isfile(backup_path):
+        return jsonify({"error": "Backup file not found"}), 404
+    try:
+        os.remove(backup_path)
+    except OSError as e:
+        return jsonify({"error": f"Delete failed: {e}"}), 500
+    return jsonify({"message": f"Deleted {filename}."})
+
+
 # ── Transaction History Import ────────────────────────────────────────────────
 
 def _combined_export_profile_id(profile_name, fallback_profile_id, conn):
@@ -2183,7 +2235,8 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
             f"{'s' if original_basis_updated != 1 else ''}"
             + (
                 f"; {original_basis_skipped} ticker"
-                f"{'s' if original_basis_skipped != 1 else ''} skipped because transaction shares did not match."
+                f"{'s' if original_basis_skipped != 1 else ''} skipped because transaction shares did not match"
+                f" ({', '.join(m.get('ticker', '?') for m in original_basis_mismatches)})."
                 if original_basis_skipped else "."
             )
         ),
@@ -2728,7 +2781,8 @@ def api_import_transactions():
                 f"{'s' if original_basis_updated != 1 else ''}"
                 + (
                     f"; {original_basis_skipped} ticker"
-                    f"{'s' if original_basis_skipped != 1 else ''} skipped because transaction shares did not match."
+                    f"{'s' if original_basis_skipped != 1 else ''} skipped because transaction shares did not match"
+                    f" ({', '.join(m.get('ticker', '?') for m in original_basis_mismatches)})."
                     if original_basis_skipped else "."
                 )
                 if preserve_positions else ""
@@ -2824,6 +2878,130 @@ def api_nav_snapshot():
         "value": values.get(str(profile_id)),
         "owner_value": values.get("1") if profile_id != 1 else values.get("1"),
         "values": values,
+    })
+
+
+@app.route("/api/nav/backfill", methods=["POST"])
+def api_nav_backfill():
+    """Backfill portfolio_nav history by replaying transactions against yfinance prices."""
+    import warnings
+    import numpy as np
+    warnings.filterwarnings("ignore")
+
+    profile_id = get_profile_id()
+    conn = get_connection()
+    try:
+        txns = conn.execute(
+            "SELECT ticker, transaction_type, transaction_date, shares, price_per_share "
+            "FROM transactions WHERE profile_id = ? AND transaction_type IN ('BUY', 'SELL') "
+            "ORDER BY transaction_date, id",
+            (profile_id,),
+        ).fetchall()
+        if not txns:
+            return jsonify({"error": "No transactions found to backfill from."}), 400
+
+        existing_nav = set(
+            r[0] for r in conn.execute(
+                "SELECT nav_date FROM portfolio_nav WHERE profile_id = ?", (profile_id,)
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+
+    events = []
+    for t in txns:
+        ticker = t["ticker"] if isinstance(t, dict) else t[0]
+        ttype = t["transaction_type"] if isinstance(t, dict) else t[1]
+        tdate = t["transaction_date"] if isinstance(t, dict) else t[2]
+        shares = float((t["shares"] if isinstance(t, dict) else t[3]) or 0)
+        events.append((tdate, ticker, ttype, shares))
+
+    earliest = min(e[0] for e in events if e[0])
+    all_tickers = sorted(set(e[1] for e in events))
+    yahoo_map = {t: _yahoo_symbol_for_ticker(t) for t in all_tickers}
+    yahoo_symbols = list(dict.fromkeys(yahoo_map.values()))
+
+    try:
+        raw = _chunked_yf_download(
+            " ".join(yahoo_symbols), start=earliest, auto_adjust=True, progress=False
+        )
+        if raw.empty:
+            return jsonify({"error": "Could not download price history."}), 500
+    except Exception as e:
+        return jsonify({"error": f"yfinance download failed: {e}"}), 500
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        close = raw["Close"].dropna(how="all")
+    else:
+        close = raw[["Close"]].dropna(how="all")
+        close.columns = [yahoo_symbols[0]]
+
+    reverse_yahoo = {}
+    for app_ticker, yahoo_sym in yahoo_map.items():
+        reverse_yahoo.setdefault(yahoo_sym, app_ticker)
+
+    price_df = pd.DataFrame(index=close.index)
+    for app_ticker, yahoo_sym in yahoo_map.items():
+        if yahoo_sym in close.columns:
+            price_df[app_ticker] = close[yahoo_sym]
+
+    price_df = price_df.ffill()
+    dates = sorted(price_df.index)
+    if not dates:
+        return jsonify({"error": "No price data available for backfill."}), 500
+
+    positions = {}
+    event_idx = 0
+    sorted_events = sorted(events, key=lambda e: e[0] or "")
+
+    nav_rows = []
+    for dt in dates:
+        dt_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10]
+
+        while event_idx < len(sorted_events) and sorted_events[event_idx][0] <= dt_str:
+            _, ticker, ttype, shares = sorted_events[event_idx]
+            if ttype == "BUY":
+                positions[ticker] = positions.get(ticker, 0) + shares
+            else:
+                positions[ticker] = max(positions.get(ticker, 0) - shares, 0)
+            event_idx += 1
+
+        if not positions or all(v < 1e-9 for v in positions.values()):
+            continue
+        if not is_nyse_trading_day(dt_str):
+            continue
+        if dt_str in existing_nav:
+            continue
+
+        total = 0.0
+        for ticker, qty in positions.items():
+            if qty < 1e-9:
+                continue
+            if ticker in price_df.columns:
+                px = price_df.loc[dt, ticker]
+                if pd.notna(px):
+                    total += qty * float(px)
+                else:
+                    total += 0
+        if total > 0:
+            nav_rows.append((profile_id, dt_str, round(total, 2)))
+
+    conn = get_connection()
+    try:
+        for row in nav_rows:
+            conn.execute(
+                "INSERT INTO portfolio_nav (profile_id, nav_date, total_value) "
+                "VALUES (?, ?, ?) ON CONFLICT(profile_id, nav_date) DO UPDATE SET total_value = excluded.total_value",
+                row,
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return jsonify({
+        "message": f"Backfilled {len(nav_rows)} NAV snapshots from {earliest} to today.",
+        "rows_added": len(nav_rows),
+        "start_date": earliest,
     })
 
 
@@ -7934,10 +8112,10 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
         "SELECT quantity FROM all_account_info WHERE ticker = ? AND profile_id = ?",
         (ticker, profile_id),
     ).fetchone()
-    if not holding:
-        return {"status": "no_holding", "ticker": ticker}
-    holding_shares = holding["quantity"] if isinstance(holding, dict) else holding[0]
-    holding_shares = float(holding_shares or 0)
+    holding_shares = (
+        float((holding["quantity"] if isinstance(holding, dict) else holding[0]) or 0)
+        if holding else 0.0
+    )
 
     def _val(r, key, idx):
         return r[key] if isinstance(r, dict) else r[idx]
@@ -7952,6 +8130,7 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
     lots = []
     share_deficit = 0.0
     total_realized = 0.0
+    earliest_buy = None
     for r in rows:
         txn_id = _val(r, "id", 0)
         txn_type = (_val(r, "transaction_type", 1) or "BUY").upper()
@@ -7966,6 +8145,8 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
                 share_deficit -= covered
                 shares -= covered
             _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id, txn_date=tdate)
+            if shares > 1e-9 and tdate and (earliest_buy is None or tdate < earliest_buy):
+                earliest_buy = tdate
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
         else:
             sell_proceeds = (shares * price) - fees
@@ -7982,6 +8163,16 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
                 (round(realized, 2), txn_id),
             )
 
+    # Closed position (no current holding row) — realized_gain on transactions
+    # has been recomputed above; nothing to update on all_account_info.
+    if not holding:
+        return {
+            "status": "no_holding",
+            "ticker": ticker,
+            "transaction_shares": round(sum(lot["shares"] for lot in lots) - share_deficit, 6),
+            "total_realized": round(total_realized, 2),
+        }
+
     total_shares = sum(lot["shares"] for lot in lots) - share_deficit
     total_cost = sum(lot["shares"] * lot["cost_per_share"] for lot in lots)
     avg_price = total_cost / total_shares if total_shares > 1e-9 else 0
@@ -7989,9 +8180,10 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
     if abs(share_delta) > _basis_share_tolerance(holding_shares):
         conn.execute(
             """UPDATE all_account_info
-               SET realized_gains = ?
+               SET realized_gains = ?,
+                   purchase_date = COALESCE(purchase_date, ?)
                WHERE ticker = ? AND profile_id = ?""",
-            (round(total_realized, 2), ticker, profile_id),
+            (round(total_realized, 2), earliest_buy, ticker, profile_id),
         )
         return {
             "status": "share_mismatch",
@@ -8005,12 +8197,14 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
         """UPDATE all_account_info
            SET original_price_paid = ?,
                original_purchase_value = ?,
-               realized_gains = ?
+               realized_gains = ?,
+               purchase_date = COALESCE(purchase_date, ?)
            WHERE ticker = ? AND profile_id = ?""",
         (
             round(avg_price, 4) if total_shares > 1e-9 else 0,
             round(total_cost, 2) if total_shares > 1e-9 else 0,
             round(total_realized, 2),
+            earliest_buy,
             ticker,
             profile_id,
         ),
@@ -8022,6 +8216,7 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
         "transaction_shares": round(total_shares, 6),
         "original_price_paid": round(avg_price, 4) if total_shares > 1e-9 else 0,
         "original_purchase_value": round(total_cost, 2) if total_shares > 1e-9 else 0,
+        "purchase_date": earliest_buy,
     }
 
 
