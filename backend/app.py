@@ -6,6 +6,7 @@ import sqlite3
 import json
 import hashlib
 import datetime
+from html.parser import HTMLParser
 
 # Ensure backend directory is on the Python path so sibling imports work
 # regardless of the working directory (e.g. when launched from project root).
@@ -13,6 +14,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import math
 import pandas as pd
+import urllib.parse
+import urllib.request
 from flask import Flask, request, jsonify, session, send_file
 from flask.json.provider import DefaultJSONProvider
 from flask_cors import CORS
@@ -130,6 +133,9 @@ _DIVIDEND_CALENDAR_CACHE = {}
 _EARNINGS_CALENDAR_CACHE = {}
 _DIVIDEND_EVENT_TTL_SEC = 60 * 60
 _EARNINGS_EVENT_TTL_SEC = 6 * 60 * 60
+_CEFCONNECT_CACHE = {}
+_CEFCONNECT_TTL_SEC = 30 * 60
+_CEFCONNECT_BASE_URL = "https://www.cefconnect.com"
 
 
 def _cache_value(value):
@@ -29511,6 +29517,531 @@ def etf_funds_search():
             pass
 
     return jsonify({'funds': funds, 'total': len(funds)})
+
+
+def _cef_cache_get(key):
+    entry = _CEFCONNECT_CACHE.get(key)
+    if not entry:
+        return None
+    ts, payload = entry
+    if time.time() - ts > _CEFCONNECT_TTL_SEC:
+        _CEFCONNECT_CACHE.pop(key, None)
+        return None
+    return payload
+
+
+def _cef_cache_set(key, payload):
+    _CEFCONNECT_CACHE[key] = (time.time(), payload)
+
+
+def _cefconnect_json(path, cache_key):
+    cached = _cef_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    req = urllib.request.Request(
+        f"{_CEFCONNECT_BASE_URL}{path}",
+        headers={
+            "Accept": "application/json,text/plain,*/*",
+            "User-Agent": "PortfolioTrackingClient/1.0",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    _cef_cache_set(cache_key, payload)
+    return payload
+
+
+def _cefconnect_text(path, cache_key):
+    cached = _cef_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    req = urllib.request.Request(
+        f"{_CEFCONNECT_BASE_URL}{path}",
+        headers={
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "User-Agent": "PortfolioTrackingClient/1.0",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        payload = resp.read().decode("utf-8", errors="replace")
+    _cef_cache_set(cache_key, payload)
+    return payload
+
+
+def _cef_value(row, key):
+    value = row.get(key)
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
+
+
+def _cef_normalize_row(row):
+    ticker = str(row.get("Ticker") or "").upper()
+    return {
+        "ticker": _cef_value(row, "Ticker"),
+        "name": _cef_value(row, "Name"),
+        "strategy": _cef_value(row, "Strategy"),
+        "category": _cef_value(row, "CategoryName"),
+        "sponsor": _cef_value(row, "SponsorName"),
+        "price": _cef_value(row, "Price"),
+        "price_change": _cef_value(row, "PriceChange"),
+        "nav": _cef_value(row, "NAV"),
+        "premium_discount": _cef_value(row, "Discount"),
+        "distribution_rate_price": _cef_value(row, "DistributionRatePrice"),
+        "distribution_rate_nav": _cef_value(row, "DistributionRateNAV"),
+        "distribution_amount": _cef_value(row, "DistributionAmtUSD"),
+        "distribution_frequency": _cef_value(row, "DistributionFrequency"),
+        "distribution_date": _cef_value(row, "DistributionDate"),
+        "is_managed_distribution": bool(row.get("IsManagedDistribution")),
+        "return_on_nav_1y": _cef_value(row, "ReturnOnNAV"),
+        "return_on_price_1y": _cef_value(row, "ReturnOnPrice"),
+        "return_on_nav_3y": _cef_value(row, "Yr3RetOnNav"),
+        "return_on_price_3y": _cef_value(row, "Yr3RetOnPrice"),
+        "return_on_nav_5y": _cef_value(row, "Yr5RetOnNav"),
+        "return_on_price_5y": _cef_value(row, "Yr5RetOnPrice"),
+        "return_on_nav_ytd": _cef_value(row, "YTDRetOnNav"),
+        "return_on_price_ytd": _cef_value(row, "YTDRetOnPrice"),
+        "leverage_ratio": _cef_value(row, "LeverageRatioPercentage"),
+        "is_leveraged": bool(row.get("IsLeveraged")),
+        "market_cap_usd_m": _cef_value(row, "MarketCapUSDm"),
+        "total_assets_usd_m": _cef_value(row, "TotalAssetsUSDm"),
+        "expense_ratio": _cef_value(row, "ExpenseRatio"),
+        "z_score_1y": _cef_value(row, "ZScore1Yr"),
+        "z_score_3m": _cef_value(row, "ZScore3M"),
+        "z_score_6m": _cef_value(row, "ZScore6M"),
+        "price_52wk_avg": _cef_value(row, "Price52WkAvg"),
+        "discount_52wk_avg": _cef_value(row, "Discount52WkAvg"),
+        "avg_daily_volume": _cef_value(row, "AvgDailyVolume"),
+        "inception_date": _cef_value(row, "InceptionDateString") or _cef_value(row, "InceptionDate"),
+        "nav_published": _cef_value(row, "NAVPublished"),
+        "last_updated": _cef_value(row, "LastUpdated"),
+        "nav_ticker": _cef_value(row, "NavTicker"),
+        "cusip": _cef_value(row, "Cusip"),
+        "source_url": f"{_CEFCONNECT_BASE_URL}/fund/{urllib.parse.quote(ticker)}",
+    }
+
+
+def _cef_daily_rows():
+    rows = _cefconnect_json("/api/v3/DailyPricing", "daily-pricing")
+    if not isinstance(rows, list):
+        raise ValueError("CEF Connect daily pricing response was not a list.")
+    return rows
+
+
+class _CefTableParser(HTMLParser):
+    def __init__(self, table_id_part):
+        super().__init__(convert_charrefs=True)
+        self.table_id_part = table_id_part
+        self.in_table = False
+        self.table_depth = 0
+        self.in_row = False
+        self.in_cell = False
+        self.current_cell = []
+        self.current_row = []
+        self.rows = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "table":
+            if self.in_table:
+                self.table_depth += 1
+            elif self.table_id_part in (attrs.get("id") or ""):
+                self.in_table = True
+                self.table_depth = 1
+            return
+
+        if not self.in_table:
+            return
+
+        if tag == "tr":
+            self.in_row = True
+            self.current_row = []
+        elif tag in {"td", "th"} and self.in_row:
+            self.in_cell = True
+            self.current_cell = []
+        elif tag == "br" and self.in_cell:
+            self.current_cell.append(" ")
+
+    def handle_endtag(self, tag):
+        if not self.in_table:
+            return
+
+        if tag in {"td", "th"} and self.in_cell:
+            text = re.sub(r"\s+", " ", "".join(self.current_cell)).strip()
+            self.current_row.append(text)
+            self.current_cell = []
+            self.in_cell = False
+        elif tag == "tr" and self.in_row:
+            if any(cell for cell in self.current_row):
+                self.rows.append(self.current_row)
+            self.current_row = []
+            self.in_row = False
+        elif tag == "table":
+            self.table_depth -= 1
+            if self.table_depth <= 0:
+                self.in_table = False
+
+    def handle_data(self, data):
+        if self.in_cell:
+            self.current_cell.append(data)
+
+
+def _cef_extract_table(html, table_id_part):
+    parser = _CefTableParser(table_id_part)
+    parser.feed(html)
+    return parser.rows
+
+
+def _cef_extract_as_of(html, id_part):
+    match = re.search(
+        rf'<span[^>]+id="[^"]*{re.escape(id_part)}[^"]*"[^>]*>(.*?)</span>',
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return None
+    text = re.sub(r"<[^>]+>", " ", match.group(1))
+    return re.sub(r"\s+", " ", text).strip() or None
+
+
+def _cef_split_label_as_of(text):
+    clean = re.sub(r"\s+", " ", text or "").strip()
+    match = re.match(r"^(.*?):?\s+As of\s+(.+)$", clean, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).strip().rstrip(":"), f"As of {match.group(2).strip()}"
+    return clean.rstrip(":"), None
+
+
+def _cef_rows_from_two_col(table_rows, skip_header=True):
+    rows = table_rows[1:] if skip_header and table_rows and len(table_rows[0]) >= 2 else table_rows
+    result = []
+    for row in rows:
+        if len(row) < 2:
+            continue
+        result.append({"label": row[0], "value": row[1]})
+    return result
+
+
+def _cef_portfolio_characteristics(symbol):
+    html = _cefconnect_text(f"/fund/{urllib.parse.quote(symbol)}", f"fund-html:{symbol}")
+
+    summary = []
+    for row in _cef_extract_table(html, "ucPortChar_pcSummaryGrid"):
+        if len(row) < 2:
+            continue
+        label, as_of = _cef_split_label_as_of(row[0])
+        summary.append({"label": label, "value": row[1], "as_of": as_of})
+
+    asset_payload = _cefconnect_json(
+        f"/api/v3/assetallocation/{urllib.parse.quote(symbol)}",
+        f"asset-allocation:{symbol}",
+    )
+    asset_rows = []
+    if isinstance(asset_payload, dict):
+        for item in asset_payload.get("Data") or []:
+            if not isinstance(item, dict):
+                continue
+            value = item.get("Value")
+            asset_rows.append({
+                "label": item.get("Text"),
+                "value": value,
+                "display_value": f"{float(value):.2f}%" if value is not None else None,
+            })
+
+    holding_rows = _cef_extract_table(html, "ucPortChar_TopHoldingsGrid")
+    holding_rows = holding_rows[1:] if holding_rows and len(holding_rows[0]) >= 3 else holding_rows
+    holdings = []
+    for row in holding_rows:
+        if len(row) < 3:
+            continue
+        holdings.append({"holding": row[0], "value": row[1], "portfolio_pct": row[2]})
+
+    return {
+        "summary": summary,
+        "asset_allocation": {
+            "as_of": f"As of {asset_payload.get('AsOfDate')}" if isinstance(asset_payload, dict) and asset_payload.get("AsOfDate") else _cef_extract_as_of(html, "AssetAsOfLabel"),
+            "rows": asset_rows,
+        },
+        "top_sectors": {
+            "as_of": _cef_extract_as_of(html, "pcSector_SectorAsOfLabel"),
+            "rows": _cef_rows_from_two_col(_cef_extract_table(html, "ucPortChar_pcSector_SectorGrid")),
+        },
+        "top_holdings": {
+            "as_of": _cef_extract_as_of(html, "HoldingsAsOfLabel"),
+            "rows": holdings,
+        },
+        "country_allocation": {
+            "as_of": _cef_extract_as_of(html, "pcCountry_CountryAsOfLabel"),
+            "rows": _cef_rows_from_two_col(_cef_extract_table(html, "ucPortChar_pcCountry_CountryGrid")),
+        },
+    }
+
+
+def _cef_period_stats(history):
+    if not history:
+        return {}
+
+    def clean(values):
+        result = []
+        for value in values:
+            try:
+                if value is not None:
+                    result.append(float(value))
+            except (TypeError, ValueError):
+                pass
+        return result
+
+    prices = clean(row.get("Data") for row in history)
+    navs = clean(row.get("NAVData") for row in history)
+    discounts = clean(row.get("DiscountData") for row in history)
+    latest = history[-1]
+
+    def pack(values, current_key):
+        return {
+            "current": latest.get(current_key),
+            "average": round(sum(values) / len(values), 4) if values else None,
+            "high": max(values) if values else None,
+            "low": min(values) if values else None,
+        }
+
+    return {
+        "price": pack(prices, "Data"),
+        "nav": pack(navs, "NAVData"),
+        "premium_discount": pack(discounts, "DiscountData"),
+    }
+
+
+@app.route("/api/closed-cef/pricing", methods=["GET"])
+def closed_cef_pricing():
+    rows = [_cef_normalize_row(row) for row in _cef_daily_rows()]
+    rows = [row for row in rows if row.get("ticker")]
+    categories = sorted({row["category"] for row in rows if row.get("category")})
+    strategies = sorted({row["strategy"] for row in rows if row.get("strategy")})
+    sponsors = sorted({row["sponsor"] for row in rows if row.get("sponsor")})
+    latest = max((row.get("last_updated") or "" for row in rows), default=None)
+    return jsonify({
+        "rows": rows,
+        "total": len(rows),
+        "categories": categories,
+        "strategies": strategies,
+        "sponsors": sponsors,
+        "last_updated": latest,
+        "source_url": f"{_CEFCONNECT_BASE_URL}/closed-end-funds-daily-pricing",
+        "source": "CEF Connect daily pricing data supplied by Morningstar.",
+    })
+
+
+def _cef_performance_rows(symbol, kind):
+    """Fetch calendar or annualized total return rows for a CEF Connect fund."""
+    payload = _cefconnect_json(
+        f"/api/v3/performance/{kind}/{urllib.parse.quote(symbol)}",
+        f"performance:{kind}:{symbol}",
+    )
+    data = payload.get("Data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return []
+    rows = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        rows.append({
+            "type": item.get("Type"),
+            "price_total_return": _cef_value(item, "PriceTR"),
+            "nav_total_return": _cef_value(item, "NAVTR"),
+            "category_price_total_return": _cef_value(item, "PricePGTR"),
+            "category_nav_total_return": _cef_value(item, "NAVPGTR"),
+        })
+    return rows
+
+
+@app.route("/api/closed-cef/fund/<ticker>/performance", methods=["GET"])
+def closed_cef_fund_performance(ticker):
+    symbol = re.sub(r"[^A-Za-z0-9.\-]", "", ticker or "").upper()
+    if not symbol:
+        return jsonify({"error": "Ticker is required."}), 400
+    try:
+        annualized = _cef_performance_rows(symbol, "annualized")
+        calendar = _cef_performance_rows(symbol, "calendar")
+    except Exception as exc:
+        return jsonify({"error": f"Could not load performance for {symbol}: {exc}"}), 502
+    return jsonify({
+        "ticker": symbol,
+        "annualized": annualized,
+        "calendar": calendar,
+        "source_url": f"{_CEFCONNECT_BASE_URL}/fund/{urllib.parse.quote(symbol)}",
+        "source": "CEF Connect performance data supplied by Morningstar.",
+    })
+
+
+def _cef_period_start(period):
+    """Return a pandas Timestamp for the period's start date (or None for ALL)."""
+    now = pd.Timestamp.now().normalize()
+    period = (period or "1Y").upper()
+    if period == "5D":
+        return now - pd.Timedelta(days=10)  # extra slack for weekends
+    if period == "1M":
+        return now - pd.DateOffset(months=1)
+    if period == "YTD":
+        return pd.Timestamp(year=now.year, month=1, day=1)
+    if period == "1Y":
+        return now - pd.DateOffset(years=1)
+    if period == "3Y":
+        return now - pd.DateOffset(years=3)
+    if period == "5Y":
+        return now - pd.DateOffset(years=5)
+    return None  # ALL
+
+
+@app.route("/api/closed-cef/fund/<ticker>/total-return", methods=["GET"])
+def closed_cef_fund_total_return(ticker):
+    """Return cumulative price total return % and NAV total return % series."""
+    import warnings
+    import yfinance as yf
+    warnings.filterwarnings("ignore")
+
+    symbol = re.sub(r"[^A-Za-z0-9.\-]", "", ticker or "").upper()
+    if not symbol:
+        return jsonify({"error": "Ticker is required."}), 400
+
+    period = (request.args.get("period") or "1Y").upper()
+    allowed_periods = {"5D", "1M", "YTD", "1Y", "3Y", "5Y", "ALL"}
+    if period not in allowed_periods:
+        period = "1Y"
+    cef_period = "All" if period == "ALL" else period
+
+    # NAV history from CEF Connect
+    try:
+        history_payload = _cefconnect_json(
+            f"/api/v3/pricinghistory/{urllib.parse.quote(symbol)}/{cef_period}",
+            f"pricing-history:{symbol}:{period}",
+        )
+    except Exception as exc:
+        return jsonify({"error": f"Could not load NAV history for {symbol}: {exc}"}), 502
+    data = history_payload.get("Data") if isinstance(history_payload, dict) else {}
+    nav_history = data.get("PriceHistory") if isinstance(data, dict) else []
+    if not isinstance(nav_history, list):
+        nav_history = []
+
+    nav_dates = []
+    nav_values = []
+    for row in nav_history:
+        d = row.get("DataDate") or row.get("DataDateDisplay")
+        v = row.get("NAVData")
+        if d is None or v is None:
+            continue
+        try:
+            nav_values.append(float(v))
+            nav_dates.append(pd.Timestamp(d).normalize())
+        except (TypeError, ValueError):
+            continue
+
+    if period == "ALL" and nav_dates:
+        start = nav_dates[0]
+    else:
+        start = _cef_period_start(period)
+        if start is None and nav_dates:
+            start = nav_dates[0]
+    start_str = start.strftime("%Y-%m-%d") if start is not None else None
+
+    # yfinance: close + dividends since start
+    try:
+        if start_str:
+            raw = _chunked_yf_download(symbol, start=start_str, progress=False, auto_adjust=False, actions=True)
+        else:
+            raw = _chunked_yf_download(symbol, period="max", progress=False, auto_adjust=False, actions=True)
+    except Exception as exc:
+        return jsonify({"error": f"Yahoo Finance error for {symbol}: {exc}"}), 502
+
+    price_dates = []
+    price_total_return = []
+    dividends_by_date = {}
+    if raw is not None and not raw.empty:
+        try:
+            close_col, divs_col = _research_price_and_dividend_series(raw, symbol)
+            if len(close_col) >= 2:
+                start_price = float(close_col.iloc[0])
+                if start_price > 0:
+                    cum_divs = divs_col.cumsum()
+                    pr_tr = ((close_col - start_price + cum_divs) / start_price * 100).round(4)
+                    price_dates = close_col.index.strftime("%Y-%m-%d").tolist()
+                    price_total_return = pr_tr.tolist()
+                    # Build {date_str: cumulative_divs}
+                    cum_index = cum_divs.index.strftime("%Y-%m-%d")
+                    for d_str, v in zip(cum_index, cum_divs.tolist()):
+                        dividends_by_date[d_str] = float(v)
+        except Exception:
+            pass
+
+    # NAV total return %, using cumulative divs at or before each NAV date
+    nav_total_return_dates = []
+    nav_total_return = []
+    if nav_dates and nav_values:
+        # Filter to the period start window
+        pairs = [(d, v) for d, v in zip(nav_dates, nav_values) if start is None or d >= start]
+        if len(pairs) >= 2 and dividends_by_date:
+            sorted_div_dates = sorted(dividends_by_date.keys())
+            sorted_div_values = [dividends_by_date[k] for k in sorted_div_dates]
+            start_nav = pairs[0][1]
+            if start_nav > 0:
+                import bisect
+                for d, v in pairs:
+                    d_str = d.strftime("%Y-%m-%d")
+                    idx = bisect.bisect_right(sorted_div_dates, d_str) - 1
+                    cum_d = sorted_div_values[idx] if idx >= 0 else 0.0
+                    tr = (v - start_nav + cum_d) / start_nav * 100
+                    nav_total_return_dates.append(d_str)
+                    nav_total_return.append(round(tr, 4))
+
+    return jsonify({
+        "ticker": symbol,
+        "period": period,
+        "price_dates": price_dates,
+        "price_total_return": price_total_return,
+        "nav_dates": nav_total_return_dates,
+        "nav_total_return": nav_total_return,
+    })
+
+
+@app.route("/api/closed-cef/fund/<ticker>", methods=["GET"])
+def closed_cef_fund(ticker):
+    symbol = re.sub(r"[^A-Za-z0-9.\-]", "", ticker or "").upper()
+    if not symbol:
+        return jsonify({"error": "Ticker is required."}), 400
+
+    period = (request.args.get("period") or "1Y").upper()
+    allowed_periods = {"5D", "1M", "YTD", "1Y", "3Y", "5Y", "ALL"}
+    if period not in allowed_periods:
+        period = "1Y"
+    cef_period = "All" if period == "ALL" else period
+
+    rows = _cef_daily_rows()
+    row = next((r for r in rows if str(r.get("Ticker") or "").upper() == symbol), None)
+    if not row:
+        return jsonify({"error": f"{symbol} was not found in CEF Connect daily pricing."}), 404
+
+    encoded_symbol = urllib.parse.quote(symbol)
+    history_payload = _cefconnect_json(
+        f"/api/v3/pricinghistory/{encoded_symbol}/{cef_period}",
+        f"pricing-history:{symbol}:{period}",
+    )
+    data = history_payload.get("Data") if isinstance(history_payload, dict) else {}
+    history = data.get("PriceHistory") if isinstance(data, dict) else []
+    if not isinstance(history, list):
+        history = []
+
+    fund = _cef_normalize_row(row)
+    return jsonify({
+        "fund": fund,
+        "period": period,
+        "history": history,
+        "period_stats": _cef_period_stats(history),
+        "portfolio_characteristics": _cef_portfolio_characteristics(symbol),
+        "source_url": fund["source_url"],
+        "source_pricing_url": f"{_CEFCONNECT_BASE_URL}/closed-end-funds-daily-pricing",
+        "source": "CEF Connect daily pricing data supplied by Morningstar.",
+    })
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────

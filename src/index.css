@@ -4009,6 +4009,404 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
 }
 .by-bracket-table td { padding: 3px 6px; }
 
+/* Closed CEF Information */
+.cef-page {
+  max-width: 1600px;
+}
+.cef-title-row,
+.cef-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.cef-title-row h1,
+.cef-detail-header h1 {
+  margin-bottom: 0.25rem;
+}
+.cef-title-row p,
+.cef-detail-header p,
+.cef-source-note,
+.cef-note,
+.cef-asof {
+  color: #9fb3c8;
+  font-size: 0.9rem;
+}
+.cef-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(220px, 1fr) minmax(220px, 1fr) minmax(170px, 0.7fr);
+  gap: 0.8rem;
+  align-items: end;
+  margin-bottom: 1rem;
+  background: rgba(22, 33, 62, 0.72);
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  padding: 1rem;
+}
+.cef-controls input,
+.cef-controls select {
+  width: 100%;
+}
+.cef-summary-strip {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  align-items: center;
+  color: #b8c7d8;
+  font-size: 0.86rem;
+  margin-bottom: 0.75rem;
+}
+.cef-table-wrap {
+  max-height: calc(100vh - 300px);
+  overflow: auto;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  background: #121d35;
+}
+.cef-list-table {
+  min-width: 1120px;
+  font-size: 0.84rem;
+}
+.cef-list-table td:nth-child(n+4),
+.cef-list-table th:nth-child(n+4),
+.cef-metric-table td:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.cef-list-table tbody tr:nth-child(odd),
+.cef-metric-table tbody tr:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.018);
+}
+.cef-ticker-link,
+.cef-back-link {
+  color: #7ecfff;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-weight: 800;
+  cursor: pointer;
+}
+.cef-ticker-link:hover,
+.cef-back-link:hover {
+  color: #b6e7ff;
+}
+.cef-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1.5rem 0;
+  color: #b8c7d8;
+}
+.cef-positive {
+  color: #68d391;
+}
+.cef-negative {
+  color: #f87171;
+}
+.cef-detail-header {
+  margin-top: 0.75rem;
+}
+.cef-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 1rem 0;
+  border-bottom: 2px solid #0f3460;
+}
+.cef-tab {
+  background: transparent;
+  border: none;
+  color: #9fb3c8;
+  padding: 0.75rem 1rem;
+  margin-bottom: -2px;
+  border-bottom: 2px solid transparent;
+  font-size: 0.92rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+.cef-tab:hover,
+.cef-tab.active {
+  color: #7ecfff;
+  border-bottom-color: #7ecfff;
+}
+.cef-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.95fr) minmax(480px, 1.05fr);
+  gap: 1rem;
+  align-items: start;
+}
+.cef-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(300px, 1fr));
+  gap: 1rem;
+}
+.cef-info-card,
+.cef-table-card,
+.cef-chart-panel,
+.cef-disclosure {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  padding: 1rem;
+}
+.cef-table-card {
+  margin: 0.75rem 0 1rem;
+  padding: 0;
+  overflow: hidden;
+}
+.cef-info-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.58rem 0;
+  border-bottom: 1px solid rgba(15, 52, 96, 0.65);
+}
+.cef-info-row:last-child {
+  border-bottom: none;
+}
+.cef-info-row span {
+  color: #9fb3c8;
+}
+.cef-info-row strong {
+  color: #e0e8f5;
+  text-align: right;
+}
+.cef-metric-table th,
+.cef-metric-table td {
+  font-size: 0.9rem;
+}
+.cef-chart-panel {
+  min-width: 0;
+}
+.cef-chart {
+  min-height: 430px;
+}
+.cef-periods {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+.cef-disclosure p {
+  color: #b8c7d8;
+  line-height: 1.5;
+  margin-top: 0.45rem;
+}
+.cef-characteristics-grid {
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) minmax(420px, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+.cef-characteristics-section {
+  margin-bottom: 1rem;
+}
+.cef-characteristics-section h3 {
+  margin: 0 0 0.35rem 0;
+  color: #b7d36a;
+  font-size: 1.05rem;
+}
+.cef-characteristics-table {
+  margin-top: 0.7rem;
+  font-size: 0.9rem;
+}
+.cef-characteristics-table th,
+.cef-characteristics-table td {
+  background: transparent;
+  position: static;
+  vertical-align: top;
+}
+.cef-characteristics-table tbody tr:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.018);
+}
+.cef-characteristics-table strong {
+  display: block;
+  color: #e6edf7;
+}
+.cef-characteristics-table td span {
+  display: block;
+  margin-top: 0.25rem;
+  color: #9fb3c8;
+  font-size: 0.8rem;
+  font-style: italic;
+}
+.cef-characteristics-table .cef-right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cef-asset-chart {
+  min-height: 260px;
+}
+.cef-about {
+  max-width: 920px;
+  margin: 0 auto;
+}
+.cef-about .cef-info-card {
+  padding: 1.75rem 2rem;
+  line-height: 1.65;
+  color: #d6e0ee;
+}
+.cef-about h2 {
+  margin: 0 0 1rem 0;
+  color: #b7d36a;
+  font-size: 1.6rem;
+  border-bottom: 1px solid #0f3460;
+  padding-bottom: 0.5rem;
+}
+.cef-about h3 {
+  margin: 1.5rem 0 0.6rem 0;
+  color: #58c4d8;
+  font-size: 1.2rem;
+}
+.cef-about h4 {
+  margin: 1.4rem 0 0.5rem 0;
+  color: #f0c66e;
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+}
+.cef-about h5 {
+  margin: 1rem 0 0.4rem 0;
+  color: #e0e8f5;
+  font-size: 0.98rem;
+  font-weight: 600;
+}
+.cef-about p {
+  margin: 0.55rem 0;
+  color: #d6e0ee;
+}
+.cef-about ul {
+  margin: 0.35rem 0 0.85rem 1.4rem;
+  padding: 0;
+  color: #d6e0ee;
+}
+.cef-about li {
+  margin: 0.18rem 0;
+}
+.cef-about strong {
+  color: #e6edf7;
+}
+.cef-about .cef-formula {
+  background: #0f3460;
+  border-left: 3px solid #58c4d8;
+  border-radius: 4px;
+  padding: 0.7rem 1rem;
+  margin: 0.7rem 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #e6edf7;
+  font-size: 0.95rem;
+}
+
+/* ── CEF Buying Guide ─────────────────────────────────────────────────── */
+.cef-guide-intro {
+  max-width: 780px;
+  margin: 0 0 1.6rem;
+  color: #b8c8e0;
+  font-size: 0.97rem;
+  line-height: 1.65;
+}
+.cef-guide-intro p {
+  margin: 0 0 0.6rem;
+}
+.cef-guide-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 860px;
+}
+.cef-guide-card {
+  background: #1a2744;
+  border: 1px solid #243356;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.cef-guide-card--open {
+  border-color: #58c4d8;
+}
+.cef-guide-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 1rem 1.2rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: #e0e8f5;
+}
+.cef-guide-header:hover {
+  background: #1f2e52;
+}
+.cef-guide-number {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #0f3460;
+  border: 1.5px solid #58c4d8;
+  color: #58c4d8;
+  font-size: 0.85rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cef-guide-question {
+  flex: 1;
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: #e6edf7;
+}
+.cef-guide-chevron {
+  flex-shrink: 0;
+  color: #58c4d8;
+  font-size: 0.75rem;
+}
+.cef-guide-detail {
+  padding: 0 1.4rem 1.2rem 3.6rem;
+  border-top: 1px solid #243356;
+  color: #b8c8e0;
+  font-size: 0.94rem;
+  line-height: 1.65;
+}
+.cef-guide-detail p {
+  margin: 0.7rem 0;
+}
+.cef-guide-detail h4 {
+  margin: 1rem 0 0.4rem;
+  color: #58c4d8;
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cef-guide-detail ul {
+  margin: 0 0 0.6rem 1.2rem;
+  padding: 0;
+}
+.cef-guide-detail li {
+  margin: 0.3rem 0;
+}
+.cef-guide-detail strong {
+  color: #e6edf7;
+}
+@media (max-width: 980px) {
+  .cef-controls,
+  .cef-detail-grid,
+  .cef-card-grid,
+  .cef-characteristics-grid {
+    grid-template-columns: 1fr;
+  }
+  .cef-title-row,
+  .cef-detail-header {
+    flex-direction: column;
+  }
+}
+
 .by-bracket-input {
   background: #0d1b33; border: 1px solid #1a3a5c; border-radius: 4px;
   color: #e0e8f5; padding: 0.3rem 0.5rem; font-size: 0.82rem;

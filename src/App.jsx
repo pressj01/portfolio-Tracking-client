@@ -48,6 +48,8 @@ import ETFComparer from './pages/ETFComparer'
 import StockComparer from './pages/StockComparer'
 import RebalanceWizard from './pages/RebalanceWizard'
 import ActionCenter from './pages/ActionCenter'
+import ClosedCEFInformation from './pages/ClosedCEFInformation'
+import CEFBuyingGuide from './pages/CEFBuyingGuide'
 // Option Trading Tools and Option Education are intentionally excluded from
 // deployed builds — still in development, not ready for production.
 // import OptionTradingTools from './pages/OptionTradingTools'
@@ -136,6 +138,9 @@ function App() {
         <Route path="/tax-report" element={<AnnualTaxReport />} />
         <Route path="/tax-loss" element={<TaxLossHarvest />} />
         <Route path="/blended-yield" element={<BlendedYield />} />
+        <Route path="/closed-cef-info" element={<ClosedCEFInformation />} />
+        <Route path="/closed-cef-info/:ticker" element={<ClosedCEFInformation />} />
+        <Route path="/cef-buying-guide" element={<CEFBuyingGuide />} />
         {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
         <Route path="/help" element={<Help />} />
       </Routes>
@@ -233,6 +238,10 @@ function Nav() {
         <NavLink to="/macro-dashboard">Macro Regime Dashboard</NavLink>
           <NavLink to="/scanner">Single Strategy Scanner</NavLink>
         <NavLink to="/general-scanner">General Scanner</NavLink>
+      </NavDropdown>
+      <NavDropdown label="CEF's">
+        <NavLink to="/closed-cef-info">Closed CEF Information</NavLink>
+        <NavLink to="/cef-buying-guide">What to Look For When Buying CEFs</NavLink>
       </NavDropdown>
       <NavDropdown label="Taxes">
         <NavLink to="/tax-report">Annual Tax Report</NavLink>
