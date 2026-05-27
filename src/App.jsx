@@ -146,19 +146,28 @@ function App() {
 }
 
 function ProfileSelector() {
-  const { profiles, selection, setProfileId, currentProfileName, aggregateConfig, aggregateName } = useProfile()
+  const { profiles, selection, isAggregate, aggregateId, setProfileId, currentProfileName, aggregates } = useProfile()
+
+  // Map the resolved selection back to a value the <select> can match
+  const selectValue = isAggregate ? `a:${aggregateId}` : (selection.startsWith('p:') ? selection : `p:${selection}`)
 
   return (
     <div className="profile-selector">
       <select
-        value={selection}
+        value={selectValue}
         onChange={(e) => setProfileId(e.target.value)}
         title={`Active portfolio: ${currentProfileName}`}
       >
         {profiles.map(p => (
-          <option key={p.id} value={String(p.id)}>{p.name}</option>
+          <option key={`p-${p.id}`} value={`p:${p.id}`}>{p.name}</option>
         ))}
-        {aggregateConfig.length > 0 && <option value="aggregate">{aggregateName}</option>}
+        {aggregates.length > 0 && (
+          <optgroup label="Aggregates">
+            {aggregates.map(agg => (
+              <option key={`a-${agg.id}`} value={`a:${agg.id}`}>{agg.name}</option>
+            ))}
+          </optgroup>
+        )}
       </select>
     </div>
   )

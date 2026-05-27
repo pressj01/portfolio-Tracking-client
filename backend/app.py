@@ -212,15 +212,30 @@ def get_profile_id():
     return int(request.args.get("profile_id", session.get("profile_id", 1)))
 
 
+def _request_aggregate_id():
+    """Read aggregate_id query param. Returns int or None."""
+    raw = request.args.get("aggregate_id")
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def get_profile_filter():
     """Return (is_aggregate, profile_ids_list) for read operations.
 
-    If ?aggregate=true, reads member IDs from aggregate_config.
+    If ?aggregate_id=N, reads member IDs from aggregate_config for that aggregate.
     Otherwise returns (False, [single_profile_id]).
     """
-    if request.args.get("aggregate") == "true":
+    agg_id = _request_aggregate_id()
+    if agg_id is not None:
         conn = get_connection()
-        rows = conn.execute("SELECT member_profile_id FROM aggregate_config").fetchall()
+        rows = conn.execute(
+            "SELECT member_profile_id FROM aggregate_config WHERE aggregate_id = ? ORDER BY member_profile_id",
+            (agg_id,),
+        ).fetchall()
         conn.close()
         ids = [r["member_profile_id"] if isinstance(r, dict) else r[0] for r in rows]
         return True, ids if ids else [1]
@@ -466,12 +481,33 @@ def _get_owner_source_profile_ids(conn):
     return [r["id"] if isinstance(r, dict) else r[0] for r in rows]
 
 
-def _get_aggregate_member_profile_ids(conn):
-    """Return profile ids that feed the user-configured aggregate portfolio."""
-    rows = conn.execute(
-        "SELECT member_profile_id FROM aggregate_config ORDER BY member_profile_id"
-    ).fetchall()
+def _get_aggregate_member_profile_ids(conn, aggregate_id=None):
+    """Return profile ids that feed an aggregate portfolio.
+
+    If aggregate_id is None, returns the distinct union of members across all aggregates.
+    """
+    if aggregate_id is None:
+        rows = conn.execute(
+            "SELECT DISTINCT member_profile_id FROM aggregate_config ORDER BY member_profile_id"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT member_profile_id FROM aggregate_config WHERE aggregate_id = ? ORDER BY member_profile_id",
+            (aggregate_id,),
+        ).fetchall()
     return [r["member_profile_id"] if isinstance(r, dict) else r[0] for r in rows]
+
+
+def _list_aggregates(conn):
+    """Return [{id, name, member_ids}] for every aggregate."""
+    agg_rows = conn.execute("SELECT id, name FROM aggregates ORDER BY id").fetchall()
+    aggregates = []
+    for row in agg_rows:
+        aid = row["id"] if isinstance(row, dict) else row[0]
+        name = row["name"] if isinstance(row, dict) else row[1]
+        members = _get_aggregate_member_profile_ids(conn, aid)
+        aggregates.append({"id": aid, "name": name, "member_ids": members})
+    return aggregates
 
 
 def _get_transaction_read_scope(conn, is_aggregate, profile_ids):
@@ -583,9 +619,9 @@ def _snapshot_nav_after_multi_profile_update(profile_ids, nav_date=None):
 
 def _broker_import_target_error(profile_id, conn):
     """Return an error message when broker/Snowball imports should be blocked."""
-    if request.args.get("aggregate") == "true":
+    if _request_aggregate_id() is not None:
         return (
-            "Broker and Snowball imports cannot be imported into the Aggregate view. "
+            "Broker and Snowball imports cannot be imported into an Aggregate view. "
             "Select a specific source portfolio first."
         )
 
@@ -826,11 +862,9 @@ def _get_gains_losses_profile_scope(conn):
 
 def _get_refresh_target_info(conn):
     """Resolve which profiles a holdings refresh should update."""
-    if request.args.get("aggregate") == "true":
-        rows = conn.execute(
-            "SELECT member_profile_id FROM aggregate_config ORDER BY member_profile_id"
-        ).fetchall()
-        pids = [r["member_profile_id"] if isinstance(r, dict) else r[0] for r in rows]
+    agg_id = _request_aggregate_id()
+    if agg_id is not None:
+        pids = _get_aggregate_member_profile_ids(conn, agg_id)
         return {
             "scope": "aggregate",
             "source_profile_ids": pids or [1],
@@ -1441,40 +1475,78 @@ def profiles_summary():
     return jsonify({"profiles": rows_to_dicts(rows), "owner_import_used": bool(flag)})
 
 
-@app.route("/api/aggregate-config", methods=["GET"])
-def get_aggregate_config():
+@app.route("/api/aggregates", methods=["GET"])
+def list_aggregates():
     conn = get_connection()
-    rows = conn.execute("SELECT member_profile_id FROM aggregate_config").fetchall()
-    name_row = conn.execute("SELECT value FROM settings WHERE key = 'aggregate_name'").fetchone()
-    conn.close()
-    ids = [r["member_profile_id"] if isinstance(r, dict) else r[0] for r in rows]
-    name = (name_row[0] if name_row else "Aggregate")
-    return jsonify({"member_ids": ids, "name": name})
+    try:
+        return jsonify({"aggregates": _list_aggregates(conn)})
+    finally:
+        conn.close()
 
 
-@app.route("/api/aggregate-config", methods=["PUT"])
-def set_aggregate_config():
-    data = request.get_json()
-    member_ids = data.get("member_ids", [])
-    name = data.get("name", "Aggregate")
+@app.route("/api/aggregates", methods=["POST"])
+def create_aggregate():
+    data = request.get_json() or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    member_ids = data.get("member_ids") or []
     conn = get_connection()
-    conn.execute("DELETE FROM aggregate_config")
-    for mid in member_ids:
-        conn.execute("INSERT OR IGNORE INTO aggregate_config (member_profile_id) VALUES (?)", (mid,))
-    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("aggregate_name", name))
-    conn.commit()
-    conn.close()
-    return jsonify({"member_ids": member_ids, "name": name})
+    try:
+        cur = conn.execute("INSERT INTO aggregates (name) VALUES (?)", (name,))
+        agg_id = cur.lastrowid
+        for mid in member_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO aggregate_config (aggregate_id, member_profile_id) VALUES (?, ?)",
+                (agg_id, int(mid)),
+            )
+        conn.commit()
+        return jsonify({"id": agg_id, "name": name, "member_ids": list(member_ids)})
+    finally:
+        conn.close()
 
 
-@app.route("/api/aggregate-config", methods=["DELETE"])
-def delete_aggregate_config():
+@app.route("/api/aggregates/<int:agg_id>", methods=["PUT"])
+def update_aggregate(agg_id):
+    data = request.get_json() or {}
     conn = get_connection()
-    conn.execute("DELETE FROM aggregate_config")
-    conn.execute("DELETE FROM settings WHERE key = 'aggregate_name'")
-    conn.commit()
-    conn.close()
-    return jsonify({"deleted": True})
+    try:
+        row = conn.execute("SELECT id FROM aggregates WHERE id = ?", (agg_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "Aggregate not found"}), 404
+        if "name" in data:
+            name = (data.get("name") or "").strip()
+            if not name:
+                return jsonify({"error": "Name is required"}), 400
+            conn.execute("UPDATE aggregates SET name = ? WHERE id = ?", (name, agg_id))
+        if "member_ids" in data:
+            member_ids = data.get("member_ids") or []
+            conn.execute("DELETE FROM aggregate_config WHERE aggregate_id = ?", (agg_id,))
+            for mid in member_ids:
+                conn.execute(
+                    "INSERT OR IGNORE INTO aggregate_config (aggregate_id, member_profile_id) VALUES (?, ?)",
+                    (agg_id, int(mid)),
+                )
+        conn.commit()
+        name_row = conn.execute("SELECT name FROM aggregates WHERE id = ?", (agg_id,)).fetchone()
+        name = name_row["name"] if isinstance(name_row, dict) else name_row[0]
+        members = _get_aggregate_member_profile_ids(conn, agg_id)
+        return jsonify({"id": agg_id, "name": name, "member_ids": members})
+    finally:
+        conn.close()
+
+
+@app.route("/api/aggregates/<int:agg_id>", methods=["DELETE"])
+def delete_aggregate(agg_id):
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM aggregates WHERE id = ?", (agg_id,))
+        # ON DELETE CASCADE removes aggregate_config rows; ensure FKs enforced
+        conn.execute("DELETE FROM aggregate_config WHERE aggregate_id = ?", (agg_id,))
+        conn.commit()
+        return jsonify({"deleted": agg_id})
+    finally:
+        conn.close()
 
 
 @app.route("/api/profiles/reconcile-owner", methods=["POST"])
@@ -2449,8 +2521,8 @@ def api_import_transactions_preview():
     conn = get_connection()
     try:
         blocked_msg = None
-        if fmt == "portfolio_export" and request.args.get("aggregate") == "true":
-            blocked_msg = "Portfolio export imports cannot be run from the Aggregate view. Select a specific portfolio first."
+        if fmt == "portfolio_export" and _request_aggregate_id() is not None:
+            blocked_msg = "Portfolio export imports cannot be run from an Aggregate view. Select a specific portfolio first."
         elif fmt != "portfolio_export":
             blocked_msg = _broker_import_target_error(profile_id, conn)
     finally:
@@ -2720,8 +2792,8 @@ def api_import_transactions():
     conn = get_connection()
     try:
         blocked_msg = None
-        if fmt == "portfolio_export" and request.args.get("aggregate") == "true":
-            blocked_msg = "Portfolio export imports cannot be run from the Aggregate view. Select a specific portfolio first."
+        if fmt == "portfolio_export" and _request_aggregate_id() is not None:
+            blocked_msg = "Portfolio export imports cannot be run from an Aggregate view. Select a specific portfolio first."
         elif fmt != "portfolio_export":
             blocked_msg = _broker_import_target_error(profile_id, conn)
     finally:
@@ -2995,8 +3067,9 @@ def api_nav_history():
 
     conn = get_connection()
     try:
-        if request.args.get("aggregate") == "true":
-            profile_ids = _get_aggregate_member_profile_ids(conn)
+        _agg_id = _request_aggregate_id()
+        if _agg_id is not None:
+            profile_ids = _get_aggregate_member_profile_ids(conn, _agg_id)
             if not profile_ids:
                 return jsonify([])
             placeholders = ",".join("?" * len(profile_ids))
@@ -3061,8 +3134,9 @@ def _trim_incompatible_position_nav_history(rows, profile_id, conn):
 
 def _nav_snapshot_profile_ids(conn, profile_id):
     """Return profiles that should be snapshotted for the active NAV scope."""
-    if request.args.get("aggregate") == "true":
-        return _get_aggregate_member_profile_ids(conn)
+    agg_id = _request_aggregate_id()
+    if agg_id is not None:
+        return _get_aggregate_member_profile_ids(conn, agg_id)
     if profile_id == 1:
         source_ids = _get_owner_source_profile_ids(conn)
         return [1, *source_ids] if source_ids else [1]

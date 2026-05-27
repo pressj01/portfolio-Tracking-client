@@ -857,14 +857,23 @@ export default function Dashboard() {
       valueTrace.text = values.map(v => fmt(v))
     }
     const traces = [valueTrace]
+    const oneDayMs = 24 * 60 * 60 * 1000
+    const spanMs = (maxDate - minDate) + 2 * datePadding
+    const isLongRange = spanMs > 370 * oneDayMs
     const xaxis = {
       gridcolor: '#1a2233',
       color: '#8899aa',
       type: 'date',
-      nticks: xTickCount,
-      tickformat: (maxDate - minDate) > 370 * 24 * 60 * 60 * 1000 ? '%b %Y' : '%b %d',
+      tickformat: isLongRange ? '%b %Y' : '%b %d',
       tickangle: 0,
       automargin: true,
+    }
+    if (isLongRange) {
+      xaxis.nticks = xTickCount
+    } else {
+      const spanDays = Math.max(1, Math.ceil(spanMs / oneDayMs))
+      const tickStepDays = Math.max(1, Math.round(spanDays / xTickCount))
+      xaxis.dtick = tickStepDays * oneDayMs
     }
     if (xRange) xaxis.range = xRange
     const layout = {

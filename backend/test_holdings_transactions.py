@@ -311,8 +311,14 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 include_in_owner INTEGER DEFAULT 0,
                 positions_managed INTEGER DEFAULT 0
             );
+            CREATE TABLE aggregates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL
+            );
             CREATE TABLE aggregate_config (
-                member_profile_id INTEGER PRIMARY KEY
+                aggregate_id INTEGER NOT NULL,
+                member_profile_id INTEGER NOT NULL,
+                UNIQUE (aggregate_id, member_profile_id)
             );
             CREATE TABLE categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -535,8 +541,9 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Schwab IRA', 0)")
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (3, 'Fidelity Taxable', 0)")
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (4, 'Outside Account', 0)")
-        self._execute("INSERT INTO aggregate_config (member_profile_id) VALUES (2)")
-        self._execute("INSERT INTO aggregate_config (member_profile_id) VALUES (3)")
+        self._execute("INSERT INTO aggregates (id, name) VALUES (1, 'Combined')")
+        self._execute("INSERT INTO aggregate_config (aggregate_id, member_profile_id) VALUES (1, 2)")
+        self._execute("INSERT INTO aggregate_config (aggregate_id, member_profile_id) VALUES (1, 3)")
         self._execute(
             "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
             "VALUES ('ABC', 2, 'BUY', '2026-01-01', 1, 10, 0, '')"
@@ -550,7 +557,7 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             "VALUES ('ABC', 4, 'BUY', '2026-01-03', 3, 12, 0, 'excluded note')"
         )
 
-        res = self.client.get("/api/holdings/ABC/transactions?aggregate=true")
+        res = self.client.get("/api/holdings/ABC/transactions?aggregate_id=1")
 
         self.assertEqual(res.status_code, 200)
         data = res.get_json()
@@ -584,8 +591,9 @@ class HoldingsTransactionApiTest(unittest.TestCase):
     def test_gains_losses_summary_combines_aggregate_member_broker_positions_and_transactions(self):
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Broker One', 0)")
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (3, 'Broker Two', 0)")
-        self._execute("INSERT INTO aggregate_config (member_profile_id) VALUES (2)")
-        self._execute("INSERT INTO aggregate_config (member_profile_id) VALUES (3)")
+        self._execute("INSERT INTO aggregates (id, name) VALUES (1, 'Combined')")
+        self._execute("INSERT INTO aggregate_config (aggregate_id, member_profile_id) VALUES (1, 2)")
+        self._execute("INSERT INTO aggregate_config (aggregate_id, member_profile_id) VALUES (1, 3)")
         self._execute(
             "INSERT INTO all_account_info "
             "(ticker, profile_id, description, quantity, price_paid, purchase_value, current_price, current_value, gain_or_loss, total_divs_received) "
@@ -601,7 +609,7 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             "VALUES ('ABC', 3, 'SELL', '2026-01-10', 2, 20, 0, 12)"
         )
 
-        res = self.client.get("/api/gains-losses/summary?aggregate=true")
+        res = self.client.get("/api/gains-losses/summary?aggregate_id=1")
 
         self.assertEqual(res.status_code, 200)
         data = res.get_json()

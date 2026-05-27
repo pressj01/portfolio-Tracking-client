@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { useProfile } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { API_BASE } from '../config'
 
@@ -15,15 +15,26 @@ const BROKER_OPTIONS = [
 ]
 
 export default function ManagePortfolios() {
-  const { profiles, refreshProfiles, refreshAggregateConfig, aggregateConfig, aggregateName, isAggregate, setProfileId } = useProfile()
+  const {
+    profiles,
+    refreshProfiles,
+    refreshAggregates,
+    aggregates,
+    isAggregate,
+    aggregateId,
+    setProfileId,
+    setAggregateSelection,
+  } = useProfile()
   const dialog = useDialog()
   const [summary, setSummary] = useState([])
   const [ownerImportUsed, setOwnerImportUsed] = useState(false)
-  const [aggMembers, setAggMembers] = useState([])
-  const [aggNameInput, setAggNameInput] = useState('')
   const [editingId, setEditingId] = useState(null)
   const [editName, setEditName] = useState('')
   const [editBrokerSource, setEditBrokerSource] = useState('')
+  const [editingAggId, setEditingAggId] = useState(null)
+  const [editAggName, setEditAggName] = useState('')
+  const [reconcileAggId, setReconcileAggId] = useState('owner') // 'owner' = use include_in_owner; else aggregate id
+  const [reconciling, setReconciling] = useState(false)
 
   const loadSummary = useCallback(() => {
     fetch(`${API_BASE}/api/profiles/summary`)
@@ -38,14 +49,6 @@ export default function ManagePortfolios() {
   useEffect(() => {
     loadSummary()
   }, [loadSummary])
-
-  useEffect(() => {
-    setAggMembers(aggregateConfig)
-  }, [aggregateConfig])
-
-  useEffect(() => {
-    setAggNameInput(aggregateName)
-  }, [aggregateName])
 
   const createPortfolio = async () => {
     const name = await dialog.prompt('Enter portfolio name:')
@@ -103,6 +106,7 @@ export default function ManagePortfolios() {
     const res = await fetch(`${API_BASE}/api/profiles/${p.id}`, { method: 'DELETE' })
     if (res.ok) {
       await refreshProfiles()
+      await refreshAggregates()
       loadSummary()
     }
   }
@@ -117,40 +121,6 @@ export default function ManagePortfolios() {
     }
   }
 
-  const toggleAggMember = (id) => {
-    setAggMembers(prev =>
-      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-    )
-  }
-
-  const saveAggregateConfig = async () => {
-    if (!aggNameInput.trim()) {
-      await dialog.alert('Please enter a name for the aggregate portfolio.')
-      return
-    }
-    const res = await fetch(`${API_BASE}/api/aggregate-config`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ member_ids: aggMembers, name: aggNameInput.trim() }),
-    })
-    if (res.ok) {
-      await refreshAggregateConfig()
-      await dialog.alert('Aggregate configuration saved.')
-    }
-  }
-
-  const deleteAggregateConfig = async () => {
-    const ok = await dialog.confirm('Delete the aggregate portfolio configuration? You can recreate it at any time.')
-    if (!ok) return
-    const res = await fetch(`${API_BASE}/api/aggregate-config`, { method: 'DELETE' })
-    if (res.ok) {
-      await refreshAggregateConfig()
-      if (isAggregate) setProfileId('1')
-    }
-  }
-
-  const [reconciling, setReconciling] = useState(false)
-
   const toggleIncludeInOwner = async (p) => {
     const newVal = !p.include_in_owner
     const res = await fetch(`${API_BASE}/api/profiles/${p.id}/include-in-owner`, {
@@ -161,14 +131,79 @@ export default function ManagePortfolios() {
     if (res.ok) loadSummary()
   }
 
+  // ── Aggregate CRUD ────────────────────────────────────────────────────
+  const createAggregate = async () => {
+    const name = await dialog.prompt('Name for the new aggregate:')
+    if (!name || !name.trim()) return
+    const res = await fetch(`${API_BASE}/api/aggregates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), member_ids: [] }),
+    })
+    if (res.ok) await refreshAggregates()
+  }
+
+  const startRenameAggregate = (agg) => {
+    setEditingAggId(agg.id)
+    setEditAggName(agg.name)
+  }
+
+  const saveAggregateName = async (aggId) => {
+    if (!editAggName.trim()) { setEditingAggId(null); return }
+    const res = await fetch(`${API_BASE}/api/aggregates/${aggId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: editAggName.trim() }),
+    })
+    if (res.ok) await refreshAggregates()
+    setEditingAggId(null)
+  }
+
+  const deleteAggregate = async (agg) => {
+    const ok = await dialog.confirm(`Delete aggregate "${agg.name}"? Member portfolios are not affected.`)
+    if (!ok) return
+    const res = await fetch(`${API_BASE}/api/aggregates/${agg.id}`, { method: 'DELETE' })
+    if (res.ok) {
+      await refreshAggregates()
+      if (isAggregate && aggregateId === agg.id) setProfileId('1')
+    }
+  }
+
+  const toggleAggMember = async (agg, profileId) => {
+    const isMember = agg.member_ids.includes(profileId)
+    const nextMembers = isMember
+      ? agg.member_ids.filter(id => id !== profileId)
+      : [...agg.member_ids, profileId]
+    const res = await fetch(`${API_BASE}/api/aggregates/${agg.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ member_ids: nextMembers }),
+    })
+    if (res.ok) await refreshAggregates()
+  }
+
+  // ── Owner reconciliation ─────────────────────────────────────────────
   const reconcileOwner = async () => {
-    const included = summary.filter(p => p.id !== 1 && p.include_in_owner)
+    let included, label
+    if (reconcileAggId === 'owner') {
+      included = summary.filter(p => p.id !== 1 && p.include_in_owner)
+      label = `${included.length} sub-portfolio(s) marked "Owner"`
+    } else {
+      const agg = aggregates.find(a => a.id === Number(reconcileAggId))
+      if (!agg) {
+        await dialog.alert('Selected aggregate no longer exists.')
+        return
+      }
+      const memberSet = new Set(agg.member_ids)
+      included = summary.filter(p => p.id !== 1 && memberSet.has(p.id))
+      label = `aggregate "${agg.name}"`
+    }
     if (included.length === 0) {
-      await dialog.alert('No sub-portfolios are marked under "Owner". Check the Owner box for each portfolio you want included.')
+      await dialog.alert('No source portfolios found. Pick a different source or mark portfolios under "Owner".')
       return
     }
     const ok = await dialog.confirm(
-      `Reconcile Owner against ${included.length} sub-portfolio(s)?\n\nThis will update Owner holdings to match the combined totals of: ${included.map(p => p.name).join(', ')}.`
+      `Sync Owner from ${label}?\n\nThis will update Owner holdings to match the combined totals of: ${included.map(p => p.name).join(', ')}.`
     )
     if (!ok) return
 
@@ -181,7 +216,7 @@ export default function ManagePortfolios() {
         body: JSON.stringify({ source_ids: sourceIds }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Reconciliation failed')
+      if (!res.ok) throw new Error(data.error || 'Sync failed')
       await dialog.alert(data.message)
       loadSummary()
     } catch (e) {
@@ -206,7 +241,6 @@ export default function ManagePortfolios() {
             <th>Name</th>
             <th>Broker Source</th>
             <th style={{ textAlign: 'center' }} title="Include this portfolio in the Owner aggregate">Owner</th>
-            <th style={{ textAlign: 'center' }} title="Include this portfolio in the Combined aggregate">Combined</th>
             <th style={{ textAlign: 'right' }}>Holdings</th>
             <th style={{ textAlign: 'right' }}>Total Value</th>
             <th style={{ textAlign: 'right' }}>Created</th>
@@ -232,11 +266,12 @@ export default function ManagePortfolios() {
                   </div>
                 ) : (
                   <span
-                    style={{ cursor: 'pointer', borderBottom: '1px dashed #64b5f6' }}
+                    style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', borderBottom: '1px dashed #64b5f6' }}
                     onClick={() => startRename(p)}
                     title="Click to rename"
                   >
                     {p.name}
+                    <span style={{ fontSize: '0.75rem', opacity: 0.7 }} aria-hidden="true">✎</span>
                   </span>
                 )}
               </td>
@@ -270,18 +305,6 @@ export default function ManagePortfolios() {
                   />
                 )}
               </td>
-              <td style={{ textAlign: 'center' }}>
-                {p.id === 1 ? (
-                  <span style={{ color: '#556' }}>—</span>
-                ) : (
-                  <input
-                    type="checkbox"
-                    checked={aggMembers.includes(p.id)}
-                    onChange={() => toggleAggMember(p.id)}
-                    title="Include in Combined aggregate"
-                  />
-                )}
-              </td>
               <td style={{ textAlign: 'right' }}>{p.holdings_count}</td>
               <td style={{ textAlign: 'right' }}>{fmt(p.total_value)}</td>
               <td style={{ textAlign: 'right' }}>{p.created_at ? new Date(p.created_at).toLocaleDateString() : ''}</td>
@@ -299,53 +322,99 @@ export default function ManagePortfolios() {
         </tbody>
       </table>
 
-      {profiles.length > 1 && (
-        <>
-          <h3 style={{ marginBottom: '1rem' }}>
-            Aggregate Configuration{aggregateConfig.length > 0 ? `: ${aggregateName}` : ''}
-          </h3>
-          <p style={{ color: '#aaa', marginBottom: '1rem', fontSize: '0.9rem' }}>
-            {aggregateConfig.length > 0
-              ? 'Edit the name or delete the aggregate portfolio. Use the "Combined" checkboxes above to manage members.'
-              : 'Create an aggregate portfolio to view combined data. Use the "Combined" checkboxes above to select members.'}
-          </p>
-          <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.9rem', color: '#ccc' }}>Aggregate Name</label>
-            <input
-              className="dialog-input"
-              style={{ width: '300px', padding: '0.4rem 0.5rem' }}
-              value={aggNameInput}
-              onChange={(e) => setAggNameInput(e.target.value)}
-              placeholder="Aggregate"
-            />
-          </div>
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
-            <button className="btn btn-primary" onClick={saveAggregateConfig}>
-              {aggregateConfig.length > 0 ? 'Save Aggregate Config' : 'Create Aggregate'}
-            </button>
-            {aggregateConfig.length > 0 && (
-              <button className="btn btn-danger" onClick={deleteAggregateConfig}>Delete Aggregate</button>
-            )}
-          </div>
+      {/* ── Aggregates section ───────────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+        <h3 style={{ margin: 0 }}>Aggregates</h3>
+        <button className="btn btn-primary btn-sm" onClick={createAggregate}>+ Add Aggregate</button>
+      </div>
+      <p style={{ color: '#aaa', marginBottom: '1rem', fontSize: '0.9rem' }}>
+        Define one or more virtual portfolios that combine selected real portfolios. Each aggregate appears in the portfolio selector.
+      </p>
 
-          {ownerImportUsed && (
-            <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid #333' }}>
-              <h3 style={{ marginBottom: '0.5rem' }}>Reconcile Owner</h3>
-              <p style={{ color: '#aaa', marginBottom: '1rem', fontSize: '0.9rem' }}>
-                Compare Owner (profile 1) against the combined totals of portfolios with "Owner" checked above.
-                Only checked portfolios will be included. Missing tickers will be added;
-                tickers no longer in any included sub-portfolio will be removed.
-              </p>
-              <button
-                className="btn btn-primary"
-                onClick={reconcileOwner}
-                disabled={reconciling}
-              >
-                {reconciling ? <><span className="spinner" /> Reconciling...</> : 'Reconcile Owner'}
-              </button>
+      {profiles.length <= 1 ? (
+        <p style={{ color: '#888', fontStyle: 'italic' }}>Add at least one additional portfolio to use aggregates.</p>
+      ) : aggregates.length === 0 ? (
+        <p style={{ color: '#888', fontStyle: 'italic' }}>No aggregates yet. Click "+ Add Aggregate" to create one.</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {aggregates.map(agg => (
+            <div key={agg.id} style={{ border: '1px solid #333', borderRadius: '6px', padding: '0.75rem 1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.5rem' }}>
+                {editingAggId === agg.id ? (
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <input
+                      className="dialog-input"
+                      style={{ width: '240px', padding: '0.3rem 0.5rem' }}
+                      value={editAggName}
+                      onChange={(e) => setEditAggName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') saveAggregateName(agg.id); if (e.key === 'Escape') setEditingAggId(null) }}
+                      autoFocus
+                    />
+                    <button className="btn btn-sm" onClick={() => saveAggregateName(agg.id)}>Save</button>
+                    <button className="btn btn-sm" onClick={() => setEditingAggId(null)}>Cancel</button>
+                  </div>
+                ) : (
+                  <span
+                    style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600, fontSize: '1.05rem', borderBottom: '1px dashed #64b5f6' }}
+                    onClick={() => startRenameAggregate(agg)}
+                    title="Click to rename"
+                  >
+                    {agg.name}
+                    <span style={{ fontSize: '0.75rem', opacity: 0.7 }} aria-hidden="true">✎</span>
+                  </span>
+                )}
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button className="btn btn-sm" onClick={() => setAggregateSelection(agg.id)} title="View this aggregate">Select</button>
+                  <button className="btn btn-sm btn-danger" onClick={() => deleteAggregate(agg)}>Delete</button>
+                </div>
+              </div>
+              <div style={{ color: '#aaa', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
+                Members ({agg.member_ids.length} of {summary.filter(p => p.id !== 1).length}):
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem 1rem' }}>
+                {summary.filter(p => p.id !== 1).map(p => (
+                  <label key={p.id} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.9rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={agg.member_ids.includes(p.id)}
+                      onChange={() => toggleAggMember(agg, p.id)}
+                    />
+                    {p.name}
+                  </label>
+                ))}
+              </div>
             </div>
-          )}
-        </>
+          ))}
+        </div>
+      )}
+
+      {ownerImportUsed && (
+        <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid #333' }}>
+          <h3 style={{ marginBottom: '0.5rem' }}>Sync Owner</h3>
+          <p style={{ color: '#aaa', marginBottom: '1rem', fontSize: '0.9rem' }}>
+            Update Owner (profile 1) to match the combined totals of a chosen source set. Missing tickers are added; tickers no longer in the source are removed.
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+            <label style={{ fontSize: '0.9rem', color: '#ccc' }}>Source:</label>
+            <select
+              value={reconcileAggId}
+              onChange={(e) => setReconcileAggId(e.target.value)}
+              style={{ minWidth: '240px' }}
+            >
+              <option value="owner">Portfolios marked "Owner" above</option>
+              {aggregates.map(agg => (
+                <option key={agg.id} value={agg.id}>Aggregate: {agg.name}</option>
+              ))}
+            </select>
+          </div>
+          <button
+            className="btn btn-primary"
+            onClick={reconcileOwner}
+            disabled={reconciling}
+          >
+            {reconciling ? <><span className="spinner" /> Syncing...</> : 'Sync Owner'}
+          </button>
+        </div>
       )}
     </div>
   )

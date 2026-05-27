@@ -793,13 +793,50 @@ def ensure_tables_exist(conn=None):
         ON dividend_schedule_history (ticker, profile_id)
     """)
 
-    # ── aggregate_config ────────────────────────────────────────────────────
+    # ── aggregates ──────────────────────────────────────────────────────────
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS aggregate_config (
-            member_profile_id INTEGER NOT NULL UNIQUE,
-            FOREIGN KEY (member_profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+        CREATE TABLE IF NOT EXISTS aggregates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL
         )
     """)
+
+    # ── aggregate_config ────────────────────────────────────────────────────
+    # New shape: (aggregate_id, member_profile_id) — supports many aggregates.
+    # Migrate from legacy shape that had member_profile_id UNIQUE and no aggregate_id.
+    _ac_cols = {r[1] for r in cur.execute("PRAGMA table_info(aggregate_config)").fetchall()}
+    if _ac_cols and "aggregate_id" not in _ac_cols:
+        _name_row = cur.execute(
+            "SELECT value FROM settings WHERE key = 'aggregate_name'"
+        ).fetchone()
+        _legacy_name = (_name_row[0] if _name_row else None) or "Combined Portfolios"
+        cur.execute("INSERT OR IGNORE INTO aggregates (id, name) VALUES (1, ?)", (_legacy_name,))
+        cur.execute("ALTER TABLE aggregate_config RENAME TO _aggregate_config_legacy")
+        cur.execute("""
+            CREATE TABLE aggregate_config (
+                aggregate_id      INTEGER NOT NULL,
+                member_profile_id INTEGER NOT NULL,
+                UNIQUE (aggregate_id, member_profile_id),
+                FOREIGN KEY (aggregate_id) REFERENCES aggregates(id) ON DELETE CASCADE,
+                FOREIGN KEY (member_profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+            )
+        """)
+        cur.execute("""
+            INSERT INTO aggregate_config (aggregate_id, member_profile_id)
+            SELECT 1, member_profile_id FROM _aggregate_config_legacy
+        """)
+        cur.execute("DROP TABLE _aggregate_config_legacy")
+        cur.execute("DELETE FROM settings WHERE key = 'aggregate_name'")
+    else:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS aggregate_config (
+                aggregate_id      INTEGER NOT NULL,
+                member_profile_id INTEGER NOT NULL,
+                UNIQUE (aggregate_id, member_profile_id),
+                FOREIGN KEY (aggregate_id) REFERENCES aggregates(id) ON DELETE CASCADE,
+                FOREIGN KEY (member_profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+            )
+        """)
 
     # ── macro_overrides ────────────────────────────────────────────────────────
     cur.execute("""
