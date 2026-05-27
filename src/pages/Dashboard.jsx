@@ -380,7 +380,7 @@ function safeJson(r) {
 
 export default function Dashboard() {
   const pf = useProfileFetch()
-  const { profileId, isAggregate, selection, currentProfileName, basisMode } = useProfile()
+  const { profileId, profiles, isAggregate, selection, currentProfileName, basisMode } = useProfile()
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshStatus, setRefreshStatus] = useState(null)
@@ -405,6 +405,18 @@ export default function Dashboard() {
   const [actionCenter, setActionCenter] = useState(null)
   const navChartRef = useRef(null)
   const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v13_${selection}_${basisMode}`, [selection, basisMode])
+  const currentProfile = useMemo(
+    () => profiles.find(p => p.id === profileId) || null,
+    [profiles, profileId],
+  )
+  const brokerPositionNavBackfillBlocked = !isAggregate && [
+    'schwab',
+    'etrade',
+    'fidelity',
+    'shear_group',
+    'generic',
+    'other',
+  ].includes(String(currentProfile?.broker_source || '').toLowerCase())
 
   useEffect(() => {
     const cached = readDashboardCache(SP500_CACHE_KEY)
@@ -1063,8 +1075,14 @@ export default function Dashboard() {
           <button
             className="btn btn-secondary"
             style={{ fontSize: '0.8rem', padding: '0.25rem 0.6rem' }}
-            disabled={navBackfilling || navHistory.length > 30}
-            title={navHistory.length > 30 ? 'History already populated' : 'Replay transactions against historical prices to populate the chart'}
+            disabled={navBackfilling || navHistory.length > 30 || brokerPositionNavBackfillBlocked}
+            title={
+              brokerPositionNavBackfillBlocked
+                ? 'Use Record NAV or position-file imports for broker-position portfolios'
+                : navHistory.length > 30
+                  ? 'History already populated'
+                  : 'Replay transactions against historical prices to populate the chart'
+            }
             onClick={() => {
               setNavBackfilling(true)
               pf('/api/nav/backfill', { method: 'POST' })

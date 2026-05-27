@@ -2982,6 +2982,10 @@ def api_import_transactions():
 def api_nav_history():
     """Return portfolio NAV snapshots for the current profile."""
     start = request.args.get("start")
+
+    def trim_incompatible_position_history(rows, profile_id, conn):
+        return _trim_incompatible_position_nav_history(rows, profile_id, conn)
+
     def history_payload(rows):
         return [
             {"date": r["nav_date"], "value": r["total_value"]}
@@ -3017,9 +3021,42 @@ def api_nav_history():
                 params.append(start)
             query += " ORDER BY nav_date"
             rows = conn.execute(query, params).fetchall()
+            rows = trim_incompatible_position_history(rows, profile_id, conn)
             return jsonify(history_payload(rows))
     finally:
         conn.close()
+
+
+def _trim_incompatible_position_nav_history(rows, profile_id, conn):
+    """Hide transaction-replay NAV history when current broker positions supersede it."""
+    if not rows or len(rows) < 2:
+        return rows
+    if not _profile_is_positions_managed(profile_id, conn):
+        return rows
+    if _profile_broker_source(profile_id, conn) not in _SNOWBALL_LAYERED_BROKER_SOURCES:
+        return rows
+
+    values = []
+    for row in rows:
+        try:
+            values.append(float(row["total_value"] or 0))
+        except (TypeError, ValueError):
+            values.append(0.0)
+    latest = values[-1] if values else 0.0
+    if latest <= 0:
+        return rows
+
+    threshold = latest * 0.5
+    for idx, value in enumerate(values):
+        if value < threshold:
+            continue
+        if idx == 0:
+            return rows
+        previous = values[idx - 1]
+        if previous > 0 and value / previous >= 3:
+            return rows[idx:]
+        return rows
+    return rows
 
 
 def _nav_snapshot_profile_ids(conn, profile_id):
@@ -3078,6 +3115,17 @@ def api_nav_backfill():
     profile_id = get_profile_id()
     conn = get_connection()
     try:
+        if (
+            _profile_is_positions_managed(profile_id, conn)
+            and _profile_broker_source(profile_id, conn) in _SNOWBALL_LAYERED_BROKER_SOURCES
+        ):
+            return jsonify({
+                "error": (
+                    "NAV backfill is disabled for broker-position portfolios because transaction "
+                    "imports are recordkeeping only. Use Record NAV or position-file imports to add "
+                    "authoritative daily snapshots."
+                )
+            }), 400
         txns = conn.execute(
             "SELECT ticker, transaction_type, transaction_date, shares, price_per_share "
             "FROM transactions WHERE profile_id = ? AND transaction_type IN ('BUY', 'SELL') "

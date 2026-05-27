@@ -467,6 +467,43 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         )
         self.assertNotIn("_account_name", filtered["positions"][0])
 
+    def test_position_managed_nav_history_trims_partial_transaction_backfill(self):
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (23, 'Shear_Jpresser', 'shear_group', 0, 1)"
+        )
+        rows = [
+            {"nav_date": "2026-05-21", "total_value": 78282.99},
+            {"nav_date": "2026-05-22", "total_value": 78457.52},
+            {"nav_date": "2026-05-26", "total_value": 493397.52},
+        ]
+        conn = self._get_connection()
+        try:
+            trimmed = app_module._trim_incompatible_position_nav_history(rows, 23, conn)
+        finally:
+            conn.close()
+
+        self.assertEqual(trimmed, rows[-1:])
+
+    def test_position_managed_nav_history_keeps_stable_daily_snapshots(self):
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (6, 'Pressj04', 'schwab', 1, 1)"
+        )
+        rows = [
+            {"nav_date": "2026-05-19", "total_value": 185483.93},
+            {"nav_date": "2026-05-20", "total_value": 186784.15},
+            {"nav_date": "2026-05-21", "total_value": 188092.28},
+            {"nav_date": "2026-05-26", "total_value": 190297.55},
+        ]
+        conn = self._get_connection()
+        try:
+            trimmed = app_module._trim_incompatible_position_nav_history(rows, 6, conn)
+        finally:
+            conn.close()
+
+        self.assertEqual(trimmed, rows)
+
     def test_owner_transaction_list_includes_owner_member_accounts_with_source_notes(self):
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 1)")
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Schwab IRA', 1)")
