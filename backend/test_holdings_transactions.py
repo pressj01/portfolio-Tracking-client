@@ -411,6 +411,62 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_shear_group_positions_filter_to_selected_account(self):
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner) "
+            "VALUES (23, 'Shear_Jpresser', 'shear_group', 0)"
+        )
+        parsed = {
+            "positions": [],
+            "format_type": "positions",
+            "source_format": "shear_group",
+            "summary": {"holdings": 2, "cash": 15, "account_count": 2, "account_value": 315},
+            "_cash_by_account": {
+                "PRESSER JAMES, 45514950": 10,
+                "PRESSER CYNTHIA, 27287326": 5,
+            },
+            "_raw_positions": [
+                {
+                    "ticker": "AAA",
+                    "description": "AAA Inc",
+                    "quantity": 2,
+                    "cost_per_share": 40,
+                    "current_price": 50,
+                    "purchase_value": 80,
+                    "current_value": 100,
+                    "gain_or_loss": 20,
+                    "_account_label": "PRESSER JAMES, 45514950",
+                    "_account_name": "PRESSER JAMES",
+                    "_account_number": "45514950",
+                },
+                {
+                    "ticker": "BBB",
+                    "description": "BBB Inc",
+                    "quantity": 4,
+                    "cost_per_share": 45,
+                    "current_price": 50,
+                    "purchase_value": 180,
+                    "current_value": 200,
+                    "gain_or_loss": 20,
+                    "_account_label": "PRESSER CYNTHIA, 27287326",
+                    "_account_name": "PRESSER CYNTHIA",
+                    "_account_number": "27287326",
+                },
+            ],
+        }
+
+        filtered = app_module._filter_shear_group_result_for_profile(parsed, 23)
+
+        self.assertEqual([pos["ticker"] for pos in filtered["positions"]], ["AAA"])
+        self.assertEqual(filtered["summary"]["cash"], 10)
+        self.assertEqual(filtered["summary"]["account_count"], 1)
+        self.assertEqual(filtered["summary"]["account_value"], 110)
+        self.assertEqual(
+            filtered["account_match"]["matched_accounts"],
+            ["PRESSER JAMES, 45514950"],
+        )
+        self.assertNotIn("_account_name", filtered["positions"][0])
+
     def test_owner_transaction_list_includes_owner_member_accounts_with_source_notes(self):
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 1)")
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Schwab IRA', 1)")

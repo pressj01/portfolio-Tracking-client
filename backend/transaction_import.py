@@ -1889,14 +1889,21 @@ _SHEAR_GROUP_ACTIVITY_ALIASES = {
 }
 
 
-def _shear_group_account_label(record):
+def _shear_group_account_parts(record):
     nickname = str(record.get("Account Nick Name") or record.get("Account Nickname") or "").strip()
     account_name = str(record.get("Account Name") or "").strip()
     account_number = str(record.get("Account Number") or "").strip()
     label = nickname or account_name
     if label and account_number:
-        return f"{label}, {account_number}"
-    return label or account_number
+        label = f"{label}, {account_number}"
+    else:
+        label = label or account_number
+    return label, nickname or account_name, account_number
+
+
+def _shear_group_account_label(record):
+    label, _, _ = _shear_group_account_parts(record)
+    return label
 
 
 def _merge_positions_by_ticker(positions):
@@ -1945,12 +1952,13 @@ def parse_shear_group_positions(file_path, filename):
     filtered_count = 0
     cash_value = 0.0
     account_labels = set()
+    cash_by_account = {}
 
     for row in rows[header_idx + 1:]:
         if not _row_has_values(row):
             continue
         record = _row_record(header, row)
-        account_label = _shear_group_account_label(record)
+        account_label, account_name, account_number = _shear_group_account_parts(record)
         if account_label:
             account_labels.add(account_label)
 
@@ -1961,11 +1969,15 @@ def parse_shear_group_positions(file_path, filename):
 
         if asset_type.lower() in {"cash", "money market"} or ticker in {"CASH", "USD"}:
             cash_value += current_value
+            if account_label:
+                cash_by_account[account_label] = cash_by_account.get(account_label, 0.0) + current_value
             filtered_count += 1
             continue
 
         if not ticker or not TICKER_RE.match(ticker) or quantity is None or quantity <= 0:
             cash_value += current_value if ticker and ticker.isdigit() else 0.0
+            if account_label and ticker and ticker.isdigit():
+                cash_by_account[account_label] = cash_by_account.get(account_label, 0.0) + current_value
             filtered_count += 1
             continue
 
@@ -1992,8 +2004,12 @@ def parse_shear_group_positions(file_path, filename):
             "dividend_yield": None,
             "reinvest_dividends": None,
             "asset_type": asset_type,
+            "_account_label": account_label,
+            "_account_name": account_name,
+            "_account_number": account_number,
         })
 
+    raw_positions = positions
     positions = _merge_positions_by_ticker(positions)
     if not positions:
         raise ValueError("No holdings rows were found in the Shear Group positions file.")
@@ -2016,6 +2032,8 @@ def parse_shear_group_positions(file_path, filename):
         },
         "format_type": "positions",
         "source_format": "shear_group",
+        "_raw_positions": raw_positions,
+        "_cash_by_account": {label: round(value, 2) for label, value in cash_by_account.items()},
     }
     return result
 
@@ -2050,9 +2068,9 @@ def parse_shear_group_activity(file_path, filename):
     drip_actions = {"dividend reinvest", "lt cap gain reinvest", "st cap gain reinvest", "reinvest interest"}
 
     for row in data_rows:
-        account_name = str(row.get("Account Nickname") or "").strip()
-        if account_name:
-            account_names.add(account_name)
+        account_label, account_name, account_number = _shear_group_account_parts(row)
+        if account_label:
+            account_names.add(account_label)
 
         activity = str(row.get("Activity") or "").strip()
         activity_key = activity.lower()
@@ -2083,6 +2101,9 @@ def parse_shear_group_activity(file_path, filename):
                 "fees": 0.0,
                 "dividend_amount": None,
                 "notes": activity,
+                "_account_label": account_label,
+                "_account_name": account_name,
+                "_account_number": account_number,
             })
         elif activity_key == "sell":
             if quantity is None or quantity == 0:
@@ -2097,6 +2118,9 @@ def parse_shear_group_activity(file_path, filename):
                 "fees": 0.0,
                 "dividend_amount": None,
                 "notes": activity,
+                "_account_label": account_label,
+                "_account_name": account_name,
+                "_account_number": account_number,
             })
         elif activity_key in dividend_actions:
             if amount is None:
@@ -2111,6 +2135,9 @@ def parse_shear_group_activity(file_path, filename):
                 "fees": 0.0,
                 "dividend_amount": round(amount, 2),
                 "notes": activity,
+                "_account_label": account_label,
+                "_account_name": account_name,
+                "_account_number": account_number,
             })
         elif activity_key in drip_actions:
             if quantity is None or quantity == 0:
@@ -2125,6 +2152,9 @@ def parse_shear_group_activity(file_path, filename):
                 "fees": 0.0,
                 "dividend_amount": None,
                 "notes": f"[DRIP] {activity}",
+                "_account_label": account_label,
+                "_account_name": account_name,
+                "_account_number": account_number,
             })
         else:
             filtered_count += 1
@@ -2144,6 +2174,7 @@ def parse_shear_group_activity(file_path, filename):
             "drip_detected": drip_count,
             "splits_applied": 0,
         },
+        "source_format": "shear_group_activity",
     }
     if account_names:
         result["summary"]["account_count"] = len(account_names)

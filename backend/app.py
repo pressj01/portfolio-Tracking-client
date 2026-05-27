@@ -641,6 +641,167 @@ def _should_preserve_positions_for_transaction_import(profile_id, fmt, conn):
     return existing_holdings > 0
 
 
+def _shear_group_account_aliases(account_name, account_number=None):
+    tokens = [
+        tok for tok in _normalize_account_tokens(account_name)
+        if tok and tok not in _ACCOUNT_MATCH_IGNORED_TOKENS
+    ]
+    aliases = set()
+    if tokens:
+        aliases.add("".join(tokens))
+        first_token = tokens[0]
+        last_token = tokens[-1]
+        if len(tokens) >= 2:
+            aliases.add(f"{first_token}{last_token}")
+            aliases.add(f"{last_token}{first_token}")
+            aliases.add(f"{first_token}{last_token[:1]}")
+            aliases.add(f"{last_token[:1]}{first_token}")
+            aliases.add(f"{last_token}{first_token[:1]}")
+            aliases.add(f"{first_token[:1]}{last_token}")
+    account_number = re.sub(r"\D+", "", str(account_number or ""))
+    if account_number:
+        aliases.add(account_number)
+    return {alias for alias in aliases if alias}
+
+
+def _shear_group_account_matches_profile(profile_name, account_name, account_number):
+    profile_tokens = _normalize_account_tokens(profile_name)
+    profile_compact = "".join(profile_tokens)
+    profile_digits = re.sub(r"\D+", "", profile_name or "")
+    for alias in _shear_group_account_aliases(account_name, account_number):
+        if alias.isdigit():
+            if alias and alias in profile_digits:
+                return True
+            continue
+        if alias in profile_tokens or alias in profile_compact:
+            return True
+    return False
+
+
+def _merge_import_positions_by_ticker(positions):
+    merged = {}
+    for pos in positions:
+        ticker = pos["ticker"]
+        if ticker not in merged:
+            merged[ticker] = dict(pos)
+            continue
+
+        existing = merged[ticker]
+        total_qty = (existing.get("quantity") or 0) + (pos.get("quantity") or 0)
+        total_purchase = (existing.get("purchase_value") or 0) + (pos.get("purchase_value") or 0)
+        total_current = (existing.get("current_value") or 0) + (pos.get("current_value") or 0)
+        total_gain = (existing.get("gain_or_loss") or 0) + (pos.get("gain_or_loss") or 0)
+
+        existing["quantity"] = total_qty
+        existing["purchase_value"] = round(total_purchase, 2)
+        existing["current_value"] = round(total_current, 2)
+        existing["gain_or_loss"] = round(total_gain, 2)
+        existing["cost_per_share"] = round(total_purchase / total_qty, 4) if total_qty else 0
+        existing["current_price"] = pos.get("current_price") or existing.get("current_price") or 0
+        if not existing.get("description"):
+            existing["description"] = pos.get("description") or ""
+        if not existing.get("asset_type"):
+            existing["asset_type"] = pos.get("asset_type") or ""
+    return list(merged.values())
+
+
+def _strip_shear_group_account_fields(items):
+    for item in items or []:
+        item.pop("_account_label", None)
+        item.pop("_account_name", None)
+        item.pop("_account_number", None)
+
+
+def _filter_shear_group_result_for_profile(parsed, profile_id):
+    source_format = (parsed.get("source_format") or "").strip().lower()
+    if source_format not in {"shear_group", "shear_group_activity"}:
+        return parsed
+
+    profile_name = _get_profile_name(profile_id)
+    raw_positions = parsed.pop("_raw_positions", None)
+    cash_by_account = parsed.pop("_cash_by_account", {})
+
+    if raw_positions is not None:
+        account_labels = {
+            pos.get("_account_label") for pos in raw_positions
+            if pos.get("_account_label")
+        }
+        matched_positions = raw_positions
+        matched_labels = set(account_labels)
+        if len(account_labels) > 1:
+            matched_positions = [
+                pos for pos in raw_positions
+                if _shear_group_account_matches_profile(
+                    profile_name,
+                    pos.get("_account_name") or pos.get("_account_label"),
+                    pos.get("_account_number"),
+                )
+            ]
+            matched_labels = {
+                pos.get("_account_label") for pos in matched_positions
+                if pos.get("_account_label")
+            }
+            if not matched_positions:
+                available = ", ".join(sorted(account_labels))
+                raise ValueError(
+                    "This Shear Group positions file contains multiple accounts, but none match "
+                    f"'{profile_name}'. Rename/select a portfolio with the account holder or account number, "
+                    f"or import a single-account export. Available accounts: {available}"
+                )
+
+        merged_positions = _merge_import_positions_by_ticker(matched_positions)
+        _strip_shear_group_account_fields(merged_positions)
+        parsed["positions"] = merged_positions
+        summary = parsed.setdefault("summary", {})
+        cash_value = round(sum(cash_by_account.get(label, 0.0) for label in matched_labels), 2)
+        summary["holdings"] = len(merged_positions)
+        summary["cash"] = cash_value
+        summary["account_count"] = len(matched_labels)
+        summary["account_value"] = round(sum(p["current_value"] for p in merged_positions) + cash_value, 2)
+        parsed["target_profile_name"] = profile_name
+        parsed["account_match"] = {
+            "matched": True,
+            "reason": "shear_group_account_filter",
+            "matched_accounts": sorted(matched_labels),
+        }
+        return parsed
+
+    transactions = parsed.get("transactions") or []
+    account_labels = {
+        txn.get("_account_label") for txn in transactions
+        if txn.get("_account_label")
+    }
+    if len(account_labels) > 1:
+        matched_transactions = [
+            txn for txn in transactions
+            if _shear_group_account_matches_profile(
+                profile_name,
+                txn.get("_account_name") or txn.get("_account_label"),
+                txn.get("_account_number"),
+            )
+        ]
+        if not matched_transactions:
+            available = ", ".join(sorted(account_labels))
+            raise ValueError(
+                "This Shear Group activity file contains multiple accounts, but none match "
+                f"'{profile_name}'. Available accounts: {available}"
+            )
+        parsed["transactions"] = matched_transactions
+        summary = parsed.setdefault("summary", {})
+        summary["buys"] = sum(1 for txn in matched_transactions if txn.get("type") == "BUY")
+        summary["sells"] = sum(1 for txn in matched_transactions if txn.get("type") == "SELL")
+        summary["dividends"] = sum(1 for txn in matched_transactions if txn.get("type") == "DIVIDEND")
+        summary["account_count"] = len({
+            txn.get("_account_label") for txn in matched_transactions
+            if txn.get("_account_label")
+        })
+        parsed["target_profile_name"] = profile_name
+        parsed["account_match"] = {"matched": True, "reason": "shear_group_account_filter"}
+
+    _strip_shear_group_account_fields(parsed.get("transactions"))
+    return parsed
+
+
 def _get_gains_losses_profile_scope(conn):
     """Return holding and transaction profile scopes for Gains & Losses views."""
     is_agg, pids = get_profile_filter()
@@ -2302,6 +2463,7 @@ def api_import_transactions_preview():
     f.save(path)
     try:
         result = TXN_PARSERS[fmt](path, f.filename)
+        result = _filter_shear_group_result_for_profile(result, profile_id)
         if result.get("format_type") == "combined_export":
             result["target_profile_name"] = _get_profile_name(profile_id)
             result["preserve_positions"] = True
@@ -2576,6 +2738,7 @@ def api_import_transactions():
     f.save(path)
     try:
         parsed = TXN_PARSERS[fmt](path, f.filename)
+        parsed = _filter_shear_group_result_for_profile(parsed, profile_id)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
