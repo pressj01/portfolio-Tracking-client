@@ -829,13 +829,15 @@ export default function Dashboard() {
       maxValue + valuePadding,
     ]
     const singlePoint = points.length === 1
-    const dateFormatter = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
-    const tickText = points.map(r => dateFormatter.format(new Date(`${r.date}T00:00:00`)))
+    const denseHistory = points.length > 80
+    const chartWidth = el.clientWidth || 900
+    const xTickCount = Math.max(3, Math.min(8, Math.floor(chartWidth / 180)))
+    const markerSize = denseHistory ? 4 : 8
     const valueTrace = {
       x: dates, y: values,
-      mode: singlePoint ? 'markers+text' : 'lines+markers',
+      mode: singlePoint ? 'markers+text' : denseHistory ? 'lines' : 'lines+markers',
       line: { color: '#7ecfff', width: 2 },
-      marker: { color: '#7ecfff', size: 8 },
+      marker: { color: '#7ecfff', size: markerSize },
       textposition: 'top center',
       hovertemplate: '%{x|%b %d, %Y}<br>$%{y:,.2f}<extra></extra>',
     }
@@ -847,9 +849,10 @@ export default function Dashboard() {
       gridcolor: '#1a2233',
       color: '#8899aa',
       type: 'date',
-      tickmode: 'array',
-      tickvals: dates,
-      ticktext: tickText,
+      nticks: xTickCount,
+      tickformat: (maxDate - minDate) > 370 * 24 * 60 * 60 * 1000 ? '%b %Y' : '%b %d',
+      tickangle: 0,
+      automargin: true,
     }
     if (xRange) xaxis.range = xRange
     const layout = {
@@ -857,7 +860,7 @@ export default function Dashboard() {
       paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
       xaxis,
       yaxis: { title: { text: 'Portfolio Value ($)', font: { size: 12, color: '#8899aa' } }, gridcolor: '#1a2233', color: '#8899aa', tickprefix: '$', range: yRange },
-      margin: { l: 90, r: 20, t: 10, b: 40 },
+      margin: { l: 90, r: 20, t: 10, b: 52 },
       height: 300,
       hovermode: 'x unified',
     }
