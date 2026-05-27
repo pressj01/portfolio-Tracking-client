@@ -3,33 +3,10 @@ import { API_BASE } from '../config'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { returnVsYield } from '../utils/returnVsYield'
+import { readDashboardCache, writeDashboardCache } from '../utils/dashboardCache'
 
 const DASHBOARD_CACHE_TTL_MS = 60 * 60 * 1000
 const SP500_CACHE_KEY = 'portfolio_dashboard_sp500'
-
-function readDashboardCache(key) {
-  try {
-    const raw = localStorage.getItem(key) || sessionStorage.getItem(key)
-    if (!raw) return null
-    const cached = JSON.parse(raw)
-    if (!cached?.ts || Date.now() - cached.ts > DASHBOARD_CACHE_TTL_MS) {
-      localStorage.removeItem(key)
-      sessionStorage.removeItem(key)
-      return null
-    }
-    return cached.data || null
-  } catch {
-    return null
-  }
-}
-
-function writeDashboardCache(key, data) {
-  try {
-    localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }))
-  } catch {
-    // Cache writes are best-effort; rendering should never depend on storage.
-  }
-}
 
 const fmt = (v, d = 2) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
 const fmtShares = (v) => Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 })

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react'
 import { API_BASE } from '../config'
+import { clearAggregateDashboardCache } from '../utils/dashboardCache'
 
 const ProfileContext = createContext(null)
 
@@ -107,6 +108,7 @@ export default function ProfileProvider({ children }) {
       .then(data => {
         const list = data.aggregates || []
         setAggregates(list)
+        clearAggregateDashboardCache()
         return list
       })
       .catch(() => [])
