@@ -93,9 +93,12 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     # Multi-chunk path: use caller's group_by (if any) in each chunk.
     # Single-ticker chunks return flat columns and must be normalized to match
     # what a multi-ticker download with the same group_by setting would return.
+    import time as _time
     caller_group_by = kwargs.get("group_by", None)
     frames = []
     for i in range(0, len(tickers), chunk_size):
+        if i > 0:
+            _time.sleep(1)
         chunk = tickers[i:i + chunk_size]
         try:
             raw = yf.download(chunk if len(chunk) > 1 else chunk[0], **kwargs)
@@ -20546,6 +20549,8 @@ INCOME_ETFS = [
     "QYLD", "XYLD", "RYLD", "DJIA", "QYLG", "XYLG", "TYLG", "EDGQ", "EDGX", "QRMI", "XRMI", "QCLR", "XCLR",
     # Amplify income / option-income ETFs
     "BAGY", "BITY", "DIVO", "QDVO", "IDVO", "HCOW", "HAKY", "ETTY", "SLJY",
+    # Goldman Sachs / First Trust option-income ETFs
+    "GPIQ", "GPIX", "FTQI",
     # XFunds / Nicholas Wealth income ETFs
     "GIAX", "BLOX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX",
     # NEOS ETF lineup
@@ -27893,6 +27898,116 @@ def general_scanner_universe():
     return jsonify(rows=[{"ticker": r["ticker"], "asset_type": r["asset_type"]} for r in rows])
 
 
+_options_income_tickers = set([
+    # JPM / Global X / classic covered call
+    "JEPI", "JEPQ", "JEPY", "QYLD", "XYLD", "RYLD", "DJIA", "QYLG", "XYLG", "TYLG",
+    "EDGQ", "EDGX", "QRMI", "XRMI", "QCLR", "XCLR", "DIVO", "PUTW", "NUSI",
+    # Amplify
+    "BAGY", "BITY", "QDVO", "IDVO", "HCOW", "HAKY", "ETTY", "SLJY",
+    # XFunds / Nicholas Wealth
+    "GIAX", "BLOX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX",
+    # NEOS / option-income and hedged-income
+    "SPYI", "QQQI", "IWMI", "IYRI", "BTCI", "ETHI", "NEHI", "NIHI", "MLPI",
+    "IAUI", "HYBI", "CSHI", "QQQH", "SPYH", "XQQI", "XSPI",
+    # Goldman / First Trust / Simplify / iShares / Roundhill / Defiance
+    "GPIQ", "GPIX", "FTQI", "SVOL", "TLTW", "KLIP", "USOI",
+    "QQQY", "XDTE", "QDTE", "RDTE", "WDTE", "BALI", "ISPY", "JEPX", "SPXX", "QQXX", "IWMW",
+    # Kurv
+    "KQQQ", "KYLD", "KGLD", "KSLV", "KCOP", "AMZP", "AAPY", "GOOP", "MSFY", "NFLP", "TSLP",
+    # REX Shares income
+    "AIPI", "FEPI", "CEPI", "ULTI", "GIF", "ATCL",
+    "COII", "MSII", "NVII", "TSII", "HOII", "PLTI", "CWII", "LLII", "WMTI", "TLDR",
+    # Quantify Funds option-income
+    "ISBG", "ISSB",
+    # VistaShares
+    "ACKY", "OMAH", "QUSA", "DRKY", "SIOO", "TPRY", "BTYB",
+    # GraniteShares YieldBOOST
+    "YSPY", "TQQY", "YBST", "YBTY", "NVYY", "XBTY", "MTYY", "PLYY", "MAAY", "IOYY", "RTYY", "HMYY",
+    # Other option-income / derivatives
+    "CHPY", "GPTY", "TSPY", "TDAQ", "TDAX", "TSYX", "SEPI", "QDVO", "OVL",
+    "YMAX", "YMAG", "ULTY", "LFGY", "SLTY", "BIGY", "FIVY",
+]) | set(_get_single_stock_etfs())
+
+_TICKER_STRATEGY_OVERRIDES = {
+    # Options / Covered Call Income
+    **{t: "Options Income" for t in sorted(_options_income_tickers)},
+    # CEF Income
+    **{t: "CEF" for t in [
+        "PCEF", "CEFS", "YYY", "XMPT", "FCEF", "ADX", "ASGI", "BST",
+    ]},
+    # BDC
+    **{t: "BDC" for t in [
+        "BIZD", "PBDC",
+        "MAIN", "ARCC", "HTGC", "GBDC", "BXSL", "TPVG", "GSBD", "OBDC", "ORCC", "FSK",
+        "NEWT", "GAIN", "GLAD", "PSEC", "SLRC", "OCSL", "CGBD", "FDUS", "MFIC", "CSWC",
+    ]},
+    # Leveraged Loans / Senior Loans
+    **{t: "Loans" for t in [
+        "BKLN", "SRLN", "FLBL", "FTSL",
+    ]},
+    # Preferred Stock
+    **{t: "Preferred" for t in [
+        "PFF", "PFFD", "PGX", "PSK", "FPE", "PFFV", "VRP", "FPEI",
+        "SPFF", "PREF", "EPRF",
+    ]},
+}
+
+def _classify_etf(category, ticker=""):
+    """Derive strategy and cap size from yfinance ETF category string."""
+    # Check ticker-based override first
+    override = _TICKER_STRATEGY_OVERRIDES.get(ticker, "")
+
+    if not category and not override:
+        return "", override or "", ""
+    cat = (category or "").lower()
+
+    # ── Strategy ──
+    strategy = ""
+    if override:
+        strategy = override
+    elif any(w in cat for w in ["derivative income", "covered call", "option"]):
+        strategy = "Options Income"
+    elif "preferred" in cat:
+        strategy = "Preferred"
+    elif any(w in cat for w in ["income", "dividend", "yield", "high yield equity"]):
+        strategy = "Dividend"
+    elif "bond" in cat or "government" in cat or "treasury" in cat or "fixed" in cat or "inflation" in cat or "mortgage" in cat:
+        strategy = "Bonds"
+    elif "growth" in cat:
+        strategy = "Growth"
+    elif "value" in cat:
+        strategy = "Value"
+    elif "blend" in cat:
+        strategy = "Blend"
+    elif any(w in cat for w in ["commodit", "precious", "gold", "silver", "metal"]):
+        strategy = "Commodity"
+    elif "real estate" in cat or "reit" in cat:
+        strategy = "Real Estate"
+    elif any(w in cat for w in ["emerging", "international", "foreign", "world", "global", "china", "europe", "japan", "pacific"]):
+        strategy = "International"
+    elif any(w in cat for w in ["technology", "health", "energy", "financial", "utilities", "consumer", "industrial", "communication"]):
+        strategy = "Sector"
+    elif "target" in cat:
+        strategy = "Target Date"
+    else:
+        strategy = "Other"
+
+    # ── Cap size ──
+    cap_size = ""
+    if "large" in cat:
+        cap_size = "Large Cap"
+    elif "mid" in cat:
+        cap_size = "Mid Cap"
+    elif "small" in cat:
+        cap_size = "Small Cap"
+    elif "micro" in cat:
+        cap_size = "Micro Cap"
+    elif any(w in cat for w in ["total market", "all cap", "blend"]) and strategy in ("Growth", "Value", "Blend"):
+        cap_size = "All Cap"
+
+    return category or "", strategy, cap_size
+
+
 def _general_scanner_refresh_impl(tickers, type_map, force_info=False):
     """Fetch/refresh scanner data for a supplied ticker list."""
     import yfinance as yf
@@ -28032,116 +28147,6 @@ def _general_scanner_refresh_impl(tickers, type_map, force_info=False):
     errors = []
     fund_data = {}
 
-    # Ticker-based overrides for ETFs that yfinance doesn't classify well
-    _options_income_tickers = set([
-        # JPM / Global X / classic covered call
-        "JEPI", "JEPQ", "JEPY", "QYLD", "XYLD", "RYLD", "DJIA", "QYLG", "XYLG", "TYLG",
-        "EDGQ", "EDGX", "QRMI", "XRMI", "QCLR", "XCLR", "DIVO", "PUTW", "NUSI",
-        # Amplify
-        "BAGY", "BITY", "QDVO", "IDVO", "HCOW", "HAKY", "ETTY", "SLJY",
-        # XFunds / Nicholas Wealth
-        "GIAX", "BLOX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX",
-        # NEOS / option-income and hedged-income
-        "SPYI", "QQQI", "IWMI", "IYRI", "BTCI", "ETHI", "NEHI", "NIHI", "MLPI",
-        "IAUI", "HYBI", "CSHI", "QQQH", "SPYH", "XQQI", "XSPI",
-        # Goldman / First Trust / Simplify / iShares / Roundhill / Defiance
-        "GPIQ", "GPIX", "FTQI", "SVOL", "TLTW", "KLIP", "USOI",
-        "QQQY", "XDTE", "QDTE", "RDTE", "WDTE", "BALI", "ISPY", "JEPX", "SPXX", "QQXX", "IWMW",
-        # Kurv
-        "KQQQ", "KYLD", "KGLD", "KSLV", "KCOP", "AMZP", "AAPY", "GOOP", "MSFY", "NFLP", "TSLP",
-        # REX Shares income
-        "AIPI", "FEPI", "CEPI", "ULTI", "GIF", "ATCL",
-        "COII", "MSII", "NVII", "TSII", "HOII", "PLTI", "CWII", "LLII", "WMTI", "TLDR",
-        # Quantify Funds option-income
-        "ISBG", "ISSB",
-        # VistaShares
-        "ACKY", "OMAH", "QUSA", "DRKY", "SIOO", "TPRY", "BTYB",
-        # GraniteShares YieldBOOST
-        "YSPY", "TQQY", "YBST", "YBTY", "NVYY", "XBTY", "MTYY", "PLYY", "MAAY", "IOYY", "RTYY", "HMYY",
-        # Other option-income / derivatives
-        "CHPY", "GPTY", "TSPY", "TDAQ", "TDAX", "TSYX", "SEPI", "QDVO", "OVL",
-        "YMAX", "YMAG", "ULTY", "LFGY", "SLTY", "BIGY", "FIVY",
-    ]) | set(_get_single_stock_etfs())
-
-    _TICKER_STRATEGY_OVERRIDES = {
-        # Options / Covered Call Income
-        **{t: "Options Income" for t in sorted(_options_income_tickers)},
-        # CEF Income
-        **{t: "CEF" for t in [
-            "PCEF", "CEFS", "YYY", "XMPT", "FCEF", "ADX", "ASGI", "BST",
-        ]},
-        # BDC
-        **{t: "BDC" for t in [
-            "BIZD", "PBDC",
-            "MAIN", "ARCC", "HTGC", "GBDC", "BXSL", "TPVG", "GSBD", "OBDC", "ORCC", "FSK",
-            "NEWT", "GAIN", "GLAD", "PSEC", "SLRC", "OCSL", "CGBD", "FDUS", "MFIC", "CSWC",
-        ]},
-        # Leveraged Loans / Senior Loans
-        **{t: "Loans" for t in [
-            "BKLN", "SRLN", "FLBL", "FTSL",
-        ]},
-        # Preferred Stock
-        **{t: "Preferred" for t in [
-            "PFF", "PFFD", "PGX", "PSK", "FPE", "PFFV", "VRP", "FPEI",
-            "SPFF", "PREF", "EPRF",
-        ]},
-    }
-
-    def _classify_etf(category, ticker=""):
-        """Derive strategy and cap size from yfinance ETF category string."""
-        # Check ticker-based override first
-        override = _TICKER_STRATEGY_OVERRIDES.get(ticker, "")
-
-        if not category and not override:
-            return "", override or "", ""
-        cat = (category or "").lower()
-
-        # ── Strategy ──
-        strategy = ""
-        if override:
-            strategy = override
-        elif any(w in cat for w in ["derivative income", "covered call", "option"]):
-            strategy = "Options Income"
-        elif "preferred" in cat:
-            strategy = "Preferred"
-        elif any(w in cat for w in ["income", "dividend", "yield", "high yield equity"]):
-            strategy = "Dividend"
-        elif "bond" in cat or "government" in cat or "treasury" in cat or "fixed" in cat or "inflation" in cat or "mortgage" in cat:
-            strategy = "Bonds"
-        elif "growth" in cat:
-            strategy = "Growth"
-        elif "value" in cat:
-            strategy = "Value"
-        elif "blend" in cat:
-            strategy = "Blend"
-        elif any(w in cat for w in ["commodit", "precious", "gold", "silver", "metal"]):
-            strategy = "Commodity"
-        elif "real estate" in cat or "reit" in cat:
-            strategy = "Real Estate"
-        elif any(w in cat for w in ["emerging", "international", "foreign", "world", "global", "china", "europe", "japan", "pacific"]):
-            strategy = "International"
-        elif any(w in cat for w in ["technology", "health", "energy", "financial", "utilities", "consumer", "industrial", "communication"]):
-            strategy = "Sector"
-        elif "target" in cat:
-            strategy = "Target Date"
-        else:
-            strategy = "Other"
-
-        # ── Cap size ──
-        cap_size = ""
-        if "large" in cat:
-            cap_size = "Large Cap"
-        elif "mid" in cat:
-            cap_size = "Mid Cap"
-        elif "small" in cat:
-            cap_size = "Small Cap"
-        elif "micro" in cat:
-            cap_size = "Micro Cap"
-        elif any(w in cat for w in ["total market", "all cap", "blend"]) and strategy in ("Growth", "Value", "Blend"):
-            cap_size = "All Cap"
-
-        return category or "", strategy, cap_size
-
     def _fetch_info(t):
         try:
             info = yf.Ticker(t).info or {}
@@ -28158,7 +28163,7 @@ def _general_scanner_refresh_impl(tickers, type_map, force_info=False):
                 "peg_ratio": info.get("trailingPegRatio"),
                 "ps_ratio": info.get("priceToSalesTrailing12Months"),
                 "pb_ratio": info.get("priceToBook"),
-                "dividend_yield": round(info.get("dividendYield", 0) * 100, 2) if info.get("dividendYield") else None,
+                "dividend_yield": round(float(info["dividendYield"]), 2) if info.get("dividendYield") else None,
                 "eps": info.get("trailingEps"),
                 "revenue": info.get("totalRevenue"),
                 "profit_margin": round(info.get("profitMargins", 0) * 100, 2) if info.get("profitMargins") else None,
@@ -28166,11 +28171,16 @@ def _general_scanner_refresh_impl(tickers, type_map, force_info=False):
                 "debt_to_equity": info.get("debtToEquity"),
                 "current_ratio": info.get("currentRatio"),
                 "beta": info.get("beta"),
-                "expense_ratio": round(info.get("annualReportExpenseRatio", 0) * 100, 4) if info.get("annualReportExpenseRatio") else None,
+                "expense_ratio": round(float(info["netExpenseRatio"]), 4) if info.get("netExpenseRatio") else (round(float(info["annualReportExpenseRatio"]), 4) if info.get("annualReportExpenseRatio") else None),
                 "aum": info.get("totalAssets"),
                 "etf_category": etf_category,
                 "etf_strategy": etf_strategy,
                 "etf_cap_size": etf_cap_size,
+                "three_year_return": round(info["threeYearAverageReturn"] * 100, 4) if info.get("threeYearAverageReturn") else None,
+                "five_year_return": round(info["fiveYearAverageReturn"] * 100, 4) if info.get("fiveYearAverageReturn") else None,
+                "ytd_return": round(info["ytdReturn"], 4) if info.get("ytdReturn") else None,
+                "beta_3y": info.get("beta3Year"),
+                "fund_family": info.get("fundFamily", ""),
             }
         except Exception as exc:
             return t, {"_error": str(exc)}
@@ -28823,6 +28833,404 @@ def general_scanner_save_defaults():
     with open(defaults_path, "w") as f:
         _json.dump(data, f, indent=2)
     return jsonify(ok=True, count=len(data))
+
+
+# ── ETF Evaluate ────────────────────────────────────────────────────────────────
+
+def _etf_peer_history_metrics(tickers):
+    """Batch-download full price history for peer tickers and compute, per ticker:
+    price_cagr (annualized price-only return — the NAV-erosion signal),
+    total_cagr (annualized dividend-reinvested return), history_years,
+    ttm_yield (trailing-12-month distributions / latest price), and last_price.
+
+    Uses one batched (chunked) download so enriching dozens of peers stays fast.
+    Best-effort: tickers with insufficient data are simply omitted.
+    """
+    out = {}
+    tickers = [t for t in tickers if t]
+    if not tickers:
+        return out
+    try:
+        df = _chunked_yf_download(
+            tickers, chunk_size=25, period="max",
+            auto_adjust=False, actions=True, group_by="ticker",
+        )
+    except Exception:
+        return out
+    if df is None or df.empty:
+        return out
+
+    have_multi = isinstance(df.columns, pd.MultiIndex)
+    lvl0 = set(df.columns.get_level_values(0)) if have_multi else set()
+    for t in tickers:
+        try:
+            if have_multi:
+                if t not in lvl0:
+                    continue
+                sub = df[t]
+            else:
+                sub = df
+            if "Close" not in sub:
+                continue
+            close = sub["Close"].dropna()
+            if len(close) < 30 or close.iloc[0] <= 0:
+                continue
+            years = (close.index[-1] - close.index[0]).days / 365.25
+            if years < 0.5:
+                continue
+            price_cagr = round(((close.iloc[-1] / close.iloc[0]) ** (1 / years) - 1) * 100, 4)
+            total_cagr = None
+            if "Adj Close" in sub:
+                adj = sub["Adj Close"].dropna()
+                if len(adj) >= 2 and adj.iloc[0] > 0:
+                    total_cagr = round(((adj.iloc[-1] / adj.iloc[0]) ** (1 / years) - 1) * 100, 4)
+            last_price = float(close.iloc[-1])
+            ttm_yield = None
+            if "Dividends" in sub:
+                divs = sub["Dividends"].dropna()
+                if len(divs):
+                    cutoff = close.index[-1] - pd.Timedelta(days=365)
+                    ttm = float(divs[divs.index >= cutoff].sum())
+                    if last_price > 0 and ttm > 0:
+                        ttm_yield = round(ttm / last_price * 100, 4)
+            out[t] = {
+                "price_cagr": price_cagr,
+                "total_cagr": total_cagr,
+                "history_years": round(years, 2),
+                "ttm_yield": ttm_yield,
+                "last_price": round(last_price, 4),
+            }
+        except Exception:
+            continue
+    return out
+
+
+@app.route("/api/etf-evaluate/<ticker>")
+def etf_evaluate(ticker):
+    """Fetch yfinance data for an ETF and return it alongside category peers from the scanner cache."""
+    import yfinance as yf
+
+    ticker = ticker.strip().upper()
+    if not ticker:
+        return jsonify(error="Ticker is required."), 400
+
+    try:
+        info = yf.Ticker(ticker).info or {}
+    except Exception as exc:
+        return jsonify(error=f"yfinance lookup failed for {ticker}: {exc}"), 502
+
+    if not info.get("shortName") and not info.get("longName"):
+        return jsonify(error=f"Ticker {ticker} not found in yfinance."), 404
+
+    def _safe_pct_from(source, key):
+        v = source.get(key)
+        if v is None:
+            return None
+        try:
+            return round(float(v) * 100, 4)
+        except (TypeError, ValueError):
+            return None
+
+    def _safe_pct(key):
+        return _safe_pct_from(info, key)
+
+    def _safe_raw_pct(source, *keys):
+        for key in keys:
+            v = source.get(key)
+            if v is None:
+                continue
+            try:
+                return round(float(v), 4)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _live_peer_from_yfinance(peer_ticker):
+        import time as _time
+        _time.sleep(0.4)
+        try:
+            peer_info = yf.Ticker(peer_ticker).info or {}
+        except Exception:
+            return None
+        name = peer_info.get("shortName") or peer_info.get("longName", "")
+        if not name:
+            return None
+        peer_cat = peer_info.get("category", "")
+        peer_category, peer_strategy, peer_cap_size = _classify_etf(peer_cat, peer_ticker)
+        return {
+            "ticker": peer_ticker,
+            "name": name,
+            "category": peer_cat,
+            "price": peer_info.get("regularMarketPrice") or peer_info.get("previousClose"),
+            "nav": peer_info.get("navPrice"),
+            "yield_pct": _safe_pct_from(peer_info, "yield"),
+            "dividend_yield": _safe_raw_pct(peer_info, "dividendYield"),
+            "expense_ratio": _safe_raw_pct(peer_info, "netExpenseRatio", "annualReportExpenseRatio"),
+            "aum": peer_info.get("totalAssets"),
+            "avg_volume": peer_info.get("averageVolume") or peer_info.get("averageDailyVolume10Day"),
+            "etf_strategy": peer_strategy,
+            "etf_category": peer_category,
+            "etf_cap_size": peer_cap_size,
+            "three_year_return": _safe_pct_from(peer_info, "threeYearAverageReturn"),
+            "five_year_return": _safe_pct_from(peer_info, "fiveYearAverageReturn"),
+            "ytd_return": _safe_raw_pct(peer_info, "ytdReturn"),
+            "beta_3y": peer_info.get("beta3Year"),
+            "fund_family": peer_info.get("fundFamily", ""),
+            "is_single_stock": peer_ticker in _get_single_stock_etfs(),
+        }
+
+    etf_cat = info.get("category", "")
+    etf_category, etf_strategy, etf_cap_size = _classify_etf(etf_cat, ticker)
+    is_option_income = etf_strategy == "Options Income" or ticker in _options_income_tickers
+
+    inception_ts = info.get("fundInceptionDate")
+    inception_date = None
+    if inception_ts:
+        try:
+            from datetime import datetime
+            inception_date = datetime.utcfromtimestamp(int(inception_ts)).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    # ── NAV erosion / CAGR signals from full price history ───────────────────
+    # Annualized price-only return (CAGR) is the real NAV-erosion signal: a fund
+    # paying a high distribution while its share price chronically declines is
+    # funding the payout from capital. Annualized total return (dividends
+    # reinvested) is used as a performance/sustainability fallback for funds too
+    # new to have a 3Y/5Y average return from yfinance.
+    price_cagr = None
+    total_cagr = None
+    history_years = None
+    try:
+        hist = yf.Ticker(ticker).history(period="max", auto_adjust=False)
+        if hist is not None and not hist.empty and len(hist) >= 30:
+            close = hist["Close"].dropna()
+            years = (close.index[-1] - close.index[0]).days / 365.25
+            if years >= 0.5 and len(close) >= 2 and close.iloc[0] > 0:
+                history_years = round(years, 2)
+                price_cagr = round(((close.iloc[-1] / close.iloc[0]) ** (1 / years) - 1) * 100, 4)
+                if "Adj Close" in hist.columns:
+                    adj = hist["Adj Close"].dropna()
+                    if len(adj) >= 2 and adj.iloc[0] > 0:
+                        total_cagr = round(((adj.iloc[-1] / adj.iloc[0]) ** (1 / years) - 1) * 100, 4)
+    except Exception:
+        pass
+
+    fund = {
+        "ticker": ticker,
+        "name": info.get("shortName") or info.get("longName", ""),
+        "category": etf_cat,
+        "etf_category": etf_category,
+        "etf_strategy": etf_strategy,
+        "etf_cap_size": etf_cap_size,
+        "fund_family": info.get("fundFamily", ""),
+        "price": info.get("regularMarketPrice") or info.get("previousClose"),
+        "nav": info.get("navPrice"),
+        "yield_pct": _safe_pct("yield"),
+        "dividend_yield": round(float(info["dividendYield"]), 4) if info.get("dividendYield") is not None else None,
+        "expense_ratio": round(float(info["netExpenseRatio"]), 4) if info.get("netExpenseRatio") is not None else (round(float(info["annualReportExpenseRatio"]), 4) if info.get("annualReportExpenseRatio") is not None else None),
+        "three_year_return": _safe_pct("threeYearAverageReturn"),
+        "five_year_return": _safe_pct("fiveYearAverageReturn"),
+        "ytd_return": round(float(info["ytdReturn"]), 4) if info.get("ytdReturn") else None,
+        "beta_3y": info.get("beta3Year"),
+        "aum": info.get("totalAssets"),
+        "avg_volume": info.get("averageVolume") or info.get("averageDailyVolume10Day"),
+        "inception_date": inception_date,
+        "is_option_income": is_option_income,
+        "week52_high": info.get("fiftyTwoWeekHigh"),
+        "week52_low": info.get("fiftyTwoWeekLow"),
+        "price_cagr": price_cagr,
+        "total_cagr": total_cagr,
+        "history_years": history_years,
+    }
+
+    # ── Fetch peers from scanner cache ───────────────────────────────────────
+    option_universe_tickers = []
+    conn = get_connection()
+    if is_option_income:
+        peer_tickers = sorted(_options_income_tickers - {ticker})
+        option_universe_tickers = peer_tickers
+        if peer_tickers:
+            placeholders = ",".join("?" for _ in peer_tickers)
+            peer_rows = conn.execute(
+                f"""
+                SELECT * FROM general_scanner_cache
+                WHERE ticker != ?
+                  AND (
+                    etf_strategy = 'Options Income'
+                    OR ticker IN ({placeholders})
+                  )
+                """,
+                [ticker] + peer_tickers,
+            ).fetchall()
+        else:
+            peer_rows = conn.execute(
+                "SELECT * FROM general_scanner_cache WHERE ticker != ? AND etf_strategy = 'Options Income'",
+                (ticker,),
+            ).fetchall()
+    else:
+        if etf_strategy:
+            peer_rows = conn.execute(
+                "SELECT * FROM general_scanner_cache WHERE etf_strategy = ? AND ticker != ?",
+                (etf_strategy, ticker),
+            ).fetchall()
+        else:
+            peer_rows = []
+    conn.close()
+
+    # Build base peer dicts from cache. Cap the candidate set to the largest funds
+    # by AUM so the live history enrichment below stays bounded and fast — tiny
+    # funds are poor alternatives anyway.
+    single_stock_set = _get_single_stock_etfs()
+
+    def _cache_val(row, key):
+        try:
+            return row[key] if key in row.keys() else None
+        except Exception:
+            return None
+
+    base_peers = []
+    for row in peer_rows:
+        base_peers.append({
+            "ticker": row["ticker"],
+            "name": row["name"],
+            "price": row["price"],
+            "dividend_yield": _cache_val(row, "dividend_yield"),
+            "expense_ratio": _cache_val(row, "expense_ratio"),
+            "aum": _cache_val(row, "aum"),
+            "avg_volume": _cache_val(row, "avg_volume"),
+            "etf_strategy": _cache_val(row, "etf_strategy"),
+            "etf_category": _cache_val(row, "etf_category"),
+            "three_year_return": _cache_val(row, "three_year_return"),
+            "five_year_return": _cache_val(row, "five_year_return"),
+            "ytd_return": _cache_val(row, "ytd_return"),
+            "beta_3y": _cache_val(row, "beta_3y"),
+            "fund_family": _cache_val(row, "fund_family"),
+            "is_single_stock": row["ticker"] in single_stock_set,
+        })
+
+    def _option_peer_seed(peer):
+        total = peer.get("total_cagr")
+        price = peer.get("price_cagr")
+        yld = peer.get("yield_pct") or peer.get("dividend_yield")
+        aum = peer.get("aum")
+        score = 0
+        if total is not None:
+            score += float(total) * 1.4
+        if price is not None:
+            score += float(price) * 1.1
+            if float(price) < -5:
+                score -= 25
+        if yld is not None:
+            score += min(float(yld), 20) * 0.25
+        if aum:
+            score += min(math.log10(max(float(aum), 1)) - 6, 6)
+        if peer.get("is_single_stock"):
+            score -= 30
+        return score
+
+    metrics = {}
+    if is_option_income:
+        discovered = {p["ticker"] for p in base_peers}
+        discovery_tickers = sorted((set(option_universe_tickers) | discovered) - {ticker})
+        metrics = _etf_peer_history_metrics(discovery_tickers)
+
+        for p in base_peers:
+            m = metrics.get(p["ticker"])
+            if not m:
+                continue
+            p["price_cagr"] = m["price_cagr"]
+            p["total_cagr"] = m["total_cagr"]
+            p["history_years"] = m["history_years"]
+            if m["last_price"] is not None:
+                p["price"] = m["last_price"]
+            if m["ttm_yield"] is not None:
+                p["yield_pct"] = m["ttm_yield"]
+            elif p.get("dividend_yield") is not None:
+                p["yield_pct"] = p["dividend_yield"]
+
+        discovered = {p["ticker"] for p in base_peers}
+        for peer_ticker, m in metrics.items():
+            if peer_ticker in discovered or peer_ticker == ticker:
+                continue
+            base_peers.append({
+                "ticker": peer_ticker,
+                "name": peer_ticker,
+                "price": m.get("last_price"),
+                "yield_pct": m.get("ttm_yield"),
+                "dividend_yield": m.get("ttm_yield"),
+                "expense_ratio": None,
+                "aum": None,
+                "avg_volume": None,
+                "etf_strategy": "Options Income",
+                "etf_category": "Derivative Income",
+                "three_year_return": None,
+                "five_year_return": None,
+                "ytd_return": None,
+                "beta_3y": None,
+                "fund_family": "",
+                "is_single_stock": peer_ticker in single_stock_set,
+                "price_cagr": m.get("price_cagr"),
+                "total_cagr": m.get("total_cagr"),
+                "history_years": m.get("history_years"),
+            })
+            discovered.add(peer_ticker)
+
+        live_info_targets = [
+            p["ticker"] for p in sorted(base_peers, key=_option_peer_seed, reverse=True)
+            if p["name"] == p["ticker"]
+        ][:20]
+        if live_info_targets:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = {pool.submit(_live_peer_from_yfinance, t): t for t in live_info_targets}
+                live_by_ticker = {}
+                for fut in as_completed(futures):
+                    live = fut.result()
+                    if live:
+                        live_by_ticker[live["ticker"]] = live
+            for i, p in enumerate(base_peers):
+                live = live_by_ticker.get(p["ticker"])
+                if live:
+                    base_peers[i] = {**p, **live, **{k: p.get(k) for k in ("price_cagr", "total_cagr", "history_years", "yield_pct")}}
+
+    PEER_ENRICH_CAP = 40
+    if is_option_income:
+        base_peers.sort(key=_option_peer_seed, reverse=True)
+        candidates = base_peers
+    else:
+        base_peers.sort(key=lambda p: (p["aum"] or 0), reverse=True)
+        candidates = base_peers[:PEER_ENRICH_CAP]
+
+    # Hybrid enrichment: live-fetch the price-derived metrics that the cache cannot
+    # provide (price/total CAGR, trailing yield), keeping cached fundamentals.
+    if not is_option_income:
+        metrics = _etf_peer_history_metrics([p["ticker"] for p in candidates])
+    for p in candidates:
+        m = metrics.get(p["ticker"])
+        if not m:
+            continue
+        p["price_cagr"] = m["price_cagr"]
+        p["total_cagr"] = m["total_cagr"]
+        p["history_years"] = m["history_years"]
+        if m["last_price"] is not None:
+            p["price"] = m["last_price"]
+        # Trailing-12-month distribution yield is the authoritative income figure;
+        # fall back to the (possibly stale) cached yield only when unavailable.
+        if m["ttm_yield"] is not None:
+            p["yield_pct"] = m["ttm_yield"]
+        elif p.get("dividend_yield") is not None:
+            p["yield_pct"] = p["dividend_yield"]
+
+    peers = candidates
+
+    return jsonify(
+        fund=fund,
+        peers=peers,
+        strategy=etf_strategy,
+        category=etf_cat,
+        is_option_income=is_option_income,
+    )
 
 
 register_options_routes(app)
@@ -29617,6 +30025,8 @@ def _cef_normalize_row(row):
         "inception_date": _cef_value(row, "InceptionDateString") or _cef_value(row, "InceptionDate"),
         "nav_published": _cef_value(row, "NAVPublished"),
         "last_updated": _cef_value(row, "LastUpdated"),
+        "unii_per_share": _cef_value(row, "UNIIPerShare"),
+        "earnings_per_share": _cef_value(row, "EarningsPerShare"),
         "nav_ticker": _cef_value(row, "NavTicker"),
         "cusip": _cef_value(row, "Cusip"),
         "source_url": f"{_CEFCONNECT_BASE_URL}/fund/{urllib.parse.quote(ticker)}",

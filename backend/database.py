@@ -1022,9 +1022,13 @@ def ensure_tables_exist(conn=None):
         if col not in cache_cols:
             cur.execute(f"ALTER TABLE general_scanner_cache ADD COLUMN {col} TEXT")
     for col in ["macd_line", "macd_signal", "macd_hist", "stoch_k", "stoch_d",
-                "prev_sma_20", "prev_sma_50", "prev_sma_200"]:
+                "prev_sma_20", "prev_sma_50", "prev_sma_200",
+                "three_year_return", "five_year_return", "ytd_return", "beta_3y"]:
         if col not in cache_cols:
             cur.execute(f"ALTER TABLE general_scanner_cache ADD COLUMN {col} REAL")
+    for col in ["fund_family"]:
+        if col not in cache_cols:
+            cur.execute(f"ALTER TABLE general_scanner_cache ADD COLUMN {col} TEXT")
 
     # One-time fix: clear ETF columns that had timestamps (from earlier column-order bug)
     cur.execute("""

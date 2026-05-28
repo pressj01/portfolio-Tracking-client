@@ -50,6 +50,9 @@ import RebalanceWizard from './pages/RebalanceWizard'
 import ActionCenter from './pages/ActionCenter'
 import ClosedCEFInformation from './pages/ClosedCEFInformation'
 import CEFBuyingGuide from './pages/CEFBuyingGuide'
+import CEFBuyingChecklistEvaluator from './pages/CEFBuyingChecklistEvaluator'
+import ETFBuyingChecklistEvaluator from './pages/ETFBuyingChecklistEvaluator'
+import OptionIncomeETFEvaluator from './pages/OptionIncomeETFEvaluator'
 // Option Trading Tools and Option Education are intentionally excluded from
 // deployed builds — still in development, not ready for production.
 // import OptionTradingTools from './pages/OptionTradingTools'
@@ -141,6 +144,9 @@ function App() {
         <Route path="/closed-cef-info" element={<ClosedCEFInformation />} />
         <Route path="/closed-cef-info/:ticker" element={<ClosedCEFInformation />} />
         <Route path="/cef-buying-guide" element={<CEFBuyingGuide />} />
+        <Route path="/cef-buying-checklist-evaluator" element={<CEFBuyingChecklistEvaluator />} />
+        <Route path="/etf-buying-checklist-evaluator" element={<ETFBuyingChecklistEvaluator />} />
+        <Route path="/option-income-etf-evaluator" element={<OptionIncomeETFEvaluator />} />
         {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
         <Route path="/help" element={<Help />} />
       </Routes>
@@ -218,10 +224,14 @@ function Nav() {
         <NavLink to="/dividend-calculator">Dividend Calculator</NavLink>
         <NavLink to="/watchlist">Watchlist</NavLink>
       </NavDropdown>
-      <NavDropdown label="Analysis">
+      <NavDropdown label="ETF's">
+        <NavLink to="/etf-buying-checklist-evaluator">ETF Buying Checklist Evaluator</NavLink>
+        <NavLink to="/option-income-etf-evaluator">Option-Income ETF Evaluator</NavLink>
         <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>
         <NavLink to="/etf-comparer">ETF Comparer</NavLink>
         <NavLink to="/stock-comparer">Stock Comparer</NavLink>
+      </NavDropdown>
+      <NavDropdown label="Analysis">
         <NavLink to="/security-research">Security Research</NavLink>
         <NavLink to="/buy-sell-signals">Buy / Sell Signals</NavLink>
         <NavLink to="/nav-erosion">NAV Erosion</NavLink>
@@ -236,12 +246,13 @@ function Nav() {
         <NavLink to="/dist-compare">Distribution Compare</NavLink>
         <NavLink to="/consolidation">Consolidation Analysis</NavLink>
         <NavLink to="/macro-dashboard">Macro Regime Dashboard</NavLink>
-          <NavLink to="/scanner">Single Strategy Scanner</NavLink>
+        <NavLink to="/scanner">Single Strategy Scanner</NavLink>
         <NavLink to="/general-scanner">General Scanner</NavLink>
       </NavDropdown>
       <NavDropdown label="CEF's">
         <NavLink to="/closed-cef-info">Closed CEF Information</NavLink>
         <NavLink to="/cef-buying-guide">What to Look For When Buying CEFs</NavLink>
+        <NavLink to="/cef-buying-checklist-evaluator">CEF Buying Checklist Evaluator</NavLink>
       </NavDropdown>
       <NavDropdown label="Taxes">
         <NavLink to="/tax-report">Annual Tax Report</NavLink>
