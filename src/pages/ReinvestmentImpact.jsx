@@ -205,6 +205,9 @@ export default function ReinvestmentImpact() {
   const [reinvestPct, setReinvestPct] = useState(100)
   const [monthlyContribution, setMonthlyContribution] = useState(0)
   const [projScopeTicker, setProjScopeTicker] = useState('')  // '' = whole portfolio
+  const [projCategories, setProjCategories] = useState([])  // selected category ids for projection
+  const [projCatOpen, setProjCatOpen] = useState(false)
+  const [allCategories, setAllCategories] = useState([])  // loaded independently for projection tab
 
   const [data, setData] = useState(null)        // historical response
   // Projection holds all three scenarios so the income chart can switch market
@@ -214,6 +217,7 @@ export default function ReinvestmentImpact() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const catRef = useRef(null)
+  const projCatRef = useRef(null)
   // Guards against out-of-order responses: switching granularity fires two
   // fetches (old range, then the reset range) — only apply the latest.
   const reqIdRef = useRef(0)
@@ -222,12 +226,24 @@ export default function ReinvestmentImpact() {
   // so later user edits (and scope/portfolio switches) aren't clobbered.
   const seededReinvestRef = useRef(false)
 
-  // Close category dropdown on outside click
+  // Close category dropdowns on outside click
   useEffect(() => {
-    const handler = e => { if (catRef.current && !catRef.current.contains(e.target)) setCatOpen(false) }
+    const handler = e => {
+      if (catRef.current && !catRef.current.contains(e.target)) setCatOpen(false)
+      if (projCatRef.current && !projCatRef.current.contains(e.target)) setProjCatOpen(false)
+    }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
+
+  // Load category list independently so the projection tab has it even before
+  // the historical tab has fired a fetch.
+  useEffect(() => {
+    pf('/api/categories/data')
+      .then(r => r.json())
+      .then(d => setAllCategories((d.categories || []).sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => setAllCategories([]))
+  }, [pf, selection])
 
   // Reset range sensibly when granularity changes
   useEffect(() => {
@@ -287,7 +303,9 @@ export default function ReinvestmentImpact() {
     const myId = ++projReqIdRef.current
     setLoading(true)
     setError(null)
-    const scoped = projScopeTicker ? holdings.filter(h => h.ticker === projScopeTicker) : holdings
+    const scoped = holdings
+      .filter(h => !projScopeTicker || h.ticker === projScopeTicker)
+      .filter(h => !projCategories.length || projCategories.includes(String(h.category)))
     const override = scoped.map(h => ({
       ticker: h.ticker,
       shares: h.quantity,
@@ -317,7 +335,7 @@ export default function ReinvestmentImpact() {
       })
       .catch(e => { if (myId === projReqIdRef.current) setError(e.message) })
       .finally(() => { if (myId === projReqIdRef.current) setLoading(false) })
-  }, [holdings, years, monthlyContribution, reinvestPct, projScopeTicker, pf])
+  }, [holdings, years, monthlyContribution, reinvestPct, projScopeTicker, projCategories, pf])
 
   useEffect(() => {
     if (mode === 'historical') fetchHistorical()
@@ -535,12 +553,47 @@ export default function ReinvestmentImpact() {
           <>
             <div className="growth-filter-group">
               <label>Fund</label>
-              <select value={projScopeTicker} onChange={e => setProjScopeTicker(e.target.value)}
+              <select value={projScopeTicker} onChange={e => { setProjScopeTicker(e.target.value); setProjCategories([]) }}
                 style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: '#0a1929', color: '#c5d0dc', border: '1px solid #1a3a5c', borderRadius: '4px', minWidth: '160px' }}>
                 <option value="">Whole Portfolio</option>
                 {holdings.map(h => <option key={h.ticker} value={h.ticker}>{h.ticker}</option>)}
               </select>
             </div>
+
+            {allCategories.length > 0 && !projScopeTicker && (
+              <div className="growth-filter-group" style={{ position: 'relative' }} ref={projCatRef}>
+                <label>Categories</label>
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '0.35rem 0.75rem', fontSize: '0.85rem', minWidth: '140px', textAlign: 'left' }}
+                  onClick={() => setProjCatOpen(o => !o)}
+                >
+                  {projCategories.length === 0 ? 'All Holdings' : `${projCategories.length} selected`}
+                  <span style={{ float: 'right', marginLeft: '0.5rem' }}>{projCatOpen ? '▴' : '▾'}</span>
+                </button>
+                {projCatOpen && (
+                  <div className="growth-cat-dropdown">
+                    <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
+                      <input type="checkbox" checked={projCategories.length === 0} onChange={() => setProjCategories([])} />
+                      <span>All Holdings</span>
+                    </label>
+                    {allCategories.map(c => (
+                      <label key={c.id} className="growth-cat-option">
+                        <input
+                          type="checkbox"
+                          checked={projCategories.includes(c.name)}
+                          onChange={e => {
+                            if (e.target.checked) setProjCategories(prev => [...prev, c.name])
+                            else setProjCategories(prev => prev.filter(n => n !== c.name))
+                          }}
+                        />
+                        <span>{c.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="growth-filter-group">
               <label>Horizon</label>
               <div style={{ display: 'flex' }}>
