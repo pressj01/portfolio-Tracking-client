@@ -14620,35 +14620,14 @@ def income_growth_sim():
         price_rate = (next_price / prev_price - 1) if prev_price > 0 else 0.0
         return div_rate, price_rate
 
-    def _yield_ceiling(start_yield):
-        """Forward yield ceiling that prevents unsustainable payout compounding."""
-        if start_yield <= 0:
-            return None
-        if scenario_key == "bearish":
-            if start_yield > 0.12:
-                return min(start_yield * 0.40, 0.12)
-            return start_yield * 0.85
-        if scenario_key == "bullish":
-            if start_yield > 0.12:
-                return min(start_yield * 0.70, 0.22)
-            return start_yield * 1.10
-        if start_yield > 0.12:
-            return min(start_yield * 0.60, 0.16)
-        return start_yield * 1.03
-
     def _adjusted_dps(h, div_factor, price_factor):
-        """Apply scenario distribution path, then cap yield against modeled price."""
-        base_dps = h["div_per_share"] * div_factor
-        freq = h.get("freq") or 0
-        price = h.get("price") or 0
-        if base_dps <= 0 or freq <= 0 or price <= 0:
-            return base_dps
-        start_yield = (h["div_per_share"] * freq) / price
-        ceiling = _yield_ceiling(start_yield)
-        if ceiling is None:
-            return base_dps
-        cap_dps = price * price_factor * ceiling / freq
-        return min(base_dps, cap_dps)
+        """Apply the scenario distribution path to the holding's per-share payout.
+
+        No yield ceiling is applied: option-income funds sustain high
+        distribution rates, so we let the per-share distribution follow the
+        scenario growth path directly rather than haircutting high yields.
+        """
+        return h["div_per_share"] * div_factor
 
     # Frequency maps (same as drip_projection)
     freq_map = {

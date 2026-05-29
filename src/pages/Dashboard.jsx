@@ -639,8 +639,9 @@ export default function Dashboard() {
     const currentYield = currentValue ? (annualIncome / currentValue) : 0
     const priceReturn = purchaseValue ? (gainLoss / purchaseValue) : 0
     const totalReturn = purchaseValue ? ((gainLoss + totalDivs) / purchaseValue) : 0
+    const reinvestPct = monthlyIncome ? (monthlyReinvested / monthlyIncome) : 0
 
-    return { ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, annualIncome, dripSharesMonthly, dripSharesYearly, currentValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, currentMonthIncome }
+    return { ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, reinvestPct, annualIncome, dripSharesMonthly, dripSharesYearly, currentValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, currentMonthIncome }
   }, [holdings, incomeSummary])
 
   // Enrich holdings with computed fields
@@ -976,6 +977,7 @@ export default function Dashboard() {
         <SummaryCard label="Est. Monthly Income" value={fmt(totals.monthlyIncome)} color="#4dff91" sub="Annual estimate / 12" />
         <SummaryCard label="Mo$ Reinvested" value={fmt(totals.monthlyReinvested)} color="#7ecfff" />
         <SummaryCard label="Mo$ Not Reinvested" value={fmt(totals.monthlyNotReinvested)} color="#ffb300" />
+        <SummaryCard label="% Reinvested" value={pct(totals.reinvestPct)} color="#66bb6a" />
         <SummaryCard label="Est. Annual Income" value={fmt(totals.annualIncome)} color="#4dff91" />
         <SummaryCard label="Portfolio Value" value={fmt(totals.currentValue)} color="#7ecfff" />
         <SummaryCard label="Avg Yield on Cost" value={pct(totals.avgYoc)} />

@@ -4,6 +4,59 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 const fmt$ = v => v == null ? '—' : '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
 const fmtShares = v => v == null ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtPct1 = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`
+const fmtYears = v => v == null ? '—' : v < 1 / 12 ? '<1 mo' : v < 1 ? `${Math.round(v * 12)} mo` : `${v.toFixed(1)} yr`
+
+// Break-even analysis for a single holding. "Break even" = recovering the cost
+// basis. We report it two ways: cost-basis (position value alone) and
+// total-return (value + dividends already collected). For underwater positions
+// we also estimate how long reinvestment alone needs to close the gap at a flat
+// price — DRIP adds ~one year's distributions of value per year.
+function breakevenMetrics(h) {
+  if (!h) return null
+  const shares = Number(h.quantity) || 0
+  const price = Number(h.current_price) || 0
+  const cost = Number(h.purchase_value) || 0
+  const value = Number(h.current_value) || shares * price
+  const divs = Number(h.total_divs_received) || 0
+  const annualIncome = Number(h.estim_payment_per_year) || 0
+  if (cost <= 0 || price <= 0 || value <= 0) return null
+
+  // Past ~90% down, a price/share recovery is implausibly large (e.g. a
+  // position down 99.7% "needs +35,000%"), so we soften that display.
+  const WIPED_PCT = 900           // pctToBreakeven above this = effectively wiped out
+  const MAX_DRIP_YEARS = 50       // DRIP horizons beyond this aren't actionable
+
+  const leg = (effValue) => {
+    const gap = cost - effValue                 // $ still short of cost basis (<0 means past it)
+    const brokenEven = effValue >= cost
+    const pctToBreakeven = brokenEven ? null : (cost / effValue - 1) * 100
+    const years = brokenEven || annualIncome <= 0 ? null : gap / annualIncome
+    return {
+      brokenEven,
+      // value's distance from cost basis (negative = underwater, positive = above)
+      pctFromCost: (effValue / cost - 1) * 100,
+      // % the value must still rise to reach cost basis (null once past it)
+      pctToBreakeven,
+      // % the value sits above cost basis (null until past it)
+      pctAbove: brokenEven ? (effValue / cost - 1) * 100 : null,
+      // extra shares at today's price to close the remaining gap
+      sharesNeeded: brokenEven ? 0 : gap / price,
+      // years for reinvested distributions to close the gap at a flat price
+      years,
+      // too far gone for a meaningful price/share recovery target
+      wipedOut: !brokenEven && pctToBreakeven > WIPED_PCT,
+      // reinvestment still offers a realistic, finite path back
+      dripRecoverable: years != null && years <= MAX_DRIP_YEARS,
+    }
+  }
+
+  return {
+    shares, price, cost, value, divs, annualIncome,
+    costBasis: leg(value),
+    totalReturn: leg(value + divs),
+  }
+}
 
 const VIEW_OPTIONS = [
   { value: 'yearly', label: 'Annual' },
@@ -69,6 +122,72 @@ function StatTile({ label, value, color, sub }) {
   )
 }
 
+// One side of the break-even panel (cost-basis or total-return).
+function BreakevenLeg({ title, leg, hint }) {
+  const green = '#4dff91', amber = '#f59e0b'
+  return (
+    <div style={{ flex: '1 1 240px', minWidth: 240 }}>
+      <div style={{ fontSize: '0.75rem', color: '#8899aa', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.1rem' }}>{title}</div>
+      <div style={{ fontSize: '0.7rem', color: '#6a7892', marginBottom: '0.5rem' }}>{hint}</div>
+      {leg.brokenEven ? (
+        <>
+          <div style={{ fontSize: '1.4rem', fontWeight: 700, color: green }}>{fmtPct1(leg.pctAbove)}</div>
+          <div style={{ fontSize: '0.78rem', color: '#8899aa' }}>above break-even ✓</div>
+        </>
+      ) : leg.wipedOut ? (
+        <>
+          <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e05555' }}>{fmtPct1(leg.pctFromCost)}</div>
+          <div style={{ fontSize: '0.78rem', color: '#8899aa' }}>from cost — effectively wiped out</div>
+          {leg.dripRecoverable ? (
+            <div style={{ marginTop: '0.4rem', fontSize: '0.85rem', color: '#c5d0dc' }}>
+              Price recovery unlikely, but reinvestment closes it in ~<span style={{ fontWeight: 600 }}>{fmtYears(leg.years)}</span> at a flat price
+            </div>
+          ) : (
+            <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: '#6a7892', fontStyle: 'italic' }}>
+              Recovery impractical at the current distribution rate
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: '1.4rem', fontWeight: 700, color: amber }}>{fmtPct1(leg.pctToBreakeven)}</div>
+          <div style={{ fontSize: '0.78rem', color: '#8899aa' }}>needed to break even</div>
+          <div style={{ marginTop: '0.4rem', fontSize: '0.85rem', color: '#c5d0dc' }}>
+            <span style={{ color: '#a855f7', fontWeight: 600 }}>{fmtShares(leg.sharesNeeded)}</span> more shares at today's price
+          </div>
+          {leg.years != null && (
+            <div style={{ fontSize: '0.85rem', color: '#c5d0dc' }}>
+              ~<span style={{ fontWeight: 600 }}>{fmtYears(leg.years)}</span> via reinvestment at a flat price
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+function BreakevenPanel({ ticker, holding }) {
+  const be = breakevenMetrics(holding)
+  if (!be) return null
+  return (
+    <div className="da-chart-panel" style={{ marginBottom: '1rem' }}>
+      <h3 style={{ marginTop: 0, marginBottom: '0.25rem' }}>Break-Even — {ticker}</h3>
+      <p style={{ color: '#8899aa', fontSize: '0.78rem', margin: '0 0 0.75rem' }}>
+        Cost basis {fmt$(be.cost)} · current value {fmt$(be.value)} · dividends received {fmt$(be.divs)}
+      </p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem' }}>
+        <BreakevenLeg title="Cost basis" hint="position value vs. what you paid" leg={be.costBasis} />
+        <BreakevenLeg title="Total return" hint="value + dividends collected vs. cost" leg={be.totalReturn} />
+      </div>
+      {be.annualIncome > 0 && (
+        <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0.6rem 0 0', fontStyle: 'italic' }}>
+          Time-to-break-even assumes a flat price and reinvested distributions at the current annual rate ({fmt$(be.annualIncome)}/yr); price moves and distribution changes will shift it.
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function ReinvestmentImpact() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
@@ -99,6 +218,9 @@ export default function ReinvestmentImpact() {
   // fetches (old range, then the reset range) — only apply the latest.
   const reqIdRef = useRef(0)
   const projReqIdRef = useRef(0)
+  // Seed the Reinvest % default from the portfolio's actual DRIP mix only once,
+  // so later user edits (and scope/portfolio switches) aren't clobbered.
+  const seededReinvestRef = useRef(false)
 
   // Close category dropdown on outside click
   useEffect(() => {
@@ -116,11 +238,28 @@ export default function ReinvestmentImpact() {
 
   // Load holdings for the scope dropdown + projection override
   useEffect(() => {
+    seededReinvestRef.current = false  // re-seed when the active portfolio changes
     pf('/api/holdings')
       .then(r => r.json())
       .then(rows => setHoldings((rows || []).filter(r => r.quantity > 0 && r.current_price > 0)))
       .catch(() => setHoldings([]))
   }, [pf, selection])
+
+  // Portfolio's actual reinvested share of monthly income, mirroring the
+  // Holdings/Dashboard "% Reinvested" metric (income reinvested ÷ total income).
+  const portfolioReinvestPct = useMemo(() => {
+    const mi = holdings.reduce((s, h) => s + (Number(h.approx_monthly_income) || 0), 0)
+    const ri = holdings.reduce((s, h) => s + (Number(h.monthly_income_reinvested) || 0), 0)
+    return mi > 0 ? (ri / mi) * 100 : null
+  }, [holdings])
+
+  // Default the Reinvest % control to the portfolio's real DRIP mix (once).
+  useEffect(() => {
+    if (!seededReinvestRef.current && portfolioReinvestPct != null) {
+      setReinvestPct(Math.round(portfolioReinvestPct))
+      seededReinvestRef.current = true
+    }
+  }, [portfolioReinvestPct])
 
   // ── Historical fetch ──────────────────────────────────────────────────────
   const fetchHistorical = useCallback(() => {
@@ -287,9 +426,16 @@ export default function ReinvestmentImpact() {
   return (
     <div className="page dashboard">
       <h1 style={{ marginBottom: '0.25rem' }}>Reinvestment Impact</h1>
-      <p style={{ color: '#8899aa', marginTop: 0, marginBottom: '1rem', fontSize: '0.9rem' }}>
+      <p style={{ color: '#8899aa', marginTop: 0, marginBottom: '0.5rem', fontSize: '0.9rem' }}>
         How dividend reinvestment reshapes your payouts — share growth, rate changes, and price effects over time.
       </p>
+      {portfolioReinvestPct != null && (
+        <p style={{ marginTop: 0, marginBottom: '1rem', fontSize: '0.9rem' }}>
+          <span style={{ color: '#8899aa' }}>Currently reinvesting </span>
+          <span style={{ color: '#66bb6a', fontWeight: 700 }}>{portfolioReinvestPct.toFixed(1)}%</span>
+          <span style={{ color: '#8899aa' }}> of this portfolio's monthly income (used as the projection default below).</span>
+        </p>
+      )}
 
       {/* Mode toggle */}
       <div style={{ display: 'flex', gap: 0, marginBottom: '1rem' }}>
@@ -422,6 +568,11 @@ export default function ReinvestmentImpact() {
               <input type="number" min="0" max="100" value={reinvestPct}
                 onChange={e => setReinvestPct(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
                 style={{ width: '80px', padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: '#0a1929', color: '#c5d0dc', border: '1px solid #1a3a5c', borderRadius: '4px' }} />
+              {portfolioReinvestPct != null && (
+                <div style={{ fontSize: '0.7rem', color: '#8899aa', marginTop: '0.2rem' }}>
+                  Portfolio: {portfolioReinvestPct.toFixed(1)}%
+                </div>
+              )}
             </div>
             <div className="growth-filter-group">
               <label>Monthly Add $</label>
@@ -446,6 +597,10 @@ export default function ReinvestmentImpact() {
               sub="share of payout change" />
             <StatTile label="ANNUAL RUN-RATE" value={fmt$(data.summary.run_rate)} color="#f59e0b" />
           </div>
+
+          {scopeTicker && (
+            <BreakevenPanel ticker={scopeTicker} holding={holdings.find(h => h.ticker === scopeTicker)} />
+          )}
 
           {hasData ? (
             <>
@@ -530,6 +685,26 @@ export default function ReinvestmentImpact() {
               color="#f59e0b"
             />
           </div>
+
+          <div style={{
+            display: 'flex', alignItems: 'flex-start', gap: '0.6rem',
+            background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.35)',
+            borderLeft: '3px solid #38bdf8', borderRadius: '6px',
+            padding: '0.7rem 0.9rem', margin: '0 0 1rem', fontSize: '0.85rem', color: '#c5d0dc', lineHeight: 1.45,
+          }}>
+            <span style={{ color: '#38bdf8', fontSize: '1rem', fontWeight: 700, flexShrink: 0, lineHeight: 1.3 }}>ⓘ</span>
+            <span>
+              <strong style={{ color: '#e0e8f5' }}>Why this differs from the dashboard:</strong> Current annual income here is
+              computed from each holding's latest declared distribution × frequency × shares, so it can differ slightly from the
+              dashboard's “Est. Annual Income,” which uses a smoothed per-holding estimate. The two diverge most for
+              variable-payout option-income funds.
+            </span>
+          </div>
+
+          {projScopeTicker && (
+            <BreakevenPanel ticker={projScopeTicker} holding={holdings.find(h => h.ticker === projScopeTicker)} />
+          )}
+
           {projTraces.length > 0 ? (
             <div className="da-chart-panel" style={{ marginBottom: '1rem' }}>
               <Plot

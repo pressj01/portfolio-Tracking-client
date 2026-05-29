@@ -1188,9 +1188,12 @@ export default function ManageHoldings() {
   const [txnIsNew, setTxnIsNew] = useState(false)      // true = new ticker via transaction
   const [expandedTickers, setExpandedTickers] = useState({})  // { ticker: [txns] | 'loading' }
 
-  const fetchHoldings = async () => {
+  // `silent` re-fetches without flashing the table spinner — used to reconcile
+  // a single optimistic edit (e.g. a DRIP toggle) against the backend's
+  // authoritative computed values.
+  const fetchHoldings = async ({ silent = false } = {}) => {
     const requestId = ++holdingsRequestRef.current
-    setLoading(true)
+    if (!silent) setLoading(true)
     try {
       const res = await pf('/api/holdings')
       const data = await res.json()
@@ -1202,7 +1205,7 @@ export default function ManageHoldings() {
       if (requestId !== holdingsRequestRef.current) return
       setError('Failed to load holdings')
     } finally {
-      if (requestId === holdingsRequestRef.current) setLoading(false)
+      if (requestId === holdingsRequestRef.current && !silent) setLoading(false)
     }
   }
 
@@ -1474,10 +1477,13 @@ export default function ManageHoldings() {
 
   const incTotals = React.useMemo(() => {
     const sum = (key) => filteredHoldings.reduce((s, h) => s + (Number(h[key]) || 0), 0)
+    const monthlyIncome = sum('approx_monthly_income')
+    const reinvested = sum('monthly_income_reinvested')
     return {
-      monthlyIncome: sum('approx_monthly_income'),
-      reinvested: sum('monthly_income_reinvested'),
+      monthlyIncome,
+      reinvested,
       notReinvested: sum('monthly_income_not_reinvested'),
+      reinvestPct: monthlyIncome > 0 ? (reinvested / monthlyIncome) * 100 : 0,
     }
   }, [filteredHoldings])
 
@@ -1678,6 +1684,10 @@ export default function ManageHoldings() {
             <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mo$ Not Reinvested</div>
             <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#ffb300' }}>${fmt(incTotals.notReinvested)}</div>
           </div>
+          <div className="card" style={{ flex: '1 1 140px', minWidth: 140, padding: '0.65rem 1rem' }}>
+            <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em' }}>% Reinvested</div>
+            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#66bb6a' }}>{incTotals.reinvestPct.toFixed(1)}%</div>
+          </div>
         </div>
       )}
 
@@ -1767,9 +1777,18 @@ export default function ManageHoldings() {
                       checked={h.reinvest === 'Y'}
                       onChange={async () => {
                         const newVal = h.reinvest === 'Y' ? 'N' : 'Y'
+                        const mi = Number(h.approx_monthly_income) || 0
+                        const ri = Number(h.monthly_income_reinvested) || 0
+                        // Only fake an all-or-nothing split when the holding is
+                        // already wholly reinvested or wholly not (single account).
+                        // A partial DRIP ratio (Owner/aggregate, where some
+                        // sub-accounts reinvest and others don't) must NOT snap to
+                        // 100%/0% — flip just the flag and let the silent refetch
+                        // below pull the backend's true split.
+                        const isAllOrNothing = ri < 0.005 || Math.abs(ri - mi) < 0.005
                         setHoldings(prev => prev.map(row => {
                           if (row.ticker !== h.ticker) return row
-                          const mi = Number(row.approx_monthly_income) || 0
+                          if (!isAllOrNothing) return { ...row, reinvest: newVal }
                           return {
                             ...row,
                             reinvest: newVal,
@@ -1784,6 +1803,9 @@ export default function ManageHoldings() {
                             body: JSON.stringify({ reinvest: newVal }),
                           })
                           invalidateDashboardCache()
+                          // Reconcile with the backend's authoritative split so
+                          // partial reinvestment ratios stay accurate.
+                          await fetchHoldings({ silent: true })
                         } catch (e) {
                           setHoldings(prev => prev.map(row =>
                             row.ticker === h.ticker ? { ...row, reinvest: h.reinvest, monthly_income_reinvested: h.monthly_income_reinvested, monthly_income_not_reinvested: h.monthly_income_not_reinvested } : row
