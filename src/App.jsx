@@ -31,6 +31,7 @@ import MacroRegimeDashboard from './pages/MacroRegimeDashboard'
 import IncomeGrowthSim from './pages/IncomeGrowthSim'
 import RetirementReadiness from './pages/RetirementReadiness'
 import DividendHistory from './pages/DividendHistory'
+import ReinvestmentImpact from './pages/ReinvestmentImpact'
 import GainsLosses from './pages/GainsLosses'
 import TaxLossHarvest from './pages/TaxLossHarvest'
 import BlendedYield from './pages/BlendedYield'
@@ -129,6 +130,7 @@ function App() {
         <Route path="/consolidation" element={<ConsolidationAnalysis />} />
         <Route path="/macro-dashboard" element={<MacroRegimeDashboard />} />
         <Route path="/dividend-history" element={<DividendHistory />} />
+        <Route path="/reinvestment-impact" element={<ReinvestmentImpact />} />
         <Route path="/scanner" element={<TechnicalScanner />} />
         <Route path="/general-scanner" element={<GeneralScanner />} />
         <Route path="/portfolio-tester" element={<PortfolioTester />} />
@@ -220,6 +222,7 @@ function Nav() {
         <NavLink to="/earnings-calendar">Earnings Calendar</NavLink>
         <NavLink to="/div-compare">Dividend Compare</NavLink>
         <NavLink to="/dividend-history">Dividend History</NavLink>
+        <NavLink to="/reinvestment-impact">Reinvestment Impact</NavLink>
         <NavLink to="/total-return">Total Return</NavLink>
         <NavLink to="/gains-losses">Gains & Losses</NavLink>
         <NavLink to="/safe-withdrawal">Safe Withdrawal</NavLink>
