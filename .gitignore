@@ -23,6 +23,9 @@ dist-electron/
 .env.local
 tmp_*.log
 
+# Debug API response dumps
+*_resp.json
+
 # IDE
 .vscode/
 .idea/
