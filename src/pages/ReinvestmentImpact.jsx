@@ -85,9 +85,12 @@ export default function ReinvestmentImpact() {
   const [marketType, setMarketType] = useState('neutral')
   const [reinvestPct, setReinvestPct] = useState(100)
   const [monthlyContribution, setMonthlyContribution] = useState(0)
+  const [projScopeTicker, setProjScopeTicker] = useState('')  // '' = whole portfolio
 
   const [data, setData] = useState(null)        // historical response
-  const [projData, setProjData] = useState(null)  // projection response
+  // Projection holds all three scenarios so the income chart can switch market
+  // type instantly and the share-growth chart can plot all three at once.
+  const [projScenarios, setProjScenarios] = useState(null)  // { bullish, neutral, bearish }
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -95,6 +98,7 @@ export default function ReinvestmentImpact() {
   // Guards against out-of-order responses: switching granularity fires two
   // fetches (old range, then the reset range) — only apply the latest.
   const reqIdRef = useRef(0)
+  const projReqIdRef = useRef(0)
 
   // Close category dropdown on outside click
   useEffect(() => {
@@ -138,30 +142,43 @@ export default function ReinvestmentImpact() {
   }, [view, monthsBack, categories, scopeTicker, selection, pf])
 
   // ── Projection fetch (reuse Income Growth engine) ──────────────────────────
+  // Fetches all three market scenarios at once so the income chart can switch
+  // instantly and the share-growth chart can show every scenario together.
   const fetchProjection = useCallback(() => {
+    const myId = ++projReqIdRef.current
     setLoading(true)
     setError(null)
-    const override = holdings.map(h => ({
+    const scoped = projScopeTicker ? holdings.filter(h => h.ticker === projScopeTicker) : holdings
+    const override = scoped.map(h => ({
       ticker: h.ticker,
       shares: h.quantity,
       price: h.current_price,
       div_per_share: h.div || 0,
       freq_str: h.div_frequency || 'Q',
       description: (h.description || '').substring(0, 40),
-      reinvest: reinvestPct > 0 && (h.reinvest === 'Y' || h.reinvest === true),
+      // Projection models the user's chosen Reinvest %, not the portfolio's
+      // stored DRIP flag — so setting 100% reinvests even funds marked 'N'.
+      reinvest: reinvestPct > 0,
     }))
-    const payload = { years, market_type: marketType, monthly_contribution: monthlyContribution, reinvest_pct: reinvestPct }
-    if (override.length) payload.holdings_override = override
-    pf('/api/analytics/income-growth-sim', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-      .then(r => r.json())
-      .then(d => { if (d.error) throw new Error(d.error); setProjData(d) })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
-  }, [holdings, years, marketType, monthlyContribution, reinvestPct, pf])
+    const run = (mt) => {
+      const payload = { years, market_type: mt, monthly_contribution: monthlyContribution, reinvest_pct: reinvestPct, monte_carlo: false }
+      if (override.length) payload.holdings_override = override
+      return pf('/api/analytics/income-growth-sim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).then(r => r.json())
+    }
+    Promise.all([run('bullish'), run('neutral'), run('bearish')])
+      .then(([bullish, neutral, bearish]) => {
+        if (myId !== projReqIdRef.current) return
+        const err = [bullish, neutral, bearish].find(d => d && d.error)
+        if (err) throw new Error(err.error)
+        setProjScenarios({ bullish, neutral, bearish })
+      })
+      .catch(e => { if (myId === projReqIdRef.current) setError(e.message) })
+      .finally(() => { if (myId === projReqIdRef.current) setLoading(false) })
+  }, [holdings, years, monthlyContribution, reinvestPct, projScopeTicker, pf])
 
   useEffect(() => {
     if (mode === 'historical') fetchHistorical()
@@ -232,10 +249,13 @@ export default function ReinvestmentImpact() {
   }, [s, xText])
 
   // ── Projection chart data ──────────────────────────────────────────────────
-  const projSeries = projData ? (years <= 5 ? projData.monthly_series : projData.annual_series) : []
+  const SCENARIO_COLORS = { bullish: '#4dff91', neutral: '#f59e0b', bearish: '#e05555' }
+  const projData = projScenarios ? projScenarios[marketType] : null  // selected-scenario response (for income chart + tiles)
+  const seriesKey = years <= 5 ? 'monthly_series' : 'annual_series'
+  const projSeries = projData ? projData[seriesKey] : []
   const projTraces = useMemo(() => {
     if (!projSeries?.length) return []
-    const color = marketType === 'bullish' ? '#4dff91' : marketType === 'bearish' ? '#e05555' : '#f59e0b'
+    const color = SCENARIO_COLORS[marketType]
     return [{
       x: projSeries.map(p => p.label),
       y: projSeries.map(p => p.total_income),
@@ -244,6 +264,22 @@ export default function ReinvestmentImpact() {
       hovertemplate: '%{x}<br>$%{y:,.0f}<extra></extra>', name: 'Projected income',
     }]
   }, [projSeries, marketType])
+
+  // Share-count growth across all three scenarios on one chart.
+  const shareGrowthTraces = useMemo(() => {
+    if (!projScenarios) return []
+    return ['bullish', 'neutral', 'bearish'].map(mt => {
+      const ser = projScenarios[mt]?.[seriesKey] || []
+      return {
+        x: ser.map(p => p.label),
+        y: ser.map(p => p.total_shares),
+        type: 'scatter', mode: 'lines',
+        line: { color: SCENARIO_COLORS[mt], width: 2 },
+        name: mt.charAt(0).toUpperCase() + mt.slice(1),
+        hovertemplate: `%{x}<br>${mt}: %{y:,.2f} sh<extra></extra>`,
+      }
+    })
+  }, [projScenarios, seriesKey])
 
   const rangeOptions = view === 'monthly' ? MONTHLY_RANGE : view === 'weekly' ? WEEKLY_RANGE : YEARLY_RANGE
   const hasData = s && s.labels.length > 0
@@ -351,6 +387,14 @@ export default function ReinvestmentImpact() {
 
         {mode === 'projection' && (
           <>
+            <div className="growth-filter-group">
+              <label>Fund</label>
+              <select value={projScopeTicker} onChange={e => setProjScopeTicker(e.target.value)}
+                style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: '#0a1929', color: '#c5d0dc', border: '1px solid #1a3a5c', borderRadius: '4px', minWidth: '160px' }}>
+                <option value="">Whole Portfolio</option>
+                {holdings.map(h => <option key={h.ticker} value={h.ticker}>{h.ticker}</option>)}
+              </select>
+            </div>
             <div className="growth-filter-group">
               <label>Horizon</label>
               <div style={{ display: 'flex' }}>
@@ -487,10 +531,10 @@ export default function ReinvestmentImpact() {
             />
           </div>
           {projTraces.length > 0 ? (
-            <div className="da-chart-panel">
+            <div className="da-chart-panel" style={{ marginBottom: '1rem' }}>
               <Plot
                 data={projTraces}
-                layout={{ ...DARK_LAYOUT, title: { text: `Projected Income (${marketType}, ${reinvestPct}% reinvested)`, x: 0.5 }, height: 420, yaxis: { tickprefix: '$', gridcolor: '#293a5f' }, xaxis: { gridcolor: '#1c2a4b' }, showlegend: false }}
+                layout={{ ...DARK_LAYOUT, title: { text: `Projected Income — ${projScopeTicker || 'Whole Portfolio'} (${marketType}, ${reinvestPct}% reinvested)`, x: 0.5 }, height: 420, yaxis: { tickprefix: '$', gridcolor: '#293a5f' }, xaxis: { gridcolor: '#1c2a4b' }, showlegend: false }}
                 config={{ responsive: true, displayModeBar: false }}
                 style={{ width: '100%' }}
                 useResizeHandler
@@ -498,6 +542,23 @@ export default function ReinvestmentImpact() {
             </div>
           ) : (
             <div style={{ textAlign: 'center', padding: '3rem', color: '#8899aa' }}>No projection data.</div>
+          )}
+
+          {shareGrowthTraces.length > 0 && (
+            <div className="da-chart-panel">
+              <Plot
+                data={shareGrowthTraces}
+                layout={{ ...DARK_LAYOUT, title: { text: `Share Count Growth by Scenario — ${projScopeTicker || 'Whole Portfolio'}`, x: 0.5 }, height: 380, yaxis: { title: 'Total shares', gridcolor: '#293a5f' }, xaxis: { gridcolor: '#1c2a4b' }, legend: { orientation: 'h', y: -0.2 } }}
+                config={{ responsive: true, displayModeBar: false }}
+                style={{ width: '100%' }}
+                useResizeHandler
+              />
+              {!projScopeTicker && (
+                <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0.15rem 0 0', fontStyle: 'italic' }}>
+                  Whole-portfolio share count sums shares across funds with different prices — select a single Fund above for a clean per-fund view.
+                </p>
+              )}
+            </div>
           )}
         </>
       )}

@@ -4426,7 +4426,7 @@ function IncomeGrowthHelp() {
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Controls</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
-        <li><strong>Scenario</strong> — Bullish (+5% annual div growth, +8% price drift), Neutral (flat), or Bearish (-20% div cut, -20% price decline). Bearish uses aggressive rates to realistically model income decline even with DRIP compounding.</li>
+        <li><strong>Scenario</strong> — Bullish models a normal expansion (+4% annual distribution growth, +8% price drift), Neutral uses modest nominal growth (+1% distributions, +3% price), and Bearish applies a first-year shock (-35% distributions, -25% price) followed by gradual recovery. The model also caps forward yields by scenario, with tighter caps on unusually high current payouts so they mean-revert instead of compounding forever as if fully sustainable.</li>
         <li><strong>Timeframe</strong> — 1 to 20 years. Preset buttons or custom input.</li>
         <li><strong>Monthly Investment</strong> — Additional dollars invested each month, allocated proportionally across holdings. Increases share count and future income.</li>
         <li><strong>Reinvest All / DRIP toggle</strong> — Toggle DRIP on or off for all holdings at once, or use the per-holding checkboxes in the holdings table below. When DRIP is on, dividends are reinvested to buy more shares, compounding income over time.</li>

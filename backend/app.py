@@ -14588,15 +14588,67 @@ def income_growth_sim():
     market_type = data.get("market_type", "neutral")
     monthly_contribution = max(0.0, float(data.get("monthly_contribution", 0)))
     reinvest_pct = max(0.0, min(100.0, float(data.get("reinvest_pct", 0))))
+    reinvest_frac = reinvest_pct / 100.0  # fraction of each distribution that is reinvested
     use_monte_carlo = bool(data.get("monte_carlo", False))
 
     holdings_override = data.get("holdings_override")  # optional [{ticker, shares, price, div_per_share, freq_str, description}]
 
-    # Scenario rates
-    div_growth_map = {"bullish": 0.05, "neutral": 0.0, "bearish": -0.20}
-    price_drift_map = {"bullish": 0.08, "neutral": 0.0, "bearish": -0.20}
-    annual_div_growth = div_growth_map.get(market_type, 0.0)
-    annual_price_drift = price_drift_map.get(market_type, 0.0)
+    scenario_key = market_type if market_type in {"bullish", "neutral", "bearish"} else "neutral"
+
+    def _scenario_factors(month):
+        """Return distribution and price factors for a realistic scenario path."""
+        y = max(0.0, month / 12.0)
+        if scenario_key == "bullish":
+            # Expansion: price leads, income improves, but yield does not explode.
+            return (1.04 ** y, 1.08 ** y)
+        if scenario_key == "bearish":
+            # Recession/bear: first year shock, then gradual recovery from the
+            # lower base. Distributions fall harder than price in the shock.
+            if month <= 12:
+                phase = month / 12.0
+                return (0.65 ** phase, 0.75 ** phase)
+            recovery_years = (month - 12) / 12.0
+            return (0.65 * (1.04 ** recovery_years), 0.75 * (1.08 ** recovery_years))
+        # Neutral/base case: modest nominal growth in both income and price.
+        return (1.01 ** y, 1.03 ** y)
+
+    def _scenario_monthly_rates(month):
+        """Expected month-over-month factor changes for Monte Carlo bias."""
+        prev_div, prev_price = _scenario_factors(month)
+        next_div, next_price = _scenario_factors(month + 1)
+        div_rate = (next_div / prev_div - 1) if prev_div > 0 else 0.0
+        price_rate = (next_price / prev_price - 1) if prev_price > 0 else 0.0
+        return div_rate, price_rate
+
+    def _yield_ceiling(start_yield):
+        """Forward yield ceiling that prevents unsustainable payout compounding."""
+        if start_yield <= 0:
+            return None
+        if scenario_key == "bearish":
+            if start_yield > 0.12:
+                return min(start_yield * 0.40, 0.12)
+            return start_yield * 0.85
+        if scenario_key == "bullish":
+            if start_yield > 0.12:
+                return min(start_yield * 0.70, 0.22)
+            return start_yield * 1.10
+        if start_yield > 0.12:
+            return min(start_yield * 0.60, 0.16)
+        return start_yield * 1.03
+
+    def _adjusted_dps(h, div_factor, price_factor):
+        """Apply scenario distribution path, then cap yield against modeled price."""
+        base_dps = h["div_per_share"] * div_factor
+        freq = h.get("freq") or 0
+        price = h.get("price") or 0
+        if base_dps <= 0 or freq <= 0 or price <= 0:
+            return base_dps
+        start_yield = (h["div_per_share"] * freq) / price
+        ceiling = _yield_ceiling(start_yield)
+        if ceiling is None:
+            return base_dps
+        cap_dps = price * price_factor * ceiling / freq
+        return min(base_dps, cap_dps)
 
     # Frequency maps (same as drip_projection)
     freq_map = {
@@ -14721,6 +14773,7 @@ def income_growth_sim():
             weights[h["ticker"]] = (h["price"] * h["shares"]) / elig_value if elig_value > 0 else 0
 
     total_months = years * 12
+    final_div_factor, _ = _scenario_factors(total_months)
     now = datetime.now()
     start_year = now.year
     start_month = now.month
@@ -14745,8 +14798,7 @@ def income_growth_sim():
 
         for m in range(1, total_months + 1):
             cal_month, label = _month_label(m)
-            growth_factor = (1 + annual_div_growth) ** (m / 12)
-            price_factor = (1 + annual_price_drift) ** (m / 12)
+            growth_factor, price_factor = _scenario_factors(m)
 
             # Monthly contribution: buy shares at drifted prices
             if monthly_contribution > 0 and weights:
@@ -14769,7 +14821,7 @@ def income_growth_sim():
                 if freq <= 0 or h["div_per_share"] <= 0:
                     continue
                 # Spread annual income evenly across 12 months for display
-                adj_dps = h["div_per_share"] * growth_factor
+                adj_dps = _adjusted_dps(h, growth_factor, price_factor)
                 annual_inc = adj_dps * sim_shares[tk] * freq
                 monthly_inc = annual_inc / 12
                 annual_inc_existing = adj_dps * h["shares"] * freq
@@ -14781,7 +14833,7 @@ def income_growth_sim():
                 pay_months = month_pay_map.get(freq, [])
                 if cal_month in pay_months and h.get("reinvest"):
                     ppm = payments_per_month.get(freq, 1)
-                    drip_amt = adj_dps * sim_drip_shares[tk] * ppm
+                    drip_amt = adj_dps * sim_drip_shares[tk] * ppm * reinvest_frac
                     drip_buys[tk] = drip_amt
 
             # DRIP: reinvest dividends back into the same holdings
@@ -14801,6 +14853,7 @@ def income_growth_sim():
                 "total_income": _safe(month_income),
                 "income_from_existing": _safe(month_income_existing),
                 "income_from_contributions": _safe(month_income_contrib),
+                "total_shares": _safe(sum(sim_shares.values())),
                 "p10": None, "p90": None,
             })
 
@@ -14859,6 +14912,7 @@ def income_growth_sim():
                 "total_income": _safe(yr_total),
                 "income_from_existing": _safe(yr_existing),
                 "income_from_contributions": _safe(yr_contrib),
+                "total_shares": (yr_months[-1].get("total_shares") if yr_months else None),
                 "change_dollar": _safe(change_d),
                 "change_pct": _safe(change_p),
                 "p10": None, "p90": None,
@@ -14875,9 +14929,6 @@ def income_growth_sim():
         div_sigma = 0.015
         # Price noise: sigma ~5% monthly
         price_sigma = 0.05
-
-        monthly_div_bias = annual_div_growth / 12
-        monthly_price_bias = annual_price_drift / 12
 
         # Run N_PATHS simulations
         # For each path, track monthly portfolio income
@@ -14898,6 +14949,7 @@ def income_growth_sim():
                 # Random walk for div and price factors
                 for h in holdings:
                     tk = h["ticker"]
+                    monthly_div_bias, monthly_price_bias = _scenario_monthly_rates(m)
                     div_noise = np.random.normal(monthly_div_bias, div_sigma)
                     price_noise = np.random.normal(monthly_price_bias, price_sigma)
                     cum_div_factor[tk] *= (1 + div_noise)
@@ -14923,7 +14975,7 @@ def income_growth_sim():
                     freq = h["freq"]
                     if freq <= 0 or h["div_per_share"] <= 0:
                         continue
-                    adj_dps = h["div_per_share"] * cum_div_factor[tk]
+                    adj_dps = _adjusted_dps(h, cum_div_factor[tk], cum_price_factor[tk])
                     annual_inc = adj_dps * sim_shares_p[tk] * freq
                     monthly_inc = annual_inc / 12
                     annual_inc_existing = adj_dps * h["shares"] * freq
@@ -14934,7 +14986,7 @@ def income_growth_sim():
                     pay_months = month_pay_map.get(freq, [])
                     if cal_month in pay_months and h.get("reinvest"):
                         ppm = payments_per_month.get(freq, 1)
-                        drip_amt = adj_dps * sim_drip_shares_p[tk] * ppm
+                        drip_amt = adj_dps * sim_drip_shares_p[tk] * ppm * reinvest_frac
                         mc_drip_buys[tk] = drip_amt
 
                 # DRIP reinvest
@@ -15033,8 +15085,8 @@ def income_growth_sim():
         tk = h["ticker"]
         start_ann = h["div_per_share"] * h["freq"] * h["shares"]
         end_shares = final_shares.get(tk, h["shares"])
-        growth_factor = (1 + annual_div_growth) ** years
-        end_ann = h["div_per_share"] * growth_factor * h["freq"] * end_shares
+        _, final_price_factor = _scenario_factors(total_months)
+        end_ann = _adjusted_dps(h, final_div_factor, final_price_factor) * h["freq"] * end_shares
         growth_pct = ((end_ann / start_ann - 1) * 100) if start_ann > 0 else 0
         holdings_out.append({
             "ticker": tk,
@@ -15060,7 +15112,7 @@ def income_growth_sim():
         annual_series=annual_series,
         holdings=holdings_out,
         years=years,
-        market_type=market_type,
+        market_type=scenario_key,
         projected_annual_income=_safe(projected_annual),
     )
 
