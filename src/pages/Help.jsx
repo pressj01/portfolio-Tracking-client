@@ -34,6 +34,7 @@ const GROUPS = [
     sections: [
       { id: 'dashboard', label: 'Dashboard' },
       { id: 'holdings', label: 'Holdings' },
+      { id: 'reinvestment-impact', label: 'Reinvestment Impact' },
       { id: 'categories', label: 'Categories' },
       { id: 'growth', label: 'Growth' },
       { id: 'growth-2', label: 'Portfolio Growth 2' },
@@ -792,6 +793,45 @@ function HoldingsHelp() {
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>The DRIP checkbox appears in the Holdings table and can be toggled directly without opening the edit form. When enabled, dividends are automatically reinvested into additional shares using historical prices from the payment date.</p>
       </div>
 
+      {/* ── % Reinvested Card ─────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>% Reinvested Card (Income Summary)</h3>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/holdings/Updated-holdings.jpg" alt="Holdings income summary cards including % Reinvested" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>
+          The income summary above the table now includes a <strong>% Reinvested</strong> card alongside
+          Est. Monthly Income, Mo$ Reinvested, and Mo$ Not Reinvested.
+        </p>
+      </div>
+
+      <p style={{ marginBottom: '0.75rem' }}>
+        The Holdings page now shows four income summary cards above the table:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Est. Monthly Income</strong> — total estimated monthly income across all displayed holdings.</li>
+        <li><strong>Mo$ Reinvested</strong> — the dollar portion of monthly income being reinvested (DRIP on).</li>
+        <li><strong>Mo$ Not Reinvested</strong> — the portion being taken as cash (DRIP off).</li>
+        <li><strong style={{ color: '#66bb6a' }}>% Reinvested</strong> — the income-weighted fraction being reinvested: Mo$ Reinvested ÷ Est. Monthly Income × 100. This updates <strong>live</strong> as you toggle DRIP checkboxes in the table, so you can immediately see the portfolio-level impact of any change.</li>
+      </ul>
+
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>How % Reinvested is calculated.</strong> The percentage is <em>income-weighted</em>, not a
+        simple count of how many holdings have DRIP on. A holding with $500/mo income counts far more than
+        one with $10/mo. For the Owner portfolio, where a single ticker may be held across multiple
+        sub-accounts (some reinvesting, some not), the per-ticker reinvested amount is derived from the
+        sub-account DRIP ratios rather than a binary 100%/0% — so the number accurately reflects a partial
+        reinvestment mix across accounts. The same metric appears on the Dashboard and seeds the default
+        Reinvest % on the Reinvestment Impact page.
+      </p>
+
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>DRIP toggle accuracy.</strong> Toggling the DRIP checkbox on a holding that is only
+        partially reinvested (e.g. a ticker held in three accounts where only one reinvests) no longer
+        snaps the displayed split to 100%/0%. The toggle flips the flag immediately for responsiveness,
+        then silently re-fetches the authoritative split from the backend so the income cards and % Reinvested
+        always reflect the true per-account ratio rather than a fabricated all-or-nothing value.
+      </p>
+
       {/* ── Toolbar Buttons ─────────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Toolbar Buttons</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -1241,6 +1281,177 @@ function HoldingsHelp() {
         <strong>Tax lots:</strong> The DRIP simulation does not create BUY transaction records. If you
         need individual DRIP lots for cost-basis tracking or the Annual Tax Report, import your broker's
         transaction history — each DRIP reinvestment will appear as a BUY lot with the correct date and price.
+      </div>
+    </div>
+  )
+}
+
+function ReinvestmentImpactHelp() {
+  return (
+    <div>
+      <h2>Reinvestment Impact</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The <strong>Reinvestment Impact</strong> page shows how dividend reinvestment (DRIP) is reshaping your
+        portfolio over time — decomposing payout growth into share accumulation, distribution-rate changes,
+        and price effects — and projects how reinvestment compounds income forward under different market
+        scenarios. It has two modes: <strong>Historical</strong> and <strong>Projection</strong>.
+      </p>
+
+      <p style={{ marginBottom: '1rem' }}>
+        The page always shows the portfolio's current DRIP rate in the subtitle:
+        <em> "Currently reinvesting 33.8% of this portfolio's monthly income."</em> This is the
+        income-weighted fraction — the dollar amount reinvested divided by total estimated monthly income —
+        and is kept in sync with the DRIP toggles on the Holdings page and the DRIP Matrix.
+      </p>
+
+      {/* ── Historical ─────────────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Historical Tab</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Replays your portfolio's dividend-reinvestment history using recorded payments and Yahoo Finance
+        price history, then charts that history at Annual, Monthly, or Weekly granularity.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/reinvestment-impact/reinvestment-impact-historical1.jpg" alt="Reinvestment Impact historical overview" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Historical tab showing the four summary tiles and the Distributions Over Time chart for the whole portfolio.</p>
+      </div>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Summary Tiles</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Total Distributions</strong> — sum of all payouts received in the selected window.</li>
+        <li><strong>DRIP Shares Added</strong> — cumulative shares purchased by reinvesting those distributions.</li>
+        <li><strong>Growth From DRIP</strong> — the fraction of total payout change attributable to share accumulation (vs. rate or price changes).</li>
+        <li><strong>Annual Run-Rate</strong> — the current annualised income implied by the most recent period.</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Filters</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Granularity</strong> — Annual, Monthly, or Weekly grouping of the data.</li>
+        <li><strong>Time Range</strong> — adjusts to the granularity (e.g. 3 Mo – 24 Mo for Weekly; 2 – 10 Yr for Annual).</li>
+        <li><strong>Categories</strong> — multi-select dropdown to restrict the view to one or more portfolio categories (Anchors, Boosters, etc.). All Holdings is the default.</li>
+        <li><strong>Scope</strong> — zoom in to a single ticker. Selecting a fund also reveals the Break-Even panel (see below).</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/reinvestment-impact/Historical-filter.jpg" alt="Historical filter controls" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Granularity, Time Range, Categories, and Scope filters in the Historical tab.</p>
+      </div>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Charts</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Distributions Over Time</strong> — bar chart of total payouts per period. Green bars are actual recorded payments; blue bars are reconstructed from Yahoo price and dividend history (used where individual lot history isn't tracked).</li>
+        <li><strong>DRIP Share Growth</strong> — bars show incremental shares added each period; the amber line shows the running cumulative total.</li>
+        <li><strong>Why Payouts Changed</strong> — stacked attribution chart decomposing each period's payout change into three components: share growth from DRIP (green), distribution-rate changes (blue), and price/interaction effects (amber).</li>
+        <li><strong>Top Contributors table</strong> — when viewing the whole portfolio, a sortable table of per-ticker distribution totals, DRIP shares, and reinvestment status. Click any row to scope the charts to that ticker.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/reinvestment-impact/reinvest-impact-historicalbottom.jpg" alt="Historical charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>DRIP Share Growth and Why Payouts Changed charts, followed by the Top Contributors table.</p>
+      </div>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/reinvestment-impact/Historical-individual.jpg" alt="Historical individual ticker view" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Scoping to a single ticker (DIVO shown) narrows all three charts and reveals the Break-Even panel.</p>
+      </div>
+
+      {/* ── Break-Even Panel ──────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Break-Even Panel (Single Ticker)</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        When you scope to a single holding (via Scope in Historical mode, or Fund in Projection mode),
+        a <strong>Break-Even</strong> panel appears showing how far the position is from recovering
+        its cost basis — and how reinvestment alone can close that gap over time.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/reinvestment-impact/Historical-Divo.jpg" alt="Break-Even panel for DIVO" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>The Break-Even panel for a single holding, showing both the cost-basis and total-return legs side by side.</p>
+      </div>
+
+      <p style={{ marginBottom: '0.5rem' }}>The panel shows two legs side by side:</p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>
+          <strong>Cost Basis</strong> — compares position value (shares × current price) to what you paid.
+          <ul style={{ paddingLeft: '1.25rem', marginTop: '0.25rem', lineHeight: '1.7' }}>
+            <li>If <em>underwater</em>: shows <span style={{ color: '#f59e0b' }}>% still needed to break even</span>, how many more shares at today's price would close the gap, and approximately how long reinvestment alone takes to get there at a flat price.</li>
+            <li>If <em>recovered</em>: shows <span style={{ color: '#4dff91' }}>% above break-even ✓</span>.</li>
+          </ul>
+        </li>
+        <li>
+          <strong>Total Return</strong> — the same calculation but counts dividends already collected (value + dividends received vs. cost). For income-focused funds this leg often crosses break-even even while the price is still below cost.
+        </li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The time-to-break-even estimate assumes the price stays flat and distributions continue at the current annual rate — it is a rough guide, not a guarantee.
+        For positions that are deeply underwater (&gt;90% down) the panel shows the drawdown percentage and a note about recovery practicality instead of an impractically large share count.
+      </p>
+
+      {/* ── Projection ──────────────────────────────────────────── */}
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Projection Tab</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Projects how portfolio income and share count evolve over 1–20 years under three market scenarios
+        simultaneously, using the current distribution rate and your chosen reinvestment percentage.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/reinvestment-impact/Projection-portfolio.jpg" alt="Projection tab whole portfolio" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Projection tab for the whole portfolio in neutral scenario over 10 years.</p>
+      </div>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Controls</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Fund</strong> — project a single holding instead of the whole portfolio. Selecting a fund reveals the Break-Even panel and clears any active category filter.</li>
+        <li><strong>Categories</strong> — multi-select to restrict the projection to one or more portfolio categories (e.g. project only your Boosters). Hidden when a specific Fund is selected.</li>
+        <li><strong>Horizon</strong> — 1, 3, 5, 10, or 20 years. Horizons ≤ 5 yr show a monthly income series; longer horizons use an annual series.</li>
+        <li><strong>Market</strong> — Neutral (modest +1%/yr distribution growth), Bullish (+4%/yr), or Bearish (first-year shock then gradual recovery). All three scenarios are computed simultaneously; the income chart switches instantly when you change Market without re-fetching.</li>
+        <li><strong>Reinvest %</strong> — the fraction of each distribution that is reinvested as new shares. Defaults to the portfolio's actual computed DRIP rate (shown as "Portfolio: X%" below the input) so you start from your real-world baseline. Adjust to model what-if scenarios.</li>
+        <li><strong>Monthly Add $</strong> — a fixed dollar contribution added each month, allocated across holdings by market value weight.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/reinvestment-impact/projections-categories.jpg" alt="Projection with categories filter" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Projection scoped to a single category (e.g. Boosters), showing only that slice of the portfolio's projected income.</p>
+      </div>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Summary Tiles</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Current Annual Income</strong> — computed as Σ(latest declared distribution × frequency × shares) for the selected scope. This can differ slightly from the dashboard's "Est. Annual Income," which uses a smoothed per-holding estimate; the gap is largest for variable-payout option-income funds whose most recent declared distribution differs from their trailing average.</li>
+        <li><strong>Projected in N yr</strong> — the annualised income in the final year of the simulation for the selected market scenario.</li>
+        <li><strong>Growth</strong> — percentage change from current to projected.</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Charts</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Projected Income</strong> — line chart for the selected market scenario. Shows monthly income for horizons ≤ 5 yr, annual totals for longer horizons.</li>
+        <li><strong>Share Count Growth by Scenario</strong> — all three scenarios (Bullish, Neutral, Bearish) plotted together so you can see how differently compounding plays out under each market path. For single-fund views this shows clean per-fund share growth; the whole-portfolio view sums shares across all funds (different prices, so the absolute number is less meaningful).</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/reinvestment-impact/projection-all-holdings.jpg" alt="Projection all holdings scenario comparison" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Share Count Growth chart showing all three scenarios side by side for easy comparison.</p>
+      </div>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/reinvestment-impact/projection-individualtop.jpg" alt="Projection individual fund top" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="/help-screenshots/reinvestment-impact/projection-indiv-bottom.jpg" alt="Projection individual fund bottom" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333', marginTop: '0.75rem' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Projecting a single fund shows the Break-Even panel, the income chart, and the per-fund share-count growth across all three scenarios.</p>
+      </div>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>How the Projection Model Works</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Each holding's latest declared distribution per share grows at the scenario's annual rate (Neutral +1%, Bullish +4%, Bearish shock then recovery).</li>
+        <li>Distributions flagged for reinvestment buy new shares at the drifted price; those shares earn dividends in every subsequent period — compounding.</li>
+        <li>The Bearish scenario models a first-year distribution shock (~35% down in month 12) followed by gradual recovery; this is a market scenario, not a sustainability haircut — high-yielding option-income funds are not capped.</li>
+        <li>Monthly contributions are allocated across holdings by market-value weight and also earn dividends once invested.</li>
+        <li>Holdings with no declared dividend per share are excluded from income calculations but still receive contribution-based share purchases.</li>
+      </ul>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.5rem' }}>
+        <strong>Note on high-yield funds:</strong> The projection does not impose a yield ceiling or sustainability
+        haircut. Option-income ETFs and CEFs with yields above 12% are modelled at face value because their
+        distributions are largely sustainable (funded by options premiums, not return-of-capital erosion).
+        The scenario growth rates (±1–4% / yr) still apply, so projections reflect modestly growing or
+        declining distributions rather than holding them flat forever.
       </div>
     </div>
   )
@@ -5592,6 +5803,7 @@ const CONTENT_MAP = {
   'blended-yield': BlendedYieldHelp,
   dashboard: DashboardHelp,
   holdings: HoldingsHelp,
+  'reinvestment-impact': ReinvestmentImpactHelp,
   categories: CategoriesHelp,
   growth: GrowthHelp,
   'growth-2': PortfolioGrowth2Help,
