@@ -893,6 +893,9 @@ const COLUMNS = [
   { key: 'description', label: 'Description', type: 'string' },
   { key: 'category', label: 'Category', type: 'string' },
   { key: 'quantity', label: 'Shares', type: 'number' },
+  { key: 'base_quantity', label: 'Base Shares', type: 'number' },
+  { key: 'shares_bought_from_dividend', label: 'DRIP Shares', type: 'number' },
+  { key: 'total_cash_reinvested', label: 'Cash Reinvested', type: 'number' },
   { key: 'price_paid', label: 'Price Paid', type: 'number' },
   { key: 'current_price', label: 'Current', type: 'number' },
   { key: 'purchase_date', label: 'Purchase Date', type: 'string' },
@@ -1740,6 +1743,9 @@ export default function ManageHoldings() {
                   </td>
                   <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[2], minWidth: FROZEN_WIDTHS[2], maxWidth: FROZEN_WIDTHS[2], zIndex: 1 }}>{h.category || '-'}</td>
                   <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[3], minWidth: FROZEN_WIDTHS[3], maxWidth: FROZEN_WIDTHS[3], zIndex: 1 }}>{fmt(h.quantity)}</td>
+                  <td>{fmt(h.base_quantity, 4)}</td>
+                  <td>{fmt(h.shares_bought_from_dividend, 4)}</td>
+                  <td>{h.total_cash_reinvested != null ? '$' + fmt(h.total_cash_reinvested) : '-'}</td>
                   <td>${fmt(h.price_paid, 4)}</td>
                   <td>${fmt(h.current_price)}</td>
                   <td>{h.purchase_date || '-'}</td>

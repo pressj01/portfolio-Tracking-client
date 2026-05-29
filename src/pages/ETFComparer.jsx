@@ -79,6 +79,11 @@ function compact(value) {
   return Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 2 }).format(n)
 }
 
+function positiveNumber(value) {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 function number(value, digits = 2) {
   const n = Number(value)
   if (!Number.isFinite(n)) return '-'
@@ -89,6 +94,56 @@ function ratioPct(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return '-'
   return `${(Math.abs(n) <= 1 ? n * 100 : n).toFixed(2)}%`
+}
+
+function yieldPct(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+  return `${n.toFixed(2)}%`
+}
+
+function annualDistributionMultiplier(frequency, history) {
+  const freq = String(frequency || '').trim().toLowerCase()
+  if (['w', 'weekly', '52'].includes(freq)) return 52
+  if (['m', 'monthly', '12'].includes(freq)) return 12
+  if (['q', 'quarterly', '4'].includes(freq)) return 4
+  if (['sa', 'semi-annually', 'semiannually', 'semiannual', 'semi-annual', '2'].includes(freq)) return 2
+  if (['a', 'annual', 'annually', 'yearly', '1'].includes(freq)) return 1
+
+  const dated = (Array.isArray(history) ? history : [])
+    .map(item => ({ ...item, dateValue: new Date(item?.date).getTime() }))
+    .filter(item => Number.isFinite(item.dateValue))
+    .sort((a, b) => b.dateValue - a.dateValue)
+  if (dated.length < 2) return 4
+  const gapDays = Math.abs(dated[0].dateValue - dated[1].dateValue) / (24 * 60 * 60 * 1000)
+  if (gapDays <= 10) return 52
+  if (gapDays <= 45) return 12
+  if (gapDays <= 115) return 4
+  if (gapDays <= 240) return 2
+  return 1
+}
+
+function approxYieldFromCurrentDistributions(profile) {
+  const price = Number(profile?.price)
+  if (!Number.isFinite(price) || price <= 0) return null
+
+  const latest = (Array.isArray(profile?.distribution_history) ? profile.distribution_history : [])
+    .map(item => ({
+      amount: Number(item?.amount),
+      dateValue: new Date(item?.date).getTime(),
+    }))
+    .filter(item => Number.isFinite(item.amount) && item.amount > 0)
+    .sort((a, b) => {
+      const aDate = Number.isFinite(a.dateValue) ? a.dateValue : 0
+      const bDate = Number.isFinite(b.dateValue) ? b.dateValue : 0
+      return bDate - aDate
+    })
+    .slice(0, 10)
+
+  if (!latest.length) return null
+  const avgDistribution = latest.reduce((sum, item) => sum + item.amount, 0) / latest.length
+  const multiplier = annualDistributionMultiplier(profile?.distribution_frequency, profile?.distribution_history)
+  return (avgDistribution * multiplier / price) * 100
 }
 
 function normalize(value) {
@@ -233,8 +288,11 @@ export default function ETFComparer() {
         .then(r => r.json())
         .then(d => {
           if (cancelled || d.error) return
-          setHoldings(prev => ({ ...prev, [sym]: d.top_holdings || [] }))
-          setHoldingsLoadedNonce(prev => ({ ...prev, [sym]: refreshNonce }))
+          const topHoldings = d.top_holdings || []
+          setHoldings(prev => ({ ...prev, [sym]: topHoldings }))
+          if (topHoldings.length) {
+            setHoldingsLoadedNonce(prev => ({ ...prev, [sym]: refreshNonce }))
+          }
         })
         .catch(() => {})
     })
@@ -518,18 +576,33 @@ export default function ETFComparer() {
       .map(label => periodByLabel.get(label) || { label, returns: {} })
   }, [averageData])
 
+  const averageSymbols = useMemo(
+    () => averageData?.symbols?.length ? averageData.symbols : symbols,
+    [averageData, symbols],
+  )
+  const aumBySymbol = useMemo(() => {
+    const profiles = data?.profiles || {}
+    return Object.fromEntries(symbols.map(sym => [sym, positiveNumber(profiles[sym]?.assets)]))
+  }, [data, symbols])
+  const approxYieldBySymbol = useMemo(() => {
+    const profiles = data?.profiles || {}
+    return Object.fromEntries(symbols.map(sym => [sym, approxYieldFromCurrentDistributions(profiles[sym])]))
+  }, [data, symbols])
+
   const downloadAverageReturns = useCallback(() => {
-    const exportSymbols = averageData?.symbols?.length ? averageData.symbols : symbols
+    const exportSymbols = averageSymbols
     if (!exportSymbols.length || !averageTablePeriods.length) return
     const escapeCsv = value => {
       const text = value == null ? '' : String(value)
       return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
     }
-    const headers = ['Symbol', ...averageTablePeriods.map(p => `${p.label === 'YTD' ? 'Year-to-date' : p.label} Return (%)`)]
+    const headers = ['Symbol', 'AUM', 'Approx yield (%)', ...averageTablePeriods.map(p => `${p.label === 'YTD' ? 'Year-to-date' : p.label} Return (%)`)]
     const lines = [
       headers.map(escapeCsv).join(','),
       ...exportSymbols.map(sym => [
         sym,
+        aumBySymbol[sym] == null || Number.isNaN(Number(aumBySymbol[sym])) ? '' : Number(aumBySymbol[sym]),
+        approxYieldBySymbol[sym] == null || Number.isNaN(Number(approxYieldBySymbol[sym])) ? '' : Number(approxYieldBySymbol[sym]).toFixed(2),
         ...averageTablePeriods.map(p => {
           const value = p.returns?.[sym]
           return value == null || Number.isNaN(Number(value)) ? '' : Number(value).toFixed(2)
@@ -547,7 +620,7 @@ export default function ETFComparer() {
     URL.revokeObjectURL(url)
     setDownloadStatus(`Downloaded ${a.download}`)
     window.setTimeout(() => setDownloadStatus(''), 4000)
-  }, [averageData, averageTablePeriods, symbols])
+  }, [approxYieldBySymbol, aumBySymbol, averageSymbols, averageTablePeriods])
 
   return (
     <div className="page etf-comparer-page">
@@ -767,14 +840,18 @@ export default function ETFComparer() {
               <thead>
                 <tr>
                   <th>Symbol</th>
+                  <th>AUM</th>
+                  <th>Approx yield</th>
                   {averageTablePeriods
                     .map(p => <th key={p.label}>{p.label === 'YTD' ? 'Year-to-date' : p.label}</th>)}
                 </tr>
               </thead>
               <tbody>
-                {(averageData.symbols || symbols).map((sym, idx) => (
+                {averageSymbols.map((sym, idx) => (
                   <tr key={sym}>
                     <td><span className="etfc-series-swatch" style={{ background: COLORS[idx % COLORS.length] }} />{sym}</td>
+                    <td>{compact(aumBySymbol[sym])}</td>
+                    <td>{yieldPct(approxYieldBySymbol[sym])}</td>
                     {averageTablePeriods
                       .map(p => <td key={p.label}>{pct(p.returns?.[sym])}</td>)}
                   </tr>

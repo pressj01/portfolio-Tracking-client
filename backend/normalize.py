@@ -160,9 +160,10 @@ def snapshot_nav(profile_id=1, nav_date=None):
         if total_value <= 0:
             return 0.0
         conn.execute(
-            """INSERT INTO portfolio_nav (profile_id, nav_date, total_value)
-               VALUES (?, ?, ?)
-               ON CONFLICT(profile_id, nav_date) DO UPDATE SET total_value = excluded.total_value""",
+            """INSERT INTO portfolio_nav (profile_id, nav_date, total_value, source)
+               VALUES (?, ?, ?, 'snapshot')
+               ON CONFLICT(profile_id, nav_date) DO UPDATE SET
+                   total_value = excluded.total_value, source = 'snapshot'""",
             (profile_id, snapshot_date, round(total_value, 2)),
         )
         conn.commit()

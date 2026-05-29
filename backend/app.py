@@ -2628,6 +2628,12 @@ def _import_positions(parsed, profile_id, nav_date=None):
                     "gain_or_loss = ?",
                     "base_quantity = ?",
                     "import_date = ?",
+                    # Reset simulated-DRIP accumulators so the post-import refresh
+                    # starts fresh from the newly imported quantity. Without this
+                    # the stale simulated shares accumulate across re-imports and
+                    # quantity diverges from what the broker reports.
+                    "shares_bought_from_dividend = 0",
+                    "total_cash_reinvested = 0",
                     """description = CASE WHEN description IS NULL OR description = ''
                                        THEN ? ELSE description END""",
                 ]
@@ -2770,9 +2776,10 @@ def _record_positions_nav_only(parsed, profile_id, nav_date):
     conn = get_connection()
     try:
         conn.execute(
-            """INSERT INTO portfolio_nav (profile_id, nav_date, total_value)
-               VALUES (?, ?, ?)
-               ON CONFLICT(profile_id, nav_date) DO UPDATE SET total_value = excluded.total_value""",
+            """INSERT INTO portfolio_nav (profile_id, nav_date, total_value, source)
+               VALUES (?, ?, ?, 'snapshot')
+               ON CONFLICT(profile_id, nav_date) DO UPDATE SET
+                   total_value = excluded.total_value, source = 'snapshot'""",
             (profile_id, nav_date, total_value),
         )
         conn.commit()
@@ -3188,43 +3195,43 @@ def api_nav_snapshot():
     })
 
 
-@app.route("/api/nav/backfill", methods=["POST"])
-def api_nav_backfill():
-    """Backfill portfolio_nav history by replaying transactions against yfinance prices."""
+def _nav_replay_blocked(profile_id, conn):
+    """True when a profile's NAV must come from authoritative snapshots, not transaction replay."""
+    return (
+        _profile_is_positions_managed(profile_id, conn)
+        and _profile_broker_source(profile_id, conn) in _SNOWBALL_LAYERED_BROKER_SOURCES
+    )
+
+
+_NAV_REPLAY_BLOCKED_MSG = (
+    "NAV backfill is disabled for broker-position portfolios because transaction "
+    "imports are recordkeeping only. Use Record NAV or position-file imports to add "
+    "authoritative daily snapshots."
+)
+
+
+def _compute_backfill_nav_rows(profile_id, existing_nav):
+    """Replay BUY/SELL transactions against actual (unadjusted) closing prices.
+
+    Returns (nav_rows, earliest, error, status). nav_rows is a list of
+    (profile_id, nav_date, total_value) tuples for trading days NOT already in
+    `existing_nav`. On failure, nav_rows is None and (error, status) describe it.
+    """
     import warnings
-    import numpy as np
     warnings.filterwarnings("ignore")
 
-    profile_id = get_profile_id()
     conn = get_connection()
     try:
-        if (
-            _profile_is_positions_managed(profile_id, conn)
-            and _profile_broker_source(profile_id, conn) in _SNOWBALL_LAYERED_BROKER_SOURCES
-        ):
-            return jsonify({
-                "error": (
-                    "NAV backfill is disabled for broker-position portfolios because transaction "
-                    "imports are recordkeeping only. Use Record NAV or position-file imports to add "
-                    "authoritative daily snapshots."
-                )
-            }), 400
         txns = conn.execute(
             "SELECT ticker, transaction_type, transaction_date, shares, price_per_share "
             "FROM transactions WHERE profile_id = ? AND transaction_type IN ('BUY', 'SELL') "
             "ORDER BY transaction_date, id",
             (profile_id,),
         ).fetchall()
-        if not txns:
-            return jsonify({"error": "No transactions found to backfill from."}), 400
-
-        existing_nav = set(
-            r[0] for r in conn.execute(
-                "SELECT nav_date FROM portfolio_nav WHERE profile_id = ?", (profile_id,)
-            ).fetchall()
-        )
     finally:
         conn.close()
+    if not txns:
+        return None, None, "No transactions found to backfill from.", 400
 
     events = []
     for t in txns:
@@ -3240,23 +3247,23 @@ def api_nav_backfill():
     yahoo_symbols = list(dict.fromkeys(yahoo_map.values()))
 
     try:
+        # auto_adjust=False so we replay against the ACTUAL (unadjusted) close that
+        # traded on each date. Adjusted closes back-discount every distribution since,
+        # which for an income portfolio (CEFs, covered-call ETFs) understates past NAV
+        # and makes backfilled days dip below real recorded snapshots -- corrupting the chart.
         raw = _chunked_yf_download(
-            " ".join(yahoo_symbols), start=earliest, auto_adjust=True, progress=False
+            " ".join(yahoo_symbols), start=earliest, auto_adjust=False, progress=False
         )
         if raw.empty:
-            return jsonify({"error": "Could not download price history."}), 500
+            return None, None, "Could not download price history.", 500
     except Exception as e:
-        return jsonify({"error": f"yfinance download failed: {e}"}), 500
+        return None, None, f"yfinance download failed: {e}", 500
 
     if isinstance(raw.columns, pd.MultiIndex):
         close = raw["Close"].dropna(how="all")
     else:
         close = raw[["Close"]].dropna(how="all")
         close.columns = [yahoo_symbols[0]]
-
-    reverse_yahoo = {}
-    for app_ticker, yahoo_sym in yahoo_map.items():
-        reverse_yahoo.setdefault(yahoo_sym, app_ticker)
 
     price_df = pd.DataFrame(index=close.index)
     for app_ticker, yahoo_sym in yahoo_map.items():
@@ -3266,7 +3273,7 @@ def api_nav_backfill():
     price_df = price_df.ffill()
     dates = sorted(price_df.index)
     if not dates:
-        return jsonify({"error": "No price data available for backfill."}), 500
+        return None, None, "No price data available for backfill.", 500
 
     positions = {}
     event_idx = 0
@@ -3299,17 +3306,114 @@ def api_nav_backfill():
                 px = price_df.loc[dt, ticker]
                 if pd.notna(px):
                     total += qty * float(px)
-                else:
-                    total += 0
         if total > 0:
             nav_rows.append((profile_id, dt_str, round(total, 2)))
 
+    return nav_rows, earliest, None, 200
+
+
+def _write_backfill_nav_rows(nav_rows):
+    """Upsert replayed NAV rows, tagging them 'backfill' so a repair can regenerate them."""
     conn = get_connection()
     try:
         for row in nav_rows:
             conn.execute(
-                "INSERT INTO portfolio_nav (profile_id, nav_date, total_value) "
-                "VALUES (?, ?, ?) ON CONFLICT(profile_id, nav_date) DO UPDATE SET total_value = excluded.total_value",
+                "INSERT INTO portfolio_nav (profile_id, nav_date, total_value, source) "
+                "VALUES (?, ?, ?, 'backfill') ON CONFLICT(profile_id, nav_date) DO UPDATE SET "
+                "total_value = excluded.total_value, source = 'backfill'",
+                row,
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@app.route("/api/nav/backfill", methods=["POST"])
+def api_nav_backfill():
+    """Fill MISSING days in portfolio_nav by replaying transactions against actual prices.
+
+    Never overwrites an existing row -- recorded snapshots and prior backfills are kept.
+    """
+    profile_id = get_profile_id()
+    conn = get_connection()
+    try:
+        if _nav_replay_blocked(profile_id, conn):
+            return jsonify({"error": _NAV_REPLAY_BLOCKED_MSG}), 400
+        existing_nav = set(
+            r[0] for r in conn.execute(
+                "SELECT nav_date FROM portfolio_nav WHERE profile_id = ?", (profile_id,)
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+
+    nav_rows, earliest, error, status = _compute_backfill_nav_rows(profile_id, existing_nav)
+    if error:
+        return jsonify({"error": error}), status
+
+    _write_backfill_nav_rows(nav_rows)
+    return jsonify({
+        "message": f"Backfilled {len(nav_rows)} NAV snapshots from {earliest} to today.",
+        "rows_added": len(nav_rows),
+        "start_date": earliest,
+    })
+
+
+@app.route("/api/nav/repair", methods=["POST"])
+def api_nav_repair():
+    """Rebuild a distorted chart: drop replayed/legacy NAV rows and regenerate them.
+
+    Deletes only rows that are NOT authoritative snapshots (source 'backfill' or the
+    untagged legacy rows an older buggy backfill wrote) and never today's live value,
+    then replays the corrected (unadjusted-price) history. Recorded snapshots are kept.
+    A timestamped database backup is taken first.
+    """
+    profile_id = get_profile_id()
+    conn = get_connection()
+    try:
+        if _nav_replay_blocked(profile_id, conn):
+            return jsonify({"error": _NAV_REPLAY_BLOCKED_MSG}), 400
+    finally:
+        conn.close()
+
+    today_str = datetime.date.today().isoformat()
+
+    # Rows we keep: authoritative snapshots and today's live value. Everything else
+    # (replayed 'backfill' rows + untagged legacy rows) is what we rebuild.
+    conn = get_connection()
+    try:
+        protected = set(
+            r[0] for r in conn.execute(
+                "SELECT nav_date FROM portfolio_nav WHERE profile_id = ? "
+                "AND (source = 'snapshot' OR nav_date >= ?)",
+                (profile_id, today_str),
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+
+    # Compute the corrected history BEFORE deleting anything, so a price-download
+    # failure can never leave the chart with points removed but not regenerated.
+    nav_rows, earliest, error, status = _compute_backfill_nav_rows(profile_id, protected)
+    if error:
+        return jsonify({"error": error}), status
+
+    backup_path = _create_import_backup(profile_id=profile_id)
+    backup_name = os.path.basename(backup_path) if backup_path else None
+
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "DELETE FROM portfolio_nav WHERE profile_id = ? AND nav_date < ? "
+            "AND (source IS NULL OR source = 'backfill')",
+            (profile_id, today_str),
+        )
+        deleted = cur.rowcount
+        for row in nav_rows:
+            conn.execute(
+                "INSERT INTO portfolio_nav (profile_id, nav_date, total_value, source) "
+                "VALUES (?, ?, ?, 'backfill') ON CONFLICT(profile_id, nav_date) DO UPDATE SET "
+                "total_value = excluded.total_value, source = 'backfill'",
                 row,
             )
         conn.commit()
@@ -3317,9 +3421,15 @@ def api_nav_backfill():
         conn.close()
 
     return jsonify({
-        "message": f"Backfilled {len(nav_rows)} NAV snapshots from {earliest} to today.",
+        "message": (
+            f"Repaired chart: removed {deleted} distorted point(s) and regenerated "
+            f"{len(nav_rows)} from actual prices ({earliest} to today). "
+            "Recorded snapshots were preserved."
+        ),
+        "deleted": deleted,
         "rows_added": len(nav_rows),
         "start_date": earliest,
+        "backup": backup_name,
     })
 
 

@@ -1116,10 +1116,18 @@ def ensure_tables_exist(conn=None):
             profile_id  INTEGER NOT NULL DEFAULT 1,
             nav_date    DATE NOT NULL,
             total_value REAL NOT NULL,
+            source      TEXT,
             created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (profile_id, nav_date)
         )
     """)
+
+    # source: 'snapshot' = authoritative recorded value, 'backfill' = replayed from
+    # transactions. Lets the chart repair regenerate only backfilled rows. Legacy rows
+    # stay NULL (source unknown) and are treated as protected unless explicitly repaired.
+    _nav_cols = {r[1] for r in cur.execute("PRAGMA table_info(portfolio_nav)").fetchall()}
+    if "source" not in _nav_cols:
+        cur.execute("ALTER TABLE portfolio_nav ADD COLUMN source TEXT")
 
     _seed_etf_provider_data(conn)
 

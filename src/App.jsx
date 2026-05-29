@@ -51,6 +51,7 @@ import ActionCenter from './pages/ActionCenter'
 import ClosedCEFInformation from './pages/ClosedCEFInformation'
 import CEFBuyingGuide from './pages/CEFBuyingGuide'
 import CEFBuyingChecklistEvaluator from './pages/CEFBuyingChecklistEvaluator'
+import CEFvsIncomeETF from './pages/CEFvsIncomeETF'
 import ETFBuyingChecklistEvaluator from './pages/ETFBuyingChecklistEvaluator'
 import OptionIncomeETFEvaluator from './pages/OptionIncomeETFEvaluator'
 // Option Trading Tools and Option Education are intentionally excluded from
@@ -145,6 +146,7 @@ function App() {
         <Route path="/closed-cef-info/:ticker" element={<ClosedCEFInformation />} />
         <Route path="/cef-buying-guide" element={<CEFBuyingGuide />} />
         <Route path="/cef-buying-checklist-evaluator" element={<CEFBuyingChecklistEvaluator />} />
+        <Route path="/cef-vs-income-etf" element={<CEFvsIncomeETF />} />
         <Route path="/etf-buying-checklist-evaluator" element={<ETFBuyingChecklistEvaluator />} />
         <Route path="/option-income-etf-evaluator" element={<OptionIncomeETFEvaluator />} />
         {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
@@ -253,6 +255,7 @@ function Nav() {
         <NavLink to="/closed-cef-info">Closed CEF Information</NavLink>
         <NavLink to="/cef-buying-guide">What to Look For When Buying CEFs</NavLink>
         <NavLink to="/cef-buying-checklist-evaluator">CEF Buying Checklist Evaluator</NavLink>
+        <NavLink to="/cef-vs-income-etf">CEFs &amp; Income ETFs: A Guide</NavLink>
       </NavDropdown>
       <NavDropdown label="Taxes">
         <NavLink to="/tax-report">Annual Tax Report</NavLink>

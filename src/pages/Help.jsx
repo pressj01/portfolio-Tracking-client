@@ -49,14 +49,29 @@ const GROUPS = [
     ],
   },
   {
+    id: 'etfs',
+    label: "ETF's",
+    sections: [
+      { id: 'etf-buying-checklist-evaluator', label: 'ETF Checklist Evaluator' },
+      { id: 'option-income-etf-evaluator', label: 'Option-Income ETF Evaluator' },
+      { id: 'etf-screen', label: 'Stock & ETF Analysis' },
+      { id: 'etf-comparer', label: 'ETF Comparer' },
+      { id: 'stock-comparer', label: 'Stock Comparer' },
+    ],
+  },
+  {
+    id: 'cefs',
+    label: "CEF's",
+    sections: [
+      { id: 'cef-buying-checklist-evaluator', label: 'CEF Checklist Evaluator' },
+    ],
+  },
+  {
     id: 'analysis',
     label: 'Analysis',
     sections: [
       { id: 'general-scanner', label: 'General Scanner' },
       { id: 'security-research', label: 'Security Research' },
-      { id: 'etf-screen', label: 'ETF/Stock Screen' },
-      { id: 'etf-comparer', label: 'ETF Comparer' },
-      { id: 'stock-comparer', label: 'Stock Comparer' },
       { id: 'watchlist', label: 'Watchlist' },
       { id: 'buy-sell', label: 'Buy/Sell Signals' },
       { id: 'nav-erosion', label: 'NAV Erosion' },
@@ -5267,6 +5282,303 @@ function BlendedYieldHelp() {
   )
 }
 
+function ETFBuyingChecklistHelp() {
+  return (
+    <div>
+      <h2>ETF Buying Checklist Evaluator</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The ETF Buying Checklist Evaluator grades any broad-market, sector, dividend, or specialty ETF across
+        six structured criteria. It fetches live data for the ticker, scores each criterion Pass / Warn / Fail,
+        rolls them up into a letter-grade verdict, and suggests smarter alternatives when the fund falls short.
+        It is designed for standard (non-option-income) ETFs — use the Option-Income ETF Evaluator for
+        covered-call and put-write funds.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/etf-buying-checklist-evaluator/etf_checklist_top.jpg" alt="ETF Buying Checklist Evaluator top — ticker lookup, verdict card, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
+        <li>Type an ETF ticker in the input field and click <strong>Evaluate</strong> (or press Enter).</li>
+        <li>Live data is fetched and the six criteria are scored automatically.</li>
+        <li>Review the verdict card at the top, then work through each criterion card below.</li>
+        <li>Expand <strong>What to check</strong> under any criterion for guidance on what to investigate further.</li>
+        <li>Scroll to the bottom to see Smart Alternatives when the fund scores poorly.</li>
+      </ol>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Six Criteria</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li>
+          <strong>1. Strategy Fit</strong> — Does the fund's index, sector, or mandate match your intended exposure?
+          Avoids duplicating a strategy you already hold and flags non-obvious category mismatches.
+        </li>
+        <li>
+          <strong>2. Expense Ratio</strong> — Scores Pass (≤ 0.10%), Warn (≤ threshold), or Fail (above threshold).
+          Broad market ETFs should be well under 0.10%; sector and specialty funds under 0.50%.
+          Thresholds are adjustable per your own standard.
+        </li>
+        <li>
+          <strong>3. Fund Size &amp; Liquidity</strong> — Checks AUM and average daily dollar volume. Funds under $100M
+          face elevated closure risk; thin trading increases implicit transaction costs. Scores Pass / Warn / Fail
+          based on configurable AUM thresholds.
+        </li>
+        <li>
+          <strong>4. Performance vs. Peers</strong> — Compares 3Y and 5Y average annual total returns against the
+          category peer group. Short-term outperformance can be noise — 5Y is weighted more heavily.
+        </li>
+        <li>
+          <strong>5. Risk / Volatility</strong> — Evaluates beta. Near 1.0 is normal. Above 1.5 flags elevated
+          market sensitivity; very low beta (&lt; 0.3) may indicate a niche strategy with limited growth potential.
+          Warn/Fail thresholds are adjustable.
+        </li>
+        <li>
+          <strong>6. Yield Sustainability</strong> — Only scored when the fund yields above 2%. Checks whether the
+          yield exceeds the fund's long-term total return, which would imply NAV erosion.
+          A gap over the warn threshold is a red flag for dividend ETFs.
+        </li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Verdict Card</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The verdict card at the top shows the composite letter grade (A through F) and a one-line summary.
+        The grade is derived from the weighted combination of criteria scores — a single Fail in a heavily
+        weighted criterion (expense ratio, fund size) can pull the overall grade down significantly.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/etf-buying-checklist-evaluator/etf-buy-checklist-bottom.jpg" alt="ETF Buying Checklist Evaluator bottom — smart alternatives and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Smart Alternatives</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        When the evaluated fund scores poorly, a Smart Alternatives section appears below the criteria
+        listing ETFs in the same category that meet a higher standard. Click any alternative ticker to
+        immediately evaluate it.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each scoreable criterion (Expense Ratio, Fund Size, Risk, Yield Sustainability) has an inline
+        threshold editor that appears under the criterion card. Adjust the Pass/Warn/Fail boundaries to
+        match your own standards — for example, tightening the expense ratio cutoff to 0.05% for core
+        holdings or relaxing the AUM floor for a niche strategy you accept as illiquid. Thresholds are
+        saved to your browser's local storage and persist between sessions. Click <strong>Reset</strong> on
+        any criterion to restore factory defaults.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When to Use It</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li>Use this evaluator for any ETF that is not primarily an option-income or covered-call fund.</li>
+        <li>Use the <strong>Option-Income ETF Evaluator</strong> for JEPI, XYLD, QYLD, SPYI, and similar covered-call or put-write ETFs — they have different criteria, especially around NAV erosion and track record.</li>
+        <li>Use the <strong>CEF Buying Checklist Evaluator</strong> (CEF's menu) for closed-end funds, which add discount/premium, leverage, and distribution-sustainability dimensions not relevant to ETFs.</li>
+      </ul>
+    </div>
+  )
+}
+
+function OptionIncomeETFHelp() {
+  return (
+    <div>
+      <h2>Option-Income ETF Evaluator</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Option-Income ETF Evaluator is built specifically for covered-call, put-write, and other
+        option-overlay ETFs — funds like JEPI, XYLD, QYLD, SPYI, QQQI, and the YieldMax single-stock
+        option series. Standard ETF metrics (PE ratio, category peer return) tell you little about these
+        funds; what matters is whether the high yield is sustainable, whether NAV is eroding, whether the
+        strategy is complex enough to justify the fee, and whether the fund has a long enough track record
+        to evaluate.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/option-income-etf-evaluator/option-income-etf-evaluator-top.jpg" alt="Option-Income ETF Evaluator top — ticker lookup, underlying strategy, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
+        <li>Type a covered-call or option-income ETF ticker and click <strong>Evaluate</strong>.</li>
+        <li>The evaluator detects the underlying strategy (e.g. S&amp;P 500, Nasdaq 100, single stock, fixed income).</li>
+        <li>Seven criteria are scored with PASS / WARN / FAIL badges.</li>
+        <li>Expand <strong>What to check</strong> under any criterion for deeper guidance.</li>
+        <li>Review the overall verdict and, if the fund underperforms, explore alternatives below.</li>
+      </ol>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Seven Criteria</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li>
+          <strong>1. Strategy Fit</strong> — Confirms the fund is an option-income product and that its strategy
+          (covered call vs. put-write vs. collar, index vs. single-stock) aligns with your goals.
+          Option-income ETFs sacrifice upside in exchange for current income — this is by design, not a flaw,
+          but the tradeoff must suit your portfolio.
+        </li>
+        <li>
+          <strong>2. NAV Erosion vs. Yield</strong> — Compares the distribution yield against the fund's
+          long-term total return. A gap under ~2 percentage points is normal for option-income; above 4pp
+          signals the high yield is being funded partly by returning your own capital rather than genuine
+          option premium income. A declining distribution history is a red flag.
+        </li>
+        <li>
+          <strong>3. Expense Ratio</strong> — Option-income ETFs are inherently costlier than index ETFs
+          due to strategy complexity. Under 0.50% is competitive for this category; above 0.75% needs
+          strong justification from performance. Thresholds are adjustable.
+        </li>
+        <li>
+          <strong>4. Fund Size &amp; Liquidity</strong> — AUM and daily dollar volume. Many option-income ETFs
+          launched in 2020–2023 and are still small. Funds under $100M face real closure risk; thin trading
+          means worse fills on your orders.
+        </li>
+        <li>
+          <strong>5. Performance vs. Peers</strong> — Total return compared to the option-income category.
+          A 7%+ annualized total return is competitive for the income trade-off. Low beta (&lt; 0.7) is
+          expected — you gave up upside for lower volatility and income.
+        </li>
+        <li>
+          <strong>6. NAV Trend</strong> — Compares the annualized share-price trend against annualized total
+          return. A fund whose price chronically declines while paying a high yield is funding the distribution
+          from your capital (return of capital), not from income. At-the-money covered-call funds (e.g. QYLD)
+          cap nearly all upside; out-of-the-money writers (e.g. QQQI, SPYI) retain more upside and hold NAV
+          better over full cycles.
+        </li>
+        <li>
+          <strong>7. Track Record</strong> — Fund age and manager pedigree. Funds under 3 years have no
+          full market-cycle track record. Funds under 1 year are speculative — the strategy is essentially
+          untested across bear markets, rate cycles, and volatility regimes.
+        </li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/option-income-etf-evaluator/option-income-etf-evaluator-bottom.jpg" alt="Option-Income ETF Evaluator bottom — verdict, smart alternatives, and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Underlying Strategy Detection</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The evaluator auto-detects what the fund writes options on — S&amp;P 500, Nasdaq 100, Russell 2000,
+        a single stock, or a fixed-income underlying — and shows this at the top of the results. This helps
+        contextualize the performance score: a fund writing covered calls on the Nasdaq will underperform
+        more in a tech bull run than one writing on the S&amp;P 500.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Verdict &amp; Smart Alternatives</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The verdict card shows a composite letter grade and summary. When the fund scores C or below,
+        a Smart Alternatives section lists comparable option-income ETFs in the same category that score
+        higher. Click any alternative to evaluate it immediately.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        All six scoreable criteria have inline threshold editors (NAV Erosion gap, expense ratio cutoffs,
+        AUM thresholds, performance floor, NAV erosion rate, track-record age). Adjust them to match your
+        personal tolerance. Settings are saved in browser local storage and persist between sessions.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When to Use It</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li>Use this evaluator for any ETF that primarily generates income from selling options (covered calls, puts, collars).</li>
+        <li>Use the <strong>ETF Buying Checklist Evaluator</strong> for standard index, sector, or dividend ETFs that don't use an option-overlay strategy.</li>
+        <li>Use the <strong>CEF Buying Checklist Evaluator</strong> (CEF's menu) for closed-end funds, which add discount/premium and leverage dimensions.</li>
+      </ul>
+    </div>
+  )
+}
+
+function CEFBuyingChecklistHelp() {
+  return (
+    <div>
+      <h2>CEF Buying Checklist Evaluator</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The CEF Buying Checklist Evaluator grades a closed-end fund across seven CEF-specific criteria —
+        including the discount/premium to NAV, leverage level, distribution sustainability, and liquidity
+        factors that don't exist in open-end ETFs. It fetches live data, scores each criterion
+        Pass / Warn / Fail, produces a letter-grade verdict, and suggests alternatives when the fund falls short.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/cef/cef_evaluator.jpg" alt="CEF Buying Checklist Evaluator top — ticker lookup, CEF header data, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
+        <li>Type a CEF ticker and click <strong>Evaluate</strong> (or press Enter).</li>
+        <li>Live data is fetched: price, NAV, discount/premium, leverage ratio, distribution rate, and fund history.</li>
+        <li>Seven criteria are scored with PASS / WARN / FAIL badges automatically.</li>
+        <li>Expand <strong>What to check</strong> under any criterion for CEF-specific guidance.</li>
+        <li>Review alternatives at the bottom when the fund scores poorly.</li>
+      </ol>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Seven Criteria</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li>
+          <strong>1. Strategy Fit &amp; Mandate</strong> — Does the fund's stated mandate (bond, equity, option-overlay,
+          multi-asset) match your timeline and risk tolerance? Avoids concentrating into another leveraged equity CEF
+          if you already hold one and flags yield vs. total return mix (a 15% yield funded by return-of-capital is very
+          different from 8% from net investment income).
+        </li>
+        <li>
+          <strong>2. Distribution Sustainability</strong> — Compares the distribution rate on NAV against the fund's
+          long-term NAV total return (3Y and 5Y). Managed-distribution policies that pay out more than the portfolio
+          earns will gradually erode NAV. Section 19(a) notices are referenced for income vs. return-of-capital breakdown.
+          Scores Pass when income covers the distribution; Warn or Fail when the gap implies NAV consumption.
+        </li>
+        <li>
+          <strong>3. Discount / Premium to NAV</strong> — The unique CEF characteristic. Current discount vs. the
+          52-week average and 1-year z-score. A discount wider than the fund's own history is more attractive;
+          a premium above 5% leaves no margin of safety and means you're paying more than the portfolio is worth.
+          Scores are based on configurable discount and premium thresholds.
+        </li>
+        <li>
+          <strong>4. Leverage</strong> — Regulatory leverage is capped at 50% for bond funds and 33% for equity funds.
+          Funds near those limits have less cushion in falling markets. The type of leverage (preferred shares vs.
+          credit facility vs. reverse repos) behaves differently under stress. Scores Pass at moderate leverage,
+          Warn as leverage approaches regulatory limits.
+        </li>
+        <li>
+          <strong>5. Expense Ratio</strong> — Total expense ratio including management fees, administration, and the
+          interest cost of leverage. CEF fees are structurally higher than ETFs due to active management and
+          leverage costs. A higher-fee fund must deliver superior NAV total return to justify the cost.
+          Thresholds are adjustable.
+        </li>
+        <li>
+          <strong>6. Manager Quality / NAV Performance</strong> — NAV total return isolates the manager's stock-picking
+          and income generation from discount/premium movement. Sponsor reputation, manager tenure, and
+          distribution-history discipline are qualitative signals factored in here.
+        </li>
+        <li>
+          <strong>7. Liquidity</strong> — A single trade should not exceed 10–20% of average daily volume, otherwise
+          you move the market against yourself. Wider bid-ask spreads in thin funds mean higher implicit transaction
+          costs; limit orders are always recommended for CEFs. Scores based on configurable AUM and volume thresholds.
+        </li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/cef/cef_evaluator_bottom.jpg" alt="CEF Buying Checklist Evaluator bottom — verdict card, alternatives, and threshold editors" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Verdict Card</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The verdict card at the top shows the composite letter grade (A through F) and a one-line verdict.
+        CEF-specific alerts (e.g. "trading at premium — proceed with caution", "leverage near regulatory cap")
+        appear as highlighted callouts when relevant.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Five criteria have inline threshold editors: Distribution Sustainability gap, Discount/Premium bounds,
+        Leverage level, Expense Ratio cutoffs, and Liquidity (AUM and volume minimums). Thresholds are saved
+        in browser local storage and persist between sessions.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>CEF-Specific Tips</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li><strong>Always use limit orders</strong> — market orders in thinly traded CEFs can result in significantly worse fills than the displayed price.</li>
+        <li><strong>Check Section 19(a) notices</strong> — published monthly by most CEFs, they break down how much of each distribution is income vs. return of capital.</li>
+        <li><strong>Watch z-scores over time</strong> — a fund's current discount only becomes a buy signal when it's wider than its own historical average.</li>
+        <li>Use the <strong>CEFs &amp; Income ETFs: A Guide</strong> page (CEF's menu) for a full educational walkthrough of the CEF structure, discount mechanics, and how CEFs compare to covered-call ETFs.</li>
+      </ul>
+    </div>
+  )
+}
+
 const CONTENT_MAP = {
   overview: Overview,
   'action-center': ActionCenterHelp,
@@ -5297,6 +5609,9 @@ const CONTENT_MAP = {
   'etf-screen': ETFScreenHelp,
   'etf-comparer': ETFComparerHelp,
   'stock-comparer': StockComparerHelp,
+  'etf-buying-checklist-evaluator': ETFBuyingChecklistHelp,
+  'option-income-etf-evaluator': OptionIncomeETFHelp,
+  'cef-buying-checklist-evaluator': CEFBuyingChecklistHelp,
   watchlist: WatchlistHelp,
   'buy-sell': BuySellHelp,
   'nav-erosion': NavErosionHelp,

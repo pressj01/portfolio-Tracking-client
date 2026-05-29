@@ -379,6 +379,7 @@ export default function Dashboard() {
   const [navHistory, setNavHistory] = useState([])
   const [navSnapping, setNavSnapping] = useState(false)
   const [navBackfilling, setNavBackfilling] = useState(false)
+  const [navRepairing, setNavRepairing] = useState(false)
   const [actionCenter, setActionCenter] = useState(null)
   const navChartRef = useRef(null)
   const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v13_${selection}_${basisMode}`, [selection, basisMode])
@@ -1061,13 +1062,11 @@ export default function Dashboard() {
           <button
             className="btn btn-secondary"
             style={{ fontSize: '0.8rem', padding: '0.25rem 0.6rem' }}
-            disabled={navBackfilling || navHistory.length > 30 || brokerPositionNavBackfillBlocked}
+            disabled={navBackfilling || brokerPositionNavBackfillBlocked}
             title={
               brokerPositionNavBackfillBlocked
                 ? 'Use Record NAV or position-file imports for broker-position portfolios'
-                : navHistory.length > 30
-                  ? 'History already populated'
-                  : 'Replay transactions against historical prices to populate the chart'
+                : 'Fill any missing days in the chart by replaying transactions against actual closing prices (recorded days are never changed)'
             }
             onClick={() => {
               setNavBackfilling(true)
@@ -1087,6 +1086,38 @@ export default function Dashboard() {
           >
             {navBackfilling ? 'Backfilling...' : 'Backfill History'}
           </button>
+          {navHistory.length > 0 && !brokerPositionNavBackfillBlocked && (
+            <button
+              className="btn btn-secondary"
+              style={{ fontSize: '0.8rem', padding: '0.25rem 0.6rem' }}
+              disabled={navRepairing || navBackfilling}
+              title="Rebuild a distorted chart: regenerate previously backfilled points from actual prices. Your recorded snapshots and today's value are kept, and a database backup is made first."
+              onClick={() => {
+                if (!window.confirm(
+                  'Repair the NAV chart?\n\n' +
+                  'This rebuilds previously backfilled points using actual closing prices to remove distortion. ' +
+                  "Your recorded snapshots and today's value are preserved, and a database backup is taken first."
+                )) {
+                  return
+                }
+                setNavRepairing(true)
+                pf('/api/nav/repair', { method: 'POST' })
+                  .then(safeJson)
+                  .then(d => {
+                    setRefreshStatus(d?.message || `Repaired chart (${d?.rows_added || 0} points regenerated).`)
+                    setTimeout(() => setRefreshStatus(null), 6000)
+                    return pf('/api/nav/history').then(safeJson).then(history => { if (Array.isArray(history)) setNavHistory(history) })
+                  })
+                  .catch(() => {
+                    setRefreshStatus('NAV repair failed.')
+                    setTimeout(() => setRefreshStatus(null), 3000)
+                  })
+                  .finally(() => setNavRepairing(false))
+              }}
+            >
+              {navRepairing ? 'Repairing...' : 'Repair Chart'}
+            </button>
+          )}
         </div>
         {navHistory.length >= 1 ? <div ref={navChartRef} /> : (
           <p style={{ color: '#8899aa', fontSize: '0.85rem', margin: '1rem 0' }}>
