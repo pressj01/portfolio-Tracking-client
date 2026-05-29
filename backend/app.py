@@ -16811,9 +16811,28 @@ def etf_screen_data():
     mode = request.args.get("mode", "ohlcv")  # ohlcv | total | price | pricediv | both | all3 | all4
     reinvest_pct = min(100, max(0, int(request.args.get("reinvest", 100))))
     interval = request.args.get("interval", "")
+    # Optional explicit date window. When both are present they override `period`
+    # so the chart/returns are computed over exactly the requested span.
+    start = request.args.get("start", "").strip()
+    end = request.args.get("end", "").strip()
+    use_range = bool(start and end)
 
     if not ticker:
         return jsonify(error="ticker is required"), 400
+
+    def _end_exclusive(end_str):
+        """yfinance `end` is exclusive — bump by one day to include the end date."""
+        try:
+            d = datetime.datetime.strptime(end_str, "%Y-%m-%d") + datetime.timedelta(days=1)
+            return d.strftime("%Y-%m-%d")
+        except Exception:
+            return end_str
+
+    def _range_kwargs():
+        """Download kwargs for the requested window (explicit dates or period)."""
+        if use_range:
+            return {"start": start, "end": _end_exclusive(end)}
+        return {"period": period}
 
     # Collect all symbols
     symbols = [ticker]
@@ -16827,19 +16846,32 @@ def etf_screen_data():
 
     # Auto-select interval
     if not interval:
-        period_intervals = {
-            "1mo": "1d", "3mo": "1d", "6mo": "1d",
-            "ytd": "1d", "1y": "1d", "2y": "1wk",
-            "5y": "1wk", "10y": "1mo", "max": "1mo",
-        }
-        interval = period_intervals.get(period, "1d")
+        if use_range:
+            try:
+                span_days = (datetime.datetime.strptime(end, "%Y-%m-%d")
+                             - datetime.datetime.strptime(start, "%Y-%m-%d")).days
+            except Exception:
+                span_days = 365
+            if span_days <= 365 * 3:
+                interval = "1d"
+            elif span_days <= 365 * 6:
+                interval = "1wk"
+            else:
+                interval = "1mo"
+        else:
+            period_intervals = {
+                "1mo": "1d", "3mo": "1d", "6mo": "1d",
+                "ytd": "1d", "1y": "1d", "2y": "1wk",
+                "5y": "1wk", "10y": "1mo", "max": "1mo",
+            }
+            interval = period_intervals.get(period, "1d")
 
     # ---------- OHLCV mode (for candlestick / technical chart) ----------
     if mode == "ohlcv":
         dl_ticker = yahoo_by_symbol.get(ticker, ticker)
         try:
             tk = yf.Ticker(dl_ticker)
-            df = tk.history(period=period, interval=interval, auto_adjust=False)
+            df = tk.history(interval=interval, auto_adjust=False, **_range_kwargs())
             if df.empty:
                 return jsonify(error=f"No data found for {ticker}"), 404
 
@@ -16907,12 +16939,12 @@ def etf_screen_data():
     frac = reinvest_pct / 100.0
     try:
         # Download price data (unadjusted)
-        price_df = _chunked_yf_download(yahoo_symbols, period=period, interval=interval, auto_adjust=False, progress=False)
+        price_df = _chunked_yf_download(yahoo_symbols, interval=interval, auto_adjust=False, progress=False, **_range_kwargs())
         if price_df.empty:
             return jsonify(error="No price data found"), 404
 
         # Download daily data with dividends for return calcs
-        div_df = _chunked_yf_download(yahoo_symbols, period=period, interval="1d", auto_adjust=False, actions=True, progress=False)
+        div_df = _chunked_yf_download(yahoo_symbols, interval="1d", auto_adjust=False, actions=True, progress=False, **_range_kwargs())
 
         result = {
             "mode": mode,
@@ -17009,7 +17041,7 @@ def etf_screen_data():
 
             if close.empty and div_close.empty:
                 try:
-                    fallback = yf.Ticker(dl_sym).history(period=period, interval="1d", auto_adjust=False, actions=True)
+                    fallback = yf.Ticker(dl_sym).history(interval="1d", auto_adjust=False, actions=True, **_range_kwargs())
                 except Exception:
                     fallback = pd.DataFrame()
                 if fallback is not None and not fallback.empty and "Close" in fallback.columns:

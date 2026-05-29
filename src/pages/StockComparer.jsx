@@ -224,6 +224,10 @@ export default function StockComparer() {
   const [returnPctMode, setReturnPctMode] = useState(true)
   const [showRangeSlider, setShowRangeSlider] = useState(true)
   const [returnXRange, setReturnXRange] = useState([null, null])
+  // Committed custom data window from the date inputs (overrides `period` on the
+  // server). Separate from returnXRange (the volatile range-slider zoom, which
+  // Plotly resets to null on autorange) so the window survives a refetch.
+  const [fetchRange, setFetchRange] = useState(null)
   const [data, setData] = useState(null)
   const [averageData, setAverageData] = useState(null)
   const [refreshNonce, setRefreshNonce] = useState(0)
@@ -241,6 +245,7 @@ export default function StockComparer() {
   const [distAnnual, setDistAnnual] = useState(false)
 
   const resetReturnRange = useCallback(() => {
+    setFetchRange(null)
     setReturnXRange([null, null])
   }, [])
 
@@ -255,10 +260,16 @@ export default function StockComparer() {
   const rangeEnd = returnXRange[1] || dataDateBounds[1] || ''
 
   const handleRangeDateChange = useCallback((which, value) => {
-    if (!value) { setReturnXRange([null, null]); return }
+    if (!value) { setFetchRange(null); setReturnXRange([null, null]); return }
     const s = which === 'start' ? value : (returnXRange[0] || dataDateBounds[0])
     const e = which === 'end' ? value : (returnXRange[1] || dataDateBounds[1])
-    if (s && e) setReturnXRange(normalizeReturnRange([s, e]) || [s, e])
+    if (s && e) {
+      const next = normalizeReturnRange([s, e]) || [s, e]
+      // fetchRange triggers a re-fetch over the window (load depends on it);
+      // returnXRange sets the initial on-chart view.
+      setFetchRange(next)
+      setReturnXRange(next)
+    }
   }, [returnXRange, dataDateBounds])
 
   useEffect(() => {
@@ -279,7 +290,9 @@ export default function StockComparer() {
     setLoading(true)
     setError('')
     const [primary, ...extra] = symbols
-    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}`)
+    const fr = normalizeReturnRange(fetchRange)
+    const rangeParam = fr ? `&start=${fr[0]}&end=${fr[1]}` : ''
+    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}${rangeParam}`)
       .then(r => r.json())
       .then(d => {
         if (loadSeqRef.current !== loadSeq) return
@@ -294,7 +307,7 @@ export default function StockComparer() {
       .finally(() => {
         if (loadSeqRef.current === loadSeq) setLoading(false)
       })
-  }, [pf, tickers, period, returnMode, reinvest, refreshNonce])
+  }, [pf, tickers, period, returnMode, reinvest, refreshNonce, fetchRange])
 
   useEffect(() => { load() }, [load])
 
@@ -409,7 +422,10 @@ export default function StockComparer() {
     const activeReturnRange = normalizeReturnRange(returnXRange)
     const fallbackRange = dataDateBounds[0] && dataDateBounds[1] ? dataDateBounds : null
     const effectiveReturnRange = activeReturnRange || fallbackRange
-    const [visibleStart, visibleEnd] = visibleDateRange(data, returnXRange, showRangeSlider)
+    // Rebasing, end labels and y-scaling always follow the active window (typed
+    // dates or slider) so the chart visually aligns with the date set.
+    const [visibleStart, visibleEnd] = visibleDateRange(data, returnXRange, true)
+    const titleWindow = activeReturnRange || normalizeReturnRange(fetchRange)
 
     symbols.forEach((sym, idx) => {
       const dates = data.series[sym]?.dates || []
@@ -501,6 +517,19 @@ export default function StockComparer() {
       showlegend: false,
       hoverinfo: 'skip',
     })
+    // Constrain the y-axis to the visible date window. Plotly autoranges y over
+    // all trace data (not just the x-visible portion), so without this the curve
+    // stays scaled to the full series and looks misaligned after zooming.
+    let yAxisRange = null
+    if (visibleYValues.length) {
+      const axisBase = returnPctMode ? 0 : 100
+      const labelYs = labelCandidates.map(l => l.y)
+      const yLo = Math.min(axisBase, ...visibleYValues, ...labelYs)
+      const yHi = Math.max(axisBase, ...visibleYValues, ...labelYs)
+      const pad = Math.max((yHi - yLo) * 0.08, 1)
+      yAxisRange = [yLo - pad, yHi + pad]
+    }
+    const titleText = titleWindow ? `Total Return — ${titleWindow[0]} → ${titleWindow[1]}` : 'Total Return (%)'
     return {
       data: traces,
       layout: {
@@ -508,7 +537,7 @@ export default function StockComparer() {
         paper_bgcolor: '#1e1e2f',
         plot_bgcolor: '#1e1e2f',
         font: { color: '#e0e0e0', size: 12 },
-        title: { text: 'Total Return (%)', x: 0.5, font: { size: 20, color: '#e0e0e0' } },
+        title: { text: titleText, x: 0.5, font: { size: 20, color: '#e0e0e0' } },
         height: 560,
         margin: { l: 55, r: 70, t: 70, b: 55 },
         hovermode: returnHoverMode,
@@ -520,6 +549,7 @@ export default function StockComparer() {
           zerolinecolor: '#555',
           showspikes: true,
           spikemode: 'across',
+          ...(yAxisRange ? { range: yAxisRange, autorange: false } : {}),
         },
         xaxis: {
           type: 'date',
@@ -532,7 +562,7 @@ export default function StockComparer() {
         annotations,
       },
     }
-  }, [data, symbols, reinvest, returnPctMode, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds])
+  }, [data, symbols, reinvest, returnPctMode, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange])
 
   const rows = useMemo(() => {
     const profiles = data?.profiles || {}
@@ -649,9 +679,14 @@ export default function StockComparer() {
           <select className="etfc-select" value={returnMode} onChange={e => setReturnMode(e.target.value)}>
             {RETURN_MODES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
-          {PERIODS.map(p => (
-              <button key={p.value} className={`btn btn-sm${period === p.value ? ' btn-active' : ''}`} onClick={() => { setPeriod(p.value); resetReturnRange() }}>{p.label}</button>
-          ))}
+          {PERIODS.map(p => {
+            // A custom date window overrides the period, so don't show a period
+            // button as selected while one is active.
+            const customActive = !!(returnXRange[0] || returnXRange[1] || fetchRange)
+            return (
+              <button key={p.value} className={`btn btn-sm${period === p.value && !customActive ? ' btn-active' : ''}`} onClick={() => { setPeriod(p.value); resetReturnRange() }}>{p.label}</button>
+            )
+          })}
           {dataDateBounds[0] && (
             <>
               <span className="etfc-date-sep">|</span>
@@ -660,7 +695,7 @@ export default function StockComparer() {
               <span className="range-date-arrow">→</span>
               <input type="date" className="range-date-input" value={rangeEnd} min={rangeStart}
                 onChange={e => handleRangeDateChange('end', e.target.value)} title="End date" />
-              {(returnXRange[0] || returnXRange[1]) && (
+              {(returnXRange[0] || returnXRange[1] || fetchRange) && (
                 <button className="btn btn-sm" onClick={resetReturnRange} title="Clear custom dates">&times;</button>
               )}
             </>

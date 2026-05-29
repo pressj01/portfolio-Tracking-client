@@ -2017,6 +2017,17 @@ function normalizeReturnRange(range) {
   return start <= end ? [start, end] : [end, start]
 }
 
+// Concise duration label for a date window, e.g. "12D", "5M", "1.5Y".
+function formatSpanLabel(start, end) {
+  if (!start || !end) return ''
+  const days = Math.round((new Date(end) - new Date(start)) / 86400000)
+  if (days <= 0) return ''
+  if (days < 31) return `${days}D`
+  if (days < 365) return `${Math.round(days / 30.44)}M`
+  const years = Math.round((days / 365.25) * 10) / 10
+  return `${years % 1 === 0 ? years.toFixed(0) : years.toFixed(1)}Y`
+}
+
 function getVisibleDateRange(returnData, returnXRange, useRange = false) {
   const range = useRange ? normalizeReturnRange(returnXRange) : null
   if (range) return range
@@ -2210,9 +2221,15 @@ export default function ETFScreen() {
   const returnXRangeRef = useRef([null, null])
   const returnDataDateBoundsRef = useRef([null, null])
   const returnAbortRef = useRef(null)
+  // The window the data is actually fetched for (from the date inputs). Kept
+  // separate from returnXRange (the on-chart zoom set by the range slider) so
+  // sliding to zoom in never shrinks the underlying fetched data.
+  const fetchRangeRef = useRef(null)
+  const loadReturnsRef = useRef(null)
 
   const resetReturnRange = useCallback(() => {
     returnXRangeRef.current = [null, null]
+    fetchRangeRef.current = null
     setReturnXRange([null, null])
   }, [])
 
@@ -2232,15 +2249,24 @@ export default function ETFScreen() {
   const rangeEnd = returnXRange[1] || returnDataDateBounds[1] || ''
 
   const handleRangeDateChange = useCallback((which, value) => {
-    if (!value) { returnXRangeRef.current = [null, null]; setReturnXRange([null, null]); return }
+    // Clearing a date input drops the custom window and reloads the period.
+    if (!value) {
+      resetReturnRange()
+      loadReturnsRef.current?.()
+      return
+    }
     const s = which === 'start' ? value : (returnXRange[0] || returnDataDateBounds[0])
     const e = which === 'end' ? value : (returnXRange[1] || returnDataDateBounds[1])
     if (s && e) {
       const next = normalizeReturnRange([s, e]) || [s, e]
       returnXRangeRef.current = next
+      fetchRangeRef.current = next
       setReturnXRange(next)
+      // Re-fetch over the requested window so returns are computed for it
+      // (the date inputs are not just a client-side zoom).
+      loadReturnsRef.current?.()
     }
-  }, [returnXRange, returnDataDateBounds])
+  }, [returnXRange, returnDataDateBounds, resetReturnRange])
 
   useEffect(() => {
     resetReturnRange()
@@ -2287,7 +2313,10 @@ export default function ETFScreen() {
     setReturnLoading(true)
     setError('')
     const extra = compareTickers.filter(t => t !== primary).join(',')
-    const url = `/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${debouncedReinvest}&extra=${encodeURIComponent(extra)}`
+    // Custom date window (from the date inputs) overrides `period` on the server.
+    const fr = normalizeReturnRange(fetchRangeRef.current)
+    const rangeParam = fr ? `&start=${fr[0]}&end=${fr[1]}` : ''
+    const url = `/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${debouncedReinvest}&extra=${encodeURIComponent(extra)}${rangeParam}`
     pf(url, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
@@ -2297,6 +2326,10 @@ export default function ETFScreen() {
       .catch(e => { if (e.name !== 'AbortError') setError(e.message) })
       .finally(() => setReturnLoading(false))
   }, [ticker, period, returnMode, debouncedReinvest, compareTickers])
+
+  // Keep a stable handle to the latest loadReturns so date-input handlers can
+  // trigger a re-fetch without capturing a stale closure.
+  loadReturnsRef.current = loadReturns
 
   // Auto-reload returns chart when mode/reinvest changes (only if already loaded)
   useEffect(() => {
@@ -2568,7 +2601,9 @@ export default function ETFScreen() {
     const activeReturnRange = normalizeReturnRange(returnXRange)
     const fallbackRange = returnDataDateBounds[0] && returnDataDateBounds[1] ? returnDataDateBounds : null
     const effectiveReturnRange = activeReturnRange || fallbackRange
-    const [visibleStart, visibleEnd] = getVisibleDateRange(returnData, returnXRange, showRangeSlider)
+    // Rebasing, end labels and y-scaling always follow the active date window
+    // (typed dates or slider), so the chart visually aligns with the date set.
+    const [visibleStart, visibleEnd] = getVisibleDateRange(returnData, returnXRange, true)
 
     allSymbols.forEach((sym, si) => {
       const { dates, traces: traceMap } = returnData.series[sym]
@@ -2656,9 +2691,12 @@ export default function ETFScreen() {
       })
     }
 
-    // Build title like web version
+    // Build title like web version. When a custom date window is active, show
+    // the actual span instead of the (now stale) period button label.
     const modeInfo = RETURN_MODES.find(m => m.value === returnData.mode) || {}
-    const periodLabel = PERIODS.find(p => p.value === period)?.label || period
+    const periodLabel = activeReturnRange
+      ? `${activeReturnRange[0]} → ${activeReturnRange[1]}`
+      : (PERIODS.find(p => p.value === period)?.label || period)
     const titleSymbol = Object.keys(returnData.series)[0] || ticker.toUpperCase()
     let titleText = `${titleSymbol} — ${periodLabel}`
     if (returnData.mode === 'all3') {
@@ -2709,6 +2747,19 @@ export default function ETFScreen() {
       })
     }
 
+    // Constrain the y-axis to the visible date window. Plotly autoranges y over
+    // all trace data (not just the x-visible portion), so without this the curve
+    // stays scaled to the full series and looks misaligned after zooming.
+    let yAxisRange = null
+    if (visibleYValues.length) {
+      const axisBase = returnPctMode ? 0 : 100
+      const labelYs = labelCandidates.map(l => l.y)
+      const yLo = Math.min(axisBase, ...visibleYValues, ...labelYs)
+      const yHi = Math.max(axisBase, ...visibleYValues, ...labelYs)
+      const pad = Math.max((yHi - yLo) * 0.08, 1)
+      yAxisRange = [yLo - pad, yHi + pad]
+    }
+
     const layout = {
       template: 'plotly_dark', paper_bgcolor: '#1e1e2f', plot_bgcolor: '#1e1e2f',
       font: { color: '#e0e0e0', size: 12 },
@@ -2724,6 +2775,7 @@ export default function ETFScreen() {
       yaxis: {
         title: returnPctMode ? 'Total Return (%)' : 'Normalized Return (100 = start)',
         ...(returnPctMode && { ticksuffix: '%', tickformat: '+.2f' }),
+        ...(yAxisRange ? { range: yAxisRange, autorange: false } : {}),
         gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot',
       },
       legend: { orientation: 'h', y: 1.06, x: 0.5, xanchor: 'center', font: { size: 11 } },
@@ -2789,9 +2841,13 @@ export default function ETFScreen() {
         </div>
 
         <div className="etf-period-bar">
-          {PERIODS.map(p => (
-            <button key={p.value} className={`btn btn-sm${period === p.value && !interval ? ' btn-active' : ''}`} onClick={() => { setPeriod(p.value); setInterval_(''); setDrawnShapes([]); setFibSets([]); setFibClicks([]) }}>{p.label}</button>
-          ))}
+          {PERIODS.map(p => {
+            // On the returns tab a custom date window overrides the period, so
+            // don't show a period button as selected while one is active.
+            const customActive = tab === 'returns' && (returnXRange[0] || returnXRange[1])
+            return (
+            <button key={p.value} className={`btn btn-sm${period === p.value && !interval && !customActive ? ' btn-active' : ''}`} onClick={() => { setPeriod(p.value); setInterval_(''); setDrawnShapes([]); setFibSets([]); setFibClicks([]) }}>{p.label}</button>
+          )})}
           <span className="etf-draw-sep">|</span>
           {tab === 'returns' && returnDataDateBounds[0] && (
             <>
@@ -2801,7 +2857,7 @@ export default function ETFScreen() {
               <input type="date" className="range-date-input" value={rangeEnd} min={rangeStart}
                 onChange={e => handleRangeDateChange('end', e.target.value)} title="End date" />
               {(returnXRange[0] || returnXRange[1]) && (
-                <button className="btn btn-sm" onClick={resetReturnRange} title="Clear custom dates">&times;</button>
+                <button className="btn btn-sm" onClick={() => { resetReturnRange(); loadReturnsRef.current?.() }} title="Clear custom dates">&times;</button>
               )}
               <span className="etf-draw-sep">|</span>
             </>
@@ -3143,12 +3199,16 @@ export default function ETFScreen() {
             const primarySym = Object.keys(returnData.stats)[0]
             const st = returnData.stats[primarySym]
             if (!st) return null
-            const periodLabel = PERIODS.find(p => p.value === period)?.label || period
+            const customWin = normalizeReturnRange(returnXRange)
+            const periodLabel = customWin
+              ? formatSpanLabel(customWin[0], customWin[1])
+              : (PERIODS.find(p => p.value === period)?.label || period)
             return (
               <div className="return-summary-strip">
                 <div className="return-summary-card">
                   <div className="rsc-label">PERIOD</div>
                   <div className="rsc-value" style={{ color: '#90caf9' }}>{periodLabel}</div>
+                  {customWin && <div className="rsc-sub">{customWin[0]} → {customWin[1]}</div>}
                 </div>
                 <div className="return-summary-card">
                   <div className="rsc-label">{primarySym} RETURN</div>
