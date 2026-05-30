@@ -55,6 +55,7 @@ import CEFBuyingChecklistEvaluator from './pages/CEFBuyingChecklistEvaluator'
 import CEFvsIncomeETF from './pages/CEFvsIncomeETF'
 import ETFBuyingChecklistEvaluator from './pages/ETFBuyingChecklistEvaluator'
 import OptionIncomeETFEvaluator from './pages/OptionIncomeETFEvaluator'
+import StockBuyingChecklist from './pages/StockBuyingChecklist'
 // Option Trading Tools and Option Education are intentionally excluded from
 // deployed builds — still in development, not ready for production.
 // import OptionTradingTools from './pages/OptionTradingTools'
@@ -151,6 +152,7 @@ function App() {
         <Route path="/cef-vs-income-etf" element={<CEFvsIncomeETF />} />
         <Route path="/etf-buying-checklist-evaluator" element={<ETFBuyingChecklistEvaluator />} />
         <Route path="/option-income-etf-evaluator" element={<OptionIncomeETFEvaluator />} />
+        <Route path="/stock-buying-checklist" element={<StockBuyingChecklist />} />
         {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
         <Route path="/help" element={<Help />} />
       </Routes>
@@ -230,6 +232,7 @@ function Nav() {
         <NavLink to="/watchlist">Watchlist</NavLink>
       </NavDropdown>
       <NavDropdown label="ETF's">
+        <NavLink to="/stock-buying-checklist">Stock Buying Checklist</NavLink>
         <NavLink to="/etf-buying-checklist-evaluator">ETF Buying Checklist Evaluator</NavLink>
         <NavLink to="/option-income-etf-evaluator">Option-Income ETF Evaluator</NavLink>
         <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>

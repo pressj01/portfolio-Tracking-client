@@ -53,6 +53,7 @@ const GROUPS = [
     id: 'etfs',
     label: "ETF's",
     sections: [
+      { id: 'stock-buying-checklist', label: 'Stock Buying Checklist' },
       { id: 'etf-buying-checklist-evaluator', label: 'ETF Checklist Evaluator' },
       { id: 'option-income-etf-evaluator', label: 'Option-Income ETF Evaluator' },
       { id: 'etf-screen', label: 'Stock & ETF Analysis' },
@@ -5493,6 +5494,81 @@ function BlendedYieldHelp() {
   )
 }
 
+function StockBuyingChecklistHelp() {
+  return (
+    <div>
+      <h2>Stock Buying Checklist</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Stock Buying Checklist scores an individual stock on both fundamental and technical analysis,
+        then blends the two into a single buy verdict. Fundamentals are graded <strong>relative to the
+        stock's sector</strong> — a "cheap" utility P/E is different from a "cheap" technology P/E — while
+        technicals use standard chart indicators. It is built for individual companies; use the ETF and CEF
+        evaluators for funds.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Two Modes</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Deep Dive</strong> — Type one ticker for a full scorecard: a Fundamental composite, a
+          Technical composite, a blended verdict, and eight expandable criteria cards. If you enter a fund
+          ticker a warning is shown, but the technical analysis still runs.</li>
+        <li><strong>Scan a List</strong> — Enter several tickers (or pick your portfolio or watchlist) to score
+          them all at once in a sortable table. In this mode each stock is graded against the live median of
+          its sector <em>within the batch you scanned</em>.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Automatic Fund Filtering</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The Scan tab automatically detects and skips funds so they don't appear alongside stocks or receive
+        misleading fundamental scores. The following types are filtered out:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '0.75rem' }}>
+        <li><strong>ETFs &amp; mutual funds</strong> — detected from Yahoo Finance's quote type.</li>
+        <li><strong>Closed-end funds (CEFs)</strong> — detected from the fund's description, even when Yahoo
+          reports them as equities (e.g. FSCO, PDI).</li>
+        <li><strong>Business Development Companies (BDCs)</strong> — similarly detected from the description
+          (e.g. HTGC, BXSL, ARCC).</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Skipped tickers appear in an amber banner below the scan results with their type listed, so nothing
+        silently disappears. REITs are <em>not</em> filtered — they file standard company financials and
+        can be graded as stocks.
+      </p>
+      <p style={{ marginBottom: '0.75rem', color: '#9aa7b8', fontSize: '0.9rem' }}>
+        For skipped tickers, use the dedicated evaluators: <strong>ETF Buying Checklist</strong> for broad
+        ETFs, <strong>Option-Income ETF Evaluator</strong> for covered-call/put-write funds, and
+        <strong>CEF Buying Checklist</strong> for closed-end funds and BDCs.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Fundamental Criteria</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Valuation</strong> — P/E, forward P/E, PEG, P/B, P/S, and EV/EBITDA versus the sector (lower is better).</li>
+        <li><strong>Profitability</strong> — Net, operating, and gross margins plus return on equity and assets.</li>
+        <li><strong>Growth &amp; Earnings</strong> — Revenue and earnings growth, positive EPS, and recent earnings beats.</li>
+        <li><strong>Balance-Sheet Health</strong> — Debt/equity, current ratio, and (for payers) the dividend payout ratio.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Technical Criteria</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Trend</strong> — Price versus the 50- and 200-day moving averages, including the golden/death cross.</li>
+        <li><strong>Momentum</strong> — MACD (12/26/9) and RSI (14).</li>
+        <li><strong>Oscillators</strong> — Slow stochastic and the Awesome Oscillator.</li>
+        <li><strong>Volume &amp; Range</strong> — On-balance-volume trend, volume vs. its 20-day average, and where price sits in its 52-week range.</li>
+      </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Blended Verdict</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The Fundamental and Technical composites are combined (60% fundamental / 40% technical by default) into a
+        verdict of <strong>Strong Buy</strong>, <strong>Buy</strong>, <strong>Hold</strong>, or <strong>Avoid</strong>.
+        Keeping the two scores separate is deliberate: it lets you spot a great company with poor entry timing,
+        or a hot chart on a weak business, instead of hiding that distinction in one number.
+      </p>
+      <p style={{ marginBottom: '0.75rem', color: '#9aa7b8', fontSize: '0.9rem' }}>
+        Data is fetched live from Yahoo Finance. This is decision support, not investment advice.
+      </p>
+    </div>
+  )
+}
+
 function ETFBuyingChecklistHelp() {
   return (
     <div>
@@ -5821,6 +5897,7 @@ const CONTENT_MAP = {
   'etf-screen': ETFScreenHelp,
   'etf-comparer': ETFComparerHelp,
   'stock-comparer': StockComparerHelp,
+  'stock-buying-checklist': StockBuyingChecklistHelp,
   'etf-buying-checklist-evaluator': ETFBuyingChecklistHelp,
   'option-income-etf-evaluator': OptionIncomeETFHelp,
   'cef-buying-checklist-evaluator': CEFBuyingChecklistHelp,

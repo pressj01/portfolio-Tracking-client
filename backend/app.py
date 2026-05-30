@@ -18437,6 +18437,430 @@ def _bss_sortino(close, risk_free_annual=0.05):
         return None
 
 
+# ── Stock Buying Checklist: extra indicators + metric builder ────────────────
+
+def _awesome_oscillator(high, low, fast=5, slow=34):
+    """Bill Williams Awesome Oscillator: SMA(fast) - SMA(slow) of median price.
+
+    Returns (value, signal). Bullish above zero and rising, bearish below and
+    falling, otherwise neutral.
+    """
+    if high is None or low is None or len(high) < slow + 1:
+        return None, "NEUTRAL"
+    median = (high + low) / 2
+    ao = median.rolling(fast).mean() - median.rolling(slow).mean()
+    if len(ao) < 2 or pd.isna(ao.iloc[-1]) or pd.isna(ao.iloc[-2]):
+        return None, "NEUTRAL"
+    last = float(ao.iloc[-1])
+    prev = float(ao.iloc[-2])
+    eps = 1e-9  # tolerate float noise so a flat-but-positive AO still reads bullish
+    if last > 0 and last >= prev - eps:
+        sig = "BUY"
+    elif last < 0 and last <= prev + eps:
+        sig = "SELL"
+    else:
+        sig = "NEUTRAL"
+    return round(last, 4), sig
+
+
+def _obv_volume_signal(close, volume, lookback=20):
+    """On-Balance Volume trend + latest volume vs its recent average.
+
+    Returns {obv_trend_pct, volume_vs_avg, signal}. Rising OBV (accumulation)
+    confirms buying interest; falling OBV (distribution) confirms selling.
+    """
+    import numpy as np
+
+    result = {"obv_trend_pct": None, "volume_vs_avg": None, "signal": "NEUTRAL"}
+    if close is None or volume is None or len(close) < lookback + 1:
+        return result
+    volume = volume.fillna(0)
+    direction = np.sign(close.diff().fillna(0))
+    obv = (direction * volume).cumsum()
+    window = obv.iloc[-lookback:]
+    start = float(window.iloc[0])
+    end = float(window.iloc[-1])
+    if start != 0:
+        result["obv_trend_pct"] = round((end - start) / abs(start) * 100, 2)
+    avg_vol = float(volume.iloc[-lookback:].mean())
+    if avg_vol > 0:
+        result["volume_vs_avg"] = round(float(volume.iloc[-1]) / avg_vol, 2)
+    delta = end - start
+    if delta > 0:
+        result["signal"] = "BUY"
+    elif delta < 0:
+        result["signal"] = "SELL"
+    return result
+
+
+def _macd_values(close):
+    """Return {macd, signal_line, histogram, state} for the standard 12/26/9 MACD."""
+    result = {"macd": None, "signal_line": None, "histogram": None, "state": "NEUTRAL"}
+    if close is None or len(close) < 35:
+        return result
+    macd_line = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
+    sig_line = macd_line.ewm(span=9, adjust=False).mean()
+    m, s = macd_line.iloc[-1], sig_line.iloc[-1]
+    if pd.isna(m) or pd.isna(s):
+        return result
+    m, s = float(m), float(s)
+    result.update({
+        "macd": round(m, 4),
+        "signal_line": round(s, 4),
+        "histogram": round(m - s, 4),
+        "state": "BUY" if m > s else "SELL",
+    })
+    return result
+
+
+def _stochastic_state(slow_k, slow_d):
+    """Classify a slow stochastic reading: oversold (<20) buy, overbought (>80) sell."""
+    if slow_k is None or slow_d is None:
+        return "NEUTRAL"
+    if slow_k < 20 and slow_d < 20:
+        return "BUY"
+    if slow_k > 80 and slow_d > 80:
+        return "SELL"
+    return "NEUTRAL"
+
+
+def _stock_earnings_facts(tk):
+    """Best-effort next-earnings date and recent surprise history (optional)."""
+    facts = {
+        "next_earnings_date": None,
+        "days_to_earnings": None,
+        "last_surprise_pct": None,
+        "recent_beats": None,
+        "recent_reports": None,
+    }
+    try:
+        ed = None
+        getter = getattr(tk, "get_earnings_dates", None)
+        if callable(getter):
+            ed = getter(limit=12)
+        else:
+            ed = getattr(tk, "earnings_dates", None)
+        if ed is None or ed.empty:
+            return facts
+        now = pd.Timestamp.now(tz=ed.index.tz)
+        future = ed[ed.index >= now]
+        if not future.empty:
+            nd = future.index.min()
+            facts["next_earnings_date"] = nd.strftime("%Y-%m-%d")
+            facts["days_to_earnings"] = int((nd - now).days)
+        past = ed[ed.index < now]
+        col = next((c for c in ed.columns if "surprise" in str(c).lower()), None)
+        if col and not past.empty:
+            sp = past[col].dropna()
+            if not sp.empty:
+                raw = float(sp.iloc[0])
+                facts["last_surprise_pct"] = round(raw * 100, 2) if abs(raw) <= 1 else round(raw, 2)
+                facts["recent_reports"] = int(len(sp))
+                facts["recent_beats"] = int((sp > 0).sum())
+    except Exception:
+        pass
+    return facts
+
+
+def _checklist_frac_pct(value):
+    """Convert a yfinance ratio that is always stored as a fraction (margins,
+    ROE/ROA, growth rates, payout ratio) into a percentage. Unlike
+    ``_research_pct`` this always multiplies by 100, so values above 1.0
+    (e.g. an ROE of 1.41 = 141%) are handled correctly.
+    """
+    value = _research_clean_value(value)
+    if value is None:
+        return None
+    try:
+        return round(float(value) * 100, 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stock_checklist_fund_kind(quote_type, info, name):
+    """Classify a ticker as a fund kind (or None for an ordinary stock).
+
+    ETFs and mutual funds are detected from quoteType; closed-end funds and
+    BDCs report as EQUITY on Yahoo, so they are caught via the shared
+    legal-type classifier. REITs are treated as stocks (they file normal
+    company financials), so they are NOT flagged here.
+    """
+    summary = _research_info_value(info, "longBusinessSummary") or ""
+    industry = _research_info_value(info, "industry", "industryDisp") or ""
+    legal = (_derive_legal_type(quote_type, summary, None, None, name, industry) or "").lower()
+    if quote_type == "ETF" or "exchange traded fund" in legal:
+        return "ETF"
+    if quote_type in {"MUTUALFUND", "MONEYMARKET"} or "mutual fund" in legal:
+        return "Mutual Fund"
+    if "business development" in legal:
+        return "BDC"
+    if "closed" in legal:
+        return "Closed-End Fund"
+    # Many closed-end funds report as EQUITY with no legalType; their summaries
+    # phrase it loosely ("close ended", "closed-end management investment
+    # company"), which the shared classifier misses — catch those here.
+    s = summary.lower().replace("-", " ")
+    if ("close end" in s or "closed end" in s) and ("fund" in s or "investment company" in s):
+        return "Closed-End Fund"
+    if "business development company" in s:
+        return "BDC"
+    return None
+
+
+def _build_stock_checklist(symbol, skip_if_fund=False):
+    """Fetch fundamentals + technicals for one ticker for the buying checklist.
+
+    Returns (metrics_dict, error). Scoring/grading happens client-side so the
+    sector-relative thresholds stay user-editable; this only supplies raw
+    fundamentals and standard technical indicator values/signals.
+    """
+    import yfinance as yf
+
+    symbol = (symbol or "").strip().upper()
+    if not symbol:
+        return None, "ticker is required"
+    lookup = _yahoo_symbol_for_ticker(symbol)
+    try:
+        tk = yf.Ticker(lookup)
+        info = tk.info or {}
+        info_symbol = (info.get("symbol") or "").upper()
+        if info_symbol and info_symbol != lookup:
+            lookup = info_symbol
+            tk = yf.Ticker(lookup)
+            info = tk.info or {}
+    except Exception as exc:
+        return None, f"Could not load {symbol}: {exc}"
+
+    name = _research_info_value(info, "longName", "shortName", "displayName")
+    quote_type = (_research_info_value(info, "quoteType") or "").upper()
+    if not name:
+        return None, f"Ticker {symbol} not found in Yahoo Finance."
+
+    fund_kind = _stock_checklist_fund_kind(quote_type, info, name)
+    # The checklist grades individual stocks. When asked to skip funds (batch
+    # scan), short-circuit before the expensive history fetch and let the caller
+    # report it as skipped instead of scoring it on stock criteria.
+    if skip_if_fund and fund_kind:
+        return {
+            "ticker": lookup, "requested_ticker": symbol, "name": name,
+            "quote_type": quote_type, "sector": _research_info_value(info, "sector"),
+            "is_fund": True, "fund_kind": fund_kind, "skipped": True,
+        }, None
+
+    enterprise_value = _research_clean_value(_research_info_value(info, "enterpriseValue"))
+    ebitda = _research_clean_value(_research_info_value(info, "ebitda"))
+    ev_to_ebitda = None
+    if enterprise_value is not None and ebitda not in (None, 0):
+        try:
+            ev_to_ebitda = round(float(enterprise_value) / float(ebitda), 2)
+        except (TypeError, ZeroDivisionError, ValueError):
+            ev_to_ebitda = None
+
+    fundamentals = {
+        "trailing_pe": _research_clean_value(_research_info_value(info, "trailingPE")),
+        "forward_pe": _research_clean_value(_research_info_value(info, "forwardPE")),
+        "peg_ratio": _research_clean_value(_research_info_value(info, "pegRatio", "trailingPegRatio")),
+        "price_to_book": _research_clean_value(_research_info_value(info, "priceToBook")),
+        "price_to_sales_ttm": _research_clean_value(_research_info_value(info, "priceToSalesTrailing12Months")),
+        "ev_to_ebitda": ev_to_ebitda,
+        "profit_margin_pct": _checklist_frac_pct(_research_info_value(info, "profitMargins")),
+        "operating_margin_pct": _checklist_frac_pct(_research_info_value(info, "operatingMargins")),
+        "gross_margin_pct": _checklist_frac_pct(_research_info_value(info, "grossMargins")),
+        "roe_pct": _checklist_frac_pct(_research_info_value(info, "returnOnEquity")),
+        "roa_pct": _checklist_frac_pct(_research_info_value(info, "returnOnAssets")),
+        "revenue_growth_pct": _checklist_frac_pct(_research_info_value(info, "revenueGrowth")),
+        "earnings_growth_pct": _checklist_frac_pct(_research_info_value(info, "earningsGrowth")),
+        "earnings_q_growth_pct": _checklist_frac_pct(_research_info_value(info, "earningsQuarterlyGrowth")),
+        "eps": _research_clean_value(_research_info_value(info, "trailingEps")),
+        "forward_eps": _research_clean_value(_research_info_value(info, "forwardEps")),
+        "debt_to_equity": _research_clean_value(_research_info_value(info, "debtToEquity")),
+        "current_ratio": _research_clean_value(_research_info_value(info, "currentRatio")),
+        "quick_ratio": _research_clean_value(_research_info_value(info, "quickRatio")),
+        "free_cash_flow": _research_money(_research_info_value(info, "freeCashflow")),
+        "total_cash": _research_money(_research_info_value(info, "totalCash")),
+        "total_debt": _research_money(_research_info_value(info, "totalDebt")),
+        # yfinance reports dividendYield already as a percent (e.g. 2.68 = 2.68%),
+        # so it is used as-is; payoutRatio is a fraction and is scaled to a percent.
+        "dividend_yield_pct": _research_money(_research_info_value(info, "dividendYield", "trailingAnnualDividendYield")),
+        "payout_ratio_pct": _checklist_frac_pct(_research_info_value(info, "payoutRatio")),
+        "beta": _research_clean_value(_research_info_value(info, "beta")),
+    }
+
+    price = _research_money(_research_info_value(info, "regularMarketPrice", "currentPrice", "previousClose"))
+    week_low = _research_money(_research_info_value(info, "fiftyTwoWeekLow"))
+    week_high = _research_money(_research_info_value(info, "fiftyTwoWeekHigh"))
+    range_position_pct = None
+    if price is not None and week_low is not None and week_high is not None and week_high > week_low:
+        range_position_pct = round((price - week_low) / (week_high - week_low) * 100, 1)
+
+    # ── Technicals from 1y daily history ─────────────────────────────────────
+    technicals = {
+        "price": price,
+        "sma50": None, "sma200": None,
+        "pct_vs_sma50": None, "pct_vs_sma200": None,
+        "trend_state": "NEUTRAL", "golden_cross": None,
+        "rsi14": None, "rsi_state": "NEUTRAL",
+        "macd": None, "macd_signal_line": None, "macd_histogram": None, "macd_state": "NEUTRAL",
+        "stoch_k": None, "stoch_d": None, "stoch_state": "NEUTRAL",
+        "awesome_oscillator": None, "ao_state": "NEUTRAL",
+        "obv_trend_pct": None, "volume_vs_avg": None, "volume_state": "NEUTRAL",
+        "fifty_two_week_low": week_low,
+        "fifty_two_week_high": week_high,
+        "range_position_pct": range_position_pct,
+    }
+    try:
+        hist = tk.history(period="1y", auto_adjust=False)
+    except Exception:
+        hist = None
+    if hist is not None and not hist.empty and "Close" in hist.columns:
+        close = hist["Close"].dropna()
+        high = hist["High"].dropna() if "High" in hist.columns else None
+        low = hist["Low"].dropna() if "Low" in hist.columns else None
+        volume = hist["Volume"] if "Volume" in hist.columns else None
+        if len(close) >= 2:
+            sma50_sig, sma50_val, sma50_pct = _bss_sma(close, 50)
+            sma200_sig, sma200_val, sma200_pct = _bss_sma(close, 200)
+            technicals["sma50"] = round(sma50_val, 4) if sma50_val is not None else None
+            technicals["sma200"] = round(sma200_val, 4) if sma200_val is not None else None
+            technicals["pct_vs_sma50"] = round(sma50_pct, 2) if sma50_pct is not None else None
+            technicals["pct_vs_sma200"] = round(sma200_pct, 2) if sma200_pct is not None else None
+            technicals["trend_state"] = sma200_sig if sma200_val is not None else sma50_sig
+            if sma50_val is not None and sma200_val is not None:
+                technicals["golden_cross"] = bool(sma50_val > sma200_val)
+
+            rsi_sig, rsi_val = _bss_rsi(close)
+            technicals["rsi14"] = round(rsi_val, 2) if rsi_val is not None else None
+            technicals["rsi_state"] = rsi_sig
+
+            macd = _macd_values(close)
+            technicals["macd"] = macd["macd"]
+            technicals["macd_signal_line"] = macd["signal_line"]
+            technicals["macd_histogram"] = macd["histogram"]
+            technicals["macd_state"] = macd["state"]
+
+            if high is not None and low is not None:
+                k_val, d_val = _slow_stochastic(high, low, close)
+                technicals["stoch_k"] = round(k_val, 2) if k_val is not None else None
+                technicals["stoch_d"] = round(d_val, 2) if d_val is not None else None
+                technicals["stoch_state"] = _stochastic_state(k_val, d_val)
+
+                ao_val, ao_sig = _awesome_oscillator(high, low)
+                technicals["awesome_oscillator"] = ao_val
+                technicals["ao_state"] = ao_sig
+
+            vol = _obv_volume_signal(close, volume)
+            technicals["obv_trend_pct"] = vol["obv_trend_pct"]
+            technicals["volume_vs_avg"] = vol["volume_vs_avg"]
+            technicals["volume_state"] = vol["signal"]
+            if technicals["price"] is None:
+                technicals["price"] = round(float(close.iloc[-1]), 4)
+
+    metrics = {
+        "ticker": lookup,
+        "requested_ticker": symbol,
+        "name": name,
+        "quote_type": quote_type,
+        "sector": _research_info_value(info, "sector"),
+        "industry": _research_info_value(info, "industry"),
+        "price": technicals["price"],
+        "market_cap": _research_money(_research_info_value(info, "marketCap")),
+        "is_fund": fund_kind is not None,
+        "fund_kind": fund_kind,
+        "fundamentals": fundamentals,
+        "technicals": technicals,
+        "earnings": _stock_earnings_facts(tk),
+        "data_source": "Yahoo Finance",
+    }
+    return metrics, None
+
+
+@app.route("/api/stock-evaluate/<ticker>")
+def stock_evaluate(ticker):
+    """Fundamental + technical metrics for a single ticker (Stock Buying Checklist)."""
+    metrics, error = _build_stock_checklist(ticker)
+    if error:
+        status = 404 if "not found" in error.lower() else 502
+        return jsonify({"error": error}), status
+    return jsonify(metrics)
+
+
+@app.route("/api/stock-checklist/scan", methods=["POST"])
+def stock_checklist_scan():
+    """Batch metrics for a list of tickers or a named source (portfolio/watchlist).
+
+    Body: {"tickers": [...]} and/or {"source": "portfolio" | "watchlist"}.
+    Sector-relative grading is done client-side from the returned set.
+    """
+    SCAN_LIMIT = 60
+    payload = request.get_json(silent=True) or {}
+    tickers = []
+
+    raw_list = payload.get("tickers") or []
+    if isinstance(raw_list, str):
+        raw_list = re.split(r"[\s,;]+", raw_list)
+    for t in raw_list:
+        sym = str(t or "").strip().upper()
+        if sym:
+            tickers.append(sym)
+
+    source = (payload.get("source") or "").strip().lower()
+    if source == "portfolio":
+        profile_id = get_profile_id()
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT ticker FROM all_account_info "
+                "WHERE profile_id = ? AND quantity > 0 ORDER BY ticker",
+                (profile_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+        tickers += [r["ticker"] if isinstance(r, dict) else r[0] for r in rows]
+    elif source == "watchlist":
+        tickers += [r["Ticker"] for r in _read_watchlist_rows() if r.get("Ticker")]
+
+    # De-dupe while preserving order, then cap.
+    seen = set()
+    ordered = []
+    for sym in tickers:
+        if sym and sym not in seen:
+            seen.add(sym)
+            ordered.append(sym)
+    if not ordered:
+        return jsonify({"error": "No tickers to scan. Provide a ticker list or a source."}), 400
+    truncated = len(ordered) > SCAN_LIMIT
+    ordered = ordered[:SCAN_LIMIT]
+
+    results = []
+    errors = []
+    skipped_funds = []
+    for sym in ordered:
+        try:
+            metrics, error = _build_stock_checklist(sym, skip_if_fund=True)
+            if error:
+                errors.append({"ticker": sym, "error": error})
+            elif metrics.get("is_fund"):
+                skipped_funds.append({
+                    "ticker": metrics.get("ticker", sym),
+                    "name": metrics.get("name", ""),
+                    "kind": metrics.get("fund_kind") or "Fund",
+                })
+            else:
+                results.append(metrics)
+        except Exception as exc:  # noqa: BLE001 - one bad ticker must not kill the batch
+            errors.append({"ticker": sym, "error": str(exc)})
+
+    return jsonify({
+        "results": results,
+        "errors": errors,
+        "skipped_funds": skipped_funds,
+        "requested": len(ordered),
+        "returned": len(results),
+        "truncated": truncated,
+        "scan_limit": SCAN_LIMIT,
+    })
+
+
 @app.route("/api/buy-sell-signals")
 def buy_sell_signals_data():
     """Compute 5-indicator majority-vote signals for portfolio + sector/watchlist tickers."""
