@@ -417,6 +417,80 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_layered_broker_then_snowball_then_broker_does_not_double_count(self):
+        """Positions → Snowball txns → broker txns must not double-count the same
+        real-world buys and dividends when the two feeds disagree on small details
+        (price rounding, dividend pay vs. settlement date)."""
+        import io
+
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (30, 'My Schwab', 'schwab', 0, 0)"
+        )
+
+        orig_income = app_module.populate_income_tracking
+        orig_snapshot = app_module._snapshot_nav_after_profile_update
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+        try:
+            def post(fmt, filename, content):
+                return self.client.post(
+                    "/api/import/transactions?profile_id=30",
+                    data={"format": fmt, "file": (io.BytesIO(content.encode()), filename)},
+                    content_type="multipart/form-data",
+                )
+
+            # 1. Broker positions: 10 shares ABC, $200 cost basis.
+            self.assertEqual(post(
+                "schwab", "positions.csv",
+                '"Positions for account"\n\n'
+                "Symbol,Description,Qty (Quantity),Price,Cost Basis,Mkt Val (Market Value)\n"
+                "ABC,ABC Corp,10,$25.00,$200.00,$250.00\n",
+            ).status_code, 200)
+
+            # 2. Snowball transactions: the buy at $20.00 and a $5 dividend on 03-10.
+            self.assertEqual(post(
+                "snowball", "snowball.csv",
+                "Event,Symbol,Date,Quantity,Price,Note\n"
+                "BUY,ABC,2025-01-15,10,20.00,initial buy\n"
+                "DIVIDEND,ABC,2025-03-10,5,,quarterly div\n",
+            ).status_code, 200)
+
+            # 3. Broker transactions: SAME buy at a half-cent-different price and the
+            #    SAME dividend stamped two days later (pay vs. settlement date).
+            self.assertEqual(post(
+                "schwab_transactions", "txns.csv",
+                "Date,Action,Symbol,Description,Quantity,Price,Fees & Comm,Amount\n"
+                "01/15/2025,Buy,ABC,ABC Corp,10,$20.005,$0.00,-$200.05\n"
+                "03/12/2025,Cash Dividend,ABC,ABC Corp,,,,$5.00\n",
+            ).status_code, 200)
+        finally:
+            app_module.populate_income_tracking = orig_income
+            app_module._snapshot_nav_after_profile_update = orig_snapshot
+
+        conn = self._get_connection()
+        try:
+            buy_shares = conn.execute(
+                "SELECT COALESCE(SUM(shares), 0) FROM transactions "
+                "WHERE profile_id = 30 AND transaction_type = 'BUY'"
+            ).fetchone()[0]
+            div_total = conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) FROM dividend_payments WHERE profile_id = 30"
+            ).fetchone()[0]
+            holding = conn.execute(
+                "SELECT quantity, total_divs_received FROM all_account_info "
+                "WHERE ticker = 'ABC' AND profile_id = 30"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        # Both feeds describe the same single buy and single dividend, so the
+        # ledger and totals must reflect 10 shares bought and $5 received — not 20/$10.
+        self.assertAlmostEqual(buy_shares, 10.0, places=4)
+        self.assertAlmostEqual(div_total, 5.0, places=2)
+        self.assertAlmostEqual(holding["quantity"], 10.0, places=4)
+        self.assertAlmostEqual(holding["total_divs_received"], 5.0, places=2)
+
     def test_shear_group_positions_filter_to_selected_account(self):
         self._execute(
             "INSERT INTO profiles (id, name, broker_source, include_in_owner) "

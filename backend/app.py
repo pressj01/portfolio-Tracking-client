@@ -2495,22 +2495,47 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
     if any(pid != 1 for pid in imported_profiles):
         _auto_reconcile_owner()
 
+    # Build a clear, plain-English summary of what happened.
+    total_holdings = sum(d["rows"] for d in holding_messages)
+    num_portfolios = len(holding_messages)
+    total_new_txns = inserted_buys + inserted_sells + dividends_applied
+    parts = [
+        f"Imported {total_holdings} holding{'s' if total_holdings != 1 else ''} across "
+        f"{num_portfolios} portfolio{'s' if num_portfolios != 1 else ''}."
+    ]
+    if total_new_txns:
+        parts.append(
+            f"Added {inserted_buys} buy{'s' if inserted_buys != 1 else ''}, "
+            f"{inserted_sells} sell{'s' if inserted_sells != 1 else ''}, and "
+            f"{dividends_applied} dividend{'s' if dividends_applied != 1 else ''}."
+        )
+    elif duplicates_skipped:
+        parts.append("No new transactions were added — they are already in your records.")
+    if duplicates_skipped:
+        parts.append(
+            f"{duplicates_skipped} transaction"
+            f"{'s' if duplicates_skipped != 1 else ''} already in your records "
+            f"{'were' if duplicates_skipped != 1 else 'was'} skipped."
+        )
+    if original_basis_updated:
+        parts.append(
+            f"Cost basis was refreshed for {original_basis_updated} ticker"
+            f"{'s' if original_basis_updated != 1 else ''}."
+        )
+    if original_basis_skipped:
+        shown = [m.get("ticker", "?") for m in original_basis_mismatches]
+        more = original_basis_skipped - len(shown)
+        ticker_list = ", ".join(shown) + (f", +{more} more" if more > 0 else "")
+        parts.append(
+            f"Cost basis was left unchanged for {original_basis_skipped} ticker"
+            f"{'s' if original_basis_skipped != 1 else ''} because this file's "
+            f"transaction history doesn't add up to their current share count"
+            f"{'s' if original_basis_skipped != 1 else ''} — usually that means the "
+            f"export doesn't go back far enough to cover the full position: {ticker_list}."
+        )
+
     return jsonify({
-        "message": (
-            f"Imported {sum(d['rows'] for d in holding_messages)} holdings across "
-            f"{len(holding_messages)} portfolio{'s' if len(holding_messages) != 1 else ''}, "
-            f"plus {inserted_buys} buys, {inserted_sells} sells, "
-            f"and {dividends_applied} dividends. "
-            f"{duplicates_skipped} duplicate transactions skipped."
-            f" Original basis updated for {original_basis_updated} ticker"
-            f"{'s' if original_basis_updated != 1 else ''}"
-            + (
-                f"; {original_basis_skipped} ticker"
-                f"{'s' if original_basis_skipped != 1 else ''} skipped because transaction shares did not match"
-                f" ({', '.join(m.get('ticker', '?') for m in original_basis_mismatches)})."
-                if original_basis_skipped else "."
-            )
-        ),
+        "message": " ".join(parts),
         "details": holding_messages,
         "inserted_buys": inserted_buys,
         "inserted_sells": inserted_sells,
@@ -2799,6 +2824,46 @@ def _record_positions_nav_only(parsed, profile_id, nav_date):
     })
 
 
+# When transaction history is layered on top of broker-managed positions, the
+# same real-world event often shows up in more than one feed (e.g. a Snowball
+# export and the broker's own transactions export) with small representational
+# differences: a price rounded to a different number of decimals, or a dividend
+# stamped with the pay date in one feed and the settlement date in another.
+# These tolerances let the importer recognise those near-duplicates so layered
+# imports don't double-count buys, sells, and dividends.
+_LAYERED_DIV_WINDOW_DAYS = 3
+
+
+def _layered_dividend_duplicate(conn, ticker, profile_id, date_str, amount):
+    """Return True if a near-duplicate dividend already exists for this ticker.
+
+    Matches a payment within a few days of ``date_str`` whose amount is the
+    same (within ~1%). Used only when layering a second feed on top of broker
+    positions, so the same payment reported with a different date by each feed
+    is not recorded twice. The caller has already ruled out an exact-date row.
+    """
+    try:
+        d = datetime.date.fromisoformat(date_str)
+    except (TypeError, ValueError):
+        return False
+    lo = (d - datetime.timedelta(days=_LAYERED_DIV_WINDOW_DAYS)).isoformat()
+    hi = (d + datetime.timedelta(days=_LAYERED_DIV_WINDOW_DAYS)).isoformat()
+    rows = conn.execute(
+        "SELECT amount FROM dividend_payments WHERE ticker = ? AND profile_id = ? "
+        "AND payment_date BETWEEN ? AND ?",
+        (ticker, profile_id, lo, hi),
+    ).fetchall()
+    target = float(amount or 0)
+    tol = max(0.01, abs(target) * 0.01)
+    for r in rows:
+        existing = r["amount"] if isinstance(r, dict) else r[0]
+        if existing is None:
+            continue
+        if abs(float(existing) - target) <= tol:
+            return True
+    return False
+
+
 @app.route("/api/import/transactions", methods=["POST"])
 def api_import_transactions():
     """Import transaction history from a CSV into the transactions + dividend_payments tables."""
@@ -2924,6 +2989,15 @@ def api_import_transactions():
                     duplicates_skipped += 1
                 continue
 
+            # Layered imports: the same payment can arrive from a second feed
+            # stamped with a slightly different date. Treat a nearby same-amount
+            # dividend as the same payment instead of double-counting it.
+            if preserve_positions and _layered_dividend_duplicate(
+                conn, ticker, profile_id, date_str, info["amount"]
+            ):
+                duplicates_skipped += 1
+                continue
+
             notes = "; ".join(dict.fromkeys(info["notes_parts"]))  # dedupe note parts
             conn.execute(
                 "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
@@ -2940,19 +3014,36 @@ def api_import_transactions():
             # Count-based duplicate check so legitimate identical transactions
             # (same day/qty/price) are preserved while re-imports are deduped.
             # DB count includes uncommitted inserts from this batch (same conn).
-            existing_count = conn.execute(
-                "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
-                "AND transaction_type = ? AND transaction_date = ? "
-                "AND ABS(shares - ?) < 0.0001 AND price_per_share = ?",
-                (ticker, profile_id, txn["type"], txn["date"],
-                 txn["shares"], txn["price_per_share"] or 0),
-            ).fetchone()[0]
-            import_count = sum(1 for t in non_div_txns
-                               if t["type"] == txn["type"] and t["ticker"] == ticker
-                               and t["date"] == txn["date"]
-                               and t["shares"] is not None
-                               and abs(t["shares"] - txn["shares"]) < 0.0001
-                               and (t["price_per_share"] or 0) == (txn["price_per_share"] or 0))
+            # When layering history on top of broker-managed positions, the same
+            # fill can arrive from two feeds with a rounding difference in price,
+            # so match on date/quantity alone there; otherwise require an exact
+            # price match so genuinely distinct same-day trades are preserved.
+            if preserve_positions:
+                existing_count = conn.execute(
+                    "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
+                    "AND transaction_type = ? AND transaction_date = ? "
+                    "AND ABS(shares - ?) < 0.0001",
+                    (ticker, profile_id, txn["type"], txn["date"], txn["shares"]),
+                ).fetchone()[0]
+                import_count = sum(1 for t in non_div_txns
+                                   if t["type"] == txn["type"] and t["ticker"] == ticker
+                                   and t["date"] == txn["date"]
+                                   and t["shares"] is not None
+                                   and abs(t["shares"] - txn["shares"]) < 0.0001)
+            else:
+                existing_count = conn.execute(
+                    "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
+                    "AND transaction_type = ? AND transaction_date = ? "
+                    "AND ABS(shares - ?) < 0.0001 AND price_per_share = ?",
+                    (ticker, profile_id, txn["type"], txn["date"],
+                     txn["shares"], txn["price_per_share"] or 0),
+                ).fetchone()[0]
+                import_count = sum(1 for t in non_div_txns
+                                   if t["type"] == txn["type"] and t["ticker"] == ticker
+                                   and t["date"] == txn["date"]
+                                   and t["shares"] is not None
+                                   and abs(t["shares"] - txn["shares"]) < 0.0001
+                                   and (t["price_per_share"] or 0) == (txn["price_per_share"] or 0))
             if existing_count >= import_count:
                 duplicates_skipped += 1
                 continue
@@ -3044,6 +3135,49 @@ def api_import_transactions():
     finally:
         conn.close()
 
+    # Build a clear, plain-English summary of what happened.
+    total_new = inserted_buys + inserted_sells + dividends_applied
+    parts = []
+    if total_new == 0 and duplicates_skipped > 0:
+        parts.append(
+            f"Nothing new to import — all {duplicates_skipped} transaction"
+            f"{'s' if duplicates_skipped != 1 else ''} in this file "
+            f"{'are' if duplicates_skipped != 1 else 'is'} already in your records, "
+            f"so nothing was added. (This is normal when re-importing a file you've "
+            f"imported before.)"
+        )
+    else:
+        parts.append(
+            f"Imported {inserted_buys} buy{'s' if inserted_buys != 1 else ''}, "
+            f"{inserted_sells} sell{'s' if inserted_sells != 1 else ''}, and "
+            f"{dividends_applied} dividend{'s' if dividends_applied != 1 else ''}."
+        )
+        if duplicates_skipped:
+            parts.append(
+                f"{duplicates_skipped} transaction"
+                f"{'s' if duplicates_skipped != 1 else ''} already in your records "
+                f"{'were' if duplicates_skipped != 1 else 'was'} skipped."
+            )
+
+    if preserve_positions:
+        parts.append("Your current share counts were kept from the broker positions import.")
+        if original_basis_updated:
+            parts.append(
+                f"Cost basis was refreshed for {original_basis_updated} ticker"
+                f"{'s' if original_basis_updated != 1 else ''}."
+            )
+        if original_basis_skipped:
+            shown = [m.get("ticker", "?") for m in original_basis_mismatches]
+            more = original_basis_skipped - len(shown)
+            ticker_list = ", ".join(shown) + (f", +{more} more" if more > 0 else "")
+            parts.append(
+                f"Cost basis was left unchanged for {original_basis_skipped} ticker"
+                f"{'s' if original_basis_skipped != 1 else ''} because this file's "
+                f"transaction history doesn't add up to their current share count"
+                f"{'s' if original_basis_skipped != 1 else ''} — usually that means the "
+                f"export doesn't go back far enough to cover the full position: {ticker_list}."
+            )
+
     return jsonify({
         "inserted_buys": inserted_buys,
         "inserted_sells": inserted_sells,
@@ -3052,22 +3186,7 @@ def api_import_transactions():
         "original_basis_updated": original_basis_updated,
         "original_basis_skipped": original_basis_skipped,
         "original_basis_mismatches": original_basis_mismatches,
-        "message": (
-            f"Imported {inserted_buys} buys, {inserted_sells} sells, "
-            f"{dividends_applied} dividends. {duplicates_skipped} duplicates skipped."
-            + (
-                " Current holdings were preserved from the broker positions import for this portfolio."
-                f" Original basis updated for {original_basis_updated} ticker"
-                f"{'s' if original_basis_updated != 1 else ''}"
-                + (
-                    f"; {original_basis_skipped} ticker"
-                    f"{'s' if original_basis_skipped != 1 else ''} skipped because transaction shares did not match"
-                    f" ({', '.join(m.get('ticker', '?') for m in original_basis_mismatches)})."
-                    if original_basis_skipped else "."
-                )
-                if preserve_positions else ""
-            )
-        ),
+        "message": " ".join(parts),
     })
 
 
@@ -26631,6 +26750,15 @@ def reinvestment_impact_data():
     profile_id = pids[0]
     conn = get_connection()
 
+    # Owner has no dividend_payments of its own — its real payments live in the
+    # member sub-accounts. Mirror the dashboard's remap so actual-payment lookups
+    # read the sub-accounts instead of Owner's (essentially empty) own rows.
+    payment_pids = pids
+    if not is_agg and len(pids) == 1 and pids[0] == 1:
+        owner_source_ids = _get_owner_source_profile_ids(conn)
+        if owner_source_ids:
+            payment_pids = owner_source_ids
+
     cats = conn.execute(
         "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
         (profile_id,),
@@ -26681,13 +26809,14 @@ def reinvestment_impact_data():
     actual_tickers = set()
     if holdings:
         tph = ",".join("?" * len(holdings))
+        payment_placeholders = ",".join("?" * len(payment_pids))
         pay_rows = conn.execute(
             f"""SELECT ticker, payment_date, SUM(amount) as amount
                 FROM dividend_payments
-                WHERE profile_id IN ({placeholders})
+                WHERE profile_id IN ({payment_placeholders})
                   AND ticker IN ({tph})
                 GROUP BY ticker, payment_date""",
-            pids + [h["ticker"] for h in holdings],
+            list(payment_pids) + [h["ticker"] for h in holdings],
         ).fetchall()
         for r in pay_rows:
             ts = _parse_timestamp_value(r["payment_date"])
