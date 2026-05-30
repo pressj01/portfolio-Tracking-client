@@ -648,7 +648,8 @@ export default function ReinvestmentImpact() {
             <StatTile label="DRIP SHARES ADDED" value={fmtShares(data.summary.total_drip_shares)} color="#a855f7" />
             <StatTile label="GROWTH FROM DRIP" value={`${data.summary.drip_pct_of_growth}%`} color="#4dff91"
               sub="share of payout change" />
-            <StatTile label="ANNUAL RUN-RATE" value={fmt$(data.summary.run_rate)} color="#f59e0b" />
+            <StatTile label="ANNUAL RUN-RATE" value={fmt$(data.summary.run_rate)} color="#f59e0b"
+              sub={`most recent ${view === 'weekly' ? 'week' : view === 'yearly' ? 'year' : 'month'} × ${view === 'weekly' ? 52 : view === 'yearly' ? 1 : 12} — current pace, not a year-to-date total`} />
           </div>
 
           {scopeTicker && (

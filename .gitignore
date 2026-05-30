@@ -43,3 +43,6 @@ installer/
 
 # Claude Code local memory
 .claude/
+
+# Local dev server logs
+.codex-server-logs/
