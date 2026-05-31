@@ -25,7 +25,7 @@ function MetricCard({ label, value, className }) {
 
 export default function TotalReturn() {
   const pf = useProfileFetch()
-  const { selection } = useProfile()
+  const { selection, basisMode } = useProfile()
   const [categories, setCategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const catRef = useRef(null)
@@ -78,7 +78,7 @@ export default function TotalReturn() {
       })
       .catch(e => setSummaryError(e.message))
       .finally(() => setSummaryLoading(false))
-  }, [categories, selection])
+  }, [categories, selection, basisMode])
 
   // Fetch yfinance charts
   useEffect(() => {

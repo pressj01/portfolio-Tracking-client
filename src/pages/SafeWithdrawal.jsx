@@ -16,7 +16,7 @@ function MetricCard({ label, value, valueColor }) {
 
 export default function SafeWithdrawal() {
   const pf = useProfileFetch()
-  const { selection } = useProfile()
+  const { selection, basisMode } = useProfile()
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -45,7 +45,7 @@ export default function SafeWithdrawal() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [selection])
+  }, [selection, basisMode])
 
   const allComputed = useMemo(() => rows.map(r => {
     const cost = r.purchase_value || 0
