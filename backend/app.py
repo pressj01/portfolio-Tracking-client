@@ -3319,27 +3319,22 @@ def api_nav_snapshot():
     })
 
 
-def _nav_replay_blocked(profile_id, conn):
-    """True when a profile's NAV must come from authoritative snapshots, not transaction replay."""
-    return (
-        _profile_is_positions_managed(profile_id, conn)
-        and _profile_broker_source(profile_id, conn) in _SNOWBALL_LAYERED_BROKER_SOURCES
-    )
-
-
-_NAV_REPLAY_BLOCKED_MSG = (
-    "NAV backfill is disabled for broker-position portfolios because transaction "
-    "imports are recordkeeping only. Use Record NAV or position-file imports to add "
-    "authoritative daily snapshots."
-)
-
-
-def _compute_backfill_nav_rows(profile_id, existing_nav):
+def _compute_backfill_nav_rows(profile_id, existing_nav, anchor_to_current=False):
     """Replay BUY/SELL transactions against actual (unadjusted) closing prices.
 
     Returns (nav_rows, earliest, error, status). nav_rows is a list of
     (profile_id, nav_date, total_value) tuples for trading days NOT already in
     `existing_nav`. On failure, nav_rows is None and (error, status) describe it.
+
+    Two reconstruction modes:
+      * Forward (default): start from a zero position and accumulate recorded
+        BUY/SELL events. Correct when every share is explained by a transaction.
+      * Anchored (anchor_to_current=True): start from the authoritative current
+        holdings in all_account_info and walk BACKWARD, undoing later BUY/SELL
+        events. Required for broker-position profiles whose opening lots were
+        established by a positions import (or transferred in) and never appear as
+        BUY rows -- forward replay would understate every past day. Anchoring
+        makes the most recent computed day equal the true current value.
     """
     import warnings
     warnings.filterwarnings("ignore")
@@ -3352,6 +3347,16 @@ def _compute_backfill_nav_rows(profile_id, existing_nav):
             "ORDER BY transaction_date, id",
             (profile_id,),
         ).fetchall()
+        current_positions = {}
+        if anchor_to_current:
+            for r in conn.execute(
+                "SELECT ticker, quantity FROM all_account_info WHERE profile_id = ?",
+                (profile_id,),
+            ).fetchall():
+                tk = (r["ticker"] if isinstance(r, dict) else r[0]) or ""
+                qty = float((r["quantity"] if isinstance(r, dict) else r[1]) or 0)
+                if tk:
+                    current_positions[tk] = qty
     finally:
         conn.close()
     if not txns:
@@ -3366,7 +3371,12 @@ def _compute_backfill_nav_rows(profile_id, existing_nav):
         events.append((tdate, ticker, ttype, shares))
 
     earliest = min(e[0] for e in events if e[0])
-    all_tickers = sorted(set(e[1] for e in events))
+    ticker_universe = set(e[1] for e in events)
+    if anchor_to_current:
+        # Include tickers held today that were never traded in the ledger (e.g.
+        # opening lots) so their historical price is downloaded and valued.
+        ticker_universe |= set(current_positions.keys())
+    all_tickers = sorted(ticker_universe)
     yahoo_map = {t: _yahoo_symbol_for_ticker(t) for t in all_tickers}
     yahoo_symbols = list(dict.fromkeys(yahoo_map.values()))
 
@@ -3399,29 +3409,9 @@ def _compute_backfill_nav_rows(profile_id, existing_nav):
     if not dates:
         return None, None, "No price data available for backfill.", 500
 
-    positions = {}
-    event_idx = 0
     sorted_events = sorted(events, key=lambda e: e[0] or "")
 
-    nav_rows = []
-    for dt in dates:
-        dt_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10]
-
-        while event_idx < len(sorted_events) and sorted_events[event_idx][0] <= dt_str:
-            _, ticker, ttype, shares = sorted_events[event_idx]
-            if ttype == "BUY":
-                positions[ticker] = positions.get(ticker, 0) + shares
-            else:
-                positions[ticker] = max(positions.get(ticker, 0) - shares, 0)
-            event_idx += 1
-
-        if not positions or all(v < 1e-9 for v in positions.values()):
-            continue
-        if not is_nyse_trading_day(dt_str):
-            continue
-        if dt_str in existing_nav:
-            continue
-
+    def _value_positions(dt, positions):
         total = 0.0
         for ticker, qty in positions.items():
             if qty < 1e-9:
@@ -3430,8 +3420,55 @@ def _compute_backfill_nav_rows(profile_id, existing_nav):
                 px = price_df.loc[dt, ticker]
                 if pd.notna(px):
                     total += qty * float(px)
-        if total > 0:
-            nav_rows.append((profile_id, dt_str, round(total, 2)))
+        return total
+
+    nav_rows = []
+
+    if anchor_to_current:
+        # Anchored backward replay: position on a given day = current holdings,
+        # minus BUYs that happened AFTER that day, plus SELLs that happened after.
+        # Each day is derived independently from the authoritative current
+        # position, so the most recent computed day equals the live value.
+        for dt in dates:
+            dt_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10]
+            if not is_nyse_trading_day(dt_str):
+                continue
+            if dt_str in existing_nav:
+                continue
+            positions = dict(current_positions)
+            for edate, ticker, ttype, shares in sorted_events:
+                if edate and edate > dt_str:
+                    if ttype == "BUY":
+                        positions[ticker] = positions.get(ticker, 0) - shares
+                    else:
+                        positions[ticker] = positions.get(ticker, 0) + shares
+            total = _value_positions(dt, positions)
+            if total > 0:
+                nav_rows.append((profile_id, dt_str, round(total, 2)))
+    else:
+        positions = {}
+        event_idx = 0
+        for dt in dates:
+            dt_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10]
+
+            while event_idx < len(sorted_events) and sorted_events[event_idx][0] <= dt_str:
+                _, ticker, ttype, shares = sorted_events[event_idx]
+                if ttype == "BUY":
+                    positions[ticker] = positions.get(ticker, 0) + shares
+                else:
+                    positions[ticker] = max(positions.get(ticker, 0) - shares, 0)
+                event_idx += 1
+
+            if not positions or all(v < 1e-9 for v in positions.values()):
+                continue
+            if not is_nyse_trading_day(dt_str):
+                continue
+            if dt_str in existing_nav:
+                continue
+
+            total = _value_positions(dt, positions)
+            if total > 0:
+                nav_rows.append((profile_id, dt_str, round(total, 2)))
 
     return nav_rows, earliest, None, 200
 
@@ -3461,8 +3498,10 @@ def api_nav_backfill():
     profile_id = get_profile_id()
     conn = get_connection()
     try:
-        if _nav_replay_blocked(profile_id, conn):
-            return jsonify({"error": _NAV_REPLAY_BLOCKED_MSG}), 400
+        # Positions-managed (broker) profiles anchor to authoritative current
+        # holdings; pure transaction profiles replay forward from zero. Backfill
+        # only fills MISSING days and never deletes, so it is safe for both.
+        anchored = _profile_is_positions_managed(profile_id, conn)
         existing_nav = set(
             r[0] for r in conn.execute(
                 "SELECT nav_date FROM portfolio_nav WHERE profile_id = ?", (profile_id,)
@@ -3471,7 +3510,9 @@ def api_nav_backfill():
     finally:
         conn.close()
 
-    nav_rows, earliest, error, status = _compute_backfill_nav_rows(profile_id, existing_nav)
+    nav_rows, earliest, error, status = _compute_backfill_nav_rows(
+        profile_id, existing_nav, anchor_to_current=anchored
+    )
     if error:
         return jsonify({"error": error}), status
 
@@ -3493,19 +3534,16 @@ def api_nav_repair():
     A timestamped database backup is taken first.
     """
     profile_id = get_profile_id()
-    conn = get_connection()
-    try:
-        if _nav_replay_blocked(profile_id, conn):
-            return jsonify({"error": _NAV_REPLAY_BLOCKED_MSG}), 400
-    finally:
-        conn.close()
-
     today_str = datetime.date.today().isoformat()
 
-    # Rows we keep: authoritative snapshots and today's live value. Everything else
-    # (replayed 'backfill' rows + untagged legacy rows) is what we rebuild.
     conn = get_connection()
     try:
+        # Positions-managed (broker) profiles anchor the replay to authoritative
+        # current holdings so the rebuilt curve ends at the true live value rather
+        # than understating it (opening lots rarely appear as BUY transactions).
+        anchored = _profile_is_positions_managed(profile_id, conn)
+        # Rows we keep: authoritative snapshots and today's live value. Everything
+        # else (replayed 'backfill' rows + untagged legacy rows) is what we rebuild.
         protected = set(
             r[0] for r in conn.execute(
                 "SELECT nav_date FROM portfolio_nav WHERE profile_id = ? "
@@ -3513,12 +3551,46 @@ def api_nav_repair():
                 (profile_id, today_str),
             ).fetchall()
         )
+        # Untagged legacy rows (written before the source column existed). These
+        # are ambiguous -- they may be genuine recorded daily snapshots -- so the
+        # guard below uses them to decide whether a full rebuild is safe. Prior
+        # 'backfill' rows are NOT counted: repair owns those and may always
+        # regenerate them, which keeps repair re-runnable.
+        legacy_dates = sorted(
+            r[0] for r in conn.execute(
+                "SELECT nav_date FROM portfolio_nav WHERE profile_id = ? AND nav_date < ? "
+                "AND source IS NULL",
+                (profile_id, today_str),
+            ).fetchall()
+        )
     finally:
         conn.close()
 
+    # Guard: never discard an established daily history that happens to be untagged.
+    # Repair fixes a sparse/distorted chart -- it must not wipe months of genuine
+    # recorded snapshots. If many legacy points already span a long window, refuse
+    # and point the user at non-destructive Backfill instead.
+    if len(legacy_dates) >= 30:
+        try:
+            span_days = (
+                datetime.date.fromisoformat(legacy_dates[-1])
+                - datetime.date.fromisoformat(legacy_dates[0])
+            ).days
+        except ValueError:
+            span_days = 0
+        if span_days >= 60:
+            return jsonify({"error": (
+                "This portfolio already has an established daily NAV history "
+                f"({len(legacy_dates)} points spanning {span_days} days). Repair "
+                "was skipped to avoid overwriting genuine recorded snapshots. Use "
+                "Backfill History to fill only the missing days."
+            )}), 400
+
     # Compute the corrected history BEFORE deleting anything, so a price-download
     # failure can never leave the chart with points removed but not regenerated.
-    nav_rows, earliest, error, status = _compute_backfill_nav_rows(profile_id, protected)
+    nav_rows, earliest, error, status = _compute_backfill_nav_rows(
+        profile_id, protected, anchor_to_current=anchored
+    )
     if error:
         return jsonify({"error": error}), status
 
@@ -3548,7 +3620,9 @@ def api_nav_repair():
         "message": (
             f"Repaired chart: removed {deleted} distorted point(s) and regenerated "
             f"{len(nav_rows)} from actual prices ({earliest} to today). "
-            "Recorded snapshots were preserved."
+            + ("History was anchored to your current holdings so it ends at the live "
+               "value. " if anchored else "")
+            + "Recorded snapshots were preserved."
         ),
         "deleted": deleted,
         "rows_added": len(nav_rows),
