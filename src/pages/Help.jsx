@@ -157,7 +157,7 @@ function ImportHelp() {
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Brokerage Position Templates</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/import/Screenshot 2026-05-10 144007.jpg" alt="Import Brokerage Positions and Snowball Data tab showing format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/Screenshot 2026-05-10 144007.jpg" alt="Import Brokerage Positions and Snowball Data tab showing format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -172,13 +172,13 @@ function ImportHelp() {
 
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem', marginTop: '0.5rem' }}>
         <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
-          <img src="/help-screenshots/import/Screenshot 2026-05-10 144111.jpg" alt="Charles Schwab Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+          <img src="./help-screenshots/import/Screenshot 2026-05-10 144111.jpg" alt="Charles Schwab Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         </div>
         <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
-          <img src="/help-screenshots/import/Screenshot 2026-05-10 144201.jpg" alt="E*TRADE Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+          <img src="./help-screenshots/import/Screenshot 2026-05-10 144201.jpg" alt="E*TRADE Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         </div>
         <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
-          <img src="/help-screenshots/import/Screenshot 2026-05-10 144335.jpg" alt="Fidelity Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+          <img src="./help-screenshots/import/Screenshot 2026-05-10 144335.jpg" alt="Fidelity Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         </div>
       </div>
 
@@ -249,7 +249,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/import/Screenshot 2026-05-10 144133.jpg" alt="Partial history warning and Charles Schwab Transactions format" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/Screenshot 2026-05-10 144133.jpg" alt="Partial history warning and Charles Schwab Transactions format" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>E*TRADE (Buys &amp; Sells)</h4>
@@ -260,7 +260,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/import/Screenshot 2026-05-10 144254.jpg" alt="E*TRADE Buys and Sells format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/Screenshot 2026-05-10 144254.jpg" alt="E*TRADE Buys and Sells format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>E*TRADE (Dividends)</h4>
@@ -272,7 +272,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/import/Screenshot 2026-05-10 144224.jpg" alt="E*TRADE Dividends format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/Screenshot 2026-05-10 144224.jpg" alt="E*TRADE Dividends format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Fidelity (Transactions)</h4>
@@ -285,7 +285,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/import/Screenshot 2026-05-10 144401.jpg" alt="Fidelity Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/Screenshot 2026-05-10 144401.jpg" alt="Fidelity Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Robinhood (Positions PDF)</h4>
@@ -297,7 +297,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/import/Screenshot 2026-05-10 144418.jpg" alt="Robinhood Positions PDF format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/Screenshot 2026-05-10 144418.jpg" alt="Robinhood Positions PDF format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Robinhood (Transactions)</h4>
@@ -309,7 +309,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/import/Screenshot 2026-05-10 144437.jpg" alt="Robinhood Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/Screenshot 2026-05-10 144437.jpg" alt="Robinhood Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Snowball Transactions</h4>
@@ -329,7 +329,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/import/Screenshot 2026-05-10 144023.jpg" alt="Snowball Transactions format selector with automatic backup notice" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/Screenshot 2026-05-10 144023.jpg" alt="Snowball Transactions format selector with automatic backup notice" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Common Steps (All Transaction Formats)</h4>
@@ -356,14 +356,14 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/import/Screenshot 2026-05-10 144051.jpg" alt="Automatic database backup notice shown before each import" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/Screenshot 2026-05-10 144051.jpg" alt="Automatic database backup notice shown before each import" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       {/* ── My Spreadsheet ──────────────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: My Spreadsheet (Owner Format)</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/import/My_Spreadsheet.jpg" alt="My Spreadsheet tab showing the owner-format import interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/My_Spreadsheet.jpg" alt="My Spreadsheet tab showing the owner-format import interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <p style={{ marginBottom: '0.75rem' }}>
@@ -421,7 +421,7 @@ function ImportHelp() {
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 2: Generic Upload</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/import/Screenshot 2026-05-10 143859.jpg" alt="Generic Upload tab showing portfolio upload and watchlist import sections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/Screenshot 2026-05-10 143859.jpg" alt="Generic Upload tab showing portfolio upload and watchlist import sections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <p style={{ marginBottom: '0.75rem' }}>
@@ -445,7 +445,7 @@ function ImportHelp() {
           Price Paid, Current Price, Dividend, Frequency, Ex-Div Date, Pay Date, DRIP, Category, Purchase Date,
           Dividends Paid, YTD Divs, Total Divs Received, and more.
           <div style={{ marginBottom: '0.75rem', marginTop: '0.75rem' }}>
-            <img src="/help-screenshots/import/Screenshot 2026-05-10 143932.jpg" alt="Upload Your Portfolio section with Download Template button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+            <img src="./help-screenshots/import/Screenshot 2026-05-10 143932.jpg" alt="Upload Your Portfolio section with Download Template button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
           </div>
         </li>
         <li>
@@ -517,7 +517,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/import/Screenshot 2026-05-10 143951.jpg" alt="Generic Upload merge mode notice and Merge Portfolio button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/Screenshot 2026-05-10 143951.jpg" alt="Generic Upload merge mode notice and Merge Portfolio button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
     </div>
   )
@@ -595,7 +595,7 @@ function DashboardHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/dashboard/dashboard-page.jpg" alt="Dashboard showing Action Center preview, summary cards strip, Portfolio Value Over Time chart, Grade Thresholds guide, and Upcoming Dividends this week" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/dashboard/dashboard-page.jpg" alt="Dashboard showing Action Center preview, summary cards strip, Portfolio Value Over Time chart, Grade Thresholds guide, and Upcoming Dividends this week" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
       <p style={{ marginBottom: '0.75rem', color: '#90a4ae', fontSize: '0.9rem' }}>
         The screenshot above shows (top to bottom): the <strong>Action Center</strong> preview panel with follow-up items;
@@ -771,13 +771,13 @@ function HoldingsHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/holdings/holdings-page.jpg" alt="Holdings page full view showing table and controls" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/holdings/holdings-page.jpg" alt="Holdings page full view showing table and controls" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Detailed Views and Features</h3>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/holdings/complete-holdings-table.jpg" alt="Holdings table overview" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/holdings/complete-holdings-table.jpg" alt="Holdings table overview" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       {/* ── Table Overview ──────────────────────────────────── */}
@@ -790,7 +790,7 @@ function HoldingsHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/holdings/drip-setting.jpg" alt="DRIP setting in Holdings table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/holdings/drip-setting.jpg" alt="DRIP setting in Holdings table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>The DRIP checkbox appears in the Holdings table and can be toggled directly without opening the edit form. When enabled, dividends are automatically reinvested into additional shares using historical prices from the payment date.</p>
       </div>
 
@@ -798,7 +798,7 @@ function HoldingsHelp() {
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>% Reinvested Card (Income Summary)</h3>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/holdings/Updated-holdings.jpg" alt="Holdings income summary cards including % Reinvested" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/holdings/Updated-holdings.jpg" alt="Holdings income summary cards including % Reinvested" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>
           The income summary above the table now includes a <strong>% Reinvested</strong> card alongside
           Est. Monthly Income, Mo$ Reinvested, and Mo$ Not Reinvested.
@@ -875,12 +875,12 @@ function HoldingsHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/holdings/add-holding.jpg" alt="Add Holding form" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/holdings/add-holding.jpg" alt="Add Holding form" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>The Add Holding form allows you to quickly create a new position by entering the ticker, company name, category, number of shares, current price, and dividend information directly. This creates a "direct" position without transaction-lot tracking.</p>
       </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/holdings/add-transaction.jpg" alt="Add Transaction form" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/holdings/add-transaction.jpg" alt="Add Transaction form" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>The Add Transaction form records a BUY transaction, establishing cost basis and creating a transaction lot that can later be sold (SELL) for capital gains tracking. This method provides full transaction history and lot-level cost tracking.</p>
       </div>
 
@@ -926,7 +926,7 @@ function HoldingsHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/holdings/refresh-data.jpg" alt="Refresh Prices and Dividends" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/holdings/refresh-data.jpg" alt="Refresh Prices and Dividends" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>The "Refresh Prices & Divs" button fetches the latest market data from Yahoo Finance for all holdings. The Latest Refresh Result section shows a summary of what was updated: current prices, dividend amounts, DRIP shares, accrued income since the last refresh, and estimated upcoming payment rows added to your dividend history.</p>
       </div>
 
@@ -1141,7 +1141,7 @@ function HoldingsHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/holdings/edit-holding-simple.jpg" alt="Edit holding without transactions" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/holdings/edit-holding-simple.jpg" alt="Edit holding without transactions" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>When editing a "direct" holding (one without transaction lots), all fields are editable. You can update shares, price paid, dividend information, category, and DRIP status directly. Calculated fields like Cost Basis and Gain/Loss update automatically.</p>
       </div>
 
@@ -1153,7 +1153,7 @@ function HoldingsHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/holdings/edit-holding-with-lots.jpg" alt="Edit holding with transactions" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/holdings/edit-holding-with-lots.jpg" alt="Edit holding with transactions" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>When editing a holding with transaction lots, the Position fields (Shares, Price Paid, Purchase Date) are locked and grayed out because they are calculated from your transaction history. You can still edit dividend information, category, and DRIP status. Use the "Txn" button to modify the transaction lots themselves.</p>
       </div>
 
@@ -1333,7 +1333,7 @@ function ReinvestmentImpactHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/reinvestment-impact/historical-overview.jpg" alt="Reinvestment Impact historical overview" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/reinvestment-impact/historical-overview.jpg" alt="Reinvestment Impact historical overview" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Historical tab: all six summary tiles, Distributions Over Time (with the "if not reinvested" dotted line and cumulative amber line), and DRIP Share Growth chart.</p>
       </div>
 
@@ -1359,7 +1359,7 @@ function ReinvestmentImpactHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/reinvestment-impact/historical-attribution.jpg" alt="Why Payouts Changed attribution chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/reinvestment-impact/historical-attribution.jpg" alt="Why Payouts Changed attribution chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Why Payouts Changed chart in per-period mode, with the Per period / Cumulative toggle top-right.</p>
       </div>
 
@@ -1377,7 +1377,7 @@ function ReinvestmentImpactHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/reinvestment-impact/historical-rate-changes.jpg" alt="Notable rate changes and DRIP off panels" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/reinvestment-impact/historical-rate-changes.jpg" alt="Notable rate changes and DRIP off panels" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Notable rate changes (left) and DRIP off — cash not compounding (right), followed by the Top Contributors table.</p>
       </div>
 
@@ -1430,7 +1430,7 @@ function ReinvestmentImpactHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/reinvestment-impact/Projection-portfolio.jpg" alt="Projection tab whole portfolio" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/reinvestment-impact/Projection-portfolio.jpg" alt="Projection tab whole portfolio" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Projection tab for the whole portfolio in neutral scenario over 10 years.</p>
       </div>
 
@@ -1445,7 +1445,7 @@ function ReinvestmentImpactHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/reinvestment-impact/projections-categories.jpg" alt="Projection with categories filter" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/reinvestment-impact/projections-categories.jpg" alt="Projection with categories filter" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Projection scoped to a single category (e.g. Boosters), showing only that slice of the portfolio's projected income.</p>
       </div>
 
@@ -1463,13 +1463,13 @@ function ReinvestmentImpactHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/reinvestment-impact/projection-all-holdings.jpg" alt="Projection all holdings scenario comparison" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/reinvestment-impact/projection-all-holdings.jpg" alt="Projection all holdings scenario comparison" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Share Count Growth chart showing all three scenarios side by side for easy comparison.</p>
       </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/reinvestment-impact/projection-individualtop.jpg" alt="Projection individual fund top" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <img src="/help-screenshots/reinvestment-impact/projection-indiv-bottom.jpg" alt="Projection individual fund bottom" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333', marginTop: '0.75rem' }} />
+        <img src="./help-screenshots/reinvestment-impact/projection-individualtop.jpg" alt="Projection individual fund top" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/reinvestment-impact/projection-indiv-bottom.jpg" alt="Projection individual fund bottom" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333', marginTop: '0.75rem' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Projecting a single fund shows the Break-Even panel, the income chart, and the per-fund share-count growth across all three scenarios.</p>
       </div>
 
@@ -1576,7 +1576,7 @@ function CategoriesHelp() {
         There are two ways to assign unallocated tickers to a category:
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/categories/category-cards-unallocated-assets.jpg" alt="Category cards and Unallocated Assets panel" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/categories/category-cards-unallocated-assets.jpg" alt="Category cards and Unallocated Assets panel" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>
           Category cards are the working area for organizing holdings. The number badge beside each category name shows how many tickers are assigned, the blue bar shows its current portfolio weight, and the right side shows Quality, allocation percentage, and dollar value. The Unallocated Assets panel on the right is the source list for tickers that still need a category.
         </p>
@@ -1697,7 +1697,7 @@ function CategoriesHelp() {
         <li><strong>Reason</strong> — plain-language explanation of why the suggestion moved up or down.</li>
       </ul>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/categories/target-assistant-suggestion-table.jpg" alt="Target Assistant suggested target table with Quality scores and dollar moves" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/categories/target-assistant-suggestion-table.jpg" alt="Target Assistant suggested target table with Quality scores and dollar moves" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>
           Use the suggestion table as the final review before saving target changes. The Suggested column shows the assistant's proposed target weight, $ To Suggested estimates how much would need to move, and Reason explains why the category is being increased or trimmed. Click a Quality score to see which tickers are contributing to the score, including income concentration, weekly-payer exposure, high-yield reliance, NAV monitors, or confirmed high NAV ratio.
         </p>
@@ -1816,7 +1816,7 @@ function GrowthHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/growth/filters-and-metrics.jpg" alt="Growth page filters and metrics strip" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/growth/filters-and-metrics.jpg" alt="Growth page filters and metrics strip" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       {/* ── Filters ────────────────────────────────────────────── */}
@@ -1873,7 +1873,7 @@ function GrowthHelp() {
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Charts</h3>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/growth/performance-charts.jpg" alt="Growth page performance charts including price-only and total return charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/growth/performance-charts.jpg" alt="Growth page performance charts including price-only and total return charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Price-Only Chart</h4>
@@ -2026,7 +2026,7 @@ function PortfolioGrowth2Help() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/growth-2/Screenshot 2026-05-09 095042.jpg" alt="Portfolio Growth 2 performance chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/growth-2/Screenshot 2026-05-09 095042.jpg" alt="Portfolio Growth 2 performance chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Controls</h3>
@@ -2151,7 +2151,7 @@ function DividendsHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/dividends/Screenshot 2026-05-09 095253.jpg" alt="Dividend Analysis page" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/dividends/Screenshot 2026-05-09 095253.jpg" alt="Dividend Analysis page" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       {/* ── Filters ────────────────────────────────────────────── */}
@@ -2326,7 +2326,7 @@ function DivCalendarHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/div-calendar/Screenshot 2026-05-09 100041.jpg" alt="Dividend Calendar" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/div-calendar/Screenshot 2026-05-09 100041.jpg" alt="Dividend Calendar" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       {/* ── What the Page Shows ─────────────────────────────── */}
@@ -2470,7 +2470,7 @@ function EarningsCalendarHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/earnings-calendar/Screenshot 2026-05-09 100408.jpg" alt="Earnings Calendar" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/earnings-calendar/Screenshot 2026-05-09 100408.jpg" alt="Earnings Calendar" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What the Page Shows</h3>
@@ -2549,7 +2549,7 @@ function DivCompareHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/div-compare/Screenshot 2026-05-09 100606.jpg" alt="Dividend Compare" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/div-compare/Screenshot 2026-05-09 100606.jpg" alt="Dividend Compare" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       {/* ── Forward vs TTM ─────────────────────────────────────── */}
@@ -2666,7 +2666,7 @@ function DividendHistoryHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/dividend-history/Screenshot 2026-05-09 100726.jpg" alt="Dividend History" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/dividend-history/Screenshot 2026-05-09 100726.jpg" alt="Dividend History" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Views and Ranges</h3>
@@ -2722,7 +2722,7 @@ function TotalReturnHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/total-return/Screenshot 2026-05-09 100848.jpg" alt="Total Return analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/total-return/Screenshot 2026-05-09 100848.jpg" alt="Total Return analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       {/* ── Category Filter ─────────────────────────────────────── */}
@@ -2877,7 +2877,7 @@ function GainsLossesHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/gains-losses/Screenshot 2026-05-09 101659.jpg" alt="Gains and Losses breakdown" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/gains-losses/Screenshot 2026-05-09 101659.jpg" alt="Gains and Losses breakdown" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       {/* ── Category Filter ─────────────────────────────────────── */}
@@ -3054,7 +3054,7 @@ function SafeWithdrawalHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/safe-withdrawal/Screenshot 2026-05-09 101918.jpg" alt="Safe Withdrawal Rate calculator" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/safe-withdrawal/Screenshot 2026-05-09 101918.jpg" alt="Safe Withdrawal Rate calculator" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What It Shows</h3>
@@ -3088,7 +3088,7 @@ function GeneralScannerHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/general-scanner/Screenshot 2026-05-09 125140.jpg" alt="General Scanner interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/general-scanner/Screenshot 2026-05-09 125140.jpg" alt="General Scanner interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Saved Universe vs Ad Hoc Pulls</h3>
@@ -3149,7 +3149,7 @@ function SecurityResearchHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/security-research/Screenshot 2026-05-09 103658.jpg" alt="Security Research page" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/security-research/Screenshot 2026-05-09 103658.jpg" alt="Security Research page" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Lookup Modes</h3>
@@ -3236,7 +3236,7 @@ function ETFScreenHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/etf-screen/Line_Chart.jpg" alt="ETF Screening chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-screen/Line_Chart.jpg" alt="ETF Screening chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Loading a Ticker</h3>
@@ -3318,7 +3318,7 @@ function WatchlistHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/watchlist/Screenshot 2026-05-09 102831.jpg" alt="Watchlist with price and dividend data" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/watchlist/Screenshot 2026-05-09 102831.jpg" alt="Watchlist with price and dividend data" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
@@ -3373,7 +3373,7 @@ function BuySellHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/buy-sell-signals/Screenshot 2026-05-09 103926.jpg" alt="Buy/Sell Signals dashboard" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/buy-sell-signals/Screenshot 2026-05-09 103926.jpg" alt="Buy/Sell Signals dashboard" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Signal Summary Badges</h3>
@@ -3445,7 +3445,7 @@ function NavErosionHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/nav-erosion/Screenshot 2026-05-09 110511.jpg" alt="NAV Erosion analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/nav-erosion/Screenshot 2026-05-09 110511.jpg" alt="NAV Erosion analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What is NAV Erosion?</h3>
@@ -3591,7 +3591,7 @@ function NavScreenerHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/nav-erosion-portfolio/Screenshot 2026-05-09 112656.jpg" alt="NAV Erosion Screener portfolio backtest grid" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/nav-erosion-portfolio/Screenshot 2026-05-09 112656.jpg" alt="NAV Erosion Screener portfolio backtest grid" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Building Your Backtest Grid</h3>
@@ -3651,7 +3651,7 @@ function SingleStrategyHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/scanner/Screenshot 2026-05-09 125056.jpg" alt="Single Strategy Scanner results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/scanner/Screenshot 2026-05-09 125056.jpg" alt="Single Strategy Scanner results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Ticker List and Saved Settings</h3>
@@ -3691,7 +3691,7 @@ function IncomeSimHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 113052.jpg" alt="Income Simulator projections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 113052.jpg" alt="Income Simulator projections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP Projections Panel</h3>
@@ -3709,7 +3709,7 @@ function IncomeSimHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 113238.jpg" alt="Income Simulator settings and filters panel" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 113238.jpg" alt="Income Simulator settings and filters panel" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Simulation Modes</h3>
@@ -3722,7 +3722,7 @@ function IncomeSimHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 113309.jpg" alt="Income Simulator historical projection results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 113309.jpg" alt="Income Simulator historical projection results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Simulate Mode</h4>
@@ -3740,7 +3740,7 @@ function IncomeSimHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 113942.jpg" alt="Income Simulator forward projection with market bias" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 113942.jpg" alt="Income Simulator forward projection with market bias" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Comparison Mode</h4>
@@ -3752,7 +3752,7 @@ function IncomeSimHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 114242.jpg" alt="Income Simulator comparison mode with multiple tickers" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 114242.jpg" alt="Income Simulator comparison mode with multiple tickers" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
       <p style={{ marginBottom: '0.75rem' }}>
         You can also turn on <strong>Compare Reinvestment Impact</strong> to show baseline vs. reinvested
@@ -3776,15 +3776,15 @@ function IncomeSimHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 114346.jpg" alt="Income Simulator results table and charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 114346.jpg" alt="Income Simulator results table and charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 115416.jpg" alt="Income projection chart with dividend distributions" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 115416.jpg" alt="Income projection chart with dividend distributions" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/income-sim/Screenshot 2026-05-09 115453.jpg" alt="Monthly dividend chart with smoothing" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 115453.jpg" alt="Monthly dividend chart with smoothing" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
     </div>
   )
@@ -3804,7 +3804,7 @@ function CorrelationHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/correlation/Screenshot 2026-05-09 120623.jpg" alt="Correlation Matrix heatmap" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/correlation/Screenshot 2026-05-09 120623.jpg" alt="Correlation Matrix heatmap" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
@@ -3857,7 +3857,7 @@ function AnalyticsHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/analytics/Screenshot 2026-05-09 121143.jpg" alt="Portfolio Analytics dashboard" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/analytics/Screenshot 2026-05-09 121143.jpg" alt="Portfolio Analytics dashboard" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Loading Tickers</h3>
@@ -3939,7 +3939,7 @@ function PortfolioBuilderHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/portfolio-builder/Screenshot 2026-05-09 122850.jpg" alt="Portfolio Builder optimizer" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/portfolio-builder/Screenshot 2026-05-09 122850.jpg" alt="Portfolio Builder optimizer" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Managing Portfolios</h3>
@@ -4006,7 +4006,7 @@ function PortfolioTesterHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/portfolio-tester/Screenshot 2026-05-09 123458.jpg" alt="Portfolio Tester backtest results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/portfolio-tester/Screenshot 2026-05-09 123458.jpg" alt="Portfolio Tester backtest results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
@@ -4145,7 +4145,7 @@ function DistCompareHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/dist-compare/Screenshot 2026-05-09 123641.jpg" alt="Distribution Compare analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/dist-compare/Screenshot 2026-05-09 123641.jpg" alt="Distribution Compare analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Mode & Comparison Type</h3>
@@ -4207,7 +4207,7 @@ function ConsolidationHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/consolidation/Screenshot 2026-05-09 124407.jpg" alt="Consolidation Analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/consolidation/Screenshot 2026-05-09 124407.jpg" alt="Consolidation Analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       {/* Overlap Tab */}
@@ -4335,7 +4335,7 @@ function PortfoliosHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/portfolios/manage-portfolios-overview-blurred.jpg" alt="Manage Portfolios page showing portfolio table with total values blurred" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/portfolios/manage-portfolios-overview-blurred.jpg" alt="Manage Portfolios page showing portfolio table with total values blurred" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Table</h3>
@@ -4458,7 +4458,7 @@ function MacroDashboardHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/macro-dashboard/Screenshot 2026-05-09 124729.jpg" alt="Macro Regime Dashboard" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124729.jpg" alt="Macro Regime Dashboard" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: Macro Conditions</h3>
@@ -4470,7 +4470,7 @@ function MacroDashboardHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/macro-dashboard/Screenshot 2026-05-09 124802.jpg" alt="Macro Conditions tab showing economic indicators" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124802.jpg" alt="Macro Conditions tab showing economic indicators" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 2: Portfolio Exposure</h3>
@@ -4486,7 +4486,7 @@ function MacroDashboardHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/macro-dashboard/Screenshot 2026-05-09 124826.jpg" alt="Portfolio Exposure breakdown by macro sensitivity" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124826.jpg" alt="Portfolio Exposure breakdown by macro sensitivity" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 3: Rebalancing Tilts</h3>
@@ -4497,7 +4497,7 @@ function MacroDashboardHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/macro-dashboard/Screenshot 2026-05-09 124844.jpg" alt="Rebalancing Tilts recommendations" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124844.jpg" alt="Rebalancing Tilts recommendations" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 4: Income Benchmark</h3>
@@ -4516,7 +4516,7 @@ function MacroDashboardHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/macro-dashboard/Screenshot 2026-05-09 124904.jpg" alt="Income Benchmark allocation comparison" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124904.jpg" alt="Income Benchmark allocation comparison" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 5: Classifications</h3>
@@ -4533,7 +4533,7 @@ function MacroDashboardHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/macro-dashboard/Screenshot 2026-05-09 124932.jpg" alt="Classifications tab for macro sensitivity overrides" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124932.jpg" alt="Classifications tab for macro sensitivity overrides" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 6: Regime Quadrants</h3>
@@ -4552,7 +4552,7 @@ function MacroDashboardHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/macro-dashboard/Screenshot 2026-05-09 124944.jpg" alt="Regime Quadrants showing macro classification" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124944.jpg" alt="Regime Quadrants showing macro classification" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How Classification Works</h4>
@@ -4769,7 +4769,7 @@ function DividendCalculatorHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/dividend-calculator/Screenshot 2026-05-09 102110.jpg" alt="Dividend Calculator projections interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/dividend-calculator/Screenshot 2026-05-09 102110.jpg" alt="Dividend Calculator projections interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calculation Settings</h3>
@@ -4874,17 +4874,17 @@ function ETFProviderUpdateHelp() {
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
         <p style={{ fontSize: '0.9rem', color: '#90a4ae', marginBottom: '0.5rem', fontStyle: 'italic' }}>BlackRock provider showing 484 funds with $4.3T in assets</p>
-        <img src="/help-screenshots/etf-provider-update/blackrock-example.jpg" alt="ETF Provider Update example showing BlackRock provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-provider-update/blackrock-example.jpg" alt="ETF Provider Update example showing BlackRock provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
         <p style={{ fontSize: '0.9rem', color: '#90a4ae', marginBottom: '0.5rem', fontStyle: 'italic' }}>State Street provider showing 183 funds with $1.8T in assets</p>
-        <img src="/help-screenshots/etf-provider-update/state-street-example.jpg" alt="ETF Provider Update example showing State Street provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-provider-update/state-street-example.jpg" alt="ETF Provider Update example showing State Street provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
         <p style={{ fontSize: '0.9rem', color: '#90a4ae', marginBottom: '0.5rem', fontStyle: 'italic' }}>Invesco provider showing 238 funds with $871B in assets</p>
-        <img src="/help-screenshots/etf-provider-update/invesco-example.jpg" alt="ETF Provider Update example showing Invesco provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-provider-update/invesco-example.jpg" alt="ETF Provider Update example showing Invesco provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
     </div>
   )
@@ -4931,7 +4931,7 @@ function AnnualTaxReportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/tax-report/tax-report-summary-form-previews.jpg" alt="Annual Tax Report summary cards and Form 1099-DIV and Form 8949 previews" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/tax-report/tax-report-summary-form-previews.jpg" alt="Annual Tax Report summary cards and Form 1099-DIV and Form 8949 previews" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ marginBottom: '0.5rem' }}>Tabs</h3>
@@ -4956,7 +4956,7 @@ function AnnualTaxReportHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/tax-report/tax-report-dividends-overrides.jpg" alt="Annual Tax Report Dividends tab with per-ticker tax treatment overrides" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/tax-report/tax-report-dividends-overrides.jpg" alt="Annual Tax Report Dividends tab with per-ticker tax treatment overrides" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <p><strong>Realized Lots</strong></p>
@@ -4967,7 +4967,7 @@ function AnnualTaxReportHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/tax-report/tax-report-realized-lots.jpg" alt="Annual Tax Report Realized Lots tab with closed tax lots and gain or loss detail" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/tax-report/tax-report-realized-lots.jpg" alt="Annual Tax Report Realized Lots tab with closed tax lots and gain or loss detail" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Where the numbers come from</h3>
@@ -5051,7 +5051,7 @@ function ETFComparerHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/etf-comparer/return-chart.jpg" alt="ETF Comparer return chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-comparer/return-chart.jpg" alt="ETF Comparer return chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
@@ -5091,7 +5091,7 @@ function ETFComparerHelp() {
         resets the toggle to Monthly automatically.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/etf-comparer/distribution-history.jpg" alt="ETF Comparer distribution history chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-comparer/distribution-history.jpg" alt="ETF Comparer distribution history chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Comparison Table</h3>
@@ -5114,7 +5114,7 @@ function ETFComparerHelp() {
         return, yield, and spread values. This column is on by default and can be hidden via the Indicators menu.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/etf-comparer/comparison-table.jpg" alt="ETF Comparer comparison table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-comparer/comparison-table.jpg" alt="ETF Comparer comparison table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Average Return Bar Chart</h3>
@@ -5128,7 +5128,7 @@ function ETFComparerHelp() {
         <strong> Return (%)</strong> in the heading so values such as 19.27 are clearly understood as 19.27%.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/etf-comparer/average-returns.jpg" alt="ETF Comparer average return bar chart and multi-period table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-comparer/average-returns.jpg" alt="ETF Comparer average return bar chart and multi-period table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Multi-Period Table</h3>
@@ -5160,7 +5160,7 @@ function StockComparerHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/stock-comparer/return-chart.jpg" alt="Stock Comparer return chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/stock-comparer/return-chart.jpg" alt="Stock Comparer return chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
@@ -5176,7 +5176,7 @@ function StockComparerHelp() {
         reinvestment % slider, % / index toggle, end labels, and a date range slider.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/stock-comparer/distribution-history.jpg" alt="Stock Comparer distribution history chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/stock-comparer/distribution-history.jpg" alt="Stock Comparer distribution history chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Comparison Table</h3>
@@ -5187,7 +5187,7 @@ function StockComparerHelp() {
         debt/equity, 52-week high/low, sector, industry, max drawdown, revenue, profit margin).
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/stock-comparer/comparison-table.jpg" alt="Stock Comparer comparison table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/stock-comparer/comparison-table.jpg" alt="Stock Comparer comparison table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Average Return Bar Chart &amp; Multi-Period Table</h3>
@@ -5195,7 +5195,7 @@ function StockComparerHelp() {
         Same as ETF Comparer — grouped bar chart of 1Y/3Y/5Y/10Y annualized returns and a tabular multi-period summary.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/stock-comparer/average-returns.jpg" alt="Stock Comparer average return bar chart and multi-period table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/stock-comparer/average-returns.jpg" alt="Stock Comparer average return bar chart and multi-period table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Distribution History</h3>
@@ -5243,7 +5243,7 @@ function RebalanceWizardHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/rebalance-wizard/Screenshot 2026-05-09 122956.jpg" alt="Rebalance Wizard trade plan" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/rebalance-wizard/Screenshot 2026-05-09 122956.jpg" alt="Rebalance Wizard trade plan" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Settings</h3>
@@ -5346,7 +5346,7 @@ function TaxLossHarvestHelp() {
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
         <img
-          src="/help-screenshots/Tax-loss/tax-loss-harvest-overview.jpg"
+          src="./help-screenshots/Tax-loss/tax-loss-harvest-overview.jpg"
           alt="Tax-Loss Harvest page showing summary cards and candidate table with wash-sale status badges"
           style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
         />
@@ -5457,7 +5457,7 @@ function BlendedYieldHelp() {
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
         <img
-          src="/help-screenshots/blended-yield/01-portfolio-setup.jpg"
+          src="./help-screenshots/blended-yield/01-portfolio-setup.jpg"
           alt="Blended Yield Calculator tax profile and fund cards"
           style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
         />
@@ -5472,7 +5472,7 @@ function BlendedYieldHelp() {
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
         <img
-          src="/help-screenshots/blended-yield/02-portfolio-summary.jpg"
+          src="./help-screenshots/blended-yield/02-portfolio-summary.jpg"
           alt="Portfolio Summary results, allocation bar, and breakdown table"
           style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
         />
@@ -5493,7 +5493,7 @@ function BlendedYieldHelp() {
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
         <img
-          src="/help-screenshots/blended-yield/03-tax-bracket-settings.jpg"
+          src="./help-screenshots/blended-yield/03-tax-bracket-settings.jpg"
           alt="Tax Bracket Settings editor with editable Federal, LTCG, California, Arizona, and Pennsylvania brackets"
           style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
         />
@@ -5632,7 +5632,7 @@ function ETFBuyingChecklistHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/etf-buying-checklist-evaluator/etf_checklist_top.jpg" alt="ETF Buying Checklist Evaluator top — ticker lookup, verdict card, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf_checklist_top.jpg" alt="ETF Buying Checklist Evaluator top — ticker lookup, verdict card, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Seven Criteria</h3>
@@ -5714,7 +5714,7 @@ function ETFBuyingChecklistHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/etf-buying-checklist-evaluator/etf-buy-checklist-bottom.jpg" alt="ETF Buying Checklist Evaluator bottom — smart alternatives and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf-buy-checklist-bottom.jpg" alt="ETF Buying Checklist Evaluator bottom — smart alternatives and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Smart Alternatives</h3>
@@ -5777,7 +5777,7 @@ function OptionIncomeETFHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/option-income-etf-evaluator/option-income-etf-evaluator-top.jpg" alt="Option-Income ETF Evaluator top — ticker lookup, underlying strategy, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/option-income-etf-evaluator/option-income-etf-evaluator-top.jpg" alt="Option-Income ETF Evaluator top — ticker lookup, underlying strategy, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Eight Criteria</h3>
@@ -5869,7 +5869,7 @@ function OptionIncomeETFHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/option-income-etf-evaluator/option-income-etf-evaluator-bottom.jpg" alt="Option-Income ETF Evaluator bottom — verdict, smart alternatives, and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/option-income-etf-evaluator/option-income-etf-evaluator-bottom.jpg" alt="Option-Income ETF Evaluator bottom — verdict, smart alternatives, and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Composite Score &amp; Verdict</h3>
@@ -5956,7 +5956,7 @@ function CEFBuyingChecklistHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="/help-screenshots/cef/cef_evaluator.jpg" alt="CEF Buying Checklist Evaluator top — ticker lookup, CEF header data, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/cef/cef_evaluator.jpg" alt="CEF Buying Checklist Evaluator top — ticker lookup, CEF header data, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Eight Criteria</h3>
@@ -6045,7 +6045,7 @@ function CEFBuyingChecklistHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/cef/cef_evaluator_bottom.jpg" alt="CEF Buying Checklist Evaluator bottom — verdict card, alternatives, and threshold editors" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/cef/cef_evaluator_bottom.jpg" alt="CEF Buying Checklist Evaluator bottom — verdict card, alternatives, and threshold editors" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
