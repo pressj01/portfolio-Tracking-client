@@ -198,6 +198,7 @@ export default function ReinvestmentImpact() {
   const [categories, setCategories] = useState([])  // selected category ids (strings)
   const [catOpen, setCatOpen] = useState(false)
   const [scopeTicker, setScopeTicker] = useState('')  // '' = whole portfolio
+  const [decompCumulative, setDecompCumulative] = useState(false)  // attribution chart: per-period vs running total
 
   // Projection controls
   const [years, setYears] = useState(10)
@@ -367,12 +368,42 @@ export default function ReinvestmentImpact() {
   const distTraces = useMemo(() => {
     if (!s) return []
     const colors = (s.payout_source || []).map(src => src === 'actual' ? '#4dff91' : '#38bdf8')
-    return [{
+    const traces = [{
       x: xText, y: s.payout, type: 'bar',
       marker: { color: colors },
       hovertemplate: '%{x}<br>$%{y:,.2f}<extra></extra>',
       name: 'Distributions',
     }]
+    // Counterfactual: payout had distributions been taken as cash (no reinvestment).
+    // The bars show actual recorded payments where available, while payout_nodrip
+    // is reconstructed — so we can't plot the raw nodrip series against them (it can
+    // float above the bars when actual < reconstructed). Instead subtract the
+    // modeled per-period DRIP benefit (recon − nodrip, ≥ 0) from each bar, so the
+    // line is always ≤ the bar and the gap equals the income reinvesting added.
+    const nodrip = s.payout_nodrip
+    const recon = s.payout_reconstructed
+    if (nodrip && recon) {
+      const benefit = recon.map((r, i) => Math.max(0, r - (nodrip[i] ?? 0)))
+      if (benefit.some(b => b > 0.005)) {
+        const line = s.payout.map((p, i) => Math.max(0, (p ?? 0) - benefit[i]))
+        traces.push({
+          x: xText, y: line, type: 'scatter', mode: 'lines',
+          line: { color: '#94a3b8', width: 1.5, dash: 'dot' },
+          hovertemplate: '%{x}<br>$%{y:,.2f} income if not reinvested<extra></extra>',
+          name: 'Income if not reinvested',
+        })
+      }
+    }
+    // Cumulative income received across the window (right axis).
+    let runTotal = 0
+    const cum = (s.payout || []).map(v => { runTotal += (v || 0); return Math.round(runTotal * 100) / 100 })
+    traces.push({
+      x: xText, y: cum, type: 'scatter', mode: 'lines', yaxis: 'y2',
+      line: { color: '#f59e0b', width: 2 },
+      hovertemplate: '%{x}<br>$%{y:,.2f} received so far<extra></extra>',
+      name: 'Cumulative received',
+    })
+    return traces
   }, [s, xText])
 
   const shareTraces = useMemo(() => {
@@ -391,19 +422,46 @@ export default function ReinvestmentImpact() {
     ]
   }, [s, xText])
 
+  // Per-share distribution-rate trend — only meaningful for a single fund, so it's
+  // shown when the charts are scoped to one ticker. Aligns the ticker's dps series
+  // to the aggregate label axis.
+  const rateTraces = useMemo(() => {
+    if (!scopeTicker || !s) return []
+    const t = (data?.per_ticker || []).find(x => x.ticker === scopeTicker)
+    if (!t?.dps?.length) return []
+    const byLabel = {}
+    t.labels.forEach((k, i) => { byLabel[k] = t.dps[i] })
+    const y = (s.labels || []).map(k => (k in byLabel ? byLabel[k] : null))
+    return [{
+      x: xText, y, type: 'scatter', mode: 'lines+markers', connectgaps: true,
+      line: { color: '#38bdf8', width: 2 }, marker: { size: 4, color: '#38bdf8' },
+      hovertemplate: '%{x}<br>$%{y:,.4f} / share<extra></extra>',
+      name: 'Distribution / share',
+    }]
+  }, [scopeTicker, s, xText, data])
+
   const decompTraces = useMemo(() => {
     if (!s?.decomp) return []
     const d = s.decomp
+    // Running total of each effect since the window start — answers "over the
+    // whole window, how much of my income growth came from DRIP vs. rate?"
+    const runningSum = (arr) => {
+      let run = 0
+      return (arr || []).map(v => { run += (v || 0); return Math.round(run * 100) / 100 })
+    }
+    const shares = decompCumulative ? runningSum(d.shares) : d.shares
+    const rate = decompCumulative ? runningSum(d.rate) : d.rate
+    const price = decompCumulative ? runningSum(d.price) : d.price
     const mk = (y, name, color) => ({
       x: xText, y, type: 'bar', name,
       marker: { color }, hovertemplate: '%{x}<br>$%{y:,.2f}<extra></extra>',
     })
     return [
-      mk(d.shares, 'Share growth (DRIP)', '#4dff91'),
-      mk(d.rate, 'Distribution rate', '#38bdf8'),
-      mk(d.price, 'Price / interaction', '#f59e0b'),
+      mk(shares, 'Share growth (DRIP)', '#4dff91'),
+      mk(rate, 'Distribution rate', '#38bdf8'),
+      mk(price, 'Interaction', '#f59e0b'),
     ]
-  }, [s, xText])
+  }, [s, xText, decompCumulative])
 
   // ── Projection chart data ──────────────────────────────────────────────────
   const SCENARIO_COLORS = { bullish: '#4dff91', neutral: '#f59e0b', bearish: '#e05555' }
@@ -650,6 +708,14 @@ export default function ReinvestmentImpact() {
               sub="share of payout change" />
             <StatTile label="ANNUAL RUN-RATE" value={fmt$(data.summary.run_rate)} color="#f59e0b"
               sub={`most recent ${view === 'weekly' ? 'week' : view === 'yearly' ? 'year' : 'month'} × ${view === 'weekly' ? 52 : view === 'yearly' ? 1 : 12} — current pace, not a year-to-date total`} />
+            {data.summary.extra_income_from_drip > 0 && (
+              <StatTile label="EXTRA FROM REINVESTING" value={fmt$(data.summary.extra_income_from_drip)} color="#4dff91"
+                sub={`+${data.summary.extra_income_pct}% vs. taking the cash`} />
+            )}
+            {data.summary.pct_reinvested != null && (
+              <StatTile label="% REINVESTED" value={`${data.summary.pct_reinvested}%`} color="#38bdf8"
+                sub={data.summary.cash_payout > 0 ? `${fmt$(data.summary.cash_payout)} taken as cash` : 'all distributions reinvested'} />
+            )}
           </div>
 
           {scopeTicker && (
@@ -661,19 +727,39 @@ export default function ReinvestmentImpact() {
               <div className="da-chart-panel" style={{ marginBottom: '1rem' }}>
                 <Plot
                   data={distTraces}
-                  layout={{ ...DARK_LAYOUT, title: { text: 'Distributions Over Time', x: 0.5 }, height: 380, yaxis: { tickprefix: '$', gridcolor: '#293a5f' }, xaxis: xAxis, showlegend: false }}
+                  layout={{ ...DARK_LAYOUT, title: { text: 'Distributions Over Time', x: 0.5 }, height: 380, yaxis: { tickprefix: '$', gridcolor: '#293a5f' }, yaxis2: { title: 'Cumulative', tickprefix: '$', overlaying: 'y', side: 'right', gridcolor: 'rgba(0,0,0,0)', rangemode: 'tozero' }, xaxis: xAxis, showlegend: true, legend: { orientation: 'h', y: -0.2 } }}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%' }}
                   useResizeHandler
                 />
-                <p style={{ color: '#8899aa', fontSize: '0.75rem', margin: '0.25rem 0 0' }}>
+                <p style={{ color: '#8899aa', fontSize: '0.75rem', margin: '0.25rem 0 0', paddingLeft: '0.5rem' }}>
                   <span style={{ color: '#4dff91' }}>■</span> Actual recorded payments&nbsp;&nbsp;
-                  <span style={{ color: '#38bdf8' }}>■</span> Reconstructed from price + distribution history
+                  <span style={{ color: '#38bdf8' }}>■</span> Reconstructed from price + distribution history&nbsp;&nbsp;
+                  <span style={{ color: '#94a3b8' }}>┄</span> Income each period if you had <strong>not</strong> reinvested (taken as cash)&nbsp;&nbsp;
+                  <span style={{ color: '#f59e0b' }}>━</span> Cumulative received (right axis)
                 </p>
-                <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0.15rem 0 0', fontStyle: 'italic' }}>
+                <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0.15rem 0 0', paddingLeft: '0.5rem', fontStyle: 'italic' }}>
+                  The dotted line is the distribution income you'd have collected each period had you taken the cash instead of reinvesting — lower because you'd own fewer shares. The gap above it is the income reinvesting created.
+                </p>
+                <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0.15rem 0 0', paddingLeft: '0.5rem', fontStyle: 'italic' }}>
                   Reconstruction models your current position reinvested across the window (per-event lot history isn't tracked), hybridized with actual recorded payments where available.
                 </p>
               </div>
+
+              {scopeTicker && rateTraces.length > 0 && (
+                <div className="da-chart-panel" style={{ marginBottom: '1rem' }}>
+                  <Plot
+                    data={rateTraces}
+                    layout={{ ...DARK_LAYOUT, title: { text: `Distribution per Share — ${scopeTicker}`, x: 0.5 }, height: 320, yaxis: { tickprefix: '$', gridcolor: '#293a5f', rangemode: 'tozero' }, xaxis: xAxis, showlegend: false }}
+                    config={{ responsive: true, displayModeBar: false }}
+                    style={{ width: '100%' }}
+                    useResizeHandler
+                  />
+                  <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0.15rem 0 0', paddingLeft: '0.5rem', fontStyle: 'italic' }}>
+                    The fund's actual distribution paid per share each period — a falling trend means payout erosion, independent of how many shares you hold.
+                  </p>
+                </div>
+              )}
 
               <div className="da-chart-panel" style={{ marginBottom: '1rem' }}>
                 <Plot
@@ -686,14 +772,74 @@ export default function ReinvestmentImpact() {
               </div>
 
               <div className="da-chart-panel" style={{ marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.25rem', marginBottom: '-0.5rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setDecompCumulative(false)}
+                    style={{ fontSize: '0.72rem', padding: '0.15rem 0.5rem', borderRadius: '4px', cursor: 'pointer', border: '1px solid #2a3a5a', background: decompCumulative ? 'transparent' : '#1c2a4b', color: decompCumulative ? '#8899aa' : '#cfe0ff' }}
+                  >Per period</button>
+                  <button
+                    type="button"
+                    onClick={() => setDecompCumulative(true)}
+                    style={{ fontSize: '0.72rem', padding: '0.15rem 0.5rem', borderRadius: '4px', cursor: 'pointer', border: '1px solid #2a3a5a', background: decompCumulative ? '#1c2a4b' : 'transparent', color: decompCumulative ? '#cfe0ff' : '#8899aa' }}
+                  >Cumulative</button>
+                </div>
                 <Plot
                   data={decompTraces}
-                  layout={{ ...DARK_LAYOUT, title: { text: 'Why Payouts Changed (per-period attribution)', x: 0.5 }, height: 360, barmode: 'relative', yaxis: { tickprefix: '$', gridcolor: '#293a5f' }, xaxis: xAxis, legend: { orientation: 'h', y: -0.2 } }}
+                  layout={{ ...DARK_LAYOUT, title: { text: decompCumulative ? 'Why Payouts Changed (cumulative since window start)' : 'Why Payouts Changed (vs. prior period)', x: 0.5 }, height: 360, barmode: 'relative', yaxis: { tickprefix: '$', gridcolor: '#293a5f' }, xaxis: xAxis, legend: { orientation: 'h', y: -0.2 } }}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%' }}
                   useResizeHandler
                 />
+                <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0.15rem 0 0', paddingLeft: '0.5rem', fontStyle: 'italic' }}>
+                  {decompCumulative
+                    ? 'Running total of each effect since the window start. Green = extra income from DRIP share growth; blue = the fund changing its per-share rate; amber = the interaction of both.'
+                    : 'Each bar sums to the net change in payout vs. the prior period. Green = more shares from DRIP; blue = the fund changed its per-share rate; amber = the interaction of both.'}
+                </p>
               </div>
+
+              {!scopeTicker && ((data.rate_raises?.length > 0 || data.rate_cuts?.length > 0) || data.summary.drip_off?.length > 0) && (
+                <div className="da-chart-panel" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '2rem' }}>
+                  {(data.rate_raises?.length > 0 || data.rate_cuts?.length > 0) && (
+                    <div style={{ flex: '1 1 320px' }}>
+                      <h3 style={{ marginTop: 0 }}>Notable rate changes this window</h3>
+                      <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0 0 0.5rem', fontStyle: 'italic' }}>
+                        Dollar impact of each fund changing its per-share distribution (drives the blue bars above).
+                      </p>
+                      {data.rate_raises?.length > 0 && (
+                        <div style={{ marginBottom: '0.5rem' }}>
+                          {data.rate_raises.map(r => (
+                            <div key={r.ticker} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.15rem 0' }}>
+                              <span><span style={{ color: '#4dff91' }}>▲</span> <strong style={{ cursor: 'pointer' }} onClick={() => setScopeTicker(r.ticker)}>{r.ticker}</strong></span>
+                              <span style={{ color: '#4dff91' }}>+{fmt$(r.rate_impact)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {data.rate_cuts?.length > 0 && data.rate_cuts.map(r => (
+                        <div key={r.ticker} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.15rem 0' }}>
+                          <span><span style={{ color: '#e05555' }}>▼</span> <strong style={{ cursor: 'pointer' }} onClick={() => setScopeTicker(r.ticker)}>{r.ticker}</strong></span>
+                          <span style={{ color: '#e05555' }}>{fmt$(r.rate_impact)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {data.summary.drip_off?.length > 0 && (
+                    <div style={{ flex: '1 1 320px' }}>
+                      <h3 style={{ marginTop: 0 }}>DRIP off — cash not compounding</h3>
+                      <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0 0 0.5rem', fontStyle: 'italic' }}>
+                        These holdings paid distributions but aren't reinvesting — {fmt$(data.summary.cash_payout)} took as cash this window.
+                      </p>
+                      {data.summary.drip_off.map(d => (
+                        <div key={d.ticker} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.15rem 0' }}>
+                          <strong style={{ cursor: 'pointer' }} onClick={() => setScopeTicker(d.ticker)}>{d.ticker}</strong>
+                          <span style={{ color: '#8899aa' }}>{fmt$(d.payout)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {!scopeTicker && data.per_ticker?.length > 0 && (
                 <div className="da-chart-panel">

@@ -1,8 +1,8 @@
 // Grading helpers for ETF and Option-Income ETF Buying Checklist Evaluators.
 // Reuses scoreBand / badgeFromScore / verdictFromComposite from cefGrading.js.
 
-import { verdictFromComposite } from './cefGrading'
-export { verdictFromComposite }
+import { verdictFromComposite, gradeRiskRatios } from './cefGrading'
+export { verdictFromComposite, gradeRiskRatios }
 
 const num = (v) => {
   if (v === null || v === undefined || v === '') return null
@@ -300,6 +300,7 @@ export function gradeETF(fund, peers, thresholds) {
     etfGradePerformance(fund, peers),
     etfGradeRisk(fund, thresholds),
     etfGradeYieldSustainability(fund, thresholds),
+    gradeRiskRatios(fund, 7),
   ]
   const scored = criteria.filter(c => typeof c.score === 'number')
   const composite = scored.length ? scored.reduce((s, c) => s + c.score, 0) / scored.length : null
@@ -566,6 +567,7 @@ export function gradeOptionIncomeETF(fund, peers, thresholds) {
     optGradePerformance(fund, thresholds),
     optGradeNavErosion(fund, thresholds),
     optGradeTrackRecord(fund, peers, thresholds),
+    gradeRiskRatios(fund, 8),
   ]
   const scored = criteria.filter(c => typeof c.score === 'number')
   const composite = scored.length ? scored.reduce((s, c) => s + c.score, 0) / scored.length : null

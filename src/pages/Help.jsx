@@ -1309,52 +1309,92 @@ function ReinvestmentImpactHelp() {
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Historical Tab</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Replays your portfolio's dividend-reinvestment history using recorded payments and Yahoo Finance
-        price history, then charts that history at Annual, Monthly, or Weekly granularity.
+        price history, then charts that history at Annual, Monthly, or Weekly granularity. Use the filters
+        to focus on any time window, category slice, or individual holding.
       </p>
-
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/reinvestment-impact/reinvestment-impact-historical1.jpg" alt="Reinvestment Impact historical overview" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Historical tab showing the four summary tiles and the Distributions Over Time chart for the whole portfolio.</p>
-      </div>
-
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Summary Tiles</h4>
-      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Total Distributions</strong> — sum of all payouts received in the selected window.</li>
-        <li><strong>DRIP Shares Added</strong> — cumulative shares purchased by reinvesting those distributions.</li>
-        <li><strong>Growth From DRIP</strong> — the fraction of total payout change attributable to share accumulation (vs. rate or price changes).</li>
-        <li><strong>Annual Run-Rate</strong> — the current annualised income implied by the most recent period.</li>
-      </ul>
 
       <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Filters</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Granularity</strong> — Annual, Monthly, or Weekly grouping of the data.</li>
         <li><strong>Time Range</strong> — adjusts to the granularity (e.g. 3 Mo – 24 Mo for Weekly; 2 – 10 Yr for Annual).</li>
         <li><strong>Categories</strong> — multi-select dropdown to restrict the view to one or more portfolio categories (Anchors, Boosters, etc.). All Holdings is the default.</li>
-        <li><strong>Scope</strong> — zoom in to a single ticker. Selecting a fund also reveals the Break-Even panel (see below).</li>
+        <li><strong>Scope</strong> — zoom in to a single ticker. Selecting a fund narrows all charts to that holding and reveals the Break-Even panel and the per-share rate trend chart.</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Summary Tiles</h4>
+      <p style={{ marginBottom: '0.5rem' }}>Six tiles summarise the selected window at a glance:</p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Total Distributions</strong> — the total cash paid out to you across all holdings in the window.</li>
+        <li><strong>DRIP Shares Added</strong> — cumulative new shares purchased by reinvesting those distributions. Shows in purple.</li>
+        <li><strong>Growth From DRIP</strong> — what fraction of your total payout change came from owning more shares (via DRIP), as opposed to the funds raising or cutting their rates. A high number means compounding is doing real work; a low number means rate changes are the dominant driver.</li>
+        <li><strong>Annual Run-Rate</strong> — the most recent period's payout annualised (e.g. last month × 12). This is your current income pace, not a year-to-date total.</li>
+        <li><strong>Extra from Reinvesting</strong> — the additional income you collected over the window because you reinvested, compared to what you'd have received had you taken all distributions as cash instead. The percentage shows how much bigger your income stream became through compounding alone.</li>
+        <li><strong>% Reinvested</strong> — the share of total distributions that went back into buying shares (DRIP on) versus being taken as cash (DRIP off). The sub-label shows the raw dollar amount taken as cash, flagging how much is not compounding.</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/reinvestment-impact/Historical-filter.jpg" alt="Historical filter controls" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Granularity, Time Range, Categories, and Scope filters in the Historical tab.</p>
+        <img src="/help-screenshots/reinvestment-impact/historical-overview.jpg" alt="Reinvestment Impact historical overview" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Historical tab: all six summary tiles, Distributions Over Time (with the "if not reinvested" dotted line and cumulative amber line), and DRIP Share Growth chart.</p>
       </div>
 
       <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Charts</h4>
+
+      <p style={{ marginBottom: '0.5rem' }}><strong>Distributions Over Time</strong></p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The main bar chart shows total payouts per period. <span style={{ color: '#4dff91' }}>Green bars</span> are actual recorded payments from your dividend history; <span style={{ color: '#38bdf8' }}>blue bars</span> are reconstructed from Yahoo Finance price and dividend-per-share data (used where individual lot history isn't imported). The chart hybridises the two: actual payments take priority where available.
+      </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Distributions Over Time</strong> — bar chart of total payouts per period. Green bars are actual recorded payments; blue bars are reconstructed from Yahoo price and dividend history (used where individual lot history isn't tracked).</li>
-        <li><strong>DRIP Share Growth</strong> — bars show incremental shares added each period; the amber line shows the running cumulative total.</li>
-        <li><strong>Why Payouts Changed</strong> — stacked attribution chart decomposing each period's payout change into three components: share growth from DRIP (green), distribution-rate changes (blue), and price/interaction effects (amber).</li>
-        <li><strong>Top Contributors table</strong> — when viewing the whole portfolio, a sortable table of per-ticker distribution totals, DRIP shares, and reinvestment status. Click any row to scope the charts to that ticker.</li>
+        <li><strong>Dotted line — "Income if not reinvested"</strong>: what each period's income would have been had you taken distributions as cash instead of reinvesting. Because DRIP adds shares over time, this line sits below the bars — the gap between the bar and the dotted line in any period is the extra income that compounding created.</li>
+        <li><strong>Amber line (right axis) — "Cumulative received"</strong>: the running total of all distributions collected since the start of the window. A steadily rising slope confirms consistent income; a flattening slope signals slower recent growth.</li>
       </ul>
 
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/reinvestment-impact/reinvest-impact-historicalbottom.jpg" alt="Historical charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>DRIP Share Growth and Why Payouts Changed charts, followed by the Top Contributors table.</p>
-      </div>
+      <p style={{ marginBottom: '0.5rem' }}><strong>DRIP Share Growth</strong></p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <span style={{ color: '#a855f7' }}>Purple bars</span> show the incremental new shares bought each period by reinvesting that period's cash. The <span style={{ color: '#f59e0b' }}>amber line</span> (right axis) is the running cumulative total of all DRIP shares purchased since the window start. The cumulative line growing smoothly upward means compounding is working as intended; a plateau means reinvestment slowed (rate cut, DRIP turned off, etc.).
+      </p>
+
+      <p style={{ marginBottom: '0.5rem' }}><strong>Distribution per Share</strong> <span style={{ color: '#6a7892', fontSize: '0.85em' }}>(single-ticker scope only)</span></p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        When you scope to a single fund, this chart appears showing the fund's actual distribution paid per share each period. This is the most direct measure of whether a fund is sustaining, growing, or eroding its payout. A falling line means the fund is paying less per share — regardless of how many shares you hold. Combine this with the Distributions Over Time chart: if your total bars are still rising while this line is falling, it means DRIP is masking underlying rate erosion by adding more shares.
+      </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/reinvestment-impact/Historical-individual.jpg" alt="Historical individual ticker view" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Scoping to a single ticker (DIVO shown) narrows all three charts and reveals the Break-Even panel.</p>
+        <img src="/help-screenshots/reinvestment-impact/historical-attribution.jpg" alt="Why Payouts Changed attribution chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Why Payouts Changed chart in per-period mode, with the Per period / Cumulative toggle top-right.</p>
       </div>
+
+      <p style={{ marginBottom: '0.5rem' }}><strong>Why Payouts Changed</strong></p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This attribution chart answers the question: <em>why did my income go up or down?</em> Every period's payout change is split into three forces:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><span style={{ color: '#4dff91' }}>■ <strong>Share growth (DRIP)</strong></span> — the portion of the change explained purely by owning more shares from reinvesting. This is always a small, steady positive contribution — it compounds quietly every period.</li>
+        <li><span style={{ color: '#38bdf8' }}>■ <strong>Distribution rate</strong></span> — the portion caused by the fund itself raising or cutting its per-share payment. This is usually the dominant driver of big swings: a large blue bar above zero means a rate raise lifted income; a large blue bar below zero means a rate cut hit it.</li>
+        <li><span style={{ color: '#f59e0b' }}>■ <strong>Interaction</strong></span> — a small mathematical cross-term that appears when both share count and rate change in the same period. It's usually tiny and can be ignored; it just ensures the three pieces add up exactly to the total change.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Bars above zero mean income rose that period; bars below zero mean it fell. Toggle <strong>Per period</strong> to see each period's change in isolation, or <strong>Cumulative</strong> to see the running total of each effect since the window start — the cumulative view directly answers "over the whole window, how much of my income growth came from DRIP versus rate changes?"
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="/help-screenshots/reinvestment-impact/historical-rate-changes.jpg" alt="Notable rate changes and DRIP off panels" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Notable rate changes (left) and DRIP off — cash not compounding (right), followed by the Top Contributors table.</p>
+      </div>
+
+      <p style={{ marginBottom: '0.5rem' }}><strong>Notable Rate Changes</strong></p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Shows the top three rate raises (<span style={{ color: '#4dff91' }}>▲ green</span>) and top three rate cuts (<span style={{ color: '#e05555' }}>▼ red</span>) by dollar impact across the window. The dollar figure next to each ticker is how much that fund's distribution-rate change added or subtracted from your total income — these are the funds driving the blue bars in the attribution chart. Click any ticker to scope all charts to that holding.
+      </p>
+
+      <p style={{ marginBottom: '0.5rem' }}><strong>DRIP Off — Cash Not Compounding</strong></p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Lists holdings that have DRIP turned off, along with the total cash each paid out this window. These distributions were collected as cash rather than reinvested, so they did not compound. The panel header shows the total cash amount taken across all DRIP-off holdings. Use this to identify where enabling DRIP would immediately begin adding to your share count and future income.
+      </p>
+
+      <p style={{ marginBottom: '0.5rem' }}><strong>Top Contributors Table</strong></p>
+      <p style={{ marginBottom: '1rem' }}>
+        A table of up to 15 holdings ranked by total distributions paid in the window. Shows the ticker, fund name, total distributions received, DRIP shares added (purple), and whether reinvestment is on (✓) or off (—). Click any row to scope all charts to that ticker.
+      </p>
 
       {/* ── Break-Even Panel ──────────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Break-Even Panel (Single Ticker)</h3>
@@ -1363,11 +1403,6 @@ function ReinvestmentImpactHelp() {
         a <strong>Break-Even</strong> panel appears showing how far the position is from recovering
         its cost basis — and how reinvestment alone can close that gap over time.
       </p>
-
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img src="/help-screenshots/reinvestment-impact/Historical-Divo.jpg" alt="Break-Even panel for DIVO" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>The Break-Even panel for a single holding, showing both the cost-basis and total-return legs side by side.</p>
-      </div>
 
       <p style={{ marginBottom: '0.5rem' }}>The panel shows two legs side by side:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -5575,62 +5610,107 @@ function ETFBuyingChecklistHelp() {
       <h2>ETF Buying Checklist Evaluator</h2>
       <p style={{ marginBottom: '1rem' }}>
         The ETF Buying Checklist Evaluator grades any broad-market, sector, dividend, or specialty ETF across
-        six structured criteria. It fetches live data for the ticker, scores each criterion Pass / Warn / Fail,
-        rolls them up into a letter-grade verdict, and suggests smarter alternatives when the fund falls short.
+        seven structured criteria. It fetches live data for the ticker, scores each criterion Pass / Warn / Fail,
+        rolls them up into a composite verdict, and suggests smarter alternatives when the fund falls short.
         It is designed for standard (non-option-income) ETFs — use the Option-Income ETF Evaluator for
         covered-call and put-write funds.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Two Modes</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li>
+          <strong>Deep Dive</strong> — Type one ticker for a full scored breakdown: seven criteria cards,
+          a composite score, a buy verdict, and Smart Alternatives from the same strategy group.
+        </li>
+        <li>
+          <strong>Scan a List</strong> — Evaluate multiple ETFs at once in a sortable ranking table.
+          Check <em>My holdings</em> and/or <em>My watchlist</em> to pull tickers automatically, or paste
+          extra tickers into the text box. The scanner evaluates <strong>ETFs only</strong> — option-income
+          ETFs and CEFs are automatically separated and redirected to their own evaluator. Results include
+          Yield, Expense Ratio, Total Return, Composite score, and all five risk-adjusted ratio columns.
+        </li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
         <img src="/help-screenshots/etf-buying-checklist-evaluator/etf_checklist_top.jpg" alt="ETF Buying Checklist Evaluator top — ticker lookup, verdict card, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
-      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
-        <li>Type an ETF ticker in the input field and click <strong>Evaluate</strong> (or press Enter).</li>
-        <li>Live data is fetched and the six criteria are scored automatically.</li>
-        <li>Review the verdict card at the top, then work through each criterion card below.</li>
-        <li>Expand <strong>What to check</strong> under any criterion for guidance on what to investigate further.</li>
-        <li>Scroll to the bottom to see Smart Alternatives when the fund scores poorly.</li>
-      </ol>
-
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Six Criteria</h3>
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Seven Criteria</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>
           <strong>1. Strategy Fit</strong> — Does the fund's index, sector, or mandate match your intended exposure?
           Avoids duplicating a strategy you already hold and flags non-obvious category mismatches.
+          Informational only — not scored.
         </li>
         <li>
-          <strong>2. Expense Ratio</strong> — Scores Pass (≤ 0.10%), Warn (≤ threshold), or Fail (above threshold).
+          <strong>2. Expense Ratio</strong> — Scores Pass (≤ your threshold), Warn, or Fail (above threshold).
           Broad market ETFs should be well under 0.10%; sector and specialty funds under 0.50%.
-          Thresholds are adjustable per your own standard.
+          Thresholds are fully adjustable.
         </li>
         <li>
           <strong>3. Fund Size &amp; Liquidity</strong> — Checks AUM and average daily dollar volume. Funds under $100M
-          face elevated closure risk; thin trading increases implicit transaction costs. Scores Pass / Warn / Fail
-          based on configurable AUM thresholds.
+          face elevated closure risk; thin trading increases implicit transaction costs.
         </li>
         <li>
           <strong>4. Performance vs. Peers</strong> — Compares 3Y and 5Y average annual total returns against the
-          category peer group. Short-term outperformance can be noise — 5Y is weighted more heavily.
+          category peer group from the scanner cache. Funds too new for a 3Y return receive an info badge.
         </li>
         <li>
-          <strong>5. Risk / Volatility</strong> — Evaluates beta. Near 1.0 is normal. Above 1.5 flags elevated
+          <strong>5. Risk / Beta</strong> — Evaluates 3-year beta. Near 1.0 is normal. Above 1.5 flags elevated
           market sensitivity; very low beta (&lt; 0.3) may indicate a niche strategy with limited growth potential.
-          Warn/Fail thresholds are adjustable.
         </li>
         <li>
           <strong>6. Yield Sustainability</strong> — Only scored when the fund yields above 2%. Checks whether the
           yield exceeds the fund's long-term total return, which would imply NAV erosion.
-          A gap over the warn threshold is a red flag for dividend ETFs.
+        </li>
+        <li>
+          <strong>7. Risk-Adjusted Return Profile</strong> — A bundled criterion that folds five quantitative
+          risk ratios into one scored criterion (see <em>Risk-Adjusted Scoring</em> below). Computed from the
+          fund's full dividend-adjusted price history and excluded from the composite when fewer than ~250
+          trading days (~1 year) of data exist. When sufficient history is present the score joins the composite
+          on equal footing with the other criteria.
         </li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Verdict Card</h3>
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Risk-Adjusted Scoring</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        The verdict card at the top shows the composite letter grade (A through F) and a one-line summary.
-        The grade is derived from the weighted combination of criteria scores — a single Fail in a heavily
-        weighted criterion (expense ratio, fund size) can pull the overall grade down significantly.
+        Criterion 7 bundles five standard risk-adjusted return ratios into a single 0–100 score. The ratios
+        are computed on the <strong>dividend-adjusted (total-return) price series</strong> so
+        high-distribution funds are not penalized twice — NAV erosion is already captured by Criterion 6.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Sharpe Ratio</strong> — excess return above the risk-free rate divided by total volatility
+          (standard deviation). Measures how much return you get per unit of risk taken.
+          &gt; 1.0 is solid; &gt; 1.5 is excellent. Default weight: 10%.</li>
+        <li><strong>Sortino Ratio</strong> — like Sharpe but only penalizes <em>downside</em> deviation,
+          ignoring upside volatility which isn't harmful. More meaningful than Sharpe for income investors.
+          &gt; 1.0 is good; &gt; 2.0 is excellent. Default weight: 15%.</li>
+        <li><strong>Calmar Ratio</strong> — annualized return divided by maximum drawdown. Answers: "how
+          efficiently does the fund recover from its worst drop?" &gt; 0.5 is acceptable; &gt; 1.5 is
+          excellent. Default weight: 20%.</li>
+        <li><strong>Omega Ratio</strong> — probability-weighted ratio of gains above zero to losses below
+          zero. Captures the entire return distribution, not just volatility. &gt; 1.2 is decent; &gt; 2.0
+          is strong. Default weight: 15%.</li>
+        <li><strong>Ulcer Index</strong> — measures the <em>depth and duration</em> of drawdowns, not just
+          the maximum. A fund that drops 20% and recovers quickly scores better than one that lingers in a
+          10% drawdown for months. Lower is better: &lt; 3 is excellent, &lt; 7 is good, &gt; 12 is
+          high-pain. Default weight: 25%.</li>
+        <li><strong>Max Drawdown</strong> — the largest peak-to-trough decline in the history window.
+          Default weight: 10%. The remaining 5% goes to down-capture ratio when a benchmark is available.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem', color: '#9aa7b8', fontSize: '0.9rem' }}>
+        The weighted composite of these sub-scores produces the Risk criterion's 0–100 number. A score of
+        80+ earns a PASS badge; 50–79 earns WARN; below 50 earns FAIL. When fewer than ~250 trading
+        days (~1 year) of history exist the criterion shows an info badge and is excluded from the
+        composite average so new funds are never penalised for being young.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Composite Score &amp; Verdict</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The composite is the simple average of all <em>scored</em> criteria (criteria with a numeric score —
+        informational and insufficient-data criteria are excluded). Verdict thresholds: composite ≥ 70 with
+        no failing criteria → <strong>Strong Buy</strong>; ≥ 60 with at most one fail → <strong>Weak Buy</strong>;
+        otherwise → <strong>Do Not Buy</strong>.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -5639,19 +5719,18 @@ function ETFBuyingChecklistHelp() {
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Smart Alternatives</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        When the evaluated fund scores poorly, a Smart Alternatives section appears below the criteria
-        listing ETFs in the same category that meet a higher standard. Click any alternative ticker to
-        immediately evaluate it.
+        When the evaluated fund scores poorly, a Smart Alternatives section appears listing ETFs in the same
+        strategy group that score higher on the composite. Each alternative shows the specific improvements
+        (lower expense ratio, better total return, larger fund, etc.).
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Each scoreable criterion (Expense Ratio, Fund Size, Risk, Yield Sustainability) has an inline
-        threshold editor that appears under the criterion card. Adjust the Pass/Warn/Fail boundaries to
-        match your own standards — for example, tightening the expense ratio cutoff to 0.05% for core
-        holdings or relaxing the AUM floor for a niche strategy you accept as illiquid. Thresholds are
-        saved to your browser's local storage and persist between sessions. Click <strong>Reset</strong> on
-        any criterion to restore factory defaults.
+        Each scoreable criterion has an inline threshold editor under its card. Adjust Pass/Warn/Fail
+        boundaries to match your standards — e.g. tightening the expense ratio to 0.05% for core
+        holdings or relaxing the AUM floor for a niche strategy. Thresholds are saved in browser local
+        storage and persist between sessions. Use <strong>Reset thresholds to defaults</strong> at the
+        top of the page to restore factory settings.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When to Use It</h3>
@@ -5673,41 +5752,51 @@ function OptionIncomeETFHelp() {
         option-overlay ETFs — funds like JEPI, XYLD, QYLD, SPYI, QQQI, and the YieldMax single-stock
         option series. Standard ETF metrics (PE ratio, category peer return) tell you little about these
         funds; what matters is whether the high yield is sustainable, whether NAV is eroding, whether the
-        strategy is complex enough to justify the fee, and whether the fund has a long enough track record
-        to evaluate.
+        strategy justifies the fee, and whether the fund has a long enough track record to evaluate.
+        A bundled risk-adjusted-return criterion has been added so you can see the full drawdown and
+        volatility picture alongside the income-specific checks.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Two Modes</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li>
+          <strong>Deep Dive</strong> — Type one option-income ETF ticker for a full scorecard: eight
+          criteria cards, a composite score, an overall verdict, and Smart Alternatives drawn from ~150
+          curated option-income peers. The underlying strategy (S&amp;P 500, Nasdaq 100, single stock, etc.)
+          is auto-detected to filter alternatives appropriately.
+        </li>
+        <li>
+          <strong>Scan a List</strong> — Evaluate your option-income holdings and watchlist entries in one
+          pass. Check <em>My holdings</em> and/or <em>My watchlist</em>, paste additional tickers if needed,
+          then click <strong>Scan</strong>. The scanner evaluates <strong>option-income ETFs only</strong> —
+          plain ETFs, CEFs, and stocks are automatically separated and shown in a "skipped" panel with a
+          pointer to the correct evaluator. Results are ranked in a sortable table showing Yield, NAV/yr,
+          Expense Ratio, Composite score, a Risk bundle score, and individual ratio columns
+          (Sharpe / Sortino / Calmar / Omega / Ulcer).
+        </li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
         <img src="/help-screenshots/option-income-etf-evaluator/option-income-etf-evaluator-top.jpg" alt="Option-Income ETF Evaluator top — ticker lookup, underlying strategy, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
-      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
-        <li>Type a covered-call or option-income ETF ticker and click <strong>Evaluate</strong>.</li>
-        <li>The evaluator detects the underlying strategy (e.g. S&amp;P 500, Nasdaq 100, single stock, fixed income).</li>
-        <li>Seven criteria are scored with PASS / WARN / FAIL badges.</li>
-        <li>Expand <strong>What to check</strong> under any criterion for deeper guidance.</li>
-        <li>Review the overall verdict and, if the fund underperforms, explore alternatives below.</li>
-      </ol>
-
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Seven Criteria</h3>
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Eight Criteria</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>
           <strong>1. Strategy Fit</strong> — Confirms the fund is an option-income product and that its strategy
           (covered call vs. put-write vs. collar, index vs. single-stock) aligns with your goals.
-          Option-income ETFs sacrifice upside in exchange for current income — this is by design, not a flaw,
-          but the tradeoff must suit your portfolio.
+          Informational only — not scored.
         </li>
         <li>
-          <strong>2. NAV Erosion vs. Yield</strong> — Compares the distribution yield against the fund's
-          long-term total return. A gap under ~2 percentage points is normal for option-income; above 4pp
-          signals the high yield is being funded partly by returning your own capital rather than genuine
-          option premium income. A declining distribution history is a red flag.
+          <strong>2. Yield Sustainability</strong> — Compares the distribution yield against the fund's
+          long-term total return (5Y → 3Y → annualised full-history CAGR, in that order). A gap under
+          ~2 pp is normal for option-income; above 4 pp signals the high yield is partly funded by
+          returning your own capital rather than genuine option premium income.
         </li>
         <li>
           <strong>3. Expense Ratio</strong> — Option-income ETFs are inherently costlier than index ETFs
-          due to strategy complexity. Under 0.50% is competitive for this category; above 0.75% needs
-          strong justification from performance. Thresholds are adjustable.
+          due to strategy complexity. Under 0.50% is competitive; above 0.75% needs strong justification.
+          Thresholds are fully adjustable.
         </li>
         <li>
           <strong>4. Fund Size &amp; Liquidity</strong> — AUM and daily dollar volume. Many option-income ETFs
@@ -5715,54 +5804,110 @@ function OptionIncomeETFHelp() {
           means worse fills on your orders.
         </li>
         <li>
-          <strong>5. Performance vs. Peers</strong> — Total return compared to the option-income category.
-          A 7%+ annualized total return is competitive for the income trade-off. Low beta (&lt; 0.7) is
-          expected — you gave up upside for lower volatility and income.
+          <strong>5. Total Return</strong> — Checks whether the fund's long-term total return meets a
+          minimum floor (default 7% annualised). A high yield that is not also delivering reasonable total
+          return means the income trade-off isn't paying off.
         </li>
         <li>
-          <strong>6. NAV Trend</strong> — Compares the annualized share-price trend against annualized total
-          return. A fund whose price chronically declines while paying a high yield is funding the distribution
-          from your capital (return of capital), not from income. At-the-money covered-call funds (e.g. QYLD)
-          cap nearly all upside; out-of-the-money writers (e.g. QQQI, SPYI) retain more upside and hold NAV
-          better over full cycles.
+          <strong>6. NAV Trend</strong> — Compares the annualised share-price (price-only) trend against
+          annualised total return. A fund whose share price chronically declines while paying a high yield
+          is funding the distribution from your capital (return of capital), not from income. At-the-money
+          covered-call funds (e.g. QYLD) cap nearly all upside; out-of-the-money writers (e.g. QQQI, SPYI)
+          retain more upside and hold NAV better over full cycles.
         </li>
         <li>
           <strong>7. Track Record</strong> — Fund age and manager pedigree. Funds under 3 years have no
-          full market-cycle track record. Funds under 1 year are speculative — the strategy is essentially
-          untested across bear markets, rate cycles, and volatility regimes.
+          full market-cycle track record. Funds under 1 year are speculative. Established fund families
+          (JPMorgan, Global X, Amplify, NEOS) have deeper resources for complex strategies.
+        </li>
+        <li>
+          <strong>8. Risk-Adjusted Return Profile</strong> — A bundled criterion folding five quantitative
+          ratios into one score (see <em>Risk-Adjusted Scoring</em> below). This is computed on the
+          <strong> dividend-adjusted total-return series</strong> — not the price-only series — so
+          high-distribution funds are not penalised twice for NAV erosion that Criterion 6 already
+          captures. Excluded from the composite when fewer than ~250 trading days of data exist.
         </li>
       </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Risk-Adjusted Scoring</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Criterion 8 bundles five risk-adjusted return ratios into a single 0–100 score displayed both
+        in the criterion card and as a <strong>Risk</strong> column in the Scan a List table. The ratios
+        are computed server-side from the fund's full price history, not estimated from recent volatility.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Sharpe Ratio</strong> — excess return per unit of total volatility. &gt; 1.0 is solid;
+          &gt; 1.5 is excellent. Weight in composite: 10%.</li>
+        <li><strong>Sortino Ratio</strong> — like Sharpe but only penalises <em>downside</em> deviation,
+          ignoring upside swings that aren't harmful. More meaningful than Sharpe for income portfolios.
+          &gt; 1.0 is good; &gt; 2.0 is excellent. Weight: 15%.</li>
+        <li><strong>Calmar Ratio</strong> — annualised return divided by maximum drawdown. Measures
+          recovery efficiency: "how much return do you get per point of worst-case loss?" &gt; 0.5 is
+          acceptable; &gt; 1.5 is strong. Weight: 20%.</li>
+        <li><strong>Omega Ratio</strong> — probability-weighted ratio of all gains above zero to all losses
+          below zero. Captures the full return distribution, not just its standard deviation. &gt; 1.2
+          is decent; &gt; 2.0 is strong. Weight: 15%.</li>
+        <li><strong>Ulcer Index</strong> — measures the <em>depth and duration</em> of drawdowns together,
+          not just the single worst drop. A fund that dips 20% and recovers in a month scores far better
+          than one that languishes in a 10% drawdown for years. Lower is better: &lt; 3 is excellent,
+          &lt; 7 is good, &gt; 12 is high-pain. Weight: 25%.</li>
+        <li><strong>Max Drawdown</strong> — peak-to-trough decline over the history window. Weight: 10%.
+          The remaining 5% goes to down-capture ratio when a benchmark is available.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem', color: '#9aa7b8', fontSize: '0.9rem' }}>
+        Composite thresholds: ≥ 80 → PASS · 50–79 → WARN · &lt; 50 → FAIL. Funds with fewer than ~250
+        trading days (~1 year) of history show an info badge and are excluded from the composite so new
+        funds are never scored as failures for being young.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Why One Bundled Criterion?</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Sharpe, Sortino, Calmar, Omega, and Ulcer are highly correlated — a fund that scores well on one
+        tends to score well on all five. Treating them as five separate criteria would let the risk
+        dimension crowd out the income-specific checks (yield sustainability, NAV erosion, track record)
+        that are the whole point of this evaluator. One bundled criterion keeps the balance right.
+      </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="/help-screenshots/option-income-etf-evaluator/option-income-etf-evaluator-bottom.jpg" alt="Option-Income ETF Evaluator bottom — verdict, smart alternatives, and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Composite Score &amp; Verdict</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The composite is the simple average of all scored criteria (criteria with a numeric score;
+        informational and insufficient-data criteria are excluded). Composite ≥ 70 with no failing
+        criteria → <strong>Strong Buy</strong>; ≥ 60 with at most one fail → <strong>Weak Buy</strong>;
+        otherwise → <strong>Do Not Buy</strong>.
+      </p>
+
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Underlying Strategy Detection</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The evaluator auto-detects what the fund writes options on — S&amp;P 500, Nasdaq 100, Russell 2000,
-        a single stock, or a fixed-income underlying — and shows this at the top of the results. This helps
-        contextualize the performance score: a fund writing covered calls on the Nasdaq will underperform
-        more in a tech bull run than one writing on the S&amp;P 500.
+        a single stock, gold/commodity, or a fixed-income underlying — and shows this at the top of the
+        results. The alternatives section uses this to restrict suggestions to funds tracking the same
+        type of underlier.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Verdict &amp; Smart Alternatives</h3>
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Smart Alternatives</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        The verdict card shows a composite letter grade and summary. When the fund scores C or below,
-        a Smart Alternatives section lists comparable option-income ETFs in the same category that score
-        higher. Click any alternative to evaluate it immediately.
+        When the fund scores below the passing threshold, Smart Alternatives lists option-income peers that
+        clear all quality checks and target the same underlying. You can filter by underlying, set a target
+        yield or minimum yield floor, and the list is re-ranked automatically. Single-stock option funds
+        (e.g. YieldMax) are sorted to the bottom and labelled "higher risk" unless the fund you evaluated
+        is itself single-stock.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        All six scoreable criteria have inline threshold editors (NAV Erosion gap, expense ratio cutoffs,
-        AUM thresholds, performance floor, NAV erosion rate, track-record age). Adjust them to match your
-        personal tolerance. Settings are saved in browser local storage and persist between sessions.
+        All seven scoreable criteria have inline threshold editors. Adjust them to match your personal
+        tolerance. Settings are saved in browser local storage and persist between sessions. Click
+        <strong> Reset thresholds to defaults</strong> at the top of the page to restore factory settings.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When to Use It</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>Use this evaluator for any ETF that primarily generates income from selling options (covered calls, puts, collars).</li>
-        <li>Use the <strong>ETF Buying Checklist Evaluator</strong> for standard index, sector, or dividend ETFs that don't use an option-overlay strategy.</li>
+        <li>Use the <strong>ETF Buying Checklist Evaluator</strong> for standard index, sector, or dividend ETFs without an option-overlay strategy.</li>
         <li>Use the <strong>CEF Buying Checklist Evaluator</strong> (CEF's menu) for closed-end funds, which add discount/premium and leverage dimensions.</li>
       </ul>
     </div>
@@ -5774,92 +5919,150 @@ function CEFBuyingChecklistHelp() {
     <div>
       <h2>CEF Buying Checklist Evaluator</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The CEF Buying Checklist Evaluator grades a closed-end fund across seven CEF-specific criteria —
-        including the discount/premium to NAV, leverage level, distribution sustainability, and liquidity
-        factors that don't exist in open-end ETFs. It fetches live data, scores each criterion
-        Pass / Warn / Fail, produces a letter-grade verdict, and suggests alternatives when the fund falls short.
+        The CEF Buying Checklist Evaluator grades a closed-end fund across eight criteria — including the
+        discount/premium to NAV, leverage level, distribution sustainability, liquidity, and a bundled
+        risk-adjusted-return criterion that captures how the fund behaves across the full drawdown cycle.
+        It fetches live data from CEF Connect, scores each criterion Pass / Warn / Fail, produces a
+        composite verdict, and suggests alternatives when the fund falls short.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Two Modes</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li>
+          <strong>Deep Dive</strong> — Type a CEF ticker for a full scored breakdown. Data is sourced from
+          CEF Connect (price, NAV, discount/premium, leverage, distribution rate, NAV return history).
+          Eight criteria are scored with Pass / Warn / Fail badges and an expandable "What to check"
+          section for each. Alternatives in the same category are listed at the bottom.
+        </li>
+        <li>
+          <strong>Scan a List</strong> — Evaluate multiple CEFs at once from a sortable ranking table.
+          Check <em>My holdings</em> and/or <em>My watchlist</em> to pull tickers automatically, or paste
+          additional tickers into the text box. Alternatively, enable <em>Entire CEF universe</em> to browse
+          the whole market — this is mutually exclusive with holdings/watchlist (those checkboxes are disabled
+          while it is on), since it is a browse-the-category operation rather than a check-what-I-own one.
+          Because the universe holds several hundred funds (currently ~360), you must narrow it with the
+          <strong> CEF category</strong> and/or <strong>CEF strategy</strong> dropdowns that appear. These
+          are the same Morningstar groupings used on the Closed CEF Information page (Municipal, Covered Call,
+          High Yield, Single Country Equity, and so on). Only the chosen slice is scanned, producing a focused,
+          rankable list. The scanner evaluates <strong>CEFs only</strong> — option-income ETFs, plain ETFs,
+          and stocks are automatically separated and redirected to their own evaluator. Results show Yield,
+          Premium/Discount, Composite score, a Risk bundle score, and individual ratio columns.
+        </li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem', color: '#9aa7b8', fontSize: '0.9rem' }}>
+        <strong>CEF detection note:</strong> Yahoo Finance frequently labels closed-end funds as ordinary
+        equities. The scanner uses the CEF Connect universe as the authoritative CEF list so funds like
+        ADX, BST, and PDI are correctly identified even though Yahoo calls them stocks.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
         <img src="/help-screenshots/cef/cef_evaluator.jpg" alt="CEF Buying Checklist Evaluator top — ticker lookup, CEF header data, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
-      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
-        <li>Type a CEF ticker and click <strong>Evaluate</strong> (or press Enter).</li>
-        <li>Live data is fetched: price, NAV, discount/premium, leverage ratio, distribution rate, and fund history.</li>
-        <li>Seven criteria are scored with PASS / WARN / FAIL badges automatically.</li>
-        <li>Expand <strong>What to check</strong> under any criterion for CEF-specific guidance.</li>
-        <li>Review alternatives at the bottom when the fund scores poorly.</li>
-      </ol>
-
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Seven Criteria</h3>
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Eight Criteria</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>
-          <strong>1. Strategy Fit &amp; Mandate</strong> — Does the fund's stated mandate (bond, equity, option-overlay,
-          multi-asset) match your timeline and risk tolerance? Avoids concentrating into another leveraged equity CEF
-          if you already hold one and flags yield vs. total return mix (a 15% yield funded by return-of-capital is very
-          different from 8% from net investment income).
+          <strong>1. Strategy Fit &amp; Mandate</strong> — Does the fund's stated mandate (bond, equity,
+          option-overlay, multi-asset) match your timeline and risk tolerance? Flags yield vs. total
+          return mix — a 15% yield funded by return-of-capital is very different from 8% from net
+          investment income. Informational only — not scored.
         </li>
         <li>
-          <strong>2. Distribution Sustainability</strong> — Compares the distribution rate on NAV against the fund's
-          long-term NAV total return (3Y and 5Y). Managed-distribution policies that pay out more than the portfolio
-          earns will gradually erode NAV. Section 19(a) notices are referenced for income vs. return-of-capital breakdown.
-          Scores Pass when income covers the distribution; Warn or Fail when the gap implies NAV consumption.
+          <strong>2. Distribution Sustainability</strong> — Compares the distribution rate on NAV against
+          the fund's long-term NAV total return (5Y preferred, 3Y fallback). Managed-distribution policies
+          that pay out more than the portfolio earns will gradually erode NAV. UNII per share (Undistributed
+          Net Investment Income) and earnings-based coverage are factored in when reported. Scores Pass when
+          income covers the distribution; Warn or Fail when the gap implies NAV consumption.
         </li>
         <li>
-          <strong>3. Discount / Premium to NAV</strong> — The unique CEF characteristic. Current discount vs. the
-          52-week average and 1-year z-score. A discount wider than the fund's own history is more attractive;
-          a premium above 5% leaves no margin of safety and means you're paying more than the portfolio is worth.
-          Scores are based on configurable discount and premium thresholds.
+          <strong>3. Discount / Premium to NAV</strong> — The unique CEF characteristic. Current discount vs.
+          the 52-week average and 1-year z-score. A discount wider than the fund's own history is more
+          attractive; a premium above 5% leaves no margin of safety and means you're paying more than the
+          portfolio is worth. Both the threshold and warn band are adjustable.
         </li>
         <li>
-          <strong>4. Leverage</strong> — Regulatory leverage is capped at 50% for bond funds and 33% for equity funds.
-          Funds near those limits have less cushion in falling markets. The type of leverage (preferred shares vs.
-          credit facility vs. reverse repos) behaves differently under stress. Scores Pass at moderate leverage,
-          Warn as leverage approaches regulatory limits.
+          <strong>4. Leverage</strong> — Regulatory leverage is capped at 50% for bond funds and 33% for
+          equity funds. Funds near those limits have less cushion in falling markets. The type of leverage
+          (preferred shares vs. credit facility vs. reverse repos) behaves differently under stress.
+          Scores Pass at moderate leverage, Warn as it approaches limits.
         </li>
         <li>
-          <strong>5. Expense Ratio</strong> — Total expense ratio including management fees, administration, and the
-          interest cost of leverage. CEF fees are structurally higher than ETFs due to active management and
-          leverage costs. A higher-fee fund must deliver superior NAV total return to justify the cost.
-          Thresholds are adjustable.
+          <strong>5. Expense Ratio</strong> — Total expense including management fees, administration, and
+          the interest cost of leverage. CEF fees are structurally higher than ETFs due to active management
+          and leverage. A higher-fee fund must deliver superior NAV return to justify it. Adjustable.
         </li>
         <li>
-          <strong>6. Manager Quality / NAV Performance</strong> — NAV total return isolates the manager's stock-picking
-          and income generation from discount/premium movement. Sponsor reputation, manager tenure, and
-          distribution-history discipline are qualitative signals factored in here.
+          <strong>6. Manager Quality / NAV Performance</strong> — NAV total return isolates the manager's
+          stock-picking and income generation from discount/premium movement, and compares it to the
+          category median over 3Y and 5Y. Sponsor reputation, manager tenure, and distribution discipline
+          are qualitative signals factored in here.
         </li>
         <li>
-          <strong>7. Liquidity</strong> — A single trade should not exceed 10–20% of average daily volume, otherwise
-          you move the market against yourself. Wider bid-ask spreads in thin funds mean higher implicit transaction
-          costs; limit orders are always recommended for CEFs. Scores based on configurable AUM and volume thresholds.
+          <strong>7. Liquidity</strong> — A single trade should not exceed ~10–20% of average daily volume,
+          otherwise you move the market against yourself. Wider bid-ask spreads in thin funds increase
+          implicit transaction costs; limit orders are always recommended for CEFs. Adjustable volume floor.
+        </li>
+        <li>
+          <strong>8. Risk-Adjusted Return Profile</strong> — A bundled criterion folding five quantitative
+          risk ratios (Sharpe, Sortino, Calmar, Omega, Ulcer) into one score (see <em>Risk-Adjusted
+          Scoring</em> below). Computed from the fund's full dividend-adjusted price history. Excluded from
+          the composite when fewer than ~250 trading days (~1 year) of data exist.
         </li>
       </ul>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Risk-Adjusted Scoring</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Criterion 8 bundles five risk ratios into a single 0–100 score displayed both in the criterion
+        card and as a <strong>Risk</strong> column in the Scan a List table.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Sharpe Ratio</strong> — excess return per unit of total volatility.
+          &gt; 1.0 is solid; &gt; 1.5 is excellent. Weight: 10%.</li>
+        <li><strong>Sortino Ratio</strong> — like Sharpe but only penalises downside volatility.
+          &gt; 1.0 is good; &gt; 2.0 is excellent. Weight: 15%.</li>
+        <li><strong>Calmar Ratio</strong> — annualised return ÷ maximum drawdown. Measures recovery
+          efficiency. &gt; 0.5 is acceptable; &gt; 1.5 is strong. Weight: 20%.</li>
+        <li><strong>Omega Ratio</strong> — probability-weighted ratio of all gains to all losses.
+          Captures the full return distribution. &gt; 1.2 is decent; &gt; 2.0 is strong. Weight: 15%.</li>
+        <li><strong>Ulcer Index</strong> — depth and <em>duration</em> of drawdowns. A fund that dips
+          20% briefly scores better than one lingering in a 10% drawdown for years. Lower is better:
+          &lt; 3 excellent, &lt; 7 good, &gt; 12 high-pain. Weight: 25%.</li>
+        <li><strong>Max Drawdown</strong> — peak-to-trough decline. Weight: 10%. Down-capture
+          ratio gets the remaining 5% when a benchmark is available.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem', color: '#9aa7b8', fontSize: '0.9rem' }}>
+        The sub-scores are weighted and averaged to a 0–100 composite. ≥ 80 → PASS · 50–79 → WARN
+        · &lt; 50 → FAIL. Funds with fewer than ~250 trading days get an info badge and are excluded
+        from the composite — new funds are never scored as failures for being young.
+      </p>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Composite Score &amp; Verdict</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The composite is the simple average of all scored criteria (informational and
+        insufficient-data criteria are excluded). Verdict: composite ≥ 70 with no failing
+        criteria → <strong>Strong Buy</strong>; ≥ 60 with at most one fail → <strong>Weak
+        Buy</strong>; otherwise → <strong>Do Not Buy</strong>.
+      </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="/help-screenshots/cef/cef_evaluator_bottom.jpg" alt="CEF Buying Checklist Evaluator bottom — verdict card, alternatives, and threshold editors" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Verdict Card</h3>
-      <p style={{ marginBottom: '0.75rem' }}>
-        The verdict card at the top shows the composite letter grade (A through F) and a one-line verdict.
-        CEF-specific alerts (e.g. "trading at premium — proceed with caution", "leverage near regulatory cap")
-        appear as highlighted callouts when relevant.
-      </p>
-
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Five criteria have inline threshold editors: Distribution Sustainability gap, Discount/Premium bounds,
-        Leverage level, Expense Ratio cutoffs, and Liquidity (AUM and volume minimums). Thresholds are saved
-        in browser local storage and persist between sessions.
+        Five criteria have inline threshold editors: Distribution Sustainability gap, Discount/Premium
+        bounds, Leverage level, Expense Ratio cutoffs, and Liquidity (volume minimums). Thresholds are
+        saved in browser local storage and persist between sessions. Click <strong>Reset thresholds
+        to defaults</strong> at the top of the page to restore factory settings.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>CEF-Specific Tips</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li><strong>Always use limit orders</strong> — market orders in thinly traded CEFs can result in significantly worse fills than the displayed price.</li>
         <li><strong>Check Section 19(a) notices</strong> — published monthly by most CEFs, they break down how much of each distribution is income vs. return of capital.</li>
-        <li><strong>Watch z-scores over time</strong> — a fund's current discount only becomes a buy signal when it's wider than its own historical average.</li>
+        <li><strong>Watch z-scores over time</strong> — a fund's current discount only becomes a buy signal when it's wider than its own historical average, not just because it's at a discount.</li>
+        <li><strong>Scan all your CEFs in one pass</strong> — use Scan a List with "My holdings" to rank every CEF you own by composite score and risk profile. Sorts by any column.</li>
+        <li><strong>Explore a whole CEF category</strong> — enable "Entire CEF universe" and pick a category or strategy (e.g. Covered Call or Municipal) to rank that slice of the market head-to-head, even funds you don't yet own. A very large slice is capped at the scan limit, so it shows the first batch.</li>
         <li>Use the <strong>CEFs &amp; Income ETFs: A Guide</strong> page (CEF's menu) for a full educational walkthrough of the CEF structure, discount mechanics, and how CEFs compare to covered-call ETFs.</li>
       </ul>
     </div>

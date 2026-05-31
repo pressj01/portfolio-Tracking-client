@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { API_BASE } from '../config'
+import FundScanTab from '../components/FundScanTab'
 import {
   ETF_DEFAULT_THRESHOLDS,
   OPTION_DEFAULT_THRESHOLDS,
@@ -290,8 +291,21 @@ export default function ETFBuyingChecklistEvaluator() {
   const [strategy, setStrategy] = useState('')
   const [isOptionIncome, setIsOptionIncome] = useState(false)
   const [thresholds, setThresholds] = useState(loadThresholds())
+  const [tab, setTab] = useState('deep')
 
   useEffect(() => { saveThresholds(thresholds) }, [thresholds])
+
+  const tabBtn = (key, label) => (
+    <button
+      type="button"
+      onClick={() => setTab(key)}
+      style={{
+        background: tab === key ? '#1d3a6b' : 'transparent',
+        border: '1px solid #2a3e6b', borderRadius: 4, color: tab === key ? '#e6edf7' : '#8aa0c8',
+        padding: '0.4rem 0.9rem', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 600,
+      }}
+    >{label}</button>
+  )
 
   const evaluate = useCallback((ticker) => {
     if (!ticker) return
@@ -354,6 +368,25 @@ export default function ETFBuyingChecklistEvaluator() {
         </div>
       </div>
 
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.1rem' }}>
+        {tabBtn('deep', 'Deep Dive')}
+        {tabBtn('scan', 'Scan a List')}
+      </div>
+
+      {tab === 'scan' ? (
+        <FundScanTab
+          endpoint="/api/etf/scan"
+          kindLabel="ETFs"
+          gradeFund={gradeETF}
+          verdictFromComposite={verdictFromComposite}
+          thresholds={thresholds}
+          extraColumns={[
+            { key: 'expense_ratio', label: 'Expense', fmt: (r) => (r.expense_ratio == null ? '—' : `${Number(r.expense_ratio).toFixed(2)}%`) },
+            { key: 'total_cagr', label: 'TR/yr', fmt: (r) => (r.total_cagr == null ? '—' : `${Number(r.total_cagr).toFixed(1)}%`) },
+          ]}
+        />
+      ) : (
+      <>
       <form onSubmit={submit} style={{
         display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0 0 1rem', maxWidth: 520,
       }}>
@@ -457,6 +490,8 @@ export default function ETFBuyingChecklistEvaluator() {
             Custom thresholds persist in this browser via localStorage.
           </div>
         </>
+      )}
+      </>
       )}
     </div>
   )

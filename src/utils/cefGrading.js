@@ -386,6 +386,52 @@ function gradeLiquidity(fund, thresholds) {
   }
 }
 
+// -- Shared bundled risk-adjusted-return criterion --
+// Folds the five server-computed ratios (Sharpe / Sortino / Calmar / Omega /
+// Ulcer) into ONE scored criterion so the correlated ratios don't swamp the
+// asset-class-specific checks. Inert when `fund.risk_ratios` is absent (the
+// single-ticker deep dives don't supply it yet) or when history is too short:
+// in those cases it returns an info card with score null, which every grader
+// excludes from the composite average — so it never scores a fund as a failure
+// for simply being too new.
+export function gradeRiskRatios(fund, id = 8) {
+  const rr = fund && fund.risk_ratios
+  const fmt = (v) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? 'n/a' : Number(v).toFixed(2))
+  const baseMetrics = [
+    { label: 'Sharpe', value: fmt(rr && rr.sharpe) },
+    { label: 'Sortino', value: fmt(rr && rr.sortino) },
+    { label: 'Calmar', value: fmt(rr && rr.calmar) },
+    { label: 'Omega', value: fmt(rr && rr.omega) },
+    { label: 'Ulcer Index', value: fmt(rr && rr.ulcer_index) },
+    { label: 'Max drawdown', value: rr && rr.max_drawdown != null ? `${Number(rr.max_drawdown).toFixed(1)}%` : 'n/a' },
+  ]
+  if (!rr || rr.sufficient === false || typeof rr.composite !== 'number') {
+    const yrs = rr && rr.history_years != null ? Number(rr.history_years).toFixed(1) : null
+    return {
+      id, key: 'riskRatios',
+      question: 'How strong is the risk-adjusted return profile?',
+      badge: 'info', score: null, editable: false,
+      rationale: rr
+        ? `Only ${yrs || '<1'}y of price history — not enough to compute reliable risk-adjusted ratios. Excluded from the composite.`
+        : 'Risk-adjusted ratios are computed in the Scan a List tab (they need full price history).',
+      metrics: baseMetrics,
+    }
+  }
+  const score = rr.composite
+  const badge = score >= 80 ? 'pass' : score >= 50 ? 'warn' : 'fail'
+  const yrs = rr.history_years != null ? `${Number(rr.history_years).toFixed(1)}y` : 'full'
+  let rationale
+  if (badge === 'pass') rationale = `Strong risk-adjusted profile (score ${score.toFixed(0)}/100 over ${yrs}): drawdowns are shallow and returns compensate for the volatility taken.`
+  else if (badge === 'warn') rationale = `Middling risk-adjusted profile (score ${score.toFixed(0)}/100 over ${yrs}): acceptable, but either drawdowns run deep or returns don't fully pay for the risk.`
+  else rationale = `Weak risk-adjusted profile (score ${score.toFixed(0)}/100 over ${yrs}): deep/prolonged drawdowns relative to the return earned.`
+  return {
+    id, key: 'riskRatios',
+    question: 'How strong is the risk-adjusted return profile?',
+    badge, score, editable: false, rationale,
+    metrics: [{ label: 'Risk-adjusted score', value: `${score.toFixed(0)}/100` }, ...baseMetrics],
+  }
+}
+
 // Translate a composite (0-100) plus any hard fails into a buy / pass verdict.
 export function verdictFromComposite(composite, criteria) {
   if (composite === null || composite === undefined) {
@@ -411,6 +457,7 @@ export function gradeFund(fund, peers, thresholds) {
     gradeExpenses(fund, thresholds),
     gradeManager(fund, peers),
     gradeLiquidity(fund, thresholds),
+    gradeRiskRatios(fund, 8),
   ]
   const scored = criteria.filter(c => typeof c.score === 'number')
   const composite = scored.length

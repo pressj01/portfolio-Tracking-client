@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { API_BASE } from '../config'
+import FundScanTab from '../components/FundScanTab'
 import {
   DEFAULT_THRESHOLDS,
   BEST_PRACTICE,
@@ -317,6 +318,19 @@ export default function CEFBuyingChecklistEvaluator() {
   const [inputTicker, setInputTicker] = useState('')
   const [activeTicker, setActiveTicker] = useState('')
   const [thresholds, setThresholds] = useState(loadThresholds())
+  const [tab, setTab] = useState('deep')
+
+  const tabBtn = (key, label) => (
+    <button
+      type="button"
+      onClick={() => setTab(key)}
+      style={{
+        background: tab === key ? '#1d3a6b' : 'transparent',
+        border: '1px solid #2a3e6b', borderRadius: 4, color: tab === key ? '#e6edf7' : '#8aa0c8',
+        padding: '0.4rem 0.9rem', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 600,
+      }}
+    >{label}</button>
+  )
 
   const loadPricing = useCallback(() => {
     setLoading(true)
@@ -374,6 +388,25 @@ export default function CEFBuyingChecklistEvaluator() {
         </div>
       </div>
 
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.1rem' }}>
+        {tabBtn('deep', 'Deep Dive')}
+        {tabBtn('scan', 'Scan a List')}
+      </div>
+
+      {tab === 'scan' ? (
+        <FundScanTab
+          endpoint="/api/cef/scan"
+          kindLabel="closed-end funds"
+          gradeFund={gradeFund}
+          verdictFromComposite={verdictFromComposite}
+          thresholds={thresholds}
+          allowCefUniverse
+          extraColumns={[
+            { key: 'premium_discount', label: 'Prem/Disc', fmt: (r) => (r.premium_discount == null ? '—' : `${Number(r.premium_discount).toFixed(2)}%`) },
+          ]}
+        />
+      ) : (
+      <>
       <form onSubmit={submit} style={{
         display: 'flex', gap: '0.5rem', alignItems: 'center',
         margin: '0 0 1rem', maxWidth: 520,
@@ -491,6 +524,8 @@ export default function CEFBuyingChecklistEvaluator() {
             reports them (many funds return null for UNII). Custom thresholds you set persist in this browser.
           </div>
         </>
+      )}
+      </>
       )}
     </div>
   )
