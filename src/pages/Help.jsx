@@ -594,15 +594,25 @@ function DashboardHelp() {
         value, income, returns, risk grades, and upcoming dividends.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/dashboard/dashboard-page.jpg" alt="Dashboard showing Action Center preview, summary cards strip, Portfolio Value Over Time chart, Grade Thresholds guide, and Upcoming Dividends this week" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      <div style={{ marginBottom: '1rem' }}>
+        <img src="./help-screenshots/dashboard/Dashboard_top.jpg" alt="Top of the Dashboard showing the Basis and portfolio selectors, Action Center preview, the full summary cards strip with estimated and actual reinvestment cards, the Portfolio Value Over Time chart, and Upcoming Dividends This Week" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+      </div>
+      <p style={{ marginBottom: '1.25rem', color: '#90a4ae', fontSize: '0.9rem' }}>
+        <strong>Top of the page</strong> (above): the <strong>Basis</strong> and <strong>portfolio</strong> selectors in the
+        header; the <strong>Action Center</strong> preview panel with follow-up items; the full <strong>summary cards
+        strip</strong> covering portfolio grade, risk ratios, income totals, the estimated vs. actual reinvestment cards,
+        NAV erosion, returns, and the S&amp;P 500 benchmark; the <strong>Portfolio Value Over Time</strong> equity-curve
+        chart with the Record NAV / Backfill History / Repair Chart buttons; and the <strong>Upcoming Dividends This
+        Week</strong> section.
+      </p>
+      <div style={{ marginBottom: '1rem' }}>
+        <img src="./help-screenshots/dashboard/dashboard_bottom.jpg" alt="Lower Dashboard showing the category allocation donut chart with value, gain, and allocation per category, and the full holdings table with per-holding columns including the NAV testing controls" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
       <p style={{ marginBottom: '0.75rem', color: '#90a4ae', fontSize: '0.9rem' }}>
-        The screenshot above shows (top to bottom): the <strong>Action Center</strong> preview panel with follow-up items;
-        the <strong>summary cards strip</strong> covering portfolio grade, risk ratios, income totals, NAV erosion, and returns;
-        the <strong>Portfolio Value Over Time</strong> equity-curve chart with the Record NAV button;
-        the collapsible <strong>Grade Thresholds Guide</strong>; and the <strong>Upcoming Dividends This Week</strong>
-        section. The full holdings table continues below.
+        <strong>Lower on the page</strong> (above): the <strong>category allocation</strong> donut chart — each slice is a
+        category (Anchors, Boosters, Gold &amp; Silver, Growth, BDC, Hedged Anchor, Juicers, Energy, …) with its value
+        invested, gain, and percent allocation — followed by the full <strong>holdings table</strong> with all per-holding
+        columns and the inline NAV testing controls described below.
       </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
@@ -613,15 +623,40 @@ function DashboardHelp() {
         <li><strong>Portfolio Grade</strong> — composite grade based on yield, growth, and risk metrics.</li>
         <li><strong>Ulcer / Calmar / Omega / Sortino / Sharpe</strong> — risk-adjusted performance ratios.</li>
         <li><strong>YTD Dividends</strong> — total dividends received year-to-date.</li>
-        <li><strong>Current Month Income</strong> — dividends received (or estimated) for the current calendar month.</li>
-        <li><strong>Est. Monthly Income</strong> — estimated monthly dividend income across all holdings.</li>
-        <li><strong>Mo$ Reinvested</strong> — portion of monthly income being reinvested via DRIP (shown in blue).</li>
-        <li><strong>Mo$ Not Reinvested</strong> — portion of monthly income taken as cash (shown in amber).</li>
+        <li><strong>[Month] Income</strong> (e.g. "May Income") — dividends actually received this calendar month from recorded payments, with a subtitle showing the number of recorded payments through today. Estimated only when no payment history exists.</li>
+        <li><strong>Est. Monthly Income</strong> — estimated monthly dividend income across all holdings (annual estimate ÷ 12).</li>
+      </ul>
+
+      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.4rem' }}>Reinvestment cards: Estimated vs. Actual</h4>
+      <p style={{ marginBottom: '0.6rem' }}>
+        The reinvestment split is shown two ways. The <strong>Estimated</strong> cards are a steady forward run-rate — your
+        reinvest settings applied to estimated income — so they read the same on the 1st of the month as on the 30th, which
+        makes them right for planning. The <strong>Actual</strong> cards are sourced from recorded dividend payments and
+        grow through the month as distributions land, showing what you are <em>really</em> reinvesting vs. taking as cash.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Est. Mo$ Reinvested</strong> (blue) — estimated monthly income being reinvested via DRIP, forward run-rate.</li>
+        <li><strong>Est. Mo$ Not Reinvested</strong> (amber) — estimated monthly income taken as cash, forward run-rate.</li>
+        <li><strong>Est. % Reinvested</strong> (green) — Est. Mo$ Reinvested ÷ Est. Monthly Income.</li>
+        <li><strong>[Month] Reinvested</strong> (blue, e.g. "May Reinvested") — of the income <em>actually</em> received this month, the portion in DRIP-enabled accounts. Starts low early in the month and grows as payments arrive.</li>
+        <li><strong>[Month] Not Reinvested</strong> (amber) — actual income this month taken as cash.</li>
+        <li><strong>[Month] % Reinvested</strong> (green) — actual reinvested ÷ actual month income.</li>
+      </ul>
+      <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>Why the two percentages can differ:</strong> the estimate weights each holding by its <em>projected</em>
+        income; the actual weights each holding by what it <em>actually paid this month</em>. A month where DRIP-enabled
+        funds happen to pay more will read higher than the estimate, and vice-versa. Both are correct — the gap is the
+        signal. The actual split is attributed <strong>per account</strong>, so a fund reinvested only in your Roth IRA but
+        taken as cash elsewhere is bucketed correctly.
+      </div>
+
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li><strong>Est. Annual Income</strong> — estimated annual dividend income.</li>
         <li><strong>Portfolio Value</strong> — total current market value.</li>
         <li><strong>Avg Yield on Cost / Current Yield</strong> — dividend yield based on cost basis vs current price.</li>
         <li><strong>Price Return / Total Return</strong> — portfolio returns excluding and including dividends.</li>
         <li><strong>NAV Erosion Ratio</strong> — dollar-weighted benchmark-adjusted NAV erosion context for income-oriented funds. The portfolio severity follows the aggregate ratio thresholds: low at 0.25 or below, moderate from 0.25-0.75, and high above 0.75.</li>
+        <li><strong>S&amp;P 500</strong> — the current S&amp;P 500 index level with its day's change, as a market reference alongside your portfolio's returns.</li>
       </ul>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP$ and Cash$ Columns</h3>
@@ -1430,8 +1465,8 @@ function ReinvestmentImpactHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/reinvestment-impact/Projection-portfolio.jpg" alt="Projection tab whole portfolio" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Projection tab for the whole portfolio in neutral scenario over 10 years.</p>
+        <img src="./help-screenshots/reinvestment-impact/projections_new.jpg" alt="Projection tab for the whole portfolio showing the Fund, Categories, Horizon, Market, Reinvest %, and Monthly Add controls with the Est and Actual 3-month reinvestment seeds beneath Reinvest %, the Current Annual Income / Projected / Growth tiles, and the Projected Income and Share Count Growth charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Projection tab for the whole portfolio in the neutral scenario over 10 years. Note the header line "Currently reinvesting X%" and the two clickable seeds — <strong>Est</strong> and <strong>Actual 3mo</strong> — directly under the Reinvest % input.</p>
       </div>
 
       <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Controls</h4>
@@ -1440,7 +1475,12 @@ function ReinvestmentImpactHelp() {
         <li><strong>Categories</strong> — multi-select to restrict the projection to one or more portfolio categories (e.g. project only your Boosters). Hidden when a specific Fund is selected.</li>
         <li><strong>Horizon</strong> — 1, 3, 5, 10, or 20 years. Horizons ≤ 5 yr show a monthly income series; longer horizons use an annual series.</li>
         <li><strong>Market</strong> — Neutral (modest +1%/yr distribution growth), Bullish (+4%/yr), or Bearish (first-year shock then gradual recovery). All three scenarios are computed simultaneously; the income chart switches instantly when you change Market without re-fetching.</li>
-        <li><strong>Reinvest %</strong> — the fraction of each distribution that is reinvested as new shares. Defaults to the portfolio's actual computed DRIP rate (shown as "Portfolio: X%" below the input) so you start from your real-world baseline. Adjust to model what-if scenarios.</li>
+        <li><strong>Reinvest %</strong> — the fraction of each distribution that is reinvested as new shares. It auto-seeds from your estimated DRIP mix so you start from a real-world baseline, and you can freely override it to model what-if scenarios. Two clickable seeds sit beneath the input:
+          <ul style={{ paddingLeft: '1.25rem', lineHeight: '1.7', marginTop: '0.3rem' }}>
+            <li><strong style={{ color: '#66bb6a' }}>Est: X%</strong> — your estimated DRIP mix from the reinvest settings (the default seed). Click to apply.</li>
+            <li><strong style={{ color: '#38bdf8' }}>Actual 3mo: Y%</strong> — the share of distributions you <em>actually</em> reinvested over the trailing <strong>3 completed months</strong>, from recorded payments split per account. Click to apply.</li>
+          </ul>
+          The actual figure deliberately uses completed months and excludes the in-progress month, so it is stable and available from the first of any month — no start-of-month ramp-up. The two often agree closely; when they diverge it reflects recent payment timing.</li>
         <li><strong>Monthly Add $</strong> — a fixed dollar contribution added each month, allocated across holdings by market value weight.</li>
       </ul>
 

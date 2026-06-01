@@ -1217,6 +1217,11 @@ export default function Dashboard() {
               const covBad = navSeverity === 'High'
               const navScope = h.nav_erosion_scope || navMeta.nav_erosion_scope || 'auto'
               const navBenchmark = h.nav_benchmark_override || navMeta.nav_benchmark_override || ''
+              // The editable field reads from the holding row alone, so an
+              // intentional clear sticks. Using navBenchmark (with its meta
+              // fallback) here would re-populate a just-deleted value from
+              // stale coverage meta, making the field impossible to empty.
+              const navBenchmarkInput = h.nav_benchmark_override || ''
               const navLabel = navScope === 'test' ? 'Test' : navScope === 'skip' ? 'Skip' : 'Auto'
               const navBenchmarkInvalid = navBenchmark && navMeta.benchmark_valid === false
               const navTitle = navScope === 'skip'
@@ -1300,7 +1305,7 @@ export default function Dashboard() {
                     </div>
                     <input
                       aria-label={`${h.ticker} NAV benchmark override`}
-                      value={navBenchmark}
+                      value={navBenchmarkInput}
                       placeholder={navMeta.benchmark || 'bench'}
                       onClick={e => e.stopPropagation()}
                       onChange={e => {
