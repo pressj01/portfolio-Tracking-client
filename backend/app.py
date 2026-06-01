@@ -2461,6 +2461,7 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
                     original_basis_skipped += 1
                     if len(original_basis_mismatches) < 10:
                         original_basis_mismatches.append(basis_result)
+                _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
 
         current_year = str(datetime.date.today().year)
         for profile_id, tickers in dividend_tickers_by_profile.items():
@@ -2658,12 +2659,6 @@ def _import_positions(parsed, profile_id, nav_date=None):
                     "gain_or_loss = ?",
                     "base_quantity = ?",
                     "import_date = ?",
-                    # Reset simulated-DRIP accumulators so the post-import refresh
-                    # starts fresh from the newly imported quantity. Without this
-                    # the stale simulated shares accumulate across re-imports and
-                    # quantity diverges from what the broker reports.
-                    "shares_bought_from_dividend = 0",
-                    "total_cash_reinvested = 0",
                     """description = CASE WHEN description IS NULL OR description = ''
                                        THEN ? ELSE description END""",
                 ]
@@ -2775,9 +2770,8 @@ def _import_positions(parsed, profile_id, nav_date=None):
                 broker_yield,
                 preserve_existing_income=preserve_existing_income,
             )
-            # Restore reinvestment tracking from transaction history — the
-            # update above resets the DRIP accumulators to 0, so rebuild them
-            # from any [DRIP] buys this account already has on record.
+            # Prefer authoritative DRIP buys when transaction history exists,
+            # while preserving imported/manual values for positions-only files.
             _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
 
         conn.commit()
@@ -8956,27 +8950,26 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
 
 
 def _refresh_drip_tracking_from_transactions(ticker, profile_id, conn):
-    """Rebuild the holding's reinvestment tracking from its [DRIP] BUY history.
+    """Rebuild the holding's reinvestment tracking from DRIP BUY history.
 
     Broker position imports report current share counts but not how many of
-    those shares came from reinvested dividends, and a position re-import resets
-    the DRIP accumulators (shares_bought_from_dividend / total_cash_reinvested)
-    to zero. The imported transaction history is the authoritative record of
-    reinvestment, so when [DRIP]-tagged buys exist we recompute the two tracking
-    columns from them. Sums every reinvestment buy ever recorded (lifetime), so
-    the Holdings screen shows real DRIP shares/cash even for accounts whose
+    those shares came from reinvested dividends. The imported transaction
+    history is the authoritative record of reinvestment, so when
+    DRIP/reinvestment-tagged buys exist we recompute the two tracking columns
+    from them. Sums every reinvestment buy ever recorded (lifetime), so the
+    Holdings screen shows real DRIP shares/cash even for accounts whose
     quantities are managed by the broker feed.
 
-    No-op when the ticker has no [DRIP] buys (so spreadsheet-sourced values and
-    the forward-simulation path are left untouched) or when the position is no
-    longer held.
+    No-op when the ticker has no DRIP/reinvestment buys (so spreadsheet-sourced
+    values and the forward-simulation path are left untouched) or when the
+    position is no longer held.
     """
     row = conn.execute(
         "SELECT COALESCE(SUM(shares), 0) AS sh, "
         "       COALESCE(SUM(shares * COALESCE(price_per_share, 0)), 0) AS cash "
         "FROM transactions "
         "WHERE ticker = ? AND profile_id = ? AND transaction_type = 'BUY' "
-        "AND notes LIKE '%[DRIP]%'",
+        "AND (notes LIKE '%[DRIP]%' OR LOWER(COALESCE(notes, '')) LIKE '%reinvest%')",
         (ticker, profile_id),
     ).fetchone()
     drip_shares = float((row["sh"] if isinstance(row, dict) else row[0]) or 0)

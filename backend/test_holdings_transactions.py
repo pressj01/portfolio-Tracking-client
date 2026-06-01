@@ -121,6 +121,21 @@ class HoldingsTransactionTest(unittest.TestCase):
         self.assertAlmostEqual(row["shares_bought_from_dividend"], 3.5, places=6)
         self.assertAlmostEqual(row["total_cash_reinvested"], 70.0, places=2)
 
+    def test_drip_tracking_accepts_reinvest_buy_notes_without_bracket_tag(self):
+        self._seed_holding("ABC", 1, 100)
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('ABC', 1, 'BUY', '2026-02-10', 2, 15, 0, 'Dividend Reinvestment')"
+        )
+
+        _refresh_drip_tracking_from_transactions("ABC", 1, self.conn)
+
+        row = self.conn.execute(
+            "SELECT shares_bought_from_dividend, total_cash_reinvested FROM all_account_info WHERE ticker='ABC' AND profile_id=1"
+        ).fetchone()
+        self.assertAlmostEqual(row["shares_bought_from_dividend"], 2.0, places=6)
+        self.assertAlmostEqual(row["total_cash_reinvested"], 30.0, places=2)
+
     def test_drip_tracking_capped_at_current_quantity(self):
         # Position trimmed below the lifetime reinvested total → cap shares and
         # scale the cash figure proportionally.

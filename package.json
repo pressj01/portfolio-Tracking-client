@@ -1,6 +1,6 @@
 {
   "name": "portfolio-tracking-client",
-  "version": "1.31.1",
+  "version": "1.31.2",
   "private": true,
   "description": "Portfolio Tracking Desktop Application",
   "author": "Press",
@@ -10,9 +10,10 @@
     "dev:all": "concurrently --kill-others \"py backend/app.py\" \"vite\"",
     "start": "concurrently --kill-others \"py backend/app.py\" \"wait-on http://localhost:5001/api/profiles && electron .\"",
     "build": "vite build",
+    "build:backend": "powershell -ExecutionPolicy Bypass -File scripts/build-backend.ps1",
     "electron": "electron .",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "dist": "npm run build && electron-builder --win"
+    "dist": "npm run build:backend && npm run build && electron-builder --win"
   },
   "build": {
     "appId": "com.portfolio-tracker.client",
@@ -36,14 +37,18 @@
       {
         "from": "installer/flask-dist/backend",
         "to": "flask-backend",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": null
@@ -60,7 +65,10 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "category": "public.app-category.finance"
@@ -68,8 +76,16 @@
     "dmg": {
       "title": "Portfolio Tracker",
       "contents": [
-        { "x": 130, "y": 220 },
-        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
       ]
     }
   },
