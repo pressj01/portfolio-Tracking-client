@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as app_module
 from app import (
+    _refresh_drip_tracking_from_transactions,
     _refresh_transaction_realized_gains,
     _rollup_transactions,
     _validate_sell_quantity_available,
@@ -43,7 +44,9 @@ class HoldingsTransactionTest(unittest.TestCase):
                 annual_yield_on_cost REAL,
                 current_annual_yield REAL,
                 current_month_income REAL,
-                dividend_paid REAL
+                dividend_paid REAL,
+                shares_bought_from_dividend REAL,
+                total_cash_reinvested REAL
             );
             CREATE TABLE transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,6 +77,64 @@ class HoldingsTransactionTest(unittest.TestCase):
         app_module.populate_holdings = self._orig_populate_holdings
         app_module.populate_dividends = self._orig_populate_dividends
         self.conn.close()
+
+    def _seed_holding(self, ticker, profile_id, quantity):
+        self.conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, "
+            "shares_bought_from_dividend, total_cash_reinvested) VALUES (?, ?, ?, 0, 0)",
+            (ticker, profile_id, quantity),
+        )
+
+    def test_drip_tracking_rebuilt_from_drip_buys(self):
+        self._seed_holding("ABC", 1, 100)
+        # A regular buy plus two reinvestment buys (tagged [DRIP] by the parsers).
+        self.conn.executemany(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) VALUES (?,?,?,?,?,?,?,?)",
+            [
+                ("ABC", 1, "BUY", "2026-01-10", 90, 10, 0, ""),
+                ("ABC", 1, "BUY", "2026-02-10", 6, 10, 0, "[DRIP] Reinvest Shares"),
+                ("ABC", 1, "BUY", "2026-03-10", 4, 10, 0, "[DRIP] Reinvest Shares"),
+            ],
+        )
+        _refresh_drip_tracking_from_transactions("ABC", 1, self.conn)
+        row = self.conn.execute(
+            "SELECT shares_bought_from_dividend, total_cash_reinvested FROM all_account_info WHERE ticker='ABC' AND profile_id=1"
+        ).fetchone()
+        self.assertAlmostEqual(row["shares_bought_from_dividend"], 10.0, places=6)
+        self.assertAlmostEqual(row["total_cash_reinvested"], 100.0, places=2)
+
+    def test_drip_tracking_noop_without_drip_buys(self):
+        # Holding carries spreadsheet-sourced DRIP values and only plain buys —
+        # the helper must leave the existing values untouched.
+        self.conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, "
+            "shares_bought_from_dividend, total_cash_reinvested) VALUES ('ABC', 1, 100, 3.5, 70)"
+        )
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('ABC', 1, 'BUY', '2026-01-10', 100, 10, 0, '')"
+        )
+        _refresh_drip_tracking_from_transactions("ABC", 1, self.conn)
+        row = self.conn.execute(
+            "SELECT shares_bought_from_dividend, total_cash_reinvested FROM all_account_info WHERE ticker='ABC' AND profile_id=1"
+        ).fetchone()
+        self.assertAlmostEqual(row["shares_bought_from_dividend"], 3.5, places=6)
+        self.assertAlmostEqual(row["total_cash_reinvested"], 70.0, places=2)
+
+    def test_drip_tracking_capped_at_current_quantity(self):
+        # Position trimmed below the lifetime reinvested total → cap shares and
+        # scale the cash figure proportionally.
+        self._seed_holding("ABC", 1, 5)
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('ABC', 1, 'BUY', '2026-02-10', 10, 10, 0, '[DRIP] Reinvest Shares')"
+        )
+        _refresh_drip_tracking_from_transactions("ABC", 1, self.conn)
+        row = self.conn.execute(
+            "SELECT shares_bought_from_dividend, total_cash_reinvested FROM all_account_info WHERE ticker='ABC' AND profile_id=1"
+        ).fetchone()
+        self.assertAlmostEqual(row["shares_bought_from_dividend"], 5.0, places=6)
+        self.assertAlmostEqual(row["total_cash_reinvested"], 50.0, places=2)
 
     def test_sell_rejects_more_shares_than_available_on_sell_date(self):
         self.conn.execute(

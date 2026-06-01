@@ -2775,6 +2775,10 @@ def _import_positions(parsed, profile_id, nav_date=None):
                 broker_yield,
                 preserve_existing_income=preserve_existing_income,
             )
+            # Restore reinvestment tracking from transaction history — the
+            # update above resets the DRIP accumulators to 0, so rebuild them
+            # from any [DRIP] buys this account already has on record.
+            _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
 
         conn.commit()
 
@@ -3088,6 +3092,9 @@ def api_import_transactions():
                     original_basis_skipped += 1
                     if len(original_basis_mismatches) < 10:
                         original_basis_mismatches.append(basis_result)
+                # Broker-managed quantities stay put, but surface the reinvested
+                # share/cash totals from the freshly imported [DRIP] buys.
+                _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
             conn.commit()
 
         # Recompute dividend totals from dividend_payments for affected tickers
@@ -7350,31 +7357,42 @@ def refresh_market_data():
                     base_qty,
                     start_date=drip_start,
                 )
-                qty = drip_result["quantity"]
                 drip_shares = drip_result["drip_shares"]
                 drip_total_divs = drip_result["drip_total_divs"]
                 ytd_divs = drip_result["ytd_divs"]
                 current_month_income = drip_result["current_month_income"]
-                if drip_result["event_count"] > 0:
-                    sets.extend(["quantity = ?", "base_quantity = ?",
-                                 "shares_bought_from_dividend = ?",
-                                 "total_cash_reinvested = ?"])
-                    vals.extend([round(qty, 6), base_qty,
-                                 round(drip_shares, 6),
-                                 round(drip_total_divs, 2)])
-                    purchase_value = (base_qty * price_paid) + drip_total_divs
-                    sets.append("purchase_value = ?")
-                    vals.append(round(purchase_value, 2))
-                elif qty != base_qty:
-                    # No new DRIP dividends since import — reset to base
-                    qty = base_qty
-                    sets.extend(["quantity = ?", "base_quantity = ?",
-                                 "shares_bought_from_dividend = ?",
-                                 "total_cash_reinvested = ?"])
-                    vals.extend([base_qty, base_qty, 0, 0])
-                    purchase_value = base_qty * price_paid
-                    sets.append("purchase_value = ?")
-                    vals.append(round(purchase_value, 2))
+                if pid in positions_managed_ids:
+                    # Broker-managed account: the position feed owns the share
+                    # count, and reinvested shares/cash are rebuilt from the
+                    # imported transaction history
+                    # (_refresh_drip_tracking_from_transactions). Use the
+                    # simulated income figures above, but never simulate the
+                    # quantity or overwrite the DRIP-tracking columns here —
+                    # that would double-count against the broker feed and wipe
+                    # the lifetime reinvestment totals.
+                    pass
+                else:
+                    qty = drip_result["quantity"]
+                    if drip_result["event_count"] > 0:
+                        sets.extend(["quantity = ?", "base_quantity = ?",
+                                     "shares_bought_from_dividend = ?",
+                                     "total_cash_reinvested = ?"])
+                        vals.extend([round(qty, 6), base_qty,
+                                     round(drip_shares, 6),
+                                     round(drip_total_divs, 2)])
+                        purchase_value = (base_qty * price_paid) + drip_total_divs
+                        sets.append("purchase_value = ?")
+                        vals.append(round(purchase_value, 2))
+                    elif qty != base_qty:
+                        # No new DRIP dividends since import — reset to base
+                        qty = base_qty
+                        sets.extend(["quantity = ?", "base_quantity = ?",
+                                     "shares_bought_from_dividend = ?",
+                                     "total_cash_reinvested = ?"])
+                        vals.extend([base_qty, base_qty, 0, 0])
+                        purchase_value = base_qty * price_paid
+                        sets.append("purchase_value = ?")
+                        vals.append(round(purchase_value, 2))
             elif not is_drip and qty != base_qty:
                 # reinvest changed from Y to N — clear accumulated DRIP shares
                 qty = base_qty
@@ -8937,6 +8955,56 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
     }
 
 
+def _refresh_drip_tracking_from_transactions(ticker, profile_id, conn):
+    """Rebuild the holding's reinvestment tracking from its [DRIP] BUY history.
+
+    Broker position imports report current share counts but not how many of
+    those shares came from reinvested dividends, and a position re-import resets
+    the DRIP accumulators (shares_bought_from_dividend / total_cash_reinvested)
+    to zero. The imported transaction history is the authoritative record of
+    reinvestment, so when [DRIP]-tagged buys exist we recompute the two tracking
+    columns from them. Sums every reinvestment buy ever recorded (lifetime), so
+    the Holdings screen shows real DRIP shares/cash even for accounts whose
+    quantities are managed by the broker feed.
+
+    No-op when the ticker has no [DRIP] buys (so spreadsheet-sourced values and
+    the forward-simulation path are left untouched) or when the position is no
+    longer held.
+    """
+    row = conn.execute(
+        "SELECT COALESCE(SUM(shares), 0) AS sh, "
+        "       COALESCE(SUM(shares * COALESCE(price_per_share, 0)), 0) AS cash "
+        "FROM transactions "
+        "WHERE ticker = ? AND profile_id = ? AND transaction_type = 'BUY' "
+        "AND notes LIKE '%[DRIP]%'",
+        (ticker, profile_id),
+    ).fetchone()
+    drip_shares = float((row["sh"] if isinstance(row, dict) else row[0]) or 0)
+    if drip_shares <= 1e-9:
+        return  # no reinvestment history — leave existing values as-is
+    drip_cash = float((row["cash"] if isinstance(row, dict) else row[1]) or 0)
+
+    holding = conn.execute(
+        "SELECT quantity FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    if not holding:
+        return  # position fully sold — nothing on screen to annotate
+    qty = float((holding["quantity"] if isinstance(holding, dict) else holding[0]) or 0)
+    # A trimmed position can hold fewer shares than were ever reinvested; cap so
+    # reinvested shares never exceed the shares actually on hand, scaling the
+    # cash figure to match.
+    if qty > 0 and drip_shares > qty:
+        drip_cash *= qty / drip_shares
+        drip_shares = qty
+
+    conn.execute(
+        "UPDATE all_account_info SET shares_bought_from_dividend = ?, "
+        "total_cash_reinvested = ? WHERE ticker = ? AND profile_id = ?",
+        (round(drip_shares, 6), round(drip_cash, 2), ticker, profile_id),
+    )
+
+
 def _rollup_transactions(ticker, profile_id, conn):
     """Recalculate all_account_info from transactions.
 
@@ -9067,6 +9135,7 @@ def _rollup_transactions(ticker, profile_id, conn):
             previous_quantity=previous_quantity,
             previous_annual_income=previous_annual_income,
         )
+        _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
     conn.commit()
     populate_holdings(profile_id)
     populate_dividends(profile_id)
