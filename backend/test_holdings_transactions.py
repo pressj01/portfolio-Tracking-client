@@ -404,7 +404,9 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 paid_for_itself REAL,
                 dividend_actuals_source TEXT,
                 classification_type TEXT,
-                reinvest TEXT
+                reinvest TEXT,
+                shares_bought_from_dividend REAL,
+                total_cash_reinvested REAL
             );
             CREATE TABLE transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -802,6 +804,60 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(rows["Boosters"]["missing_profile_ids"], [3, 5])
         self.assertAlmostEqual(rows["Growth"]["weighted_guide_pct"], 60.0, places=6)
         self.assertAlmostEqual(data["weighted_total_pct"], 100.0, places=6)
+
+    def test_holdings_uses_dividend_payment_history_as_total_dividend_floor(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Etrade Trading', 0)")
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, purchase_value, "
+            "current_price, current_value, gain_or_loss, total_divs_received, ytd_divs, "
+            "estim_payment_per_year, approx_monthly_income, reinvest, shares_bought_from_dividend, total_cash_reinvested) "
+            "VALUES ('ABC', 20, 'ABC High Income', 10, 10, 100, 9, 90, -10, 0, 0, 24, 2, 'N', 0, 0)"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('ABC', 20, '2026-01-15', 12, 'import', '')"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('ABC', 20, '2026-06-01', 8, 'import', '')"
+        )
+
+        res = self.client.get("/api/holdings?profile_id=20")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(len(data), 1)
+        row = data[0]
+        self.assertEqual(row["total_divs_received"], 20.0)
+        self.assertAlmostEqual(row["paid_for_itself"], 0.2, places=6)
+
+    def test_total_return_summary_uses_dividend_payment_history_as_total_dividend_floor(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Etrade Trading', 0)")
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, purchase_value, "
+            "current_price, current_value, gain_or_loss, total_divs_received, ytd_divs, "
+            "estim_payment_per_year, approx_monthly_income, reinvest, shares_bought_from_dividend, total_cash_reinvested) "
+            "VALUES ('ABC', 20, 'ABC High Income', 10, 10, 100, 9, 90, -10, 0, 0, 24, 2, 'N', 0, 0)"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('ABC', 20, '2026-01-15', 12, 'import', '')"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('ABC', 20, '2026-06-01', 8, 'import', '')"
+        )
+
+        res = self.client.get("/api/total-return/summary?profile_id=20")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertAlmostEqual(data["totals"]["total_divs"], 20.0, places=2)
+        self.assertAlmostEqual(data["totals"]["total_return_pct"], 10.0, places=2)
+        self.assertAlmostEqual(data["rows"][0]["price_return_pct"], -10.0, places=2)
+        self.assertAlmostEqual(data["rows"][0]["total_return_pct"], 10.0, places=2)
 
     def test_aggregate_transaction_list_adds_source_account_to_notes(self):
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Schwab IRA', 0)")

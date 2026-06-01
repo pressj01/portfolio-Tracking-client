@@ -257,6 +257,51 @@ def get_profile_filter():
     return False, [pid]
 
 
+def _dividend_payment_profile_ids_for_read(conn, profile_ids):
+    ids = []
+    for pid in profile_ids or [1]:
+        pid = int(pid)
+        if pid == 1:
+            source_ids = _get_owner_source_profile_ids(conn)
+            ids.extend(source_ids or [1])
+        else:
+            ids.append(pid)
+    return list(dict.fromkeys(ids))
+
+
+def _dividend_payment_totals_by_ticker(conn, profile_ids):
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT ticker, COALESCE(SUM(amount), 0) AS total_divs_received
+            FROM dividend_payments
+            WHERE profile_id IN ({placeholders})
+            GROUP BY ticker""",
+        ids,
+    ).fetchall()
+    return {
+        row["ticker"]: _num_or_zero(row["total_divs_received"])
+        for row in rows
+    }
+
+
+def _apply_dividend_payment_total_floor(rows, payment_totals):
+    if not payment_totals:
+        return rows
+    for row in rows:
+        ticker = row.get("ticker")
+        payment_total = _num_or_zero(payment_totals.get(ticker))
+        if payment_total <= 0:
+            continue
+        row["total_divs_received"] = max(
+            _num_or_zero(row.get("total_divs_received")),
+            payment_total,
+        )
+    return rows
+
+
 def _resolve_aggregate_profile(ticker, profile_ids):
     """For aggregate writes, find the profile with the largest position for a ticker."""
     conn = get_connection()
@@ -3500,8 +3545,10 @@ def _compute_backfill_nav_rows(profile_id, existing_nav, anchor_to_current=False
         # traded on each date. Adjusted closes back-discount every distribution since,
         # which for an income portfolio (CEFs, covered-call ETFs) understates past NAV
         # and makes backfilled days dip below real recorded snapshots -- corrupting the chart.
+        # actions=True so the response carries each ticker's split history -- see below.
         raw = _chunked_yf_download(
-            " ".join(yahoo_symbols), start=earliest, auto_adjust=False, progress=False
+            " ".join(yahoo_symbols), start=earliest, auto_adjust=False,
+            actions=True, progress=False
         )
         if raw.empty:
             return None, None, "Could not download price history.", 500
@@ -3523,6 +3570,52 @@ def _compute_backfill_nav_rows(profile_id, existing_nav, anchor_to_current=False
     dates = sorted(price_df.index)
     if not dates:
         return None, None, "No price data available for backfill.", 500
+
+    # IMPORTANT: yfinance's `auto_adjust=False` only turns off DIVIDEND adjustment --
+    # it still SPLIT-adjusts the Close so the whole series is in today's share basis.
+    # Our transaction `shares` are recorded in the basis that traded on the txn date
+    # (pre-split). Valuing pre-split shares against a split-adjusted close massively
+    # distorts the chart: e.g. ULTY's 1-for-10 reverse split (factor 0.1) on 2025-12-01
+    # makes every earlier ULTY close ~10x higher, so 1787 recorded shares were valued
+    # at ~$55 instead of ~$5.50 -- a phantom ~$90k spike. Fix: normalize each txn's
+    # shares to today's basis by multiplying by the product of split factors that
+    # occurred AFTER the txn (a reverse 1-for-10 has factor 0.1, so 100 pre-split
+    # shares become 10 post-split shares). current_positions are already in today's
+    # basis (they come from live holdings), so only the transaction legs need scaling.
+    split_factors = {}  # app_ticker -> sorted list of (date_str, factor)
+    try:
+        if isinstance(raw.columns, pd.MultiIndex) and "Stock Splits" in raw.columns.get_level_values(0):
+            splits_df = raw["Stock Splits"]
+            for app_ticker, yahoo_sym in yahoo_map.items():
+                if yahoo_sym not in splits_df.columns:
+                    continue
+                col = splits_df[yahoo_sym]
+                events_sp = [
+                    (idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10],
+                     float(val))
+                    for idx, val in col.items()
+                    if pd.notna(val) and float(val) not in (0.0, 1.0)
+                ]
+                if events_sp:
+                    split_factors[app_ticker] = sorted(events_sp)
+    except Exception:
+        split_factors = {}
+
+    def _shares_in_today_basis(ticker, tdate, shares):
+        factors = split_factors.get(ticker)
+        if not factors or not tdate:
+            return shares
+        adj = shares
+        for sdate, fval in factors:
+            if sdate > tdate:
+                adj *= fval
+        return adj
+
+    if split_factors:
+        events = [
+            (tdate, ticker, ttype, _shares_in_today_basis(ticker, tdate, shares))
+            for (tdate, ticker, ttype, shares) in events
+        ]
 
     sorted_events = sorted(events, key=lambda e: e[0] or "")
 
@@ -8408,6 +8501,11 @@ def list_holdings():
 
     # Recalculate percent_of_account
     results = rows_to_dicts(rows)
+    payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, pids)
+    _apply_dividend_payment_total_floor(
+        results,
+        _dividend_payment_totals_by_ticker(conn, payment_profile_ids),
+    )
     _apply_basis_mode_to_holdings(results)
     _apply_holding_display_quantities(results)
     total_value = sum(r.get("current_value") or 0 for r in results)
@@ -15767,6 +15865,12 @@ def total_return_summary():
     if df.empty:
         conn.close()
         return jsonify({"rows": [], "totals": {}, "scatter": None, "categories": categories})
+
+    payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
+    payment_totals = _dividend_payment_totals_by_ticker(conn, payment_profile_ids)
+    if payment_totals:
+        df["payment_total_divs_received"] = df["ticker"].map(payment_totals).fillna(0)
+        df["total_divs_received"] = df[["total_divs_received", "payment_total_divs_received"]].max(axis=1)
 
     # Enrich category names
     try:
