@@ -319,7 +319,83 @@ def _repair_drip_tracking_for_profiles(conn, profile_ids):
         ticker = row["ticker"] if isinstance(row, dict) else row[0]
         profile_id = row["profile_id"] if isinstance(row, dict) else row[1]
         _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
-    return len(rows)
+    repaired = len(rows)
+
+    fallback_rows = conn.execute(
+        f"""SELECT ticker, profile_id
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND reinvest = 'Y'
+              AND COALESCE(quantity, 0) > 1e-9
+              AND COALESCE(shares_bought_from_dividend, 0) <= 1e-9
+              AND COALESCE(total_cash_reinvested, 0) <= 1e-9""",
+        profile_ids,
+    ).fetchall()
+    for row in fallback_rows:
+        ticker = row["ticker"] if isinstance(row, dict) else row[0]
+        profile_id = row["profile_id"] if isinstance(row, dict) else row[1]
+        if _estimate_drip_tracking_from_dividend_history(ticker, profile_id, conn):
+            repaired += 1
+    return repaired
+
+
+def _estimate_drip_tracking_from_dividend_history(ticker, profile_id, conn):
+    """Estimate DRIP tracking when a broker feed lacks reinvestment buy lots."""
+    holding = conn.execute(
+        """SELECT quantity, current_price, price_paid, reinvest,
+                  shares_bought_from_dividend, total_cash_reinvested,
+                  ytd_divs, total_divs_received, dividend_paid
+           FROM all_account_info
+           WHERE ticker = ? AND profile_id = ?""",
+        (ticker, profile_id),
+    ).fetchone()
+    if not holding or (holding["reinvest"] if isinstance(holding, dict) else holding[3]) != "Y":
+        return False
+
+    existing_shares = _num_or_zero(holding["shares_bought_from_dividend"] if isinstance(holding, dict) else holding[4])
+    existing_cash = _num_or_zero(holding["total_cash_reinvested"] if isinstance(holding, dict) else holding[5])
+    if existing_shares > 1e-9 or existing_cash > 1e-9:
+        return False
+
+    tagged_buys = conn.execute(
+        "SELECT COUNT(*) FROM transactions "
+        "WHERE ticker = ? AND profile_id = ? AND transaction_type = 'BUY' "
+        "AND (notes LIKE '%[DRIP]%' OR LOWER(COALESCE(notes, '')) LIKE '%reinvest%')",
+        (ticker, profile_id),
+    ).fetchone()[0]
+    if tagged_buys:
+        return False
+
+    payment_row = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM dividend_payments "
+        "WHERE ticker = ? AND profile_id = ? AND amount > 0",
+        (ticker, profile_id),
+    ).fetchone()
+    payment_cash = _num_or_zero(payment_row[0] if payment_row else 0)
+    fallback_cash = max(
+        payment_cash,
+        _num_or_zero(holding["total_divs_received"] if isinstance(holding, dict) else holding[7]),
+        _num_or_zero(holding["ytd_divs"] if isinstance(holding, dict) else holding[6]),
+        _num_or_zero(holding["dividend_paid"] if isinstance(holding, dict) else holding[8]),
+    )
+    if fallback_cash <= 1e-9:
+        return False
+
+    qty = _num_or_zero(holding["quantity"] if isinstance(holding, dict) else holding[0])
+    price = _num_or_zero(holding["current_price"] if isinstance(holding, dict) else holding[1])
+    if price <= 1e-9:
+        price = _num_or_zero(holding["price_paid"] if isinstance(holding, dict) else holding[2])
+    if qty <= 1e-9 or price <= 1e-9:
+        return False
+
+    drip_shares = min(fallback_cash / price, qty)
+    drip_cash = min(fallback_cash, drip_shares * price)
+    conn.execute(
+        "UPDATE all_account_info SET shares_bought_from_dividend = ?, "
+        "total_cash_reinvested = ? WHERE ticker = ? AND profile_id = ?",
+        (round(drip_shares, 6), round(drip_cash, 2), ticker, profile_id),
+    )
+    return True
 
 
 def _basis_mode():

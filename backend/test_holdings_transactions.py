@@ -40,6 +40,7 @@ class HoldingsTransactionTest(unittest.TestCase):
                 percent_change REAL,
                 div REAL,
                 div_frequency TEXT,
+                reinvest TEXT,
                 ex_div_date TEXT,
                 estim_payment_per_year REAL,
                 approx_monthly_income REAL,
@@ -47,6 +48,8 @@ class HoldingsTransactionTest(unittest.TestCase):
                 current_annual_yield REAL,
                 current_month_income REAL,
                 dividend_paid REAL,
+                ytd_divs REAL,
+                total_divs_received REAL,
                 shares_bought_from_dividend REAL,
                 total_cash_reinvested REAL
             );
@@ -68,6 +71,15 @@ class HoldingsTransactionTest(unittest.TestCase):
                 buy_txn_id INTEGER,
                 shares REAL
             );
+            CREATE TABLE dividend_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT,
+                profile_id INTEGER,
+                payment_date TEXT,
+                amount REAL,
+                source TEXT,
+                notes TEXT
+            );
             """
         )
         self._orig_populate_holdings = app_module.populate_holdings
@@ -83,7 +95,7 @@ class HoldingsTransactionTest(unittest.TestCase):
     def _seed_holding(self, ticker, profile_id, quantity):
         self.conn.execute(
             "INSERT INTO all_account_info (ticker, profile_id, quantity, "
-            "shares_bought_from_dividend, total_cash_reinvested) VALUES (?, ?, ?, 0, 0)",
+            "reinvest, shares_bought_from_dividend, total_cash_reinvested) VALUES (?, ?, ?, 'N', 0, 0)",
             (ticker, profile_id, quantity),
         )
 
@@ -153,6 +165,25 @@ class HoldingsTransactionTest(unittest.TestCase):
         self.assertEqual(repaired, 1)
         self.assertAlmostEqual(row["shares_bought_from_dividend"], 2.0, places=6)
         self.assertAlmostEqual(row["total_cash_reinvested"], 30.0, places=2)
+
+    def test_drip_tracking_repair_estimates_from_dividends_when_broker_lacks_drip_buys(self):
+        self.conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, current_price, reinvest, "
+            "shares_bought_from_dividend, total_cash_reinvested) VALUES ('ABC', 1, 100, 20, 'Y', 0, 0)"
+        )
+        self.conn.execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('ABC', 1, '2026-05-15', 40, 'etrade', 'Dividend')"
+        )
+
+        repaired = _repair_drip_tracking_for_profiles(self.conn, [1])
+
+        row = self.conn.execute(
+            "SELECT shares_bought_from_dividend, total_cash_reinvested FROM all_account_info WHERE ticker='ABC' AND profile_id=1"
+        ).fetchone()
+        self.assertEqual(repaired, 1)
+        self.assertAlmostEqual(row["shares_bought_from_dividend"], 2.0, places=6)
+        self.assertAlmostEqual(row["total_cash_reinvested"], 40.0, places=2)
 
     def test_holding_display_quantities_include_base_shares(self):
         rows = [{"quantity": 21.88, "shares_bought_from_dividend": 0.9145}]
