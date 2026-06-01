@@ -215,6 +215,7 @@ export default function ReinvestmentImpact() {
   // type instantly and the share-growth chart can plot all three at once.
   const [projScenarios, setProjScenarios] = useState(null)  // { bullish, neutral, bearish }
   const [holdings, setHoldings] = useState([])
+  const [actualReinvest, setActualReinvest] = useState(null)  // trailing-3-mo actual reinvest % from recorded payments
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const catRef = useRef(null)
@@ -260,6 +261,16 @@ export default function ReinvestmentImpact() {
       .then(r => r.json())
       .then(rows => setHoldings((rows || []).filter(r => r.quantity > 0 && r.current_price > 0)))
       .catch(() => setHoldings([]))
+  }, [pf, selection])
+
+  // Actual reinvested % over the trailing 3 completed months (recorded payments
+  // split by per-account reinvest flag). Offered next to Reinvest % as a
+  // real-data seed alongside the estimate. Excludes the in-progress month.
+  useEffect(() => {
+    pf('/api/reinvestment-actual-pct?months=3')
+      .then(r => r.json())
+      .then(d => setActualReinvest(d && d.pct_reinvested != null ? d : null))
+      .catch(() => setActualReinvest(null))
   }, [pf, selection])
 
   // Portfolio's actual reinvested share of monthly income, mirroring the
@@ -679,9 +690,26 @@ export default function ReinvestmentImpact() {
               <input type="number" min="0" max="100" value={reinvestPct}
                 onChange={e => setReinvestPct(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
                 style={{ width: '80px', padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: '#0a1929', color: '#c5d0dc', border: '1px solid #1a3a5c', borderRadius: '4px' }} />
-              {portfolioReinvestPct != null && (
-                <div style={{ fontSize: '0.7rem', color: '#8899aa', marginTop: '0.2rem' }}>
-                  Portfolio: {portfolioReinvestPct.toFixed(1)}%
+              {(portfolioReinvestPct != null || actualReinvest) && (
+                <div style={{ fontSize: '0.7rem', color: '#8899aa', marginTop: '0.2rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  {portfolioReinvestPct != null && (
+                    <span
+                      onClick={() => setReinvestPct(Math.round(portfolioReinvestPct))}
+                      title="Use the estimated DRIP mix from your reinvest settings"
+                      style={{ cursor: 'pointer', textDecoration: 'underline dotted', color: '#66bb6a' }}
+                    >
+                      Est: {portfolioReinvestPct.toFixed(1)}%
+                    </span>
+                  )}
+                  {actualReinvest && (
+                    <span
+                      onClick={() => setReinvestPct(Math.round(actualReinvest.pct_reinvested))}
+                      title={`Actual reinvested share of distributions paid ${actualReinvest.window_start} to ${actualReinvest.window_end} (${actualReinvest.months_with_data} mo of data). Click to use.`}
+                      style={{ cursor: 'pointer', textDecoration: 'underline dotted', color: '#38bdf8' }}
+                    >
+                      Actual 3mo: {actualReinvest.pct_reinvested.toFixed(1)}%
+                    </span>
+                  )}
                 </div>
               )}
             </div>

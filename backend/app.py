@@ -13342,6 +13342,80 @@ def income_summary():
     })
 
 
+@app.route("/api/reinvestment-actual-pct", methods=["GET"])
+def reinvestment_actual_pct():
+    """Actual reinvested share of distributions over the trailing N *completed*
+    calendar months (default 3), from recorded dividend payments split by each
+    account's reinvest flag.
+
+    The in-progress current month is excluded so the figure is stable and
+    available from the first of a new month (no ramp-up). Used by the
+    Reinvestment Impact page as a real-data alternative seed for Reinvest %.
+    """
+    import datetime
+    is_agg, pids = get_profile_filter()
+    try:
+        months = max(1, min(24, int(request.args.get("months", 3))))
+    except (TypeError, ValueError):
+        months = 3
+    conn = get_connection()
+    today = datetime.date.today()
+
+    # Window: first day of (months) ago .. last day of the previous month.
+    current_month_start = today.replace(day=1)
+    window_end_date = current_month_start - datetime.timedelta(days=1)
+    y, m = current_month_start.year, current_month_start.month
+    m -= months
+    while m <= 0:
+        m += 12
+        y -= 1
+    window_start_date = datetime.date(y, m, 1)
+    window_start = window_start_date.isoformat()
+    window_end = window_end_date.isoformat()
+
+    # Payments live on the Owner's source profiles when viewing the Owner roll-up.
+    payment_pids = pids
+    if not is_agg and len(pids) == 1 and pids[0] == 1:
+        owner_source_ids = _get_owner_source_profile_ids(conn)
+        if owner_source_ids:
+            payment_pids = owner_source_ids
+    payment_placeholders = ",".join("?" * len(payment_pids))
+
+    row = conn.execute(
+        f"""SELECT
+               COALESCE(SUM(CASE WHEN a.reinvest = 'Y'
+                                 THEN dp.amount ELSE 0 END), 0) AS reinv,
+               COALESCE(SUM(CASE WHEN a.reinvest IS NULL OR a.reinvest != 'Y'
+                                 THEN dp.amount ELSE 0 END), 0) AS not_reinv,
+               COUNT(*) AS rows,
+               COUNT(DISTINCT substr(dp.payment_date, 1, 7)) AS months_with_data
+            FROM dividend_payments dp
+            LEFT JOIN all_account_info a
+              ON a.ticker = dp.ticker AND a.profile_id = dp.profile_id
+            WHERE dp.profile_id IN ({payment_placeholders})
+              AND dp.payment_date >= ? AND dp.payment_date <= ?""",
+        payment_pids + [window_start, window_end],
+    ).fetchone()
+    conn.close()
+
+    reinv = float(row["reinv"] or 0)
+    not_reinv = float(row["not_reinv"] or 0)
+    total = reinv + not_reinv
+    pct = (reinv / total * 100) if total > 0 else None
+
+    return jsonify({
+        "pct_reinvested": round(pct, 1) if pct is not None else None,
+        "reinvested": round(reinv, 2),
+        "not_reinvested": round(not_reinv, 2),
+        "total": round(total, 2),
+        "payment_rows": int(row["rows"] or 0),
+        "months_requested": months,
+        "months_with_data": int(row["months_with_data"] or 0),
+        "window_start": window_start,
+        "window_end": window_end,
+    })
+
+
 # ── Categories ────────────────────────────────────────────────────────────────
 
 _CLASSIFICATION_NAMES = {
