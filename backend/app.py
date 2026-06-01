@@ -13197,6 +13197,22 @@ def income_summary():
         total_ytd += _estimate_ytd_income(h) if stored_ytd is None else stored_ytd
     estimated_month_to_date = total_month
 
+    # Estimated reinvest fraction (forward-looking run-rate split by the
+    # per-holding reinvest flag). Used as a proportional fallback when actual
+    # income can't be attributed to individual tickers (e.g. monthly_payouts).
+    frac_row = conn.execute(
+        f"""SELECT
+               COALESCE(SUM(CASE WHEN reinvest = 'Y'
+                                 THEN approx_monthly_income ELSE 0 END), 0) AS reinv,
+               COALESCE(SUM(approx_monthly_income), 0) AS total
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND quantity IS NOT NULL AND quantity > 0""",
+        pids,
+    ).fetchone()
+    est_total = float(frac_row["total"] or 0)
+    reinvest_fraction = (float(frac_row["reinv"] or 0) / est_total) if est_total else 0.0
+
     payment_pids = pids
     if not is_agg and len(pids) == 1 and pids[0] == 1:
         owner_source_ids = _get_owner_source_profile_ids(conn)
@@ -13281,12 +13297,42 @@ def income_summary():
         total_ytd = float(payout_ytd["amount"] or 0)
         ytd_income_source = "monthly_payouts"
 
+    # Split the actual current-month income into reinvested vs not-reinvested.
+    # When income comes from recorded dividend payments we can attribute each
+    # payment to its ticker's reinvest flag exactly; otherwise fall back to the
+    # estimated reinvest fraction so the two always sum to current_month_income.
+    if current_month_income_source == "dividend_payments":
+        # Attribute each payment to ITS OWN account's reinvest flag (ticker +
+        # profile_id). The same ticker can be reinvested in one account (e.g. a
+        # Roth IRA) and taken as cash in another, so collapsing to one flag per
+        # ticker would mis-bucket the cash payments.
+        split = conn.execute(
+            f"""SELECT
+                   COALESCE(SUM(CASE WHEN a.reinvest = 'Y'
+                                     THEN dp.amount ELSE 0 END), 0) AS reinv,
+                   COALESCE(SUM(CASE WHEN a.reinvest IS NULL OR a.reinvest != 'Y'
+                                     THEN dp.amount ELSE 0 END), 0) AS not_reinv
+                FROM dividend_payments dp
+                LEFT JOIN all_account_info a
+                  ON a.ticker = dp.ticker AND a.profile_id = dp.profile_id
+                WHERE dp.profile_id IN ({payment_placeholders})
+                  AND dp.payment_date >= ? AND dp.payment_date <= ?""",
+            payment_pids + [month_start, today_iso],
+        ).fetchone()
+        current_month_reinvested = float(split["reinv"] or 0)
+        current_month_not_reinvested = float(split["not_reinv"] or 0)
+    else:
+        current_month_reinvested = round(total_month * reinvest_fraction, 2)
+        current_month_not_reinvested = round(total_month - current_month_reinvested, 2)
+
     conn.close()
     return jsonify({
         "ytd_income": total_ytd,
         "ytd_income_source": ytd_income_source,
         "ytd_payment_rows": ytd_payment_rows,
         "current_month_income": total_month,
+        "current_month_income_reinvested": current_month_reinvested,
+        "current_month_income_not_reinvested": current_month_not_reinvested,
         "current_month_income_source": current_month_income_source,
         "current_month_payment_rows": current_month_payment_rows,
         "current_month_payment_start": month_start,

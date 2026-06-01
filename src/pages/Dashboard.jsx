@@ -628,6 +628,10 @@ export default function Dashboard() {
     const dripSharesYearly = holdings.reduce((s, h) => s + sharesFromDrip(h.estim_payment_per_year, h), 0)
     const rawMonthIncome = sum('current_month_income')
     const currentMonthIncome = incomeSummary?.current_month_income ?? rawMonthIncome ?? 0
+    const currentMonthReinvested = incomeSummary?.current_month_income_reinvested ?? null
+    const currentMonthNotReinvested = incomeSummary?.current_month_income_not_reinvested ?? null
+    const currentMonthReinvestPct = (currentMonthReinvested != null && currentMonthIncome)
+      ? (currentMonthReinvested / currentMonthIncome) : null
 
     let avgYoc = 0
     const valid = holdings.filter(h => h.purchase_value > 0 && h.annual_yield_on_cost != null)
@@ -641,7 +645,7 @@ export default function Dashboard() {
     const totalReturn = purchaseValue ? ((gainLoss + totalDivs) / purchaseValue) : 0
     const reinvestPct = monthlyIncome ? (monthlyReinvested / monthlyIncome) : 0
 
-    return { ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, reinvestPct, annualIncome, dripSharesMonthly, dripSharesYearly, currentValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, currentMonthIncome }
+    return { ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, reinvestPct, annualIncome, dripSharesMonthly, dripSharesYearly, currentValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, currentMonthIncome, currentMonthReinvested, currentMonthNotReinvested, currentMonthReinvestPct }
   }, [holdings, incomeSummary])
 
   // Enrich holdings with computed fields
@@ -975,9 +979,12 @@ export default function Dashboard() {
         <SummaryCard label="YTD Dividends" value={fmt(totals.ytdDivs)} color="#4dff91" />
         <SummaryCard label={`${currentMonth} Income`} value={fmt(totals.currentMonthIncome)} color="#4dff91" sub={currentMonthSub} />
         <SummaryCard label="Est. Monthly Income" value={fmt(totals.monthlyIncome)} color="#4dff91" sub="Annual estimate / 12" />
-        <SummaryCard label="Mo$ Reinvested" value={fmt(totals.monthlyReinvested)} color="#7ecfff" />
-        <SummaryCard label="Mo$ Not Reinvested" value={fmt(totals.monthlyNotReinvested)} color="#ffb300" />
-        <SummaryCard label="% Reinvested" value={pct(totals.reinvestPct)} color="#66bb6a" />
+        <SummaryCard label="Est. Mo$ Reinvested" value={fmt(totals.monthlyReinvested)} color="#7ecfff" sub="Forward run-rate" />
+        <SummaryCard label="Est. Mo$ Not Reinvested" value={fmt(totals.monthlyNotReinvested)} color="#ffb300" sub="Forward run-rate" />
+        <SummaryCard label="Est. % Reinvested" value={pct(totals.reinvestPct)} color="#66bb6a" sub="Forward run-rate" />
+        <SummaryCard label={`${currentMonth} Reinvested`} value={fmt(totals.currentMonthReinvested)} color="#7ecfff" sub={currentMonthSub} />
+        <SummaryCard label={`${currentMonth} Not Reinvested`} value={fmt(totals.currentMonthNotReinvested)} color="#ffb300" sub={currentMonthSub} />
+        <SummaryCard label={`${currentMonth} % Reinvested`} value={totals.currentMonthReinvestPct != null ? pct(totals.currentMonthReinvestPct) : '—'} color="#66bb6a" sub={currentMonthSub} />
         <SummaryCard label="Est. Annual Income" value={fmt(totals.annualIncome)} color="#4dff91" />
         <SummaryCard label="Portfolio Value" value={fmt(totals.currentValue)} color="#7ecfff" />
         <SummaryCard label="Avg Yield on Cost" value={pct(totals.avgYoc)} />
