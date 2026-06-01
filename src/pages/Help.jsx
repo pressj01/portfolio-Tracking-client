@@ -1,6 +1,6 @@
 ﻿import React, { useState } from 'react'
 
-const APP_VERSION = '1.31.2'
+const APP_VERSION = '1.31.3'
 
 const GROUPS = [
   {

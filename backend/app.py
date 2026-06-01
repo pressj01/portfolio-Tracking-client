@@ -284,6 +284,44 @@ def rows_to_dicts(rows):
     return [dict(r) for r in rows]
 
 
+def _num_or_zero(value):
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _apply_holding_display_quantities(rows):
+    """Ensure holdings API rows include user-facing DRIP/base share figures."""
+    for row in rows:
+        qty = _num_or_zero(row.get("quantity"))
+        drip_shares = _num_or_zero(row.get("shares_bought_from_dividend"))
+        row["base_quantity"] = round(max(qty - drip_shares, 0.0), 6)
+
+
+def _repair_drip_tracking_for_profiles(conn, profile_ids):
+    """Backfill visible holdings whose saved transaction history has DRIP buys."""
+    if not profile_ids:
+        return 0
+    placeholders = ",".join("?" * len(profile_ids))
+    rows = conn.execute(
+        f"""SELECT DISTINCT t.ticker, t.profile_id
+            FROM transactions t
+            JOIN all_account_info a
+              ON a.ticker = t.ticker AND a.profile_id = t.profile_id
+            WHERE t.profile_id IN ({placeholders})
+              AND t.transaction_type = 'BUY'
+              AND (t.notes LIKE '%[DRIP]%' OR LOWER(COALESCE(t.notes, '')) LIKE '%reinvest%')
+              AND COALESCE(a.quantity, 0) > 1e-9""",
+        profile_ids,
+    ).fetchall()
+    for row in rows:
+        ticker = row["ticker"] if isinstance(row, dict) else row[0]
+        profile_id = row["profile_id"] if isinstance(row, dict) else row[1]
+        _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
+    return len(rows)
+
+
 def _basis_mode():
     mode = (request.args.get("basis_mode") or "original").strip().lower()
     return "broker_adjusted" if mode in {"broker", "broker_adjusted", "adjusted"} else "original"
@@ -8186,6 +8224,8 @@ def list_holdings():
     _ensure_basis_columns(conn)
     placeholders = ",".join("?" * len(pids))
     basis_total = _basis_total_expr("a")
+    if _repair_drip_tracking_for_profiles(conn, pids):
+        conn.commit()
 
     if is_agg and len(pids) > 1:
         # Check if Owner import was used — if so, prefer Owner's per-ticker
@@ -8293,6 +8333,7 @@ def list_holdings():
     # Recalculate percent_of_account
     results = rows_to_dicts(rows)
     _apply_basis_mode_to_holdings(results)
+    _apply_holding_display_quantities(results)
     total_value = sum(r.get("current_value") or 0 for r in results)
     if total_value > 0:
         for r in results:

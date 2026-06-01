@@ -7,6 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as app_module
 from app import (
+    _apply_holding_display_quantities,
+    _repair_drip_tracking_for_profiles,
     _refresh_drip_tracking_from_transactions,
     _refresh_transaction_realized_gains,
     _rollup_transactions,
@@ -135,6 +137,29 @@ class HoldingsTransactionTest(unittest.TestCase):
         ).fetchone()
         self.assertAlmostEqual(row["shares_bought_from_dividend"], 2.0, places=6)
         self.assertAlmostEqual(row["total_cash_reinvested"], 30.0, places=2)
+
+    def test_drip_tracking_repair_backfills_existing_zero_holdings(self):
+        self._seed_holding("ABC", 1, 100)
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('ABC', 1, 'BUY', '2026-02-10', 2, 15, 0, 'Dividend Reinvestment')"
+        )
+
+        repaired = _repair_drip_tracking_for_profiles(self.conn, [1])
+
+        row = self.conn.execute(
+            "SELECT shares_bought_from_dividend, total_cash_reinvested FROM all_account_info WHERE ticker='ABC' AND profile_id=1"
+        ).fetchone()
+        self.assertEqual(repaired, 1)
+        self.assertAlmostEqual(row["shares_bought_from_dividend"], 2.0, places=6)
+        self.assertAlmostEqual(row["total_cash_reinvested"], 30.0, places=2)
+
+    def test_holding_display_quantities_include_base_shares(self):
+        rows = [{"quantity": 21.88, "shares_bought_from_dividend": 0.9145}]
+
+        _apply_holding_display_quantities(rows)
+
+        self.assertAlmostEqual(rows[0]["base_quantity"], 20.9655, places=6)
 
     def test_drip_tracking_capped_at_current_quantity(self):
         # Position trimmed below the lifetime reinvested total → cap shares and
