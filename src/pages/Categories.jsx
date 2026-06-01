@@ -3,9 +3,14 @@ import { useNavigate } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 
-function CategoryModal({ category, onSave, onCancel }) {
+function CategoryModal({ category, onSave, onCancel, targetBaseTotal = 0 }) {
   const [name, setName] = useState(category?.name || '')
   const [target, setTarget] = useState(category?.target_pct ?? '')
+  const targetValue = target === '' ? 0 : Number(target)
+  const cleanTargetValue = Number.isFinite(targetValue) ? targetValue : 0
+  const projectedTotal = targetBaseTotal + cleanTargetValue
+  const remaining = 100 - projectedTotal
+  const totalColor = projectedTotal > 100 ? '#ff6b6b' : Math.abs(projectedTotal - 100) <= 0.05 ? '#00e89a' : '#ffc107'
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -26,6 +31,17 @@ function CategoryModal({ category, onSave, onCancel }) {
           <div className="form-group">
             <label>Target Allocation %</label>
             <input type="number" step="0.1" min="0" max="100" value={target} onChange={e => setTarget(e.target.value)} placeholder="Optional" style={{ width: '100%' }} />
+            <div style={{ marginTop: '0.55rem', border: '1px solid #0f3460', background: '#1a1a2e', borderRadius: 6, padding: '0.6rem 0.7rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center' }}>
+                <span style={{ color: '#90a4ae', fontSize: '0.8rem' }}>Total after save</span>
+                <strong style={{ color: totalColor }}>{projectedTotal.toFixed(1)}% / 100%</strong>
+              </div>
+              <div style={{ marginTop: '0.25rem', color: remaining < 0 ? '#ffb3b3' : '#b0bec5', fontSize: '0.78rem' }}>
+                {remaining < 0
+                  ? `${Math.abs(remaining).toFixed(1)}% over target`
+                  : `${remaining.toFixed(1)}% remaining`}
+              </div>
+            </div>
           </div>
           <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
             <button type="submit" className="btn btn-success">{category ? 'Update' : 'Create'}</button>
@@ -124,6 +140,84 @@ function AllocationBar({ categories, totalValue }) {
           fontSize: '0.65rem', color: '#ccc', overflow: 'hidden',
         }}>
           {unPct > 5 ? `Unallocated ${unPct.toFixed(1)}%` : ''}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function OwnerTargetReference({ reference, fmt, fmtPct }) {
+  if (!reference?.is_owner || !reference.profiles?.length) return null
+
+  const accounts = reference.profiles || []
+  const rows = reference.rows || []
+  const accountsWithTargets = accounts.filter(account => account.has_targets).length
+  const targetCoverageValue = accounts
+    .filter(account => account.has_targets)
+    .reduce((sum, account) => sum + Number(account.total_value || 0), 0)
+
+  return (
+    <div className="card owner-target-reference">
+      <div className="owner-target-header">
+        <div>
+          <h2>Subaccount Target Reference</h2>
+          <div className="owner-target-meta">
+            <span>{accounts.length} included accounts</span>
+            <span>{accountsWithTargets} with targets</span>
+            <span>{fmt(targetCoverageValue)} targeted value</span>
+            {reference.weighted_total_pct != null && (
+              <span>Guide total {fmtPct(reference.weighted_total_pct)}</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="alert alert-info" style={{ margin: 0 }}>
+          Included subaccounts do not have category targets set yet.
+        </div>
+      ) : (
+        <div className="pb-table-wrap" style={{ marginBottom: 0 }}>
+          <table className="pb-table owner-target-table">
+            <thead>
+              <tr>
+                <th>Category</th>
+                {accounts.map(account => (
+                  <th key={account.id}>
+                    <span>{account.name}</span>
+                    <small>{fmt(account.total_value)}</small>
+                  </th>
+                ))}
+                <th>
+                  <span>Weighted Owner Guide</span>
+                  <small>by account value</small>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(row => (
+                <tr key={row.category}>
+                  <td>{row.category}</td>
+                  {accounts.map(account => {
+                    const target = row.targets?.[account.id]
+                    return (
+                      <td key={account.id} className={target == null ? 'owner-target-empty' : ''}>
+                        {target == null ? '-' : fmtPct(target)}
+                      </td>
+                    )
+                  })}
+                  <td className="owner-target-guide">
+                    {row.weighted_guide_pct == null ? '-' : fmtPct(row.weighted_guide_pct)}
+                    {row.missing_profile_ids?.length > 0 && (
+                      <small title="One or more included accounts do not have a target for this category">
+                        partial
+                      </small>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
@@ -268,7 +362,7 @@ function enrichCategoryData(categoryData, holdings = [], navCoverage = null) {
 
 export default function Categories() {
   const pf = useProfileFetch()
-  const { selection } = useProfile()
+  const { selection, profileId, isAggregate } = useProfile()
   const dialog = useDialog()
   const navigate = useNavigate()
   const [data, setData] = useState({ categories: [], unallocated: [], total_value: 0 })
@@ -290,27 +384,32 @@ export default function Categories() {
   })
   const [constraintsSeeded, setConstraintsSeeded] = useState(false)
   const [incomeFloorTouched, setIncomeFloorTouched] = useState(false)
+  const isOwnerProfile = !isAggregate && Number(profileId) === 1
 
   const reload = useCallback(async () => {
     try {
-      const [catRes, holdingsRes, navCoverageRes] = await Promise.all([
+      const [catRes, holdingsRes, navCoverageRes, ownerTargetRefRes] = await Promise.all([
         pf('/api/categories/data'),
         pf('/api/holdings').catch(() => null),
         pf('/api/portfolio-coverage').catch(() => null),
+        isOwnerProfile ? pf('/api/categories/owner-target-reference').catch(() => null) : Promise.resolve(null),
       ])
       const d = await catRes.json()
       const holdings = holdingsRes ? await holdingsRes.json() : []
       const navCoverage = navCoverageRes ? await navCoverageRes.json() : null
+      const ownerTargetReference = ownerTargetRefRes ? await ownerTargetRefRes.json() : null
       setData({
         ...enrichCategoryData(d, Array.isArray(holdings) ? holdings : [], navCoverage),
+        owner_target_reference: ownerTargetReference,
         _selection: selection,
       })
+      setError(null)
     } catch (e) {
       setError('Failed to load categories')
     } finally {
       setLoading(false)
     }
-  }, [pf, selection])
+  }, [pf, selection, isOwnerProfile])
 
   useEffect(() => { reload() }, [reload, selection])
 
@@ -453,6 +552,17 @@ export default function Categories() {
   const allocatedValue = data.categories.reduce((s, c) => s + c.actual_value, 0)
   const allocatedPct = data.total_value ? (allocatedValue / data.total_value * 100) : 0
   const totalTargetPct = data.categories.reduce((s, c) => s + (Number(c.target_pct) || 0), 0)
+  const targetRemainingPct = 100 - totalTargetPct
+  const targetTotalColor = totalTargetPct > 100 ? '#ff6b6b' : Math.abs(totalTargetPct - 100) <= 0.05 ? '#00e89a' : '#ffc107'
+  const targetComparisonRows = data.categories
+    .filter(c => c.target_pct != null)
+    .map(c => ({
+      id: c.id,
+      name: c.name,
+      actual: Number(c.actual_pct || 0),
+      target: Number(c.target_pct || 0),
+      drift: Number(c.actual_pct || 0) - Number(c.target_pct || 0),
+    }))
 
   const targetAssistant = useMemo(() => {
     const cats = data.categories.filter(c => Number(c.actual_value || 0) > 0)
@@ -787,6 +897,12 @@ export default function Categories() {
         </div>
         <AllocationBar categories={data.categories} totalValue={data.total_value} />
       </div>
+
+      <OwnerTargetReference
+        reference={data.owner_target_reference}
+        fmt={fmt}
+        fmtPct={fmtPct}
+      />
 
       {targetAssistant && (
         <div className="card" style={{ padding: '1rem', marginTop: '1rem' }}>
@@ -1131,6 +1247,47 @@ export default function Categories() {
 
         {/* Right: Unallocated assets */}
         <div style={{ flex: '0 0 28%', position: 'sticky', top: '1rem' }}>
+          <div className="card" style={{ padding: '1rem', marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center', marginBottom: '0.45rem' }}>
+              <h2 style={{ fontSize: '1rem', margin: 0 }}>Target Allocation</h2>
+              <strong style={{ color: targetTotalColor, fontSize: '1rem' }}>{totalTargetPct.toFixed(1)}%</strong>
+            </div>
+            <div style={{ height: 8, borderRadius: 4, background: '#1a1a2e', overflow: 'hidden', border: '1px solid #0f3460', marginBottom: '0.45rem' }}>
+              <div style={{ height: '100%', width: `${Math.min(totalTargetPct, 100)}%`, background: targetTotalColor, transition: 'width 0.2s' }} />
+            </div>
+            <div style={{ color: targetRemainingPct < 0 ? '#ffb3b3' : '#b0bec5', fontSize: '0.8rem', fontWeight: 700 }}>
+              {targetRemainingPct < 0
+                ? `${Math.abs(targetRemainingPct).toFixed(1)}% over target`
+                : `${targetRemainingPct.toFixed(1)}% remaining`}
+            </div>
+            <div style={{ borderTop: '1px solid #0f3460', marginTop: '0.75rem', paddingTop: '0.65rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 3.4rem 3.4rem 3.5rem', gap: '0.35rem', color: '#78909c', fontSize: '0.68rem', fontWeight: 800, textTransform: 'uppercase', marginBottom: '0.35rem' }}>
+                <span>Category</span>
+                <span style={{ textAlign: 'right' }}>Actual</span>
+                <span style={{ textAlign: 'right' }}>Target</span>
+                <span style={{ textAlign: 'right' }}>Drift</span>
+              </div>
+              {targetComparisonRows.length === 0 ? (
+                <div style={{ color: '#90a4ae', fontSize: '0.78rem' }}>No targets set yet.</div>
+              ) : (
+                <div style={{ display: 'grid', gap: '0.28rem' }}>
+                  {targetComparisonRows.map(row => {
+                    const driftColor = Math.abs(row.drift) <= 3 ? '#00e89a' : Math.abs(row.drift) <= 8 ? '#ffc107' : '#ff6b6b'
+                    return (
+                      <div key={row.id} style={{ display: 'grid', gridTemplateColumns: '1fr 3.4rem 3.4rem 3.5rem', gap: '0.35rem', alignItems: 'center', fontSize: '0.76rem' }}>
+                        <span title={row.name} style={{ color: '#d8e6f3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 700 }}>{row.name}</span>
+                        <span style={{ color: '#b0bec5', textAlign: 'right' }}>{row.actual.toFixed(1)}%</span>
+                        <span style={{ color: '#90caf9', textAlign: 'right' }}>{row.target.toFixed(1)}%</span>
+                        <span style={{ color: driftColor, textAlign: 'right', fontWeight: 800 }}>
+                          {row.drift >= 0 ? '+' : ''}{row.drift.toFixed(1)}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
           <div className="card">
             <h2 style={{ fontSize: '1rem', marginBottom: '0.75rem' }}>
               Unallocated Assets
@@ -1213,6 +1370,9 @@ export default function Categories() {
       {showModal && (
         <CategoryModal
           category={editCat}
+          targetBaseTotal={data.categories
+            .filter(c => !editCat || c.id !== editCat.id)
+            .reduce((s, c) => s + (Number(c.target_pct) || 0), 0)}
           onSave={handleSave}
           onCancel={() => setShowModal(false)}
         />

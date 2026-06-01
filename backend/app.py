@@ -13802,6 +13802,125 @@ def categories_data():
     })
 
 
+@app.route("/api/categories/owner-target-reference", methods=["GET"])
+def owner_target_reference():
+    """Return read-only subaccount target weights for the Owner categories page."""
+    if _request_aggregate_id() is not None or get_profile_id() != 1:
+        return jsonify({
+            "is_owner": False,
+            "profiles": [],
+            "rows": [],
+            "total_value": 0,
+            "weighted_total_pct": None,
+        })
+
+    conn = get_connection()
+    source_ids = _get_owner_source_profile_ids(conn)
+    if not source_ids:
+        conn.close()
+        return jsonify({
+            "is_owner": True,
+            "profiles": [],
+            "rows": [],
+            "total_value": 0,
+            "weighted_total_pct": None,
+        })
+
+    placeholders = ",".join("?" * len(source_ids))
+    profile_rows = conn.execute(
+        f"SELECT id, name FROM profiles WHERE id IN ({placeholders})",
+        source_ids,
+    ).fetchall()
+    profile_names = {
+        int(row["id"]): row["name"]
+        for row in profile_rows
+    }
+
+    value_rows = conn.execute(
+        f"""SELECT profile_id, COALESCE(SUM(current_value), 0) AS total_value
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders}) AND IFNULL(quantity, 0) > 0
+            GROUP BY profile_id""",
+        source_ids,
+    ).fetchall()
+    values_by_profile = {
+        int(row["profile_id"]): float(row["total_value"] or 0)
+        for row in value_rows
+    }
+
+    target_rows = conn.execute(
+        f"""SELECT profile_id, name, target_pct, sort_order
+            FROM categories
+            WHERE profile_id IN ({placeholders})
+            ORDER BY sort_order, name""",
+        source_ids,
+    ).fetchall()
+    conn.close()
+
+    targets_by_category = {}
+    category_order = {}
+    for row in target_rows:
+        name = (row["name"] or "").strip()
+        if not name:
+            continue
+        profile_id = int(row["profile_id"])
+        target = row["target_pct"]
+        targets_by_category.setdefault(name, {})[profile_id] = (
+            None if target is None else float(target)
+        )
+        sort_order = int(row["sort_order"] or 0)
+        category_order[name] = min(category_order.get(name, sort_order), sort_order)
+
+    profiles = []
+    for pid in source_ids:
+        account_targets = [
+            targets.get(pid)
+            for targets in targets_by_category.values()
+            if targets.get(pid) is not None
+        ]
+        target_total = sum(account_targets)
+        profiles.append({
+            "id": pid,
+            "name": profile_names.get(pid, f"Profile {pid}"),
+            "total_value": values_by_profile.get(pid, 0),
+            "target_total_pct": target_total,
+            "has_targets": target_total > 0.0001,
+        })
+
+    total_value = sum(profile["total_value"] for profile in profiles)
+    rows = []
+    for category in sorted(targets_by_category, key=lambda name: (category_order.get(name, 0), name.lower())):
+        targets = targets_by_category[category]
+        if not any(target is not None for target in targets.values()):
+            continue
+        weighted = None
+        if total_value > 0:
+            weighted = sum(
+                values_by_profile.get(pid, 0) * float(targets.get(pid) or 0) / 100
+                for pid in source_ids
+            ) / total_value * 100
+        rows.append({
+            "category": category,
+            "targets": {str(pid): targets.get(pid) for pid in source_ids},
+            "weighted_guide_pct": weighted,
+            "missing_profile_ids": [
+                pid for pid in source_ids if targets.get(pid) is None
+            ],
+        })
+
+    weighted_total = None
+    if rows and total_value > 0:
+        weighted_total = sum(row["weighted_guide_pct"] or 0 for row in rows)
+
+    return jsonify({
+        "is_owner": True,
+        "profiles": profiles,
+        "rows": rows,
+        "total_value": total_value,
+        "weighted_total_pct": weighted_total,
+    })
+
+
 @app.route("/api/categories", methods=["POST"])
 def create_category():
     profile_id = get_profile_id()

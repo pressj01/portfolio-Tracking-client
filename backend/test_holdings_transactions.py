@@ -455,6 +455,7 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             CREATE TABLE categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT,
+                target_pct REAL,
                 profile_id INTEGER,
                 sort_order INTEGER
             );
@@ -742,6 +743,65 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(data[0]["raw_notes"], "owner note")
         self.assertEqual(data[1]["notes"], "Account: Schwab IRA; member note")
         self.assertEqual(data[1]["source_account_name"], "Schwab IRA")
+
+    def test_owner_target_reference_shows_included_subaccount_targets(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 1)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Schwab IRA', 1)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (3, 'Fidelity Taxable', 1)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (4, 'Excluded Account', 0)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (5, 'Zero Target Account', 1)")
+        self._execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, current_value) "
+            "VALUES ('AAA', 2, 1, 100)"
+        )
+        self._execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, current_value) "
+            "VALUES ('BBB', 3, 1, 300)"
+        )
+        self._execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, current_value) "
+            "VALUES ('ZZZ', 4, 1, 900)"
+        )
+        self._execute(
+            "INSERT INTO categories (name, target_pct, profile_id, sort_order) "
+            "VALUES ('Anchors', 40, 2, 1)"
+        )
+        self._execute(
+            "INSERT INTO categories (name, target_pct, profile_id, sort_order) "
+            "VALUES ('Boosters', 60, 2, 2)"
+        )
+        self._execute(
+            "INSERT INTO categories (name, target_pct, profile_id, sort_order) "
+            "VALUES ('Anchors', 20, 3, 1)"
+        )
+        self._execute(
+            "INSERT INTO categories (name, target_pct, profile_id, sort_order) "
+            "VALUES ('Growth', 80, 3, 2)"
+        )
+        self._execute(
+            "INSERT INTO categories (name, target_pct, profile_id, sort_order) "
+            "VALUES ('Anchors', 99, 4, 1)"
+        )
+        self._execute(
+            "INSERT INTO categories (name, target_pct, profile_id, sort_order) "
+            "VALUES ('Anchors', 0, 5, 1)"
+        )
+
+        res = self.client.get("/api/categories/owner-target-reference?profile_id=1")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertTrue(data["is_owner"])
+        self.assertEqual([profile["id"] for profile in data["profiles"]], [2, 3, 5])
+        zero_target_profile = next(profile for profile in data["profiles"] if profile["id"] == 5)
+        self.assertFalse(zero_target_profile["has_targets"])
+        rows = {row["category"]: row for row in data["rows"]}
+        self.assertEqual(rows["Anchors"]["targets"], {"2": 40.0, "3": 20.0, "5": 0.0})
+        self.assertAlmostEqual(rows["Anchors"]["weighted_guide_pct"], 25.0, places=6)
+        self.assertAlmostEqual(rows["Boosters"]["weighted_guide_pct"], 15.0, places=6)
+        self.assertEqual(rows["Boosters"]["missing_profile_ids"], [3, 5])
+        self.assertAlmostEqual(rows["Growth"]["weighted_guide_pct"], 60.0, places=6)
+        self.assertAlmostEqual(data["weighted_total_pct"], 100.0, places=6)
 
     def test_aggregate_transaction_list_adds_source_account_to_notes(self):
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Schwab IRA', 0)")
