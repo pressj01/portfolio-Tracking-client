@@ -154,6 +154,13 @@ function ImportHelp() {
         the preview shows both the holdings sheets and the Transactions sheet before import.
       </div>
 
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+        <strong>Refresh coordination:</strong> If a market-data refresh is already running from the Dashboard or Holdings page,
+        Import waits for it to finish before enabling position or transaction imports. This prevents a refresh and an import
+        from writing overlapping price, dividend, DRIP, or NAV data at the same time. Successful imports also clear cached
+        Dashboard data so the next Dashboard load reflects the newly imported holdings and payments.
+      </div>
+
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Brokerage Position Templates</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
@@ -650,6 +657,13 @@ function DashboardHelp() {
         taken as cash elsewhere is bucketed correctly.
       </div>
 
+      <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>Shared refresh behavior:</strong> Dashboard, Holdings, and NAV Snapshot now use the same in-app refresh
+        coordinator. If a price/dividend refresh is already running, a second refresh request waits for the first one
+        instead of starting a competing update. When the refresh finishes, cached Dashboard snapshots are cleared so
+        stale summary cards and charts are not reused after prices, dividends, or imports change.
+      </div>
+
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li><strong>Est. Annual Income</strong> — estimated annual dividend income.</li>
         <li><strong>Portfolio Value</strong> — total current market value.</li>
@@ -871,7 +885,7 @@ function HoldingsHelp() {
       {/* ── Toolbar Buttons ─────────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Toolbar Buttons</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Refresh Prices &amp; Divs</strong> - Fetches the latest prices, dividend amounts, ex-div dates, pay dates, and dividend frequency from Yahoo Finance for the currently selected Holdings scope. Individual accounts refresh only themselves; Owner refreshes its included source accounts; Aggregate refreshes its configured member accounts.</li>
+        <li><strong>Refresh Prices &amp; Divs</strong> - Fetches the latest prices, dividend amounts, ex-div dates, pay dates, and dividend frequency from Yahoo Finance for the currently selected Holdings scope. Individual accounts refresh only themselves; Owner refreshes its included source accounts; Aggregate refreshes its configured member accounts. Refresh requests are coordinated across Dashboard and Holdings, so if one refresh is already running, the next request waits for it instead of starting a second overlapping refresh.</li>
         <li><strong>Latest Refresh Result</strong> - After Refresh Prices &amp; Divs finishes, a temporary result section appears near the top of the Holdings screen. Each account card shows:
           <ul style={{ paddingLeft: '1.25rem', lineHeight: '1.7', marginTop: '0.25rem' }}>
             <li><strong>Month-to-date payable distributions</strong> — total estimated cash from holdings with expected pay dates from the first day of the refresh month through the refresh date.</li>
@@ -881,7 +895,7 @@ function HoldingsHelp() {
             <li><strong>Distribution ticker chips</strong> — the tickers included in the month-to-date payable total, with their estimated dollar amounts.</li>
           </ul>
         </li>
-        <li><strong>DRIP during refresh</strong> - If a holding has DRIP turned on, Refresh Prices &amp; Divs can simulate reinvested dividends from the holding's import/purchase date using Yahoo dividend history and closing prices. When that succeeds, the holding's share count, shares from dividends, cash reinvested, estimated annual income, approximate monthly income, and estimated payment amount can all increase. This updates the Holdings row only; it does not create BUY transactions or rewrite transaction-lot history.</li>
+        <li><strong>DRIP during refresh</strong> - If a holding has DRIP turned on, Refresh Prices &amp; Divs can simulate reinvested dividends from the holding's import/purchase date using Yahoo dividend history and closing prices. When that succeeds, the holding's share count, shares from dividends, cash reinvested, estimated annual income, approximate monthly income, and estimated payment amount can all increase. The simulation starts after the import/purchase date, so newly bought shares are not credited with dividends from before you owned them. This updates the Holdings row only; it does not create BUY transactions or rewrite transaction-lot history.</li>
         <li><strong>Post-Refresh Accrual Estimate</strong> - The accrual cards summarize estimated dividends earned since the previous refresh for each account. If the app can identify pay-date events in that window, the count is labeled as payments since refresh. These cards also appear on page load before you run a new refresh, so you can always see the running accrual.</li>
         <li><strong>Dividend history tracking</strong> - When the refresh finds an expected payment for the current month through the refresh date, it can write an estimated payment row into Dividend History using source <code>refresh_estimate</code>. If a broker dividend import later brings in the actual payment for the same ticker, account, and date, the actual broker row replaces the refresh estimate instead of creating a duplicate. Dividend repair ignores <code>refresh_estimate</code> rows when rebuilding actual payment totals, so estimates do not get counted as imported broker actuals.</li>
         <li><strong>Div Src filter</strong> (dropdown, left of Refresh) — Filters the holdings table by the source of each row's dividend actuals. Options: <em>All</em>, <em>Imported actuals</em> (any broker-sourced payment data — Schwab, Fidelity, E*Trade, Robinhood, Snowball, or generic imports), individual brokers, <em>Snapshot</em> (lifetime totals preserved from a Snowball migration), <em>Yahoo</em> (fallback filled from Yahoo history), <em>Mixed</em> (aggregate rows whose members have different sources), and <em>No source</em> (holdings with no dividend data yet). The selected source is also shown in the new <strong>Div Src</strong> column in the table.</li>
@@ -936,9 +950,9 @@ function HoldingsHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.7', marginBottom: '0.5rem' }}>
         <li><em>Current price</em> — used to recompute Current Value, Gain/Loss, and any yield/coverage metric.</li>
         <li><em>Dividend per share, frequency, ex-div date, pay date</em> — refreshes the forward-looking distribution metadata used by Estimated Annual Income, Approx Monthly Income, and the Dividend Calendar.</li>
-        <li><em>DRIP share growth</em> — for holdings with DRIP turned on, refresh uses dividend history and close prices to estimate reinvested shares since the import/purchase date. If new DRIP shares are found, the holding's share count and income estimates are recalculated from the larger share balance. This affects the Holdings row and payment estimates, but does not add transaction-lot records.</li>
+        <li><em>DRIP share growth</em> — for holdings with DRIP turned on, refresh uses dividend history and close prices to estimate reinvested shares since the import/purchase date. If new DRIP shares are found, the holding's share count and income estimates are recalculated from the larger share balance. The replay starts after the import/purchase date, so a holding bought after an ex-dividend date is not credited with that already-missed distribution. This affects the Holdings row and payment estimates, but does not add transaction-lot records.</li>
         <li><em>Accrued income since last refresh</em> — the gap between the previous refresh timestamp and now is used to estimate dividends earned per holding, surfaced in the Latest Refresh Result and Post-Refresh Accrual Estimate cards.</li>
-        <li><em>Estimated payment rows on payable distributions</em> — if a holding's expected pay date falls from the start of the current month through the refresh date, an estimate row is written into Dividend History with source <code>refresh_estimate</code>. A later broker import for the same ticker/account/date overwrites the estimate with the actual payment, so estimates never double-count.</li>
+        <li><em>Estimated payment rows on payable distributions</em> — if a holding's expected pay date falls from the start of the current month through the refresh date, an estimate row is written into Dividend History with source <code>refresh_estimate</code>. The holding must also have been owned before the ex-dividend date; if the purchase date is on or after the ex-date, no payment row is created and any stale refresh estimate for that missed payment is removed. A later broker import for the same ticker/account/date overwrites an eligible estimate with the actual payment, so estimates never double-count.</li>
       </ul>
       <p style={{ marginBottom: '0.5rem' }}>
         <strong>Scope.</strong> A single profile refreshes only itself. Owner refreshes its included source
@@ -959,6 +973,13 @@ function HoldingsHelp() {
         and it does not change DRIP flags or share counts. For those, use Preview Div Repair or
         Sync DRIP / DRIP Matrix.
       </p>
+
+      <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>Ex-date eligibility:</strong> For current dividend fields and refresh-created payment estimates,
+        the app checks purchase date against ex-dividend date. If you bought a fund after the ex-date but before
+        the pay date, the row can still show forward monthly/annual income for future payments, but the missed
+        payment is not counted as received, reinvested, YTD income, or DRIP shares.
+      </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="./help-screenshots/holdings/refresh-data.jpg" alt="Refresh Prices and Dividends" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
@@ -5972,7 +5993,8 @@ function CEFBuyingChecklistHelp() {
           <strong>Deep Dive</strong> — Type a CEF ticker for a full scored breakdown. Data is sourced from
           CEF Connect (price, NAV, discount/premium, leverage, distribution rate, NAV return history).
           Eight criteria are scored with Pass / Warn / Fail badges and an expandable "What to check"
-          section for each. Alternatives in the same category are listed at the bottom.
+          section for each. Alternatives are listed at the bottom, narrowed to the same sector or strategy
+          theme when the app can detect one.
         </li>
         <li>
           <strong>Scan a List</strong> — Evaluate multiple CEFs at once from a sortable ranking table.
@@ -6087,6 +6109,20 @@ function CEFBuyingChecklistHelp() {
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="./help-screenshots/cef/cef_evaluator_bottom.jpg" alt="CEF Buying Checklist Evaluator bottom — verdict card, alternatives, and threshold editors" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
+
+      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Better Alternatives</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The alternatives section compares the current CEF against peers that score higher on the same checklist.
+        When the fund name, strategy, or category indicates a recognizable theme — such as infrastructure,
+        utilities, energy/MLP/midstream, real estate, municipal bonds, preferreds, senior loans, covered-call
+        income, technology, health care, or emerging markets — suggestions are narrowed to that theme first.
+        For example, an infrastructure CEF is compared with other infrastructure CEFs instead of every broad
+        global-income CEF in the same Morningstar category.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        If the app cannot detect a specific theme, or if too few same-theme peers are available, it falls back
+        to the broader CEF category so the alternatives list still has enough funds to compare.
+      </p>
 
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
       <p style={{ marginBottom: '0.75rem' }}>
