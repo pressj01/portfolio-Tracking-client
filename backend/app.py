@@ -1111,6 +1111,11 @@ def _estimate_month_income(holding, month):
 def _estimate_current_month_income(holding):
     """Estimate income for the current month from a single holding."""
     import datetime
+    if not _holding_eligible_for_current_dividend(
+        holding.get("purchase_date"),
+        holding.get("ex_div_date"),
+    ):
+        return 0.0
     return _estimate_month_income(holding, datetime.date.today().month)
 
 
@@ -1224,6 +1229,7 @@ def _recompute_position_income_fields(
 ):
     row = conn.execute(
         """SELECT quantity, purchase_value, current_value, div, div_frequency, ex_div_date,
+                  div_pay_date, purchase_date,
                   estim_payment_per_year, approx_monthly_income
            FROM all_account_info
            WHERE ticker = ? AND profile_id = ?""",
@@ -1275,7 +1281,24 @@ def _recompute_position_income_fields(
         "div": div,
         "div_frequency": div_frequency,
         "ex_div_date": row["ex_div_date"],
+        "purchase_date": row["purchase_date"],
     }) if quantity > 0 and payments_per_year > 0 else 0.0
+    dividend_paid = (
+        _current_dividend_paid(quantity, div)
+        if _holding_eligible_for_current_dividend(row["purchase_date"], row["ex_div_date"])
+        else 0.0
+    )
+    if dividend_paid <= 0 and not _holding_eligible_for_current_dividend(row["purchase_date"], row["ex_div_date"]):
+        pay_dt = _date_from_value(row["div_pay_date"])
+        if pay_dt is not None:
+            try:
+                conn.execute(
+                    "DELETE FROM dividend_payments "
+                    "WHERE ticker = ? AND profile_id = ? AND payment_date = ? AND source = ?",
+                    (ticker, profile_id, pay_dt.isoformat(), REFRESH_ESTIMATE_DIVIDEND_SOURCE),
+                )
+            except Exception:
+                pass
 
     conn.execute(
         """UPDATE all_account_info
@@ -1289,7 +1312,7 @@ def _recompute_position_income_fields(
             round(yoc, 4),
             round(cur_yield, 4),
             round(current_month_income, 2),
-            _current_dividend_paid(quantity, div),
+            dividend_paid,
             ticker,
             profile_id,
         ),
@@ -4520,6 +4543,15 @@ def _date_from_value(value):
     return ts.date()
 
 
+def _holding_eligible_for_current_dividend(purchase_date, ex_div_date):
+    """Return False when the holding was bought on/after the current ex-date."""
+    purchase_dt = _date_from_value(purchase_date)
+    ex_dt = _date_from_value(ex_div_date)
+    if purchase_dt is None or ex_dt is None:
+        return True
+    return purchase_dt < ex_dt
+
+
 def _infer_dividend_frequency_from_count(count):
     """Infer dividend frequency code from the number of positive payments in ~1 year."""
     if count >= 45:
@@ -7429,6 +7461,7 @@ def refresh_market_data():
     accrued_divs_by_profile = {pid: 0.0 for pid in source_pids}
     days_since_refresh_by_profile = {}
     distributions_today_by_profile = {pid: [] for pid in source_pids}
+    ineligible_refresh_payments_by_profile = {pid: [] for pid in source_pids}
     history_payments_recorded_by_profile = {pid: 0 for pid in source_pids}
     history_payments_inserted_by_profile = {pid: 0 for pid in source_pids}
     history_payments_updated_by_profile = {pid: 0 for pid in source_pids}
@@ -7739,30 +7772,42 @@ def refresh_market_data():
                 vals.append(next_current_month_income)
 
             effective_div = new_div if snapshot_known else h["div"]
-            next_dividend_paid = _current_dividend_paid(qty, effective_div)
+            effective_exdiv = new_exdiv if snapshot_known else old_exdiv
+            raw_dividend_paid = _current_dividend_paid(qty, effective_div)
+            eligible_for_current_dividend = _holding_eligible_for_current_dividend(
+                purchase_date,
+                effective_exdiv,
+            )
+            next_dividend_paid = raw_dividend_paid if eligible_for_current_dividend else 0.0
             if _refresh_num_changed(h["dividend_paid"], next_dividend_paid):
                 dividend_row_updated = True
             sets.append("dividend_paid = ?")
             vals.append(next_dividend_paid)
 
             expected_pay_date = _refresh_expected_pay_date(
-                new_exdiv if snapshot_known else old_exdiv,
+                effective_exdiv,
                 new_pay_date if snapshot_known else old_pay_date,
                 new_freq if snapshot_known else old_freq,
             )
             if (
                 expected_pay_date is not None
                 and refresh_month_start <= expected_pay_date <= refresh_date
-                and next_dividend_paid > 0
+                and raw_dividend_paid > 0
             ):
-                distributions_today_by_profile.setdefault(pid, []).append({
-                    "ticker": t,
-                    "amount": round(float(next_dividend_paid), 2),
-                    "div": round(float(effective_div or 0), 6),
-                    "quantity": round(float(qty or 0), 6),
-                    "frequency": (new_freq if snapshot_known else old_freq) or "",
-                    "pay_date": expected_pay_date.isoformat(),
-                })
+                if eligible_for_current_dividend:
+                    distributions_today_by_profile.setdefault(pid, []).append({
+                        "ticker": t,
+                        "amount": round(float(next_dividend_paid), 2),
+                        "div": round(float(effective_div or 0), 6),
+                        "quantity": round(float(qty or 0), 6),
+                        "frequency": (new_freq if snapshot_known else old_freq) or "",
+                        "pay_date": expected_pay_date.isoformat(),
+                    })
+                else:
+                    ineligible_refresh_payments_by_profile.setdefault(pid, []).append({
+                        "ticker": t,
+                        "pay_date": expected_pay_date.isoformat(),
+                    })
 
             if sets:
                 vals.extend([t, pid])
@@ -7814,6 +7859,14 @@ def refresh_market_data():
             )
             history_payments_recorded_by_profile[pid] = history_payments_recorded_by_profile.get(pid, 0) + 1
             history_payments_inserted_by_profile[pid] = history_payments_inserted_by_profile.get(pid, 0) + 1
+
+    for pid, payments in ineligible_refresh_payments_by_profile.items():
+        for item in payments:
+            conn.execute(
+                "DELETE FROM dividend_payments "
+                "WHERE ticker = ? AND profile_id = ? AND payment_date = ? AND source = ?",
+                (item["ticker"], pid, item["pay_date"], REFRESH_ESTIMATE_DIVIDEND_SOURCE),
+            )
 
     # Save last-refresh timestamps for next refresh's accrual calculation
     now_iso = _dt.now().isoformat()
@@ -13454,7 +13507,7 @@ def income_summary():
 
     # Use stored actuals from refresh, fall back to estimates for holdings without data
     holdings = conn.execute(
-        f"""SELECT quantity, div, ex_div_date, div_frequency,
+        f"""SELECT quantity, div, ex_div_date, div_frequency, purchase_date,
                    ytd_divs, current_month_income
             FROM all_account_info
             WHERE profile_id IN ({placeholders})

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useDialog } from '../components/DialogProvider'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { useMarketRefresh } from '../context/MarketRefreshContext'
+import { clearDashboardCacheForSelection } from '../utils/dashboardCache'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '',
@@ -16,14 +18,7 @@ const EMPTY_HOLDING = {
 
 function invalidateDashboardCache() {
   try {
-    for (const store of [localStorage, sessionStorage]) {
-      for (let i = store.length - 1; i >= 0; i -= 1) {
-        const key = store.key(i)
-        if (key && key.startsWith('portfolio_dashboard_v9_')) {
-          store.removeItem(key)
-        }
-      }
-    }
+    clearDashboardCacheForSelection(localStorage.getItem('portfolio_selectedProfileId') || 'p:1')
   } catch {
     // Cache invalidation is best-effort; data refresh still comes from the API.
   }
@@ -1162,6 +1157,7 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
 
 export default function ManageHoldings() {
   const pf = useProfileFetch()
+  const { runMarketRefresh } = useMarketRefresh()
   const { profileId, isAggregate, selection, basisMode } = useProfile()
   const dialog = useDialog()
   const holdingsRequestRef = useRef(0)
@@ -1285,9 +1281,7 @@ export default function ManageHoldings() {
     setDividendRefreshAccounts(null)
     setDividendRefreshDate(null)
     try {
-      const res = await pf('/api/refresh', { method: 'POST' })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
+      const data = await runMarketRefresh({ statusMessage: 'Refreshing holdings prices & dividends...' })
       setDividendRefreshAccounts(data.dividend_update_accounts || [])
       setDividendRefreshDate(data.refresh_date || null)
       setMessage(data.message)

@@ -478,6 +478,49 @@ function describeImprovement(label, altVal, curVal, isPctPoints, lowerBetter) {
   return null
 }
 
+// Sector/strategy themes used to keep "better alternatives" within the same
+// kind of fund. The broad Morningstar CategoryName (e.g. "US CEF Global Income")
+// lumps an infrastructure fund in with every global-income CEF, so on its own it
+// surfaces unrelated alternatives. These themes are matched against the fund's
+// name + strategy + category so an infrastructure CEF is only ever compared to
+// other infrastructure CEFs. Ordered most-specific first; the first theme whose
+// pattern matches the fund wins.
+const FUND_THEMES = [
+  { key: 'infrastructure', label: 'infrastructure',                patterns: [/infrastructure/] },
+  { key: 'utilities',      label: 'utilities & infrastructure',    patterns: [/utilit/] },
+  { key: 'midstream',      label: 'energy / MLP / midstream',      patterns: [/midstream/, /\bmlp\b/, /pipeline/, /natural resources?/, /\benergy\b/, /oil\s*&?\s*gas/] },
+  { key: 'real-estate',    label: 'real estate',                   patterns: [/real estate/, /\breits?\b/, /\bproperty\b/] },
+  { key: 'municipal',      label: 'municipal',                     patterns: [/municipal/, /\bmuni\b/, /tax[-\s]?free/, /tax[-\s]?advantaged/, /tax[-\s]?exempt/] },
+  { key: 'preferred',      label: 'preferred securities',          patterns: [/preferred/] },
+  { key: 'senior-loan',    label: 'senior loan / floating rate',   patterns: [/senior loan/, /floating[-\s]?rate/, /bank loan/] },
+  { key: 'convertible',    label: 'convertible',                   patterns: [/convertible/] },
+  { key: 'covered-call',   label: 'option income / covered call',  patterns: [/covered[-\s]?call/, /buy[-\s]?write/, /option income/, /equity premium/] },
+  { key: 'technology',     label: 'technology',                    patterns: [/technology/, /\btech\b/] },
+  { key: 'healthcare',     label: 'health care',                   patterns: [/health\s?care/, /\bhealth\b/, /biotech/, /life sciences?/] },
+  { key: 'emerging',       label: 'emerging markets',              patterns: [/emerging market/] },
+]
+
+function fundThemeText(fund) {
+  return `${fund?.name || ''} ${fund?.strategy || ''} ${fund?.category || ''}`.toLowerCase()
+}
+
+// Identify the most specific sector/strategy theme for a fund, or null if none
+// of the known themes apply (in which case callers fall back to broad category).
+export function detectFundTheme(fund) {
+  const text = fundThemeText(fund)
+  if (!text.trim()) return null
+  for (const theme of FUND_THEMES) {
+    if (theme.patterns.some(p => p.test(text))) return theme
+  }
+  return null
+}
+
+export function fundMatchesTheme(fund, theme) {
+  if (!theme) return false
+  const text = fundThemeText(fund)
+  return theme.patterns.some(p => p.test(text))
+}
+
 export function findAlternatives(currentFund, peers, thresholds, limit = 5) {
   if (!currentFund || !peers || !peers.length) return []
   const currentTicker = String(currentFund.ticker || '').toUpperCase()

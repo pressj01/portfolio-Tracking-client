@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { API_BASE } from '../config'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { useMarketRefresh } from '../context/MarketRefreshContext'
 import { returnVsYield } from '../utils/returnVsYield'
 import { readDashboardCache, writeDashboardCache } from '../utils/dashboardCache'
 
@@ -357,6 +358,7 @@ function safeJson(r) {
 
 export default function Dashboard() {
   const pf = useProfileFetch()
+  const { runMarketRefresh } = useMarketRefresh()
   const { profileId, profiles, isAggregate, selection, currentProfileName, basisMode } = useProfile()
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
@@ -541,8 +543,7 @@ export default function Dashboard() {
             .catch(() => {})
 
           setRefreshStatus('Updating prices & dividends...')
-          pf('/api/refresh', { method: 'POST' })
-            .then(safeJson)
+          runMarketRefresh({ statusMessage: 'Updating prices & dividends...' })
             .then(r => {
               if (stale) return
               setRefreshStatus(r.message)
@@ -579,7 +580,7 @@ export default function Dashboard() {
       })
       .catch(() => { if (!stale) setLoading(false) })
     return () => { stale = true }
-  }, [pf, selection, dashboardCacheKey])
+  }, [pf, selection, dashboardCacheKey, runMarketRefresh])
 
   useEffect(() => {
     if (loading || !holdings.length) return
@@ -1050,7 +1051,9 @@ export default function Dashboard() {
             disabled={navSnapping}
             onClick={() => {
               setNavSnapping(true)
-              pf('/api/nav/snapshot', { method: 'POST' })
+              setRefreshStatus('Updating prices & dividends before recording NAV...')
+              runMarketRefresh({ statusMessage: 'Updating prices & dividends before recording NAV...' })
+                .then(() => pf('/api/nav/snapshot', { method: 'POST' }))
                 .then(safeJson)
                 .then(d => {
                   if (d?.skipped) {

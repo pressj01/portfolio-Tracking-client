@@ -47,3 +47,16 @@ export function clearDashboardCacheForSelection(selectionKey) {
     // best-effort
   }
 }
+
+export function clearAllDashboardCache() {
+  try {
+    const stores = [localStorage, sessionStorage]
+    stores.forEach(store => {
+      Object.keys(store)
+        .filter(k => k.startsWith(CACHE_PREFIX))
+        .forEach(k => store.removeItem(k))
+    })
+  } catch {
+    // best-effort
+  }
+}

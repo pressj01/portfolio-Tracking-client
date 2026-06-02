@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { API_BASE } from '../config'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { useMarketRefresh } from '../context/MarketRefreshContext'
+import { clearAllDashboardCache } from '../utils/dashboardCache'
 
 const dateInputToday = () => {
   const d = new Date()
@@ -58,11 +60,13 @@ function FileUpload({ onFileSelect, accept, file }) {
 
 export default function Import() {
   const pf = useProfileFetch()
+  const { isRefreshing: marketRefreshing, waitForMarketRefresh } = useMarketRefresh()
   const { selection, profiles, isAggregate, refreshProfiles, currentProfileName } = useProfile()
   const [activeTab, setActiveTab] = useState('owner')
   const [file, setFile] = useState(null)
   const [sheetName, setSheetName] = useState('All Accounts')
   const [loading, setLoading] = useState(false)
+  const [waitingForRefresh, setWaitingForRefresh] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [multiSheet, setMultiSheet] = useState(false)
@@ -152,6 +156,15 @@ export default function Import() {
     }
   }
 
+  const waitForRefreshBeforeImport = async () => {
+    if (marketRefreshing) setWaitingForRefresh(true)
+    try {
+      await waitForMarketRefresh()
+    } finally {
+      setWaitingForRefresh(false)
+    }
+  }
+
   const handleOwnerImport = async () => {
     setLoading(true)
     setResult(null)
@@ -160,6 +173,7 @@ export default function Import() {
     const results = []
 
     try {
+      await waitForRefreshBeforeImport()
       // Main import
       const extraFields = multiSheet ? { multi_sheet: 'true' } : { sheet_name: sheetName }
       extraFields.nav_date = navSnapshotDate
@@ -198,6 +212,7 @@ export default function Import() {
       }
 
       setResult(results)
+      clearAllDashboardCache()
       loadBackups()
     } catch (e) {
       setError(e.message)
@@ -212,6 +227,7 @@ export default function Import() {
     setError(null)
 
     try {
+      await waitForRefreshBeforeImport()
       const extraFields = multiSheet ? { multi_sheet: 'true' } : {}
       extraFields.nav_date = navSnapshotDate
       if (asTransactions) extraFields.as_transactions = 'true'
@@ -221,6 +237,7 @@ export default function Import() {
         setResult([data.message, ...data.details.map(d => `  ${d.profile_name}: ${d.message}`)])
         refreshProfiles()
       }
+      clearAllDashboardCache()
       loadBackups()
     } catch (e) {
       setError(e.message)
@@ -327,6 +344,11 @@ export default function Import() {
       <p style={{ color: '#7ecfff', marginBottom: '1rem', fontSize: '0.9rem' }}>
         Importing into: <strong>{currentProfileName}</strong>
       </p>
+      {(marketRefreshing || waitingForRefresh) && (
+        <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+          Price and dividend refresh is finishing. Imports will be available as soon as the refresh completes.
+        </div>
+      )}
 
       <div className="tabs">
         <button
@@ -439,9 +461,9 @@ export default function Import() {
           <button
             className="btn btn-primary"
             onClick={handleOwnerImport}
-            disabled={!file || loading}
+            disabled={!file || loading || marketRefreshing || waitingForRefresh}
           >
-            {loading ? <><span className="spinner" /> Importing...</> : hasData ? 'Merge Spreadsheet' : 'Import Spreadsheet'}
+            {waitingForRefresh || marketRefreshing ? <><span className="spinner" /> Waiting...</> : loading ? <><span className="spinner" /> Importing...</> : hasData ? 'Merge Spreadsheet' : 'Import Spreadsheet'}
           </button>
         </div>
       )}
@@ -504,9 +526,9 @@ export default function Import() {
             <button
               className="btn btn-primary"
               onClick={handleGenericImport}
-              disabled={!file || loading}
+              disabled={!file || loading || marketRefreshing || waitingForRefresh}
             >
-              {loading ? <><span className="spinner" /> Importing...</> : hasData ? 'Merge Portfolio' : 'Import Portfolio'}
+              {waitingForRefresh || marketRefreshing ? <><span className="spinner" /> Waiting...</> : loading ? <><span className="spinner" /> Importing...</> : hasData ? 'Merge Portfolio' : 'Import Portfolio'}
             </button>
           </div>
 
@@ -787,7 +809,7 @@ export default function Import() {
             {txnPreview && (
               <button
                 className="btn btn-primary"
-                disabled={txnImporting || !txnHasRows || txnAccountMismatch}
+                disabled={txnImporting || marketRefreshing || waitingForRefresh || !txnHasRows || txnAccountMismatch}
                 onClick={async () => {
                   setTxnImporting(true)
                   setError(null)
@@ -798,12 +820,14 @@ export default function Import() {
                   formData.append('nav_date', navSnapshotDate)
                   if (txnNavOnly && txnPreview?.format_type === 'positions') formData.append('nav_only', 'true')
                   try {
+                    await waitForRefreshBeforeImport()
                     const res = await pf(`/api/import/transactions`, { method: 'POST', body: formData })
                     const data = await res.json()
                     if (!res.ok) throw new Error(data.error || 'Import failed')
                     setResult([data.message])
                     setTxnPreview(null)
                     setTxnFile(null)
+                    clearAllDashboardCache()
                     loadBackups()
                   } catch (e) {
                     setError(e.message)
@@ -812,7 +836,7 @@ export default function Import() {
                   }
                 }}
               >
-                {txnImporting ? <><span className="spinner" /> Importing...</> : `Import into ${currentProfileName}`}
+                {marketRefreshing || waitingForRefresh ? <><span className="spinner" /> Waiting...</> : txnImporting ? <><span className="spinner" /> Importing...</> : `Import into ${currentProfileName}`}
               </button>
             )}
           </div>

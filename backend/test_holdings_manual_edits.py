@@ -64,6 +64,15 @@ class ManualHoldingEditApiTest(unittest.TestCase):
                 category_id INTEGER,
                 profile_id INTEGER
             );
+            CREATE TABLE dividend_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT,
+                profile_id INTEGER,
+                payment_date TEXT,
+                amount REAL,
+                source TEXT,
+                notes TEXT
+            );
             """
         )
         conn.close()
@@ -189,6 +198,44 @@ class ManualHoldingEditApiTest(unittest.TestCase):
         self.assertEqual(row["percent_change"], 0)
         self.assertEqual(row["estim_payment_per_year"], 0)
         self.assertEqual(row["approx_monthly_income"], 0)
+
+    def test_drip_toggle_does_not_credit_dividend_bought_after_ex_date(self):
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, current_price, purchase_value, current_value, "
+            "purchase_date, div, div_frequency, ex_div_date, div_pay_date, reinvest, "
+            "dividend_paid, current_month_income, estim_payment_per_year, approx_monthly_income) "
+            "VALUES ('UTF', 1, 68, 67.5811, 26.78, 4595.51, 1821.16, "
+            "'2026-06-02', 0.165, 'M', '05/12/26', '06/02/26', 'N', "
+            "11.22, 11.22, 134.64, 11.22)"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments "
+            "(ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('UTF', 1, '2026-06-02', 11.22, 'refresh_estimate', 'stale')"
+        )
+
+        res = self.client.put(
+            "/api/holdings/UTF?profile_id=1",
+            json={"reinvest": "Y"},
+        )
+
+        self.assertEqual(res.status_code, 200)
+        row = self._row(
+            "SELECT reinvest, dividend_paid, current_month_income, "
+            "estim_payment_per_year, approx_monthly_income "
+            "FROM all_account_info WHERE ticker = 'UTF' AND profile_id = 1"
+        )
+        self.assertEqual(row["reinvest"], "Y")
+        self.assertEqual(row["dividend_paid"], 0)
+        self.assertEqual(row["current_month_income"], 0)
+        self.assertAlmostEqual(row["estim_payment_per_year"], 134.64, places=2)
+        self.assertAlmostEqual(row["approx_monthly_income"], 11.22, places=2)
+        payment = self._row(
+            "SELECT amount FROM dividend_payments "
+            "WHERE ticker = 'UTF' AND profile_id = 1 AND payment_date = '2026-06-02'"
+        )
+        self.assertIsNone(payment)
 
     def test_clearing_price_paid_removes_stale_cost_basis_and_gain(self):
         self._execute(

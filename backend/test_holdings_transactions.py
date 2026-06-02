@@ -42,6 +42,7 @@ class HoldingsTransactionTest(unittest.TestCase):
                 div_frequency TEXT,
                 reinvest TEXT,
                 ex_div_date TEXT,
+                div_pay_date TEXT,
                 estim_payment_per_year REAL,
                 approx_monthly_income REAL,
                 annual_yield_on_cost REAL,

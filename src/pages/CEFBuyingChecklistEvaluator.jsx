@@ -8,6 +8,8 @@ import {
   gradeFund,
   findAlternatives,
   verdictFromComposite,
+  detectFundTheme,
+  fundMatchesTheme,
 } from '../utils/cefGrading'
 
 const STORAGE_KEY = 'cefChecklistThresholds.v1'
@@ -269,19 +271,28 @@ function HeaderCard({ fund }) {
   )
 }
 
-function AlternativesList({ alternatives, peerCount, currentCategory }) {
-  if (!currentCategory) return null
+function AlternativesList({ alternatives, peerCount, groupLabel, themed }) {
+  if (!groupLabel) return null
+  const heading = themed
+    ? `Better ${groupLabel} alternatives`
+    : `Better alternatives in the ${groupLabel} category`
+  const blurb = themed
+    ? `Other ${groupLabel}s scoring higher on the composite of all 7 criteria. ${peerCount} same-sector peers screened.`
+    : `Funds in the same category scoring higher on the composite of all 7 criteria. ${peerCount} peers screened.`
+  const emptyMsg = themed
+    ? `No higher-scoring ${groupLabel}s found.`
+    : 'No higher-scoring alternatives found in this category.'
   return (
     <div style={{ marginTop: '1.5rem' }}>
       <h2 style={{ color: '#e6edf7', fontSize: '1.1rem', margin: '0 0 0.4rem' }}>
-        Better alternatives in the {currentCategory} category
+        {heading}
       </h2>
       <p style={{ color: '#90a4ae', fontSize: '0.86rem', margin: '0 0 0.8rem' }}>
-        Funds in the same category scoring higher on the composite of all 7 criteria. {peerCount} peers screened.
+        {blurb}
       </p>
       {alternatives.length === 0 ? (
         <div style={{ background: '#0f1e3b', border: '1px solid #1c2e52', borderRadius: 6, padding: '1rem', color: '#b8c8e0' }}>
-          No higher-scoring alternatives found in this category.
+          {emptyMsg}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -364,6 +375,24 @@ export default function CEFBuyingChecklistEvaluator() {
     return data.rows.filter(r => r.category && r.category === fund.category)
   }, [fund, data])
 
+  // Peer group for the "better alternatives" list. When the fund belongs to a
+  // recognizable sector/strategy theme (e.g. infrastructure), narrow to other
+  // funds sharing that theme so an infrastructure CEF only surfaces other
+  // infrastructure CEFs — not every fund in its broad Morningstar category.
+  // Falls back to the broad category when no theme is detected or too few
+  // themed peers exist to compare against.
+  const altPeerGroup = useMemo(() => {
+    if (!fund || !data?.rows) return { peers: [], label: fund?.category || '', themed: false }
+    const theme = detectFundTheme(fund)
+    if (theme) {
+      const themed = data.rows.filter(r => fundMatchesTheme(r, theme))
+      if (themed.length >= 3) {
+        return { peers: themed, label: `${theme.label} CEF`, themed: true }
+      }
+    }
+    return { peers, label: fund.category, themed: false }
+  }, [fund, data, peers])
+
   const result = useMemo(() => {
     if (!fund) return null
     return gradeFund(fund, peers, thresholds)
@@ -371,8 +400,8 @@ export default function CEFBuyingChecklistEvaluator() {
 
   const alternatives = useMemo(() => {
     if (!fund) return []
-    return findAlternatives(fund, peers, thresholds, 5)
-  }, [fund, peers, thresholds])
+    return findAlternatives(fund, altPeerGroup.peers, thresholds, 5)
+  }, [fund, altPeerGroup, thresholds])
 
   const verdict = useMemo(() => {
     if (!result) return null
@@ -510,8 +539,9 @@ export default function CEFBuyingChecklistEvaluator() {
 
           <AlternativesList
             alternatives={alternatives}
-            peerCount={peers.length}
-            currentCategory={fund.category}
+            peerCount={altPeerGroup.peers.length}
+            groupLabel={altPeerGroup.label}
+            themed={altPeerGroup.themed}
           />
 
           <div style={{

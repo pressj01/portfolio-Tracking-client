@@ -3,6 +3,7 @@ import { HashRouter as Router, Routes, Route, NavLink, useLocation } from 'react
 import './index.css'
 import DialogProvider from './components/DialogProvider'
 import ProfileProvider, { useProfile } from './context/ProfileContext'
+import MarketRefreshProvider from './context/MarketRefreshContext'
 import Dashboard from './pages/Dashboard'
 import Import from './pages/Import'
 import ManageHoldings from './pages/ManageHoldings'
@@ -97,6 +98,7 @@ function App() {
   return (
     <DialogProvider>
     <ProfileProvider>
+    <MarketRefreshProvider>
     <Router>
       <Nav />
       <Routes>
@@ -157,6 +159,7 @@ function App() {
         <Route path="/help" element={<Help />} />
       </Routes>
     </Router>
+    </MarketRefreshProvider>
     </ProfileProvider>
     </DialogProvider>
   )
