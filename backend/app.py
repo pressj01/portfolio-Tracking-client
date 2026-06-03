@@ -2601,10 +2601,16 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
             realized_gain = txn.get("realized_gain")
             notes = txn.get("notes") or "Imported from portfolio export"
 
+            # Match on date+shares with a sub-cent price tolerance: the same
+            # fill can arrive from two feeds that round the price differently
+            # (e.g. 20.5425 vs 20.54), and an exact price match would let those
+            # re-imports through as duplicates. The 0.01 window is tight enough
+            # that genuinely distinct same-day fills (which differ by far more)
+            # are still preserved.
             existing_count = conn.execute(
                 "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
                 "AND transaction_type = ? AND transaction_date = ? "
-                "AND ABS(shares - ?) < 0.0001 AND price_per_share = ?",
+                "AND ABS(shares - ?) < 0.0001 AND ABS(COALESCE(price_per_share, 0) - ?) < 0.01",
                 (ticker, profile_id, txn_type, txn_date, shares, price),
             ).fetchone()[0]
             import_count = sum(
@@ -2615,7 +2621,7 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
                 and (t.get("date") or None) == txn_date
                 and _normalize_transaction_shares(t.get("shares")) is not None
                 and abs(_normalize_transaction_shares(t.get("shares")) - shares) < 0.0001
-                and (t.get("price_per_share") or 0) == price
+                and abs((t.get("price_per_share") or 0) - price) < 0.01
                 and profile_by_name.get(str(t.get("profile") or "").strip().lower(), transaction_profile_fallback) == profile_id
             )
             if existing_count >= import_count:
@@ -3211,10 +3217,14 @@ def api_import_transactions():
                                    and t["shares"] is not None
                                    and abs(t["shares"] - txn["shares"]) < 0.0001)
             else:
+                # Sub-cent price tolerance so the same fill re-imported from a
+                # feed that rounds price differently is recognised as a duplicate
+                # (an exact match would let rounding-only differences through),
+                # while genuinely distinct same-day fills are still preserved.
                 existing_count = conn.execute(
                     "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
                     "AND transaction_type = ? AND transaction_date = ? "
-                    "AND ABS(shares - ?) < 0.0001 AND price_per_share = ?",
+                    "AND ABS(shares - ?) < 0.0001 AND ABS(COALESCE(price_per_share, 0) - ?) < 0.01",
                     (ticker, profile_id, txn["type"], txn["date"],
                      txn["shares"], txn["price_per_share"] or 0),
                 ).fetchone()[0]
@@ -3223,7 +3233,7 @@ def api_import_transactions():
                                    and t["date"] == txn["date"]
                                    and t["shares"] is not None
                                    and abs(t["shares"] - txn["shares"]) < 0.0001
-                                   and (t["price_per_share"] or 0) == (txn["price_per_share"] or 0))
+                                   and abs((t["price_per_share"] or 0) - (txn["price_per_share"] or 0)) < 0.01)
             if existing_count >= import_count:
                 duplicates_skipped += 1
                 continue
@@ -8561,6 +8571,20 @@ def list_holdings():
     )
     _apply_basis_mode_to_holdings(results)
     _apply_holding_display_quantities(results)
+
+    # Single-profile reads return all_account_info.* verbatim, so a stale
+    # stored current_annual_yield / annual_yield_on_cost (e.g. left at 0 while
+    # estim_payment_per_year is populated) would surface here. The aggregate
+    # path already recomputes these in SQL; mirror that for the single path so
+    # derived yields are always consistent with estim_payment_per_year.
+    if not (is_agg and len(pids) > 1):
+        for r in results:
+            estim = r.get("estim_payment_per_year") or 0
+            cv = r.get("current_value") or 0
+            pv = r.get("purchase_value") or 0
+            r["current_annual_yield"] = (estim / cv) if cv > 0 else 0
+            r["annual_yield_on_cost"] = (estim / pv) if pv > 0 else 0
+
     total_value = sum(r.get("current_value") or 0 for r in results)
     if total_value > 0:
         for r in results:
