@@ -10357,30 +10357,16 @@ def download_snowball_holdings_template():
     )
 
 
-@app.route("/api/template/etrade-buys-sells-download", methods=["GET"])
-def download_etrade_buys_sells_template():
-    template_path = os.path.join(os.path.dirname(__file__), '..', 'templates', 'etrade_buys_sells_template.xlsx')
+@app.route("/api/template/etrade-transactions-download", methods=["GET"])
+def download_etrade_transactions_template():
+    template_path = os.path.join(os.path.dirname(__file__), '..', 'templates', 'etrade_transactions_template.xlsx')
     if not os.path.exists(template_path):
-        from create_template import create_etrade_buys_sells_template
-        create_etrade_buys_sells_template()
+        from create_template import create_etrade_transactions_template
+        create_etrade_transactions_template()
     return send_file(
         os.path.abspath(template_path),
         as_attachment=True,
-        download_name='etrade_buys_sells_template.xlsx',
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    )
-
-
-@app.route("/api/template/etrade-dividends-download", methods=["GET"])
-def download_etrade_dividends_template():
-    template_path = os.path.join(os.path.dirname(__file__), '..', 'templates', 'etrade_dividends_template.xlsx')
-    if not os.path.exists(template_path):
-        from create_template import create_etrade_dividends_template
-        create_etrade_dividends_template()
-    return send_file(
-        os.path.abspath(template_path),
-        as_attachment=True,
-        download_name='etrade_dividends_template.xlsx',
+        download_name='etrade_transactions_template.xlsx',
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
 

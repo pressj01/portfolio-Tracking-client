@@ -266,12 +266,8 @@ export default function Import() {
     window.open(`${API_BASE}/api/template/snowball-holdings-download`, '_blank')
   }
 
-  const handleDownloadEtradeBuysSellsTemplate = () => {
-    window.open(`${API_BASE}/api/template/etrade-buys-sells-download`, '_blank')
-  }
-
-  const handleDownloadEtradeDividendsTemplate = () => {
-    window.open(`${API_BASE}/api/template/etrade-dividends-download`, '_blank')
+  const handleDownloadEtradeTransactionsTemplate = () => {
+    window.open(`${API_BASE}/api/template/etrade-transactions-download`, '_blank')
   }
 
   const handleDownloadFidelityTemplate = () => {
@@ -596,10 +592,8 @@ export default function Import() {
                 ? <>Import transaction history from a Schwab <strong>Transactions CSV or XLSX</strong> export. In Schwab, go to Accounts {'>'} History, set the date range, then export to CSV or Excel. Imports buys, sells, DRIP reinvestments, and dividend payments.</>
               : txnFormat === 'etrade'
                 ? <>Import current positions from an E*TRADE <strong>portfolio download CSV or XLSX</strong>. The file account must match the portfolio you currently have selected before import is allowed.</>
-              : txnFormat === 'etrade_buys_sells'
-                ? <>Import buy and sell transactions from an E*TRADE <strong>Transaction History XLSX or CSV</strong> export. In E*TRADE, go to Accounts {'>'} Transaction History, filter to "Buys &amp; Sells", then download.</>
-              : txnFormat === 'etrade_dividends'
-                ? <>Import dividend payments and DRIP reinvestments from an E*TRADE <strong>Transaction History XLSX or CSV</strong> export. In E*TRADE, go to Accounts {'>'} Transaction History, filter to "Dividends", then download.</>
+              : txnFormat === 'etrade_transactions'
+                ? <>Import buy, sell, dividend, and DRIP rows from one E*TRADE <strong>All Transactions XLSX or CSV</strong> export. In E*TRADE, go to Accounts {'>'} Transaction History, choose all transaction activity types, then download.</>
                 : txnFormat === 'fidelity'
                   ? <>Import current positions from a Fidelity <strong>Positions XLSX or CSV</strong> export. This uses only the holdings and dividend fields the app already supports, and treats money market rows as cash.</>
                   : txnFormat === 'fidelity_transactions'
@@ -617,7 +611,7 @@ export default function Import() {
             }
           </p>
 
-          {['snowball', 'schwab_transactions', 'etrade_buys_sells', 'etrade_dividends', 'fidelity_transactions', 'robinhood_transactions', 'shear_group_activity'].includes(txnFormat) && (
+          {['snowball', 'schwab_transactions', 'etrade_transactions', 'fidelity_transactions', 'robinhood_transactions', 'shear_group_activity'].includes(txnFormat) && (
             <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
               <strong>Partial history warning:</strong> If this file does not cover the full account history
               (e.g. only the last 1–2 years), imported buy/sell transactions will recalculate your share
@@ -682,23 +676,12 @@ export default function Import() {
             </div>
           )}
 
-          {txnFormat === 'etrade_buys_sells' && (
+          {txnFormat === 'etrade_transactions' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>E*TRADE buys/sells template available:</strong> the downloadable XLSX keeps the account row, total row, and row-7 headers exactly where this parser expects them. CSV files with the same row layout are also supported.
+              <strong>E*TRADE transactions template available:</strong> the downloadable XLSX matches the all-transactions export this importer reads for buys, sells, cash dividends, and DRIP reinvestments. CSV files with the same headers are also supported.
               <div style={{ marginTop: '0.75rem' }}>
-                <button className="btn btn-secondary" onClick={handleDownloadEtradeBuysSellsTemplate}>
-                  Download E*TRADE Buys &amp; Sells Template
-                </button>
-              </div>
-            </div>
-          )}
-
-          {txnFormat === 'etrade_dividends' && (
-            <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>E*TRADE dividends template available:</strong> the downloadable XLSX matches the dividend-history import, including cash dividend rows and DRIP reinvestment rows. CSV files with the same row layout are also supported.
-              <div style={{ marginTop: '0.75rem' }}>
-                <button className="btn btn-secondary" onClick={handleDownloadEtradeDividendsTemplate}>
-                  Download E*TRADE Dividends Template
+                <button className="btn btn-secondary" onClick={handleDownloadEtradeTransactionsTemplate}>
+                  Download E*TRADE Transactions Template
                 </button>
               </div>
             </div>
@@ -761,8 +744,7 @@ export default function Import() {
               <option value="schwab">Charles Schwab (Positions)</option>
               <option value="schwab_transactions">Charles Schwab (Transactions)</option>
               <option value="etrade">E*Trade (Positions)</option>
-              <option value="etrade_buys_sells">E*Trade (Buys &amp; Sells)</option>
-              <option value="etrade_dividends">E*Trade (Dividends)</option>
+              <option value="etrade_transactions">E*Trade (Transactions)</option>
               <option value="fidelity">Fidelity (Positions)</option>
               <option value="fidelity_transactions">Fidelity (Transactions)</option>
               <option value="robinhood">Robinhood (Positions PDF)</option>

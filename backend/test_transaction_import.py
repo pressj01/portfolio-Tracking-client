@@ -1,13 +1,91 @@
 import tempfile
 import sys
 import unittest
+import csv
 from pathlib import Path
+import openpyxl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from transaction_import import parse_schwab_csv, parse_shear_group_activity, parse_shear_group_positions
+from transaction_import import (
+    parse_etrade_transactions_xlsx,
+    parse_schwab_csv,
+    parse_shear_group_activity,
+    parse_shear_group_positions,
+)
 
 
 class TransactionImportParserTest(unittest.TestCase):
+    def _write_etrade_all_transactions_csv(self, path):
+        rows = [
+            ["All Transactions Activity Types"],
+            [],
+            ["Account Activity for Trading -7113 from LAST 30 Days"],
+            [],
+            ["Total:", "1833.93"],
+            [],
+            ["Activity/Trade Date", "Transaction Date", "Settlement Date", "Activity Type", "Description", "Symbol", "Cusip", "Quantity #", "Price $", "Amount $", "Commission", "Category", "Note"],
+            ["06/03/26", "06/03/26", "", "Bought", "NEOS BOOSTED BITCOIN HIGH INCM UNSOLICITED TRADE", "XBCI", "--", "3.0", "35.517", "-106.55", "0.0", "--", "--"],
+            ["06/02/26", "06/02/26", "06/02/26", "Dividend", "INCOMESTKD 1X BTC AND 1X GP", "ISBG", "--", "", "", "1.39", "0.0", "--", "--"],
+            ["05/28/26", "05/28/26", "05/28/26", "Bought", "KURV TECH TITANS SELECT ETF DIVIDEND REINVESTMENT", "KQQQ", "--", "0.223", "31.272", "-6.97", "0.0", "--", "--"],
+            ["05/12/26", "05/12/26", "05/12/26", "Dividend", "TAPPALPHA S&P 500 GROWTH & DLY DIVIDEND REINVESTMENT", "TSPY", "--", "0.046", "25.329", "-1.16", "0.0", "--", "--"],
+            ["05/08/26", "05/08/26", "05/08/26", "Sold", "YIELDMAX ULTRA OPTION INC UNSOLICITED TRADE", "ULTY", "--", "-4.242", "31.991", "135.70", "0.0", "--", "--"],
+            ["05/08/26", "05/08/26", "05/08/26", "Transfer", "TRNSFR CASH TO MARGIN", "--", "--", "", "", "33.37", "0.0", "--", "--"],
+        ]
+        with open(path, "w", newline="", encoding="utf-8") as fh:
+            csv.writer(fh).writerows(rows)
+
+    def _write_etrade_all_transactions_xlsx(self, path):
+        rows = []
+        with tempfile.NamedTemporaryFile("w+", newline="", encoding="utf-8", delete=False) as fh:
+            temp_csv = Path(fh.name)
+        try:
+            self._write_etrade_all_transactions_csv(temp_csv)
+            with open(temp_csv, newline="", encoding="utf-8") as fh:
+                rows = list(csv.reader(fh))
+        finally:
+            temp_csv.unlink(missing_ok=True)
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "DownloadTxnHistory"
+        for row in rows:
+            ws.append(row)
+        wb.save(path)
+        wb.close()
+
+    def _assert_etrade_all_transactions_result(self, result):
+        self.assertEqual(result["account_name"], "Trading -7113")
+        self.assertEqual(result["summary"]["buys"], 3)
+        self.assertEqual(result["summary"]["sells"], 1)
+        self.assertEqual(result["summary"]["dividends"], 1)
+        self.assertEqual(result["summary"]["filtered"], 1)
+        self.assertEqual(result["summary"]["drip_detected"], 2)
+
+        by_type = [(t["type"], t["ticker"], t["notes"]) for t in result["transactions"]]
+        self.assertIn(("BUY", "XBCI", ""), by_type)
+        self.assertIn(("DIVIDEND", "ISBG", "Dividend"), by_type)
+        self.assertIn(("SELL", "ULTY", ""), by_type)
+        drip_tickers = {t["ticker"] for t in result["transactions"] if "[DRIP]" in (t["notes"] or "")}
+        self.assertEqual(drip_tickers, {"KQQQ", "TSPY"})
+
+    def test_etrade_all_transactions_csv_imports_trades_dividends_and_drips(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "renamed-export.csv"
+            self._write_etrade_all_transactions_csv(path)
+
+            result = parse_etrade_transactions_xlsx(str(path), path.name)
+
+        self._assert_etrade_all_transactions_result(result)
+
+    def test_etrade_all_transactions_xlsx_imports_by_content_not_filename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "not-an-etrade-name.xlsx"
+            self._write_etrade_all_transactions_xlsx(path)
+
+            result = parse_etrade_transactions_xlsx(str(path), path.name)
+
+        self._assert_etrade_all_transactions_result(result)
+
     def test_schwab_positions_accepts_total_cost_basis_without_cost_per_share(self):
         content = "\n".join([
             '"Positions for account Custodial Brokerage ...843 as of 05:35 PM ET, 2026/05/26",,,,,,,,,,,,,,,,,,',

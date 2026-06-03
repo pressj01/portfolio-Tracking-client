@@ -115,7 +115,7 @@ function Overview() {
       </p>
       <h3 style={{ marginBottom: '0.5rem' }}>Key Capabilities</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
-        <li><strong>Import</strong> — Bulk-load brokerage positions and transaction history from your own spreadsheet, a generic template, brokerage exports, or the app's own combined holdings + transactions workbook. Supports Schwab (Positions &amp; Transactions), E*TRADE (Positions, Buys &amp; Sells, Dividends), Fidelity (Positions &amp; Transactions), Robinhood (Positions PDF &amp; Transactions), Snowball (Holdings Migration &amp; Transactions), and Portfolio Export (Holdings + Transactions). Automatic database backups before every import and dividend repair with one-click restore.</li>
+        <li><strong>Import</strong> — Bulk-load brokerage positions and transaction history from your own spreadsheet, a generic template, brokerage exports, or the app's own combined holdings + transactions workbook. Supports Schwab (Positions &amp; Transactions), E*TRADE (Positions &amp; Transactions), Fidelity (Positions &amp; Transactions), Robinhood (Positions PDF &amp; Transactions), Snowball (Holdings Migration &amp; Transactions), and Portfolio Export (Holdings + Transactions). Automatic database backups before every import and dividend repair with one-click restore.</li>
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
         <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation. Includes an Action Center preview panel showing the top follow-up items.</li>
         <li><strong>Action Center</strong> — Automatically generated follow-up items drawn from your portfolio data, categorized by priority (Needs Review, Watch, Clear) and kind (Allocation, Dividend, Income, Rebalance, Tax, etc.).</li>
@@ -164,7 +164,7 @@ function ImportHelp() {
       <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Brokerage Position Templates</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/Screenshot 2026-05-10 144007.jpg" alt="Import Brokerage Positions and Snowball Data tab showing format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/brokerage-import-tab-overview.jpg" alt="Import Brokerage Positions and Snowball Data tab showing format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -179,13 +179,13 @@ function ImportHelp() {
 
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem', marginTop: '0.5rem' }}>
         <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
-          <img src="./help-screenshots/import/Screenshot 2026-05-10 144111.jpg" alt="Charles Schwab Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+          <img src="./help-screenshots/import/schwab-positions-import.jpg" alt="Charles Schwab Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         </div>
         <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
-          <img src="./help-screenshots/import/Screenshot 2026-05-10 144201.jpg" alt="E*TRADE Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+          <img src="./help-screenshots/import/etrade-positions-import.jpg" alt="E*TRADE Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         </div>
         <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
-          <img src="./help-screenshots/import/Screenshot 2026-05-10 144335.jpg" alt="Fidelity Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+          <img src="./help-screenshots/import/fidelity-positions-import.jpg" alt="Fidelity Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
         </div>
       </div>
 
@@ -217,7 +217,7 @@ function ImportHelp() {
         <strong>Recommended workflow:</strong>
         <ol style={{ paddingLeft: '1.5rem', marginTop: '0.5rem', marginBottom: 0 }}>
           <li>Import a <strong>Positions</strong> file first (Schwab, E*TRADE, Fidelity, or Robinhood) to set accurate current holdings, share counts, and cost basis.</li>
-          <li>Then import <strong>Transaction History</strong> (Schwab Transactions, E*TRADE Buys &amp; Sells / Dividends, Fidelity Transactions, Robinhood Transactions, or Snowball Transactions) for dividend tracking and realized gain records.</li>
+          <li>Then import <strong>Transaction History</strong> (Schwab Transactions, E*TRADE Transactions, Fidelity Transactions, Robinhood Transactions, or Snowball Transactions) for dividend tracking and realized gain records.</li>
           <li>Run <strong>Refresh Prices &amp; Divs</strong> to update market data, dividend fields, and pay-date estimates.</li>
         </ol>
         When a Positions import has been done first, transaction imports store history without overwriting your holdings data.
@@ -256,30 +256,20 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/Screenshot 2026-05-10 144133.jpg" alt="Partial history warning and Charles Schwab Transactions format" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/schwab-transactions-import.jpg" alt="Partial history warning and Charles Schwab Transactions format" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
-      <h4 style={{ marginBottom: '0.4rem' }}>E*TRADE (Buys &amp; Sells)</h4>
+      <h4 style={{ marginBottom: '0.4rem' }}>E*TRADE (Transactions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>In E*TRADE, go to <strong>Accounts &gt; Transaction History</strong>, filter to "Buys &amp; Sells", then download the XLSX.</li>
-        <li>Set the format selector to <strong>E*TRADE (Buys &amp; Sells)</strong>.</li>
-        <li>Imports: BUY and SELL transactions with date, shares, price, and commission.</li>
-      </ul>
-
-      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/Screenshot 2026-05-10 144254.jpg" alt="E*TRADE Buys and Sells format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-      </div>
-
-      <h4 style={{ marginBottom: '0.4rem' }}>E*TRADE (Dividends)</h4>
-      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>In E*TRADE, go to <strong>Accounts &gt; Transaction History</strong>, filter to "Dividends", then download the XLSX.</li>
-        <li>Set the format selector to <strong>E*TRADE (Dividends)</strong>.</li>
-        <li>Imports: cash dividend payments and DRIP reinvestment buys. Positive amounts are recorded as dividends; negative amounts with shares are recorded as <code>[DRIP]</code> buys.</li>
+        <li>In E*TRADE, go to <strong>Accounts &gt; Transaction History</strong>, choose all transaction activity types, then download the XLSX or CSV.</li>
+        <li>Set the format selector to <strong>E*TRADE (Transactions)</strong>.</li>
+        <li>Imports: BUY and SELL transactions, cash dividend payments, capital gain distributions, and DRIP reinvestment buys.</li>
+        <li>Transfers, interest, and cash-only rows are ignored.</li>
         <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/Screenshot 2026-05-10 144224.jpg" alt="E*TRADE Dividends format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/etrade-transactions-import.jpg" alt="E*TRADE Transactions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Fidelity (Transactions)</h4>
@@ -292,7 +282,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/Screenshot 2026-05-10 144401.jpg" alt="Fidelity Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/fidelity-transactions-import.jpg" alt="Fidelity Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Robinhood (Positions PDF)</h4>
@@ -304,7 +294,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/Screenshot 2026-05-10 144418.jpg" alt="Robinhood Positions PDF format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/robinhood-positions-import.jpg" alt="Robinhood Positions PDF format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Robinhood (Transactions)</h4>
@@ -316,7 +306,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/Screenshot 2026-05-10 144437.jpg" alt="Robinhood Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/robinhood-transactions-import.jpg" alt="Robinhood Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Snowball Transactions</h4>
@@ -336,7 +326,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/Screenshot 2026-05-10 144023.jpg" alt="Snowball Transactions format selector with automatic backup notice" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/snowball-transactions-import.jpg" alt="Snowball Transactions format selector with automatic backup notice" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Common Steps (All Transaction Formats)</h4>
@@ -363,14 +353,14 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/Screenshot 2026-05-10 144051.jpg" alt="Automatic database backup notice shown before each import" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/automatic-backup-notice.jpg" alt="Automatic database backup notice shown before each import" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       {/* ── My Spreadsheet ──────────────────────────────────────── */}
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: My Spreadsheet (Owner Format)</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/My_Spreadsheet.jpg" alt="My Spreadsheet tab showing the owner-format import interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/owner-spreadsheet-import.jpg" alt="My Spreadsheet tab showing the owner-format import interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <p style={{ marginBottom: '0.75rem' }}>
@@ -428,7 +418,7 @@ function ImportHelp() {
       <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 2: Generic Upload</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/Screenshot 2026-05-10 143859.jpg" alt="Generic Upload tab showing portfolio upload and watchlist import sections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/generic-upload-tab.jpg" alt="Generic Upload tab showing portfolio upload and watchlist import sections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
 
       <p style={{ marginBottom: '0.75rem' }}>
@@ -452,7 +442,7 @@ function ImportHelp() {
           Price Paid, Current Price, Dividend, Frequency, Ex-Div Date, Pay Date, DRIP, Category, Purchase Date,
           Dividends Paid, YTD Divs, Total Divs Received, and more.
           <div style={{ marginBottom: '0.75rem', marginTop: '0.75rem' }}>
-            <img src="./help-screenshots/import/Screenshot 2026-05-10 143932.jpg" alt="Upload Your Portfolio section with Download Template button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+            <img src="./help-screenshots/import/generic-portfolio-template-download.jpg" alt="Upload Your Portfolio section with Download Template button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
           </div>
         </li>
         <li>
@@ -524,7 +514,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/Screenshot 2026-05-10 143951.jpg" alt="Generic Upload merge mode notice and Merge Portfolio button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/generic-upload-merge-mode-notice.jpg" alt="Generic Upload merge mode notice and Merge Portfolio button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
       </div>
     </div>
   )

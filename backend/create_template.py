@@ -8,8 +8,7 @@ TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'port
 ETRADE_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'etrade_positions_template.csv')
 SCHWAB_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'schwab_positions_template.csv')
 SCHWAB_TRANSACTIONS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'schwab_transactions_template.csv')
-ETRADE_BUYS_SELLS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'etrade_buys_sells_template.xlsx')
-ETRADE_DIVIDENDS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'etrade_dividends_template.xlsx')
+ETRADE_TRANSACTIONS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'etrade_transactions_template.xlsx')
 SNOWBALL_HOLDINGS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'snowball_holdings_template.csv')
 FIDELITY_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'fidelity_positions_template.xlsx')
 FIDELITY_TRANSACTIONS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'fidelity_transactions_template.xlsx')
@@ -37,16 +36,19 @@ def _create_etrade_transaction_template(path, title, total_label, sample_rows, g
     ws["A5"] = total_label
 
     headers = [
-        "Run Date",
-        "Settlement Date",
         "Activity/Trade Date",
+        "Transaction Date",
+        "Settlement Date",
         "Activity Type",
-        "Symbol",
         "Description",
+        "Symbol",
+        "Cusip",
         "Quantity #",
         "Price $",
         "Amount $",
         "Commission",
+        "Category",
+        "Note",
     ]
 
     header_fill = PatternFill(start_color="1565C0", end_color="1565C0", fill_type="solid")
@@ -63,8 +65,9 @@ def _create_etrade_transaction_template(path, title, total_label, sample_rows, g
             ws.cell(row=row_idx, column=col_idx, value=value)
 
     widths = {
-        "A": 14, "B": 16, "C": 18, "D": 22, "E": 12,
-        "F": 34, "G": 14, "H": 12, "I": 14, "J": 12,
+        "A": 18, "B": 18, "C": 18, "D": 18, "E": 46,
+        "F": 12, "G": 12, "H": 12, "I": 12, "J": 12,
+        "K": 12, "L": 12, "M": 12,
     }
     for col, width in widths.items():
         ws.column_dimensions[col].width = width
@@ -78,14 +81,14 @@ def _create_etrade_transaction_template(path, title, total_label, sample_rows, g
         cell.font = header_font
 
     instruction_rows = [
-        ("Sheet layout", "The importer reads the first sheet only.", "Keep the title row, account row, total row, and row 7 headers in place."),
-        ("Activity Type", "Required", "Must stay in column D because the parser uses it to detect valid rows."),
+        ("Sheet layout", "The importer reads the first sheet only.", "Keep the E*TRADE transaction header row in the file."),
+        ("Activity Type", "Required", "Used to detect buys, sells, dividends, DRIPs, and ignored cash rows."),
         ("Symbol", "Required", "Ticker symbol. Invalid or blank tickers are skipped."),
         ("Activity/Trade Date", "Required", "Accepts MM/DD/YY, MM/DD/YYYY, or YYYY-MM-DD."),
         ("Quantity #", "Used for buys, sells, and DRIP reinvestments", "Leave blank for cash-only dividend rows."),
         ("Price $", "Used for buys, sells, and DRIP reinvestments", "Leave blank for cash-only dividend rows."),
         ("Amount $", "Used for dividend cash amounts and for matching export totals", "Negative amounts usually indicate cash outflow / reinvestment."),
-        ("Commission", "Imported as fees for buys and sells", "Leave 0.00 if no commission was charged."),
+        ("Commission", "Imported as fees for buys, sells, dividends, and DRIPs", "Leave 0.00 if no commission was charged."),
     ]
     for row_idx, row in enumerate(instruction_rows, 2):
         for col_idx, value in enumerate(row, 1):
@@ -676,41 +679,25 @@ def create_snowball_holdings_template():
     return _write_csv_template(SNOWBALL_HOLDINGS_TEMPLATE_PATH, rows)
 
 
-def create_etrade_buys_sells_template():
-    """Create an XLSX template matching the E*TRADE buys/sells transaction parser."""
+def create_etrade_transactions_template():
+    """Create an XLSX template matching the E*TRADE all-transactions parser."""
     sample_rows = [
-        ["04/13/2026", "03/07/2026", "03/06/2026", "Bought", "SCHD", "Schwab U.S. Dividend Equity ETF", 25, 82.15, -2053.75, 0.00],
-        ["04/13/2026", "03/28/2026", "03/27/2026", "Sold", "DIVO", "Amplify CWP Enhanced Dividend Income ETF", 10, 41.25, 412.50, 0.00],
+        ["04/13/2026", "04/13/2026", "", "Bought", "Schwab U.S. Dividend Equity ETF UNSOLICITED TRADE", "SCHD", "--", 25, 82.15, -2053.75, 0.00, "--", "--"],
+        ["04/12/2026", "04/12/2026", "04/13/2026", "Sold", "Amplify CWP Enhanced Dividend Income ETF UNSOLICITED TRADE", "DIVO", "--", -10, 41.25, 412.50, 0.00, "--", "--"],
+        ["04/10/2026", "04/10/2026", "04/10/2026", "Dividend", "Schwab U.S. Dividend Equity ETF", "SCHD", "--", "", "", 31.00, 0.00, "--", "--"],
+        ["04/10/2026", "04/10/2026", "04/10/2026", "Bought", "JPMorgan Equity Premium Income ETF DIVIDEND REINVESTMENT", "JEPI", "--", 0.9621, 57.20, -55.05, 0.00, "--", "--"],
+        ["04/09/2026", "04/09/2026", "04/09/2026", "Transfer", "TRNSFR CASH TO MARGIN", "--", "--", "", "", -100.00, 0.00, "--", "--"],
     ]
     guidance_lines = [
-        "Use the Buys & Sells export from E*TRADE Transaction History.",
-        "The importer reads Bought rows as BUY and Sold rows as SELL.",
-        "Keep Activity Type in column D and leave the header row on row 7.",
+        "Use the All Transactions export from E*TRADE Transaction History.",
+        "Bought rows import as BUY, Sold rows import as SELL, and positive Dividend or Capital Gain rows import as DIVIDEND.",
+        "Dividend reinvestment rows with shares import as [DRIP] BUY entries.",
+        "Transfers, interest, and cash-only rows are ignored.",
     ]
     return _create_etrade_transaction_template(
-        ETRADE_BUYS_SELLS_TEMPLATE_PATH,
-        "Buys & Sells Activity Types",
-        "Total for all securities: <$1,641.25>",
-        sample_rows,
-        guidance_lines,
-    )
-
-
-def create_etrade_dividends_template():
-    """Create an XLSX template matching the E*TRADE dividends transaction parser."""
-    sample_rows = [
-        ["04/13/2026", "04/04/2026", "04/03/2026", "Cash Dividend", "SCHD", "Ordinary Dividend", "", "", 31.00, 0.00],
-        ["04/13/2026", "04/04/2026", "04/03/2026", "Dividend Reinvestment", "JEPI", "Dividend Reinvestment", 0.9621, 57.20, -55.05, 0.00],
-    ]
-    guidance_lines = [
-        "Use the Dividends export from E*TRADE Transaction History.",
-        "Positive Amount rows import as cash DIVIDEND entries.",
-        "Negative Amount rows with Quantity and Price import as [DRIP] BUY entries.",
-    ]
-    return _create_etrade_transaction_template(
-        ETRADE_DIVIDENDS_TEMPLATE_PATH,
-        "Dividends Activity Types",
-        "Total for all securities: <$86.05>",
+        ETRADE_TRANSACTIONS_TEMPLATE_PATH,
+        "All Transactions Activity Types",
+        "Total:",
         sample_rows,
         guidance_lines,
     )
@@ -771,10 +758,8 @@ if __name__ == "__main__":
     print(f"Schwab transactions template created at: {schwab_txn_path}")
     snowball_holdings_path = create_snowball_holdings_template()
     print(f"Snowball holdings template created at: {snowball_holdings_path}")
-    etrade_bs_path = create_etrade_buys_sells_template()
-    print(f"E*TRADE buys/sells template created at: {etrade_bs_path}")
-    etrade_div_path = create_etrade_dividends_template()
-    print(f"E*TRADE dividends template created at: {etrade_div_path}")
+    etrade_txn_path = create_etrade_transactions_template()
+    print(f"E*TRADE transactions template created at: {etrade_txn_path}")
     fidelity_path = create_fidelity_template()
     print(f"Fidelity positions template created at: {fidelity_path}")
     fidelity_txn_path = create_fidelity_transactions_template()

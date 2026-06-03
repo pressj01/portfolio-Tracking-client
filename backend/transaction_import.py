@@ -1,4 +1,4 @@
-"""
+﻿"""
 Parsers for importing transaction history from external sources.
 
 Each parser accepts a file path + filename and returns a normalised result dict:
@@ -159,7 +159,7 @@ def _parse_reinvest_bool(value):
     return None
 
 
-# ── Snowball Analytics ──────────────────────────────────────────────────────────
+# â”€â”€ Snowball Analytics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def parse_snowball_csv(file_path, filename):
     """Parse a per-account Snowball Analytics CSV export.
@@ -168,20 +168,20 @@ def parse_snowball_csv(file_path, filename):
     heuristics.
     """
 
-    # ── Check 1: filename ────────────────────────────────────────────────────
+    # â”€â”€ Check 1: filename â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if "combined" in filename.lower():
         raise ValueError(
             "This appears to be a combined portfolio export. "
             "Please export each account individually from Snowball."
         )
 
-    # ── Read all rows ────────────────────────────────────────────────────────
+    # â”€â”€ Read all rows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     _, rows = _rows_to_dicts(_read_table_rows(file_path, filename))
 
     if not rows:
         raise ValueError("The file is empty or has no data rows.")
 
-    # ── Check 2: multiple CASH_IN on earliest date → combined export ─────────
+    # â”€â”€ Check 2: multiple CASH_IN on earliest date â†’ combined export â”€â”€â”€â”€â”€â”€â”€â”€â”€
     earliest_date = None
     cash_in_dates = []
     for row in rows:
@@ -204,7 +204,7 @@ def parse_snowball_csv(file_path, filename):
                 "Please export each account individually from Snowball."
             )
 
-    # ── Parse and filter rows ────────────────────────────────────────────────
+    # â”€â”€ Parse and filter rows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     kept = []
     split_events = []
     filtered_count = 0
@@ -271,9 +271,9 @@ def parse_snowball_csv(file_path, filename):
                 filtered_count += 1
                 continue
 
-            # Handle Snowball balance adjustments — these are opening position
+            # Handle Snowball balance adjustments â€” these are opening position
             # corrections that make the transaction math add up.
-            # Positive qty → BUY, negative qty → SELL (convert accordingly).
+            # Positive qty â†’ BUY, negative qty â†’ SELL (convert accordingly).
             if is_adjustment:
                 if qty > 0:
                     txn_type = "BUY"
@@ -281,7 +281,7 @@ def parse_snowball_csv(file_path, filename):
                     txn_type = "SELL"
                 adj_note = f"[Opening balance] {note.strip()}"
             else:
-                # Regular transaction — negative BUY qty shouldn't happen
+                # Regular transaction â€” negative BUY qty shouldn't happen
                 # outside adjustments, but handle gracefully
                 if event == "BUY" and qty < 0:
                     filtered_count += 1
@@ -319,10 +319,10 @@ def parse_snowball_csv(file_path, filename):
     for txn in kept:
         txn.pop("_row_idx", None)
 
-    # ── DRIP detection ───────────────────────────────────────────────────────
+    # â”€â”€ DRIP detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     drip_count = _detect_drip(kept)
 
-    # ── Build summary ────────────────────────────────────────────────────────
+    # â”€â”€ Build summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     buys = sum(1 for t in kept if t["type"] == "BUY")
     sells = sum(1 for t in kept if t["type"] == "SELL")
     divs = sum(1 for t in kept if t["type"] == "DIVIDEND")
@@ -442,7 +442,7 @@ def parse_snowball_holdings_csv(file_path, filename):
     }
 
 
-# ── DRIP detection ───────────────────────────────────────────────────────────
+# â”€â”€ DRIP detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _detect_drip(transactions):
     """Flag BUY transactions that look like DRIP reinvestments.
@@ -450,7 +450,7 @@ def _detect_drip(transactions):
     Heuristic: a BUY on the same date and ticker as a DIVIDEND, where the
     BUY total cost is within 20% of the dividend amount.
     """
-    # Build lookup: (ticker, date) → list of DIVIDEND amounts
+    # Build lookup: (ticker, date) â†’ list of DIVIDEND amounts
     div_lookup = defaultdict(list)
     for t in transactions:
         if t["type"] == "DIVIDEND":
@@ -476,7 +476,7 @@ def _detect_drip(transactions):
     return drip_count
 
 
-# ── Charles Schwab (Positions file) ────────────────────────────────────────
+# â”€â”€ Charles Schwab (Positions file) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 # Rows to skip in the positions CSV (not actual holdings)
 _SCHWAB_SKIP_SYMBOLS = {
@@ -502,7 +502,7 @@ _SCHWAB_POSITION_ALIASES = {
 def parse_schwab_csv(file_path, filename):
     """Parse a Schwab Positions CSV/XLSX export.
 
-    The positions file is the source of truth for current holdings —
+    The positions file is the source of truth for current holdings â€”
     it includes shares from inter-account transfers, reverse splits,
     and all corporate actions.
 
@@ -514,7 +514,7 @@ def parse_schwab_csv(file_path, filename):
         }
     """
 
-    # First line is a header like "Positions for account ..." — skip it
+    # First line is a header like "Positions for account ..." â€” skip it
     # Second line is blank, then the CSV header follows
     rows = _read_table_rows(file_path, filename)
     _, _, reader = _rows_to_flexible_dicts(
@@ -618,7 +618,7 @@ def parse_schwab_csv(file_path, filename):
 
     if positions and all(p["purchase_value"] == 0 for p in positions):
         raise ValueError(
-            "No cost basis data found — every position has a $0 cost. "
+            "No cost basis data found â€” every position has a $0 cost. "
             "This usually means a Transactions file was selected with the Positions format. "
             "Please use 'Charles Schwab (Transactions)' for transaction history files."
         )
@@ -750,7 +750,7 @@ def parse_etrade_csv(file_path, filename):
 
     if all(p["cost_per_share"] == 0 for p in positions):
         raise ValueError(
-            "No cost basis data found — every position has a $0 cost. "
+            "No cost basis data found â€” every position has a $0 cost. "
             "This usually means a Transactions file was selected with the Positions format. "
             "Please use the correct Transactions format for transaction history files."
         )
@@ -924,7 +924,7 @@ def parse_fidelity_positions_xlsx(file_path, filename):
 
     if all(p["cost_per_share"] == 0 for p in positions):
         raise ValueError(
-            "No cost basis data found — every position has a $0 cost. "
+            "No cost basis data found â€” every position has a $0 cost. "
             "This usually means a Transactions file was selected with the Positions format. "
             "Please use 'Fidelity (Transactions)' for transaction history files."
         )
@@ -1073,7 +1073,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
     }
 
 
-# ── Charles Schwab (Transactions file) ────────────────────────────────────────
+# â”€â”€ Charles Schwab (Transactions file) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 # Action types that represent dividend/distribution income
 _SCHWAB_DIVIDEND_ACTIONS = {
@@ -1102,7 +1102,7 @@ _SCHWAB_TRANSACTION_ALIASES = {
 
 
 def _schwab_parse_amount(raw):
-    """Parse a Schwab Amount field like '$1,234.56 ' or '($33.02)' → float."""
+    """Parse a Schwab Amount field like '$1,234.56 ' or '($33.02)' â†’ float."""
     if not raw:
         return None
     s = str(raw).strip()
@@ -1144,7 +1144,7 @@ def parse_schwab_transactions_csv(file_path, filename):
         raise ValueError("The file is empty.")
 
     # Schwab transaction CSVs start directly with the header row
-    # (Date,Action,Symbol,...) — no preamble lines like the positions file.
+    # (Date,Action,Symbol,...) â€” no preamble lines like the positions file.
     # Find the header row to be safe.
     _, _, reader = _rows_to_flexible_dicts(
         rows,
@@ -1185,7 +1185,7 @@ def parse_schwab_transactions_csv(file_path, filename):
         price = _safe_float(raw_price)
         fees = _safe_float(raw_fees) or 0.0
 
-        # ── Dividend / distribution ──────────────────────────────────────
+        # â”€â”€ Dividend / distribution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action in _SCHWAB_DIVIDEND_ACTIONS or action_key in {"dividend", "dividends", "cash dividend"}:
             div_amount = abs(amount) if amount is not None else 0.0
             # Div Adjustment can be negative (reversal)
@@ -1203,7 +1203,7 @@ def parse_schwab_transactions_csv(file_path, filename):
             })
             continue
 
-        # ── DRIP reinvestment shares ─────────────────────────────────────
+        # â”€â”€ DRIP reinvestment shares â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action in _SCHWAB_DRIP_ACTIONS or "reinvest" in action_key and "adj" not in action_key:
             if qty is None or qty == 0:
                 filtered_count += 1
@@ -1220,7 +1220,7 @@ def parse_schwab_transactions_csv(file_path, filename):
             })
             continue
 
-        # ── Reinvestment adjustment (share correction) ───────────────────
+        # â”€â”€ Reinvestment adjustment (share correction) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action in _SCHWAB_REINVEST_ADJ_ACTIONS or "reinvestment adj" in action_key:
             if qty is None or qty == 0:
                 filtered_count += 1
@@ -1239,7 +1239,7 @@ def parse_schwab_transactions_csv(file_path, filename):
             })
             continue
 
-        # ── Buy ──────────────────────────────────────────────────────────
+        # â”€â”€ Buy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action_key in {"buy", "bought", "you bought"}:
             if qty is None or qty == 0:
                 filtered_count += 1
@@ -1256,7 +1256,7 @@ def parse_schwab_transactions_csv(file_path, filename):
             })
             continue
 
-        # ── Sell ─────────────────────────────────────────────────────────
+        # â”€â”€ Sell â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action_key in {"sell", "sold", "you sold"}:
             if qty is None or qty == 0:
                 filtered_count += 1
@@ -1273,10 +1273,10 @@ def parse_schwab_transactions_csv(file_path, filename):
             })
             continue
 
-        # ── Unknown action — skip ────────────────────────────────────────
+        # â”€â”€ Unknown action â€” skip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         filtered_count += 1
 
-    # ── DRIP detection (for BUYs not already tagged) ────────────────────
+    # â”€â”€ DRIP detection (for BUYs not already tagged) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     drip_count = _detect_drip(kept)
     # Don't double-count DRIP tags we already set
     already_drip = sum(1 for t in kept if t["type"] == "BUY" and "[DRIP]" in (t["notes"] or "") and t["notes"].startswith("[DRIP]"))
@@ -1299,7 +1299,7 @@ def parse_schwab_transactions_csv(file_path, filename):
     }
 
 
-# ── E*Trade (Transaction History — Buys & Sells) ─────────────────────────────
+# â”€â”€ E*Trade (Transaction History â€” Buys & Sells) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _ETRADE_TRANSACTION_ALIASES = {
     "Activity/Trade Date": ["Date", "Trade Date", "Activity Date", "Run Date"],
@@ -1316,12 +1316,14 @@ _ETRADE_TRANSACTION_ALIASES = {
 def _etrade_read_rows(file_path, filename):
     """Read an E*Trade transaction history CSV/XLSX and return (account_info, data_rows).
 
-    The file layout is:
-        Row 1: Title (e.g. "Buys & Sells Activity Types")
+    The common E*TRADE export layout is:
+        Row 1: Title (e.g. "All Transactions Activity Types")
         Row 3: Account info (e.g. "Account Activity for IRA -2797 from ...")
         Row 5: Total line
         Row 7: Column headers
         Row 8+: Data rows (until empty/disclaimer text)
+    The actual header row is detected by content so renamed files and CSV exports
+    with the same fields work too.
     """
     rows = _read_table_rows(file_path, filename)
 
@@ -1392,192 +1394,6 @@ def _etrade_parse_date_str(raw):
         except (ValueError, AttributeError):
             continue
     return _parse_date_str(s)
-
-
-def parse_etrade_buys_sells_xlsx(file_path, filename):
-    """Parse an E*Trade Buys & Sells transaction history CSV/XLSX export.
-
-    Returns a normalised transaction result dict with BUY and SELL entries.
-    """
-    account_info, data_rows = _etrade_read_rows(file_path, filename)
-    account_name = _etrade_extract_account_name(account_info)
-
-    if not data_rows:
-        raise ValueError("No transaction rows found in the E*Trade buys/sells file.")
-
-    kept = []
-    filtered_count = 0
-
-    for row in data_rows:
-        activity = (str(row.get("Activity Type") or "")).strip()
-        symbol = (str(row.get("Symbol") or "")).strip().upper()
-        raw_date = row.get("Activity/Trade Date")
-        qty = row.get("Quantity #")
-        price = row.get("Price $")
-        amount = row.get("Amount $")
-        commission = row.get("Commission") or row.get("Commissions") or row.get("Fee") or row.get("Fees")
-
-        if not symbol or not TICKER_RE.match(symbol):
-            filtered_count += 1
-            continue
-
-        date_str = _etrade_parse_date_str(raw_date)
-        if not date_str:
-            filtered_count += 1
-            continue
-
-        qty_val = _safe_float(qty)
-        price_val = _safe_float(price)
-        fees = _safe_float(commission) or 0.0
-
-        activity_key = activity.strip().lower()
-        if activity_key in {"bought", "buy", "you bought"}:
-            if qty_val is None or qty_val == 0:
-                filtered_count += 1
-                continue
-            kept.append({
-                "type": "BUY",
-                "ticker": symbol,
-                "date": date_str,
-                "shares": abs(qty_val),
-                "price_per_share": price_val,
-                "fees": fees,
-                "dividend_amount": None,
-                "notes": "",
-            })
-        elif activity_key in {"sold", "sell", "you sold"}:
-            if qty_val is None or qty_val == 0:
-                filtered_count += 1
-                continue
-            kept.append({
-                "type": "SELL",
-                "ticker": symbol,
-                "date": date_str,
-                "shares": abs(qty_val),
-                "price_per_share": price_val,
-                "fees": fees,
-                "dividend_amount": None,
-                "notes": "",
-            })
-        else:
-            filtered_count += 1
-
-    buys = sum(1 for t in kept if t["type"] == "BUY")
-    sells = sum(1 for t in kept if t["type"] == "SELL")
-
-    return {
-        "account_name": account_name,
-        "transactions": kept,
-        "summary": {
-            "buys": buys,
-            "sells": sells,
-            "dividends": 0,
-            "filtered": filtered_count,
-            "drip_detected": 0,
-            "splits_applied": 0,
-        },
-    }
-
-
-# ── E*Trade (Transaction History — Dividends) ────────────────────────────────
-
-def parse_etrade_dividends_xlsx(file_path, filename):
-    """Parse an E*Trade Dividends transaction history CSV/XLSX export.
-
-    Positive Amount = cash dividend payment → DIVIDEND
-    Negative Amount with Quantity/Price = DRIP reinvestment → BUY with [DRIP] tag
-    Both the cash dividend and the DRIP buy are imported so the full picture
-    is captured (dividend income + share accumulation).
-    """
-    account_info, data_rows = _etrade_read_rows(file_path, filename)
-    account_name = _etrade_extract_account_name(account_info)
-
-    if not data_rows:
-        raise ValueError("No dividend rows found in the E*Trade dividends file.")
-
-    kept = []
-    filtered_count = 0
-
-    for row in data_rows:
-        symbol = (str(row.get("Symbol") or "")).strip().upper()
-        raw_date = row.get("Activity/Trade Date")
-        qty = row.get("Quantity #")
-        price = row.get("Price $")
-        amount = row.get("Amount $")
-        activity = (str(row.get("Activity Type") or "")).strip()
-        description = str(row.get("Description") or "").strip()
-
-        if not symbol or not TICKER_RE.match(symbol):
-            filtered_count += 1
-            continue
-
-        date_str = _etrade_parse_date_str(raw_date)
-        if not date_str:
-            filtered_count += 1
-            continue
-
-        amount_val = _safe_float(amount)
-        qty_val = _safe_float(qty)
-        price_val = _safe_float(price)
-
-        if amount_val is None:
-            filtered_count += 1
-            continue
-
-        is_reinvestment = amount_val < 0 and qty_val is not None and qty_val > 0
-        activity_lower = activity.lower()
-        description_lower = description.lower()
-        looks_like_dividend = (
-            "dividend" in activity_lower
-            or "capital gain" in activity_lower
-            or "dividend" in description_lower
-            or "capital gain" in description_lower
-        )
-
-        if is_reinvestment:
-            # DRIP reinvestment — the negative amount is the cost of shares bought
-            kept.append({
-                "type": "BUY",
-                "ticker": symbol,
-                "date": date_str,
-                "shares": abs(qty_val),
-                "price_per_share": price_val,
-                "fees": 0.0,
-                "dividend_amount": None,
-                "notes": "[DRIP] Dividend Reinvestment",
-            })
-        elif amount_val > 0 and looks_like_dividend:
-            # Cash dividend / capital gain distribution
-            kept.append({
-                "type": "DIVIDEND",
-                "ticker": symbol,
-                "date": date_str,
-                "shares": None,
-                "price_per_share": None,
-                "fees": 0.0,
-                "dividend_amount": round(amount_val, 2),
-                "notes": activity or description or "Dividend",
-            })
-        else:
-            filtered_count += 1
-
-    drip_count = sum(1 for t in kept if t["type"] == "BUY" and "[DRIP]" in (t["notes"] or ""))
-    buys = sum(1 for t in kept if t["type"] == "BUY")
-    divs = sum(1 for t in kept if t["type"] == "DIVIDEND")
-
-    return {
-        "account_name": account_name,
-        "transactions": kept,
-        "summary": {
-            "buys": buys,
-            "sells": 0,
-            "dividends": divs,
-            "filtered": filtered_count,
-            "drip_detected": drip_count,
-            "splits_applied": 0,
-        },
-    }
-
 
 # Robinhood (Positions PDF + Transactions CSV)
 
@@ -1859,7 +1675,7 @@ def parse_robinhood_transactions_csv(file_path, filename):
     }
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _SHEAR_GROUP_POSITION_ALIASES = {
     "Account Number": ["Account #", "Acct #", "Account No"],
@@ -2240,7 +2056,135 @@ def _safe_float(val):
         return None
 
 
-# ── Parser registry ──────────────────────────────────────────────────────────
+# â”€â”€ Parser registry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+def parse_etrade_transactions_xlsx(file_path, filename):
+    """Parse one E*Trade All Transactions history CSV/XLSX export.
+
+    The file is recognized from its E*TRADE transaction headers and row content,
+    so renaming the workbook or CSV does not matter. Trades, dividend payments,
+    and DRIP reinvestment buys are imported from the same export.
+    """
+    account_info, data_rows = _etrade_read_rows(file_path, filename)
+    account_name = _etrade_extract_account_name(account_info)
+
+    if not data_rows:
+        raise ValueError("No transaction rows found in the E*Trade transactions file.")
+
+    kept = []
+    filtered_count = 0
+
+    for row in data_rows:
+        activity = (str(row.get("Activity Type") or "")).strip()
+        symbol = (str(row.get("Symbol") or "")).strip().upper()
+        raw_date = row.get("Activity/Trade Date")
+        qty = row.get("Quantity #")
+        price = row.get("Price $")
+        amount = row.get("Amount $")
+        commission = row.get("Commission") or row.get("Commissions") or row.get("Fee") or row.get("Fees")
+        description = str(row.get("Description") or "").strip()
+
+        if not symbol or not TICKER_RE.match(symbol):
+            filtered_count += 1
+            continue
+
+        date_str = _etrade_parse_date_str(raw_date)
+        if not date_str:
+            filtered_count += 1
+            continue
+
+        qty_val = _safe_float(qty)
+        price_val = _safe_float(price)
+        amount_val = _safe_float(amount)
+        fees = _safe_float(commission) or 0.0
+
+        activity_key = activity.lower()
+        activity_lower = activity.lower()
+        description_lower = description.lower()
+        looks_like_dividend = (
+            "dividend" in activity_lower
+            or "capital gain" in activity_lower
+            or "dividend" in description_lower
+            or "capital gain" in description_lower
+        )
+        looks_like_reinvestment = (
+            "reinvestment" in activity_lower
+            or "reinvestment" in description_lower
+        )
+
+        if activity_key in {"bought", "buy", "you bought"}:
+            if qty_val is None or qty_val == 0:
+                filtered_count += 1
+                continue
+            kept.append({
+                "type": "BUY",
+                "ticker": symbol,
+                "date": date_str,
+                "shares": abs(qty_val),
+                "price_per_share": price_val,
+                "fees": fees,
+                "dividend_amount": None,
+                "notes": "[DRIP] Dividend Reinvestment" if looks_like_reinvestment or looks_like_dividend else "",
+            })
+        elif activity_key in {"sold", "sell", "you sold"}:
+            if qty_val is None or qty_val == 0:
+                filtered_count += 1
+                continue
+            kept.append({
+                "type": "SELL",
+                "ticker": symbol,
+                "date": date_str,
+                "shares": abs(qty_val),
+                "price_per_share": price_val,
+                "fees": fees,
+                "dividend_amount": None,
+                "notes": "",
+            })
+        elif amount_val is None:
+            filtered_count += 1
+        elif amount_val < 0 and qty_val is not None and qty_val > 0 and looks_like_dividend:
+            kept.append({
+                "type": "BUY",
+                "ticker": symbol,
+                "date": date_str,
+                "shares": abs(qty_val),
+                "price_per_share": price_val,
+                "fees": fees,
+                "dividend_amount": None,
+                "notes": "[DRIP] Dividend Reinvestment",
+            })
+        elif amount_val > 0 and looks_like_dividend:
+            kept.append({
+                "type": "DIVIDEND",
+                "ticker": symbol,
+                "date": date_str,
+                "shares": None,
+                "price_per_share": None,
+                "fees": fees,
+                "dividend_amount": round(amount_val, 2),
+                "notes": activity or description or "Dividend",
+            })
+        else:
+            filtered_count += 1
+
+    drip_count = sum(1 for t in kept if t["type"] == "BUY" and "[DRIP]" in (t["notes"] or ""))
+    buys = sum(1 for t in kept if t["type"] == "BUY")
+    sells = sum(1 for t in kept if t["type"] == "SELL")
+    divs = sum(1 for t in kept if t["type"] == "DIVIDEND")
+
+    return {
+        "account_name": account_name,
+        "transactions": kept,
+        "summary": {
+            "buys": buys,
+            "sells": sells,
+            "dividends": divs,
+            "filtered": filtered_count,
+            "drip_detected": drip_count,
+            "splits_applied": 0,
+        },
+    }
+
 
 PARSERS = {
     "snowball": parse_snowball_csv,
@@ -2248,8 +2192,7 @@ PARSERS = {
     "schwab": parse_schwab_csv,
     "schwab_transactions": parse_schwab_transactions_csv,
     "etrade": parse_etrade_csv,
-    "etrade_buys_sells": parse_etrade_buys_sells_xlsx,
-    "etrade_dividends": parse_etrade_dividends_xlsx,
+    "etrade_transactions": parse_etrade_transactions_xlsx,
     "fidelity": parse_fidelity_positions_xlsx,
     "fidelity_transactions": parse_fidelity_transactions_xlsx,
     "robinhood": parse_robinhood_positions_pdf,
@@ -2265,8 +2208,7 @@ PARSER_LABELS = {
     "schwab": "Charles Schwab (Positions)",
     "schwab_transactions": "Charles Schwab (Transactions)",
     "etrade": "E*Trade (Positions)",
-    "etrade_buys_sells": "E*Trade (Buys & Sells)",
-    "etrade_dividends": "E*Trade (Dividends)",
+    "etrade_transactions": "E*Trade (Transactions)",
     "fidelity": "Fidelity (Positions)",
     "fidelity_transactions": "Fidelity (Transactions)",
     "robinhood": "Robinhood (Positions PDF)",
