@@ -1059,6 +1059,9 @@ export default function Dashboard() {
                   if (d?.skipped) {
                     setRefreshStatus(d.reason || 'NAV snapshot skipped because the market is closed.')
                     setTimeout(() => setRefreshStatus(null), 4500)
+                  } else {
+                    setRefreshStatus('NAV snapshot recorded.')
+                    setTimeout(() => setRefreshStatus(null), 3000)
                   }
                   return pf('/api/nav/history').then(safeJson).then(history => { if (Array.isArray(history)) setNavHistory(history) })
                 })
