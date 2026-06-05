@@ -580,6 +580,7 @@ label {
 }
 .sticky-table-wrap th,
 .sticky-table-wrap td {
+  box-sizing: border-box;
   white-space: nowrap;
   padding: 0.4rem 0.5rem;
 }

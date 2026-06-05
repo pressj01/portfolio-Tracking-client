@@ -888,33 +888,38 @@ const COLUMNS = [
   { key: 'description', label: 'Description', type: 'string' },
   { key: 'category', label: 'Category', type: 'string' },
   { key: 'quantity', label: 'Shares', type: 'number' },
-  { key: 'base_quantity', label: 'Base Shares', type: 'number' },
-  { key: 'shares_bought_from_dividend', label: 'DRIP Shares', type: 'number' },
-  { key: 'total_cash_reinvested', label: 'Cash Reinvested', type: 'number' },
-  { key: 'price_paid', label: 'Price Paid', type: 'number' },
-  { key: 'current_price', label: 'Current', type: 'number' },
-  { key: 'purchase_date', label: 'Purchase Date', type: 'string' },
-  { key: 'purchase_value', label: 'Cost Basis', type: 'number' },
-  { key: 'current_value', label: 'Value', type: 'number' },
-  { key: 'gain_or_loss', label: 'Gain/Loss', type: 'number' },
-  { key: 'gain_or_loss_percentage', label: 'G/L %', type: 'number' },
-  { key: 'div', label: 'Div/Share', type: 'number' },
-  { key: 'div_frequency', label: 'Freq', type: 'string' },
-  { key: 'ex_div_date', label: 'Ex-Div Date', type: 'string' },
-  { key: 'div_pay_date', label: 'Pay Date', type: 'string' },
-  { key: 'reinvest', label: 'DRIP', type: 'string' },
-  { key: 'estim_payment_per_year', label: 'Est. Annual', type: 'number' },
-  { key: 'approx_monthly_income', label: 'Monthly', type: 'number' },
-  { key: 'annual_yield_on_cost', label: 'YOC', type: 'number' },
-  { key: 'current_annual_yield', label: 'Yield', type: 'number' },
-  { key: 'dividend_paid', label: 'Div Paid', type: 'number' },
-  { key: 'ytd_divs', label: 'YTD Divs', type: 'number' },
-  { key: 'total_divs_received', label: 'Total Divs', type: 'number' },
-  { key: 'paid_for_itself', label: 'Paid For Itself', type: 'number' },
-  { key: 'dividend_actuals_source', label: 'Div Src', type: 'string' },
-  { key: '_shares_if_reinvested', label: 'Shares if Reinvested', type: 'number' },
-  { key: 'realized_gains', label: 'Realized G/L', type: 'number' },
+  { key: 'base_quantity', label: 'Base Shares', type: 'number', width: 105 },
+  { key: 'shares_bought_from_dividend', label: 'DRIP Shares', type: 'number', width: 110 },
+  { key: 'total_cash_reinvested', label: 'Cash Reinvested', type: 'number', width: 130 },
+  { key: 'price_paid', label: 'Price Paid', type: 'number', width: 115 },
+  { key: 'current_price', label: 'Current', type: 'number', width: 95 },
+  { key: 'purchase_date', label: 'Purchase Date', type: 'string', width: 120 },
+  { key: 'purchase_value', label: 'Cost Basis', type: 'number', width: 115 },
+  { key: 'current_value', label: 'Value', type: 'number', width: 105 },
+  { key: 'gain_or_loss', label: 'Gain/Loss', type: 'number', width: 115 },
+  { key: 'gain_or_loss_percentage', label: 'G/L %', type: 'number', width: 90 },
+  { key: 'div', label: 'Div/Share', type: 'number', width: 95 },
+  { key: 'div_frequency', label: 'Freq', type: 'string', width: 70 },
+  { key: 'ex_div_date', label: 'Ex-Div Date', type: 'string', width: 110 },
+  { key: 'div_pay_date', label: 'Pay Date', type: 'string', width: 95 },
+  { key: 'reinvest', label: 'DRIP', type: 'string', width: 70 },
+  { key: 'estim_payment_per_year', label: 'Est. Annual', type: 'number', width: 110 },
+  { key: 'approx_monthly_income', label: 'Monthly', type: 'number', width: 100 },
+  { key: 'annual_yield_on_cost', label: 'YOC', type: 'number', width: 80 },
+  { key: 'current_annual_yield', label: 'Yield', type: 'number', width: 80 },
+  { key: 'dividend_paid', label: 'Div Paid', type: 'number', width: 100 },
+  { key: 'ytd_divs', label: 'YTD Divs', type: 'number', width: 100 },
+  { key: 'total_divs_received', label: 'Total Divs', type: 'number', width: 105 },
+  { key: 'paid_for_itself', label: 'Paid For Itself', type: 'number', width: 125 },
+  { key: 'dividend_actuals_source', label: 'Div Src', type: 'string', width: 85 },
+  { key: '_shares_if_reinvested', label: 'Shares if Reinvested', type: 'number', width: 155 },
+  { key: 'realized_gains', label: 'Realized G/L', type: 'number', width: 120 },
 ]
+
+const DEFAULT_COLUMN_WIDTH = 96
+const ACTIONS_COLUMN_WIDTH = 150
+const columnWidth = (col, i) => i < FROZEN_COLS ? FROZEN_WIDTHS[i] : (col.width || DEFAULT_COLUMN_WIDTH)
+const HOLDINGS_TABLE_MIN_WIDTH = COLUMNS.reduce((sum, col, i) => sum + columnWidth(col, i), ACTIONS_COLUMN_WIDTH)
 
 const DIV_SOURCE_OPTIONS = [
   { value: 'all', label: 'All Div Src' },
@@ -1693,7 +1698,13 @@ export default function ManageHoldings() {
         </div>
       ) : (
         <div className="sticky-table-wrap">
-          <table>
+          <table style={{ minWidth: HOLDINGS_TABLE_MIN_WIDTH, tableLayout: 'fixed' }}>
+            <colgroup>
+              {COLUMNS.map((col, i) => (
+                <col key={col.key} style={{ width: columnWidth(col, i) }} />
+              ))}
+              <col style={{ width: ACTIONS_COLUMN_WIDTH }} />
+            </colgroup>
             <thead>
               <tr>
                 {COLUMNS.map((col, i) => (
@@ -1706,10 +1717,18 @@ export default function ManageHoldings() {
                       ...(i < FROZEN_COLS ? {
                         position: 'sticky',
                         left: FROZEN_LEFT[i],
+                        width: FROZEN_WIDTHS[i],
                         minWidth: FROZEN_WIDTHS[i],
                         maxWidth: FROZEN_WIDTHS[i],
+                        boxSizing: 'border-box',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
                         zIndex: 4,
-                      } : {}),
+                      } : {
+                        width: col.width || DEFAULT_COLUMN_WIDTH,
+                        minWidth: col.width || DEFAULT_COLUMN_WIDTH,
+                        boxSizing: 'border-box',
+                      }),
                     }}
                   >
                     {col.label}<span style={{ fontSize: '0.65rem', opacity: 0.7 }}>{sortArrow(col.key)}</span>
@@ -1722,7 +1741,7 @@ export default function ManageHoldings() {
               {sortedHoldings.map(h => (
                 <React.Fragment key={h.ticker}>
                 <tr>
-                  <td className="frozen-col" style={{ fontWeight: 600, position: 'sticky', left: FROZEN_LEFT[0], minWidth: FROZEN_WIDTHS[0], maxWidth: FROZEN_WIDTHS[0], zIndex: 1 }}>
+                  <td className="frozen-col" style={{ fontWeight: 600, position: 'sticky', left: FROZEN_LEFT[0], width: FROZEN_WIDTHS[0], minWidth: FROZEN_WIDTHS[0], maxWidth: FROZEN_WIDTHS[0], boxSizing: 'border-box', overflow: 'hidden', zIndex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                       <span
                         onClick={() => toggleExpand(h.ticker)}
@@ -1742,11 +1761,11 @@ export default function ManageHoldings() {
                       </a>
                     </div>
                   </td>
-                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[1], minWidth: FROZEN_WIDTHS[1], maxWidth: FROZEN_WIDTHS[1], overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>
+                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[1], width: FROZEN_WIDTHS[1], minWidth: FROZEN_WIDTHS[1], maxWidth: FROZEN_WIDTHS[1], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>
                     {h.description || '-'}
                   </td>
-                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[2], minWidth: FROZEN_WIDTHS[2], maxWidth: FROZEN_WIDTHS[2], zIndex: 1 }}>{h.category || '-'}</td>
-                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[3], minWidth: FROZEN_WIDTHS[3], maxWidth: FROZEN_WIDTHS[3], zIndex: 1 }}>{fmt(h.quantity)}</td>
+                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[2], width: FROZEN_WIDTHS[2], minWidth: FROZEN_WIDTHS[2], maxWidth: FROZEN_WIDTHS[2], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{h.category || '-'}</td>
+                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[3], width: FROZEN_WIDTHS[3], minWidth: FROZEN_WIDTHS[3], maxWidth: FROZEN_WIDTHS[3], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{fmt(h.quantity)}</td>
                   <td>{fmt(h.base_quantity, 4)}</td>
                   <td>{fmt(h.shares_bought_from_dividend, 4)}</td>
                   <td>{h.total_cash_reinvested != null ? '$' + fmt(h.total_cash_reinvested) : '-'}</td>
