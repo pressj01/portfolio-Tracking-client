@@ -12,6 +12,12 @@ This release keeps the cumulative desktop description and adds a Dashboard portf
 ### Portfolio grade tiles no longer stick blank after a price-data hiccup
 The Dashboard's Portfolio Grade, Ulcer Index, Calmar, Omega, Sortino, and Sharpe tiles are computed from a fresh one-year price download, separate from the NAV chart. When that download came back empty or partial — for example after a temporary market-data rate limit — fewer than two holdings had enough history to grade, the grade came back empty, and that empty result was cached for 30 minutes against the selected accounts. The blank grades then stayed blank across account switches and chart refreshes until the cache expired. Empty/failed grade results are no longer cached, the last good grade is reused when a refresh comes back empty, and the Dashboard no longer lets an empty response overwrite grades that already loaded.
 
+### Returns chart date-window alignment
+ETF Screen, ETF Comparer, and Stock Comparer returns charts no longer start one period off in certain granularity settings.
+
+### Snowball + broker transaction double-counting
+Holdings that exist in both a Snowball import and a broker transaction import are no longer double-counted in position size, cost basis, or income estimates.
+
 ---
 
 ## Latest fixes in v1.31.10
@@ -139,12 +145,6 @@ The Holdings API returns a display-ready Base Shares value calculated from curre
 
 ### E*Trade dividend-history DRIP estimate
 For E*Trade accounts without explicit reinvestment BUY lots, DRIP-enabled holdings estimate reinvested cash from imported dividend payment history and convert it into DRIP shares using current price, with average price as a fallback.
-
-### Returns chart date-window alignment
-ETF Screen, ETF Comparer, and Stock Comparer returns charts no longer start one period off in certain granularity settings.
-
-### Snowball + broker transaction double-counting
-Holdings that exist in both a Snowball import and a broker transaction import are no longer double-counted in position size, cost basis, or income estimates.
 
 ---
 
