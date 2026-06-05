@@ -11770,10 +11770,23 @@ def portfolio_summary_data():
             portfolio_grade_info["max_drawdown"] = pm.get("max_drawdown")
             portfolio_grade_info["ulcer_index"] = pm.get("ulcer_index")
         except Exception:
-            portfolio_grade_info = cached.get("portfolio_grade", {}) if cached else {}
+            portfolio_grade_info = {}
+
+    # A partial/empty yfinance download can leave portfolio_grade_info empty even
+    # for a portfolio with plenty of holdings (e.g. fewer than 2 tickers came back
+    # with enough history). Fall back to the last good grade for this profile/
+    # ticker-set rather than blanking the dashboard tiles.
+    if not portfolio_grade_info and cached:
+        portfolio_grade_info = cached.get("portfolio_grade", {}) or {}
 
     response = {"ticker_grades": ticker_grades, "portfolio_grade": portfolio_grade_info}
-    _PORTFOLIO_SUMMARY_CACHE[cache_key] = (time.time(), response)
+    # Only cache a usable result. Caching an empty grade from a transient/partial
+    # yfinance download would pin blank tiles for the full 30-min TTL, so the
+    # grades would "stick" blank across account switches and chart refreshes until
+    # the cache expired. A genuinely ungradeable portfolio (<2 priceable holdings)
+    # is still cached so we don't re-download on every load.
+    if portfolio_grade_info or len(tickers) < 2:
+        _PORTFOLIO_SUMMARY_CACHE[cache_key] = (time.time(), response)
     return jsonify(response)
 
 

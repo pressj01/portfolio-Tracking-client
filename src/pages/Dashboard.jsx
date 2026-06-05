@@ -538,7 +538,9 @@ export default function Dashboard() {
             .then(g => {
               if (stale || !g) return
               if (g.ticker_grades) setTickerGrades(g.ticker_grades)
-              if (g.portfolio_grade) setPortfolioGrade(g.portfolio_grade)
+              // {} is truthy — only overwrite when grades were actually computed,
+              // so an empty/failed response never blanks good grade tiles.
+              if (g.portfolio_grade && Object.keys(g.portfolio_grade).length) setPortfolioGrade(g.portfolio_grade)
             })
             .catch(() => {})
 
@@ -564,7 +566,10 @@ export default function Dashboard() {
                 .then(g => {
                   if (stale || !g) return
                   if (g.ticker_grades) setTickerGrades(g.ticker_grades)
-                  if (g.portfolio_grade) setPortfolioGrade(g.portfolio_grade)
+                  // {} is truthy — only overwrite when grades were actually
+                  // computed, so the post-refresh fetch can't clobber the good
+                  // grades the first fetch already set with an empty response.
+                  if (g.portfolio_grade && Object.keys(g.portfolio_grade).length) setPortfolioGrade(g.portfolio_grade)
                   setGradeStatus('Grades loaded.')
                   setTimeout(() => { if (!stale) setGradeStatus(null) }, 3000)
                 })
