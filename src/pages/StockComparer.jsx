@@ -240,11 +240,26 @@ export default function StockComparer() {
   const [error, setError] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const [search, setSearch] = useState('')
-  const [visibleColumns, setVisibleColumns] = useState(DEFAULT_COLUMNS)
+  const [visibleColumns, setVisibleColumns] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('stockcomparer-columns'))
+      if (Array.isArray(saved)) {
+        const valid = COLUMNS.map(c => c.key)
+        const cleaned = saved.filter(k => valid.includes(k))
+        if (cleaned.length) return cleaned
+      }
+    } catch { /* ignore malformed storage */ }
+    return DEFAULT_COLUMNS
+  })
   const [showDistributionChart, setShowDistributionChart] = useState(true)
   const [distributionSymbol, setDistributionSymbol] = useState('')
   const [distPctMode, setDistPctMode] = useState(false)
   const [distAnnual, setDistAnnual] = useState(false)
+
+  // Persist column selection so it survives app restarts.
+  useEffect(() => {
+    try { localStorage.setItem('stockcomparer-columns', JSON.stringify(visibleColumns)) } catch { /* ignore */ }
+  }, [visibleColumns])
 
   const resetReturnRange = useCallback(() => {
     setFetchRange(null)
@@ -580,7 +595,8 @@ export default function StockComparer() {
         peg_ratio: research.peg_ratio,
         revenue: research.revenue,
         profit_margin: research.profit_margin_pct,
-        beta: research.beta ?? profile.beta,
+        beta: profile.beta ?? research.beta,
+        beta_benchmark: profile.beta_benchmark ?? null,
         sharpe: profile.sharpe,
         sortino: profile.sortino,
         eps: research.eps,
@@ -797,11 +813,24 @@ export default function StockComparer() {
             <tbody>
               {rows.map(row => (
                 <tr key={row.symbol}>
-                  {activeColumns.map(col => (
-                    <td key={col.key} style={['change_pct', 'return_1y', 'max_drawdown'].includes(col.key) ? { color: pctColor(row[col.key]) } : undefined}>
-                      {col.key === 'symbol' ? <strong>{row.symbol}</strong> : format(col.key, row[col.key])}
-                    </td>
-                  ))}
+                  {activeColumns.map(col => {
+                    if (col.key === 'beta') {
+                      const bm = row.beta_benchmark
+                      return (
+                        <td key={col.key} title={bm ? `Beta regressed against ${bm} (best-fitting benchmark)` : undefined}>
+                          {format('beta', row.beta)}
+                          {bm && row.beta != null && (
+                            <span style={{ color: '#6f7890', fontSize: '0.8em', marginLeft: 4 }}>vs {bm}</span>
+                          )}
+                        </td>
+                      )
+                    }
+                    return (
+                      <td key={col.key} style={['change_pct', 'return_1y', 'max_drawdown'].includes(col.key) ? { color: pctColor(row[col.key]) } : undefined}>
+                        {col.key === 'symbol' ? <strong>{row.symbol}</strong> : format(col.key, row[col.key])}
+                      </td>
+                    )
+                  })}
                 </tr>
               ))}
             </tbody>

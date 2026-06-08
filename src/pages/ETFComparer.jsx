@@ -217,12 +217,27 @@ export default function ETFComparer() {
   const [error, setError] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const [search, setSearch] = useState('')
-  const [visibleColumns, setVisibleColumns] = useState(DEFAULT_COLUMNS)
+  const [visibleColumns, setVisibleColumns] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('etfcomparer-columns'))
+      if (Array.isArray(saved)) {
+        const valid = COLUMNS.map(c => c.key)
+        const cleaned = saved.filter(k => valid.includes(k))
+        if (cleaned.length) return cleaned
+      }
+    } catch { /* ignore malformed storage */ }
+    return DEFAULT_COLUMNS
+  })
   const [showDistributionChart, setShowDistributionChart] = useState(true)
   const [distributionSymbol, setDistributionSymbol] = useState('')
   const [distPctMode, setDistPctMode] = useState(false)
   const [distAnnual, setDistAnnual] = useState(false)
   const [downloadStatus, setDownloadStatus] = useState('')
+
+  // Persist column selection so it survives app restarts.
+  useEffect(() => {
+    try { localStorage.setItem('etfcomparer-columns', JSON.stringify(visibleColumns)) } catch { /* ignore */ }
+  }, [visibleColumns])
 
   const resetReturnRange = useCallback(() => {
     setFetchRange(null)
@@ -842,6 +857,17 @@ export default function ETFComparer() {
                         <td key={col.key} style={{ color: rvy?.color || '#6f7890', textAlign: 'center' }}
                           title={rvy ? `1Y Return ${rvy.totalReturnPct?.toFixed(2)}% vs Yield ${rvy.yieldOnCost?.toFixed(2)}% (spread ${rvy.spread?.toFixed(2)}%)` : undefined}>
                           {rvy?.label || '-'}
+                        </td>
+                      )
+                    }
+                    if (col.key === 'beta') {
+                      const bm = row.beta_benchmark
+                      return (
+                        <td key={col.key} title={bm ? `Beta regressed against ${bm} (best-fitting benchmark)` : undefined}>
+                          {format('beta', row.beta)}
+                          {bm && row.beta != null && (
+                            <span style={{ color: '#6f7890', fontSize: '0.8em', marginLeft: 4 }}>vs {bm}</span>
+                          )}
                         </td>
                       )
                     }

@@ -17591,6 +17591,62 @@ def _normalized_drawdown(values):
     return round(float(drawdown.min()), 2)
 
 
+def _beta_and_corr(fund_close, bench_close):
+    """Beta and correlation of a fund vs a benchmark from aligned periodic returns.
+
+    Many newer/option-income ETFs (QQQI, SPYI, JEPQ, ...) have no usable beta on
+    Yahoo (it returns 0.0 or None), so we regress the fund's own price returns
+    against the benchmark's over the same window. Returns (beta, correlation) with
+    beta rounded to two decimals, or None when there isn't enough overlapping data.
+    """
+    try:
+        import numpy as np
+        f = pd.Series(fund_close).dropna()
+        b = pd.Series(bench_close).dropna()
+        if f.empty or b.empty:
+            return None
+        # Align on common dates first, then take returns so each return pairs
+        # the fund and benchmark over the identical span.
+        aligned = pd.concat({"f": f, "b": b}, axis=1).dropna()
+        fr = aligned["f"].pct_change().dropna()
+        br = aligned["b"].pct_change().dropna()
+        common = fr.index.intersection(br.index)
+        fr, br = fr.loc[common], br.loc[common]
+        if len(fr) < 15:
+            return None
+        var_b = float(np.var(br.values, ddof=1))
+        if var_b <= 0:
+            return None
+        cov = float(np.cov(fr.values, br.values, ddof=1)[0][1])
+        sd_f = float(np.std(fr.values, ddof=1))
+        sd_b = float(np.std(br.values, ddof=1))
+        corr = cov / (sd_f * sd_b) if sd_f > 0 and sd_b > 0 else 0.0
+        return round(cov / var_b, 2), corr
+    except Exception:
+        return None
+
+
+def _best_fit_beta(fund_close, benchmarks):
+    """Pick the benchmark the fund tracks most closely and return its beta.
+
+    `benchmarks` is a list of (name, close_series). We regress against each and
+    keep whichever yields the highest |correlation| — this routes Nasdaq-like
+    funds to QQQ and broad funds to SPY without any manual tagging. Returns
+    (beta, benchmark_name), or (None, None) when no regression is possible.
+    """
+    best = None  # (beta, name, abs_corr)
+    for name, bench_close in benchmarks:
+        res = _beta_and_corr(fund_close, bench_close)
+        if res is None:
+            continue
+        beta, corr = res
+        if best is None or abs(corr) > best[2]:
+            best = (beta, name, abs(corr))
+    if best is None:
+        return None, None
+    return best[0], best[1]
+
+
 @app.route("/api/etf-screen/data")
 def etf_screen_data():
     """Return OHLCV + return data for one or more tickers."""
@@ -17738,6 +17794,15 @@ def etf_screen_data():
         # Download daily data with dividends for return calcs
         div_df = _chunked_yf_download(yahoo_symbols, interval="1d", auto_adjust=False, actions=True, progress=False, **_range_kwargs())
 
+        # Benchmark daily closes for computing beta when Yahoo lacks it. We pull
+        # both SPY and QQQ and let each fund regress against whichever it tracks
+        # most closely (Nasdaq-like funds -> QQQ, broad funds -> SPY).
+        BETA_BENCHMARKS = ["SPY", "QQQ"]
+        try:
+            bench_df = _chunked_yf_download(BETA_BENCHMARKS, interval="1d", auto_adjust=False, progress=False, **_range_kwargs())
+        except Exception:
+            bench_df = pd.DataFrame()
+
         result = {
             "mode": mode,
             "reinvest_pct": reinvest_pct,
@@ -17821,6 +17886,13 @@ def etf_screen_data():
                 return str(value)[:10]
             except Exception:
                 return None
+
+        bench_closes = []
+        if not bench_df.empty:
+            for bm in BETA_BENCHMARKS:
+                bc = _extract_col(bench_df, "Close", bm)
+                if not bc.empty:
+                    bench_closes.append((bm, bc))
 
         for sym in symbols:
             dl_sym = yahoo_by_symbol.get(sym, sym)
@@ -17916,6 +17988,9 @@ def etf_screen_data():
             risk_basis = pd.Series(drawdown_basis, index=base.index[:len(drawdown_basis)]).dropna()
             sharpe = _sharpe(risk_basis)
             sortino = _sortino(risk_basis)
+            # Regress the fund's price returns against the best-fitting benchmark
+            # for a real beta (Yahoo returns 0.0/None for many option-income ETFs).
+            computed_beta, beta_benchmark = _best_fit_beta(base, bench_closes)
 
             result["series"][sym] = {"dates": dates, "traces": traces}
             result["stats"][sym] = {
@@ -18098,7 +18173,8 @@ def etf_screen_data():
                 "high_price": info.get("dayHigh") or info.get("regularMarketDayHigh"),
                 "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
                 "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
-                "beta": info.get("beta") or info.get("beta3Year"),
+                "beta": computed_beta if computed_beta is not None else (info.get("beta") or info.get("beta3Year")),
+                "beta_benchmark": beta_benchmark if computed_beta is not None else None,
                 "category": saved.get("etf_category") or saved.get("etf_strategy") or info.get("category"),
                 "issuer": saved.get("provider") or info.get("fundFamily"),
                 "inception_date": _fmt_yf_date(info.get("fundInceptionDate")),
