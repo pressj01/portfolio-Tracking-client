@@ -1,18 +1,28 @@
 const { spawn } = require('child_process')
+const fs = require('fs')
+const path = require('path')
 
-// Launch the Electron shell so Windows uses the app icon in the taskbar.
-// electron/main.js starts or reuses Flask and Vite as needed.
-const electron = spawn('npm', ['run', 'electron'], {
+// Prefer the packaged executable because Windows gets the taskbar icon from
+// the .exe itself. Fall back to dev Electron when no packaged build exists.
+const packagedExe = path.join(
+  __dirname,
+  'release',
+  'win-unpacked',
+  'Portfolio Tracking Client.exe',
+)
+const hasPackagedExe = fs.existsSync(packagedExe)
+
+const child = spawn(hasPackagedExe ? packagedExe : 'npm', hasPackagedExe ? [] : ['run', 'electron'], {
   cwd: __dirname,
   stdio: 'inherit',
-  shell: true,
+  shell: !hasPackagedExe,
 })
 
-electron.on('exit', (code) => {
+child.on('exit', (code) => {
   process.exit(code ?? 0)
 })
 
 process.on('SIGINT', () => {
-  electron.kill()
+  child.kill()
   process.exit()
 })
