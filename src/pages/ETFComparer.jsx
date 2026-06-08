@@ -63,7 +63,7 @@ const COLUMNS = [
 ]
 
 const DEFAULT_COLUMNS = ['symbol', 'name', 'price', 'change_pct', 'assets', 'expense_ratio', 'pe_ratio', 'expected_dividend_yield', 'dividend_yield', 'volume', 'dollar_volume', 'open', 'return_1y', 'approx_delta', 'ret_vs_yld']
-const AVERAGE_PERIOD_ORDER = ['1 Month', 'YTD', '1 Year', '5 Years', '10 Years', 'Inception']
+const AVERAGE_PERIOD_ORDER = ['1 Month', 'YTD', '1 Year', '5 Years', '10 Years', 'Common History', 'Inception']
 
 function pct(v) {
   if (v == null || Number.isNaN(Number(v))) return '-'
@@ -352,6 +352,8 @@ export default function ETFComparer() {
           symbols: result.symbols || requestedSymbols,
           periods: result.periods,
           summary: result.summary,
+          inception_meta: result.inception_meta || {},
+          common_history: result.common_history || null,
         })
       })
       .catch(() => {
@@ -590,6 +592,7 @@ export default function ETFComparer() {
   const averageChart = useMemo(() => {
     const periods = averageData?.periods || []
     const averageSymbols = averageData?.symbols?.length ? averageData.symbols : symbols
+    const inceptionMeta = averageData?.inception_meta || {}
     const periodByLabel = new Map(periods.map(p => [p.label, p]))
     const available = AVERAGE_PERIOD_ORDER.map(label => periodByLabel.get(label) || { label, returns: {} })
     return {
@@ -599,7 +602,15 @@ export default function ETFComparer() {
         type: 'bar',
         name: sym,
         marker: { color: COLORS[idx % COLORS.length] },
-        text: available.map(p => p.returns?.[sym] == null ? '' : `${p.returns[sym].toFixed(2)}%`),
+        // On the Inception bar, append each fund's own span (e.g. "1.9y") since
+        // those windows differ per fund and aren't directly comparable.
+        text: available.map(p => {
+          const v = p.returns?.[sym]
+          if (v == null) return ''
+          const base = `${v.toFixed(2)}%`
+          const yrs = inceptionMeta[sym]?.years
+          return p.label === 'Inception' && yrs != null ? `${base}<br>${yrs}y` : base
+        }),
         textposition: 'outside',
         hovertemplate: `<b>${sym}</b><br>%{x}: %{y:.2f}%<extra></extra>`,
       })),
@@ -917,6 +928,15 @@ export default function ETFComparer() {
           </div>
         )}
         <Plot data={averageChart.data} layout={averageChart.layout} config={{ responsive: true, displayModeBar: false }} useResizeHandler style={{ width: '100%', height: 390 }} />
+        {averageData?.common_history && (
+          <div className="etfc-note" style={{ fontSize: '0.82em', color: '#9aa7c2' }}>
+            <strong>Common History</strong> compares every fund over the identical window since the latest
+            inception ({averageData.common_history.start} → {averageData.common_history.end},{' '}
+            {averageData.common_history.years}y{averageData.common_history.annualized ? ', annualized' : ', cumulative'}).
+            The <strong>Inception</strong> bars instead use each fund's own start date, so their spans differ
+            (shown as the “Ny” label on each bar) and are <em>not</em> directly comparable.
+          </div>
+        )}
         {averageData?.periods?.length > 0 && (
           <div className="etfc-average-table-wrap">
             <table className="etfc-average-table">

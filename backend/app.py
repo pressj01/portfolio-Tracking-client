@@ -13078,6 +13078,39 @@ def security_research_average_returns(kind):
     )
     summary = _research_multi_return_summary(symbols, rows)
 
+    # ETF comparer: make the "Inception" comparison fair. Each fund's own
+    # inception spans a different length (e.g. QQQ since 1999 vs a 2024 income
+    # fund), so expose (a) per-fund inception spans for bar labelling and
+    # (b) a "Common History" period measured over the identical window shared
+    # by every fund (starting at the latest inception), annualized when ≥1yr.
+    inception_meta = {}
+    common_history = None
+    if kind == "etf":
+        valid = {s: ser for s, ser in series_by_symbol.items() if ser is not None and not ser.empty}
+        for s, ser in valid.items():
+            start = ser.index.min()
+            inception_meta[s] = {
+                "date": start.strftime("%Y-%m-%d"),
+                "years": round((ser.index.max() - start).days / 365.25, 1),
+            }
+        if len(valid) >= 2:
+            common_start = max(ser.index.min() for ser in valid.values())
+            common_end = min(ser.index.max() for ser in valid.values())
+            span_days = (common_end - common_start).days
+            if span_days > 5:
+                annualized = span_days >= 365
+                common_returns = {
+                    s: _research_window_return(ser.loc[ser.index <= common_end], common_start, annualize=annualized)
+                    for s, ser in valid.items()
+                }
+                rows.append({"label": "Common History", "returns": common_returns})
+                common_history = {
+                    "start": common_start.strftime("%Y-%m-%d"),
+                    "end": common_end.strftime("%Y-%m-%d"),
+                    "years": round(span_days / 365.25, 1),
+                    "annualized": annualized,
+                }
+
     return jsonify({
         "kind": kind,
         "symbols": [symbol for symbol in symbols if symbol in series_by_symbol],
@@ -13090,6 +13123,8 @@ def security_research_average_returns(kind):
         ],
         "summary": summary,
         "errors": errors,
+        "inception_meta": inception_meta,
+        "common_history": common_history,
         "note": "Returns are based on split/dividend-adjusted prices. 1 Month and YTD are cumulative; longer windows are annualized average returns.",
     })
 
