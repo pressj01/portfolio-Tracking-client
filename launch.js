@@ -1,37 +1,18 @@
-const { spawn, exec } = require('child_process')
-const path = require('path')
-const http = require('http')
-const projectDir = __dirname
+const { spawn } = require('child_process')
 
-// Start Flask backend
-const flask = spawn('py', ['backend/app.py'], {
-  cwd: projectDir,
+// Launch the Electron shell so Windows uses the app icon in the taskbar.
+// electron/main.js starts or reuses Flask and Vite as needed.
+const electron = spawn('npm', ['run', 'electron'], {
+  cwd: __dirname,
   stdio: 'inherit',
   shell: true,
 })
 
-// Start Vite dev server
-const vite = spawn('npx', ['vite'], {
-  cwd: projectDir,
-  stdio: 'inherit',
-  shell: true,
+electron.on('exit', (code) => {
+  process.exit(code ?? 0)
 })
 
-// Wait for Vite to be ready, then open browser
-function waitAndOpen() {
-  const req = http.get('http://localhost:5173', () => {
-    exec('start http://localhost:5173')
-  })
-  req.on('error', () => {
-    setTimeout(waitAndOpen, 500)
-  })
-}
-
-setTimeout(waitAndOpen, 2000)
-
-// Keep running until Ctrl+C
 process.on('SIGINT', () => {
-  flask.kill()
-  vite.kill()
+  electron.kill()
   process.exit()
 })

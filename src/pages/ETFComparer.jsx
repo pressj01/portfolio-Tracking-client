@@ -50,6 +50,9 @@ const COLUMNS = [
   { key: 'dollar_volume', label: 'Dollar Vol.' },
   { key: 'open', label: 'Open' },
   { key: 'return_1y', label: 'CAGR 1Y' },
+  { key: 'beta', label: 'Beta' },
+  { key: 'sharpe', label: 'Sharpe' },
+  { key: 'sortino', label: 'Sortino' },
   { key: 'fifty_two_week_high', label: '52 Week High' },
   { key: 'fifty_two_week_low', label: '52 Week Low' },
   { key: 'issuer', label: 'Issuer' },
@@ -559,7 +562,7 @@ export default function ETFComparer() {
 
   const format = (key, value) => {
     if (value == null || value === '') return '-'
-    if (['price', 'open', 'fifty_two_week_high', 'fifty_two_week_low', 'pe_ratio'].includes(key)) return number(value)
+    if (['price', 'open', 'fifty_two_week_high', 'fifty_two_week_low', 'pe_ratio', 'beta', 'sharpe', 'sortino'].includes(key)) return number(value)
     if (['assets', 'volume', 'dollar_volume'].includes(key)) return compact(value)
     if (['expense_ratio', 'dividend_yield', 'expected_dividend_yield'].includes(key)) return ratioPct(value)
     if (['change_pct', 'return_1y', 'max_drawdown'].includes(key)) return pct(value)
@@ -741,7 +744,7 @@ export default function ETFComparer() {
             layout={chart.layout}
             config={{ responsive: true, displayModeBar: true, displaylogo: false }}
             useResizeHandler
-            style={{ width: '100%' }}
+            style={{ width: '100%', height: 560 }}
             onRelayout={(e) => {
               if (e?.['xaxis.autorange']) { setReturnXRange([null, null]); return }
               const range = e?.['xaxis.range'] || (e?.['xaxis.range[0]'] && e?.['xaxis.range[1]'] ? [e['xaxis.range[0]'], e['xaxis.range[1]']] : null)
@@ -868,7 +871,7 @@ export default function ETFComparer() {
             {averageData.summary} These numbers are adjusted for stock splits and assume dividends are reinvested.
           </div>
         )}
-        <Plot data={averageChart.data} layout={averageChart.layout} config={{ responsive: true, displayModeBar: false }} useResizeHandler style={{ width: '100%' }} />
+        <Plot data={averageChart.data} layout={averageChart.layout} config={{ responsive: true, displayModeBar: false }} useResizeHandler style={{ width: '100%', height: 390 }} />
         {averageData?.periods?.length > 0 && (
           <div className="etfc-average-table-wrap">
             <table className="etfc-average-table">

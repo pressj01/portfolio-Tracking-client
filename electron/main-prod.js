@@ -1,10 +1,16 @@
-const { app, BrowserWindow } = require('electron')
+const { app, BrowserWindow, nativeImage } = require('electron')
 const path = require('path')
 const { spawn, execSync } = require('child_process')
 const net = require('net')
 
 let mainWindow
 let flaskProcess
+app.setAppUserModelId('com.portfolio-tracker.client')
+
+function getAppIcon() {
+  const filename = process.platform === 'win32' ? 'app-icon.ico' : 'app-icon.png'
+  return path.join(__dirname, '..', 'dist', filename)
+}
 
 function killStaleBackends() {
   // Kill any orphaned backend processes from previous runs
@@ -87,9 +93,11 @@ function waitForBackend(port, timeout) {
 }
 
 function createWindow() {
+  const appIcon = nativeImage.createFromPath(getAppIcon())
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
+    icon: appIcon,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -105,6 +113,10 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+
+  if (!appIcon.isEmpty()) {
+    mainWindow.setIcon(appIcon)
+  }
 }
 
 function killFlask() {

@@ -52,6 +52,8 @@ const COLUMNS = [
   { key: 'revenue', label: 'Revenue' },
   { key: 'profit_margin', label: 'Profit Margin' },
   { key: 'beta', label: 'Beta' },
+  { key: 'sharpe', label: 'Sharpe' },
+  { key: 'sortino', label: 'Sortino' },
   { key: 'eps', label: 'EPS (TTM)' },
   { key: 'payout_ratio', label: 'Payout Ratio' },
   { key: 'debt_to_equity', label: 'Debt/Equity' },
@@ -578,6 +580,9 @@ export default function StockComparer() {
         peg_ratio: research.peg_ratio,
         revenue: research.revenue,
         profit_margin: research.profit_margin_pct,
+        beta: research.beta ?? profile.beta,
+        sharpe: profile.sharpe,
+        sortino: profile.sortino,
         eps: research.eps,
         payout_ratio: research.payout_ratio_pct,
         debt_to_equity: research.debt_to_equity,
@@ -603,7 +608,7 @@ export default function StockComparer() {
 
   const format = (key, value) => {
     if (value == null || value === '') return '-'
-    if (['price', 'open', 'fifty_two_week_high', 'fifty_two_week_low', 'pe_ratio', 'forward_pe', 'peg_ratio', 'beta', 'eps', 'debt_to_equity'].includes(key)) return number(value)
+    if (['price', 'open', 'fifty_two_week_high', 'fifty_two_week_low', 'pe_ratio', 'forward_pe', 'peg_ratio', 'beta', 'sharpe', 'sortino', 'eps', 'debt_to_equity'].includes(key)) return number(value)
     if (['market_cap', 'volume', 'dollar_volume', 'revenue'].includes(key)) return compact(value)
     if (['dividend_yield'].includes(key)) return ratioPct(value)
     if (['profit_margin', 'payout_ratio', 'dividend_growth'].includes(key)) return pctFixed(value)
@@ -738,7 +743,7 @@ export default function StockComparer() {
             layout={chart.layout}
             config={{ responsive: true, displayModeBar: true, displaylogo: false }}
             useResizeHandler
-            style={{ width: '100%' }}
+            style={{ width: '100%', height: 560 }}
             onRelayout={(e) => {
               if (e?.['xaxis.autorange']) { setReturnXRange([null, null]); return }
               const range = e?.['xaxis.range'] || (e?.['xaxis.range[0]'] && e?.['xaxis.range[1]'] ? [e['xaxis.range[0]'], e['xaxis.range[1]']] : null)
@@ -814,7 +819,7 @@ export default function StockComparer() {
             {averageData.summary} These numbers are adjusted for stock splits and assume dividends are reinvested.
           </div>
         )}
-        <Plot data={averageChart.data} layout={averageChart.layout} config={{ responsive: true, displayModeBar: false }} useResizeHandler style={{ width: '100%' }} />
+        <Plot data={averageChart.data} layout={averageChart.layout} config={{ responsive: true, displayModeBar: false }} useResizeHandler style={{ width: '100%', height: 390 }} />
         {averageData?.periods?.length > 0 && (
           <div className="etfc-average-table-wrap">
             <table className="etfc-average-table">

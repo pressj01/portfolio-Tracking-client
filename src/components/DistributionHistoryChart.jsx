@@ -128,7 +128,7 @@ export default function DistributionHistoryChart({
           layout={chart.layout}
           config={{ responsive: true, displayModeBar: false }}
           useResizeHandler
-          style={{ width: '100%' }}
+          style={{ width: '100%', height: 360 }}
         />
       ) : (
         <div className={emptyClassName}>

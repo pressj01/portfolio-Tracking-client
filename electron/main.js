@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require('electron')
+const { app, BrowserWindow, dialog, nativeImage } = require('electron')
 const path = require('path')
 const http = require('http')
 const { spawn, execSync } = require('child_process')
@@ -8,9 +8,11 @@ const { spawn, execSync } = require('child_process')
 // (config.py falls back there when PORTFOLIO_DB_DIR is unset). The packaged
 // build uses electron/main-prod.js instead, so this file is the dev entry.
 const isDev = process.env.NODE_ENV !== 'production'
+app.setAppUserModelId('com.portfolio-tracker.client')
 
 const PROJECT_ROOT = path.join(__dirname, '..')
 const BACKEND_DIR = path.join(PROJECT_ROOT, 'backend')
+const APP_ICON = path.join(PROJECT_ROOT, 'public', process.platform === 'win32' ? 'app-icon.ico' : 'app-icon.png')
 const FLASK_HEALTH_URL = 'http://127.0.0.1:5001/api/profiles'
 const VITE_URL = 'http://localhost:5173'
 
@@ -88,9 +90,11 @@ function startVite() {
 }
 
 function createWindow() {
+  const appIcon = nativeImage.createFromPath(APP_ICON)
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
+    icon: appIcon,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -107,6 +111,10 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+
+  if (!appIcon.isEmpty()) {
+    mainWindow.setIcon(appIcon)
+  }
 }
 
 async function boot() {

@@ -17595,6 +17595,7 @@ def _normalized_drawdown(values):
 def etf_screen_data():
     """Return OHLCV + return data for one or more tickers."""
     import yfinance as yf
+    from grading import _sharpe, _sortino
 
     ticker = request.args.get("ticker", "").strip().upper()
     extra = request.args.get("extra", "").strip()
@@ -17912,6 +17913,9 @@ def etf_screen_data():
 
             # Max drawdown for the selected return path, not price-only.
             mdd = _normalized_drawdown(drawdown_basis)
+            risk_basis = pd.Series(drawdown_basis, index=base.index[:len(drawdown_basis)]).dropna()
+            sharpe = _sharpe(risk_basis)
+            sortino = _sortino(risk_basis)
 
             result["series"][sym] = {"dates": dates, "traces": traces}
             result["stats"][sym] = {
@@ -18101,6 +18105,8 @@ def etf_screen_data():
                 "return_1y": saved.get("change_1y") if saved.get("change_1y") is not None else total_ret,
                 "return_annualized": ann,
                 "max_drawdown": mdd,
+                "sharpe": sharpe,
+                "sortino": sortino,
             }
 
         return jsonify(result)

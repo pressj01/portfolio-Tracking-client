@@ -6,9 +6,11 @@
   "author": "Press",
   "main": "electron/main.js",
   "scripts": {
+    "icons": "py scripts/generate-app-icon.py",
     "dev": "vite",
     "dev:all": "concurrently --kill-others \"py backend/app.py\" \"vite\"",
     "start": "concurrently --kill-others \"py backend/app.py\" \"wait-on http://localhost:5001/api/profiles && electron .\"",
+    "prebuild": "npm run icons",
     "build": "vite build",
     "build:backend": "powershell -ExecutionPolicy Bypass -File scripts/build-backend.ps1",
     "electron": "electron .",
@@ -51,7 +53,7 @@
           ]
         }
       ],
-      "icon": null
+      "icon": "public/app-icon.ico"
     },
     "nsis": {
       "oneClick": false,
