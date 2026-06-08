@@ -17626,25 +17626,31 @@ def _beta_and_corr(fund_close, bench_close):
         return None
 
 
-def _best_fit_beta(fund_close, benchmarks):
+def _best_fit_beta(fund_close, benchmarks, primary="SPY", min_corr=0.3):
     """Pick the benchmark the fund tracks most closely and return its beta.
 
-    `benchmarks` is a list of (name, close_series). We regress against each and
-    keep whichever yields the highest |correlation| — this routes Nasdaq-like
-    funds to QQQ and broad funds to SPY without any manual tagging. Returns
-    (beta, benchmark_name), or (None, None) when no regression is possible.
+    `benchmarks` is a list of (name, close_series). We pick whichever has the
+    highest *signed* correlation (a negative correlation is never a good fit),
+    but only when it clears `min_corr` — otherwise we fall back to the primary
+    benchmark (SPY), the standard equity proxy. SPY and QQQ are themselves ~90%
+    correlated, so correlation barely separates them; without the floor, tiny
+    noise routes weakly-correlated names (JNJ, KO) to whichever index they
+    happen to anti-correlate with, yielding a misleading negative beta. This
+    keeps clearly Nasdaq-driven instruments (QQQI, JEPQ, NVDA...) on QQQ while
+    routing broad/defensive names to SPY. Returns (beta, benchmark_name), or
+    (None, None) when no regression is possible.
     """
-    best = None  # (beta, name, abs_corr)
+    results = {}
     for name, bench_close in benchmarks:
         res = _beta_and_corr(fund_close, bench_close)
-        if res is None:
-            continue
-        beta, corr = res
-        if best is None or abs(corr) > best[2]:
-            best = (beta, name, abs(corr))
-    if best is None:
+        if res is not None:
+            results[name] = res  # (beta, corr)
+    if not results:
         return None, None
-    return best[0], best[1]
+    best_name = max(results, key=lambda n: results[n][1])  # highest signed corr
+    if results[best_name][1] < min_corr and primary in results:
+        best_name = primary
+    return results[best_name][0], best_name
 
 
 @app.route("/api/etf-screen/data")
