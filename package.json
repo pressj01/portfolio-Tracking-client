@@ -18,7 +18,7 @@
     "dist": "npm run build:backend && npm run build && electron-builder --win"
   },
   "build": {
-    "appId": "com.portfolio-tracker.client",
+    "appId": "com.press.portfolio.tracker.client",
     "productName": "Portfolio Tracking Client",
     "directories": {
       "output": "release"

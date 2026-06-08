@@ -8,7 +8,7 @@ const { spawn, execSync } = require('child_process')
 // (config.py falls back there when PORTFOLIO_DB_DIR is unset). The packaged
 // build uses electron/main-prod.js instead, so this file is the dev entry.
 const isDev = process.env.NODE_ENV !== 'production'
-app.setAppUserModelId('com.portfolio-tracker.client')
+app.setAppUserModelId('com.press.portfolio.tracker.client')
 
 const PROJECT_ROOT = path.join(__dirname, '..')
 const BACKEND_DIR = path.join(PROJECT_ROOT, 'backend')

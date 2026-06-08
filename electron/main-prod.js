@@ -5,7 +5,7 @@ const net = require('net')
 
 let mainWindow
 let flaskProcess
-app.setAppUserModelId('com.portfolio-tracker.client')
+app.setAppUserModelId('com.press.portfolio.tracker.client')
 
 function getAppIcon() {
   const filename = process.platform === 'win32' ? 'app-icon.ico' : 'app-icon.png'
