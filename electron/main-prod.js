@@ -1,5 +1,6 @@
 const { app, BrowserWindow, nativeImage } = require('electron')
 const path = require('path')
+const fs = require('fs')
 const { spawn, execSync } = require('child_process')
 const net = require('net')
 
@@ -43,17 +44,32 @@ function getBackendCwd() {
   return path.join(__dirname, '..', 'installer', 'flask-dist', 'backend')
 }
 
+function getDatabaseDir() {
+  if (app.isPackaged) {
+    const repoBackendDir = path.join(process.resourcesPath, '..', '..', '..', 'backend')
+    if (process.execPath.includes(`${path.sep}release${path.sep}win-unpacked${path.sep}`)) {
+      try {
+        const repoDb = path.join(repoBackendDir, 'portfolio.db')
+        if (fs.existsSync(repoDb)) return repoBackendDir
+      } catch (e) {
+        // Fall through to userData for installed builds or inaccessible paths.
+      }
+    }
+  }
+  return app.getPath('userData')
+}
+
 function startFlask() {
   const exePath = getBackendPath()
   const cwd = getBackendCwd()
-  const userDataDir = app.getPath('userData')
+  const databaseDir = getDatabaseDir()
   console.log('Starting backend:', exePath)
   console.log('Working directory:', cwd)
-  console.log('Database directory:', userDataDir)
+  console.log('Database directory:', databaseDir)
 
   flaskProcess = spawn(exePath, [], {
     cwd: cwd,
-    env: { ...process.env, PORTFOLIO_DB_DIR: userDataDir },
+    env: { ...process.env, PORTFOLIO_DB_DIR: databaseDir },
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',  // Create new process group on macOS/Linux for clean tree kill
   })

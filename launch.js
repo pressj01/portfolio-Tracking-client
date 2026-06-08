@@ -1,21 +1,11 @@
 const { spawn } = require('child_process')
-const fs = require('fs')
-const path = require('path')
 
-// Prefer the packaged executable because Windows gets the taskbar icon from
-// the .exe itself. Fall back to dev Electron when no packaged build exists.
-const packagedExe = path.join(
-  __dirname,
-  'release',
-  'win-unpacked',
-  'Portfolio Tracking Client.exe',
-)
-const hasPackagedExe = fs.existsSync(packagedExe)
-
-const child = spawn(hasPackagedExe ? packagedExe : 'npm', hasPackagedExe ? [] : ['run', 'electron'], {
+// Use the dev Electron shell for local work so the app reads backend/portfolio.db,
+// the same database used by Flask from the terminal.
+const child = spawn('npm', ['run', 'electron'], {
   cwd: __dirname,
   stdio: 'inherit',
-  shell: !hasPackagedExe,
+  shell: true,
 })
 
 child.on('exit', (code) => {
