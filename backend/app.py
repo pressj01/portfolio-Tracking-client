@@ -17653,6 +17653,38 @@ def _best_fit_beta(fund_close, benchmarks, primary="SPY", min_corr=0.3):
     return results[best_name][0], best_name
 
 
+def _capture_deltas(fund_close, bench_close, min_days=10):
+    """Approximate effective delta vs the underlying, split by market direction.
+
+    Regress the fund's daily returns on the benchmark's separately for up-days
+    and down-days. The two slopes are the fund's sensitivity (≈ delta) when the
+    underlying rises vs falls — exposing the covered-call asymmetry (negative
+    gamma) that a single symmetric beta hides: option-income funds tend to show
+    a lower up-delta (capped upside) than down-delta (fuller downside). This is
+    an empirical proxy from prices, NOT the fund's true option-greek delta.
+    Returns (delta_up, delta_down), each rounded or None when too few days.
+    """
+    try:
+        import numpy as np
+        f = pd.Series(fund_close).dropna()
+        b = pd.Series(bench_close).dropna()
+        aligned = pd.concat({"f": f, "b": b}, axis=1).dropna()
+        rets = pd.concat({"f": aligned["f"].pct_change(), "b": aligned["b"].pct_change()}, axis=1).dropna()
+
+        def _slope(sub):
+            if len(sub) < min_days:
+                return None
+            var_b = float(np.var(sub["b"].values, ddof=1))
+            if var_b <= 0:
+                return None
+            cov = float(np.cov(sub["f"].values, sub["b"].values, ddof=1)[0][1])
+            return round(cov / var_b, 2)
+
+        return _slope(rets[rets["b"] > 0]), _slope(rets[rets["b"] < 0])
+    except Exception:
+        return None, None
+
+
 @app.route("/api/etf-screen/data")
 def etf_screen_data():
     """Return OHLCV + return data for one or more tickers."""
@@ -17997,6 +18029,13 @@ def etf_screen_data():
             # Regress the fund's price returns against the best-fitting benchmark
             # for a real beta (Yahoo returns 0.0/None for many option-income ETFs).
             computed_beta, beta_benchmark = _best_fit_beta(base, bench_closes)
+            # Approximate effective delta (up-/down-day capture) vs that same
+            # underlying — surfaces the covered-call asymmetry beta can't show.
+            delta_up = delta_down = None
+            if beta_benchmark:
+                _bclose = dict(bench_closes).get(beta_benchmark)
+                if _bclose is not None:
+                    delta_up, delta_down = _capture_deltas(base, _bclose)
 
             result["series"][sym] = {"dates": dates, "traces": traces}
             result["stats"][sym] = {
@@ -18181,6 +18220,8 @@ def etf_screen_data():
                 "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
                 "beta": computed_beta if computed_beta is not None else (info.get("beta") or info.get("beta3Year")),
                 "beta_benchmark": beta_benchmark if computed_beta is not None else None,
+                "delta_up": delta_up,
+                "delta_down": delta_down,
                 "category": saved.get("etf_category") or saved.get("etf_strategy") or info.get("category"),
                 "issuer": saved.get("provider") or info.get("fundFamily"),
                 "inception_date": _fmt_yf_date(info.get("fundInceptionDate")),

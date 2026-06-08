@@ -51,6 +51,7 @@ const COLUMNS = [
   { key: 'open', label: 'Open' },
   { key: 'return_1y', label: 'CAGR 1Y' },
   { key: 'beta', label: 'Beta' },
+  { key: 'approx_delta', label: 'Approx. Delta (↑/↓)' },
   { key: 'sharpe', label: 'Sharpe' },
   { key: 'sortino', label: 'Sortino' },
   { key: 'fifty_two_week_high', label: '52 Week High' },
@@ -61,7 +62,7 @@ const COLUMNS = [
   { key: 'ret_vs_yld', label: 'Ret vs Yld' },
 ]
 
-const DEFAULT_COLUMNS = ['symbol', 'name', 'price', 'change_pct', 'assets', 'expense_ratio', 'pe_ratio', 'expected_dividend_yield', 'dividend_yield', 'volume', 'dollar_volume', 'open', 'return_1y', 'ret_vs_yld']
+const DEFAULT_COLUMNS = ['symbol', 'name', 'price', 'change_pct', 'assets', 'expense_ratio', 'pe_ratio', 'expected_dividend_yield', 'dividend_yield', 'volume', 'dollar_volume', 'open', 'return_1y', 'approx_delta', 'ret_vs_yld']
 const AVERAGE_PERIOD_ORDER = ['1 Month', 'YTD', '1 Year', '5 Years', '10 Years', 'Inception']
 
 function pct(v) {
@@ -868,6 +869,24 @@ export default function ETFComparer() {
                           {bm && row.beta != null && (
                             <span style={{ color: '#6f7890', fontSize: '0.8em', marginLeft: 4 }}>vs {bm}</span>
                           )}
+                        </td>
+                      )
+                    }
+                    if (col.key === 'approx_delta') {
+                      const up = row.delta_up, dn = row.delta_down, bm = row.beta_benchmark
+                      const has = up != null || dn != null
+                      return (
+                        <td key={col.key} style={{ whiteSpace: 'nowrap' }}
+                          title={has
+                            ? `Approximate effective delta vs ${bm || 'underlying'} — sensitivity on up-days (↑) vs down-days (↓), from return regression. NOT the fund's true option delta; for option-income funds ↑<↓ signals capped upside.`
+                            : undefined}>
+                          {has ? (
+                            <>
+                              <span style={{ color: '#2f9d55' }}>↑{number(up)}</span>
+                              <span style={{ color: '#6f7890', margin: '0 3px' }}>/</span>
+                              <span style={{ color: '#d94b4b' }}>↓{number(dn)}</span>
+                            </>
+                          ) : '-'}
                         </td>
                       )
                     }
