@@ -23,6 +23,7 @@ export default function SafeWithdrawal() {
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(false)
   const [selCats, setSelCats] = useState([])
+  const [selSubs, setSelSubs] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const [pct, setPct] = useState(8)
   const catRef = useRef(null)
@@ -60,6 +61,8 @@ export default function SafeWithdrawal() {
     return {
       ticker: r.ticker,
       category: r.category || r.classification_type || '',
+      subcategory_id: r.subcategory_id ?? null,
+      subcategory: r.subcategory || '',
       frequency: r.div_frequency || '',
       purchase_date: r.purchase_date || '',
       price_paid: r.price_paid || 0,
@@ -81,14 +84,27 @@ export default function SafeWithdrawal() {
   }), [rows, pct])
 
   const categoryList = useMemo(() => {
-    const names = [...new Set(allComputed.map(r => r.category).filter(Boolean))].sort()
-    return names
+    // Category names with the sub-categories actually present in the holdings.
+    const byName = new Map()
+    allComputed.forEach(r => {
+      if (!r.category) return
+      let entry = byName.get(r.category)
+      if (!entry) { entry = { name: r.category, subs: new Map() }; byName.set(r.category, entry) }
+      if (r.subcategory_id != null && r.subcategory) entry.subs.set(r.subcategory_id, r.subcategory)
+    })
+    return [...byName.values()]
+      .map(e => ({
+        name: e.name,
+        subs: [...e.subs].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name))
   }, [allComputed])
 
   const computed = useMemo(() => {
-    if (selCats.length === 0) return allComputed
-    return allComputed.filter(r => selCats.includes(r.category))
-  }, [allComputed, selCats])
+    if (selCats.length === 0 && selSubs.length === 0) return allComputed
+    return allComputed.filter(r => selCats.includes(r.category)
+      || (r.subcategory_id != null && selSubs.includes(String(r.subcategory_id))))
+  }, [allComputed, selCats, selSubs])
 
   const totals = useMemo(() => {
     const totalCost = computed.reduce((s, r) => s + r.cost, 0)
@@ -188,25 +204,52 @@ export default function SafeWithdrawal() {
                 <label>Categories</label>
                 <button className="btn btn-secondary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', minWidth: '140px', textAlign: 'left' }}
                   onClick={() => setCatOpen(o => !o)}>
-                  {selCats.length === 0 ? 'All Holdings' : `${selCats.length} selected`}
+                  {selCats.length === 0 && selSubs.length === 0
+                    ? 'All Holdings'
+                    : `${selCats.length + selSubs.length} selected`}
                   <span style={{ float: 'right', marginLeft: '0.5rem' }}>{catOpen ? '\u25B4' : '\u25BE'}</span>
                 </button>
                 {catOpen && (
                   <div className="growth-cat-dropdown">
                     <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
-                      <input type="checkbox" checked={selCats.length === 0} onChange={() => setSelCats([])} />
+                      <input type="checkbox" checked={selCats.length === 0 && selSubs.length === 0}
+                        onChange={() => { setSelCats([]); setSelSubs([]) }} />
                       <span>All Holdings</span>
                     </label>
-                    {categoryList.map(name => (
-                      <label key={name} className="growth-cat-option">
-                        <input type="checkbox" checked={selCats.includes(name)}
-                          onChange={e => {
-                            if (e.target.checked) setSelCats(prev => [...prev, name])
-                            else setSelCats(prev => prev.filter(c => c !== name))
-                          }} />
-                        <span>{name}</span>
-                      </label>
-                    ))}
+                    {categoryList.map(c => {
+                      const catChecked = selCats.includes(c.name)
+                      return (
+                        <React.Fragment key={c.name}>
+                          <label className="growth-cat-option">
+                            <input type="checkbox" checked={catChecked}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  // Selecting the whole category supersedes any of its
+                                  // sub-category selections, so clear those.
+                                  const subIds = c.subs.map(s => String(s.id))
+                                  setSelCats(prev => [...prev, c.name])
+                                  setSelSubs(prev => prev.filter(id => !subIds.includes(id)))
+                                } else {
+                                  setSelCats(prev => prev.filter(n => n !== c.name))
+                                }
+                              }} />
+                            <span>{c.name}</span>
+                          </label>
+                          {c.subs.map(s => (
+                            <label key={`sub-${s.id}`} className="growth-cat-option"
+                              style={{ paddingLeft: '1.4rem', opacity: catChecked ? 0.5 : 1 }}>
+                              <input type="checkbox" disabled={catChecked}
+                                checked={catChecked || selSubs.includes(String(s.id))}
+                                onChange={e => {
+                                  if (e.target.checked) setSelSubs(prev => [...prev, String(s.id)])
+                                  else setSelSubs(prev => prev.filter(id => id !== String(s.id)))
+                                }} />
+                              <span>{s.name}</span>
+                            </label>
+                          ))}
+                        </React.Fragment>
+                      )
+                    })}
                   </div>
                 )}
               </div>

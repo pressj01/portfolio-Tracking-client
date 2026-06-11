@@ -8,6 +8,7 @@ const { spawn, execSync } = require('child_process')
 // (config.py falls back there when PORTFOLIO_DB_DIR is unset). The packaged
 // build uses electron/main-prod.js instead, so this file is the dev entry.
 const isDev = process.env.NODE_ENV !== 'production'
+const shouldOpenDevTools = process.env.PORTFOLIO_OPEN_DEVTOOLS === '1'
 app.setAppUserModelId('com.press.portfolio.tracker.client')
 
 const PROJECT_ROOT = path.join(__dirname, '..')
@@ -103,7 +104,9 @@ function createWindow() {
 
   if (isDev) {
     mainWindow.loadURL(VITE_URL)
-    mainWindow.webContents.openDevTools()
+    if (shouldOpenDevTools) {
+      mainWindow.webContents.openDevTools()
+    }
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   }

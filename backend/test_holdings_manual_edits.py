@@ -73,6 +73,30 @@ class ManualHoldingEditApiTest(unittest.TestCase):
                 source TEXT,
                 notes TEXT
             );
+            CREATE TABLE transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT,
+                profile_id INTEGER,
+                transaction_type TEXT,
+                transaction_date TEXT,
+                shares REAL,
+                price_per_share REAL,
+                fees REAL,
+                notes TEXT,
+                realized_gain REAL
+            );
+            CREATE TABLE transaction_lot_allocations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sell_txn_id INTEGER,
+                buy_txn_id INTEGER,
+                shares REAL
+            );
+            CREATE TABLE profiles (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                include_in_owner INTEGER DEFAULT 0
+            );
+            INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 0);
             """
         )
         conn.close()
@@ -80,15 +104,18 @@ class ManualHoldingEditApiTest(unittest.TestCase):
         self._orig_get_connection = app_module.get_connection
         self._orig_populate_holdings = app_module.populate_holdings
         self._orig_populate_dividends = app_module.populate_dividends
+        self._orig_testing = app_module.app.testing
         app_module.get_connection = self._get_connection
         app_module.populate_holdings = lambda profile_id: None
         app_module.populate_dividends = lambda profile_id: None
+        app_module.app.testing = True
         self.client = app_module.app.test_client()
 
     def tearDown(self):
         app_module.get_connection = self._orig_get_connection
         app_module.populate_holdings = self._orig_populate_holdings
         app_module.populate_dividends = self._orig_populate_dividends
+        app_module.app.testing = self._orig_testing
         Path(self.db_path).unlink(missing_ok=True)
 
     def _get_connection(self):
@@ -170,6 +197,55 @@ class ManualHoldingEditApiTest(unittest.TestCase):
         self.assertEqual(row["gain_or_loss"], -20)
         self.assertEqual(row["gain_or_loss_percentage"], -0.1)
         self.assertEqual(row["percent_change"], -0.1)
+
+    def test_holdings_recomputes_current_yield_and_yoc_from_annual_income(self):
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, current_price, purchase_value, current_value, "
+            "div, div_frequency, estim_payment_per_year, approx_monthly_income, "
+            "annual_yield_on_cost, current_annual_yield, reinvest, shares_bought_from_dividend, "
+            "total_cash_reinvested) "
+            "VALUES ('WEPN', 1, 50.2562, 46.25315458, 45, 1875.17, 2261.529, "
+            "0.1093, 'W', 285.64, 23.803333, 0, 0, 'Y', 0.2562, 11.77)"
+        )
+
+        res = self.client.get("/api/holdings?profile_id=1")
+
+        self.assertEqual(res.status_code, 200)
+        row = res.get_json()[0]
+        self.assertAlmostEqual(row["current_annual_yield"], 285.64 / 2261.529, places=8)
+        self.assertAlmostEqual(row["annual_yield_on_cost"], 285.64 / 1875.17, places=8)
+
+    def test_holdings_yoc_uses_selected_basis_mode(self):
+        conn = self._get_connection()
+        try:
+            app_module._ensure_basis_columns(conn)
+            conn.execute(
+                "INSERT INTO all_account_info "
+                "(ticker, profile_id, quantity, price_paid, current_price, purchase_value, current_value, "
+                "original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value, "
+                "estim_payment_per_year, approx_monthly_income, annual_yield_on_cost, current_annual_yield, "
+                "reinvest, shares_bought_from_dividend, total_cash_reinvested) "
+                "VALUES ('ABC', 1, 10, 10, 20, 100, 200, 10, 100, 12, 120, "
+                "24, 2, 0, 0, 'N', 0, 0)"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        original_res = self.client.get("/api/holdings?profile_id=1&basis_mode=original")
+        broker_res = self.client.get("/api/holdings?profile_id=1&basis_mode=broker_adjusted")
+
+        self.assertEqual(original_res.status_code, 200)
+        self.assertEqual(broker_res.status_code, 200)
+        original = original_res.get_json()[0]
+        broker = broker_res.get_json()[0]
+        self.assertAlmostEqual(original["annual_yield_on_cost"], 24 / 100, places=8)
+        self.assertAlmostEqual(original["current_annual_yield"], 24 / 200, places=8)
+        self.assertEqual(original["purchase_value"], 100)
+        self.assertAlmostEqual(broker["annual_yield_on_cost"], 24 / 120, places=8)
+        self.assertAlmostEqual(broker["current_annual_yield"], 24 / 200, places=8)
+        self.assertEqual(broker["purchase_value"], 120)
 
     def test_update_quantity_to_zero_clears_stale_position_values(self):
         self._execute(

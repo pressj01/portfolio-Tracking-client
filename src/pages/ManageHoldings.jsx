@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useDialog } from '../components/DialogProvider'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
@@ -196,11 +197,11 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
     if (payload.estim_payment_per_year && payload.current_price && payload.reinvest === 'Y') {
       payload.shares_bought_from_dividend = parseFloat((payload.estim_payment_per_year / payload.current_price).toFixed(3))
     }
-    if (payload.div && payload.price_paid) {
-      payload.annual_yield_on_cost = payload.div / payload.price_paid
+    if (payload.estim_payment_per_year && payload.purchase_value) {
+      payload.annual_yield_on_cost = payload.estim_payment_per_year / payload.purchase_value
     }
-    if (payload.div && payload.current_price) {
-      payload.current_annual_yield = payload.div / payload.current_price
+    if (payload.estim_payment_per_year && payload.current_value) {
+      payload.current_annual_yield = payload.estim_payment_per_year / payload.current_value
     }
     if (payload.total_divs_received && payload.purchase_value) {
       payload.paid_for_itself = payload.total_divs_received / payload.purchase_value
@@ -1161,6 +1162,7 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
 }
 
 export default function ManageHoldings() {
+  const navigate = useNavigate()
   const pf = useProfileFetch()
   const { runMarketRefresh } = useMarketRefresh()
   const { profileId, isAggregate, selection, basisMode } = useProfile()
@@ -1502,6 +1504,9 @@ export default function ManageHoldings() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
         <h1>Manage Holdings</h1>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary" onClick={() => navigate('/import')}>
+            Import Holdings
+          </button>
           <select
             value={divSourceFilter}
             onChange={(e) => setDivSourceFilter(e.target.value)}

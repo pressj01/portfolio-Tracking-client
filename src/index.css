@@ -2750,6 +2750,49 @@ label {
 .bss-refresh-btn:hover { background: #7ecfff; color: #000; }
 .bss-timestamp { font-size: 0.78rem; color: #666; }
 .bss-legend { color: #aaa; margin-top: 0; margin-bottom: 1rem; font-size: 0.875rem; }
+.bss-help {
+  margin: 0 0 1rem;
+  background: #111124;
+  border: 1px solid #2a2a3e;
+  border-radius: 6px;
+  color: #cfd3e6;
+}
+.bss-help summary {
+  cursor: pointer;
+  padding: 0.65rem 0.9rem;
+  color: #7ecfff;
+  font-weight: 700;
+  user-select: none;
+}
+.bss-help[open] summary {
+  border-bottom: 1px solid #2a2a3e;
+}
+.bss-help-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.7rem 1rem;
+  padding: 0.85rem 0.9rem 0.5rem;
+}
+.bss-help-item {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: start;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+.bss-help-item strong {
+  color: #f9a825;
+  white-space: nowrap;
+}
+.bss-help-note {
+  margin: 0;
+  padding: 0.75rem 0.9rem 0.85rem;
+  border-top: 1px solid #20203a;
+  color: #aeb4c8;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
 .bss-counts { display: flex; flex-wrap: wrap; gap: 1.2rem; margin-bottom: 1.2rem; }
 .bss-count-total { background: #111124; border: 1px solid #333; border-radius: 6px; padding: 0.4rem 1rem; text-align: center; }
 .bss-table-title { margin-top: 0; margin-bottom: 0.4rem; font-size: 1rem; color: #ccc; }
@@ -2821,6 +2864,35 @@ thead .ne-date-col { z-index: 4; background: #0b0b1c; }
 
 /* ── NAV Erosion Portfolio Screener ── */
 .nep-page { max-width: 100%; margin: 0 auto; padding: 1.5rem 2rem; }
+.nep-help {
+  background: #111124; border: 1px solid #2a2a3e; border-left: 3px solid #7ecfff;
+  border-radius: 8px; margin-bottom: 1rem;
+}
+.nep-help > summary {
+  cursor: pointer; padding: 0.7rem 1.2rem; color: #7ecfff;
+  font-size: 0.88rem; font-weight: 600; list-style: revert; user-select: none;
+}
+.nep-help > summary:hover { color: #a9deff; }
+.nep-help[open] > summary { border-bottom: 1px solid #2a2a3e; }
+.nep-help-body { padding: 0.4rem 1.3rem 1rem; }
+.nep-help-body section { margin-top: 1rem; }
+.nep-help-body section:first-child { margin-top: 0.4rem; }
+.nep-help-body h4 {
+  margin: 0 0 0.4rem; color: #e0e0e0; font-size: 0.86rem; font-weight: 600;
+}
+.nep-help-body p { margin: 0 0 0.5rem; color: #b8b8c8; font-size: 0.82rem; line-height: 1.55; }
+.nep-help-body em { color: #d8d8e8; font-style: normal; font-weight: 500; }
+.nep-help-body ul { margin: 0 0 0.5rem; padding-left: 1.1rem; }
+.nep-help-body li { color: #b8b8c8; font-size: 0.82rem; line-height: 1.5; margin-bottom: 0.3rem; }
+.nep-formula {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: #0b0b1c; border: 1px solid #2a2a3e; border-radius: 5px;
+  padding: 0.5rem 0.7rem; color: #9ad6ff !important; font-size: 0.8rem !important;
+}
+.nep-help-note {
+  margin-top: 1rem !important; padding-top: 0.7rem; border-top: 1px solid #2a2a3e;
+  color: #888 !important; font-size: 0.78rem !important; font-style: italic;
+}
 .nep-saved-panel {
   display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center;
   background: #111124; border: 1px solid #2a2a3e; border-radius: 8px;

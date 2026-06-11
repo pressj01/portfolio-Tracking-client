@@ -29,6 +29,7 @@ export default function DividendHistory() {
   const [view, setView] = useState('monthly')
   const [monthsBack, setMonthsBack] = useState(12)
   const [categories, setCategories] = useState([])
+  const [subcategories, setSubcategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const [showCumulative, setShowCumulative] = useState(false)
   const [data, setData] = useState(null)
@@ -55,6 +56,7 @@ export default function DividendHistory() {
     setError(null)
     const params = new URLSearchParams({ view, months_back: monthsBack })
     if (categories.length) params.set('category', categories.join(','))
+    if (subcategories.length) params.set('subcategory', subcategories.join(','))
     pf(`/api/dividend-history/data?${params}`)
       .then(r => r.json())
       .then(d => {
@@ -63,7 +65,7 @@ export default function DividendHistory() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [view, monthsBack, categories, selection, pf])
+  }, [view, monthsBack, categories, subcategories, selection, pf])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -222,28 +224,56 @@ export default function DividendHistory() {
               style={{ padding: '0.35rem 0.75rem', fontSize: '0.85rem', minWidth: '140px', textAlign: 'left' }}
               onClick={() => setCatOpen(o => !o)}
             >
-              {categories.length === 0 ? 'All Holdings' : `${categories.length} selected`}
+              {categories.length === 0 && subcategories.length === 0
+                ? 'All Holdings'
+                : `${categories.length + subcategories.length} selected`}
               <span style={{ float: 'right', marginLeft: '0.5rem' }}>{catOpen ? '\u25B4' : '\u25BE'}</span>
             </button>
             {catOpen && (
               <div className="growth-cat-dropdown">
                 <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
-                  <input type="checkbox" checked={categories.length === 0} onChange={() => setCategories([])} />
+                  <input type="checkbox" checked={categories.length === 0 && subcategories.length === 0}
+                    onChange={() => { setCategories([]); setSubcategories([]) }} />
                   <span>All Holdings</span>
                 </label>
-                {data.categories.map(c => (
-                  <label key={c.id} className="growth-cat-option">
-                    <input
-                      type="checkbox"
-                      checked={categories.includes(String(c.id))}
-                      onChange={e => {
-                        if (e.target.checked) setCategories(prev => [...prev, String(c.id)])
-                        else setCategories(prev => prev.filter(id => id !== String(c.id)))
-                      }}
-                    />
-                    <span>{c.name}</span>
-                  </label>
-                ))}
+                {data.categories.map(c => {
+                  const catChecked = categories.includes(String(c.id))
+                  const subs = c.subcategories || []
+                  return (
+                    <React.Fragment key={c.id}>
+                      <label className="growth-cat-option">
+                        <input
+                          type="checkbox"
+                          checked={catChecked}
+                          onChange={e => {
+                            if (e.target.checked) {
+                              // Selecting the whole category supersedes any of its
+                              // sub-category selections, so clear those.
+                              const subIds = subs.map(s => String(s.id))
+                              setCategories(prev => [...prev, String(c.id)])
+                              setSubcategories(prev => prev.filter(id => !subIds.includes(id)))
+                            } else {
+                              setCategories(prev => prev.filter(id => id !== String(c.id)))
+                            }
+                          }}
+                        />
+                        <span>{c.name}</span>
+                      </label>
+                      {subs.map(s => (
+                        <label key={`sub-${s.id}`} className="growth-cat-option"
+                          style={{ paddingLeft: '1.4rem', opacity: catChecked ? 0.5 : 1 }}>
+                          <input type="checkbox" disabled={catChecked}
+                            checked={catChecked || subcategories.includes(String(s.id))}
+                            onChange={e => {
+                              if (e.target.checked) setSubcategories(prev => [...prev, String(s.id)])
+                              else setSubcategories(prev => prev.filter(id => id !== String(s.id)))
+                            }} />
+                          <span>{s.name}</span>
+                        </label>
+                      ))}
+                    </React.Fragment>
+                  )
+                })}
               </div>
             )}
           </div>

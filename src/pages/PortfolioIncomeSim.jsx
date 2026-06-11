@@ -70,6 +70,7 @@ function DripProjectionsPanel() {
   const [years, setYears] = useState(1)
   const [categories, setCategories] = useState([])
   const [selectedCats, setSelectedCats] = useState([])
+  const [selectedSubs, setSelectedSubs] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const catRef = React.useRef(null)
   const [dripSettings, setDripSettings] = useState({})
@@ -151,7 +152,7 @@ function DripProjectionsPanel() {
     pf('/api/analytics/drip-projection', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        years, categories: selectedCats, drip_settings: dripSettings,
+        years, categories: selectedCats, subcategories: selectedSubs, drip_settings: dripSettings,
         drip_default: setAllRef.current !== '' ? Number(setAllRef.current) : null,
         investment_overrides: investmentOverridesRef.current,
         monthly_contribution: monthlyAmount,
@@ -186,7 +187,7 @@ function DripProjectionsPanel() {
       })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [pf, years, selectedCats, dripSettings, monthlyAmount, contributionTargeted, contributionTargets, redirects, customTickers])
+  }, [pf, years, selectedCats, selectedSubs, dripSettings, monthlyAmount, contributionTargeted, contributionTargets, redirects, customTickers])
 
   useEffect(() => { if (skipRefetch.current) { skipRefetch.current = false; return } fetchProjection() }, [fetchProjection])
 
@@ -358,7 +359,9 @@ function DripProjectionsPanel() {
               style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', minWidth: 160, textAlign: 'left' }}
               onClick={() => setCatOpen(o => !o)}
             >
-              {selectedCats.length === 0 ? 'All Holdings' : `${selectedCats.length} selected`}
+              {selectedCats.length === 0 && selectedSubs.length === 0
+                ? 'All Holdings'
+                : `${selectedCats.length + selectedSubs.length} selected`}
               <span style={{ float: 'right', marginLeft: '0.5rem' }}>{catOpen ? '\u25B4' : '\u25BE'}</span>
             </button>
             {catOpen && (
@@ -369,23 +372,52 @@ function DripProjectionsPanel() {
                 boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
               }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem', cursor: 'pointer', borderBottom: '1px solid #0f3460', marginBottom: '0.2rem', color: '#e0e8f5', fontSize: '0.85rem' }}>
-                  <input type="checkbox" checked={selectedCats.length === 0} onChange={() => setSelectedCats([])} style={{ accentColor: '#64b5f6' }} />
+                  <input type="checkbox" checked={selectedCats.length === 0 && selectedSubs.length === 0}
+                    onChange={() => { setSelectedCats([]); setSelectedSubs([]) }} style={{ accentColor: '#64b5f6' }} />
                   <span>All Holdings</span>
                 </label>
-                {categories.map(c => (
-                  <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem', cursor: 'pointer', color: '#b0bec5', fontSize: '0.85rem' }}>
-                    <input
-                      type="checkbox"
-                      checked={selectedCats.includes(c.name)}
-                      onChange={e => {
-                        if (e.target.checked) setSelectedCats(prev => [...prev, c.name])
-                        else setSelectedCats(prev => prev.filter(n => n !== c.name))
-                      }}
-                      style={{ accentColor: '#64b5f6' }}
-                    />
-                    <span>{c.name}</span>
-                  </label>
-                ))}
+                {categories.map(c => {
+                  const catChecked = selectedCats.includes(c.name)
+                  const subs = c.subcategories || []
+                  return (
+                    <React.Fragment key={c.id}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem', cursor: 'pointer', color: '#b0bec5', fontSize: '0.85rem' }}>
+                        <input
+                          type="checkbox"
+                          checked={catChecked}
+                          onChange={e => {
+                            if (e.target.checked) {
+                              // Selecting the whole category supersedes any of its
+                              // sub-category selections, so clear those.
+                              const subIds = subs.map(s => String(s.id))
+                              setSelectedCats(prev => [...prev, c.name])
+                              setSelectedSubs(prev => prev.filter(id => !subIds.includes(id)))
+                            } else {
+                              setSelectedCats(prev => prev.filter(n => n !== c.name))
+                            }
+                          }}
+                          style={{ accentColor: '#64b5f6' }}
+                        />
+                        <span>{c.name}</span>
+                      </label>
+                      {subs.map(s => (
+                        <label key={`sub-${s.id}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem 0.35rem 1.9rem', cursor: 'pointer', color: '#b0bec5', fontSize: '0.85rem', opacity: catChecked ? 0.5 : 1 }}>
+                          <input
+                            type="checkbox"
+                            disabled={catChecked}
+                            checked={catChecked || selectedSubs.includes(String(s.id))}
+                            onChange={e => {
+                              if (e.target.checked) setSelectedSubs(prev => [...prev, String(s.id)])
+                              else setSelectedSubs(prev => prev.filter(id => id !== String(s.id)))
+                            }}
+                            style={{ accentColor: '#64b5f6' }}
+                          />
+                          <span>{s.name}</span>
+                        </label>
+                      ))}
+                    </React.Fragment>
+                  )
+                })}
               </div>
             )}
           </div>

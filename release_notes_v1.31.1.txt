@@ -1,0 +1,210 @@
+﻿## v1.29.0 Release Notes
+
+**Release date:** May 30, 2026
+**Available for:** Windows (.exe installer, x64) and macOS (.dmg, Intel x64 + Apple Silicon arm64)
+
+---
+
+## New Pages
+
+### Reinvestment Impact
+A new analysis page showing how DRIP is reshaping your portfolio over time. It has two modes:
+
+**Historical tab** — replays your actual distribution history using recorded payments hybridised with Yahoo Finance price data, at Annual, Monthly, or Weekly granularity:
+- **Distributions Over Time** chart with green bars (actual recorded payments) and blue bars (reconstructed from price + dividend history)
+- **"Income if not reinvested" dotted line** — a per-period counterfactual showing what you would have collected taking distributions as cash. The gap above the line is the income reinvesting created.
+- **Cumulative income received** amber line (right axis) — the running total of all distributions collected across the window
+- **DRIP Share Growth** chart — purple bars showing incremental shares added each period; amber cumulative line on the right axis
+- **Distribution per Share** chart — appears when scoped to a single ticker; the fund's actual per-share payment each period, the clearest signal of payout erosion independent of share count
+- **Why Payouts Changed** attribution chart — decomposes each period's payout change into Share growth (DRIP, green), Distribution rate changes (blue), and Interaction (amber). Toggle Per period or Cumulative view.
+- **Notable Rate Changes** panel — top 3 distribution-rate raises and top 3 cuts by dollar impact, identifying which funds drove payout swings. Click any ticker to scope all charts to it.
+- **DRIP Off — Cash Not Compounding** panel — lists holdings with reinvestment off and the cash each generated this window, highlighting where enabling DRIP would start compounding.
+- **Top Contributors** table — up to 15 holdings ranked by distributions paid; click any row to scope
+
+**Summary tiles** — six at-a-glance metrics:
+- Total Distributions, DRIP Shares Added, Growth From DRIP %, Annual Run-Rate
+- **Extra from Reinvesting** — dollar amount and % by which reinvested distributions outpaced the cash-only path
+- **% Reinvested** — share of total distributions being reinvested vs. taken as cash
+
+**Projection tab** — projects income and share count forward 1-20 years under Bullish, Neutral, and Bearish market scenarios simultaneously, using the current distribution rate and a chosen reinvestment percentage. Filters for Fund (single ticker), Horizon, Market scenario, Reinvest %, Monthly Add $, and Categories.
+
+**Break-Even Panel** — appears in both Historical (via Scope) and Projection (via Fund) single-ticker views. Shows how far the position is from recovering cost basis in two legs: Cost Basis (position value vs. what you paid) and Total Return (value + dividends collected vs. cost). Each leg shows % above/below break-even and an estimated time to recover via reinvestment alone at a flat price.
+
+---
+
+### CEF Buying Checklist Evaluator
+A comprehensive grading tool for closed-end funds. Enter a ticker to receive a scored letter-grade report across yield and income consistency, premium/discount to NAV and its trend, distribution coverage and return-of-capital analysis, liquidity, and risk-adjusted return (Sharpe, Sortino, Calmar, Omega, Ulcer Index bundled into a single criterion). Shows smart alternative suggestions for funds scoring better on weak criteria.
+
+Includes a **Scan a List** tab — enter multiple tickers or load from the CEF Universe to grade them all at once and compare results side by side, including a Premium/Discount column.
+
+---
+
+### ETF Buying Checklist Evaluator
+Grading tool for standard ETFs across yield, expense ratio, liquidity, diversification, risk-adjusted return, and momentum. Shows per-criterion pass/warn/fail breakdown and a composite letter grade. Includes a **Scan a List** tab for batch evaluation.
+
+---
+
+### Option-Income ETF Evaluator
+Specialized evaluator for covered-call and options-income ETFs (YieldMax, NEOS, JEPI-style funds), scoring distribution yield and sustainability, NAV erosion rate, options strategy type, coverage ratio, distribution history consistency, and risk-adjusted return metrics. Includes a **Scan a List** tab for batch evaluation.
+
+---
+
+### CEF Buying Guide
+A reference page explaining how closed-end funds work: structure, premium/discount dynamics, distribution types, leverage, and what to look for before buying.
+
+---
+
+### CEF Information / NAV vs Total Return
+A research page for individual CEFs showing NAV history, market price history, premium/discount over time, and a NAV vs. Total Return chart comparing price performance to income-inclusive return.
+
+---
+
+### CEF vs Income ETF Comparison
+A side-by-side comparison page for CEFs against income ETFs, charting NAV, distribution history, yield, and total return for both vehicles.
+
+---
+
+### Stock Buying Checklist
+An evaluation screen for individual stocks combining fundamentals (P/E, P/B, debt/equity, revenue growth, EPS trend, dividend yield and coverage), technicals (RSI, moving average positioning, 52-week range, momentum), and fund-filter checks (sector concentration, liquidity, volatility). Produces a composite letter grade with per-criterion pass/warn/fail detail.
+
+---
+
+## Enhancements
+
+### Multiple Aggregates
+The Manage Portfolios page now supports creating and managing multiple named aggregate views, each with its own member list. Previously only one aggregate was supported. Aggregates can be renamed inline, and switching aggregates refreshes the dashboard without stale data.
+
+### Dashboard Cache Improvements
+Dashboard cache is now cleared automatically when aggregate membership changes or when Owner portfolio membership is updated, preventing stale holdings and tile data from persisting after structural portfolio changes.
+
+### Fund Scan Tab on All Three Evaluators
+A Scan a List tab was added to the CEF, ETF, and Option-Income evaluators. Enter a list of tickers (or use the CEF Universe for CEFs) to grade all of them at once and compare composite grades, verdicts, and key metrics in a results table.
+
+---
+
+## Bug Fixes
+
+### Double-Counting with Snowball + Broker Transactions
+Fixed a bug where holdings that existed in both a Snowball import and a broker transaction import were being counted twice when computing position size, cost basis, and income estimates.
+
+### Date-Window Alignment on Returns Charts
+Fixed an off-by-one period error on the ETF Screen, ETF Comparer, and Stock Comparer returns charts where the window start date was misaligned by one period in certain granularity settings.
+
+### NAV Chart Backfill
+Fixed edge cases in the Dashboard Backfill History function where certain broker-position portfolios produced incorrect NAV values due to price lookup timing.
+
+### DRIP Share Tracking
+Fixed DRIP share counts not persisting correctly through normalize/refresh cycles for certain holdings configurations.
+
+### Cost Basis Toggle Not Refreshing All Pages
+Fixed the Original cost / Broker adjusted cost basis toggle not updating the Total Return and Safe Withdrawal pages. Those pages were only re-reading data when the selected portfolio changed, so switching the basis left stale cost-basis and price figures on screen. Toggling the basis now invalidates the cached data on those pages and recomputes prices and cost-basis values immediately, matching the Dashboard, Manage Holdings, and Gains & Losses pages.
+
+---
+
+## Help Page Updates
+- Full new Reinvestment Impact section with current screenshots and plain-English explanations of every tile, chart, line, and panel
+- CEF Buying Checklist Evaluator, ETF Buying Checklist Evaluator, and Option-Income ETF Evaluator sections added with annotated screenshots
+- Holdings help updated with % Reinvested documentation
+
+---
+
+## Builds
+Both installers are produced automatically by GitHub Actions when this tag is published:
+- **Windows**: `Portfolio-Tracking-Client-Setup-1.29.0.exe` — NSIS installer, x64
+- **macOS**: `Portfolio-Tracking-Client-1.29.0.dmg` — universal, Intel (x64) + Apple Silicon (arm64)
+
+**Full Changelog**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.28.8...v1.29.0
+
+
+---
+
+## Patch 1.29.1 — Dashboard Chart Repair
+
+### Repair Chart now works for broker-position portfolios
+The Dashboard's **Repair Chart** button previously did nothing for portfolios imported from broker positions or from the app's own Portfolio Export (Holdings + Transactions) — those profiles were treated as recordkeeping-only and blocked. Even when the rebuild did run, it summed only BUY/SELL transactions forward from an empty position, so opening lots that came from a positions import or an account transfer-in (and never appear as buy transactions) were missed. The result was a historical curve that was badly understated and ended far below the portfolio's true value.
+
+Repair now uses **anchored reconstruction**: it starts from your authoritative current holdings and walks the transaction history backward, so the rebuilt curve ends exactly at your true current portfolio value instead of understating it. A safety guard prevents repair from overwriting portfolios that already have an established daily NAV history, and a database backup is still taken automatically before every repair.
+
+**To use it:** open the affected portfolio's Dashboard and click **Repair Chart**.
+
+
+**Full Changelog**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.29.0...v1.29.1
+
+
+---
+
+## Patch 1.29.2 — Help Page Screenshots
+
+### Help screenshots now display in the installed app
+The Help page screenshots showed correctly in development but were blank on installed copies. The images were referenced with absolute paths (e.g. `/help-screenshots/...`), which resolve over the dev server but point at the filesystem root in the packaged Electron build, so the browser couldn't find them. All references were switched to relative paths so they resolve against the bundled app. The image files themselves were always included in the build — only the path was wrong — so this affects every Help page screenshot.
+
+No action needed beyond installing this update.
+
+
+**Full Changelog**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.29.1...v1.29.2
+
+
+
+
+---
+
+## v1.30.0 — Reinvestment Tracking: Estimated vs. Actual
+
+This release separates **estimated** (forward run-rate) reinvestment figures from **actual** (recorded-payment) ones, so you can see both what your DRIP settings imply and what actually happened.
+
+### Dashboard — Estimated vs. Actual cards
+The reinvestment summary cards were a single forward estimate. They're now split into two clearly-labeled sets:
+
+- **Estimated** (relabeled): `Est. Mo$ Reinvested`, `Est. Mo$ Not Reinvested`, `Est. % Reinvested` — a steady forward run-rate from your reinvest settings (annual estimate ÷ 12, split by each holding's reinvest flag). Stable all month; good for planning.
+- **Actual** (new): `{Month} Reinvested`, `{Month} Not Reinvested`, `{Month} % Reinvested` — sourced from recorded dividend payments, growing through the month as distributions land. Shows what you're *actually* reinvesting vs. taking as cash.
+
+The two always reconcile to their respective income totals.
+
+### Per-account reinvest attribution
+The actual split attributes each payment to **its own account's** reinvest flag (ticker + account), not a single flag per ticker. So a fund reinvested only in your Roth IRA but taken as cash in taxable accounts is bucketed correctly — its taxable payments count as cash, only the Roth portion as reinvested. (An earlier approach that collapsed to one flag per ticker over-counted reinvested income; that's fixed.)
+
+### Reinvestment Impact — actual % as a projection seed
+The Projection tab's **Reinvest %** control now offers two one-click seeds beneath the input:
+
+- **Est:** your estimated DRIP mix (the existing default), and
+- **Actual 3mo:** the actual reinvested share of distributions over the trailing **3 completed months**, from recorded payments split per-account.
+
+The actual figure deliberately uses completed months and excludes the in-progress one, so it's stable and available from the first of any month — no start-of-month ramp-up. The estimate remains the auto-default; click either to seed the projection.
+
+---
+
+## Builds
+Both installers are produced automatically by GitHub Actions when this tag is published:
+- **Windows**: `Portfolio-Tracking-Client-Setup-1.30.0.exe` — NSIS installer, x64
+- **macOS**: `Portfolio-Tracking-Client-1.30.0.dmg` — universal, Intel (x64) + Apple Silicon (arm64)
+
+**Full Changelog**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.29.3...v1.30.0
+
+
+
+---
+
+## v1.31.0 — Help Page Updates and Bug Fixes
+
+### Help Page Updates
+
+**Dashboard section** — replaced the single outdated screenshot with two new images covering the full page top-to-bottom. The top image shows the Basis/portfolio selectors, Action Center, the complete summary cards strip (including the new estimated vs. actual reinvestment cards), the Portfolio Value Over Time chart, and Upcoming Dividends. The bottom image shows the category allocation donut and the full holdings table. All documentation for the summary cards has been rewritten to match the current UI, including the six reinvestment cards (three estimated, three actual), the [Month] Income card, the S&P 500 card, and an explanation of why the estimated and actual reinvestment percentages can differ.
+
+**Reinvestment Impact — Projection section** — replaced the outdated projection screenshot with the current one showing the Reinvest % control with both clickable seeds. Updated documentation to explain the Est. seed (estimated DRIP mix, the default) and the Actual 3mo seed (trailing 3 completed months from recorded payments, excludes in-progress month to avoid start-of-month ramp-up).
+
+---
+
+## Bug Fixes
+
+### Dashboard NAV Benchmark field could not be cleared
+Once a benchmark ticker was typed into the NAV benchmark override field (e.g. "AMZN"), it was impossible to delete. Clearing the text appeared to work while typing, but the field snapped back to the previous value on every keystroke. The field was bound to a meta-fallback expression (`h.nav_benchmark_override || navMeta.nav_benchmark_override`) — as soon as the user cleared `h.nav_benchmark_override`, the stale coverage meta value immediately re-filled it, creating a self-reinforcing loop. The input is now bound to the holding row value alone, so clearing the field stays cleared and saves NULL to the database on blur or Enter.
+
+---
+
+## Builds
+Both installers are produced automatically by GitHub Actions when this tag is published:
+- **Windows**: `Portfolio-Tracking-Client-Setup-1.31.0.exe` — NSIS installer, x64
+- **macOS**: `Portfolio-Tracking-Client-1.31.0.dmg` — universal, Intel (x64) + Apple Silicon (arm64)
+
+**Full Changelog**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.30.0...v1.31.0
+

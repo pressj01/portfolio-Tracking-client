@@ -99,18 +99,63 @@ const DONUT_COLORS = [
   '#90a4ae', '#a1887f',
 ]
 
-function PortfolioOverview({ groups, totalValue }) {
+function PortfolioOverview({ groups, categories, totalValue }) {
   const chartRef = React.useRef(null)
+  const [catId, setCatId] = useState(null)   // null = all categories
+  const [subId, setSubId] = useState(null)    // null = all sub-categories
 
-  const hasTargets = groups?.some(g => g.target_pct != null)
-  const totalTarget = groups?.reduce((s, g) => s + (Number(g.target_pct) || 0), 0) || 0
+  const selectedCat = useMemo(
+    () => (categories && catId != null ? categories.find(c => c.id === catId) : null),
+    [categories, catId]
+  )
+
+  // Groups actually shown in the donut + table, derived from the active filter.
+  // Top level → one slice per category; drill into a category → its
+  // sub-categories (+ an "Unassigned" bucket); drill into a sub-category (or a
+  // category without sub-categories) → individual holdings.
+  const displayGroups = useMemo(() => {
+    if (!selectedCat) return groups || []
+
+    if (subId != null) {
+      return selectedCat.tickers
+        .filter(t => t.subcategory_id === subId)
+        .map(t => ({ name: t.ticker, value: t.value, invested: t.invested, count: 1 }))
+        .sort((a, b) => b.value - a.value)
+    }
+
+    const subcats = selectedCat.subcategories || []
+    if (subcats.length) {
+      const bySub = new Map()
+      subcats.forEach(s => bySub.set(s.id, { name: s.name, value: 0, invested: 0, count: 0 }))
+      const unassigned = { name: 'Unassigned', value: 0, invested: 0, count: 0 }
+      selectedCat.tickers.forEach(t => {
+        const bucket = (t.subcategory_id != null && bySub.get(t.subcategory_id)) || unassigned
+        bucket.value += t.value
+        bucket.invested += t.invested
+        bucket.count += 1
+      })
+      return [...bySub.values(), unassigned]
+        .filter(g => g.count > 0)
+        .sort((a, b) => b.value - a.value)
+    }
+
+    return selectedCat.tickers
+      .map(t => ({ name: t.ticker, value: t.value, invested: t.invested, count: 1 }))
+      .sort((a, b) => b.value - a.value)
+  }, [groups, selectedCat, subId])
+
+  // Target ring only makes sense at the top level (sub-categories / holdings
+  // have no allocation targets).
+  const atTopLevel = !selectedCat
+  const hasTargets = atTopLevel && displayGroups.some(g => g.target_pct != null)
+  const totalTarget = atTopLevel ? displayGroups.reduce((s, g) => s + (Number(g.target_pct) || 0), 0) : 0
   const showTargetRing = hasTargets && totalTarget > 0
 
   useEffect(() => {
-    if (!groups || !groups.length || !window.Plotly || !chartRef.current) return
-    const labels = groups.map(g => g.name)
-    const values = groups.map(g => g.value)
-    const colors = groups.map((_, i) => DONUT_COLORS[i % DONUT_COLORS.length])
+    if (!displayGroups.length || !window.Plotly || !chartRef.current) return
+    const labels = displayGroups.map(g => g.name)
+    const values = displayGroups.map(g => g.value)
+    const colors = displayGroups.map((_, i) => DONUT_COLORS[i % DONUT_COLORS.length])
 
     const traces = []
 
@@ -120,7 +165,7 @@ function PortfolioOverview({ groups, totalValue }) {
         const r = parseInt(hex.slice(1,3),16), g2 = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16)
         return `rgba(${r},${g2},${b},${a})`
       }
-      groups.forEach((g, i) => {
+      displayGroups.forEach((g, i) => {
         const color = DONUT_COLORS[i % DONUT_COLORS.length]
         const actualPct = totalValue ? (g.value / totalValue) * 100 : 0
         const targetPct = Number(g.target_pct) || 0
@@ -166,13 +211,53 @@ function PortfolioOverview({ groups, totalValue }) {
     }
     window.Plotly.newPlot(chartRef.current, traces, layout, { responsive: true, displayModeBar: false })
     return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
-  }, [groups, showTargetRing, totalTarget])
+  }, [displayGroups, showTargetRing, totalTarget])
 
   if (!groups || !groups.length) return null
+
+  const selectStyle = {
+    background: '#0f3460', color: '#e0e8f5', border: '1px solid #1a2a4a',
+    borderRadius: 6, padding: '0.3rem 0.5rem', fontSize: '0.8rem',
+  }
+  const canFilter = categories && categories.length > 0
 
   return (
     <div className="portfolio-overview card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem' }}>
       <h3 style={{ color: '#90caf9', margin: '0 0 0.75rem', fontSize: '1rem' }}>Portfolio</h3>
+      {canFilter && (
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+          <span style={{ color: '#8899aa', fontSize: '0.8rem' }}>Category:</span>
+          <select
+            value={catId ?? ''}
+            onChange={e => { const v = e.target.value; setCatId(v === '' ? null : Number(v)); setSubId(null) }}
+            style={selectStyle}
+          >
+            <option value="">All categories</option>
+            {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          {selectedCat && (selectedCat.subcategories?.length > 0) && (
+            <>
+              <span style={{ color: '#8899aa', fontSize: '0.8rem' }}>Sub-category:</span>
+              <select
+                value={subId ?? ''}
+                onChange={e => { const v = e.target.value; setSubId(v === '' ? null : Number(v)) }}
+                style={selectStyle}
+              >
+                <option value="">All sub-categories</option>
+                {selectedCat.subcategories.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </>
+          )}
+          {catId != null && (
+            <button
+              onClick={() => { setCatId(null); setSubId(null) }}
+              style={{ ...selectStyle, cursor: 'pointer', color: '#90caf9' }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
       <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start' }}>
         <div ref={chartRef} style={{ width: 280, flexShrink: 0 }} />
         <div style={{ flex: 1, overflowX: 'auto', minWidth: 0 }}>
@@ -188,7 +273,7 @@ function PortfolioOverview({ groups, totalValue }) {
               </tr>
             </thead>
             <tbody>
-              {groups.map((g, i) => {
+              {displayGroups.map((g, i) => {
                 const color = DONUT_COLORS[i % DONUT_COLORS.length]
                 const gain = g.value - g.invested
                 const gainPct = g.invested ? ((gain / g.invested) * 100) : 0
@@ -377,6 +462,7 @@ export default function Dashboard() {
   const [tickerCoverage, setTickerCoverage] = useState({})
   const [tickerCoverageMeta, setTickerCoverageMeta] = useState({})
   const [overviewGroups, setOverviewGroups] = useState(null)
+  const [overviewCategories, setOverviewCategories] = useState(null)
   const [sp500, setSp500] = useState(null)
   const [navHistory, setNavHistory] = useState([])
   const [navSnapping, setNavSnapping] = useState(false)
@@ -428,6 +514,7 @@ export default function Dashboard() {
       setTickerCoverage(cached.tickerCoverage || {})
       setTickerCoverageMeta(cached.tickerCoverageMeta || {})
       setOverviewGroups(cached.overviewGroups || null)
+      setOverviewCategories(cached.overviewCategories || null)
       setLoading(false)
     } else {
       setHoldings([])
@@ -440,6 +527,7 @@ export default function Dashboard() {
       setTickerCoverage({})
       setTickerCoverageMeta({})
       setOverviewGroups(null)
+      setOverviewCategories(null)
       setLoading(true)
     }
     setRefreshStatus(null)
@@ -478,16 +566,35 @@ export default function Dashboard() {
                 // Use category grouping — need purchase_value per ticker from holdings
                 const holdingMap = {}
                 data.forEach(h => { if (h.quantity > 0) holdingMap[h.ticker] = h })
-                const groups = cats
-                  .map(c => {
-                    const tickers = (c.tickers || []).filter(t => holdingMap[t.ticker])
-                    const value = tickers.reduce((s, t) => s + (holdingMap[t.ticker]?.current_value || 0), 0)
-                    const invested = tickers.reduce((s, t) => s + (holdingMap[t.ticker]?.purchase_value || 0), 0)
-                    return { name: c.name, value, invested, count: tickers.length, target_pct: c.target_pct }
-                  })
+                // Enriched per-category structure (keeps tickers + subcategories so
+                // the overview can be drilled into by category / sub-category).
+                const enrichedCats = cats.map(c => ({
+                  id: c.id,
+                  name: c.name,
+                  target_pct: c.target_pct,
+                  subcategories: c.subcategories || [],
+                  tickers: (c.tickers || [])
+                    .filter(t => holdingMap[t.ticker])
+                    .map(t => ({
+                      ticker: t.ticker,
+                      description: t.description || holdingMap[t.ticker]?.description || '',
+                      subcategory_id: t.subcategory_id ?? null,
+                      value: holdingMap[t.ticker]?.current_value || 0,
+                      invested: holdingMap[t.ticker]?.purchase_value || 0,
+                    })),
+                }))
+                const groups = enrichedCats
+                  .map(c => ({
+                    name: c.name,
+                    value: c.tickers.reduce((s, t) => s + t.value, 0),
+                    invested: c.tickers.reduce((s, t) => s + t.invested, 0),
+                    count: c.tickers.length,
+                    target_pct: c.target_pct,
+                  }))
                   .filter(g => g.count > 0)
                   .sort((a, b) => b.value - a.value)
                 setOverviewGroups(groups)
+                setOverviewCategories(enrichedCats.filter(c => c.tickers.length > 0))
               } else {
                 // Fallback: group by classification_type
                 const byType = {}
@@ -500,6 +607,7 @@ export default function Dashboard() {
                   byType[ct].count += 1
                 })
                 setOverviewGroups(Object.values(byType).sort((a, b) => b.value - a.value))
+                setOverviewCategories(null)
               }
             })
             .catch(() => {})
@@ -600,6 +708,7 @@ export default function Dashboard() {
       tickerCoverage,
       tickerCoverageMeta,
       overviewGroups,
+      overviewCategories,
     })
   }, [
     dashboardCacheKey,
@@ -614,6 +723,7 @@ export default function Dashboard() {
     tickerCoverage,
     tickerCoverageMeta,
     overviewGroups,
+    overviewCategories,
   ])
 
   // Derived totals
@@ -1172,7 +1282,7 @@ export default function Dashboard() {
       <UpcomingDividends events={upcomingDivs} />
 
       {/* Portfolio Overview — Donut + Category Table */}
-      {overviewGroups && <PortfolioOverview groups={overviewGroups} totalValue={totals.currentValue} />}
+      {overviewGroups && <PortfolioOverview groups={overviewGroups} categories={overviewCategories} totalValue={totals.currentValue} />}
 
       {/* Holdings Table */}
       <div className="holdings-table-wrap">

@@ -35,6 +35,33 @@ function pctCls(s) {
   return ''
 }
 
+const signalHelpItems = [
+  {
+    label: 'AO',
+    text: 'Awesome Oscillator compares 5-day and 34-day midpoint averages. BUY means AO is above zero and rising; SELL means it is below zero and falling.',
+  },
+  {
+    label: 'RSI',
+    text: 'RSI uses a 14-day relative strength reading. Below 30 is treated as oversold/BUY, above 70 as overbought/SELL, and the middle range is NEUTRAL.',
+  },
+  {
+    label: 'MACD',
+    text: 'MACD uses the standard 12/26/9 setup. BUY means the MACD line is above its signal line; SELL means it is below.',
+  },
+  {
+    label: 'SMA 50',
+    text: 'BUY when price is more than 1% above the 50-day moving average, SELL when more than 1% below it, otherwise NEUTRAL.',
+  },
+  {
+    label: 'SMA 200',
+    text: 'The same 1% band is applied to the 200-day moving average. This is the longer-term trend vote.',
+  },
+  {
+    label: 'NAV',
+    text: 'Only used for NAV-erosion candidates such as option-income, covered-call, leveraged, synthetic, or similar high-income funds. Low erosion is BUY, medium is NEUTRAL, high is SELL.',
+  },
+]
+
 export default function BuySellSignals() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
@@ -112,7 +139,7 @@ export default function BuySellSignals() {
     { label: 'Name' },
     { label: 'Type' },
     { label: 'Source', tip: 'Where the ticker originates (Portfolio or Watchlist)' },
-    { label: 'Overall', tip: 'Majority-vote signal across AO, RSI, MACD, SMA50, SMA200' },
+    { label: 'Overall', tip: 'Majority-vote signal across AO, RSI, MACD, SMA50, SMA200, and eligible NAV Signal' },
     { label: 'AO', tip: 'Awesome Oscillator signal — momentum based on 5/34-period midpoint SMAs' },
     { label: 'AO Value', tip: 'Raw Awesome Oscillator value' },
     { label: 'AO Dir', tip: 'Awesome Oscillator direction (rising or falling)' },
@@ -145,8 +172,25 @@ export default function BuySellSignals() {
         <span style={{ color: '#00c853', fontWeight: 600 }}>&#9632; BUY</span>&nbsp;
         <span style={{ color: '#d50000', fontWeight: 600 }}>&#9632; SELL</span>&nbsp;
         <span style={{ color: '#f9a825', fontWeight: 600 }}>&#9632; NEUTRAL</span>
-        &nbsp;&middot;&nbsp; Overall signal = majority vote across AO, RSI, MACD, SMA50, SMA200, NAV Signal
+        &nbsp;&middot;&nbsp; Overall signal = majority vote across AO, RSI, MACD, SMA50, SMA200, plus NAV Signal when applicable
       </p>
+
+      <details className="bss-help">
+        <summary>How the signals are created</summary>
+        <div className="bss-help-grid">
+          {signalHelpItems.map(item => (
+            <div className="bss-help-item" key={item.label}>
+              <strong>{item.label}</strong>
+              <span>{item.text}</span>
+            </div>
+          ))}
+        </div>
+        <p className="bss-help-note">
+          Growth stocks, ordinary equities, broad-market ETFs, and dividend-growth funds do not need a separate dashboard.
+          Their Overall score is driven by the technical votes; the NAV erosion vote is skipped unless the holding matches an
+          income-fund structure where destructive NAV decay is plausible.
+        </p>
+      </details>
 
       {/* Counts */}
       {rows.length > 0 && (

@@ -53,6 +53,88 @@ function CategoryModal({ category, onSave, onCancel, targetBaseTotal = 0 }) {
   )
 }
 
+function TickerTable({ tickers, categoryValue, onUnassign, fmt, moveTargets = null, onMove = null }) {
+  const showMove = moveTargets && moveTargets.length > 0 && onMove
+  return (
+    <table style={{ width: '100%', fontSize: '0.82rem' }}>
+      <thead>
+        <tr>
+          <th>Ticker</th>
+          <th>Description</th>
+          <th style={{ textAlign: 'right' }}>Value</th>
+          <th style={{ textAlign: 'right' }}>Freq</th>
+          <th style={{ textAlign: 'right' }}>% of Category</th>
+          {showMove && <th style={{ textAlign: 'right' }}>Sub-category</th>}
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {tickers.map(t => (
+          <tr key={t.ticker}>
+            <td style={{ fontWeight: 600, color: '#64b5f6' }}>{t.ticker}</td>
+            <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.description || '-'}</td>
+            <td style={{ textAlign: 'right' }}>{fmt(t.current_value)}</td>
+            <td style={{ textAlign: 'right', color: t.weekly ? '#00e89a' : '#90a4ae' }}>{t.weekly ? 'Weekly' : (t.div_frequency || '-')}</td>
+            <td style={{ textAlign: 'right' }}>{categoryValue ? (t.current_value / categoryValue * 100).toFixed(1) + '%' : '-'}</td>
+            {showMove && (
+              <td style={{ textAlign: 'right' }}>
+                <select
+                  value={t.subcategory_id ?? ''}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => { e.stopPropagation(); onMove(t.ticker, e.target.value === '' ? null : Number(e.target.value)) }}
+                  style={{ fontSize: '0.78rem', padding: '0.15rem 0.3rem', background: '#1a1a2e', color: '#cfd8dc', border: '1px solid #0f3460', borderRadius: 4 }}
+                >
+                  <option value="">— no sub-category —</option>
+                  {moveTargets.map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </td>
+            )}
+            <td style={{ textAlign: 'right' }}>
+              <button
+                style={{ background: 'none', border: 'none', color: '#ef9a9a', cursor: 'pointer', fontSize: '1rem', padding: '0 0.3rem' }}
+                title="Remove from category"
+                onClick={(e) => { e.stopPropagation(); onUnassign([t.ticker]) }}
+              >&times;</button>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function SubcategoryModal({ subModal, onSave, onCancel }) {
+  const [name, setName] = useState(subModal?.sub?.name || '')
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    if (!name.trim()) return
+    onSave({ name: name.trim() })
+  }
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-content" style={{ maxWidth: 400 }} onClick={e => e.stopPropagation()}>
+        <button className="modal-close" onClick={onCancel}>&times;</button>
+        <h2>{subModal?.sub ? 'Rename Sub-category' : 'New Sub-category'}</h2>
+        <p style={{ color: '#90a4ae', marginTop: '-0.4rem', marginBottom: '0.9rem', fontSize: '0.85rem' }}>
+          Within <strong style={{ color: '#7ecfff' }}>{subModal?.categoryName}</strong>
+        </p>
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label>Name *</label>
+            <input value={name} onChange={e => setName(e.target.value)} required maxLength={100} style={{ width: '100%' }} autoFocus placeholder="e.g. Gold" />
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
+            <button type="submit" className="btn btn-success">{subModal?.sub ? 'Rename' : 'Create'}</button>
+            <button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 function QualityDetailsModal({ row, onClose, fmt, fmtPct }) {
   if (!row) return null
   const tickers = row.quality?.tickers || []
@@ -309,6 +391,22 @@ function enrichCategoryData(categoryData, holdings = [], navCoverage = null) {
     }
   }
 
+  const buildSubcategory = (def, subTickers, catValue) => {
+    const sValue = subTickers.reduce((s, t) => s + Number(t.current_value || 0), 0)
+    const sMonthly = subTickers.reduce((s, t) => s + Number(t.monthly_income || 0), 0)
+    const sWeeklyValue = subTickers.reduce((s, t) => s + (t.weekly ? Number(t.current_value || 0) : 0), 0)
+    return {
+      ...def,
+      tickers: subTickers,
+      actual_value: sValue,
+      actual_pct: totalValue ? sValue / totalValue * 100 : 0,
+      category_pct: catValue > 0 ? sValue / catValue * 100 : 0,
+      monthly_income: sMonthly,
+      current_yield: sValue > 0 ? sMonthly * 12 / sValue * 100 : 0,
+      weekly_value_pct: sValue > 0 ? sWeeklyValue / sValue * 100 : 0,
+    }
+  }
+
   const categories = (categoryData.categories || []).map(cat => {
     const tickers = (cat.tickers || []).map(enrichTicker)
     const catValue = tickers.reduce((s, t) => s + Number(t.current_value || 0), 0)
@@ -321,9 +419,20 @@ function enrichCategoryData(categoryData, holdings = [], navCoverage = null) {
     const weightedGainLoss = catValue > 0
       ? tickers.reduce((s, t) => s + Number(t.gain_or_loss_percentage || 0) * Number(t.current_value || 0), 0) / catValue
       : 0
+    const subDefs = cat.subcategories || []
+    const subTickersById = {}
+    tickers.forEach(t => {
+      if (t.subcategory_id != null) {
+        (subTickersById[t.subcategory_id] = subTickersById[t.subcategory_id] || []).push(t)
+      }
+    })
+    const subcategories = subDefs.map(def => buildSubcategory(def, subTickersById[def.id] || [], catValue))
+    const unclassifiedTickers = subDefs.length ? tickers.filter(t => t.subcategory_id == null) : []
     return {
       ...cat,
       tickers,
+      subcategories,
+      unclassified_tickers: unclassifiedTickers,
       actual_value: catValue || Number(cat.actual_value || 0),
       actual_pct: totalValue ? (catValue || Number(cat.actual_value || 0)) / totalValue * 100 : 0,
       monthly_income: catMonthlyIncome,
@@ -368,8 +477,10 @@ export default function Categories() {
   const [data, setData] = useState({ categories: [], unallocated: [], total_value: 0 })
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState(null)
+  const [expandedSubId, setExpandedSubId] = useState(null)
   const [showModal, setShowModal] = useState(false)
   const [editCat, setEditCat] = useState(null)
+  const [subModal, setSubModal] = useState(null) // { categoryId, categoryName, sub? }
   const [selectedUnalloc, setSelectedUnalloc] = useState(new Set())
   const [error, setError] = useState(null)
   const [assistantMode, setAssistantMode] = useState('balanced')
@@ -480,12 +591,39 @@ export default function Categories() {
     reload()
   }
 
-  const handleAssign = async (tickers, categoryId) => {
+  const handleAssign = async (tickers, categoryId, subcategoryId = null) => {
     await pf('/api/categories/assign', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ category_id: categoryId, tickers }),
+      body: JSON.stringify({ category_id: categoryId, subcategory_id: subcategoryId, tickers }),
     })
     setSelectedUnalloc(new Set())
+    reload()
+  }
+
+  const handleSaveSub = async ({ name }) => {
+    if (!subModal) return
+    setError(null)
+    try {
+      if (subModal.sub) {
+        await pf(`/api/subcategories/${subModal.sub.id}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        })
+      } else {
+        await pf(`/api/categories/${subModal.categoryId}/subcategories`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        })
+      }
+      setSubModal(null)
+      reload()
+    } catch (e) { setError(e.message) }
+  }
+
+  const handleDeleteSub = async (sub) => {
+    if (!await dialog.confirm(`Delete sub-category "${sub.name}"? Its tickers stay in the parent category but become unclassified.`)) return
+    await pf(`/api/subcategories/${sub.id}`, { method: 'DELETE' })
+    if (expandedSubId === sub.id) setExpandedSubId(null)
     reload()
   }
 
@@ -505,9 +643,30 @@ export default function Categories() {
     })
   }
 
+  // The currently targeted bucket for click-to-assign: an expanded sub-category,
+  // otherwise the expanded parent category with no sub-category.
+  const expandedCat = data.categories.find(c => c.id === expandedId)
+  const assignTarget = (() => {
+    if (expandedSubId != null && expandedCat) {
+      const sub = (expandedCat.subcategories || []).find(s => s.id === expandedSubId)
+      if (sub) return { categoryId: expandedCat.id, subId: sub.id, label: `${expandedCat.name} › ${sub.name}` }
+    }
+    if (expandedCat) return { categoryId: expandedCat.id, subId: null, label: `${expandedCat.name} (no sub-category)` }
+    return null
+  })()
+
+  // Flat list of valid assignment targets for the bulk-assign buttons.
+  const assignmentTargets = data.categories.flatMap(cat => {
+    const subs = cat.subcategories || []
+    return [
+      { categoryId: cat.id, subId: null, label: subs.length ? `${cat.name} (no sub-category)` : cat.name },
+      ...subs.map(s => ({ categoryId: cat.id, subId: s.id, label: `${cat.name} › ${s.name}` })),
+    ]
+  })
+
   const handleUnallocClick = (ticker) => {
-    if (expandedId) {
-      handleAssign([ticker], expandedId)
+    if (assignTarget) {
+      handleAssign([ticker], assignTarget.categoryId, assignTarget.subId)
     } else {
       toggleUnalloc(ticker)
     }
@@ -1146,7 +1305,7 @@ export default function Categories() {
                 {/* Header */}
                 <div
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
-                  onClick={() => setExpandedId(expanded ? null : cat.id)}
+                  onClick={() => { setExpandedSubId(null); setExpandedId(expanded ? null : cat.id) }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1 }}>
                     <span style={{ fontSize: '0.8rem', opacity: 0.5 }}>{expanded ? '\u25BC' : '\u25B6'}</span>
@@ -1154,6 +1313,11 @@ export default function Categories() {
                     <span style={{ background: '#0f3460', padding: '0.15rem 0.5rem', borderRadius: 10, fontSize: '0.75rem', color: '#7ecfff' }}>
                       {cat.tickers.length}
                     </span>
+                    {(cat.subcategories || []).length > 0 && (
+                      <span style={{ background: '#1a2c4e', padding: '0.15rem 0.5rem', borderRadius: 10, fontSize: '0.72rem', color: '#bb86fc' }}>
+                        {cat.subcategories.length} sub
+                      </span>
+                    )}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
                     {cat.target_pct != null && (
@@ -1189,57 +1353,82 @@ export default function Categories() {
                   <div style={{ height: '100%', width: `${Math.min(cat.actual_pct, 100)}%`, background: barColor(cat), borderRadius: 3, transition: 'width 0.3s' }} />
                 </div>
 
-                {/* Expanded: ticker list */}
-                {expanded && (
-                  <div style={{ marginTop: '0.75rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                      <button className="btn btn-primary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={(e) => { e.stopPropagation(); handleEdit(cat) }}>Edit</button>
-                      <button className="btn btn-danger" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={(e) => { e.stopPropagation(); handleDelete(cat) }}>Delete</button>
-                      {cat.tickers.length > 0 && (
-                        <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
-                          onClick={(e) => { e.stopPropagation(); handleUnassign(cat.tickers.map(t => t.ticker)) }}>
-                          Unassign All
-                        </button>
+                {/* Expanded: sub-categories and/or ticker list */}
+                {expanded && (() => {
+                  const subs = cat.subcategories || []
+                  const hasSubs = subs.length > 0
+                  return (
+                    <div style={{ marginTop: '0.75rem' }} onClick={(e) => e.stopPropagation()}>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                        <button className="btn btn-primary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={() => handleEdit(cat)}>Edit</button>
+                        <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={() => setSubModal({ categoryId: cat.id, categoryName: cat.name })}>+ Sub-category</button>
+                        <button className="btn btn-danger" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={() => handleDelete(cat)}>Delete</button>
+                        {!hasSubs && cat.tickers.length > 0 && (
+                          <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
+                            onClick={() => handleUnassign(cat.tickers.map(t => t.ticker))}>
+                            Unassign All
+                          </button>
+                        )}
+                      </div>
+
+                      {hasSubs ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {subs.map(sub => {
+                            const subExpanded = expandedSubId === sub.id
+                            return (
+                              <div key={sub.id} style={{ border: subExpanded ? '1px solid #1976d2' : '1px solid #0f3460', borderRadius: 6, background: '#161b2e' }}>
+                                <div
+                                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', padding: '0.5rem 0.65rem' }}
+                                  onClick={() => setExpandedSubId(subExpanded ? null : sub.id)}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                                    <span style={{ fontSize: '0.72rem', opacity: 0.5 }}>{subExpanded ? '▼' : '▶'}</span>
+                                    <strong style={{ fontSize: '0.92rem', color: '#cfd8dc' }}>{sub.name}</strong>
+                                    <span style={{ background: '#0f3460', padding: '0.1rem 0.45rem', borderRadius: 10, fontSize: '0.7rem', color: '#7ecfff' }}>{sub.tickers.length}</span>
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                    <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#bb86fc' }}>{sub.actual_pct.toFixed(1)}%</span>
+                                    <span style={{ fontSize: '0.78rem', color: '#90a4ae' }}>{sub.category_pct.toFixed(1)}% of {cat.name}</span>
+                                    <span style={{ fontSize: '0.82rem', color: '#90a4ae' }}>{fmt(sub.actual_value)}</span>
+                                    <button className="btn btn-secondary" style={{ padding: '0.1rem 0.4rem', fontSize: '0.7rem' }} onClick={(e) => { e.stopPropagation(); setSubModal({ categoryId: cat.id, categoryName: cat.name, sub }) }}>Rename</button>
+                                    <button style={{ background: 'none', border: 'none', color: '#ef9a9a', cursor: 'pointer', fontSize: '1rem', padding: '0 0.25rem' }} title="Delete sub-category" onClick={(e) => { e.stopPropagation(); handleDeleteSub(sub) }}>&times;</button>
+                                  </div>
+                                </div>
+                                {subExpanded && (
+                                  <div style={{ padding: '0 0.65rem 0.6rem' }}>
+                                    {sub.tickers.length === 0 ? (
+                                      <p style={{ color: '#00e89a', fontSize: '0.8rem', fontStyle: 'italic', margin: '0.25rem 0' }}>
+                                        Click a ticker on the right to assign it here
+                                      </p>
+                                    ) : (
+                                      <TickerTable tickers={sub.tickers} categoryValue={cat.actual_value} onUnassign={handleUnassign} fmt={fmt} moveTargets={subs} onMove={(ticker, subId) => handleAssign([ticker], cat.id, subId)} />
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                          {cat.unclassified_tickers.length > 0 && (
+                            <div style={{ border: '1px dashed #455a64', borderRadius: 6, padding: '0.5rem 0.65rem', background: 'rgba(69,90,100,0.08)' }}>
+                              <div style={{ fontSize: '0.8rem', color: '#90a4ae', marginBottom: '0.35rem', fontWeight: 700 }}>
+                                Not in a sub-category ({cat.unclassified_tickers.length}) — use the dropdown to choose one
+                              </div>
+                              <TickerTable tickers={cat.unclassified_tickers} categoryValue={cat.actual_value} onUnassign={handleUnassign} fmt={fmt} moveTargets={subs} onMove={(ticker, subId) => handleAssign([ticker], cat.id, subId)} />
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        cat.tickers.length === 0 ? (
+                          <p style={{ color: '#8899aa', fontSize: '0.85rem', fontStyle: 'italic' }}>
+                            Click a ticker on the right to assign it here, or add a sub-category to organize holdings.
+                          </p>
+                        ) : (
+                          <TickerTable tickers={cat.tickers} categoryValue={cat.actual_value} onUnassign={handleUnassign} fmt={fmt} />
+                        )
                       )}
                     </div>
-                    {cat.tickers.length === 0 ? (
-                      <p style={{ color: '#8899aa', fontSize: '0.85rem', fontStyle: 'italic' }}>
-                        {expandedId === cat.id ? 'Click a ticker on the right to assign it here' : 'No tickers assigned'}
-                      </p>
-                    ) : (
-                      <table style={{ width: '100%', fontSize: '0.82rem' }}>
-                        <thead>
-                          <tr>
-                            <th>Ticker</th>
-                            <th>Description</th>
-                            <th style={{ textAlign: 'right' }}>Value</th>
-                            <th style={{ textAlign: 'right' }}>Freq</th>
-                            <th style={{ textAlign: 'right' }}>% of Category</th>
-                            <th></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {cat.tickers.map(t => (
-                            <tr key={t.ticker}>
-                              <td style={{ fontWeight: 600, color: '#64b5f6' }}>{t.ticker}</td>
-                              <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.description || '-'}</td>
-                              <td style={{ textAlign: 'right' }}>{fmt(t.current_value)}</td>
-                              <td style={{ textAlign: 'right', color: t.weekly ? '#00e89a' : '#90a4ae' }}>{t.weekly ? 'Weekly' : (t.div_frequency || '-')}</td>
-                              <td style={{ textAlign: 'right' }}>{cat.actual_value ? (t.current_value / cat.actual_value * 100).toFixed(1) + '%' : '-'}</td>
-                              <td style={{ textAlign: 'right' }}>
-                                <button
-                                  style={{ background: 'none', border: 'none', color: '#ef9a9a', cursor: 'pointer', fontSize: '1rem', padding: '0 0.3rem' }}
-                                  title="Unassign"
-                                  onClick={(e) => { e.stopPropagation(); handleUnassign([t.ticker]) }}
-                                >&times;</button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                )}
+                  )
+                })()}
               </div>
             )
           })}
@@ -1294,11 +1483,11 @@ export default function Categories() {
               <span style={{ fontSize: '0.8rem', color: '#8899aa', marginLeft: '0.5rem' }}>({data.unallocated.length})</span>
             </h2>
 
-            {expandedId && (
+            {assignTarget ? (
               <p style={{ fontSize: '0.78rem', color: '#00e89a', marginBottom: '0.5rem' }}>
-                Click a ticker to assign to the selected category
+                Click a ticker to assign to <strong>{assignTarget.label}</strong>
               </p>
-            )}
+            ) : null}
 
             {data.unallocated.length === 0 ? (
               <p style={{ color: '#8899aa', fontSize: '0.85rem' }}>All tickers are allocated!</p>
@@ -1342,20 +1531,20 @@ export default function Categories() {
                   })}
                 </div>
 
-                {!expandedId && selectedUnalloc.size > 0 && data.categories.length > 0 && (
+                {!assignTarget && selectedUnalloc.size > 0 && assignmentTargets.length > 0 && (
                   <div style={{ marginTop: '0.75rem' }}>
                     <label style={{ fontSize: '0.8rem', color: '#90a4ae', display: 'block', marginBottom: '0.3rem' }}>
                       Assign {selectedUnalloc.size} selected to:
                     </label>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
-                      {data.categories.map(cat => (
+                      {assignmentTargets.map(target => (
                         <button
-                          key={cat.id}
+                          key={`${target.categoryId}-${target.subId ?? 'root'}`}
                           className="btn btn-primary"
                           style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}
-                          onClick={() => handleAssign([...selectedUnalloc], cat.id)}
+                          onClick={() => handleAssign([...selectedUnalloc], target.categoryId, target.subId)}
                         >
-                          {cat.name}
+                          {target.label}
                         </button>
                       ))}
                     </div>
@@ -1375,6 +1564,14 @@ export default function Categories() {
             .reduce((s, c) => s + (Number(c.target_pct) || 0), 0)}
           onSave={handleSave}
           onCancel={() => setShowModal(false)}
+        />
+      )}
+
+      {subModal && (
+        <SubcategoryModal
+          subModal={subModal}
+          onSave={handleSaveSub}
+          onCancel={() => setSubModal(null)}
         />
       )}
 

@@ -712,6 +712,31 @@ def ensure_tables_exist(conn=None):
             ALTER TABLE ticker_categories_new RENAME TO ticker_categories;
         """)
 
+    # ── subcategories ───────────────────────────────────────────────────────────
+    # Optional second tier within a category (e.g. Metals → Gold / Silver / Copper).
+    # Purely additive: tickers keep their top-level category_id so every other
+    # feature is unaffected; subcategory_id is grouping metadata for the
+    # Categories page only.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS subcategories (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            category_id INTEGER NOT NULL,
+            name        TEXT NOT NULL,
+            profile_id  INTEGER NOT NULL DEFAULT 1,
+            sort_order  INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (category_id, name, profile_id),
+            FOREIGN KEY (category_id) REFERENCES categories(id)
+        )
+    """)
+
+    # Add subcategory_id to ticker_categories if missing
+    _tc_cols = {r[1] for r in cur.execute("PRAGMA table_info(ticker_categories)").fetchall()}
+    if "subcategory_id" not in _tc_cols:
+        try:
+            cur.execute("ALTER TABLE ticker_categories ADD COLUMN subcategory_id INTEGER")
+        except Exception:
+            pass
+
     # ── transactions ─────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS transactions (

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 
@@ -69,7 +69,7 @@ export default function NavErosionPortfolio() {
   const [btOverwrite, setBtOverwrite] = useState(true)
   const [btError, setBtError] = useState(null)
 
-  // Load saved list and ETF list on mount
+  // Load saved backtests on mount/profile changes.
   const loadSavedList = useCallback(() => {
     pf('/api/nav-erosion-portfolio/saved')
       .then(r => r.json())
@@ -77,20 +77,23 @@ export default function NavErosionPortfolio() {
       .catch(() => {})
   }, [pf])
 
-  const loadEtfList = useCallback(() => {
-    pf('/api/nav-erosion-portfolio/list')
+  const loadSavedEtfList = useCallback(() => {
+    return pf('/api/nav-erosion-portfolio/list')
       .then(r => r.json())
       .then(d => {
         if (d.rows && d.rows.length > 0) {
-          setGridRows(d.rows.map(r => ({
+          const rows = d.rows.map(r => ({
             ticker: r.ticker, amount: String(r.amount), reinvest_pct: String(r.reinvest_pct)
-          })))
+          }))
+          setGridRows(rows)
+          return rows
         }
+        return null
       })
-      .catch(() => {})
+      .catch(() => null)
   }, [pf])
 
-  useEffect(() => { loadSavedList(); loadEtfList() }, [loadSavedList, loadEtfList, selection])
+  useEffect(() => { loadSavedList() }, [loadSavedList, selection])
 
   const updateRow = (idx, field, value) => {
     setGridRows(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r))
@@ -200,19 +203,25 @@ export default function NavErosionPortfolio() {
       .catch(err => setBtError('Save failed: ' + err.message))
   }
 
-  const runBacktest = () => {
+  const runBacktestForRows = useCallback((rowsForRun, { persist = true } = {}) => {
     setError(null)
     setResults(null)
     setLoading(true)
 
-    const rows = collectRows(gridRows)
+    const rows = collectRows(rowsForRun)
+    if (!rows.length) {
+      setLoading(false)
+      setError('No ETFs provided.')
+      return
+    }
 
-    // Save list first, then run
-    pf('/api/nav-erosion-portfolio/list', {
+    const savePromise = persist ? pf('/api/nav-erosion-portfolio/list', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rows }),
-    }).then(() => {
+    }) : Promise.resolve()
+
+    savePromise.then(() => {
       pf('/api/nav-erosion-portfolio/data', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -229,7 +238,55 @@ export default function NavErosionPortfolio() {
           setError('Request failed: ' + err.message)
         })
     })
+  }, [pf, startDate, endDate])
+
+  const runBacktest = () => {
+    runBacktestForRows(gridRows)
   }
+
+  useEffect(() => {
+    let cancelled = false
+
+    // On open: silently upsert the live portfolio into a single "My Current
+    // Portfolio" saved backtest and load it into the grid. We do NOT auto-run
+    // the backtest — the user runs it on demand from the Saved Backtests list.
+    const loadCurrentPortfolio = async () => {
+      try {
+        const r = await pf('/api/nav-erosion-portfolio/save-current', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ start: startDate, end: endDate }),
+        })
+        const d = await r.json()
+        if (cancelled) return
+        const currentRows = (d.rows || []).map(r => ({
+          ticker: r.ticker || '',
+          amount: String(r.amount || ''),
+          reinvest_pct: String(r.reinvest_pct || ''),
+        }))
+
+        if (currentRows.length > 0) {
+          setGridRows(currentRows)
+          setResults(null)
+          loadSavedList()
+          if (d.id != null) setSelectedSaved(String(d.id))
+          return
+        }
+
+        const savedRows = await loadSavedEtfList()
+        if (cancelled || !savedRows || savedRows.length === 0) {
+          setGridRows([{ ticker: '', amount: '', reinvest_pct: '' }])
+        }
+      } catch (err) {
+        if (!cancelled) {
+          await loadSavedEtfList()
+        }
+      }
+    }
+
+    loadCurrentPortfolio()
+    return () => { cancelled = true }
+  }, [pf, selection])
 
   // Sorting results
   const colKeys = ['ticker', 'amount', 'reinvest_pct', 'start_price', 'end_price',
@@ -313,6 +370,84 @@ export default function NavErosionPortfolio() {
         <span style={{ color: '#00c853', fontWeight: 600 }}> Green extra</span> means shares above breakeven.
         The percent is the gap as a share of break-even shares.
       </p>
+
+      {/* Collapsed-by-default help: how the numbers are computed */}
+      <details className="nep-help">
+        <summary>How NAV erosion &amp; total return are computed</summary>
+        <div className="nep-help-body">
+          <section>
+            <h4>NAV Erosion (Yes / No)</h4>
+            <p>
+              This is a share-count break-even test. For each ETF we buy{' '}
+              <em>starting shares = your dollar amount ÷ the first available month's price</em>. Each month
+              the fund's distributions are paid per share; the reinvest % you set is used to buy more shares
+              at that month's price (the rest is treated as cash). At the end we compute{' '}
+              <em>break-even shares = your dollar amount ÷ the ending price</em> — the number of shares you
+              would need at the closing price to be worth your original principal.
+            </p>
+            <p>
+              <strong style={{ color: '#e05555' }}>NAV Erosion = Yes</strong> when the shares you actually
+              accumulated (including everything reinvested) are <em>fewer</em> than those break-even shares —
+              the share-price decline outran the distributions. The{' '}
+              <strong>Shares Needed / Extra To Breakeven</strong> column shows that gap, and its percent is
+              the gap as a share of break-even shares.
+            </p>
+          </section>
+
+          <section>
+            <h4>NAV Ratio (benchmark-adjusted severity)</h4>
+            <p>
+              The <strong>NAV Ratio</strong> column measures destructive price decay relative to the income
+              the fund actually pays, and it is gated by the market so a broad sell-off is not mistaken for
+              structural erosion:
+            </p>
+            <p className="nep-formula">
+              NAV Ratio = fund&apos;s own price decline ÷ trailing-12-month distribution yield
+            </p>
+            <ul>
+              <li>
+                The price decline only counts when the fund&apos;s best-fit benchmark (a market index) was{' '}
+                <em>flat or up</em> over the same window. If the whole market fell, the drop is treated as
+                market beta, not NAV erosion, and the numerator is 0.
+              </li>
+              <li>Distribution yield is the trailing-12-month distributions per share ÷ the ending price.</li>
+              <li>
+                <strong>Lower is better.</strong> ≤ 0.25 = Low, 0.25–0.75 = Moderate, &gt; 0.75 = High.
+                A fund is also forced to <strong>High</strong> if its price fell ≥ 50% or you would need
+                ≥ 5% more shares to break even.
+              </li>
+            </ul>
+            <p>
+              The <strong>Portfolio NAV Erosion Ratio</strong> tile is the dollar-weighted average of each
+              fund&apos;s ratio across the holdings that have one.
+            </p>
+          </section>
+
+          <section>
+            <h4>Total Return vs. Gain / Loss</h4>
+            <p>
+              <strong>Final Value</strong> = the shares you accumulated × the ending price.
+            </p>
+            <p className="nep-formula">
+              Total Return $ = Final Value + cash distributions taken − amount invested
+              <br />
+              Total Return % = Total Return $ ÷ amount invested
+            </p>
+            <p>
+              &quot;Cash distributions taken&quot; is the portion of distributions you did{' '}
+              <em>not</em> reinvest. <strong>Gain / Loss $</strong> is narrower — just Final Value − amount invested — so it
+              reflects only the position&apos;s value and excludes any cash you pocketed. Total Return therefore
+              exceeds Gain / Loss by exactly the cash distributions taken.
+            </p>
+          </section>
+
+          <p className="nep-help-note">
+            Prices come from unadjusted historical data with distributions applied explicitly, and the
+            backtest steps month by month. If a fund has no data back to your start date, results begin from
+            its earliest available month (flagged in the Note column).
+          </p>
+        </div>
+      </details>
 
       {/* Global date inputs */}
       <div className="ne-form" style={{ marginBottom: '1rem' }}>

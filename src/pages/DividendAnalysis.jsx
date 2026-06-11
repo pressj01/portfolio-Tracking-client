@@ -53,6 +53,11 @@ const GROUP_OPTIONS = [
   { value: 'holdings', label: 'Holdings' },
   { value: 'categories', label: 'Categories' },
 ]
+const DONUT_COLORS = [
+  '#4fc3f7', '#81c784', '#ffb74d', '#e57373', '#ba68c8',
+  '#4dd0e1', '#aed581', '#fff176', '#f06292', '#7986cb',
+  '#90a4ae', '#a1887f',
+]
 
 function YieldPayoutChart({ rows }) {
   const chartRef = useRef(null)
@@ -75,6 +80,15 @@ function YieldPayoutChart({ rows }) {
   const chartData = useMemo(() => {
     if (!rows?.length) return null
 
+    const currentYieldPct = (row) => {
+      const directYield = Number(row.current_annual_yield)
+      if (Number.isFinite(directYield) && directYield > 0) return directYield * 100
+
+      const annualPayout = Number(row.estim_payment_per_year) || 0
+      const currentValue = Number(row.current_value) || 0
+      return annualPayout > 0 && currentValue > 0 ? (annualPayout / currentValue) * 100 : 0
+    }
+
     const groupKey = {
       holdings: 'ticker',
       categories: 'category_name',
@@ -85,7 +99,7 @@ function YieldPayoutChart({ rows }) {
     rows.forEach(r => {
       const key = r[groupKey] || 'Other'
       if (!grouped[key]) grouped[key] = { yield_sum: 0, yield_count: 0, annual_payout: 0, value: 0 }
-      const yld = (r.current_annual_yield || 0) * 100  // decimal to pct
+      const yld = currentYieldPct(r)
       grouped[key].yield_sum += yld
       grouped[key].yield_count += 1
       grouped[key].annual_payout += (r.estim_payment_per_year || 0)
@@ -95,7 +109,9 @@ function YieldPayoutChart({ rows }) {
     // Build arrays
     let entries = Object.entries(grouped).map(([label, d]) => ({
       label,
-      yield_pct: group === 'holdings' ? (rows.find(r => r.ticker === label)?.current_annual_yield || 0) * 100 : (d.yield_count > 0 ? d.yield_sum / d.yield_count : 0),
+      yield_pct: group === 'holdings'
+        ? currentYieldPct(rows.find(r => r.ticker === label) || {})
+        : (d.value > 0 ? (d.annual_payout / d.value) * 100 : (d.yield_count > 0 ? d.yield_sum / d.yield_count : 0)),
       annual_payout: d.annual_payout,
       value: d.value,
     }))
@@ -104,12 +120,17 @@ function YieldPayoutChart({ rows }) {
     const sortKey = metric === 'yield_pct' ? 'yield_pct' : 'annual_payout'
     entries.sort((a, b) => b[sortKey] - a[sortKey])
 
+    const yields = entries.map(e => e.yield_pct)
+    const payouts = entries.map(e => e.annual_payout)
+    const maxYield = Math.max(...yields, 0)
+    const minVisibleYield = maxYield > 0 ? Math.max(maxYield * 0.055, 3) : 0
+    const displayYields = yields.map(v => (v > 0 && v < minVisibleYield ? minVisibleYield : v))
+
     return {
       labels: entries.map(e => e.label),
-      primary: entries.map(e => e[metric === 'yield_pct' ? 'yield_pct' : 'annual_payout']),
-      secondary: entries.map(e => e[metric === 'yield_pct' ? 'annual_payout' : 'value']),
-      primaryLabel: metric === 'yield_pct' ? 'Yield (%)' : 'Annual Payout ($)',
-      secondaryLabel: metric === 'yield_pct' ? 'Annual Payout ($)' : 'Portfolio Value ($)',
+      yields,
+      payouts,
+      displayYields,
     }
   }, [rows, metric, group])
 
@@ -120,23 +141,26 @@ function YieldPayoutChart({ rows }) {
     const traces = [
       {
         x: chartData.labels,
-        y: chartData.primary,
+        y: chartData.displayYields,
+        customdata: chartData.yields,
         type: 'bar',
-        name: chartData.primaryLabel,
-        marker: { color: '#38bdf8' },
-        text: chartData.primary.map(v => metric === 'yield_pct' ? `${v.toFixed(1)}%` : `$${v.toLocaleString(undefined, {maximumFractionDigits: 0})}`),
+        name: 'Yield (%)',
+        marker: { color: '#38bdf8', line: { color: '#7dd3fc', width: 1 } },
+        opacity: 0.95,
+        text: chartData.yields.map(v => `${v.toFixed(1)}%`),
         textposition: 'none',
-        hovertemplate: metric === 'yield_pct' ? '%{x}: %{y:.2f}%<extra></extra>' : '%{x}: $%{y:,.0f}<extra></extra>',
+        hovertemplate: '%{x}<br>Yield: %{customdata:.2f}%<extra></extra>',
       },
       {
         x: chartData.labels,
-        y: chartData.secondary,
+        y: chartData.payouts,
+        customdata: chartData.payouts,
         type: 'scatter',
         mode: 'markers',
-        name: chartData.secondaryLabel,
-        marker: { color: '#a855f7', size: 7, symbol: 'line-ew-open', line: { width: 2, color: '#a855f7' } },
+        name: 'Annual Payout ($)',
+        marker: { color: '#a855f7', size: 7, symbol: 'circle', line: { width: 1, color: '#d8b4fe' } },
         yaxis: 'y2',
-        hovertemplate: '%{x}: $%{y:,.0f}<extra></extra>',
+        hovertemplate: '%{x}<br>Est. annual payout: $%{customdata:,.0f}<extra></extra>',
       },
     ]
 
@@ -152,16 +176,15 @@ function YieldPayoutChart({ rows }) {
         gridcolor: '#1a2233',
       },
       yaxis: {
-        title: chartData.primaryLabel,
+        title: 'Yield (%)',
         titlefont: { color: '#38bdf8', size: 12 },
         tickfont: { color: '#38bdf8' },
         gridcolor: '#1a2233',
-        ticksuffix: metric === 'yield_pct' ? '%' : '',
-        tickprefix: metric === 'annual_payout' ? '$' : '',
+        ticksuffix: '%',
         separatethousands: true,
       },
       yaxis2: {
-        title: chartData.secondaryLabel,
+        title: 'Annual Payout ($)',
         titlefont: { color: '#a855f7', size: 12 },
         tickfont: { color: '#a855f7' },
         overlaying: 'y',
@@ -245,7 +268,384 @@ function YieldPayoutChart({ rows }) {
           </div>
         </div>
       </div>
+      <div style={{ padding: '0 1rem 0.35rem', color: '#9aa8ba', fontSize: '0.78rem', lineHeight: 1.35 }}>
+        Blue bars show estimated annual yield on the left axis. Purple dots show estimated annual payout dollars on the right axis. Compare bars to bars and dots to dots; a high-yield holding may still pay fewer dollars if the position is small.
+      </div>
       <div ref={chartRef} style={{ width: '100%', height: '400px' }} />
+    </div>
+  )
+}
+
+function CategoryDividendsChart({ rows, categories }) {
+  const chartRef = useRef(null)
+  const [categoryId, setCategoryId] = useState('')
+  const [subcategoryId, setSubcategoryId] = useState('')
+
+  const selectedCategory = useMemo(
+    () => categories?.find(c => String(c.id) === String(categoryId)) || null,
+    [categories, categoryId]
+  )
+
+  const subcategoryOptions = useMemo(() => {
+    const source = selectedCategory ? [selectedCategory] : (categories || [])
+    return source.flatMap(c => (c.subcategories || []).map(s => ({
+      ...s,
+      categoryName: c.name,
+    })))
+  }, [categories, selectedCategory])
+
+  useEffect(() => {
+    if (!subcategoryId) return
+    const stillAvailable = subcategoryOptions.some(s => String(s.id) === String(subcategoryId))
+    if (!stillAvailable) setSubcategoryId('')
+  }, [subcategoryId, subcategoryOptions])
+
+  const chartData = useMemo(() => {
+    if (!rows?.length) return null
+
+    const add = (bucket, name, value, count = 1) => {
+      if (value <= 0) return
+      if (!bucket[name]) bucket[name] = { name, value: 0, count: 0 }
+      bucket[name].value += value
+      bucket[name].count += count
+    }
+
+    const grouped = {}
+    if (selectedCategory && subcategoryId) {
+      rows
+        .filter(r => r.category_name === selectedCategory.name && String(r.subcategory_id || '') === String(subcategoryId))
+        .forEach(r => add(grouped, r.ticker || 'Unknown', Number(r.total_divs_received) || 0))
+    } else if (selectedCategory) {
+      const subcats = selectedCategory.subcategories || []
+      if (subcats.length) {
+        subcats.forEach(s => { grouped[s.name] = { name: s.name, value: 0, count: 0 } })
+        grouped.Unassigned = { name: 'Unassigned', value: 0, count: 0 }
+        rows
+          .filter(r => r.category_name === selectedCategory.name)
+          .forEach(r => {
+            const value = Number(r.total_divs_received) || 0
+            const sub = subcats.find(s => String(s.id) === String(r.subcategory_id || ''))
+            add(grouped, sub ? sub.name : 'Unassigned', value)
+          })
+      } else {
+        rows
+          .filter(r => r.category_name === selectedCategory.name)
+          .forEach(r => add(grouped, r.ticker || 'Unknown', Number(r.total_divs_received) || 0))
+      }
+    } else {
+      rows.forEach(r => add(grouped, r.category_name || 'Other', Number(r.total_divs_received) || 0))
+    }
+
+    const entries = Object.values(grouped)
+      .filter(g => g.value > 0)
+      .sort((a, b) => b.value - a.value)
+    const total = entries.reduce((sum, e) => sum + e.value, 0)
+
+    return {
+      labels: entries.map(e => e.name),
+      values: entries.map(e => e.value),
+      entries,
+      total,
+    }
+  }, [rows, selectedCategory, subcategoryId])
+
+  useEffect(() => {
+    if (!chartRef.current || !window.Plotly) return
+    const el = chartRef.current
+
+    if (!chartData?.labels?.length) {
+      window.Plotly.purge(el)
+      return
+    }
+
+    const colors = chartData.labels.map((_, i) => DONUT_COLORS[i % DONUT_COLORS.length])
+    const traces = [{
+      type: 'pie',
+      hole: 0.55,
+      labels: chartData.labels,
+      values: chartData.values,
+      marker: { colors, line: { color: '#16213e', width: 1.5 } },
+      textinfo: 'none',
+      hovertemplate: '%{label}: $%{value:,.2f}<br>%{percent}<extra></extra>',
+      sort: false,
+    }]
+    const layout = {
+      template: 'plotly_dark',
+      paper_bgcolor: '#16213e',
+      plot_bgcolor: '#16213e',
+      margin: { l: 10, r: 10, t: 10, b: 10 },
+      showlegend: false,
+      height: 280,
+      width: 280,
+    }
+
+    window.Plotly.newPlot(el, traces, layout, { responsive: true, displayModeBar: false })
+    return () => window.Plotly.purge(el)
+  }, [chartData])
+
+  const controlStyle = {
+    background: '#0f3460',
+    border: '1px solid #1a2a4a',
+    color: '#e0e8f5',
+    borderRadius: '6px',
+    padding: '0.3rem 0.5rem',
+    fontSize: '0.82rem',
+  }
+  const selectedSubcategory = subcategoryOptions.find(s => String(s.id) === String(subcategoryId))
+  const heading = selectedSubcategory
+    ? selectedSubcategory.name
+    : selectedCategory
+      ? selectedCategory.name
+      : 'All Categories'
+  const nameLabel = selectedSubcategory ? 'Holding' : selectedCategory ? 'Name' : 'Category'
+
+  return (
+    <div className="da-chart-panel" style={{ padding: '0.75rem 1rem' }}>
+      <h3 style={{ color: '#90caf9', margin: '0 0 0.75rem', fontSize: '1rem' }}>Total Dividends Received</h3>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+        <span style={{ color: '#8899aa', fontSize: '0.8rem' }}>Category:</span>
+        <select style={controlStyle} value={categoryId} onChange={e => { setCategoryId(e.target.value); setSubcategoryId('') }} title="Filter category">
+          <option value="">All categories</option>
+          {(categories || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        {selectedCategory && selectedCategory.subcategories?.length > 0 && (
+          <>
+            <span style={{ color: '#8899aa', fontSize: '0.8rem' }}>Sub-category:</span>
+            <select style={controlStyle} value={subcategoryId} onChange={e => setSubcategoryId(e.target.value)} title="Filter subcategory">
+              <option value="">All sub-categories</option>
+              {selectedCategory.subcategories.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </>
+        )}
+        {categoryId && (
+          <button
+            onClick={() => { setCategoryId(''); setSubcategoryId('') }}
+            style={{ ...controlStyle, cursor: 'pointer', color: '#90caf9' }}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      {chartData?.labels?.length ? (
+        <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start' }}>
+          <div ref={chartRef} style={{ width: 280, flexShrink: 0 }} />
+          <div style={{ flex: 1, overflowX: 'auto', minWidth: 0 }}>
+            <div style={{ color: '#8899aa', fontSize: '0.8rem', marginBottom: '0.5rem' }}>
+              {heading} - {fmt(chartData.total)} total dividends received
+            </div>
+            <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: '#0f3460' }}>
+                  <th style={{ textAlign: 'left', padding: '0.55rem 0.65rem', color: '#b5c5d8' }}>{nameLabel}</th>
+                  <th style={{ textAlign: 'right', padding: '0.55rem 0.65rem', color: '#b5c5d8' }}>Total Dividends</th>
+                  <th style={{ textAlign: 'right', padding: '0.55rem 0.65rem', color: '#b5c5d8' }}>Share</th>
+                </tr>
+              </thead>
+              <tbody>
+                {chartData.entries.map((g, i) => {
+                  const color = DONUT_COLORS[i % DONUT_COLORS.length]
+                  const share = chartData.total ? (g.value / chartData.total) * 100 : 0
+                  return (
+                    <tr key={g.name} style={{ borderBottom: '1px solid #0f3460' }}>
+                      <td style={{ padding: '0.55rem 0.65rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                          <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                          <div>
+                            <div style={{ color: '#e0e8f5', fontWeight: 600 }}>{g.name}</div>
+                            <div style={{ color: '#8899aa', fontSize: '0.75rem' }}>{g.count} item{g.count !== 1 ? 's' : ''}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'right', padding: '0.55rem 0.65rem', color: '#e0e8f5' }}>{fmt(g.value)}</td>
+                      <td style={{ textAlign: 'right', padding: '0.55rem 0.65rem', color: '#e0e8f5' }}>{share.toFixed(2)}%</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <div style={{ height: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8899aa' }}>
+          No dividend history for the selected category filters.
+          <div ref={chartRef} style={{ display: 'none' }} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DividendPipelineChart({ pipeline }) {
+  const chartRef = useRef(null)
+  const [selectedMonth, setSelectedMonth] = useState('')
+
+  useEffect(() => {
+    if (!pipeline?.months?.length) return
+    setSelectedMonth(prev => (prev && pipeline.months.includes(prev)) ? prev : pipeline.months[0])
+  }, [pipeline])
+
+  useEffect(() => {
+    if (!pipeline?.months?.length || !chartRef.current || !window.Plotly) return
+    const el = chartRef.current
+    const labels = pipeline.labels || pipeline.months
+    const months = pipeline.months
+    const valueFor = (month, key) => Number(pipeline.totals?.[month]?.[key] || 0)
+
+    const traces = [
+      {
+        x: labels,
+        y: months.map(m => valueFor(m, 'received')),
+        name: 'Received',
+        type: 'bar',
+        marker: { color: '#22c55e' },
+        customdata: months,
+        hovertemplate: '<b>%{x}</b><br>Received: $%{y:,.2f}<extra></extra>',
+      },
+      {
+        x: labels,
+        y: months.map(m => valueFor(m, 'earned_not_paid')),
+        name: 'Ex-Date Passed',
+        type: 'bar',
+        marker: { color: '#38bdf8' },
+        customdata: months,
+        hovertemplate: '<b>%{x}</b><br>Ex-date passed: $%{y:,.2f}<extra></extra>',
+      },
+      {
+        x: labels,
+        y: months.map(m => valueFor(m, 'declared')),
+        name: 'Announced',
+        type: 'bar',
+        marker: { color: '#a855f7' },
+        customdata: months,
+        hovertemplate: '<b>%{x}</b><br>Announced, ex-date upcoming: $%{y:,.2f}<extra></extra>',
+      },
+      {
+        x: labels,
+        y: months.map(m => valueFor(m, 'estimated')),
+        name: 'Unconfirmed Estimate',
+        type: 'bar',
+        marker: { color: '#64748b' },
+        customdata: months,
+        hovertemplate: '<b>%{x}</b><br>Unconfirmed estimate: $%{y:,.2f}<extra></extra>',
+      },
+    ]
+
+    const totals = months.map(m => ['received', 'earned_not_paid', 'declared', 'estimated'].reduce((sum, key) => sum + valueFor(m, key), 0))
+    traces.push({
+      x: labels,
+      y: totals,
+      type: 'scatter',
+      mode: 'text',
+      name: 'Total',
+      text: totals.map(v => v > 0 ? `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : ''),
+      textposition: 'top center',
+      textfont: { color: '#e0e8f5', size: 11 },
+      hoverinfo: 'skip',
+      showlegend: false,
+    })
+    const maxTotal = Math.max(...totals, 100)
+    const layout = {
+      title: `Dividend Pipeline - Next 12 Months | Bar total = full monthly projection${pipeline.as_of ? ` | As of ${pipeline.as_of}` : ''}`,
+      template: 'plotly_dark',
+      paper_bgcolor: '#1a1f2e',
+      plot_bgcolor: 'rgba(255,255,255,0.03)',
+      font: { color: '#e0e8f5' },
+      barmode: 'stack',
+      xaxis: { type: 'category', categoryorder: 'array', categoryarray: labels, gridcolor: '#1a2233' },
+      yaxis: { title: 'Dividend Income ($)', gridcolor: '#1a2233', tickprefix: '$', range: [0, maxTotal * 1.28] },
+      legend: { orientation: 'h', y: 1.12, x: 0.5, xanchor: 'center' },
+      margin: { t: 70, b: 60, l: 70, r: 20 },
+    }
+
+    window.Plotly.newPlot(el, traces, layout, { responsive: true, displayModeBar: false })
+    return () => window.Plotly.purge(el)
+  }, [pipeline])
+
+  if (!pipeline?.months?.length) return null
+
+  const details = pipeline.details?.[selectedMonth] || []
+  const selectedLabel = pipeline.labels?.[pipeline.months.indexOf(selectedMonth)] || selectedMonth
+  const selectedTotals = pipeline.totals?.[selectedMonth] || {}
+  const statusColor = {
+    Received: '#22c55e',
+    'Ex-Date Passed': '#38bdf8',
+    'Announced, Ex-Date Upcoming': '#a855f7',
+    'Unconfirmed Estimate': '#94a3b8',
+  }
+  const monthTotal = ['received', 'earned_not_paid', 'declared', 'estimated']
+    .reduce((sum, key) => sum + Number(selectedTotals[key] || 0), 0)
+  const bucketLabel = {
+    received: 'Received',
+    earned_not_paid: 'Ex-date passed',
+    declared: 'Announced',
+    estimated: 'Unconfirmed estimate',
+  }
+
+  return (
+    <div className="da-chart-panel">
+      <div style={{ padding: '0.75rem 1rem 0.25rem' }}>
+        <div style={{ fontSize: '1rem', fontWeight: 600, color: '#e0e8f5', marginBottom: '0.35rem' }}>
+          Dividend Pipeline
+        </div>
+        <div style={{ color: '#9aa8ba', fontSize: '0.78rem', lineHeight: 1.35 }}>
+          Stacked by certainty. The gray segment is only the remaining unconfirmed estimate; the full monthly projection is the total height of all stacked segments.
+        </div>
+      </div>
+      <div ref={chartRef} className="da-chart-div" style={{ height: '420px' }} />
+      <div style={{ padding: '0 1rem 1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
+          <label style={{ color: '#8899aa', fontSize: '0.82rem' }}>Month</label>
+          <select
+            value={selectedMonth}
+            onChange={e => setSelectedMonth(e.target.value)}
+            style={{ background: '#0f3460', color: '#e0e8f5', border: '1px solid #1a2a4a', borderRadius: 6, padding: '0.3rem 0.5rem', fontSize: '0.82rem' }}
+          >
+            {pipeline.months.map((m, i) => <option key={m} value={m}>{pipeline.labels?.[i] || m}</option>)}
+          </select>
+          <span style={{ color: '#e0e8f5', fontSize: '0.85rem' }}>
+            {selectedLabel}: {fmt(monthTotal)}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.65rem', color: '#9aa8ba', fontSize: '0.8rem' }}>
+          {['received', 'earned_not_paid', 'declared', 'estimated'].map(key => (
+            <span key={key}>
+              {bucketLabel[key]}: <strong style={{ color: '#e0e8f5' }}>{fmt(selectedTotals[key] || 0)}</strong>
+            </span>
+          ))}
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', fontSize: '0.84rem', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#0f3460' }}>
+                <th style={{ textAlign: 'left', padding: '0.5rem 0.6rem', color: '#b5c5d8' }}>Ticker</th>
+                <th style={{ textAlign: 'left', padding: '0.5rem 0.6rem', color: '#b5c5d8' }}>Status</th>
+                <th style={{ textAlign: 'center', padding: '0.5rem 0.6rem', color: '#b5c5d8' }}>Ex-Date</th>
+                <th style={{ textAlign: 'center', padding: '0.5rem 0.6rem', color: '#b5c5d8' }}>Pay Date</th>
+                <th style={{ textAlign: 'right', padding: '0.5rem 0.6rem', color: '#b5c5d8' }}>Amount</th>
+                <th style={{ textAlign: 'left', padding: '0.5rem 0.6rem', color: '#b5c5d8' }}>Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {details.length ? details.map((d, i) => (
+                <tr key={`${d.ticker}-${d.status}-${d.pay_date}-${i}`} style={{ borderBottom: '1px solid #0f3460' }}>
+                  <td style={{ padding: '0.5rem 0.6rem', color: '#e0e8f5', fontWeight: 600 }}>{d.ticker}</td>
+                  <td style={{ padding: '0.5rem 0.6rem', color: statusColor[d.status] || '#e0e8f5' }}>{d.status}</td>
+                  <td style={{ padding: '0.5rem 0.6rem', textAlign: 'center', color: '#cbd5e1' }}>{d.ex_date || '\u2014'}</td>
+                  <td style={{ padding: '0.5rem 0.6rem', textAlign: 'center', color: '#cbd5e1' }}>{d.pay_date || '\u2014'}</td>
+                  <td style={{ padding: '0.5rem 0.6rem', textAlign: 'right', color: '#e0e8f5' }}>{fmt(d.amount)}</td>
+                  <td style={{ padding: '0.5rem 0.6rem', color: '#8899aa' }}>{d.source || '\u2014'}</td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan={6} style={{ padding: '1rem', textAlign: 'center', color: '#8899aa' }}>
+                    No pipeline details for this month.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   )
 }
@@ -257,6 +657,7 @@ export default function DividendAnalysis() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [categories, setCategories] = useState([])
+  const [subcategories, setSubcategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const catRef = useRef(null)
   const [sortCol, setSortCol] = useState(null)
@@ -275,6 +676,7 @@ export default function DividendAnalysis() {
     setError(null)
     const params = new URLSearchParams()
     if (categories.length) params.set('category', categories.join(','))
+    if (subcategories.length) params.set('subcategory', subcategories.join(','))
     pf(`/api/dividend-analysis/data?${params}`)
       .then(r => r.json())
       .then(d => {
@@ -283,7 +685,7 @@ export default function DividendAnalysis() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [categories, selection, pf])
+  }, [categories, subcategories, selection, pf])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -315,7 +717,6 @@ export default function DividendAnalysis() {
       monthly_received: 'da-chart-monthly-received',
       total_divs_ticker: 'da-chart-total-divs-ticker',
       paid_for_itself: 'da-chart-paid-for-itself',
-      by_type: 'da-chart-by-type',
     }
 
     Object.entries(chartMap).forEach(([key, elId]) => {
@@ -419,31 +820,66 @@ export default function DividendAnalysis() {
               style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', minWidth: '140px', textAlign: 'left' }}
               onClick={() => setCatOpen(o => !o)}
             >
-              {categories.length === 0 ? 'All Holdings' : `${categories.length} selected`}
+              {categories.length === 0 && subcategories.length === 0
+                ? 'All Holdings'
+                : `${categories.length + subcategories.length} selected`}
               <span style={{ float: 'right', marginLeft: '0.5rem' }}>{catOpen ? '\u25B4' : '\u25BE'}</span>
             </button>
             {catOpen && (
               <div className="growth-cat-dropdown">
                 <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
-                  <input type="checkbox" checked={categories.length === 0} onChange={() => setCategories([])} />
+                  <input
+                    type="checkbox"
+                    checked={categories.length === 0 && subcategories.length === 0}
+                    onChange={() => { setCategories([]); setSubcategories([]) }}
+                  />
                   <span>All Holdings</span>
                 </label>
-                {data.categories.map(c => (
-                  <label key={c.id} className="growth-cat-option">
-                    <input
-                      type="checkbox"
-                      checked={categories.includes(String(c.id))}
-                      onChange={e => {
-                        if (e.target.checked) {
-                          setCategories(prev => [...prev, String(c.id)])
-                        } else {
-                          setCategories(prev => prev.filter(id => id !== String(c.id)))
-                        }
-                      }}
-                    />
-                    <span>{c.name}</span>
-                  </label>
-                ))}
+                {data.categories.map(c => {
+                  const catChecked = categories.includes(String(c.id))
+                  const subs = c.subcategories || []
+                  return (
+                    <React.Fragment key={c.id}>
+                      <label className="growth-cat-option">
+                        <input
+                          type="checkbox"
+                          checked={catChecked}
+                          onChange={e => {
+                            if (e.target.checked) {
+                              const subIds = subs.map(s => String(s.id))
+                              setCategories(prev => [...prev, String(c.id)])
+                              setSubcategories(prev => prev.filter(id => !subIds.includes(id)))
+                            } else {
+                              setCategories(prev => prev.filter(id => id !== String(c.id)))
+                            }
+                          }}
+                        />
+                        <span>{c.name}</span>
+                      </label>
+                      {subs.map(s => (
+                        <label
+                          key={s.id}
+                          className="growth-cat-option"
+                          style={{ paddingLeft: '1.4rem', opacity: catChecked ? 0.5 : 1 }}
+                        >
+                          <input
+                            type="checkbox"
+                            disabled={catChecked}
+                            checked={catChecked || subcategories.includes(String(s.id))}
+                            onChange={e => {
+                              if (e.target.checked) {
+                                setSubcategories(prev => [...prev, String(s.id)])
+                              } else {
+                                setSubcategories(prev => prev.filter(id => id !== String(s.id)))
+                              }
+                            }}
+                          />
+                          <span>{s.name}</span>
+                        </label>
+                      ))}
+                    </React.Fragment>
+                  )
+                })}
               </div>
             )}
           </div>
@@ -528,6 +964,7 @@ export default function DividendAnalysis() {
           <div className="da-chart-grid">
             {data.charts.annual_income && <div className="da-chart-panel"><div id="da-chart-annual-income" className="da-chart-div" /></div>}
             {data.charts.projected_monthly && <div className="da-chart-panel"><div id="da-chart-projected-monthly" className="da-chart-div" /></div>}
+            <DividendPipelineChart pipeline={data.dividend_pipeline} />
             {data.charts.monthly_received && <div className="da-chart-panel">
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.25rem' }}>
                 <button className="btn btn-sm" onClick={handleRecalcPayouts} disabled={recalcing}
@@ -540,7 +977,7 @@ export default function DividendAnalysis() {
             </div>}
             {data.charts.total_divs_ticker && <div className="da-chart-panel"><div id="da-chart-total-divs-ticker" className="da-chart-div" /></div>}
             {data.charts.paid_for_itself && <div className="da-chart-panel"><div id="da-chart-paid-for-itself" className="da-chart-div" /></div>}
-            {data.charts.by_type && <div className="da-chart-panel"><div id="da-chart-by-type" className="da-chart-div" style={{ height: '420px' }} /></div>}
+            <CategoryDividendsChart rows={data.rows} categories={data.categories || []} />
           </div>
 
           {/* Data table */}

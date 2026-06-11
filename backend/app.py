@@ -8539,13 +8539,26 @@ def list_holdings():
                         SELECT a2.profile_id FROM all_account_info a2
                         WHERE a2.ticker = a.ticker AND a2.profile_id IN ({placeholders})
                         ORDER BY a2.quantity DESC LIMIT 1
-                    ) LIMIT 1) as category
+                    ) LIMIT 1) as category,
+                   (SELECT tc3.subcategory_id FROM ticker_categories tc3
+                    WHERE tc3.ticker = a.ticker AND tc3.profile_id = (
+                        SELECT a3.profile_id FROM all_account_info a3
+                        WHERE a3.ticker = a.ticker AND a3.profile_id IN ({placeholders})
+                        ORDER BY a3.quantity DESC LIMIT 1
+                    ) LIMIT 1) as subcategory_id,
+                   (SELECT s4.name FROM ticker_categories tc4
+                    JOIN subcategories s4 ON tc4.subcategory_id = s4.id
+                    WHERE tc4.ticker = a.ticker AND tc4.profile_id = (
+                        SELECT a4.profile_id FROM all_account_info a4
+                        WHERE a4.ticker = a.ticker AND a4.profile_id IN ({placeholders})
+                        ORDER BY a4.quantity DESC LIMIT 1
+                    ) LIMIT 1) as subcategory
                FROM all_account_info a
                WHERE a.profile_id IN ({placeholders})
                GROUP BY a.ticker
                HAVING SUM(COALESCE(a.quantity, 0)) > 1e-9
                ORDER BY a.ticker""",
-            pids + pids,
+            pids + pids + pids + pids,
         ).fetchall()
     else:
         pid = pids[0]
@@ -8554,7 +8567,14 @@ def list_holdings():
                       (SELECT c.name FROM ticker_categories tc
                        JOIN categories c ON tc.category_id = c.id
                        WHERE tc.ticker = a.ticker AND tc.profile_id = a.profile_id
-                       LIMIT 1) AS category
+                       LIMIT 1) AS category,
+                      (SELECT tc.subcategory_id FROM ticker_categories tc
+                       WHERE tc.ticker = a.ticker AND tc.profile_id = a.profile_id
+                       LIMIT 1) AS subcategory_id,
+                      (SELECT s.name FROM ticker_categories tc
+                       JOIN subcategories s ON tc.subcategory_id = s.id
+                       WHERE tc.ticker = a.ticker AND tc.profile_id = a.profile_id
+                       LIMIT 1) AS subcategory
                FROM all_account_info a
                WHERE a.profile_id = ?
                  AND COALESCE(a.quantity, 0) > 1e-9
@@ -13813,6 +13833,41 @@ _CLASSIFICATION_NAMES = {
 }
 
 
+def _attach_subcategories(conn, profile_ids, categories):
+    """Add a 'subcategories' list to each category dict (for filter dropdowns)."""
+    if not categories:
+        return categories
+    ph = ",".join("?" * len(profile_ids))
+    rows = conn.execute(
+        f"SELECT id, category_id, name FROM subcategories WHERE profile_id IN ({ph}) ORDER BY sort_order, name",
+        list(profile_ids),
+    ).fetchall()
+    subs_by_cat = {}
+    for s in rows:
+        subs_by_cat.setdefault(s["category_id"], []).append({"id": s["id"], "name": s["name"]})
+    for c in categories:
+        c["subcategories"] = subs_by_cat.get(c["id"], [])
+    return categories
+
+
+def _parse_subcategory_ids(value):
+    """Parse a comma-separated subcategory id query param into a list of ints."""
+    return [int(s) for s in str(value or "").split(",") if s.strip().isdigit()]
+
+
+def _subcategory_ticker_set(conn, profile_ids, sub_ids):
+    """Tickers assigned to any of the given subcategory ids."""
+    if not sub_ids:
+        return set()
+    ph = ",".join("?" * len(profile_ids))
+    sph = ",".join("?" * len(sub_ids))
+    rows = conn.execute(
+        f"SELECT DISTINCT ticker FROM ticker_categories WHERE profile_id IN ({ph}) AND subcategory_id IN ({sph})",
+        list(profile_ids) + list(sub_ids),
+    ).fetchall()
+    return {r["ticker"] for r in rows}
+
+
 @app.route("/api/categories/data", methods=["GET"])
 def categories_data():
     """Return categories with assigned tickers, unallocated tickers, and total value."""
@@ -13899,9 +13954,21 @@ def categories_data():
 
     # Fetch ticker-category assignments
     assignments = conn.execute(
-        "SELECT ticker, category_id FROM ticker_categories WHERE profile_id = ?",
+        "SELECT ticker, category_id, subcategory_id FROM ticker_categories WHERE profile_id = ?",
         (profile_id,),
     ).fetchall()
+    # Fetch subcategories (second tier within a category)
+    subcat_rows = conn.execute(
+        "SELECT id, category_id, name, sort_order FROM subcategories WHERE profile_id = ? ORDER BY sort_order, name",
+        (profile_id,),
+    ).fetchall()
+    subcats_by_category = {}
+    for s in subcat_rows:
+        subcats_by_category.setdefault(s["category_id"], []).append({
+            "id": s["id"],
+            "name": s["name"],
+            "sort_order": s["sort_order"],
+        })
     # Build response
     holding_map = {h["ticker"]: h for h in all_holdings}
     categories = []
@@ -13933,6 +14000,7 @@ def categories_data():
                         "nav_erosion_scope": h["nav_erosion_scope"] or "auto",
                         "nav_risk": h_nav_risk,
                         "gain_or_loss_percentage": float(h["gain_or_loss_percentage"] or 0),
+                        "subcategory_id": a["subcategory_id"],
                     })
                     assigned_tickers.add(t)
         cat_value = sum(t["current_value"] for t in cat_tickers)
@@ -13957,6 +14025,7 @@ def categories_data():
             "name": cat["name"],
             "target_pct": cat["target_pct"],
             "sort_order": cat["sort_order"],
+            "subcategories": subcats_by_category.get(cat["id"], []),
             "tickers": sorted(cat_tickers, key=lambda x: x["ticker"]),
             "actual_value": cat_value,
             "actual_pct": (cat_value / total_value * 100) if total_value else 0,
@@ -14189,6 +14258,10 @@ def delete_category(cat_id):
         (cat_id, profile_id),
     )
     conn.execute(
+        "DELETE FROM subcategories WHERE category_id = ? AND profile_id = ?",
+        (cat_id, profile_id),
+    )
+    conn.execute(
         "DELETE FROM categories WHERE id = ? AND profile_id = ?",
         (cat_id, profile_id),
     )
@@ -14202,18 +14275,28 @@ def assign_tickers():
     profile_id = get_profile_id()
     data = request.get_json()
     category_id = data.get("category_id")
+    subcategory_id = data.get("subcategory_id")
     tickers = data.get("tickers", [])
     if not category_id or not tickers:
         return jsonify({"error": "category_id and tickers required"}), 400
     conn = get_connection()
+    # Validate the subcategory belongs to this category, if provided
+    if subcategory_id is not None:
+        owner = conn.execute(
+            "SELECT category_id FROM subcategories WHERE id = ? AND profile_id = ?",
+            (subcategory_id, profile_id),
+        ).fetchone()
+        if not owner or owner["category_id"] != category_id:
+            conn.close()
+            return jsonify({"error": "Sub-category does not belong to that category"}), 400
     for t in tickers:
         conn.execute(
             "DELETE FROM ticker_categories WHERE ticker = ? AND profile_id = ?",
             (t, profile_id),
         )
         conn.execute(
-            "INSERT INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
-            (t, category_id, profile_id),
+            "INSERT INTO ticker_categories (ticker, category_id, subcategory_id, profile_id) VALUES (?, ?, ?, ?)",
+            (t, category_id, subcategory_id, profile_id),
         )
     conn.commit()
     conn.close()
@@ -14254,6 +14337,78 @@ def reorder_categories():
     return jsonify({"message": "Reordered"})
 
 
+@app.route("/api/categories/<int:cat_id>/subcategories", methods=["POST"])
+def create_subcategory(cat_id):
+    profile_id = get_profile_id()
+    data = request.get_json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    conn = get_connection()
+    # Ensure the parent category exists for this profile
+    parent = conn.execute(
+        "SELECT id FROM categories WHERE id = ? AND profile_id = ?",
+        (cat_id, profile_id),
+    ).fetchone()
+    if not parent:
+        conn.close()
+        return jsonify({"error": "Category not found"}), 404
+    max_order = conn.execute(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 as n FROM subcategories WHERE category_id = ? AND profile_id = ?",
+        (cat_id, profile_id),
+    ).fetchone()["n"]
+    try:
+        conn.execute(
+            "INSERT INTO subcategories (category_id, name, profile_id, sort_order) VALUES (?, ?, ?, ?)",
+            (cat_id, name, profile_id, max_order),
+        )
+        conn.commit()
+    except Exception:
+        conn.close()
+        return jsonify({"error": f"Sub-category '{name}' already exists in this category"}), 409
+    conn.close()
+    return jsonify({"message": f"Sub-category '{name}' created"})
+
+
+@app.route("/api/subcategories/<int:sub_id>", methods=["PUT"])
+def update_subcategory(sub_id):
+    profile_id = get_profile_id()
+    data = request.get_json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE subcategories SET name = ? WHERE id = ? AND profile_id = ?",
+            (name, sub_id, profile_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.close()
+        return jsonify({"error": f"Sub-category '{name}' already exists in this category"}), 409
+    conn.close()
+    return jsonify({"message": "Sub-category updated"})
+
+
+@app.route("/api/subcategories/<int:sub_id>", methods=["DELETE"])
+def delete_subcategory(sub_id):
+    profile_id = get_profile_id()
+    conn = get_connection()
+    # Tickers in this sub-category fall back to their parent category (unclassified within it)
+    conn.execute(
+        "UPDATE ticker_categories SET subcategory_id = NULL WHERE subcategory_id = ? AND profile_id = ?",
+        (sub_id, profile_id),
+    )
+    conn.execute(
+        "DELETE FROM subcategories WHERE id = ? AND profile_id = ?",
+        (sub_id, profile_id),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Sub-category deleted"})
+
+
 # ── Dividend Analysis ──────────────────────────────────────────────────────────
 
 @app.route("/api/dividend-analysis/data", methods=["GET"])
@@ -14283,16 +14438,28 @@ def dividend_analysis_data():
     profile_id = get_profile_id()
     conn = get_connection()
 
-    # Categories for filter dropdown
+    # Categories (with sub-categories) for the filter dropdown
     cats = conn.execute(
         "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
         (profile_id,),
     ).fetchall()
-    categories = [{"id": c["id"], "name": c["name"]} for c in cats]
+    subcat_rows = conn.execute(
+        "SELECT id, category_id, name FROM subcategories WHERE profile_id = ? ORDER BY sort_order, name",
+        (profile_id,),
+    ).fetchall()
+    subs_by_cat = {}
+    for s in subcat_rows:
+        subs_by_cat.setdefault(s["category_id"], []).append({"id": s["id"], "name": s["name"]})
+    categories = [
+        {"id": c["id"], "name": c["name"], "subcategories": subs_by_cat.get(c["id"], [])}
+        for c in cats
+    ]
 
-    # Category filter
+    # Category / sub-category filter params
     cat_param = request.args.get("category", "").strip()
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
+    sub_param = request.args.get("subcategory", "").strip()
+    sub_ids = [int(s) for s in sub_param.split(",") if s.strip().isdigit()] if sub_param else []
 
     # Load holdings
     rows = conn.execute(
@@ -14319,13 +14486,19 @@ def dividend_analysis_data():
     # Enrich with category names
     try:
         cat_map_rows = conn.execute(
-            "SELECT tc.ticker, c.name AS category_name "
+            "SELECT tc.ticker, c.name AS category_name, "
+            "       tc.subcategory_id, s.name AS subcategory_name "
             "FROM ticker_categories tc "
             "JOIN categories c ON c.id = tc.category_id "
+            "LEFT JOIN subcategories s ON s.id = tc.subcategory_id "
             "WHERE tc.profile_id = ?", (profile_id,)
         ).fetchall()
         cat_map = pd.DataFrame([dict(r) for r in cat_map_rows])
         if not cat_map.empty:
+            # A ticker may be assigned to multiple categories; keep one row per
+            # ticker so the merge doesn't duplicate holdings (which would also
+            # produce duplicate React keys in the table).
+            cat_map = cat_map.drop_duplicates(subset="ticker", keep="first")
             df = df.merge(cat_map, on="ticker", how="left")
         else:
             df["category_name"] = None
@@ -14338,12 +14511,25 @@ def dividend_analysis_data():
             lambda c: _CLASSIFICATION_NAMES.get(str(c).strip(), str(c).strip()) if pd.notna(c) else "Other"
         )
     df["category_name"] = df["category_name"].fillna("Other")
+    if "subcategory_id" not in df.columns:
+        df["subcategory_id"] = None
+    if "subcategory_name" not in df.columns:
+        df["subcategory_name"] = None
 
-    # Apply category filter
-    if cat_ids:
-        cat_names = [c["name"] for c in categories if str(c["id"]) in cat_ids]
-        if cat_names:
-            df = df[df["category_name"].isin(cat_names)]
+    # Apply category / sub-category filter
+    if cat_ids or sub_ids:
+        keep = set()
+        if cat_ids:
+            cat_names = [c["name"] for c in categories if str(c["id"]) in cat_ids]
+            if cat_names:
+                keep |= set(df[df["category_name"].isin(cat_names)]["ticker"])
+        if sub_ids:
+            sub_tickers = conn.execute(
+                f"SELECT ticker FROM ticker_categories WHERE profile_id = ? AND subcategory_id IN ({','.join('?' * len(sub_ids))})",
+                [profile_id] + sub_ids,
+            ).fetchall()
+            keep |= {r["ticker"] for r in sub_tickers}
+        df = df[df["ticker"].isin(keep)]
 
     if df.empty:
         conn.close()
@@ -14401,6 +14587,8 @@ def dividend_analysis_data():
             "ticker": row["ticker"],
             "description": row["description"],
             "category_name": row["category_name"],
+            "subcategory_id": _clean(row.get("subcategory_id")),
+            "subcategory_name": row.get("subcategory_name") or None,
             "div_frequency": row.get("div_frequency") or None,
             "ex_div_date": row.get("ex_div_date"),
             "div_pay_date": row.get("div_pay_date"),
@@ -14584,6 +14772,176 @@ def dividend_analysis_data():
         margin=dict(t=60, b=60, l=60, r=20), **dark_layout)
     charts["projected_monthly"] = json.dumps(fig2, cls=plotly.utils.PlotlyJSONEncoder)
 
+    # Dividend Pipeline: split the forward projection by certainty/status.
+    # - Received: recorded cash payments (or aggregate monthly payout fallback).
+    # - Earned, Not Paid: ex-date has passed, pay date is in the window, no recorded payment.
+    # - Declared: ex/pay dates are known but ex-date is still upcoming.
+    # - Estimated: remaining projected income without a current declaration.
+    def _month_key(d):
+        return f"{d.year:04d}-{d.month:02d}"
+
+    def _month_end(d):
+        nxt = _add_m(d.replace(day=1), 1)
+        return nxt - datetime.timedelta(days=1)
+
+    def _payments_per_year(freq):
+        f = str(freq or "").strip().upper()
+        if f in ("D", "DAILY"):
+            return 252
+        if f in ("W", "52", "WEEKLY"):
+            return 52
+        if f in ("M", "MONTHLY"):
+            return 12
+        if f in ("Q", "QUARTERLY"):
+            return 4
+        if f in ("SA", "S", "SEMI-ANN", "SEMIANNUAL", "SEMI-ANNUAL"):
+            return 2
+        if f in ("A", "ANNUAL"):
+            return 1
+        return 12
+
+    pipeline_months = future_months
+    pipeline_keys = [_month_key(m) for m in pipeline_months]
+    pipeline_labels = [m.strftime("%b") for m in pipeline_months]
+    pipeline_totals = {
+        k: {"received": 0.0, "earned_not_paid": 0.0, "declared": 0.0, "estimated": 0.0}
+        for k in pipeline_keys
+    }
+    pipeline_details = {k: [] for k in pipeline_keys}
+    pipeline_start = pipeline_months[0]
+    pipeline_end = _month_end(pipeline_months[-1])
+    non_actual_sources = {"refresh_estimate", "projection", "estimate", "estimated"}
+    actual_payment_keys = set()
+
+    try:
+        pay_rows = conn.execute(
+            "SELECT ticker, payment_date, amount, source, notes FROM dividend_payments "
+            "WHERE profile_id = ? AND payment_date >= ? AND payment_date <= ? "
+            "ORDER BY payment_date, ticker",
+            (profile_id, pipeline_start.isoformat(), pipeline_end.isoformat()),
+        ).fetchall()
+        for r in pay_rows:
+            pay_dt = _date_from_value(r["payment_date"])
+            if not pay_dt:
+                continue
+            key = _month_key(pay_dt)
+            if key not in pipeline_totals:
+                continue
+            amount = _safe_float(r["amount"])
+            source = str(r["source"] or "").strip()
+            bucket = "estimated" if source.lower() in non_actual_sources else "received"
+            pipeline_totals[key][bucket] += amount
+            if bucket == "received":
+                actual_payment_keys.add((str(r["ticker"]).upper(), pay_dt.isoformat()))
+            pipeline_details[key].append({
+                "ticker": str(r["ticker"]).upper(),
+                "status": "Received" if bucket == "received" else "Unconfirmed Estimate",
+                "ex_date": None,
+                "pay_date": pay_dt.isoformat(),
+                "amount": round(amount, 2),
+                "source": source or "dividend_payments",
+            })
+
+        # Fallback for profiles that track received cash only in monthly_payouts.
+        if not any(v["received"] > 0 for v in pipeline_totals.values()):
+            mp_future = conn.execute(
+                "SELECT year, month, amount FROM monthly_payouts "
+                "WHERE (year * 100 + month) >= ? AND (year * 100 + month) <= ? AND profile_id = ?",
+                (
+                    pipeline_start.year * 100 + pipeline_start.month,
+                    today_d.year * 100 + today_d.month,
+                    profile_id,
+                ),
+            ).fetchall()
+            for r in mp_future:
+                key = f"{int(r['year']):04d}-{int(r['month']):02d}"
+                if key not in pipeline_totals:
+                    continue
+                amount = _safe_float(r["amount"])
+                pipeline_totals[key]["received"] += amount
+                pipeline_details[key].append({
+                    "ticker": "Portfolio",
+                    "status": "Received",
+                    "ex_date": None,
+                    "pay_date": key,
+                    "amount": round(amount, 2),
+                    "source": "monthly_payouts",
+                })
+
+        for _, row in df.iterrows():
+            ticker = str(row["ticker"]).upper()
+            pay_dt = _date_from_value(row.get("div_pay_date"))
+            ex_dt = _date_from_value(row.get("ex_div_date"))
+            if not pay_dt or pay_dt < pipeline_start or pay_dt > pipeline_end:
+                continue
+            if (ticker, pay_dt.isoformat()) in actual_payment_keys:
+                continue
+
+            div_per_share = _safe_float(row.get("div"))
+            quantity = _safe_float(row.get("quantity"))
+            annual = _safe_float(row.get("estim_payment_per_year"))
+            amount = div_per_share * quantity if div_per_share > 0 and quantity > 0 else 0.0
+            if amount <= 0 and annual > 0:
+                amount = annual / _payments_per_year(row.get("div_frequency"))
+            if amount <= 0:
+                continue
+
+            key = _month_key(pay_dt)
+            if key not in pipeline_totals:
+                continue
+            if ex_dt and ex_dt <= today_d:
+                bucket = "earned_not_paid"
+                status = "Ex-Date Passed"
+            else:
+                bucket = "declared"
+                status = "Announced, Ex-Date Upcoming"
+            pipeline_totals[key][bucket] += amount
+            pipeline_details[key].append({
+                "ticker": ticker,
+                "status": status,
+                "ex_date": ex_dt.isoformat() if ex_dt else None,
+                "pay_date": pay_dt.isoformat(),
+                "amount": round(amount, 2),
+                "source": "holding schedule",
+            })
+
+        for m in pipeline_months:
+            key = _month_key(m)
+            known = (
+                pipeline_totals[key]["received"]
+                + pipeline_totals[key]["earned_not_paid"]
+                + pipeline_totals[key]["declared"]
+                + pipeline_totals[key]["estimated"]
+            )
+            projected = float(proj_key.get(m, 0.0) or 0.0)
+            remainder = max(projected - known, 0.0)
+            pipeline_totals[key]["estimated"] += remainder
+            if remainder > 0:
+                pipeline_details[key].append({
+                    "ticker": "Projected remainder",
+                    "status": "Unconfirmed Estimate",
+                    "ex_date": None,
+                    "pay_date": key,
+                    "amount": round(remainder, 2),
+                    "source": "monthly projection",
+                })
+
+        for key in pipeline_details:
+            pipeline_details[key].sort(key=lambda d: (d.get("pay_date") or "", d.get("ticker") or ""))
+    except Exception:
+        pass
+
+    dividend_pipeline = {
+        "months": pipeline_keys,
+        "labels": pipeline_labels,
+        "totals": {
+            k: {name: round(val, 2) for name, val in buckets.items()}
+            for k, buckets in pipeline_totals.items()
+        },
+        "details": pipeline_details,
+        "as_of": today_d.isoformat(),
+    }
+
     # Chart 3: Monthly Dividends Received (past 12 months)
     # Uses actual monthly_payouts where available, fills gaps with estimates
     # from monthly_payout_tickers schedule + approx_monthly_income.
@@ -14699,6 +15057,7 @@ def dividend_analysis_data():
         rows=table_rows,
         totals=totals,
         charts=charts,
+        dividend_pipeline=dividend_pipeline,
         grade=grade_info,
         categories=categories,
     )
@@ -15067,6 +15426,7 @@ def drip_projection():
     drip_default = data.get("drip_default", None)  # fallback pct from "Set All"
     investment_overrides = data.get("investment_overrides", {})  # {ticker: dollar_amount}
     filter_categories = data.get("categories", [])   # list of category names
+    filter_sub_ids = [int(s) for s in data.get("subcategories", []) if str(s).isdigit()]  # sub-category ids
 
     # Load saved DRIP defaults
     saved_drip = {}
@@ -15100,6 +15460,9 @@ def drip_projection():
         ).fetchall()
         cat_map = pd.DataFrame([dict(r) for r in cat_map_rows])
         if not cat_map.empty:
+            # A ticker may belong to multiple categories; keep one row per ticker
+            # so the merge doesn't duplicate holdings.
+            cat_map = cat_map.drop_duplicates(subset="ticker", keep="first")
             df = df.merge(cat_map, on="ticker", how="left")
         else:
             df["category_name"] = None
@@ -15119,11 +15482,13 @@ def drip_projection():
         (profile_id,),
     ).fetchall()
     categories_list = [{"id": c["id"], "name": c["name"]} for c in cats]
+    _attach_subcategories(conn, [profile_id], categories_list)
+    sub_tickers = _subcategory_ticker_set(conn, [profile_id], filter_sub_ids)
     conn.close()
 
-    # Apply category filter
-    if filter_categories:
-        df = df[df["category_name"].isin(filter_categories)]
+    # Apply category / sub-category filter
+    if filter_categories or filter_sub_ids:
+        df = df[df["category_name"].isin(filter_categories) | df["ticker"].isin(sub_tickers)]
     if df.empty:
         return jsonify(holdings=[], yearly=[], totals={}, categories=categories_list)
 
@@ -15936,9 +16301,12 @@ def total_return_summary():
         profile_ids,
     ).fetchall()
     categories = [{"id": c["id"], "name": c["name"]} for c in cats]
+    _attach_subcategories(conn, profile_ids, categories)
 
     cat_param = request.args.get("category", "").strip()
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
+    sub_ids = _parse_subcategory_ids(request.args.get("subcategory"))
+    sub_tickers = _subcategory_ticker_set(conn, profile_ids, sub_ids)
 
     rows = conn.execute(
         f"""SELECT ticker,
@@ -16008,11 +16376,10 @@ def total_return_summary():
     df["category_name"] = df["category_name"].fillna("Other")
     conn.close()
 
-    # Apply category filter
-    if cat_ids:
+    # Apply category / sub-category filter
+    if cat_ids or sub_ids:
         cat_names = [c["name"] for c in categories if str(c["id"]) in cat_ids]
-        if cat_names:
-            df = df[df["category_name"].isin(cat_names)]
+        df = df[df["category_name"].isin(cat_names) | df["ticker"].isin(sub_tickers)]
 
     if df.empty:
         return jsonify({"rows": [], "totals": {}, "scatter": None, "categories": categories})
@@ -16131,6 +16498,8 @@ def total_return_charts():
 
     cat_param = request.args.get("category", "").strip()
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
+    sub_ids = _parse_subcategory_ids(request.args.get("subcategory"))
+    sub_tickers = _subcategory_ticker_set(conn, [profile_id], sub_ids)
 
     rows = conn.execute(
         "SELECT ticker, description, classification_type, purchase_value "
@@ -16152,6 +16521,9 @@ def total_return_charts():
         ).fetchall()
         cat_map = pd.DataFrame([dict(r) for r in cat_map_rows])
         if not cat_map.empty:
+            # A ticker may belong to multiple categories; keep one row per ticker
+            # so the merge doesn't duplicate holdings.
+            cat_map = cat_map.drop_duplicates(subset="ticker", keep="first")
             df = df.merge(cat_map, on="ticker", how="left")
         else:
             df["category_name"] = None
@@ -16171,10 +16543,9 @@ def total_return_charts():
     ).fetchall()
     conn.close()
 
-    if cat_ids:
+    if cat_ids or sub_ids:
         cat_names = [c["name"] for c in cats if str(c["id"]) in cat_ids]
-        if cat_names:
-            df = df[df["category_name"].isin(cat_names)]
+        df = df[df["category_name"].isin(cat_names) | df["ticker"].isin(sub_tickers)]
 
     if df.empty:
         return jsonify({"error": "No holdings in selected categories"}), 404
@@ -16380,12 +16751,19 @@ def total_return_compare():
 
         if isinstance(raw.columns, pd.MultiIndex):
             close = raw["Close"]
+            adj_close = raw["Adj Close"] if "Adj Close" in raw.columns.get_level_values(0) else None
             divs = raw["Dividends"].fillna(0) if "Dividends" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
+            cap_gains = raw["Capital Gains"].fillna(0) if "Capital Gains" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
         else:
             close = raw[["Close"]]
             close.columns = [all_tickers[0]]
+            adj_close = raw[["Adj Close"]] if "Adj Close" in raw.columns else None
+            if adj_close is not None:
+                adj_close.columns = [all_tickers[0]]
             divs = raw[["Dividends"]].fillna(0) if "Dividends" in raw.columns else pd.DataFrame(0, index=close.index, columns=[all_tickers[0]])
             divs.columns = [all_tickers[0]]
+            cap_gains = raw[["Capital Gains"]].fillna(0) if "Capital Gains" in raw.columns else pd.DataFrame(0, index=close.index, columns=[all_tickers[0]])
+            cap_gains.columns = [all_tickers[0]]
 
         dates = [d.strftime("%Y-%m-%d") for d in close.index]
 
@@ -16414,10 +16792,18 @@ def total_return_compare():
             price_norm = (c / base * 100)
             price_series[t] = [_clean(v) for v in price_norm]
 
-            # Total return: price + cumulative dividends
-            d = divs[t].reindex(close.index).fillna(0) if t in divs.columns else pd.Series(0, index=close.index)
-            cum_div = d.cumsum()
-            total_norm = ((c + cum_div) / base * 100)
+            # Total return: prefer adjusted close because it captures reinvested
+            # dividends plus mutual-fund capital-gain distributions (e.g. FKSAX).
+            if adj_close is not None and t in adj_close.columns:
+                ac = adj_close[t].dropna()
+                if len(ac) >= 2 and float(ac.iloc[0]) != 0:
+                    total_norm = ac / float(ac.iloc[0]) * 100
+                else:
+                    total_norm = price_norm
+            else:
+                d = divs[t].reindex(close.index).fillna(0) if t in divs.columns else pd.Series(0, index=close.index)
+                cg = cap_gains[t].reindex(close.index).fillna(0) if t in cap_gains.columns else pd.Series(0, index=close.index)
+                total_norm = ((c + (d + cg).cumsum()) / base * 100)
             total_series[t] = [_clean(v) for v in total_norm]
 
         return jsonify({
@@ -16455,9 +16841,12 @@ def gains_losses_summary():
         holding_profile_ids,
     ).fetchall()
     categories = [{"id": c["id"], "name": c["name"]} for c in cats]
+    _attach_subcategories(conn, holding_profile_ids, categories)
 
     cat_param = request.args.get("category", "").strip()
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
+    sub_ids = _parse_subcategory_ids(request.args.get("subcategory"))
+    sub_tickers = _subcategory_ticker_set(conn, holding_profile_ids, sub_ids)
 
     # ── Unrealized (current holdings) ──
     rows = conn.execute(
@@ -16517,10 +16906,9 @@ def gains_losses_summary():
             )
         udf["category_name"] = udf["category_name"].fillna("Other")
 
-        if cat_ids:
+        if cat_ids or sub_ids:
             cat_names = [c["name"] for c in categories if str(c["id"]) in cat_ids]
-            if cat_names:
-                udf = udf[udf["category_name"].isin(cat_names)]
+            udf = udf[udf["category_name"].isin(cat_names) | udf["ticker"].isin(sub_tickers)]
 
     # ── Realized (sold positions) ──
     # 1) Legacy watchlist_sold table
@@ -16768,6 +17156,8 @@ def gains_losses_chart():
 
     cat_param = request.args.get("category", "").strip()
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
+    sub_ids = _parse_subcategory_ids(request.args.get("subcategory"))
+    sub_tickers = _subcategory_ticker_set(conn, holding_profile_ids, sub_ids)
 
     rows = conn.execute(
         f"""SELECT ticker,
@@ -16791,8 +17181,8 @@ def gains_losses_chart():
         conn.close()
         return jsonify({"error": "No portfolio data"}), 404
 
-    # Category filter
-    if cat_ids:
+    # Category / sub-category filter
+    if cat_ids or sub_ids:
         try:
             cat_map_rows = conn.execute(
                 "SELECT tc.ticker, c.name AS category_name "
@@ -16818,8 +17208,7 @@ def gains_losses_chart():
                 holding_profile_ids,
             ).fetchall()
             cat_names = [c["name"] for c in cats if str(c["id"]) in cat_ids]
-            if cat_names:
-                hdf = hdf[hdf["category_name"].isin(cat_names)]
+            hdf = hdf[hdf["category_name"].isin(cat_names) | hdf["ticker"].isin(sub_tickers)]
         except Exception:
             pass
 
@@ -17367,23 +17756,33 @@ def growth_data():
     period = request.args.get("period", "1y")
     benchmark = request.args.get("benchmark", "SPY").upper().strip()
     category_id = request.args.get("category")
+    subcategory_id = request.args.get("subcategory")
 
     if period not in ("1y", "5y", "max"):
         period = "1y"
 
     conn = get_connection()
 
-    # Fetch holdings (optionally filtered by category)
-    if category_id:
-        cat_ids = [int(c) for c in category_id.split(",") if c.strip().isdigit()]
-        placeholders = ",".join("?" * len(cat_ids))
+    # Fetch holdings (optionally filtered by category and/or sub-category).
+    # A selected category includes all of its holdings; a selected sub-category
+    # includes only its holdings. The two selections are OR-combined.
+    cat_ids = [int(c) for c in category_id.split(",") if c.strip().isdigit()] if category_id else []
+    sub_ids = [int(s) for s in subcategory_id.split(",") if s.strip().isdigit()] if subcategory_id else []
+    if cat_ids or sub_ids:
+        conds, qparams = [], [profile_id]
+        if cat_ids:
+            conds.append(f"tc.category_id IN ({','.join('?' * len(cat_ids))})")
+            qparams += cat_ids
+        if sub_ids:
+            conds.append(f"tc.subcategory_id IN ({','.join('?' * len(sub_ids))})")
+            qparams += sub_ids
         rows = conn.execute(
             f"""SELECT DISTINCT a.ticker, a.quantity, a.current_value
                FROM all_account_info a
                JOIN ticker_categories tc ON a.ticker = tc.ticker AND a.profile_id = tc.profile_id
-               WHERE a.profile_id = ? AND tc.category_id IN ({placeholders})
+               WHERE a.profile_id = ? AND ({' OR '.join(conds)})
                  AND a.purchase_value > 0 AND a.quantity > 0""",
-            [profile_id] + cat_ids,
+            qparams,
         ).fetchall()
     else:
         rows = conn.execute(
@@ -17393,14 +17792,24 @@ def growth_data():
             (profile_id,),
         ).fetchall()
 
-    # Fetch categories for filter dropdown
+    # Fetch categories (with sub-categories) for the filter dropdown
     cats = conn.execute(
         "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
         (profile_id,),
     ).fetchall()
+    subcat_rows = conn.execute(
+        "SELECT id, category_id, name FROM subcategories WHERE profile_id = ? ORDER BY sort_order, name",
+        (profile_id,),
+    ).fetchall()
     conn.close()
 
-    categories = [{"id": c["id"], "name": c["name"]} for c in cats]
+    subs_by_cat = {}
+    for s in subcat_rows:
+        subs_by_cat.setdefault(s["category_id"], []).append({"id": s["id"], "name": s["name"]})
+    categories = [
+        {"id": c["id"], "name": c["name"], "subcategories": subs_by_cat.get(c["id"], [])}
+        for c in cats
+    ]
 
     if not rows:
         return jsonify({"error": "No holdings found", "categories": categories}), 400
@@ -20642,6 +21051,141 @@ def nav_erosion_data():
 
 
 # ── NAV Erosion Portfolio Screener ─────────────────────────────────────────────
+
+def _nav_erosion_portfolio_profile_scope(conn):
+    agg_id = _request_aggregate_id()
+    if agg_id is not None:
+        pids = _get_aggregate_member_profile_ids(conn, agg_id)
+        return pids or [1], "aggregate"
+
+    profile_id = get_profile_id()
+    if profile_id == 1:
+        pids = _get_owner_source_profile_ids(conn)
+        return pids or [1], "owner"
+    return [profile_id], "profile"
+
+
+# Reserved name for the auto-saved backtest mirroring the live portfolio.
+NAV_EROSION_CURRENT_NAME = "My Current Portfolio"
+
+
+def _nav_erosion_current_rows(conn):
+    """Build NAV erosion screener rows from the currently selected portfolio.
+
+    Returns (rows, scope, total_count) where rows is a list of
+    {ticker, amount, reinvest_pct} dicts (capped at 80).
+    """
+    profile_ids, scope = _nav_erosion_portfolio_profile_scope(conn)
+    placeholders = ",".join("?" * len(profile_ids))
+    basis_expr = _basis_total_expr("")
+    value_expr = (
+        "COALESCE(NULLIF(current_value, 0), "
+        "CASE WHEN COALESCE(quantity, 0) > 0 AND COALESCE(current_price, 0) > 0 "
+        "THEN quantity * current_price END, "
+        f"NULLIF({basis_expr}, 0), 0)"
+    )
+    rows = conn.execute(
+        f"""SELECT ticker,
+                   SUM({value_expr}) AS amount,
+                   SUM(CASE WHEN UPPER(COALESCE(reinvest, '')) = 'Y'
+                            THEN {value_expr} ELSE 0 END) AS reinvest_amount
+              FROM all_account_info
+             WHERE profile_id IN ({placeholders})
+               AND COALESCE(quantity, 0) > 0
+               AND ticker IS NOT NULL
+               AND TRIM(ticker) != ''
+          GROUP BY UPPER(TRIM(ticker))
+            HAVING amount > 0
+          ORDER BY amount DESC""",
+        profile_ids,
+    ).fetchall()
+
+    total_count = len(rows)
+    out = []
+    for r in rows[:80]:
+        amount = float(r["amount"] or 0)
+        reinvest_amount = float(r["reinvest_amount"] or 0)
+        out.append({
+            "ticker": str(r["ticker"] or "").strip().upper(),
+            "amount": round(amount, 2),
+            "reinvest_pct": round((reinvest_amount / amount * 100.0) if amount > 0 else 0.0, 1),
+        })
+    return out, scope, total_count
+
+
+@app.route("/api/nav-erosion-portfolio/current")
+def nav_erosion_portfolio_current():
+    """Return NAV erosion screener rows for the currently selected portfolio."""
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    out, scope, total_count = _nav_erosion_current_rows(conn)
+    conn.close()
+    return jsonify(
+        rows=out,
+        source=scope,
+        total_count=total_count,
+        truncated=total_count > 80,
+    )
+
+
+@app.route("/api/nav-erosion-portfolio/save-current", methods=["POST"])
+def nav_erosion_portfolio_save_current():
+    """Upsert the live portfolio into a single reserved saved backtest.
+
+    Keeps one always-fresh "My Current Portfolio" entry in the Saved Backtests
+    list so the user can run it on demand. Does NOT run the backtest. Reuses the
+    reserved name so repeated saves refresh in place rather than duplicating.
+    """
+    import json as _json
+    data = request.get_json(force=True, silent=True) or {}
+    start = str(data.get("start", "") or "")
+    end = str(data.get("end", "") or "")
+
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    out, scope, total_count = _nav_erosion_current_rows(conn)
+
+    if not out:
+        conn.close()
+        return jsonify(rows=[], saved=False, source=scope, total_count=total_count)
+
+    cur = conn.cursor()
+    rows_json = _json.dumps(out)
+    cur.execute(
+        "SELECT id FROM nav_erosion_saved_backtests WHERE name = ?",
+        (NAV_EROSION_CURRENT_NAME,),
+    )
+    existing = cur.fetchone()
+    if existing:
+        saved_id = existing[0]
+        cur.execute(
+            "UPDATE nav_erosion_saved_backtests "
+            "SET start_date=?, end_date=?, rows_json=?, created_at=CURRENT_TIMESTAMP "
+            "WHERE id=?",
+            (start, end, rows_json, saved_id),
+        )
+    else:
+        cur.execute(
+            "INSERT INTO nav_erosion_saved_backtests (name, start_date, end_date, rows_json) "
+            "VALUES (?, ?, ?, ?)",
+            (NAV_EROSION_CURRENT_NAME, start, end, rows_json),
+        )
+        saved_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    return jsonify(
+        rows=out,
+        saved=True,
+        id=saved_id,
+        name=NAV_EROSION_CURRENT_NAME,
+        start=start,
+        end=end,
+        source=scope,
+        total_count=total_count,
+        truncated=total_count > 80,
+    )
+
 
 @app.route("/api/nav-erosion-portfolio/list", methods=["GET", "POST"])
 def nav_erosion_portfolio_list():
@@ -27951,17 +28495,20 @@ def income_targets_reset():
 
 # ── Reinvestment Impact ────────────────────────────────────────────────────────
 
-def _reinvest_resolve_category_tickers(conn, pids, cat_ids, categories):
-    """Resolve selected category ids to a ticker set (None == all holdings).
+def _reinvest_resolve_category_tickers(conn, pids, cat_ids, categories, sub_ids=None):
+    """Resolve selected category / sub-category ids to a ticker set (None == all holdings).
 
     Mirrors the resolution in dividend_history_data: includes tickers mapped via
-    ticker_categories and via classification_type aliases.
+    ticker_categories and via classification_type aliases. Selected sub-categories
+    contribute only their own tickers (OR-combined with whole categories).
     """
-    if not cat_ids:
+    sub_ids = sub_ids or []
+    if not cat_ids and not sub_ids:
         return None
+    tickers = _subcategory_ticker_set(conn, pids, sub_ids)
     cat_names = [c["name"] for c in categories if str(c["id"]) in cat_ids]
     if not cat_names:
-        return set()
+        return tickers
     placeholders = ",".join("?" * len(pids))
     rows = conn.execute(
         f"SELECT DISTINCT tc.ticker FROM ticker_categories tc "
@@ -27969,7 +28516,7 @@ def _reinvest_resolve_category_tickers(conn, pids, cat_ids, categories):
         f"WHERE tc.profile_id IN ({placeholders}) AND c.name IN ({','.join('?' * len(cat_names))})",
         pids + cat_names,
     ).fetchall()
-    tickers = {r["ticker"] for r in rows}
+    tickers |= {r["ticker"] for r in rows}
     rev = {}
     for ct_val, ct_name in _CLASSIFICATION_NAMES.items():
         rev.setdefault(ct_name, []).append(ct_val)
@@ -28004,6 +28551,7 @@ def reinvestment_impact_data():
     months_back = int(request.args.get("months_back", 60 if view == "monthly" else 12))
     cat_param = request.args.get("category", "").strip()
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
+    sub_ids = _parse_subcategory_ids(request.args.get("subcategory"))
     single_ticker = (request.args.get("ticker") or "").strip().upper() or None
 
     is_agg, pids = get_profile_filter()
@@ -28024,8 +28572,9 @@ def reinvestment_impact_data():
         (profile_id,),
     ).fetchall()
     categories = [{"id": c["id"], "name": c["name"]} for c in cats]
+    _attach_subcategories(conn, pids, categories)
 
-    filtered_tickers = _reinvest_resolve_category_tickers(conn, pids, cat_ids, categories)
+    filtered_tickers = _reinvest_resolve_category_tickers(conn, pids, cat_ids, categories, sub_ids)
 
     # ── Window cutoff ───────────────────────────────────────────────────────
     today = datetime.date.today()
@@ -28294,6 +28843,7 @@ def dividend_history_data():
     months_back = int(request.args.get("months_back", 60 if view == "monthly" else 12))
     cat_param = request.args.get("category", "").strip()
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
+    sub_ids = _parse_subcategory_ids(request.args.get("subcategory"))
 
     is_agg, pids = get_profile_filter()
     profile_id = pids[0]
@@ -28305,10 +28855,12 @@ def dividend_history_data():
         (profile_id,),
     ).fetchall()
     categories = [{"id": c["id"], "name": c["name"]} for c in cats]
+    _attach_subcategories(conn, pids, categories)
 
-    # Resolve category filter to ticker set
+    # Resolve category / sub-category filter to ticker set
     filtered_tickers = None
-    if cat_ids:
+    if cat_ids or sub_ids:
+        filtered_tickers = _subcategory_ticker_set(conn, pids, sub_ids)
         cat_names = [c["name"] for c in categories if str(c["id"]) in cat_ids]
         if cat_names:
             placeholders = ",".join("?" * len(pids))
@@ -28318,7 +28870,7 @@ def dividend_history_data():
                 f"WHERE tc.profile_id IN ({placeholders}) AND c.name IN ({','.join('?' * len(cat_names))})",
                 pids + cat_names,
             ).fetchall()
-            filtered_tickers = {r["ticker"] for r in cat_rows}
+            filtered_tickers |= {r["ticker"] for r in cat_rows}
             # Also include tickers mapped via classification_type
             _CLASSIFICATION_NAMES_REV = {}
             for ct_val, ct_name in _CLASSIFICATION_NAMES.items():

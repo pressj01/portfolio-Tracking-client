@@ -196,6 +196,7 @@ export default function ReinvestmentImpact() {
   const [view, setView] = useState('monthly')
   const [monthsBack, setMonthsBack] = useState(60)
   const [categories, setCategories] = useState([])  // selected category ids (strings)
+  const [subcategories, setSubcategories] = useState([])  // selected sub-category ids (strings)
   const [catOpen, setCatOpen] = useState(false)
   const [scopeTicker, setScopeTicker] = useState('')  // '' = whole portfolio
   const [decompCumulative, setDecompCumulative] = useState(false)  // attribution chart: per-period vs running total
@@ -206,7 +207,8 @@ export default function ReinvestmentImpact() {
   const [reinvestPct, setReinvestPct] = useState(100)
   const [monthlyContribution, setMonthlyContribution] = useState(0)
   const [projScopeTicker, setProjScopeTicker] = useState('')  // '' = whole portfolio
-  const [projCategories, setProjCategories] = useState([])  // selected category ids for projection
+  const [projCategories, setProjCategories] = useState([])  // selected category names for projection
+  const [projSubcats, setProjSubcats] = useState([])  // selected sub-category ids (strings) for projection
   const [projCatOpen, setProjCatOpen] = useState(false)
   const [allCategories, setAllCategories] = useState([])  // loaded independently for projection tab
 
@@ -296,6 +298,7 @@ export default function ReinvestmentImpact() {
     setError(null)
     const params = new URLSearchParams({ view, months_back: monthsBack })
     if (categories.length) params.set('category', categories.join(','))
+    if (subcategories.length) params.set('subcategory', subcategories.join(','))
     if (scopeTicker) params.set('ticker', scopeTicker)
     pf(`/api/reinvestment-impact/data?${params}`)
       .then(r => r.json())
@@ -306,7 +309,7 @@ export default function ReinvestmentImpact() {
       })
       .catch(e => { if (myId === reqIdRef.current) setError(e.message) })
       .finally(() => { if (myId === reqIdRef.current) setLoading(false) })
-  }, [view, monthsBack, categories, scopeTicker, selection, pf])
+  }, [view, monthsBack, categories, subcategories, scopeTicker, selection, pf])
 
   // ── Projection fetch (reuse Income Growth engine) ──────────────────────────
   // Fetches all three market scenarios at once so the income chart can switch
@@ -317,7 +320,9 @@ export default function ReinvestmentImpact() {
     setError(null)
     const scoped = holdings
       .filter(h => !projScopeTicker || h.ticker === projScopeTicker)
-      .filter(h => !projCategories.length || projCategories.includes(String(h.category)))
+      .filter(h => (!projCategories.length && !projSubcats.length)
+        || projCategories.includes(String(h.category))
+        || (h.subcategory_id != null && projSubcats.includes(String(h.subcategory_id))))
     const override = scoped.map(h => ({
       ticker: h.ticker,
       shares: h.quantity,
@@ -347,7 +352,7 @@ export default function ReinvestmentImpact() {
       })
       .catch(e => { if (myId === projReqIdRef.current) setError(e.message) })
       .finally(() => { if (myId === projReqIdRef.current) setLoading(false) })
-  }, [holdings, years, monthlyContribution, reinvestPct, projScopeTicker, projCategories, pf])
+  }, [holdings, years, monthlyContribution, reinvestPct, projScopeTicker, projCategories, projSubcats, pf])
 
   useEffect(() => {
     if (mode === 'historical') fetchHistorical()
@@ -577,28 +582,56 @@ export default function ReinvestmentImpact() {
                   style={{ padding: '0.35rem 0.75rem', fontSize: '0.85rem', minWidth: '140px', textAlign: 'left' }}
                   onClick={() => setCatOpen(o => !o)}
                 >
-                  {categories.length === 0 ? 'All Holdings' : `${categories.length} selected`}
+                  {categories.length === 0 && subcategories.length === 0
+                    ? 'All Holdings'
+                    : `${categories.length + subcategories.length} selected`}
                   <span style={{ float: 'right', marginLeft: '0.5rem' }}>{catOpen ? '▴' : '▾'}</span>
                 </button>
                 {catOpen && (
                   <div className="growth-cat-dropdown">
                     <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
-                      <input type="checkbox" checked={categories.length === 0} onChange={() => setCategories([])} />
+                      <input type="checkbox" checked={categories.length === 0 && subcategories.length === 0}
+                        onChange={() => { setCategories([]); setSubcategories([]) }} />
                       <span>All Holdings</span>
                     </label>
-                    {categoryOptions.map(c => (
-                      <label key={c.id} className="growth-cat-option">
-                        <input
-                          type="checkbox"
-                          checked={categories.includes(String(c.id))}
-                          onChange={e => {
-                            if (e.target.checked) setCategories(prev => [...prev, String(c.id)])
-                            else setCategories(prev => prev.filter(id => id !== String(c.id)))
-                          }}
-                        />
-                        <span>{c.name}</span>
-                      </label>
-                    ))}
+                    {categoryOptions.map(c => {
+                      const catChecked = categories.includes(String(c.id))
+                      const subs = c.subcategories || []
+                      return (
+                        <React.Fragment key={c.id}>
+                          <label className="growth-cat-option">
+                            <input
+                              type="checkbox"
+                              checked={catChecked}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  // Selecting the whole category supersedes any of its
+                                  // sub-category selections, so clear those.
+                                  const subIds = subs.map(s => String(s.id))
+                                  setCategories(prev => [...prev, String(c.id)])
+                                  setSubcategories(prev => prev.filter(id => !subIds.includes(id)))
+                                } else {
+                                  setCategories(prev => prev.filter(id => id !== String(c.id)))
+                                }
+                              }}
+                            />
+                            <span>{c.name}</span>
+                          </label>
+                          {subs.map(s => (
+                            <label key={`sub-${s.id}`} className="growth-cat-option"
+                              style={{ paddingLeft: '1.4rem', opacity: catChecked ? 0.5 : 1 }}>
+                              <input type="checkbox" disabled={catChecked}
+                                checked={catChecked || subcategories.includes(String(s.id))}
+                                onChange={e => {
+                                  if (e.target.checked) setSubcategories(prev => [...prev, String(s.id)])
+                                  else setSubcategories(prev => prev.filter(id => id !== String(s.id)))
+                                }} />
+                              <span>{s.name}</span>
+                            </label>
+                          ))}
+                        </React.Fragment>
+                      )
+                    })}
                   </div>
                 )}
               </div>
@@ -622,7 +655,7 @@ export default function ReinvestmentImpact() {
           <>
             <div className="growth-filter-group">
               <label>Fund</label>
-              <select value={projScopeTicker} onChange={e => { setProjScopeTicker(e.target.value); setProjCategories([]) }}
+              <select value={projScopeTicker} onChange={e => { setProjScopeTicker(e.target.value); setProjCategories([]); setProjSubcats([]) }}
                 style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: '#0a1929', color: '#c5d0dc', border: '1px solid #1a3a5c', borderRadius: '4px', minWidth: '160px' }}>
                 <option value="">Whole Portfolio</option>
                 {holdings.map(h => <option key={h.ticker} value={h.ticker}>{h.ticker}</option>)}
@@ -637,28 +670,56 @@ export default function ReinvestmentImpact() {
                   style={{ padding: '0.35rem 0.75rem', fontSize: '0.85rem', minWidth: '140px', textAlign: 'left' }}
                   onClick={() => setProjCatOpen(o => !o)}
                 >
-                  {projCategories.length === 0 ? 'All Holdings' : `${projCategories.length} selected`}
+                  {projCategories.length === 0 && projSubcats.length === 0
+                    ? 'All Holdings'
+                    : `${projCategories.length + projSubcats.length} selected`}
                   <span style={{ float: 'right', marginLeft: '0.5rem' }}>{projCatOpen ? '▴' : '▾'}</span>
                 </button>
                 {projCatOpen && (
                   <div className="growth-cat-dropdown">
                     <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
-                      <input type="checkbox" checked={projCategories.length === 0} onChange={() => setProjCategories([])} />
+                      <input type="checkbox" checked={projCategories.length === 0 && projSubcats.length === 0}
+                        onChange={() => { setProjCategories([]); setProjSubcats([]) }} />
                       <span>All Holdings</span>
                     </label>
-                    {allCategories.map(c => (
-                      <label key={c.id} className="growth-cat-option">
-                        <input
-                          type="checkbox"
-                          checked={projCategories.includes(c.name)}
-                          onChange={e => {
-                            if (e.target.checked) setProjCategories(prev => [...prev, c.name])
-                            else setProjCategories(prev => prev.filter(n => n !== c.name))
-                          }}
-                        />
-                        <span>{c.name}</span>
-                      </label>
-                    ))}
+                    {allCategories.map(c => {
+                      const catChecked = projCategories.includes(c.name)
+                      const subs = c.subcategories || []
+                      return (
+                        <React.Fragment key={c.id}>
+                          <label className="growth-cat-option">
+                            <input
+                              type="checkbox"
+                              checked={catChecked}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  // Selecting the whole category supersedes any of its
+                                  // sub-category selections, so clear those.
+                                  const subIds = subs.map(s => String(s.id))
+                                  setProjCategories(prev => [...prev, c.name])
+                                  setProjSubcats(prev => prev.filter(id => !subIds.includes(id)))
+                                } else {
+                                  setProjCategories(prev => prev.filter(n => n !== c.name))
+                                }
+                              }}
+                            />
+                            <span>{c.name}</span>
+                          </label>
+                          {subs.map(s => (
+                            <label key={`sub-${s.id}`} className="growth-cat-option"
+                              style={{ paddingLeft: '1.4rem', opacity: catChecked ? 0.5 : 1 }}>
+                              <input type="checkbox" disabled={catChecked}
+                                checked={catChecked || projSubcats.includes(String(s.id))}
+                                onChange={e => {
+                                  if (e.target.checked) setProjSubcats(prev => [...prev, String(s.id)])
+                                  else setProjSubcats(prev => prev.filter(id => id !== String(s.id)))
+                                }} />
+                              <span>{s.name}</span>
+                            </label>
+                          ))}
+                        </React.Fragment>
+                      )
+                    })}
                   </div>
                 )}
               </div>

@@ -27,6 +27,7 @@ export default function TotalReturn() {
   const pf = useProfileFetch()
   const { selection, basisMode } = useProfile()
   const [categories, setCategories] = useState([])
+  const [subcategories, setSubcategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const catRef = useRef(null)
 
@@ -41,6 +42,7 @@ export default function TotalReturn() {
   const [sortCol, setSortCol] = useState('total_return_pct')
   const [sortAsc, setSortAsc] = useState(false)
   const [rvyMode, setRvyMode] = useState('cur')
+  const [scatterReturnMode, setScatterReturnMode] = useState('pct')
 
   // Comparison chart state
   const [cmpTickers, setCmpTickers] = useState([])
@@ -70,6 +72,7 @@ export default function TotalReturn() {
     setSummaryError(null)
     const params = new URLSearchParams()
     if (categories.length) params.set('category', categories.join(','))
+    if (subcategories.length) params.set('subcategory', subcategories.join(','))
     pf(`/api/total-return/summary?${params}`)
       .then(r => r.json())
       .then(d => {
@@ -78,7 +81,7 @@ export default function TotalReturn() {
       })
       .catch(e => setSummaryError(e.message))
       .finally(() => setSummaryLoading(false))
-  }, [categories, selection, basisMode])
+  }, [categories, subcategories, selection, basisMode])
 
   // Fetch yfinance charts
   useEffect(() => {
@@ -86,6 +89,7 @@ export default function TotalReturn() {
     setChartError(null)
     const params = new URLSearchParams({ period: '1y' })
     if (categories.length) params.set('category', categories.join(','))
+    if (subcategories.length) params.set('subcategory', subcategories.join(','))
     pf(`/api/total-return/charts?${params}`)
       .then(r => r.json())
       .then(d => {
@@ -94,7 +98,7 @@ export default function TotalReturn() {
       })
       .catch(e => setChartError(e.message))
       .finally(() => setChartLoading(false))
-  }, [categories, selection])
+  }, [categories, subcategories, selection])
 
   // Render Plotly charts with consistent colors across bar + line charts
   useEffect(() => {
@@ -155,14 +159,91 @@ export default function TotalReturn() {
 
   // Render scatter chart
   useEffect(() => {
-    if (!summary?.scatter || !window.Plotly) return
+    if (!summary?.rows?.length || !window.Plotly) return
     const Plotly = window.Plotly
     const el = document.getElementById('tr-chart-scatter')
     if (!el) return
-    const fig = JSON.parse(summary.scatter)
+
+    const rows = summary.rows
+      .map(r => ({
+        ...r,
+        category_name: r.category_name || 'Other',
+        yield_on_cost_pct: Number(r.annual_yield_on_cost || 0) * 100,
+        purchase_value_num: Number(r.purchase_value || 0),
+        total_return_pct_num: Number(r.total_return_pct || 0),
+        total_return_dollar_num: Number(r.total_return_dollar || 0),
+      }))
+      .filter(r => r.ticker)
+
+    const maxPurchaseValue = Math.max(...rows.map(r => r.purchase_value_num), 0)
+    const yKey = scatterReturnMode === 'dollar' ? 'total_return_dollar_num' : 'total_return_pct_num'
+    const categories = [...new Set(rows.map(r => r.category_name))]
+    const traces = categories.map((category, i) => {
+      const group = rows.filter(r => r.category_name === category)
+      return {
+        x: group.map(r => r.yield_on_cost_pct),
+        y: group.map(r => r[yKey]),
+        customdata: group.map(r => [r.total_return_pct_num, r.total_return_dollar_num]),
+        mode: 'markers+text',
+        name: category,
+        text: group.map(r => r.ticker),
+        textposition: 'top center',
+        textfont: { size: 9 },
+        marker: {
+          size: group.map(r => maxPurchaseValue > 0 ? Math.min(Math.max((r.purchase_value_num / maxPurchaseValue * 35) + 8, 8), 43) : 12),
+          opacity: 0.8,
+          color: PALETTE[i % PALETTE.length],
+        },
+        hovertemplate: scatterReturnMode === 'dollar'
+          ? '<b>%{text}</b><br>Total Ret: $%{y:,.2f}<br>Total Ret %: %{customdata[0]:.2f}%<br>Yield on Cost: %{x:.2f}%<extra>' + category + '</extra>'
+          : '<b>%{text}</b><br>Total Ret: %{y:.2f}%<br>Total Ret $: $%{customdata[1]:,.2f}<br>Yield on Cost: %{x:.2f}%<extra>' + category + '</extra>',
+      }
+    })
+
+    const fig = {
+      data: traces,
+      layout: {
+        title: {
+          text: `${scatterReturnMode === 'dollar' ? 'Total Return $' : 'Total Return %'} vs Annual Yield on Cost (Since Purchase)`,
+          font: { color: '#e0e8f0' },
+        },
+        template: 'plotly_dark',
+        height: 520,
+        xaxis: {
+          title: { text: 'Annual Yield on Cost (%)', font: { color: '#d0dde8' } },
+          tickfont: { color: '#c0cdd8', size: 12 },
+          gridcolor: 'rgba(255,255,255,0.08)',
+        },
+        yaxis: {
+          title: {
+            text: scatterReturnMode === 'dollar' ? 'Total Return $ (Since Purchase)' : 'Total Return % (Since Purchase)',
+            font: { color: '#d0dde8' },
+          },
+          tickfont: { color: '#c0cdd8', size: 12 },
+          gridcolor: 'rgba(255,255,255,0.08)',
+          tickprefix: scatterReturnMode === 'dollar' ? '$' : undefined,
+          ticksuffix: scatterReturnMode === 'pct' ? '%' : undefined,
+        },
+        legend: { title: { text: 'Category', font: { color: '#d0dde8' } }, font: { color: '#d0dde8', size: 12 } },
+        paper_bgcolor: '#1a1f2e',
+        plot_bgcolor: 'rgba(255,255,255,0.03)',
+        margin: { t: 80, b: 60, l: 80, r: 40 },
+        shapes: [{
+          type: 'line',
+          xref: 'paper',
+          x0: 0,
+          x1: 1,
+          y0: 0,
+          y1: 0,
+          line: { color: 'gray', width: 1, dash: 'dash' },
+          opacity: 0.5,
+        }],
+      },
+    }
+
     Plotly.newPlot(el, fig.data, fig.layout, { responsive: true })
     return () => { if (el) Plotly.purge(el) }
-  }, [summary])
+  }, [summary, scatterReturnMode])
 
   // Fetch comparison chart data
   useEffect(() => {
@@ -324,25 +405,53 @@ export default function TotalReturn() {
             <label>Categories</label>
             <button className="btn btn-secondary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', minWidth: '140px', textAlign: 'left' }}
               onClick={() => setCatOpen(o => !o)}>
-              {categories.length === 0 ? 'All Holdings' : `${categories.length} selected`}
+              {categories.length === 0 && subcategories.length === 0
+                ? 'All Holdings'
+                : `${categories.length + subcategories.length} selected`}
               <span style={{ float: 'right', marginLeft: '0.5rem' }}>{catOpen ? '\u25B4' : '\u25BE'}</span>
             </button>
             {catOpen && (
               <div className="growth-cat-dropdown">
                 <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
-                  <input type="checkbox" checked={categories.length === 0} onChange={() => setCategories([])} />
+                  <input type="checkbox" checked={categories.length === 0 && subcategories.length === 0}
+                    onChange={() => { setCategories([]); setSubcategories([]) }} />
                   <span>All Holdings</span>
                 </label>
-                {summary.categories.map(c => (
-                  <label key={c.id} className="growth-cat-option">
-                    <input type="checkbox" checked={categories.includes(String(c.id))}
-                      onChange={e => {
-                        if (e.target.checked) setCategories(prev => [...prev, String(c.id)])
-                        else setCategories(prev => prev.filter(id => id !== String(c.id)))
-                      }} />
-                    <span>{c.name}</span>
-                  </label>
-                ))}
+                {summary.categories.map(c => {
+                  const catChecked = categories.includes(String(c.id))
+                  const subs = c.subcategories || []
+                  return (
+                    <React.Fragment key={c.id}>
+                      <label className="growth-cat-option">
+                        <input type="checkbox" checked={catChecked}
+                          onChange={e => {
+                            if (e.target.checked) {
+                              // Selecting the whole category supersedes any of its
+                              // sub-category selections, so clear those.
+                              const subIds = subs.map(s => String(s.id))
+                              setCategories(prev => [...prev, String(c.id)])
+                              setSubcategories(prev => prev.filter(id => !subIds.includes(id)))
+                            } else {
+                              setCategories(prev => prev.filter(id => id !== String(c.id)))
+                            }
+                          }} />
+                        <span>{c.name}</span>
+                      </label>
+                      {subs.map(s => (
+                        <label key={`sub-${s.id}`} className="growth-cat-option"
+                          style={{ paddingLeft: '1.4rem', opacity: catChecked ? 0.5 : 1 }}>
+                          <input type="checkbox" disabled={catChecked}
+                            checked={catChecked || subcategories.includes(String(s.id))}
+                            onChange={e => {
+                              if (e.target.checked) setSubcategories(prev => [...prev, String(s.id)])
+                              else setSubcategories(prev => prev.filter(id => id !== String(s.id)))
+                            }} />
+                          <span>{s.name}</span>
+                        </label>
+                      ))}
+                    </React.Fragment>
+                  )
+                })}
               </div>
             )}
           </div>
@@ -471,11 +580,24 @@ export default function TotalReturn() {
       </div>
 
       {/* Scatter chart */}
-      {summary?.scatter && (
+      {summary?.rows?.length > 0 && (
         <>
-          <h2 style={{ marginTop: '1.5rem', marginBottom: '0.25rem' }}>
-            Total Return % vs Yield on Cost <span className="tr-period-inline">— Since Purchase</span>
-          </h2>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginTop: '1.5rem', marginBottom: '0.25rem' }}>
+            <h2 style={{ margin: 0 }}>
+              Total Return {scatterReturnMode === 'dollar' ? '$' : '%'} vs Yield on Cost <span className="tr-period-inline">— Since Purchase</span>
+            </h2>
+            <div className="growth-filter-group" style={{ alignItems: 'flex-start' }}>
+              <label>Return View</label>
+              <div style={{ display: 'flex', gap: '0.25rem' }}>
+                <button className={`tr-pbtn${scatterReturnMode === 'pct' ? ' tr-pbtn-active' : ''}`}
+                  style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
+                  onClick={() => setScatterReturnMode('pct')}>%</button>
+                <button className={`tr-pbtn${scatterReturnMode === 'dollar' ? ' tr-pbtn-active' : ''}`}
+                  style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
+                  onClick={() => setScatterReturnMode('dollar')}>$</button>
+              </div>
+            </div>
+          </div>
           <p className="tr-note">Bubble size = position size. X = annual yield on cost. All-time data.</p>
           <div id="tr-chart-scatter" style={{ minHeight: '520px', marginBottom: '2rem' }} />
         </>
