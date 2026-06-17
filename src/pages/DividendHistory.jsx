@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { formatMoneyWhole } from '../utils/money'
 
-const fmt = v => v != null ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—'
+const fmt = v => formatMoneyWhole(v)
 
 const VIEW_OPTIONS = [
   { value: 'yearly', label: 'Yearly' },
@@ -87,7 +88,7 @@ export default function DividendHistory() {
         y: values,
         type: 'bar',
         marker: { color: '#a855f7' },
-        text: values.map(v => `$${v.toLocaleString()}`),
+        text: values.map(v => formatMoneyWhole(v)),
         textposition: 'outside',
         hovertemplate: '<b>%{x}</b><br>$%{y:,.2f}<extra></extra>',
         name: 'Annual Dividends',

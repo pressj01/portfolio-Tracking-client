@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react'
 import Plot from './ThemedPlot'
 import { distributionYieldPeriodLabel } from '../utils/distributionPeriod'
+import { getCurrencyLabel } from '../utils/money'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
 
@@ -112,7 +113,7 @@ export default function DistributionHistoryChart({
               className={`btn btn-sm${pctMode ? ' btn-active' : ''}`}
               onClick={onTogglePctMode}
             >
-              {pctMode ? '$ Amount' : 'Yield %'}
+              {pctMode ? `Amount (${getCurrencyLabel()})` : 'Yield %'}
             </button>
           )}
           {pctMode && chart.canShowPct && (

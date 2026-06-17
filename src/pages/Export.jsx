@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react'
 import { API_BASE } from '../config'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { useCurrency } from '../context/CurrencyContext'
 
 export default function Export() {
   const pf = useProfileFetch()
   const { selection, isAggregate, currentProfileName, profileQueryString } = useProfile()
+  const { displayCurrency, usdToCadRate, rateInfo } = useCurrency()
+  const [exportCurrency, setExportCurrency] = useState(displayCurrency)
   const [loading, setLoading] = useState(null)   // null | 'excel' | 'csv'
   const [wlLoading, setWlLoading] = useState(null) // null | 'excel' | 'csv'
   const [combinedLoading, setCombinedLoading] = useState(false)
@@ -37,7 +40,7 @@ export default function Export() {
       : 'portfolio_export.xlsx'
 
     try {
-      const url = `${API_BASE}${endpoint}?${profileQueryString}`
+      const url = `${API_BASE}${endpoint}?${profileQueryString}&currency=${exportCurrency}`
       const res = await fetch(url)
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -114,7 +117,7 @@ export default function Export() {
     const fallbackName = 'portfolio_with_transactions.xlsx'
 
     try {
-      const url = `${API_BASE}/api/export/holdings-transactions?${profileQueryString}`
+      const url = `${API_BASE}/api/export/holdings-transactions?${profileQueryString}&currency=${exportCurrency}`
       const res = await fetch(url)
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -149,12 +152,35 @@ export default function Export() {
         Exporting from: <strong>{currentProfileName}</strong>
       </p>
 
+      <div className="card" style={{ marginBottom: '1.5rem' }}>
+        <h2>Export Currency</h2>
+        <div className="theme-toggle" role="group" aria-label="Export currency">
+          <button type="button" className={`theme-toggle-btn${exportCurrency === 'USD' ? ' active' : ''}`}
+            onClick={() => setExportCurrency('USD')} aria-pressed={exportCurrency === 'USD'}>
+            Source USD
+          </button>
+          <button type="button" className={`theme-toggle-btn${exportCurrency === 'CAD' ? ' active' : ''}`}
+            onClick={() => setExportCurrency('CAD')} aria-pressed={exportCurrency === 'CAD'}>
+            Display CAD
+          </button>
+        </div>
+        {exportCurrency === 'USD' ? (
+          <p style={{ color: 'var(--text-dim-2)', marginTop: '0.7rem', fontSize: '0.85rem' }}>
+            Preserves source values and remains compatible with portfolio reimport.
+          </p>
+        ) : (
+          <p style={{ color: 'var(--warning-money)', marginTop: '0.7rem', fontSize: '0.85rem' }}>
+            Converts monetary fields at 1 USD = {usdToCadRate.toFixed(4)} CAD ({rateInfo.mode === 'manual' ? 'manual override' : 'cached live rate'}).
+            CAD report exports include rate metadata and are not intended for reimport.
+          </p>
+        )}
+      </div>
+
       <div className="card">
         <h2>Export Holdings</h2>
         <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
-          Download your portfolio data. The exported file uses the same column format
-          as the upload template, so it can be reimported using either
-          the <strong>Generic Upload</strong> or <strong>My Spreadsheet</strong> import tabs.
+          Download your portfolio data. Source USD exports use the upload-template format and can be reimported.
+          Display CAD exports are presentation copies with converted monetary values and exchange-rate metadata.
         </p>
 
         {isAggregate && (

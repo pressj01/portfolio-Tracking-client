@@ -8,6 +8,7 @@ import RiskReturnCharts from './analytics/RiskReturnCharts'
 import IncomeCharts from './analytics/IncomeCharts'
 import BacktestCharts from './analytics/BacktestCharts'
 import ToolsPanel from './analytics/ToolsPanel'
+import { formatMoney, formatMoneyDelta, formatMoneyWhole, getCurrencyLabel } from '../utils/money'
 
 const PERIODS = [
   { label: '1M', value: '1mo' },
@@ -333,7 +334,7 @@ export default function Analytics() {
                   <Stat label="Max Drawdown" value={pm.max_drawdown != null ? (pm.max_drawdown * 100).toFixed(1) + '%' : '—'} color="#ef5350" />
                   <Stat label="Top Holding" value={pm.top_weight != null ? pm.top_weight + '%' : '—'} />
                   <Stat label="Ulcer Index" value={pm.ulcer_index?.toFixed(2)} color={metricColor(pm.ulcer_index, [3, 7, 12], true)} />
-                  <Stat label="Est. Annual Income" value={pm.est_annual_income != null ? '$' + pm.est_annual_income.toLocaleString() : '—'} color="#66bb6a" />
+                  <Stat label="Est. Annual Income" value={formatMoneyWhole(pm.est_annual_income)} color="#66bb6a" />
                 </div>
 
                 {/* NAV Erosion Ratio */}
@@ -580,7 +581,7 @@ export default function Analytics() {
                     <div key={k} style={{ fontSize: '0.82rem' }}>
                       <span style={{ color: 'var(--text-dim)' }}>{k.replace(/_/g, ' ')}: </span>
                       <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>
-                        {typeof v === 'number' ? (k.includes('income') ? '$' + v.toLocaleString() : v.toFixed(2) + (k.includes('pct') || k.includes('yield') || k.includes('return') || k.includes('vol') || k.includes('dd') ? '%' : '')) : v}
+                        {typeof v === 'number' ? (k.includes('income') ? formatMoneyWhole(v) : v.toFixed(2) + (k.includes('pct') || k.includes('yield') || k.includes('return') || k.includes('vol') || k.includes('dd') ? '%' : '')) : v}
                       </span>
                     </div>
                   ))}
@@ -634,19 +635,18 @@ export default function Analytics() {
                   const diff = v2 - v1
                   const color = diff > 0.01 ? '#4dff91' : diff < -0.01 ? '#ff6b6b' : '#8899aa'
                   if (isDollar) {
-                    const sign = diff >= 0 ? '+$' : '-$'
-                    return <span style={{ color }}>{sign}{Math.abs(diff).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+                    return <span style={{ color }}>{formatMoneyDelta(diff, { digits: 0 })}</span>
                   }
                   return <span style={{ color }}>{diff > 0 ? '+' : ''}{fmt(diff)}</span>
                 }
                 const fmtPct = v => (v * 100).toFixed(1) + '%'
-                const fmtDollar = v => '$' + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+                const fmtDollar = v => formatMoneyWhole(v, { absolute: true })
                 const fmtNum = v => v.toFixed(2)
                 const metricRow = (label, bv, av, fmt, isDollar = false, tip = '') => (
                   <tr key={label} style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
                     <td title={tip} style={{ padding: '0.3rem 0.5rem', color: 'var(--text-dim)', fontSize: '0.78rem', cursor: tip ? 'help' : 'default' }}>{label}{tip ? ' \u24D8' : ''}</td>
-                    <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: 'var(--text-strong)', fontWeight: 600 }}>{bv != null ? (isDollar ? '$' + Math.abs(bv).toLocaleString(undefined, {maximumFractionDigits: 0}) : fmt(bv)) : '—'}</td>
-                    <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: 'var(--text-strong)', fontWeight: 600 }}>{av != null ? (isDollar ? '$' + Math.abs(av).toLocaleString(undefined, {maximumFractionDigits: 0}) : fmt(av)) : '—'}</td>
+                    <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: 'var(--text-strong)', fontWeight: 600 }}>{bv != null ? (isDollar ? formatMoneyWhole(bv, { absolute: true }) : fmt(bv)) : '—'}</td>
+                    <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: 'var(--text-strong)', fontWeight: 600 }}>{av != null ? (isDollar ? formatMoneyWhole(av, { absolute: true }) : fmt(av)) : '—'}</td>
                     <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>{delta(bv, av, fmt, isDollar)}</td>
                   </tr>
                 )
@@ -718,13 +718,13 @@ export default function Analytics() {
                 if (rs.num_sells > 0) summaryParts.push(`Sell ${rs.num_sells} holding${rs.num_sells > 1 ? 's' : ''}`)
                 if (rs.num_buys > 0) summaryParts.push(`buy ${rs.num_buys} holding${rs.num_buys > 1 ? 's' : ''}`)
                 const summaryText = summaryParts.join(', ')
-                const incomeSuffix = incomeChange != null ? ` \u2014 net income ${incomeChange >= 0 ? '+' : '-'}$${Math.abs(incomeChange).toLocaleString(undefined, {maximumFractionDigits: 0})}/yr` : ''
+                const incomeSuffix = incomeChange != null ? ` \u2014 net income ${formatMoneyDelta(incomeChange, { digits: 0 })}/yr` : ''
 
                 // CSV export
                 const exportCsv = () => {
                   const modeLabel = mode === 'optimize_returns' ? 'Optimize Returns' : mode === 'optimize_income' ? 'Optimize Income' : `Balanced (${balance}%)`
                   const header = `# ${modeLabel} - ${new Date().toLocaleDateString()}\n`
-                  const cols = 'Action,Ticker,$ Change,~Shares,Price,NAV Chg %,Current %,Target %\n'
+                  const cols = 'Action,Ticker,USD Change,~Shares,USD Price,NAV Chg %,Current %,Target %\n'
                   const rows = sorted.map(w =>
                     `${w.action},${w.ticker},${w.dollar_change},${w.shares_change},${w.current_price?.toFixed(2) ?? ''},${w.nav_change_pct?.toFixed(1) ?? ''},${w.current_pct.toFixed(1)},${w.optimal_pct.toFixed(1)}`
                   ).join('\n')
@@ -760,8 +760,8 @@ export default function Analytics() {
                       </div>
                     )}
                     <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.5rem', fontSize: '0.78rem' }}>
-                      {rs.num_sells > 0 && <span style={{ color: 'var(--neg)' }}>{rs.num_sells} Sell{rs.num_sells > 1 ? 's' : ''} totaling ${rs.total_sell?.toLocaleString()}</span>}
-                      {rs.num_buys > 0 && <span style={{ color: 'var(--pos)' }}>{rs.num_buys} Buy{rs.num_buys > 1 ? 's' : ''} totaling ${rs.total_buy?.toLocaleString()}</span>}
+                      {rs.num_sells > 0 && <span style={{ color: 'var(--neg)' }}>{rs.num_sells} Sell{rs.num_sells > 1 ? 's' : ''} totaling {formatMoneyWhole(rs.total_sell)}</span>}
+                      {rs.num_buys > 0 && <span style={{ color: 'var(--pos)' }}>{rs.num_buys} Buy{rs.num_buys > 1 ? 's' : ''} totaling {formatMoneyWhole(rs.total_buy)}</span>}
                       {rs.num_holds > 0 && <span style={{ color: 'var(--text-dim)' }}>{rs.num_holds} Hold{rs.num_holds > 1 ? 's' : ''}</span>}
                     </div>
                     <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem', width: '100%' }}>
@@ -769,7 +769,7 @@ export default function Analytics() {
                         <tr>
                           <th style={thStyle}>Action</th>
                           <th style={thStyle}>Ticker</th>
-                          <th style={{ ...thStyle, textAlign: 'right' }}>$ Change</th>
+                          <th style={{ ...thStyle, textAlign: 'right' }}>Change ({getCurrencyLabel()})</th>
                           <th style={{ ...thStyle, textAlign: 'right' }}>~Shares</th>
                           <th style={{ ...thStyle, textAlign: 'right' }}>Price</th>
                           <th style={{ ...thStyle, textAlign: 'right' }}>NAV Chg</th>
@@ -791,7 +791,7 @@ export default function Analytics() {
                               padding: '0.35rem 0.5rem', textAlign: 'right', fontWeight: 600,
                               color: w.action === 'BUY' ? 'var(--pos)' : w.action === 'SELL' ? 'var(--neg)' : 'var(--text-dim)',
                             }}>
-                              {w.dollar_change != null ? (w.dollar_change >= 0 ? '+$' : '-$') + Math.abs(w.dollar_change).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : '—'}
+                              {formatMoneyDelta(w.dollar_change, { digits: 0 })}
                             </td>
                             <td style={{
                               padding: '0.35rem 0.5rem', textAlign: 'right',
@@ -800,7 +800,7 @@ export default function Analytics() {
                               {w.shares_change > 0 ? '+' : ''}{w.shares_change ?? '—'}
                             </td>
                             <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right', color: 'var(--text-dim)' }}>
-                              ${w.current_price?.toFixed(2) ?? '—'}
+                              {formatMoney(w.current_price)}
                             </td>
                             <td style={{
                               padding: '0.35rem 0.5rem', textAlign: 'right', fontSize: '0.75rem',
@@ -838,15 +838,15 @@ export default function Analytics() {
                     <tbody>
                       {[
                         { label: 'Grade', get: s => { const c = s.optimization.comparison; return c ? `${c.after.grade} (${c.after.score})` : '—' } },
-                        { label: 'Annual Income', get: s => { const c = s.optimization.comparison; return c ? '$' + c.after.annual_income?.toLocaleString(undefined, {maximumFractionDigits: 0}) : '—' } },
+                        { label: 'Annual Income', get: s => { const c = s.optimization.comparison; return c ? formatMoneyWhole(c.after.annual_income) : '—' } },
                         { label: 'Sharpe', get: s => s.optimization.comparison?.after.sharpe?.toFixed(2) ?? '—' },
                         { label: 'Sortino', get: s => s.optimization.comparison?.after.sortino?.toFixed(2) ?? '—' },
                         { label: 'Omega', get: s => s.optimization.comparison?.after.omega?.toFixed(2) ?? '—' },
                         { label: 'Calmar', get: s => s.optimization.comparison?.after.calmar?.toFixed(2) ?? '—' },
                         { label: 'Ulcer Index', get: s => s.optimization.comparison?.after.ulcer_index?.toFixed(2) ?? '—' },
                         { label: 'Max Drawdown', get: s => { const v = s.optimization.comparison?.after.max_drawdown; return v != null ? (v * 100).toFixed(1) + '%' : '—' } },
-                        { label: 'Buys', get: s => { const r = s.optimization.rebalance_summary; return r ? `${r.num_buys} ($${r.total_buy?.toLocaleString()})` : '—' } },
-                        { label: 'Sells', get: s => { const r = s.optimization.rebalance_summary; return r ? `${r.num_sells} ($${r.total_sell?.toLocaleString()})` : '—' } },
+                        { label: 'Buys', get: s => { const r = s.optimization.rebalance_summary; return r ? `${r.num_buys} (${formatMoneyWhole(r.total_buy)})` : '—' } },
+                        { label: 'Sells', get: s => { const r = s.optimization.rebalance_summary; return r ? `${r.num_sells} (${formatMoneyWhole(r.total_sell)})` : '—' } },
                       ].map(row => (
                         <tr key={row.label} style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
                           <td style={{ padding: '0.3rem 0.5rem', color: 'var(--text-dim)', fontSize: '0.78rem' }}>{row.label}</td>

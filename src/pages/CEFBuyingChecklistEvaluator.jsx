@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { API_BASE } from '../config'
 import FundScanTab from '../components/FundScanTab'
+import { formatMoney } from '../utils/money'
 import {
   DEFAULT_THRESHOLDS,
   BEST_PRACTICE,
@@ -70,7 +71,7 @@ function saveThresholds(t) {
 }
 
 const fmtPct = (n) => (n === null || n === undefined || !Number.isFinite(Number(n)) ? '-' : `${Number(n).toFixed(2)}%`)
-const fmtMoney = (n) => (n === null || n === undefined || !Number.isFinite(Number(n)) ? '-' : `$${Number(n).toFixed(2)}`)
+const fmtMoney = (n) => formatMoney(n, { fallback: '-' })
 
 function ThresholdEditor({ criterion, thresholds, onChange }) {
   if (!criterion.editable || !criterion.threshold) return null

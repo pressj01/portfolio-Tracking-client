@@ -1,12 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { formatMoney, formatMoneyWhole } from '../utils/money'
 
-const fmt = v => v != null
-  ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-  : '—'
-const fmtInt = v => v != null
-  ? `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-  : '—'
+const fmt = v => formatMoney(v)
+const fmtInt = v => formatMoneyWhole(v)
 const glColor = v => (v || 0) >= 0 ? 'var(--pos)' : 'var(--neg)'
 
 const TREATMENT_LABEL = {

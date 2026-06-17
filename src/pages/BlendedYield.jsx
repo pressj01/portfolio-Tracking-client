@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import { API_BASE } from '../config'
+import { formatMoney, formatMoneyWhole } from '../utils/money'
 
 // ── Default 2025 Federal Income Tax Brackets ──────────────────────
 
@@ -366,13 +367,11 @@ function computeFundTax(yieldPct, taxType, fedRate, ltcgRate, stateRate, allMuni
 
 // ── Formatting ────────────────────────────────────────────────────
 
-const fmtMoney = v => (v == null || isNaN(v)) ? '—'
-  : '$' + Math.round(Number(v)).toLocaleString('en-US')
-const fmtMoney2 = v => (v == null || isNaN(v)) ? '—'
-  : '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtMoney = v => formatMoneyWhole(v)
+const fmtMoney2 = v => formatMoney(v)
 const fmtPct = (v, d = 2) => (v == null || isNaN(v)) ? '—' : Number(v).toFixed(d) + '%'
 const fmtRate = v => fmtPct(v * 100, 1)
-const fmtThreshold = v => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
+const fmtThreshold = v => formatMoneyWhole(v)
 
 function shortTaxLabel(code, abbr) {
   switch (code) {
@@ -902,7 +901,7 @@ export default function BlendedYield() {
                   <th>ATY</th>
                   <th>TEY</th>
                   <th>Alloc %</th>
-                  <th>Alloc $</th>
+                  <th>Allocation</th>
                   <th>Annual Income</th>
                   <th>After-Tax</th>
                 </tr>

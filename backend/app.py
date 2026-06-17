@@ -139,6 +139,8 @@ _EARNINGS_EVENT_TTL_SEC = 6 * 60 * 60
 _CEFCONNECT_CACHE = {}
 _CEFCONNECT_TTL_SEC = 30 * 60
 _CEFCONNECT_BASE_URL = "https://www.cefconnect.com"
+_FX_RATE_CACHE = {}
+_FX_RATE_TTL_SEC = 6 * 60 * 60
 
 # Full price+dividend history per ticker for the Reinvestment Impact page.
 # Each yfinance history(period="max") call is slow; cache the raw frame.
@@ -10497,6 +10499,70 @@ _EXPORT_COL_MAP = [
     ("Category",            None),  # joined separately
 ]
 
+_HOLDINGS_EXPORT_MONEY_HEADERS = {
+    "Price Paid", "Current Price", "Purchase Value", "Current Value", "Gain/Loss",
+    "Div/Share", "Div Paid", "Est. Annual Pmt", "Monthly Income", "YTD Divs",
+    "Total Divs Received", "Paid For Itself", "Cash Not Reinvest", "Cash Reinvested",
+    "8% Annual Wdraw", "8% Monthly Wdraw",
+}
+_TRANSACTION_EXPORT_MONEY_HEADERS = {
+    "Price/Share", "Fees", "Realized Gain", "Dividend Amount",
+}
+
+
+def _export_currency_context():
+    currency = str(request.args.get("currency") or "USD").upper()
+    if currency != "CAD":
+        return {"currency": "USD", "rate": 1.0, "updated_at": None, "source": "Source data"}
+    stored = _fx_settings()
+    manual = _valid_fx_rate(stored.get("usd_cad_manual_rate"))
+    live = _valid_fx_rate(stored.get("usd_cad_rate"))
+    rate = manual or live
+    if not rate:
+        return {"currency": "USD", "rate": 1.0, "updated_at": None, "source": "Source data"}
+    return {
+        "currency": "CAD",
+        "rate": rate,
+        "updated_at": stored.get("usd_cad_manual_updated_at") if manual else stored.get("usd_cad_rate_updated_at"),
+        "source": "Manual override" if manual else (stored.get("usd_cad_rate_source") or "Cached live rate"),
+    }
+
+
+def _convert_export_rows(rows, money_headers, fx):
+    if fx["currency"] != "CAD":
+        return rows
+    converted = []
+    for row in rows:
+        next_row = dict(row)
+        for header in money_headers:
+            value = next_row.get(header)
+            if value in (None, ""):
+                continue
+            try:
+                next_row[header] = float(value) * fx["rate"]
+            except (TypeError, ValueError):
+                pass
+        converted.append(next_row)
+    return converted
+
+
+def _add_export_info_sheet(wb, fx):
+    from openpyxl.styles import Font
+    ws = wb.create_sheet(title="Export Info", index=0)
+    rows = [
+        ("Export Currency", fx["currency"]),
+        ("Source Currency", "USD"),
+        ("USD/CAD Rate", fx["rate"] if fx["currency"] == "CAD" else ""),
+        ("Rate Source", fx["source"]),
+        ("Rate Last Updated", fx["updated_at"] or ""),
+        ("Reimportable", "Yes" if fx["currency"] == "USD" else "No - report values were converted"),
+    ]
+    for row_index, (label, value) in enumerate(rows, 1):
+        ws.cell(row=row_index, column=1, value=label).font = Font(bold=True)
+        ws.cell(row=row_index, column=2, value=value)
+    ws.column_dimensions["A"].width = 22
+    ws.column_dimensions["B"].width = 34
+
 
 def _export_profile_data(conn, profile_id):
     """Fetch export rows for a single profile. Returns (profile_name, [row_dicts])."""
@@ -10554,6 +10620,7 @@ def export_holdings():
     from openpyxl.utils import get_column_letter
 
     is_agg, profile_ids = get_profile_filter()
+    fx = _export_currency_context()
     conn = get_connection()
     headers = [h for h, _ in _EXPORT_COL_MAP]
 
@@ -10567,6 +10634,7 @@ def export_holdings():
 
     for pid in profile_ids:
         profile_name, rows = _export_profile_data(conn, pid)
+        rows = _convert_export_rows(rows, _HOLDINGS_EXPORT_MONEY_HEADERS, fx)
         ws = wb.create_sheet(title=profile_name[:31])
 
         for ci, header in enumerate(headers, 1):
@@ -10584,16 +10652,19 @@ def export_holdings():
             ws.column_dimensions[get_column_letter(i)].width = max(len(header) + 4, 12)
 
     conn.close()
+    if fx["currency"] == "CAD":
+        _add_export_info_sheet(wb, fx)
 
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
 
     if len(profile_ids) == 1:
-        prof_name = wb.sheetnames[0].replace(" ", "_")
-        fname = f"portfolio_export_{prof_name}.xlsx"
+        profile_sheet = next(name for name in wb.sheetnames if name != "Export Info")
+        prof_name = profile_sheet.replace(" ", "_")
+        fname = f"portfolio_export_{prof_name}_{fx['currency']}.xlsx"
     else:
-        fname = "portfolio_export_all.xlsx"
+        fname = f"portfolio_export_all_{fx['currency']}.xlsx"
 
     return send_file(buf, as_attachment=True,
                      download_name=fname,
@@ -10607,8 +10678,11 @@ def export_holdings_csv():
     from io import StringIO, BytesIO
 
     is_agg, profile_ids = get_profile_filter()
+    fx = _export_currency_context()
     conn = get_connection()
     headers = [h for h, _ in _EXPORT_COL_MAP]
+    if fx["currency"] == "CAD":
+        headers += ["Export Currency", "USD/CAD Rate", "Rate Source", "Rate Last Updated"]
 
     profile_name = None
     buf = StringIO()
@@ -10617,6 +10691,11 @@ def export_holdings_csv():
 
     for pid in profile_ids:
         name, rows = _export_profile_data(conn, pid)
+        rows = _convert_export_rows(rows, _HOLDINGS_EXPORT_MONEY_HEADERS, fx)
+        if fx["currency"] == "CAD":
+            for row in rows:
+                row.update({"Export Currency": "CAD", "USD/CAD Rate": fx["rate"],
+                            "Rate Source": fx["source"], "Rate Last Updated": fx["updated_at"] or ""})
         if profile_name is None:
             profile_name = name
         writer.writerows(rows)
@@ -10627,9 +10706,9 @@ def export_holdings_csv():
 
     if len(profile_ids) == 1:
         prof_name = (profile_name or "portfolio").replace(" ", "_")
-        fname = f"portfolio_export_{prof_name}.csv"
+        fname = f"portfolio_export_{prof_name}_{fx['currency']}.csv"
     else:
-        fname = "portfolio_export_all.csv"
+        fname = f"portfolio_export_all_{fx['currency']}.csv"
 
     return send_file(out, as_attachment=True,
                      download_name=fname,
@@ -10751,6 +10830,7 @@ def export_holdings_transactions():
     from openpyxl.utils import get_column_letter
 
     is_agg, profile_ids = get_profile_filter()
+    fx = _export_currency_context()
     conn = get_connection()
     headers = [h for h, _ in _EXPORT_COL_MAP]
 
@@ -10767,6 +10847,7 @@ def export_holdings_transactions():
 
     for pid in profile_ids:
         profile_name, rows = _export_profile_data(conn, pid)
+        rows = _convert_export_rows(rows, _HOLDINGS_EXPORT_MONEY_HEADERS, fx)
         if first_profile_name is None:
             first_profile_name = profile_name
         sheet_title = _safe_excel_sheet_title(profile_name, wb.sheetnames)
@@ -10787,6 +10868,7 @@ def export_holdings_transactions():
             ws.column_dimensions[get_column_letter(i)].width = max(len(header) + 4, 12)
 
     txn_rows = _read_transaction_export_rows(conn, is_agg, profile_ids)
+    txn_rows = _convert_export_rows(txn_rows, _TRANSACTION_EXPORT_MONEY_HEADERS, fx)
     tx_ws = wb.create_sheet(title=_safe_excel_sheet_title("Transactions", wb.sheetnames))
     for ci, header in enumerate(_TRANSACTION_EXPORT_HEADERS, 1):
         cell = tx_ws.cell(row=1, column=ci, value=header)
@@ -10808,6 +10890,8 @@ def export_holdings_transactions():
         tx_ws.column_dimensions[get_column_letter(i)].width = widths.get(header, 16)
 
     conn.close()
+    if fx["currency"] == "CAD":
+        _add_export_info_sheet(wb, fx)
 
     buf = BytesIO()
     wb.save(buf)
@@ -10815,9 +10899,9 @@ def export_holdings_transactions():
 
     if len(profile_ids) == 1:
         prof_name = (first_profile_name or "portfolio").replace(" ", "_")
-        fname = f"portfolio_with_transactions_{prof_name}.xlsx"
+        fname = f"portfolio_with_transactions_{prof_name}_{fx['currency']}.xlsx"
     else:
-        fname = "portfolio_with_transactions_all.xlsx"
+        fname = f"portfolio_with_transactions_all_{fx['currency']}.xlsx"
 
     return send_file(
         buf,
@@ -25355,6 +25439,183 @@ def save_settings():
         _NAV_BENCHMARK_OVERRIDE_CACHE.update({"ts": 0, "data": {}})
         _PORTFOLIO_COVERAGE_CACHE.clear()
     return jsonify({"ok": True})
+
+
+def _fx_settings():
+    keys = (
+        "usd_cad_rate", "usd_cad_rate_as_of", "usd_cad_rate_updated_at",
+        "usd_cad_rate_source", "usd_cad_manual_rate", "usd_cad_manual_updated_at",
+    )
+    conn = get_connection()
+    rows = conn.execute(
+        f"SELECT key, value FROM settings WHERE key IN ({','.join('?' for _ in keys)})",
+        keys,
+    ).fetchall()
+    conn.close()
+    return {row["key"]: row["value"] for row in rows}
+
+
+def _valid_fx_rate(value):
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        return None
+    return rate if 0.5 < rate < 2.5 else None
+
+
+def _fx_age_seconds(timestamp):
+    if not timestamp:
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+        return max(0, int((datetime.datetime.now(datetime.timezone.utc) - parsed).total_seconds()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _with_fx_override(payload, stored):
+    live_rate = _valid_fx_rate(payload.get("rate"))
+    manual_rate = _valid_fx_rate(stored.get("usd_cad_manual_rate"))
+    result = dict(payload)
+    result.update({
+        "live_rate": live_rate,
+        "manual_rate": manual_rate,
+        "live_updated_at": payload.get("updated_at"),
+        "manual_updated_at": stored.get("usd_cad_manual_updated_at"),
+        "mode": "manual" if manual_rate else "live",
+        "cache_ttl_seconds": _FX_RATE_TTL_SEC,
+    })
+    if manual_rate:
+        result.update({
+            "rate": manual_rate,
+            "source": "Manual override",
+            "updated_at": stored.get("usd_cad_manual_updated_at") or payload.get("updated_at"),
+            "stale": False,
+        })
+    result["cache_age_seconds"] = _fx_age_seconds(result.get("updated_at"))
+    return result
+
+
+@app.route("/api/exchange-rates/usd-cad", methods=["GET", "POST"])
+def get_usd_cad_exchange_rate():
+    if request.method == "POST":
+        data = request.get_json() or {}
+        manual_value = data.get("manual_rate")
+        conn = get_connection()
+        if manual_value in (None, ""):
+            conn.execute("DELETE FROM settings WHERE key IN ('usd_cad_manual_rate', 'usd_cad_manual_updated_at')")
+        else:
+            manual_rate = _valid_fx_rate(manual_value)
+            if manual_rate is None:
+                conn.close()
+                return jsonify({"error": "Manual USD/CAD rate must be between 0.5 and 2.5."}), 400
+            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            conn.executemany(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                [("usd_cad_manual_rate", str(manual_rate)), ("usd_cad_manual_updated_at", now)],
+            )
+        conn.commit()
+        conn.close()
+        _FX_RATE_CACHE.clear()
+
+    force_refresh = request.args.get("refresh", "").lower() in {"1", "true", "yes"}
+    cached = None if force_refresh else _cache_get(_FX_RATE_CACHE, "USD_CAD", ttl=_FX_RATE_TTL_SEC)
+    if cached is not None:
+        cached_payload = dict(cached)
+        cached_payload["cached"] = True
+        cached_payload["cache_age_seconds"] = _fx_age_seconds(cached_payload.get("updated_at"))
+        return jsonify(cached_payload)
+
+    stored = _fx_settings()
+    stored_rate = _valid_fx_rate(stored.get("usd_cad_rate"))
+    stored_updated_at = stored.get("usd_cad_rate_updated_at")
+    stored_age = _fx_age_seconds(stored_updated_at)
+
+    if not force_refresh and stored_rate and stored_age is not None and stored_age <= _FX_RATE_TTL_SEC:
+        payload = _with_fx_override({
+            "base": "USD", "quote": "CAD", "rate": stored_rate,
+            "as_of": stored.get("usd_cad_rate_as_of"),
+            "updated_at": stored_updated_at,
+            "source": stored.get("usd_cad_rate_source") or "Yahoo Finance",
+            "stale": False, "cached": True,
+        }, stored)
+        _cache_set(_FX_RATE_CACHE, "USD_CAD", payload)
+        return jsonify(payload)
+
+    try:
+        raw = _chunked_yf_download(
+            "CAD=X",
+            period="5d",
+            interval="1d",
+            auto_adjust=False,
+            progress=False,
+        )
+        if raw is None or raw.empty or "Close" not in raw.columns.get_level_values(0):
+            raise ValueError("USD/CAD market data was empty")
+
+        close = raw["Close"]
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        close = pd.to_numeric(close, errors="coerce").dropna()
+        if close.empty:
+            raise ValueError("USD/CAD close price was unavailable")
+
+        rate = float(close.iloc[-1])
+        if not 0.5 < rate < 2.5:
+            raise ValueError("USD/CAD rate was outside the expected range")
+        last_index = close.index[-1]
+        as_of = last_index.date().isoformat() if hasattr(last_index, "date") else str(last_index)[:10]
+        updated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        live_payload = {
+            "base": "USD",
+            "quote": "CAD",
+            "rate": rate,
+            "as_of": as_of,
+            "updated_at": updated_at,
+            "source": "Yahoo Finance",
+            "stale": False,
+            "cached": False,
+        }
+
+        conn = get_connection()
+        conn.executemany(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            [
+                ("usd_cad_rate", str(rate)),
+                ("usd_cad_rate_as_of", as_of),
+                ("usd_cad_rate_updated_at", updated_at),
+                ("usd_cad_rate_source", "Yahoo Finance"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+        stored.update({"usd_cad_rate": str(rate), "usd_cad_rate_as_of": as_of,
+                       "usd_cad_rate_updated_at": updated_at, "usd_cad_rate_source": "Yahoo Finance"})
+        payload = _with_fx_override(live_payload, stored)
+        _cache_set(_FX_RATE_CACHE, "USD_CAD", payload)
+        return jsonify(payload)
+    except Exception as exc:
+        manual_rate = _valid_fx_rate(stored.get("usd_cad_manual_rate"))
+        if stored_rate or manual_rate:
+            payload = _with_fx_override({
+                "base": "USD",
+                "quote": "CAD",
+                "rate": stored_rate or manual_rate,
+                "as_of": stored.get("usd_cad_rate_as_of"),
+                "updated_at": stored_updated_at,
+                "source": stored.get("usd_cad_rate_source") or "Cached rate",
+                "stale": True,
+                "cached": True,
+                "refresh_error": str(exc),
+            }, stored)
+            _cache_set(_FX_RATE_CACHE, "USD_CAD", payload)
+            return jsonify(payload)
+        return jsonify({
+            "error": "USD/CAD exchange rate is unavailable.",
+            "detail": str(exc),
+        }), 503
 
 
 # ── Portfolio Builder Rebalance ────────────────────────────────────────────────

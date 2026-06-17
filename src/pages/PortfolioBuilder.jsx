@@ -3,6 +3,7 @@ import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
+import { formatMoney } from '../utils/money'
 
 const PERIODS = [
   { label: '1M', value: '1mo' },
@@ -31,7 +32,7 @@ function metricColor(val, thresholds, lowerBetter = false) {
 
 function fmt$(v) {
   if (v == null) return '--'
-  return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatMoney(v, { fallback: '--' })
 }
 
 function fmtN(v, dec = 2) {
@@ -527,7 +528,7 @@ export default function PortfolioBuilder() {
   // ── Column definitions ───────────────────────────────────────────────────
   const cols = [
     { key: 'ticker', label: 'Ticker', fmt: v => v, align: 'left' },
-    { key: 'dollar_amount', label: '$ Amount', fmt: v => fmt$(v) },
+    { key: 'dollar_amount', label: 'Amount', fmt: v => fmt$(v) },
     { key: 'shares', label: 'Shares', fmt: v => fmtN(v, 2) },
     { key: 'current_price', label: 'Price', fmt: v => fmt$(v) },
     { key: 'weight_pct', label: 'Wt%', fmt: v => fmtN(v, 1) },
@@ -662,7 +663,7 @@ export default function PortfolioBuilder() {
               />
               <input
                 className="pb-add-dollars"
-                placeholder="$ Amount"
+                placeholder="Amount"
                 type="number"
                 value={dollarInput}
                 onChange={e => setDollarInput(e.target.value)}
@@ -1151,7 +1152,7 @@ export default function PortfolioBuilder() {
                       <th>Target %</th>
                       <th>ETF</th>
                       <th>Source</th>
-                      <th>$ Amount</th>
+                      <th>Amount</th>
                       {awResult.allocations.some(a => a.reasoning) && <th style={{ textAlign: 'left' }}>Reasoning</th>}
                     </tr>
                   </thead>
@@ -1211,8 +1212,8 @@ export default function PortfolioBuilder() {
                       <th>Target %</th>
                       <th>Current %</th>
                       <th>Drift</th>
-                      <th>Current $</th>
-                      <th>Target $</th>
+                      <th>Current Value</th>
+                      <th>Target Value</th>
                       <th style={{ textAlign: 'left' }}>Action</th>
                       <th>Ticker</th>
                     </tr>

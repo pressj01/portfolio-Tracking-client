@@ -2,12 +2,13 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import Plot from '../components/ThemedPlot'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useNavigate } from 'react-router-dom'
+import { formatMoney } from '../utils/money'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmt$(v) {
   if (v == null) return '--'
-  return '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatMoney(v, { fallback: '--' })
 }
 function fmtPct(v) {
   if (v == null) return '--'
@@ -476,7 +477,7 @@ function TiltsTab({ pf }) {
                 <th style={{ ...thStyle, textAlign: 'right' }}>Current %</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>Target %</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>Underweight</th>
-                <th style={{ ...thStyle, textAlign: 'right' }}>$ to Add</th>
+                <th style={{ ...thStyle, textAlign: 'right' }}>To Add</th>
               </tr>
             </thead>
             <tbody>
@@ -869,7 +870,7 @@ function IncomeBenchmarkTab({ pf }) {
                 { key: 'actual_value', label: 'Actual Value', align: 'right' },
                 { key: 'monthly_income', label: 'Monthly Income', align: 'right' },
                 { key: 'bucket_yield', label: 'Yield', align: 'right' },
-                { key: 'gap_dollars', label: '$ to Target', align: 'right' },
+                { key: 'gap_dollars', label: 'To Target', align: 'right' },
               ].map(col => (
                 <th key={col.key}
                   onClick={() => setIbSort(prev => ({ col: col.key, asc: prev.col === col.key ? !prev.asc : col.key === 'bucket' }))}

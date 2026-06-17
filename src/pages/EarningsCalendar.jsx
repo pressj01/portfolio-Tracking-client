@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { formatMoney } from '../utils/money'
 
 const FILTERS = [
   { key: 'upcoming', label: 'Upcoming' },
@@ -43,7 +44,7 @@ function fmtEps(val) {
   if (val === null || val === undefined) return '—'
   const n = Number(val)
   if (Number.isNaN(n)) return '—'
-  return `${n < 0 ? '-' : ''}$${Math.abs(n).toFixed(2)}`
+  return formatMoney(n)
 }
 
 function fmtPct(val) {

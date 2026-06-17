@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
+import { formatMoney } from '../utils/money'
 
 const PERIODS = ['7d', '1m', '3m', '6m', 'YTD', '1y', '5y', 'all']
 const PERIOD_LABELS = { '7d': '7d', '1m': '1m', '3m': '3m', '6m': '6m', 'YTD': 'YTD', '1y': '1y', '5y': '5y', 'all': 'all' }
@@ -178,7 +179,7 @@ export default function PortfolioGrowth2() {
           mode: 'markers', name: 'Buy',
           marker: { color: '#4dff91', size: 8, symbol: 'triangle-up' },
           hovertemplate: '%{text}<extra>Buy</extra>',
-          text: buys.map(p => `${p.ticker}: ${p.shares} @ $${p.price.toFixed(2)}`),
+          text: buys.map(p => `${p.ticker}: ${p.shares} @ ${formatMoney(p.price)}`),
         })
       }
       if (sells.length) {
@@ -187,7 +188,7 @@ export default function PortfolioGrowth2() {
           mode: 'markers', name: 'Sell',
           marker: { color: '#ff5252', size: 8, symbol: 'triangle-down' },
           hovertemplate: '%{text}<extra>Sell</extra>',
-          text: sells.map(p => `${p.ticker}: ${p.shares} @ $${p.price.toFixed(2)}`),
+          text: sells.map(p => `${p.ticker}: ${p.shares} @ ${formatMoney(p.price)}`),
         })
       }
     }
@@ -314,7 +315,7 @@ export default function PortfolioGrowth2() {
             </div>
             <div className="g2-chart-controls">
               <TabButtons
-                options={[{ value: 'pct', label: 'Total profit, %' }, { value: 'dollar', label: 'Total profit, $' }]}
+                options={[{ value: 'pct', label: 'Total profit, %' }, { value: 'dollar', label: 'Total profit, amount' }]}
                 value={profitMode}
                 onChange={setProfitMode}
               />

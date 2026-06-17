@@ -3,6 +3,7 @@ import { useProfile } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { API_BASE } from '../config'
 import { clearDashboardCacheForSelection } from '../utils/dashboardCache'
+import { formatMoney } from '../utils/money'
 
 const BROKER_OPTIONS = [
   { value: '', label: 'Not set' },
@@ -231,7 +232,7 @@ export default function ManagePortfolios() {
     }
   }
 
-  const fmt = (v) => v != null ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$0.00'
+  const fmt = (v) => formatMoney(v, { zeroIfInvalid: true })
 
   return (
     <div className="page">

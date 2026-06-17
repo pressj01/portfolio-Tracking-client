@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { formatMoney } from '../utils/money'
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -150,13 +151,7 @@ function paymentsPerYear(freq) {
 }
 
 function money(n, digits = 0) {
-  const value = Number(n || 0)
-  return value.toLocaleString(undefined, {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  })
+  return formatMoney(n, { digits, zeroIfInvalid: true })
 }
 
 function formatPct(n) {
@@ -648,7 +643,7 @@ export default function DividendCalendar() {
                   </div>
                 </div>
                 <div className="dc-amount">
-                  {ev.amount !== null && `$${ev.amount}/share`}
+                  {ev.amount !== null && `${formatMoney(ev.amount)}/share`}
                   {ev.freq_label && <span className="dc-freq">, {ev.freq_label}</span>}
                 </div>
               </div>

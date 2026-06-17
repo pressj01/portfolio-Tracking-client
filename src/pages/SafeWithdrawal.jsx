@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { formatMoney } from '../utils/money'
 
-const fmt = v => v != null ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '\u2014'
+const fmt = v => formatMoney(v)
 const fmtDate = v => v || '\u2014'
 const clamp = (v, min = 0, max = 1) => Math.min(max, Math.max(min, v))
 

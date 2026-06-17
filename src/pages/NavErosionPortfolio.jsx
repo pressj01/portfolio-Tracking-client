@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
+import { formatMoney } from '../utils/money'
 
 const MAX_ROWS = 80
 
 function fmt$(v) {
-  return '$' + parseFloat(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatMoney(v, { zeroIfInvalid: true })
 }
 function fmtPct(v) {
   return (v >= 0 ? '+' : '') + parseFloat(v).toFixed(2) + '%'
@@ -494,7 +495,7 @@ export default function NavErosionPortfolio() {
             <thead>
               <tr>
                 <th style={{ textAlign: 'left' }}>ETF Ticker</th>
-                <th style={{ textAlign: 'left' }}>Starting Dollars ($)</th>
+                <th style={{ textAlign: 'left' }}>Starting Value</th>
                 <th style={{ textAlign: 'left' }}>Dividends Reinvested (%)</th>
                 <th style={{ width: 40 }}></th>
               </tr>

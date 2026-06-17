@@ -3,15 +3,16 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
+import { formatMoney, formatMoneyWhole } from '../utils/money'
 
 const PALETTE = [
   '#7B8CFF','#FF6F61','#2EFDB5','#C98FFF','#FFB86C','#4DE8FF','#FF80A8','#D4FF9A',
   '#FFB3FF','#FFE066','#5AAFEE','#FF9933','#55DD55','#FF5555','#BB99DD','#CC8877',
 ]
 
-const fmt = v => v != null ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '\u2014'
+const fmt = v => formatMoney(v)
 const fmtPct = v => v != null ? `${Number(v).toFixed(2)}%` : '\u2014'
-const fmtInt = v => v != null ? `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '\u2014'
+const fmtInt = v => formatMoneyWhole(v)
 const glColor = v => (v || 0) >= 0 ? '#4dff91' : '#ff6b6b'
 
 function MetricCard({ label, value, className }) {
@@ -262,8 +263,8 @@ export default function GainsLosses() {
     { key: 'ticker', label: 'Ticker', tip: 'Stock or ETF ticker symbol' },
     { key: 'description', label: 'Description', tip: 'Full name of the holding' },
     { key: 'quantity', label: 'Shares', tip: 'Number of shares currently held', fmt: v => v != null ? Number(v).toFixed(3) : '\u2014', numeric: true },
-    { key: 'price_paid', label: 'Price Paid', tip: 'Average cost per share at time of purchase', fmt: v => v != null ? `$${Number(v).toFixed(4)}` : '\u2014', numeric: true },
-    { key: 'current_price', label: 'Curr Price', tip: 'Latest market price per share', fmt: v => v != null ? `$${Number(v).toFixed(4)}` : '\u2014', numeric: true },
+    { key: 'price_paid', label: 'Price Paid', tip: 'Average cost per share at time of purchase', fmt: v => formatMoney(v, { digits: 4 }), numeric: true },
+    { key: 'current_price', label: 'Curr Price', tip: 'Latest market price per share', fmt: v => formatMoney(v, { digits: 4 }), numeric: true },
     { key: 'purchase_value', label: 'Invested', tip: 'Total amount invested (price paid \u00d7 shares)', fmt, numeric: true },
     { key: 'current_value', label: 'Curr Value', tip: 'Current market value (current price \u00d7 shares)', fmt, numeric: true },
     { key: 'price_gl', label: 'Price G/L', tip: 'Gain or loss based on price change only (current value \u2212 invested)', fmt, gl: true },

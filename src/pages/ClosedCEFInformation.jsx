@@ -3,6 +3,7 @@ import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { API_BASE } from '../config'
+import { formatMoney, formatMoneyCompact } from '../utils/money'
 
 const PERIODS = [
   { value: '5D', label: '5D' },
@@ -25,11 +26,7 @@ const TABS = [
 ]
 
 const fmtMoney = (value, digits = 2) => {
-  if (value == null || value === '') return '-'
-  const n = Number(value)
-  if (!Number.isFinite(n)) return '-'
-  const formatted = Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })
-  return `${n < 0 ? '-' : ''}$${formatted}`
+  return formatMoney(value, { digits, fallback: '-' })
 }
 
 const fmtPct = (value, signed = false) => {
@@ -51,7 +48,7 @@ const fmtAssets = (value) => {
   if (value == null || value === '') return '-'
   const n = Number(value)
   if (!Number.isFinite(n)) return '-'
-  return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}M`
+  return formatMoneyCompact(n * 1e6)
 }
 
 const fmtDate = (value) => {

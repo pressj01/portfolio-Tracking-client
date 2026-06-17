@@ -154,7 +154,7 @@ export default function BuySellSignals() {
     { label: 'NAV Erosion', tip: 'High if ratio > 0.75, price decline is 50%+, or ending share deficit is 5%+. Medium is ratio 0.25-0.75; Low is <= 0.25.' },
     { label: 'Div Safety', tip: 'Dividend safety score and cut-risk level for portfolio holdings' },
     { label: 'Cut Risk', tip: 'Flags portfolio holdings with elevated or high dividend cut risk' },
-    { label: 'Portfolio $', tip: 'Current market value of this position in portfolio' },
+    { label: 'Portfolio Value', tip: 'Current market value of this position in portfolio' },
   ]
 
   return (

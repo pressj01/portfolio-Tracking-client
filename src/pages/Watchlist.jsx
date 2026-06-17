@@ -3,6 +3,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
+import { formatMoney } from '../utils/money'
 
 function SignalBadge({ signal }) {
   if (!signal || signal === '\u2014') return <span>{'\u2014'}</span>
@@ -21,8 +22,7 @@ function pctClass(v) {
 }
 
 function fmt(v) {
-  if (v == null) return '\u2014'
-  return '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatMoney(v)
 }
 
 function YieldCell({ ticker, computed, override, overridden, onSave }) {
@@ -636,7 +636,7 @@ export default function Watchlist() {
                         {r.ticker}
                       </a>
                     </td>
-                    <td>{a?.price != null ? `$${a.price.toFixed(2)}` : '\u2014'}</td>
+                    <td>{formatMoney(a?.price)}</td>
                     <td className={pctClass(a?.change_1d)}>{a?.change_1d != null ? fmtPct(a.change_1d) : '\u2014'}</td>
                     <td>
                       <YieldCell

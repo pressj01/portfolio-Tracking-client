@@ -3,6 +3,7 @@ import { API_BASE } from '../config'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
 import { clearAllDashboardCache } from '../utils/dashboardCache'
+import { formatMoney as formatDisplayMoney } from '../utils/money'
 
 const dateInputToday = () => {
   const d = new Date()
@@ -14,7 +15,7 @@ const dateInputToday = () => {
 
 const blankValue = '-'
 const formatMoney = (value, decimals = 2) => (
-  value != null && Number.isFinite(Number(value)) ? `$${Number(value).toFixed(decimals)}` : blankValue
+  formatDisplayMoney(value, { digits: decimals, fallback: blankValue })
 )
 const formatShares = (value) => (
   value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(4) : blankValue
@@ -854,7 +855,7 @@ export default function Import() {
                         <td style={{ fontWeight: 600 }}>{p.sheet_name}</td>
                         <td style={{ textAlign: 'right' }}>{p.rows}</td>
                         <td style={{ textAlign: 'right' }}>
-                          ${(p.total_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {formatMoney(p.total_value || 0)}
                         </td>
                         <td style={{ maxWidth: '420px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {(p.tickers || []).join(', ')}
@@ -940,12 +941,12 @@ export default function Import() {
                 {txnPreview.summary.filtered > 0 && (
                   <>{txnPreview.summary.filtered} rows filtered. </>
                 )}
-                Total value: <strong>${txnPreview.positions.reduce((s, p) => s + (p.current_value || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                Total value: <strong>{formatMoney(txnPreview.positions.reduce((s, p) => s + (p.current_value || 0), 0))}</strong>
                 {txnPreview.summary.cash > 0 && (
-                  <> Cash: <strong>${txnPreview.summary.cash.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></>
+                  <> Cash: <strong>{formatMoney(txnPreview.summary.cash)}</strong></>
                 )}
                 {txnPreview.summary.account_value > 0 && (
-                  <> Account value: <strong>${txnPreview.summary.account_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></>
+                  <> Account value: <strong>{formatMoney(txnPreview.summary.account_value)}</strong></>
                 )}
                 {txnPreview.summary.cost_basis_missing && (
                   <> Cost basis not provided by file; current value will be used.</>
@@ -972,11 +973,11 @@ export default function Import() {
                         <td style={{ fontWeight: 600 }}>{p.ticker}</td>
                         <td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.description}</td>
                         <td style={{ textAlign: 'right' }}>{p.quantity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
-                        <td style={{ textAlign: 'right' }}>${p.cost_per_share.toFixed(2)}</td>
-                        <td style={{ textAlign: 'right' }}>${p.current_price.toFixed(4)}</td>
-                        <td style={{ textAlign: 'right' }}>${p.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        <td style={{ textAlign: 'right' }}>{formatMoney(p.cost_per_share)}</td>
+                        <td style={{ textAlign: 'right' }}>{formatMoney(p.current_price, 4)}</td>
+                        <td style={{ textAlign: 'right' }}>{formatMoney(p.current_value)}</td>
                         <td style={{ textAlign: 'right', color: (p.gain_or_loss || 0) >= 0 ? 'var(--p-4caf50)' : 'var(--p-f44336)' }}>
-                          ${(p.gain_or_loss || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {formatMoney(p.gain_or_loss || 0)}
                         </td>
                         <td>{p.asset_type}</td>
                       </tr>

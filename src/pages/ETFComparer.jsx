@@ -5,6 +5,7 @@ import DistributionHistoryChart from '../components/DistributionHistoryChart'
 import { returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
+import { formatMoney, formatMoneyCompact } from '../utils/money'
 
 const PERIODS = [
   { value: '1mo', label: '1M' },
@@ -83,6 +84,10 @@ function compact(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return '-'
   return Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 2 }).format(n)
+}
+
+function compactMoney(value) {
+  return formatMoneyCompact(value, { minCompact: 1e3 })
 }
 
 function positiveNumber(value) {
@@ -583,8 +588,10 @@ export default function ETFComparer() {
 
   const format = (key, value) => {
     if (value == null || value === '') return '-'
-    if (['price', 'open', 'fifty_two_week_high', 'fifty_two_week_low', 'pe_ratio', 'beta', 'sharpe', 'sortino'].includes(key)) return number(value)
-    if (['assets', 'volume', 'dollar_volume'].includes(key)) return compact(value)
+    if (['price', 'open', 'fifty_two_week_high', 'fifty_two_week_low'].includes(key)) return formatMoney(value)
+    if (['pe_ratio', 'beta', 'sharpe', 'sortino'].includes(key)) return number(value)
+    if (['assets', 'dollar_volume'].includes(key)) return compactMoney(value)
+    if (key === 'volume') return compact(value)
     if (['expense_ratio', 'dividend_yield', 'expected_dividend_yield'].includes(key)) return ratioPct(value)
     if (['change_pct', 'return_1y', 'max_drawdown'].includes(key)) return pct(value)
     return value
@@ -956,7 +963,7 @@ export default function ETFComparer() {
                 {averageSymbols.map((sym, idx) => (
                   <tr key={sym}>
                     <td><span className="etfc-series-swatch" style={{ background: COLORS[idx % COLORS.length] }} />{sym}</td>
-                    <td>{compact(aumBySymbol[sym])}</td>
+                    <td>{compactMoney(aumBySymbol[sym])}</td>
                     <td>{yieldPct(approxYieldBySymbol[sym])}</td>
                     {averageTablePeriods
                       .map(p => <td key={p.label}>{pct(p.returns?.[sym])}</td>)}

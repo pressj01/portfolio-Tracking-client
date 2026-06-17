@@ -1,15 +1,21 @@
 import React, { useState, useEffect } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
+import { useCurrency } from '../context/CurrencyContext'
 
 export default function Settings() {
   const pf = useProfileFetch()
   const { selection, currentProfileName, isAggregate } = useProfile()
   const { theme, setTheme, isDark } = useTheme()
+  const { displayCurrency, usdToCadRate, rateAsOf, rateInfo, loading: currencyLoading, setDisplayCurrency, refreshCadRate, setCadManualRate } = useCurrency()
   const [stats, setStats] = useState(null)
   const [confirming, setConfirming] = useState(false)
   const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [currencySaving, setCurrencySaving] = useState(false)
+  const [currencyStatus, setCurrencyStatus] = useState(null)
+  const [rateBusy, setRateBusy] = useState(false)
+  const [manualRateInput, setManualRateInput] = useState('')
 
   // Tax-loss harvesting rates
   const [taxRates, setTaxRates] = useState({ short: '32', long: '15', state: '0' })
@@ -85,6 +91,72 @@ export default function Settings() {
       })
       .catch(() => {})
   }
+
+  const saveDisplayCurrency = async (currency) => {
+    if (currency !== 'USD' && currency !== 'CAD') return
+    setCurrencySaving(true)
+    setCurrencyStatus(null)
+    try {
+      await setDisplayCurrency(currency)
+      setCurrencyStatus({ type: 'success', msg: `Display currency saved as ${currency}.` })
+    } catch (e) {
+      setCurrencyStatus({ type: 'error', msg: 'Server error: ' + e.message })
+    }
+    setCurrencySaving(false)
+  }
+
+  useEffect(() => {
+    setManualRateInput(rateInfo.manualRate ? String(rateInfo.manualRate) : '')
+  }, [rateInfo.manualRate])
+
+  const refreshExchangeRate = async () => {
+    setRateBusy(true)
+    setCurrencyStatus(null)
+    try {
+      const result = await refreshCadRate()
+      setCurrencyStatus({ type: 'success', msg: `Live USD/CAD rate refreshed to ${result.info.liveRate?.toFixed(4) || result.rate.toFixed(4)}.` })
+    } catch (e) {
+      setCurrencyStatus({ type: 'error', msg: e.message })
+    } finally {
+      setRateBusy(false)
+    }
+  }
+
+  const saveManualExchangeRate = async () => {
+    const rate = Number(manualRateInput)
+    if (!Number.isFinite(rate) || rate <= 0) {
+      setCurrencyStatus({ type: 'error', msg: 'Enter a valid USD/CAD rate.' })
+      return
+    }
+    setRateBusy(true)
+    setCurrencyStatus(null)
+    try {
+      await setCadManualRate(rate)
+      setCurrencyStatus({ type: 'success', msg: `Manual USD/CAD rate saved at ${rate.toFixed(4)}.` })
+    } catch (e) {
+      setCurrencyStatus({ type: 'error', msg: e.message })
+    } finally {
+      setRateBusy(false)
+    }
+  }
+
+  const clearManualExchangeRate = async () => {
+    setRateBusy(true)
+    setCurrencyStatus(null)
+    try {
+      const result = await setCadManualRate(null)
+      setManualRateInput('')
+      setCurrencyStatus({ type: 'success', msg: `Manual override cleared. Using live rate ${result.rate.toFixed(4)}.` })
+    } catch (e) {
+      setCurrencyStatus({ type: 'error', msg: e.message })
+    } finally {
+      setRateBusy(false)
+    }
+  }
+
+  const updatedLabel = rateInfo.updatedAt
+    ? new Date(rateInfo.updatedAt).toLocaleString()
+    : 'Not available'
 
   const saveTaxRates = async () => {
     setTaxSaving(true)
@@ -289,6 +361,74 @@ export default function Settings() {
           >
             ☀️ Light
           </button>
+        </div>
+      </div>
+
+      {/* Display Currency */}
+      <div className="card">
+        <h2>Display Currency</h2>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+          Choose the currency preference for money displays.
+        </p>
+        {currencyStatus && (
+          <div className={`alert alert-${currencyStatus.type}`} style={{ marginBottom: '0.75rem' }}>{currencyStatus.msg}</div>
+        )}
+        <div className="theme-toggle" role="group" aria-label="Display currency">
+          <button
+            type="button"
+            className={`theme-toggle-btn${displayCurrency === 'USD' ? ' active' : ''}`}
+            onClick={() => saveDisplayCurrency('USD')}
+            aria-pressed={displayCurrency === 'USD'}
+            disabled={currencySaving || currencyLoading}
+          >
+            USD
+          </button>
+          <button
+            type="button"
+            className={`theme-toggle-btn${displayCurrency === 'CAD' ? ' active' : ''}`}
+            onClick={() => saveDisplayCurrency('CAD')}
+            aria-pressed={displayCurrency === 'CAD'}
+            disabled={currencySaving || currencyLoading}
+          >
+            CAD
+          </button>
+        </div>
+        <div style={{ marginTop: '1rem', padding: '0.85rem', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface-sunken)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <div>
+              <div style={{ color: 'var(--text-strong)', fontWeight: 700 }}>1 USD = {usdToCadRate.toFixed(4)} CAD</div>
+              <div style={{ color: 'var(--text-dim)', fontSize: '0.78rem', marginTop: 3 }}>
+                {rateInfo.mode === 'manual' ? 'Manual override' : rateInfo.cached ? 'Cached live rate' : 'Live rate'}
+                {rateInfo.source ? ` · ${rateInfo.source}` : ''}
+                {rateInfo.stale ? ' · stale' : ''}
+              </div>
+            </div>
+            <button className="btn btn-secondary" type="button" onClick={refreshExchangeRate} disabled={rateBusy || currencyLoading}>
+              {rateBusy ? 'Working…' : 'Refresh Live Rate'}
+            </button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.65rem', marginTop: '0.8rem', fontSize: '0.78rem' }}>
+            <div><span style={{ color: 'var(--text-dim)' }}>Last updated</span><br /><strong>{updatedLabel}</strong></div>
+            <div><span style={{ color: 'var(--text-dim)' }}>Market date</span><br /><strong>{rateAsOf || 'Not available'}</strong></div>
+            <div><span style={{ color: 'var(--text-dim)' }}>Latest live rate</span><br /><strong>{rateInfo.liveRate ? rateInfo.liveRate.toFixed(4) : 'Not available'}</strong>
+              {rateInfo.liveUpdatedAt && <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>{new Date(rateInfo.liveUpdatedAt).toLocaleString()}</div>}
+            </div>
+          </div>
+          <div style={{ marginTop: '0.9rem', borderTop: '1px solid var(--border)', paddingTop: '0.8rem' }}>
+            <label htmlFor="manual-usd-cad-rate" style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: 5 }}>
+              Manual override (CAD per USD)
+            </label>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input id="manual-usd-cad-rate" type="number" min="0.5" max="2.5" step="0.0001" value={manualRateInput}
+                onChange={e => setManualRateInput(e.target.value)} placeholder="e.g. 1.3750"
+                style={{ width: 150, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, padding: '0.45rem 0.55rem' }} />
+              <button className="btn btn-primary" type="button" onClick={saveManualExchangeRate} disabled={rateBusy}>Use Override</button>
+              {rateInfo.manualRate && <button className="btn btn-secondary" type="button" onClick={clearManualExchangeRate} disabled={rateBusy}>Use Live Rate</button>}
+            </div>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: 5 }}>
+              Overrides affect display and display-currency exports. The app still refreshes and retains the latest live rate for comparison.
+            </div>
+          </div>
         </div>
       </div>
 

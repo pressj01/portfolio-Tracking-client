@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import Plot from '../components/ThemedPlot'
 import { useDialog } from '../components/DialogProvider'
+import { formatMoney, formatMoneyCompact } from '../utils/money'
 
 const MAX_ROWS = 80
 const CHART_COLORS = [
@@ -12,8 +13,7 @@ const CHART_COLORS = [
 
 function fmt$(v) {
   const n = Number(v)
-  if (!Number.isFinite(n)) return '$0.00'
-  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatMoney(n, { zeroIfInvalid: true })
 }
 function fmtPct(v) {
   const n = Number(v)
@@ -40,7 +40,7 @@ function fmtCompactNumber(v, { prefix = '', suffix = '', signed = false } = {}) 
   return sign + prefix + n.toExponential(2) + suffix
 }
 
-const fmtCompact$ = (v) => fmtCompactNumber(v, { prefix: '$' })
+const fmtCompact$ = (v) => formatMoneyCompact(v, { zeroIfInvalid: true, minCompact: 1e9, smallDigits: 2 })
 const fmtCompactPct = (v, signed = false) => fmtCompactNumber(v, { suffix: '%', signed })
 
 function MoneyValue({ value }) {
@@ -726,7 +726,7 @@ function DripProjectionsPanel() {
                   </td>
                   <td style={{ textAlign: 'right' }}>{h.shares?.toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
                   <td style={{ textAlign: 'right' }}>{fmt$(h.price)}</td>
-                  <td style={{ textAlign: 'right' }}>{h.div_per_share != null ? '$' + h.div_per_share.toFixed(4) : '\u2014'}</td>
+                  <td style={{ textAlign: 'right' }}>{formatMoney(h.div_per_share, { digits: 4 })}</td>
                   <td style={{ color: 'var(--text-dim)', fontSize: '0.76rem' }}>{h.frequency || '\u2014'}</td>
                   <td style={{ textAlign: 'right', color: 'var(--p-ffb74d)' }}>{h.yield_pct != null ? h.yield_pct.toFixed(2) + '%' : '\u2014'}</td>
                   <td style={{ textAlign: 'right', padding: '0.2rem 0.3rem' }}>
@@ -1735,14 +1735,14 @@ export default function PortfolioIncomeSim() {
             <thead>
               <tr>
                 <th style={{ textAlign: 'left', width: 100 }}>Ticker</th>
-                <th style={{ textAlign: 'left', width: 140 }}>Amount ($)</th>
+                <th style={{ textAlign: 'left', width: 140 }}>Amount</th>
                 <th style={{ textAlign: 'left', width: 140 }}>Reinvest %</th>
                 <th style={{ textAlign: 'left', width: 140 }}>Yield Override %</th>
                 <th style={{ width: 40 }}></th>
               </tr>
               <tr style={{ fontSize: '0.68rem', color: 'var(--p-666)' }}>
                 <th style={{ textAlign: 'left', fontWeight: 400, paddingTop: 0 }}>ETF / stock symbol</th>
-                <th style={{ textAlign: 'left', fontWeight: 400, paddingTop: 0 }}>$ to invest</th>
+                <th style={{ textAlign: 'left', fontWeight: 400, paddingTop: 0 }}>To invest</th>
                 <th style={{ textAlign: 'left', fontWeight: 400, paddingTop: 0 }}>% divs reinvested</th>
                 <th style={{ textAlign: 'left', fontWeight: 400, paddingTop: 0 }}>Manual yield (blank=auto)</th>
                 <th></th>
@@ -1837,7 +1837,7 @@ export default function PortfolioIncomeSim() {
               {compTickers.map(t => (
                 <span key={t} className="pis-comp-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                   <strong>{t}</strong>
-                  <span style={{ fontSize: '0.74rem', color: 'var(--p-888)', whiteSpace: 'nowrap' }}>Amount $</span>
+                  <span style={{ fontSize: '0.74rem', color: 'var(--p-888)', whiteSpace: 'nowrap' }}>Amount</span>
                   <input type="number" min="0" step="500"
                     value={compAmount[t] || 10000}
                     onChange={e => updateCompAmount(t, e.target.value)}

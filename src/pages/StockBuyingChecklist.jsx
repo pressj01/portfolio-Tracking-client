@@ -5,6 +5,7 @@ import {
   computeSectorStats,
   SCORE_WEIGHTS,
 } from '../utils/stockGrading'
+import { formatMoney, formatMoneyCompact } from '../utils/money'
 
 const QUESTION_DETAILS = {
   1: [
@@ -59,10 +60,8 @@ const scoreTone = (value) => {
 const fmtMoney = (n) => {
   if (n === null || n === undefined || !Number.isFinite(Number(n))) return '-'
   const v = Number(n)
-  if (Math.abs(v) >= 1e12) return `$${(v / 1e12).toFixed(2)}T`
-  if (Math.abs(v) >= 1e9) return `$${(v / 1e9).toFixed(2)}B`
-  if (Math.abs(v) >= 1e6) return `$${(v / 1e6).toFixed(1)}M`
-  return `$${v.toFixed(2)}`
+  if (Math.abs(v) >= 1e6) return formatMoneyCompact(v, { fallback: '-' })
+  return formatMoney(v, { fallback: '-' })
 }
 
 function Badge({ tone, children }) {
@@ -136,7 +135,7 @@ function SecurityHeader({ metrics, result }) {
       <div className="stock-check-meta">
         <span><span>Sector: </span><strong>{metrics.sector || 'n/a'}</strong></span>
         <span><span>Industry: </span><strong>{metrics.industry || 'n/a'}</strong></span>
-        <span><span>Price: </span><strong>{metrics.price != null ? `$${Number(metrics.price).toFixed(2)}` : '-'}</strong></span>
+        <span><span>Price: </span><strong>{formatMoney(metrics.price, { fallback: '-' })}</strong></span>
         <span><span>Market cap: </span><strong>{fmtMoney(metrics.market_cap)}</strong></span>
         {metrics.earnings?.next_earnings_date && (
           <span>
@@ -407,7 +406,7 @@ function ScanTab() {
                     <tr key={r.ticker}>
                       <td><strong className="stock-check-table-ticker">{r.ticker}</strong></td>
                       <td>{r.sector}</td>
-                      <td className="stock-check-num">{r.price != null ? `$${Number(r.price).toFixed(2)}` : '-'}</td>
+                      <td className="stock-check-num">{formatMoney(r.price, { fallback: '-' })}</td>
                       <td className="stock-check-num stock-check-muted">{cell(r.pe, 'x')}</td>
                       <td className="stock-check-num stock-check-muted">{cell(r.peg, 'x')}</td>
                       <td className="stock-check-num">{cell(r.fund)}</td>

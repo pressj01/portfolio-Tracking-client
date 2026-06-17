@@ -3,11 +3,10 @@ import Plot from '../components/ThemedPlot'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
+import { formatMoney } from '../utils/money'
 
 const fmtMoney = (v, digits = 2) => {
-  const n = Number(v)
-  if (!Number.isFinite(n)) return '$0.00'
-  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+  return formatMoney(v, { digits, zeroIfInvalid: true })
 }
 
 const fmtPct = (v, digits = 1) => {

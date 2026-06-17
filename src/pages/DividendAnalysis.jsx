@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme, themedPlotlyLayout } from '../utils/chartTheme'
+import { formatMoney } from '../utils/money'
 
 function GradeBadge({ grade, large }) {
   if (!grade || grade === 'N/A') return <span className={`grade-badge grade-na ${large ? 'grade-lg' : ''}`}>N/A</span>
@@ -19,7 +20,7 @@ function MetricCard({ label, value }) {
   )
 }
 
-const fmt = v => v != null ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'
+const fmt = v => formatMoney(v)
 const fmtPct = v => v != null ? `${(Number(v) * 100).toFixed(2)}%` : '—'
 const fmtPctRaw = v => v != null ? `${Number(v).toFixed(2)}%` : '—'
 
@@ -49,7 +50,7 @@ function SafetyModelLabel({ model }) {
 
 const METRIC_OPTIONS = [
   { value: 'yield_pct', label: 'Yield (%)' },
-  { value: 'annual_payout', label: 'Annual payout ($)' },
+  { value: 'annual_payout', label: 'Annual payout' },
 ]
 const GROUP_OPTIONS = [
   { value: 'holdings', label: 'Holdings' },
@@ -536,7 +537,7 @@ function DividendPipelineChart({ pipeline }) {
       type: 'scatter',
       mode: 'text',
       name: 'Total',
-      text: totals.map(v => v > 0 ? `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : ''),
+      text: totals.map(v => v > 0 ? formatMoney(v, { digits: 0 }) : ''),
       textposition: 'top center',
       textfont: { color: ct.title, size: 11 },
       hoverinfo: 'skip',
@@ -782,9 +783,9 @@ export default function DividendAnalysis() {
     { key: 'ex_div_date', label: 'Ex-Div Date', align: 'center', tip: 'Ex-dividend date' },
     { key: 'div_pay_date', label: 'Pay Date', align: 'center', tip: 'Dividend payment date' },
     { key: 'quantity', label: 'Shares', fmt: v => v != null ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 4 }) : '\u2014', align: 'right', tip: 'Number of shares held' },
-    { key: 'div_per_share', label: '$/Share', fmt: v => v != null ? `$${Number(v).toFixed(4)}` : '\u2014', align: 'right', tip: 'Dividend amount per share' },
+    { key: 'div_per_share', label: 'Dist./Share', fmt: v => formatMoney(v, { digits: 4 }), align: 'right', tip: 'Dividend amount per share' },
     // \u2500\u2500 Income estimates (derived from the above) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-    { key: 'approx_monthly_income', label: 'Est. Monthly', fmt: fmt, align: 'right', tip: 'Estimated monthly dividend income (shares \u00d7 $/share \u00d7 frequency)' },
+    { key: 'approx_monthly_income', label: 'Est. Monthly', fmt: fmt, align: 'right', tip: 'Estimated monthly dividend income (shares × distribution per share × frequency)' },
     { key: 'estim_payment_per_year', label: 'Est. Annual', fmt: fmt, align: 'right', tip: 'Estimated annual dividend income' },
     { key: 'annual_yield_on_cost', label: 'Yield on Cost', fmt: fmtPct, align: 'right', tip: 'Annual dividend yield based on your cost basis' },
     { key: 'current_annual_yield', label: 'Current Yield', fmt: fmtPct, align: 'right', tip: 'Current annual dividend yield based on market price' },

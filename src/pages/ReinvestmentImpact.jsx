@@ -3,8 +3,9 @@ import Plot from '../components/ThemedPlot'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
+import { formatMoneyWhole } from '../utils/money'
 
-const fmt$ = v => v == null ? '—' : '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+const fmt$ = v => formatMoneyWhole(v)
 const fmtShares = v => v == null ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmtPct1 = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`
 const fmtYears = v => v == null ? '—' : v < 1 / 12 ? '<1 mo' : v < 1 ? `${Math.round(v * 12)} mo` : `${v.toFixed(1)} yr`
@@ -778,7 +779,7 @@ export default function ReinvestmentImpact() {
               )}
             </div>
             <div className="growth-filter-group">
-              <label>Monthly Add $</label>
+              <label>Monthly Add</label>
               <input type="number" min="0" value={monthlyContribution}
                 onChange={e => setMonthlyContribution(Math.max(0, Number(e.target.value) || 0))}
                 style={{ width: '110px', padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: 'var(--p-0a1929)', color: 'var(--p-c5d0dc)', border: '1px solid var(--p-1a3a5c)', borderRadius: '4px' }} />

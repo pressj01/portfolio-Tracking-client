@@ -7,11 +7,12 @@ import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
 import { returnVsYield } from '../utils/returnVsYield'
 import { readDashboardCache, writeDashboardCache } from '../utils/dashboardCache'
+import { formatMoney } from '../utils/money'
 
 const DASHBOARD_CACHE_TTL_MS = 60 * 60 * 1000
 const SP500_CACHE_KEY = 'portfolio_dashboard_sp500'
 
-const fmt = (v, d = 2) => '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
+const fmt = (v, d = 2) => formatMoney(v, { digits: d, zeroIfInvalid: true })
 const fmtShares = (v) => Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 })
 const dripSharePrice = (h) => {
   const currentPrice = Number(h?.current_price || 0)
@@ -141,7 +142,7 @@ function UpcomingDividends({ events }) {
               Pay: {e.pay_estimated === false ? '' : '~'}{e.pay_weekday} {new Date(e.pay_date + 'T00:00').toLocaleDateString()}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem' }}>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-dim-2)' }}>${e.amount}/share</span>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-dim-2)' }}>{formatMoney(e.amount)}/share</span>
               <span style={{ fontSize: '0.85rem', color: 'var(--pos)', fontWeight: 600 }}>{fmt(e.est_payment)}</span>
             </div>
           </div>
@@ -1515,7 +1516,7 @@ export default function Dashboard() {
                     {riskNum(risk.delta_down, tickerRiskLoading)}
                   </td>
                   <td style={{ textAlign: 'center', color: h.ret_vs_yld?.color || 'var(--p-6f7890)', fontWeight: 600 }} title={h.ret_vs_yld ? `Total Return ${h.ret_vs_yld.totalReturnPct?.toFixed(2)}% vs Yield ${h.ret_vs_yld.yieldOnCost?.toFixed(2)}% (spread ${h.ret_vs_yld.spread?.toFixed(2)}%)` : 'N/A'}>{h.ret_vs_yld?.label || '—'}</td>
-                  <td style={{ textAlign: 'right' }}>{h.div != null && h.div > 0 ? `$${Number(h.div).toFixed(4)}` : '—'}</td>
+                  <td style={{ textAlign: 'right' }}>{h.div != null && h.div > 0 ? formatMoney(h.div, { digits: 4 }) : '—'}</td>
                   <td style={{ textAlign: 'right' }}>{pct(h.current_annual_yield)}</td>
                   <td style={{ textAlign: 'right' }}>{pct(h.annual_yield_on_cost)}</td>
                   <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(h.ytd_divs)}</td>

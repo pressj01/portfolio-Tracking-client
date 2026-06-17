@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { formatMoney } from '../utils/money'
 
 function fmt$(v) {
-  const n = Number(v || 0)
-  return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatMoney(v, { zeroIfInvalid: true })
 }
 
 function fmtPct(v) {
@@ -849,7 +849,7 @@ export default function RebalanceWizard() {
                     <th>Drift</th>
                     <th>Current Value</th>
                     <th>Target Value</th>
-                    <th>$ to Target</th>
+                    <th>To Target</th>
                     <th>After Edits</th>
                     <th>Income Before</th>
                     <th>Income After</th>

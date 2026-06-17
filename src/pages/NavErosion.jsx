@@ -3,9 +3,10 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import Plot from '../components/ThemedPlot'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
+import { formatMoney } from '../utils/money'
 
 function fmt$(v) {
-  return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatMoney(v)
 }
 function fmt4(v) {
   return v.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })

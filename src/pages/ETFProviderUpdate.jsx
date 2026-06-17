@@ -1,15 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { API_BASE } from '../config'
+import { convertMoneyValue, getCurrencySymbol } from '../utils/money'
 
 const fmtAssets = (v) => {
   if (v == null) return '-'
-  const n = Number(v)
+  const n = Number(convertMoneyValue(v))
   if (!Number.isFinite(n)) return '-'
   const compact = (value) => value.toLocaleString(undefined, { maximumSignificantDigits: 4 })
   const abs = Math.abs(n)
-  if (abs >= 1e9) return `$${compact(n / 1e9)} Billion`
-  if (abs >= 1e6) return `$${compact(n / 1e6)} Million`
-  return '$' + compact(n)
+  if (abs >= 1e9) return `${getCurrencySymbol()}${compact(n / 1e9)} Billion`
+  if (abs >= 1e6) return `${getCurrencySymbol()}${compact(n / 1e6)} Million`
+  return getCurrencySymbol() + compact(n)
 }
 
 const fmtPct = (v) => v == null ? '-' : `${Number(v).toFixed(2)}%`

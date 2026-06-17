@@ -140,7 +140,7 @@ function gradeFundamentalGroup(group, fundamentals, benchmark, earnings) {
   // EPS / earnings-quality nudges
   if (group.key === 'growth') {
     const eps = num(fundamentals.eps)
-    if (eps !== null) metrics.push({ label: 'EPS (TTM)', value: `$${eps.toFixed(2)}`, badge: eps > 0 ? 'pass' : 'fail' })
+    if (eps !== null) metrics.push({ label: 'EPS (TTM)', value: formatMoney(eps), badge: eps > 0 ? 'pass' : 'fail' })
     if (eps !== null) scores.push(eps > 0 ? 85 : 25)
     if (earnings && num(earnings.recent_beats) !== null && num(earnings.recent_reports)) {
       metrics.push({ label: 'Recent earnings beats', value: `${earnings.recent_beats}/${earnings.recent_reports}` })
@@ -190,9 +190,9 @@ function gradeTechnicals(t) {
     question: 'Is the price trend constructive?',
     badge: signalBadge(t.trend_state), score: trendScore,
     metrics: [
-      { label: 'Price', value: num(t.price) === null ? 'n/a' : `$${Number(t.price).toFixed(2)}` },
-      { label: '50-day SMA', value: num(t.sma50) === null ? 'n/a' : `$${Number(t.sma50).toFixed(2)}` },
-      { label: '200-day SMA', value: num(t.sma200) === null ? 'n/a' : `$${Number(t.sma200).toFixed(2)}` },
+      { label: 'Price', value: num(t.price) === null ? 'n/a' : formatMoney(t.price) },
+      { label: '50-day SMA', value: num(t.sma50) === null ? 'n/a' : formatMoney(t.sma50) },
+      { label: '200-day SMA', value: num(t.sma200) === null ? 'n/a' : formatMoney(t.sma200) },
       { label: 'vs 50-day', value: fmtPct(t.pct_vs_sma50) },
       { label: 'vs 200-day', value: fmtPct(t.pct_vs_sma200) },
       { label: 'Golden cross', value: t.golden_cross === null || t.golden_cross === undefined ? 'n/a' : (t.golden_cross ? 'Yes (50 > 200)' : 'No (50 < 200)') },
@@ -248,7 +248,7 @@ function gradeTechnicals(t) {
       { label: 'OBV trend (20d)', value: fmtPct(t.obv_trend_pct), badge: signalBadge(t.volume_state) },
       { label: 'Volume vs 20d avg', value: num(t.volume_vs_avg) === null ? 'n/a' : `${Number(t.volume_vs_avg).toFixed(2)}×` },
       { label: '52-wk range position', value: num(t.range_position_pct) === null ? 'n/a' : `${Number(t.range_position_pct).toFixed(0)}%`, badge: rScore === null ? 'info' : rScore >= 80 ? 'pass' : rScore >= 50 ? 'warn' : 'fail' },
-      { label: '52-wk low / high', value: `${num(t.fifty_two_week_low) === null ? 'n/a' : '$' + Number(t.fifty_two_week_low).toFixed(2)} / ${num(t.fifty_two_week_high) === null ? 'n/a' : '$' + Number(t.fifty_two_week_high).toFixed(2)}` },
+      { label: '52-wk low / high', value: `${num(t.fifty_two_week_low) === null ? 'n/a' : formatMoney(t.fifty_two_week_low)} / ${num(t.fifty_two_week_high) === null ? 'n/a' : formatMoney(t.fifty_two_week_high)}` },
     ],
     rationale: `On-balance volume is ${t.volume_state === 'BUY' ? 'rising (accumulation)' : t.volume_state === 'SELL' ? 'falling (distribution)' : 'flat'}`
       + (num(t.range_position_pct) === null ? '.' : `; price sits at ${Number(t.range_position_pct).toFixed(0)}% of its 52-week range (lower is a better entry).`),
@@ -348,3 +348,4 @@ export function gradeStock(metrics, opts = {}) {
     verdict,
   }
 }
+import { formatMoney } from './money'

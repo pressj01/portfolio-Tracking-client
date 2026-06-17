@@ -3,6 +3,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
+import { formatMoney, formatMoneyWhole, getCurrencyLabel } from '../utils/money'
 
 // 30 bright, high-contrast colors for dark backgrounds
 const PALETTE = [
@@ -12,9 +13,9 @@ const PALETTE = [
   '#D5C5EE','#DDBBAA','#FFCCEE','#DDDDDD','#EEEE99','#AAEEFF',
 ]
 
-const fmt = v => v != null ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'
+const fmt = v => formatMoney(v)
 const fmtPct = v => v != null ? `${Number(v).toFixed(2)}%` : '—'
-const fmtInt = v => v != null ? `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'
+const fmtInt = v => formatMoneyWhole(v)
 
 function MetricCard({ label, value, className }) {
   return (
@@ -207,7 +208,7 @@ export default function TotalReturn() {
       data: traces,
       layout: {
         title: {
-          text: `${scatterReturnMode === 'dollar' ? 'Total Return $' : 'Total Return %'} vs Annual Yield on Cost (Since Purchase)`,
+          text: `${scatterReturnMode === 'dollar' ? `Total Return (${getCurrencyLabel()})` : 'Total Return %'} vs Annual Yield on Cost (Since Purchase)`,
           font: { color: '#e0e8f0' },
         },
         template: 'plotly_dark',
@@ -219,7 +220,7 @@ export default function TotalReturn() {
         },
         yaxis: {
           title: {
-            text: scatterReturnMode === 'dollar' ? 'Total Return $ (Since Purchase)' : 'Total Return % (Since Purchase)',
+            text: scatterReturnMode === 'dollar' ? `Total Return (${getCurrencyLabel()}, Since Purchase)` : 'Total Return % (Since Purchase)',
             font: { color: '#d0dde8' },
           },
           tickfont: { color: '#c0cdd8', size: 12 },
@@ -370,14 +371,14 @@ export default function TotalReturn() {
     { key: 'ticker', label: 'Ticker' },
     { key: 'category_name', label: 'Category' },
     { key: 'quantity', label: 'Shares', fmt: v => v != null ? Number(v).toFixed(3) : '—' },
-    { key: 'price_paid', label: 'Price Paid', fmt: v => v != null ? `$${Number(v).toFixed(4)}` : '—' },
-    { key: 'current_price', label: 'Curr Price', fmt: v => v != null ? `$${Number(v).toFixed(4)}` : '—' },
+    { key: 'price_paid', label: 'Price Paid', fmt: v => formatMoney(v, { digits: 4 }) },
+    { key: 'current_price', label: 'Curr Price', fmt: v => formatMoney(v, { digits: 4 }) },
     { key: 'purchase_value', label: 'Invested', fmt },
     { key: 'current_value', label: 'Curr Value', fmt },
     { key: 'gain_or_loss', label: 'Price G/L', fmt },
     { key: 'price_return_pct', label: 'Price Ret %', fmt: fmtPct },
     { key: 'total_divs_received', label: 'Divs Rcvd', fmt },
-    { key: 'total_return_dollar', label: 'Total Ret $', fmt },
+    { key: 'total_return_dollar', label: 'Total Return', fmt },
     { key: 'total_return_pct', label: 'Total Ret %', fmt: fmtPct },
     { key: 'ret_vs_yld', label: 'RvY', sortKey: 'ret_vs_yld_sort' },
   ]
@@ -472,7 +473,7 @@ export default function TotalReturn() {
             <MetricCard label="Current Value" value={fmtInt(t.current_value)} />
             <MetricCard label="Price Gain / Loss" value={<span style={{ color: (t.price_gl || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.price_gl)}</span>} />
             <MetricCard label="Total Divs Received" value={fmtInt(t.total_divs)} />
-            <MetricCard label="Total Return $" value={<span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>} />
+            <MetricCard label="Total Return" value={<span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>} />
             <MetricCard label="Total Return %" value={<span style={{ color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.total_return_pct)}</span>} />
             {chartData?.spy_ret != null && (
               <MetricCard label={`SPY - ${chartData.period_label || '1Y'}`}
@@ -587,7 +588,7 @@ export default function TotalReturn() {
         <>
           <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginTop: '1.5rem', marginBottom: '0.25rem' }}>
             <h2 style={{ margin: 0 }}>
-              Total Return {scatterReturnMode === 'dollar' ? '$' : '%'} vs Yield on Cost <span className="tr-period-inline">— Since Purchase</span>
+              Total Return {scatterReturnMode === 'dollar' ? getCurrencyLabel() : '%'} vs Yield on Cost <span className="tr-period-inline">— Since Purchase</span>
             </h2>
             <div className="growth-filter-group" style={{ alignItems: 'flex-start' }}>
               <label>Return View</label>
@@ -597,7 +598,7 @@ export default function TotalReturn() {
                   onClick={() => setScatterReturnMode('pct')}>%</button>
                 <button className={`tr-pbtn${scatterReturnMode === 'dollar' ? ' tr-pbtn-active' : ''}`}
                   style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
-                  onClick={() => setScatterReturnMode('dollar')}>$</button>
+                  onClick={() => setScatterReturnMode('dollar')}>{getCurrencyLabel()}</button>
               </div>
             </div>
           </div>

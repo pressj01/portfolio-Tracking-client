@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfileFetch } from '../context/ProfileContext'
+import { formatMoney, formatMoneyCompact } from '../utils/money'
 
 const TABS = [
   { key: 'overview', label: 'Descriptive' },
@@ -97,20 +98,14 @@ const TAB_COLUMNS = {
 
 function fmtVal(v, fmt) {
   if (v == null) return '\u2014'
-  if (fmt === 'cap') {
-    const n = Number(v)
-    if (n >= 1e12) return (n / 1e12).toFixed(2) + 'T'
-    if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B'
-    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'
-    return n.toLocaleString()
-  }
+  if (fmt === 'cap') return formatMoneyCompact(v, { minCompact: 1e3 })
   if (fmt === 'vol') {
     const n = Number(v)
     if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'
     if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
     return n.toLocaleString()
   }
-  if (fmt === 'price') return Number(v).toFixed(2)
+  if (fmt === 'price') return formatMoney(v)
   if (fmt === 'pct') return Number(v).toFixed(2) + '%'
   if (fmt === 'dec2') return Number(v).toFixed(2)
   if (fmt === 'dec4') return Number(v).toFixed(4)
@@ -130,7 +125,7 @@ const RANGE_FILTERS = [
     { label: 'Small (300M-2B)', min: 300e6, max: 2e9 },
     { label: 'Micro (<300M)', min: '', max: 300e6 },
   ]},
-  { key: 'price', label: 'Price $' },
+  { key: 'price', label: 'Price' },
   { key: 'pe_ratio', label: 'P/E' },
   { key: 'forward_pe', label: 'Fwd P/E' },
   { key: 'dividend_yield', label: 'Div Yield %' },

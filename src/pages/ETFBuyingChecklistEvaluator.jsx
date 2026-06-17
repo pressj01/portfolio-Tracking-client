@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { API_BASE } from '../config'
 import FundScanTab from '../components/FundScanTab'
+import { formatMoney, formatMoneyCompact } from '../utils/money'
 import {
   ETF_DEFAULT_THRESHOLDS,
   OPTION_DEFAULT_THRESHOLDS,
@@ -71,10 +72,8 @@ function saveThresholds(t) {
 const fmtMoney = (n) => {
   if (n === null || n === undefined || !Number.isFinite(Number(n))) return '-'
   const v = Number(n)
-  if (Math.abs(v) >= 1e12) return `$${(v / 1e12).toFixed(2)}T`
-  if (Math.abs(v) >= 1e9) return `$${(v / 1e9).toFixed(2)}B`
-  if (Math.abs(v) >= 1e6) return `$${(v / 1e6).toFixed(1)}M`
-  return `$${v.toFixed(2)}`
+  if (Math.abs(v) >= 1e6) return formatMoneyCompact(v, { fallback: '-' })
+  return formatMoney(v, { fallback: '-' })
 }
 const fmtPct = (n) => (n === null || n === undefined || !Number.isFinite(Number(n)) ? '-' : `${Number(n).toFixed(2)}%`)
 
@@ -215,8 +214,8 @@ function HeaderCard({ fund }) {
         <span><span style={{ color: 'var(--text-dim-2)' }}>Category: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.category || 'n/a'}</strong></span>
         <span><span style={{ color: 'var(--text-dim-2)' }}>Strategy: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.etf_strategy || 'n/a'}</strong></span>
         <span><span style={{ color: 'var(--text-dim-2)' }}>Fund family: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.fund_family || 'n/a'}</strong></span>
-        <span><span style={{ color: 'var(--text-dim-2)' }}>Price: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.price != null ? `$${Number(fund.price).toFixed(2)}` : '-'}</strong></span>
-        <span><span style={{ color: 'var(--text-dim-2)' }}>NAV: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.nav != null ? `$${Number(fund.nav).toFixed(2)}` : '-'}</strong></span>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>Price: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.price != null ? formatMoney(fund.price) : '-'}</strong></span>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>NAV: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.nav != null ? formatMoney(fund.nav) : '-'}</strong></span>
         <span><span style={{ color: 'var(--text-dim-2)' }}>AUM: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fmtMoney(fund.aum)}</strong></span>
         <span><span style={{ color: 'var(--text-dim-2)' }}>Yield: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fmtPct(fund.yield_pct || fund.dividend_yield)}</strong></span>
       </div>

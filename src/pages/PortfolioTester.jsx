@@ -4,6 +4,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
+import { formatMoneyDelta, formatMoneyWhole } from '../utils/money'
 
 const PRESETS = [
   { label: '6M',  years: 0.5 },
@@ -24,15 +25,12 @@ const fmtPct = (v, digits = 2) =>
   v == null || !isFinite(v) ? '—' : `${(v * 100).toFixed(digits)}%`
 const fmtNum = (v, digits = 2) =>
   v == null || !isFinite(v) ? '—' : Number(v).toFixed(digits)
-const fmtMoney = (v) =>
-  v == null || !isFinite(v) ? '—' : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+const fmtMoney = (v) => formatMoneyWhole(v)
 const fmtInt = (v) => (v == null || !isFinite(v) ? '—' : Math.round(v))
 
 const fmtSignedMoney = (v) => {
   if (v == null || !isFinite(v)) return '--'
-  const n = Number(v)
-  const sign = n > 0 ? '+' : n < 0 ? '-' : ''
-  return `${sign}$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+  return formatMoneyDelta(v, { digits: 0, fallback: '--' })
 }
 
 function todayISO() { return new Date().toISOString().slice(0, 10) }
@@ -262,7 +260,7 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
                       {h.weight != null ? (h.weight * 100).toFixed(2) + '%' : '—'}
                     </td>
                     <td style={{ padding: '0.25rem 0.5rem', textAlign: 'right', color: 'var(--text-dim)' }}>
-                      {h.current_value != null ? '$' + Number(h.current_value).toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}
+                      {h.current_value != null ? fmtMoney(h.current_value) : '—'}
                     </td>
                   </tr>
                 ))}
@@ -1060,8 +1058,8 @@ export default function PortfolioTester() {
                   <th style={thR}>Best Yr</th>
                   <th style={thR}>Worst Yr</th>
                   <th style={thR}>+ Months %</th>
-                  <th style={thR}>Final $</th>
-                  <th style={thR}>Divs Paid $</th>
+                  <th style={thR}>Final Value</th>
+                  <th style={thR}>Divs Paid</th>
                 </tr>
               </thead>
               <tbody>

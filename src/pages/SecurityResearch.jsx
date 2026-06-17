@@ -5,33 +5,31 @@ import DistributionHistoryChart from '../components/DistributionHistoryChart'
 import { returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
+import { convertMoneyValue, formatMoney, formatMoneyCompact, getCurrencySymbol } from '../utils/money'
 
 const fmtMoney = (v) => {
   if (v == null) return '-'
   const n = Number(v)
   const abs = Math.abs(n)
-  if (abs >= 1e12) return '$' + (n / 1e12).toFixed(2) + 'T'
-  if (abs >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B'
-  if (abs >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M'
-  return '$' + n.toLocaleString(undefined, { maximumFractionDigits: 2 })
+  if (abs >= 1e6) return formatMoneyCompact(n, { fallback: '-' })
+  return formatMoney(n, { maximumFractionDigits: 2, minimumFractionDigits: 0, fallback: '-' })
 }
 
 const fmtNum = (v, d = 2) => v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: d })
 const fmtPct = (v) => v == null ? '-' : Number(v).toFixed(2) + '%'
 const fmtDate = (v) => v || '-'
 const fmt = (v) => {
-  if (v == null) return '—'
-  return '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatMoney(v)
 }
 const fmtAssets = (v) => {
   if (v == null) return '-'
-  const n = Number(v)
+  const n = Number(convertMoneyValue(v))
   if (!Number.isFinite(n)) return '-'
   const abs = Math.abs(n)
   const compact = (value) => value.toLocaleString(undefined, { maximumSignificantDigits: 4 })
-  if (abs >= 1e9) return `$${compact(n / 1e9)} Billion`
-  if (abs >= 1e6) return `$${compact(n / 1e6)} Million`
-  return '$' + compact(n)
+  if (abs >= 1e9) return `${getCurrencySymbol()}${compact(n / 1e9)} Billion`
+  if (abs >= 1e6) return `${getCurrencySymbol()}${compact(n / 1e6)} Million`
+  return getCurrencySymbol() + compact(n)
 }
 const fmtPctVal = (v) => {
   if (v == null) return '—'
@@ -250,7 +248,7 @@ function ETFResult({ data, onOpenChart, return1y }) {
     [yieldLabel, fmtPct(data.estimated_yield_pct)],
     ['30-Day SEC Yield', fmtPct(data.sec_30_day_yield_pct)],
     ['1Y Ret vs Yield', return1y == null ? '-' : <span style={{ color: rvy?.color || 'var(--p-6f7890)' }} title={rvy ? `1Y Return ${rvy.totalReturnPct?.toFixed(2)}% vs Yield ${rvy.yieldOnCost?.toFixed(2)}% (spread ${rvy.spread?.toFixed(2)}%)` : undefined}>{rvy?.label || '-'}</span>],
-    ['TTM Dividend/Share', data.ttm_dividend_per_share == null ? '-' : '$' + fmtNum(data.ttm_dividend_per_share, 4)],
+    ['TTM Dividend/Share', formatMoney(data.ttm_dividend_per_share, { digits: 4, fallback: '-' })],
     ['Last Dividend', data.last_dividend ? `${fmtMoney(data.last_dividend.amount)} on ${data.last_dividend.date}` : '-'],
     ['Source', (() => {
       const base = data.source_url ? <a href={data.source_url} target="_blank" rel="noreferrer">{data.data_source || 'Source'}</a> : (data.data_source || '-')
@@ -348,7 +346,7 @@ function StockResult({ data, onOpenChart, return1y }) {
     ['Dividend Yield', fmtPct(data.dividend_yield_pct)],
     ['1Y Ret vs Yield', return1y == null ? '-' : <span style={{ color: rvyStock?.color || 'var(--p-6f7890)' }} title={rvyStock ? `1Y Return ${rvyStock.totalReturnPct?.toFixed(2)}% vs Yield ${rvyStock.yieldOnCost?.toFixed(2)}% (spread ${rvyStock.spread?.toFixed(2)}%)` : undefined}>{rvyStock?.label || '-'}</span>],
     ['Payout Ratio', fmtPct(data.payout_ratio_pct)],
-    ['TTM Dividend/Share', data.ttm_dividend_per_share == null ? '-' : '$' + fmtNum(data.ttm_dividend_per_share, 4)],
+    ['TTM Dividend/Share', formatMoney(data.ttm_dividend_per_share, { digits: 4, fallback: '-' })],
     ['Last Dividend', data.last_dividend ? `${fmtMoney(data.last_dividend.amount)} on ${data.last_dividend.date}` : '-'],
   ]
 

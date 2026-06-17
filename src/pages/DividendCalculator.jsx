@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import Plot from '../components/ThemedPlot'
 import { useProfileFetch } from '../context/ProfileContext'
+import { formatMoney, formatMoneyCompact, formatMoneyWhole } from '../utils/money'
 
 const FREQ_OPTIONS = [
   { code: 'W',  label: 'Weekly',        per_year: 52 },
@@ -25,10 +26,8 @@ const fmtMoney = (v) => {
   const n = Number(v)
   if (!Number.isFinite(n)) return '-'
   const abs = Math.abs(n)
-  if (abs >= 1e15) return '$' + n.toExponential(2)
-  if (abs >= 1e12) return '$' + (n / 1e12).toLocaleString('en-US', { maximumFractionDigits: 2 }) + 'T'
-  if (abs >= 1e9) return '$' + (n / 1e9).toLocaleString('en-US', { maximumFractionDigits: 2 }) + 'B'
-  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  if (abs >= 1e9) return formatMoneyCompact(n, { fallback: '-' })
+  return formatMoney(n, { fallback: '-' })
 }
 
 const fmtMoneyShort = (v) => {
@@ -36,11 +35,8 @@ const fmtMoneyShort = (v) => {
   const n = Number(v)
   if (!Number.isFinite(n)) return '-'
   const abs = Math.abs(n)
-  if (abs >= 1e15) return '$' + n.toExponential(2)
-  if (abs >= 1e12) return '$' + (n / 1e12).toLocaleString('en-US', { maximumFractionDigits: 2 }) + 'T'
-  if (abs >= 1e9) return '$' + (n / 1e9).toLocaleString('en-US', { maximumFractionDigits: 2 }) + 'B'
-  if (abs >= 1e6) return '$' + (n / 1e6).toLocaleString('en-US', { maximumFractionDigits: 2 }) + 'M'
-  return '$' + Math.round(n).toLocaleString('en-US')
+  if (abs >= 1e6) return formatMoneyCompact(n, { fallback: '-' })
+  return formatMoneyWhole(n, { fallback: '-' })
 }
 
 const fmtPct = (v, d = 2) => {

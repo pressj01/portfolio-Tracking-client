@@ -5,6 +5,7 @@ import DialogProvider from './components/DialogProvider'
 import ProfileProvider, { useProfile } from './context/ProfileContext'
 import ThemeProvider, { useTheme } from './context/ThemeContext'
 import { chartTheme, themedPlotlyLayout } from './utils/chartTheme'
+import { convertPlotlyCurrency } from './utils/money'
 import MarketRefreshProvider from './context/MarketRefreshContext'
 import Dashboard from './pages/Dashboard'
 import Import from './pages/Import'
@@ -72,10 +73,16 @@ function PlotlyThemeBridge() {
     const originalNewPlot = window.Plotly.newPlot?.bind(window.Plotly)
     const originalReact = window.Plotly.react?.bind(window.Plotly)
     if (originalNewPlot) {
-      window.Plotly.newPlot = (el, data, layout, config) => originalNewPlot(el, data, themedPlotlyLayout(layout, document.documentElement.dataset.theme !== 'light'), config)
+      window.Plotly.newPlot = (el, data, layout, config) => {
+        const converted = convertPlotlyCurrency(data, layout)
+        return originalNewPlot(el, converted.data, themedPlotlyLayout(converted.layout, document.documentElement.dataset.theme !== 'light'), config)
+      }
     }
     if (originalReact) {
-      window.Plotly.react = (el, data, layout, config) => originalReact(el, data, themedPlotlyLayout(layout, document.documentElement.dataset.theme !== 'light'), config)
+      window.Plotly.react = (el, data, layout, config) => {
+        const converted = convertPlotlyCurrency(data, layout)
+        return originalReact(el, converted.data, themedPlotlyLayout(converted.layout, document.documentElement.dataset.theme !== 'light'), config)
+      }
     }
     window.Plotly.__portfolioThemePatched = true
   }, [])

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
+import { formatMoney } from '../utils/money'
 
 function CategoryModal({ category, onSave, onCancel, targetBaseTotal = 0 }) {
   const [name, setName] = useState(category?.name || '')
@@ -538,7 +539,7 @@ export default function Categories() {
     setConstraintsSeeded(true)
   }, [constraintsSeeded, incomeFloorTouched, data.monthly_income, data._selection, selection])
 
-  const fmt = (v) => v != null ? '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'
+  const fmt = (v) => formatMoney(v, { fallback: '-' })
   const fmtPct = (v) => Number(v || 0).toFixed(1) + '%'
   const setConstraint = (key, value) => {
     if (key === 'minimumMonthlyIncome') {
@@ -1242,7 +1243,7 @@ export default function Categories() {
                   <th>Yield</th>
                   <th>Weekly</th>
                   <th>Quality</th>
-                  <th>$ To Suggested</th>
+                  <th>To Suggested</th>
                   <th style={{ textAlign: 'left' }}>Reason</th>
                 </tr>
               </thead>

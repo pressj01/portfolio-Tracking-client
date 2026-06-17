@@ -1,6 +1,7 @@
 // Pure grading helpers for the CEF Buying Checklist Evaluator.
 // Each criterion returns a { badge, score, rationale, metrics, ... } record.
 // Composite score averages criteria 2-7 (criterion 1 is informational).
+import { formatMoney, formatMoneyCompact } from './money'
 
 export const DEFAULT_THRESHOLDS = {
   sustainability: { passPp: 1, warnPp: 3 },
@@ -50,10 +51,7 @@ function badgeFromScore(score) {
 
 const pct = (n, digits = 2) => (n === null || n === undefined ? 'n/a' : `${Number(n).toFixed(digits)}%`)
 const money = (n) => {
-  if (n === null || n === undefined) return 'n/a'
-  if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`
-  if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(0)}K`
-  return `$${Math.round(n)}`
+  return formatMoneyCompact(n, { fallback: 'n/a' })
 }
 
 // -- Criterion 1: Portfolio match (informational only) --
@@ -98,7 +96,7 @@ function gradeSustainability(fund, thresholds) {
     { label: longTermLabel, value: pct(longTerm) },
   ]
   if (unii !== null) {
-    metrics.push({ label: 'UNII per share', value: `$${unii.toFixed(4)}` })
+    metrics.push({ label: 'UNII per share', value: formatMoney(unii, { digits: 4 }) })
     if (nav) metrics.push({ label: 'UNII as % of NAV', value: pct(unii / nav * 100, 3) })
   }
   if (eps !== null && distAmt !== null && distAmt > 0) {
@@ -137,7 +135,7 @@ function gradeSustainability(fund, thresholds) {
     rationale = 'Insufficient data to score (need distribution rate on NAV and 3Y/5Y NAV return).'
     // But if we have UNII or coverage, at least mention it
     if (unii !== null) {
-      rationale += ` UNII per share is $${unii.toFixed(4)} (${unii >= 0 ? 'positive — fund is earning more than it distributes' : 'negative — fund is distributing more than it earns'}).`
+      rationale += ` UNII per share is ${formatMoney(unii, { digits: 4 })} (${unii >= 0 ? 'positive — fund is earning more than it distributes' : 'negative — fund is distributing more than it earns'}).`
     }
     return {
       id: 2, key: 'sustainability',
@@ -159,7 +157,7 @@ function gradeSustainability(fund, thresholds) {
   }
   // Append UNII context
   if (unii !== null) {
-    rationale += ` UNII $${unii.toFixed(4)} (${unii >= 0 ? 'positive — earning surplus' : 'negative — earning deficit'}).`
+    rationale += ` UNII ${formatMoney(unii, { digits: 4 })} (${unii >= 0 ? 'positive — earning surplus' : 'negative — earning deficit'}).`
   }
   // Append EPS coverage context
   if (eps !== null && distAmt !== null && distAmt > 0) {

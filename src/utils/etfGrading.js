@@ -2,6 +2,7 @@
 // Reuses scoreBand / badgeFromScore / verdictFromComposite from cefGrading.js.
 
 import { verdictFromComposite, gradeRiskRatios } from './cefGrading'
+import { formatMoney, formatMoneyCompact } from './money'
 export { verdictFromComposite, gradeRiskRatios }
 
 const num = (v) => {
@@ -33,14 +34,7 @@ function badgeFromScore(score) {
 
 const pct = (n, d = 2) => (n === null || n === undefined ? 'n/a' : `${Number(n).toFixed(d)}%`)
 const money = (n) => {
-  if (n === null || n === undefined) return 'n/a'
-  const v = Number(n)
-  if (!Number.isFinite(v)) return 'n/a'
-  if (Math.abs(v) >= 1e12) return `$${(v / 1e12).toFixed(2)}T`
-  if (Math.abs(v) >= 1e9) return `$${(v / 1e9).toFixed(2)}B`
-  if (Math.abs(v) >= 1e6) return `$${(v / 1e6).toFixed(1)}M`
-  if (Math.abs(v) >= 1e3) return `$${(v / 1e3).toFixed(0)}K`
-  return `$${Math.round(v)}`
+  return formatMoneyCompact(n, { fallback: 'n/a' })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -218,8 +212,8 @@ function etfGradeRisk(fund, thresholds) {
   const t = thresholds.risk
   const metrics = [
     { label: '3Y beta', value: beta !== null ? beta.toFixed(2) : 'n/a' },
-    { label: '52-wk high', value: fund.week52_high != null ? `$${Number(fund.week52_high).toFixed(2)}` : 'n/a' },
-    { label: '52-wk low', value: fund.week52_low != null ? `$${Number(fund.week52_low).toFixed(2)}` : 'n/a' },
+    { label: '52-wk high', value: fund.week52_high != null ? formatMoney(fund.week52_high) : 'n/a' },
+    { label: '52-wk low', value: fund.week52_low != null ? formatMoney(fund.week52_low) : 'n/a' },
   ]
   if (beta === null) {
     return {

@@ -1,11 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
-
-const money = (v) => '$' + Number(v || 0).toLocaleString(undefined, {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-})
+import { convertMoneyText, formatMoney } from '../utils/money'
 
 const PRIORITY_LABEL = {
   all: 'All',
@@ -45,8 +41,8 @@ function ActionItem({ item }) {
             {item.priority === 'warning' ? 'Needs review' : item.priority === 'success' ? 'Clear' : 'Watch'}
           </span>
         </div>
-        <h2>{item.title}</h2>
-        <p>{item.detail}</p>
+        <h2>{convertMoneyText(item.title)}</h2>
+        <p>{convertMoneyText(item.detail)}</p>
       </div>
       <NavLink className="btn btn-secondary ac-item-link" to={item.route || '/'}>
         {item.cta || 'Open'}
@@ -115,8 +111,8 @@ export default function ActionCenter() {
             <ActionSummaryCard label="Items" value={data.summary.item_count || 0} sub={`As of ${data.summary.as_of}`} />
             <ActionSummaryCard label="Needs Review" value={warningCount} tone={warningCount ? 'warn' : 'good'} />
             <ActionSummaryCard label="Watch" value={infoCount} />
-            <ActionSummaryCard label="Portfolio Value" value={money(data.summary.total_value)} sub={`${data.summary.holding_count} holdings`} />
-            <ActionSummaryCard label="Monthly Income" value={money(data.summary.monthly_income)} />
+            <ActionSummaryCard label="Portfolio Value" value={formatMoney(data.summary.total_value, { zeroIfInvalid: true })} sub={`${data.summary.holding_count} holdings`} />
+            <ActionSummaryCard label="Monthly Income" value={formatMoney(data.summary.monthly_income, { zeroIfInvalid: true })} />
           </div>
 
           <div className="ac-filter-row" role="tablist" aria-label="Action priority filters">

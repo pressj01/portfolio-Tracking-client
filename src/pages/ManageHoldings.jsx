@@ -4,6 +4,7 @@ import { useDialog } from '../components/DialogProvider'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
 import { clearDashboardCacheForSelection } from '../utils/dashboardCache'
+import { formatMoney } from '../utils/money'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '',
@@ -621,6 +622,7 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
   }
 
   const fmt = (v, d = 2) => v != null ? Number(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }) : '-'
+  const fmtM = (v, d = 2) => formatMoney(v, { digits: d, fallback: '-' })
 
   return (
     <div style={{
@@ -668,15 +670,15 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
                       {txn.created_at && <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)' }}>{new Date(txn.created_at + 'Z').toLocaleString()}</div>}
                     </td>
                     <td>{fmt(txn.shares, 3)}</td>
-                    <td>${fmt(txn.price_per_share)}</td>
-                    <td>${fmt(txn.fees)}</td>
-                    <td>${fmt(amount)}</td>
+                    <td>{fmtM(txn.price_per_share)}</td>
+                    <td>{fmtM(txn.fees)}</td>
+                    <td>{fmtM(amount)}</td>
                     <td style={{ color: txn.realized_gain > 0 ? 'var(--p-81c784)' : txn.realized_gain < 0 ? 'var(--p-ef9a9a)' : undefined }}>
-                      {txn.realized_gain != null ? '$' + fmt(txn.realized_gain) : '-'}
+                      {formatMoney(txn.realized_gain, { fallback: '-' })}
                     </td>
                     <td style={{ borderLeft: '1px solid var(--p-1a3a5c)', fontWeight: 600 }}>{fmt(txn.position_after, 3)}</td>
-                    <td>${fmt(txn.avg_cost_after)}</td>
-                    <td>${fmt(txn.total_cost_after)}</td>
+                    <td>{fmtM(txn.avg_cost_after)}</td>
+                    <td>{fmtM(txn.total_cost_after)}</td>
                     <td style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{txn.notes || '-'}</td>
                     <td>
                       <div style={{ display: 'flex', gap: '0.3rem' }}>
@@ -794,8 +796,8 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
                       {openLots.map(lot => (
                         <tr key={lot.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                           <td style={{ padding: '0.3rem 0.5rem' }}>{lot.transaction_date || '-'}</td>
-                          <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>${fmt(lot.price_per_share)}</td>
-                          <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>${fmt(lot.cost_per_share)}</td>
+                          <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>{fmtM(lot.price_per_share)}</td>
+                          <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>{fmtM(lot.cost_per_share)}</td>
                           <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>{fmt(lot.shares_remaining, 3)}</td>
                           <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>
                             <input type="number" step="any" min="0" max={lot.shares_remaining}
@@ -1090,11 +1092,11 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
             <div style={{ display: 'flex', gap: '2rem', marginBottom: '0.75rem', padding: '0.6rem 1rem', background: 'var(--p-0f1b2d)', borderRadius: 6, fontSize: '0.85rem' }}>
               <div>
                 <span style={{ color: 'var(--p-888)' }}>Total Annual Income: </span>
-                <span style={{ color: 'var(--text)', fontWeight: 600 }}>${totalIncome.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                <span style={{ color: 'var(--text)', fontWeight: 600 }}>{formatMoney(totalIncome)}</span>
               </div>
               <div>
                 <span style={{ color: 'var(--p-888)' }}>DRIP Income: </span>
-                <span style={{ color: 'var(--pos-muted)', fontWeight: 600 }}>${dripIncome.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                <span style={{ color: 'var(--pos-muted)', fontWeight: 600 }}>{formatMoney(dripIncome)}</span>
               </div>
               <div>
                 <span style={{ color: 'var(--p-888)' }}>% Reinvested: </span>
@@ -1446,12 +1448,14 @@ export default function ManageHoldings() {
     return Number(v).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
   }
 
+  const fmtM = (v, decimals = 2) => formatMoney(v, { digits: decimals, fallback: '-' })
+
   const fmtPct = (v) => {
     if (v == null) return '-'
     return (Number(v) * 100).toFixed(2) + '%'
   }
 
-  const fmtCurrency = (v) => `$${fmt(Number(v || 0))}`
+  const fmtCurrency = (v) => formatMoney(v, { zeroIfInvalid: true })
 
   const fmtDateLabel = (v) => {
     if (!v) return 'refresh date'
@@ -1684,15 +1688,15 @@ export default function ManageHoldings() {
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
           <div className="card" style={{ flex: '1 1 140px', minWidth: 140, padding: '0.65rem 1rem' }}>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Est. Monthly Income</div>
-            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--pos)' }}>${fmt(incTotals.monthlyIncome)}</div>
+            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--pos)' }}>{fmtM(incTotals.monthlyIncome)}</div>
           </div>
           <div className="card" style={{ flex: '1 1 140px', minWidth: 140, padding: '0.65rem 1rem' }}>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mo$ Reinvested</div>
-            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--accent-bright)' }}>${fmt(incTotals.reinvested)}</div>
+            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--accent-bright)' }}>{fmtM(incTotals.reinvested)}</div>
           </div>
           <div className="card" style={{ flex: '1 1 140px', minWidth: 140, padding: '0.65rem 1rem' }}>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mo$ Not Reinvested</div>
-            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--warning-money)' }}>${fmt(incTotals.notReinvested)}</div>
+            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--warning-money)' }}>{fmtM(incTotals.notReinvested)}</div>
           </div>
           <div className="card" style={{ flex: '1 1 140px', minWidth: 140, padding: '0.65rem 1rem' }}>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>% Reinvested</div>
@@ -1782,19 +1786,19 @@ export default function ManageHoldings() {
                   <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[4], width: FROZEN_WIDTHS[4], minWidth: FROZEN_WIDTHS[4], maxWidth: FROZEN_WIDTHS[4], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{fmt(h.quantity)}</td>
                   <td>{fmt(h.base_quantity, 4)}</td>
                   <td>{fmt(h.shares_bought_from_dividend, 4)}</td>
-                  <td>{h.total_cash_reinvested != null ? '$' + fmt(h.total_cash_reinvested) : '-'}</td>
-                  <td>${fmt(h.price_paid, 4)}</td>
-                  <td>${fmt(h.current_price)}</td>
+                  <td>{formatMoney(h.total_cash_reinvested, { fallback: '-' })}</td>
+                  <td>{fmtM(h.price_paid, 4)}</td>
+                  <td>{fmtM(h.current_price)}</td>
                   <td>{h.purchase_date || '-'}</td>
-                  <td>${fmt(h.purchase_value)}</td>
-                  <td>${fmt(h.current_value)}</td>
+                  <td>{fmtM(h.purchase_value)}</td>
+                  <td>{fmtM(h.current_value)}</td>
                   <td style={{ color: h.gain_or_loss >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)' }}>
-                    ${fmt(h.gain_or_loss)}
+                    {fmtM(h.gain_or_loss)}
                   </td>
                   <td style={{ color: h.gain_or_loss_percentage >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)' }}>
                     {fmtPct(h.gain_or_loss_percentage)}
                   </td>
-                  <td>${fmt(h.div, 4)}</td>
+                  <td>{fmtM(h.div, 4)}</td>
                   <td>{h.div_frequency || '-'}</td>
                   <td>{h.ex_div_date || '-'}</td>
                   <td>{h.div_pay_date || '-'}</td>
@@ -1843,13 +1847,13 @@ export default function ManageHoldings() {
                       style={{ cursor: 'pointer', width: '16px', height: '16px' }}
                     />
                   </td>
-                  <td>${fmt(h.estim_payment_per_year, 3)}</td>
-                  <td>${fmt(h.approx_monthly_income, 3)}</td>
+                  <td>{fmtM(h.estim_payment_per_year, 3)}</td>
+                  <td>{fmtM(h.approx_monthly_income, 3)}</td>
                   <td>{fmtPct(h.annual_yield_on_cost)}</td>
                   <td>{fmtPct(h.current_annual_yield)}</td>
-                  <td>${fmt(h.dividend_paid)}</td>
-                  <td>${fmt(h.ytd_divs)}</td>
-                  <td>${fmt(h.total_divs_received)}</td>
+                  <td>{fmtM(h.dividend_paid)}</td>
+                  <td>{fmtM(h.ytd_divs)}</td>
+                  <td>{fmtM(h.total_divs_received)}</td>
                   <td>{fmtPct(h.paid_for_itself)}</td>
                   <td>{sourceBadge(h.dividend_actuals_source)}</td>
                   <td>
@@ -1858,7 +1862,7 @@ export default function ManageHoldings() {
                       : '-'}
                   </td>
                   <td style={{ color: h.realized_gains > 0 ? 'var(--p-81c784)' : h.realized_gains < 0 ? 'var(--p-ef9a9a)' : undefined }}>
-                    {h.realized_gains ? '$' + fmt(h.realized_gains) : '-'}
+                    {h.realized_gains ? formatMoney(h.realized_gains) : '-'}
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: '0.4rem' }}>
@@ -1912,18 +1916,18 @@ export default function ManageHoldings() {
                                       {txn.created_at && <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)' }}>{new Date(txn.created_at + 'Z').toLocaleString()}</div>}
                                     </td>
                                     <td style={{ padding: '0.3rem 0.75rem' }}>{fmt(txn.shares, 3)}</td>
-                                    <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(txn.price_per_share)}</td>
-                                    <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(txn.fees)}</td>
-                                    <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(lotCost)}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem' }}>{fmtM(txn.price_per_share)}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem' }}>{fmtM(txn.fees)}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem' }}>{fmtM(lotCost)}</td>
                                     <td style={{ padding: '0.3rem 0.75rem', color: lotGL != null ? (lotGL >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)') : undefined }}>
-                                      {lotGL != null ? '$' + fmt(lotGL) : '-'}
+                                      {formatMoney(lotGL, { fallback: '-' })}
                                     </td>
                                     <td style={{ padding: '0.3rem 0.75rem', color: txn.realized_gain != null ? (txn.realized_gain >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)') : undefined }}>
-                                      {txn.realized_gain != null ? '$' + fmt(txn.realized_gain) : '-'}
+                                      {formatMoney(txn.realized_gain, { fallback: '-' })}
                                     </td>
                                     <td style={{ padding: '0.3rem 0.75rem', borderLeft: '1px solid var(--p-1a3a5c)', fontWeight: 600 }}>{fmt(txn.position_after, 3)}</td>
-                                    <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(txn.avg_cost_after)}</td>
-                                    <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(txn.total_cost_after)}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem' }}>{fmtM(txn.avg_cost_after)}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem' }}>{fmtM(txn.total_cost_after)}</td>
                                     <td style={{ padding: '0.3rem 0.75rem', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{txn.notes || '-'}</td>
                                   </tr>
                                 )

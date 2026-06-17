@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useProfileFetch } from '../../context/ProfileContext'
+import { formatMoneyWhole } from '../../utils/money'
 
 function metricColor(val, thresholds, lowerBetter = false) {
   if (val == null) return '#8899aa'
@@ -182,9 +183,9 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
                 <div className="card" style={{ padding: '0.6rem', background: 'var(--p-0a1628)' }}>
                   <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginBottom: '0.2rem' }}>Est. Annual Income</div>
-                  <div style={{ fontSize: '0.82rem', color: 'var(--text-dim)' }}>Current: <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>${whatIfResult.currentIncome.toLocaleString()}</span></div>
+                  <div style={{ fontSize: '0.82rem', color: 'var(--text-dim)' }}>Current: <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{formatMoneyWhole(whatIfResult.currentIncome)}</span></div>
                   <div style={{ fontSize: '0.82rem', color: whatIfResult.newIncome >= whatIfResult.currentIncome ? 'var(--pos)' : 'var(--neg)' }}>
-                    Projected: <span style={{ fontWeight: 600 }}>${whatIfResult.newIncome.toLocaleString()}</span>
+                    Projected: <span style={{ fontWeight: 600 }}>{formatMoneyWhole(whatIfResult.newIncome)}</span>
                   </div>
                 </div>
                 <div className="card" style={{ padding: '0.6rem', background: 'var(--p-0a1628)' }}>

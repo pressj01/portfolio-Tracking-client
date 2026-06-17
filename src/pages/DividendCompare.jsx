@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { API_BASE } from '../config'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { formatMoney } from '../utils/money'
 
-const fmt = (v) => v == null ? '—' : '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmt = (v) => formatMoney(v)
 const pct = (v) => v == null ? '—' : (Number(v) * 100).toFixed(2) + '%'
-const fmt4 = (v) => v == null ? '—' : '$' + Number(v).toFixed(4)
+const fmt4 = (v) => formatMoney(v, { digits: 4 })
 
 function DivTable({ rows, showQty, sortCol, sortAsc, onSort, title }) {
   const sorted = useMemo(() => {

@@ -1,14 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { formatMoney, formatMoneyDelta } from '../utils/money'
 
-const fmt = (v) => v != null
-  ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-  : '—'
+const fmt = (v) => formatMoney(v)
 const fmtSigned = (v) => {
-  if (v == null) return '—'
-  const n = Number(v)
-  const s = `$${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-  return n < 0 ? `-${s}` : s
+  return formatMoneyDelta(v)
 }
 const fmtPct = (v) => v != null ? `${(Number(v) * 100).toFixed(2)}%` : '—'
 const fmtPctDelta = (v) => {
@@ -323,7 +319,7 @@ export default function TaxLossHarvest() {
                         <th style={{ textAlign: 'right' }}>Shares</th>
                         <th style={{ textAlign: 'right' }}>Cost/sh</th>
                         <th style={{ textAlign: 'right' }}>Current</th>
-                        <th style={{ textAlign: 'right' }}>Unrealized $</th>
+                        <th style={{ textAlign: 'right' }}>Unrealized Loss</th>
                         <th style={{ textAlign: 'center' }}>Term</th>
                         <th>Wash</th>
                         <th style={{ textAlign: 'right' }}>Tax Saved</th>

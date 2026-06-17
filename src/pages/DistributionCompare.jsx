@@ -3,13 +3,14 @@ import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
+import { formatMoney, formatMoneyDelta, formatMoneyWhole } from '../utils/money'
 
 const DURATION_OPTIONS = Array.from({ length: 20 }, (_, i) => ({
   value: `${i + 1}y`,
   label: `${i + 1} Year${i > 0 ? 's' : ''}`,
 }))
 
-function fmt$(v) { return '$' + Math.round(v).toLocaleString() }
+function fmt$(v) { return formatMoneyWhole(v, { zeroIfInvalid: true }) }
 function fmtS(v) { return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
 function fmtPct(v) { return (v >= 0 ? '+' : '') + v.toFixed(2) + '%' }
 function better(a, b, lower) { return lower ? (a < b ? 'dc-better' : '') : (a > b ? 'dc-better' : '') }
@@ -18,20 +19,20 @@ const FUND_COLORS = { a: '#7ecfff', b: '#ffc107', c: '#ff6b6b' }
 
 const TBL_COLS_BASE = [
   { key: '_month', label: 'Month', fmt: v => v },
-  { key: 'price', label: 'Price', fmt: v => '$' + v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
+  { key: 'price', label: 'Price', fmt: v => formatMoney(v) },
   { key: 'shares', label: 'Shares', fmt: v => v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
-  { key: 'portfolio', label: 'Portfolio $', fmt: v => '$' + Math.round(v).toLocaleString() },
-  { key: 'dist_per_share', label: 'Dist/Share', fmt: v => '$' + v.toFixed(4) },
-  { key: 'income', label: 'Income', fmt: v => '$' + v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
-  { key: 'withdrawal', label: 'Withdrawal', fmt: v => '$' + Math.round(v).toLocaleString() },
-  { key: 'wedge_drawn', label: 'CW Drawn', fmt: v => '$' + v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), wedgeOnly: true },
-  { key: 'wedge_bal', label: 'CW Balance', fmt: v => '$' + Math.round(v).toLocaleString(), wedgeOnly: true },
-  { key: 'cash_accumulated', label: 'Cash Accum.', fmt: v => '$' + Math.round(v).toLocaleString(), cashOnly: true },
-  { key: 'excess', label: 'Excess', fmt: v => (v >= 0 ? '+' : '') + '$' + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: true },
+  { key: 'portfolio', label: 'Portfolio', fmt: v => formatMoneyWhole(v) },
+  { key: 'dist_per_share', label: 'Dist/Share', fmt: v => formatMoney(v, { digits: 4 }) },
+  { key: 'income', label: 'Income', fmt: v => formatMoney(v) },
+  { key: 'withdrawal', label: 'Withdrawal', fmt: v => formatMoneyWhole(v) },
+  { key: 'wedge_drawn', label: 'CW Drawn', fmt: v => formatMoney(v), wedgeOnly: true },
+  { key: 'wedge_bal', label: 'CW Balance', fmt: v => formatMoneyWhole(v), wedgeOnly: true },
+  { key: 'cash_accumulated', label: 'Cash Accum.', fmt: v => formatMoneyWhole(v), cashOnly: true },
+  { key: 'excess', label: 'Excess', fmt: v => formatMoneyDelta(v), color: true },
   { key: 'shares_delta', label: 'Shares +/-', fmt: v => (v >= 0 ? '+' : '-') + Math.abs(v).toFixed(4), color: true },
-  { key: 'growth', label: 'Growth/Loss', fmt: v => (v >= 0 ? '+$' : '-$') + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 }), color: true },
-  { key: 'cum_income', label: 'Cum. Income', fmt: v => '$' + Math.round(v).toLocaleString() },
-  { key: 'roi_dollar', label: 'ROI ($)', fmt: v => (v >= 0 ? '+$' : '-$') + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 }), color: true },
+  { key: 'growth', label: 'Growth/Loss', fmt: v => formatMoneyDelta(v, { digits: 0 }), color: true },
+  { key: 'cum_income', label: 'Cum. Income', fmt: v => formatMoneyWhole(v) },
+  { key: 'roi_dollar', label: 'ROI', fmt: v => formatMoneyDelta(v, { digits: 0 }), color: true },
   { key: 'roi_pct', label: 'ROI (%)', fmt: v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%', color: true },
 ]
 
@@ -99,9 +100,9 @@ function DistEstimate({ lookupData, investment, yieldOverride }) {
   const distPerShare = lookupData.price * (effectiveYield / 100) / 12
   return (
     <div className="dc-dist-estimate">
-      <span>Est. Annual Distribution: <strong>${Math.round(annualDist).toLocaleString()}</strong></span>
+      <span>Est. Annual Distribution: <strong>{formatMoneyWhole(annualDist)}</strong></span>
       <span style={{ color: 'var(--p-6b7b8d)' }}> ({fmt$(monthlyDist)}/mo</span>
-      <span style={{ color: 'var(--p-6b7b8d)' }}> &middot; {shares.toFixed(2)} shares @ ${distPerShare.toFixed(4)}/sh/mo)</span>
+      <span style={{ color: 'var(--p-6b7b8d)' }}> &middot; {shares.toFixed(2)} shares @ {formatMoney(distPerShare, { digits: 4 })}/sh/mo)</span>
       {yieldOverride && <span style={{ color: 'var(--amber)', marginLeft: 6, fontSize: '0.75rem' }}>using override</span>}
     </div>
   )
@@ -156,17 +157,17 @@ function MonthlyTable({ fund, months, which }) {
                 if (c.key === '_month') return <td key={c.key} style={{ textAlign: 'left', fontWeight: 700 }}>TOTALS</td>
                 if (c.key === 'price' || c.key === 'dist_per_share') return <td key={c.key}></td>
                 if (c.key === 'shares') return <td key={c.key}>{last ? fmtS(last.shares) : '0'}</td>
-                if (c.key === 'portfolio') return <td key={c.key}>{last ? fmt$(last.portfolio) : '$0'}</td>
-                if (c.key === 'income') return <td key={c.key}>${Math.round(totIncome).toLocaleString()}</td>
-                if (c.key === 'withdrawal') return <td key={c.key}>${Math.round(totWithdrawal).toLocaleString()}</td>
-                if (c.key === 'wedge_drawn') return <td key={c.key}>${Math.round(totWedgeDrawn).toLocaleString()}</td>
-                if (c.key === 'wedge_bal') return <td key={c.key}>{last ? fmt$(last.wedge_bal) : '$0'}</td>
-                if (c.key === 'cash_accumulated') return <td key={c.key}>{last ? fmt$(last.cash_accumulated) : '$0'}</td>
-                if (c.key === 'excess') return <td key={c.key} className={totExcess >= 0 ? 'dc-pos' : 'dc-neg'}>{(totExcess >= 0 ? '+' : '') + '$' + Math.abs(Math.round(totExcess)).toLocaleString()}</td>
+                if (c.key === 'portfolio') return <td key={c.key}>{fmt$(last?.portfolio || 0)}</td>
+                if (c.key === 'income') return <td key={c.key}>{formatMoneyWhole(totIncome)}</td>
+                if (c.key === 'withdrawal') return <td key={c.key}>{formatMoneyWhole(totWithdrawal)}</td>
+                if (c.key === 'wedge_drawn') return <td key={c.key}>{formatMoneyWhole(totWedgeDrawn)}</td>
+                if (c.key === 'wedge_bal') return <td key={c.key}>{fmt$(last?.wedge_bal || 0)}</td>
+                if (c.key === 'cash_accumulated') return <td key={c.key}>{fmt$(last?.cash_accumulated || 0)}</td>
+                if (c.key === 'excess') return <td key={c.key} className={totExcess >= 0 ? 'dc-pos' : 'dc-neg'}>{formatMoneyDelta(totExcess, { digits: 0 })}</td>
                 if (c.key === 'shares_delta') return <td key={c.key} className={totSharesDelta >= 0 ? 'dc-pos' : 'dc-neg'}>{(totSharesDelta >= 0 ? '+' : '-') + Math.abs(totSharesDelta).toFixed(2)}</td>
-                if (c.key === 'growth') return <td key={c.key} className={totGrowth >= 0 ? 'dc-pos' : 'dc-neg'}>{(totGrowth >= 0 ? '+$' : '-$') + Math.abs(Math.round(totGrowth)).toLocaleString()}</td>
-                if (c.key === 'cum_income') return <td key={c.key}>{last ? fmt$(last.cum_income) : '$0'}</td>
-                if (c.key === 'roi_dollar') { const v = last ? last.roi_dollar : 0; return <td key={c.key} className={v >= 0 ? 'dc-pos' : 'dc-neg'}>{(v >= 0 ? '+$' : '-$') + Math.abs(Math.round(v)).toLocaleString()}</td> }
+                if (c.key === 'growth') return <td key={c.key} className={totGrowth >= 0 ? 'dc-pos' : 'dc-neg'}>{formatMoneyDelta(totGrowth, { digits: 0 })}</td>
+                if (c.key === 'cum_income') return <td key={c.key}>{fmt$(last?.cum_income || 0)}</td>
+                if (c.key === 'roi_dollar') { const v = last ? last.roi_dollar : 0; return <td key={c.key} className={v >= 0 ? 'dc-pos' : 'dc-neg'}>{formatMoneyDelta(v, { digits: 0 })}</td> }
                 if (c.key === 'roi_pct') { const v = last ? last.roi_pct : 0; return <td key={c.key} className={v >= 0 ? 'dc-pos' : 'dc-neg'}>{(v >= 0 ? '+' : '') + v.toFixed(2) + '%'}</td> }
                 return <td key={c.key}></td>
               })}
@@ -277,7 +278,7 @@ export default function DistributionCompare() {
       .then(r => r.json())
       .then(d => {
         if (d.error) { setInfo({ text: d.error, warn: true }); return }
-        let msg = `${ticker}  \u2014  Price: $${d.price.toFixed(2)}  |  TTM Yield: ${d.ttm_yield.toFixed(2)}%`
+        let msg = `${ticker}  \u2014  Price: ${formatMoney(d.price)}  |  TTM Yield: ${d.ttm_yield.toFixed(2)}%`
         if (!d.yield_found) {
           msg += '  (No dividends found \u2014 enter yield override)'
           setInfo({ text: msg, warn: true })

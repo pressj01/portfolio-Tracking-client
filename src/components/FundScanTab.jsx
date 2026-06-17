@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { API_BASE } from '../config'
+import { formatMoney } from '../utils/money'
 
 // Shared "Scan a List" tab for the fund evaluators (Option-Income / ETF / CEF).
 // Mirrors the Stock Buying Checklist scanner: it pulls tickers from the user's
@@ -17,7 +18,7 @@ const num = (v) => {
 }
 const fmtNum = (v, d = 2) => (num(v) === null ? '—' : num(v).toFixed(d))
 const fmtPct = (v, d = 2) => (num(v) === null ? '—' : `${num(v).toFixed(d)}%`)
-const fmtPrice = (v) => (num(v) === null ? '—' : `$${num(v).toFixed(2)}`)
+const fmtPrice = (v) => formatMoney(num(v), { fallback: '—' })
 
 // Columns shared by all three scanners. `extraColumns` lets each evaluator add a
 // type-specific column (NAV trend, expense ratio, discount, …) before the ratios.

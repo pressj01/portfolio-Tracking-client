@@ -4,6 +4,7 @@ import { useProfileFetch } from '../context/ProfileContext'
 import DistributionHistoryChart from '../components/DistributionHistoryChart'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
+import { formatMoney, formatMoneyCompact } from '../utils/money'
 
 const PERIODS = [
   { value: '1mo', label: '1M' },
@@ -85,6 +86,10 @@ function compact(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return '-'
   return Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 2 }).format(n)
+}
+
+function compactMoney(value) {
+  return formatMoneyCompact(value, { minCompact: 1e3 })
 }
 
 function number(value, digits = 2) {
@@ -204,14 +209,15 @@ const FUNDAMENTAL_ROWS = [
   { label: 'Total Cash', key: 'total_cash', fmt: 'compact' },
   { label: 'Total Debt', key: 'total_debt', fmt: 'compact' },
   { label: 'Debt/Equity', key: 'debt_to_equity', fmt: 'number' },
-  { label: '52-Wk Low', key: 'fifty_two_week_low', fmt: 'number' },
-  { label: '52-Wk High', key: 'fifty_two_week_high', fmt: 'number' },
+  { label: '52-Wk Low', key: 'fifty_two_week_low', fmt: 'money' },
+  { label: '52-Wk High', key: 'fifty_two_week_high', fmt: 'money' },
 ]
 
 function fmtFundamental(value, fmt) {
   if (value == null || value === '') return '-'
-  if (fmt === 'compact') return compact(value)
+  if (fmt === 'compact') return compactMoney(value)
   if (fmt === 'pctFixed') return pctFixed(value)
+  if (fmt === 'money') return formatMoney(value)
   return number(value)
 }
 
@@ -627,8 +633,10 @@ export default function StockComparer() {
 
   const format = (key, value) => {
     if (value == null || value === '') return '-'
-    if (['price', 'open', 'fifty_two_week_high', 'fifty_two_week_low', 'pe_ratio', 'forward_pe', 'peg_ratio', 'beta', 'sharpe', 'sortino', 'eps', 'debt_to_equity'].includes(key)) return number(value)
-    if (['market_cap', 'volume', 'dollar_volume', 'revenue'].includes(key)) return compact(value)
+    if (['price', 'open', 'fifty_two_week_high', 'fifty_two_week_low', 'eps'].includes(key)) return formatMoney(value)
+    if (['pe_ratio', 'forward_pe', 'peg_ratio', 'beta', 'sharpe', 'sortino', 'debt_to_equity'].includes(key)) return number(value)
+    if (['market_cap', 'dollar_volume', 'revenue'].includes(key)) return compactMoney(value)
+    if (key === 'volume') return compact(value)
     if (['dividend_yield'].includes(key)) return ratioPct(value)
     if (['profit_margin', 'payout_ratio', 'dividend_growth'].includes(key)) return pctFixed(value)
     if (['change_pct', 'return_1y', 'max_drawdown'].includes(key)) return pct(value)

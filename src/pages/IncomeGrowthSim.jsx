@@ -3,10 +3,10 @@ import { useProfileFetch, useProfile } from '../context/ProfileContext'
 import Plot from '../components/ThemedPlot'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
+import { formatMoney } from '../utils/money'
 
 function fmt$(v) {
-  if (v == null) return '—'
-  return '$' + parseFloat(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatMoney(v)
 }
 function fmtPct(v) {
   if (v == null) return '—'
@@ -456,8 +456,8 @@ export default function IncomeGrowthSim() {
                             style={{ width: 75, background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', color: 'var(--p-ccc)',
                               borderRadius: 3, padding: '0.15rem 0.3rem', fontSize: '0.78rem', textAlign: 'right' }} />
                         </td>
-                        <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-aaa)' }}>${h.price.toFixed(2)}</td>
-                        <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-aaa)' }}>${h.div_per_share.toFixed(4)}</td>
+                        <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-aaa)' }}>{formatMoney(h.price)}</td>
+                        <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-aaa)' }}>{formatMoney(h.div_per_share, { digits: 4 })}</td>
                         <td style={{ ...tdStyle, textAlign: 'center', color: 'var(--p-888)' }}>{h.freq_str}</td>
                         <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--pos-muted)' }}>{fmt$(annInc)}</td>
                         <td style={{ ...tdStyle, textAlign: 'center' }}>
@@ -542,7 +542,7 @@ export default function IncomeGrowthSim() {
                   {monteCarlo && <th style={{ ...thStyle, textAlign: 'right', color: 'var(--p-4caf50)' }}>P90</th>}
                   <th style={{ ...thStyle, textAlign: 'right' }}>From Existing</th>
                   {monthlyContribution > 0 && <th style={{ ...thStyle, textAlign: 'right' }}>From New Investment</th>}
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Change ($)</th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}>Change</th>
                   <th style={{ ...thStyle, textAlign: 'right' }}>Change (%)</th>
                 </tr>
               </thead>

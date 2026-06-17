@@ -5,6 +5,7 @@ import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import MarkovPanel from '../components/MarkovPanel'
 import { computeMarkov, REGIME_COLORS } from '../utils/markov'
+import { formatMoney } from '../utils/money'
 
 // ── Indicator helpers ────────────────────────────────────────────────────────
 
@@ -1758,14 +1759,14 @@ const STUDY_TEMPLATES = [
         if (emaF[i - 1] <= emaS[i - 1] && emaF[i] > emaS[i]) {
           if (rsi[i] == null || rsi[i] < rsiOB) {
             buyDates.push(dates[i]); buyPrices.push(closes[i] * 0.97)
-            buyText.push(`BUY $${closes[i].toFixed(2)}`)
+            buyText.push(`BUY ${formatMoney(closes[i])}`)
           }
         }
         // Bearish crossover
         if (emaF[i - 1] >= emaS[i - 1] && emaF[i] < emaS[i]) {
           if (rsi[i] == null || rsi[i] > rsiOS) {
             sellDates.push(dates[i]); sellPrices.push(closes[i] * 1.03)
-            sellText.push(`SELL $${closes[i].toFixed(2)}`)
+            sellText.push(`SELL ${formatMoney(closes[i])}`)
           }
         }
       }
@@ -2112,7 +2113,7 @@ export default function ETFScreen() {
     const newAnnotations = levels.map((lvl, idx) => ({
       x: xRight, y: high - diff * lvl,
       xref: 'x', yref: 'y', xanchor: 'left',
-      text: ` ${(lvl * 100).toFixed(1)}% ($${(high - diff * lvl).toFixed(2)})`,
+      text: ` ${(lvl * 100).toFixed(1)}% (${formatMoney(high - diff * lvl)})`,
       showarrow: false,
       font: { color: colors[idx], size: 10 },
     }))
@@ -2492,7 +2493,7 @@ export default function ETFScreen() {
     } else if (chartType === 'candlestick') {
       traces.push({ x: dates, open: records.map(r => r.open), high: records.map(r => r.high), low: records.map(r => r.low), close: records.map(r => r.close), type: 'candlestick', name: chartLabel, increasing: { line: { color: '#26A69A' } }, decreasing: { line: { color: '#EF5350' } }, xaxis: 'x', yaxis: 'y', hoverinfo: 'skip' })
       // Invisible scatter overlay for consistent OHLC hover on every bar
-      traces.push({ x: dates, y: records.map(r => r.close), type: 'scatter', mode: 'markers', marker: { size: 0.1, color: 'rgba(0,0,0,0)' }, showlegend: false, hovertemplate: records.map(r => `<b>%{x|%a %b %d, %Y}</b><br>O: ${r.open?.toFixed(2)}<br>H: ${r.high?.toFixed(2)}<br>L: ${r.low?.toFixed(2)}<br>C: ${r.close?.toFixed(2)}<extra></extra>`), xaxis: 'x', yaxis: 'y' })
+      traces.push({ x: dates, y: records.map(r => r.close), type: 'scatter', mode: 'markers', marker: { size: 0.1, color: 'rgba(0,0,0,0)' }, showlegend: false, hovertemplate: records.map(r => `<b>%{x|%a %b %d, %Y}</b><br>O: ${formatMoney(r.open)}<br>H: ${formatMoney(r.high)}<br>L: ${formatMoney(r.low)}<br>C: ${formatMoney(r.close)}<extra></extra>`), xaxis: 'x', yaxis: 'y' })
     } else {
       traces.push({ x: dates, y: records.map(r => r.close), type: 'scatter', mode: 'lines', name: chartLabel, line: { color: '#2196F3', width: 2 }, xaxis: 'x', yaxis: 'y' })
     }
@@ -2610,6 +2611,7 @@ export default function ETFScreen() {
       yaxis: {
         title: isPct ? 'Change (%)' : 'Price',
         domain: domains[0], gridcolor: '#333',
+        tickprefix: isPct ? '' : '$',
         type: chartScale === 'log' ? 'log' : 'linear',
         ticksuffix: isPct ? '%' : '',
         range: chartScale !== 'log' ? [priceMin - yPadBot, priceMax + yPadTop] : undefined,

@@ -3443,31 +3443,132 @@ function ETFScreenHelp() {
         <li><strong>Regime shading</strong> — The chart background behind the candles is tinted by regime (green Bull, rose Bear, faint grey Sideways) so you can see how regimes line up with price.</li>
       </ul>
 
-      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Lookback &amp; Move Threshold</h4>
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>How the Labeling Works</h4>
       <p style={{ marginBottom: '0.75rem' }}>
-        Two controls define what counts as a regime, and they directly change the predictions:
+        Before the model can estimate probabilities it must first label every bar. For each bar on the chart the
+        model asks one question: <em>"How much has price moved, as a percentage, over the past N bars?"</em> The
+        answer to that one question determines the regime label for that bar. The two controls — Lookback and
+        Move Threshold — together define what N is and what "enough of a move" means.
       </p>
-      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Lookback (bars)</strong> — How many bars back each bar's price move is measured over.</li>
-        <li><strong>Move threshold (%)</strong> — How big that ±% move must be to label a bar Bull or Bear; anything smaller is Sideways. <strong>Raise</strong> it and fewer bars qualify as Bull/Bear (more Sideways — a more conservative, longer-trend read); <strong>lower</strong> it and the model reacts to smaller moves (more Bull/Bear labels, choppier, more frequent regime flips).</li>
-      </ul>
 
-      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Recommended Threshold Values</h4>
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Move Threshold (%)</h4>
       <p style={{ marginBottom: '0.75rem' }}>
-        There is no single right number — the threshold should match how much the asset typically moves over
-        your lookback window. The reference default is <strong>20 bars / ±5%</strong>. Judge it by the output:
-        if one regime dominates (e.g. 90%+ Sideways) lower the threshold; if the regime flips almost every bar
-        with little Sideways, raise it. Aim for a mix where Bull, Bear, and Sideways all occur. Good starting
-        points for a ~20-bar lookback:
+        The move threshold is the <strong>minimum percentage move that counts as a real directional move</strong>.
+        Think of it as the signal filter sitting between raw price data and the model. Here is the exact rule applied
+        to every bar:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Price rose more than <em>+threshold%</em> over the lookback window → bar is labeled <span style={{ color: 'var(--pos)' }}><strong>Bull</strong></span></li>
+        <li>Price fell more than <em>−threshold%</em> over the lookback window → bar is labeled <span style={{ color: 'var(--neg)' }}><strong>Bear</strong></span></li>
+        <li>Price moved <em>less than ±threshold%</em> in either direction → bar is labeled <strong>Sideways</strong></li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The threshold does not affect the chart directly — it affects how the data going <em>into</em> the model is
+        classified, which in turn changes every probability the model produces.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Broad ETFs / indices</strong> (SPY, QQQ) — ±3–5%</li>
-        <li><strong>Large-cap individual stocks</strong> — ±5–8%</li>
-        <li><strong>High-volatility / small-cap / crypto</strong> — ±8–15%</li>
+        <li>
+          <strong>Raise the threshold</strong> → the bar for "meaningful move" is set higher. More bars land inside
+          the ±threshold band and are called Sideways. Fewer bars qualify as Bull or Bear. The model becomes more
+          conservative — it takes a larger, clearer trend to call a regime directional. The transition probabilities
+          become smoother and less reactive because the model has seen fewer regime changes to learn from.
+        </li>
+        <li>
+          <strong>Lower the threshold</strong> → the bar is set lower. Smaller moves count as Bull or Bear. Almost
+          every bar has <em>some</em> directional tilt, so Sideways becomes rare and the regime flips more often.
+          The model becomes more sensitive to short-term price wiggles and the forecast can appear choppy or
+          unreliable if the threshold is too small.
+        </li>
       </ul>
       <p style={{ marginBottom: '1rem' }}>
-        Scale the threshold up with the lookback — a longer window accumulates bigger moves — which is why the
-        presets pair shorter windows with smaller thresholds (10 / 3%, 20 / 5%, 50 / 8%).
+        <strong>Practical test:</strong> after loading a ticker, open the <strong>Advanced</strong> panel and check
+        how often each regime appears (the long-run base rate). A well-calibrated threshold produces a <em>mix</em>
+        of all three regimes. If the base rate shows 80%+ Sideways, the threshold is too high — lower it. If
+        Sideways is near zero and the regime badge flips every few bars, the threshold is too low — raise it.
+      </p>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Lookback (bars)</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The lookback sets <strong>how far back the model measures the price move</strong> for each bar. A lookback
+        of 20 means: "Compare today's close to the close 20 bars ago." On a daily chart, 20 bars is approximately
+        one calendar month; 50 bars is approximately one quarter.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>
+          <strong>Short lookback (e.g., 10 bars)</strong> → the model measures short-term momentum. It reacts
+          quickly — a single strong week can flip the regime. Labels are noisier and regime changes are more
+          frequent. Useful for more active, shorter-horizon analysis.
+        </li>
+        <li>
+          <strong>Long lookback (e.g., 50 bars)</strong> → the model measures medium-term trend. It reacts
+          slowly — a small dip inside a broader uptrend does not flip the regime. Labels are smoother and
+          stickier. Useful for understanding the macro trend behind day-to-day noise.
+        </li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        On weekly charts the same numbers apply, but each "bar" is a week, so a 20-bar lookback covers about
+        five months rather than one month. When you switch between daily and weekly, consider rescaling the
+        lookback accordingly.
+      </p>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>How Lookback and Threshold Work Together</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This is the most important thing to understand: <strong>lookback and threshold are not independent
+        knobs — they must be matched to each other</strong>. The reason is straightforward: a longer lookback
+        naturally accumulates a larger price move. Over 50 days SPY might move 10–12%; over 10 days it might
+        only move 2–3%. If you use a long lookback with a small threshold, nearly every 50-day window will
+        exceed the threshold and the model sees almost no Sideways. If you use a short lookback with a large
+        threshold, almost every 10-day window is too small to exceed it and everything becomes Sideways.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A simple way to think about it: <em>the threshold should be set to roughly the "normal" expected move
+        for that asset over that lookback period</em>. Moves larger than normal are directional (Bull/Bear);
+        moves smaller than normal are noise (Sideways). Because "normal expected move" grows with the lookback,
+        the threshold should grow with it too.
+      </p>
+
+      <p style={{ marginBottom: '0.5rem' }}><strong>Example — SPY on a daily chart:</strong></p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>
+          <strong>Lookback 20 / Threshold 5%</strong> — over one month, SPY moving more than ±5% is a meaningful
+          directional month. Months that drift sideways stay inside the band. This produces a healthy mix of Bull,
+          Bear, and Sideways labels. <em>(Default — good starting point for SPY/QQQ.)</em>
+        </li>
+        <li>
+          <strong>Lookback 20 / Threshold 2%</strong> (threshold too low) — almost every month moves more than
+          ±2% in some direction, so nearly every bar becomes Bull or Bear. Sideways nearly disappears. The regime
+          flips constantly and the forecast is noisy.
+        </li>
+        <li>
+          <strong>Lookback 50 / Threshold 5%</strong> (threshold too low for the longer window) — over a full
+          quarter, SPY almost always moves more than ±5% in one direction. Again, Sideways nearly disappears.
+          Raise the threshold to 8% and the distribution becomes balanced again.
+        </li>
+        <li>
+          <strong>Lookback 10 / Threshold 8%</strong> (threshold too high for the shorter window) — SPY rarely
+          moves 8% in just 10 days, so nearly every bar is Sideways. The model has nothing to distinguish.
+          Drop the threshold to 3% and it works well again.
+        </li>
+      </ul>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Recommended Starting Points</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The three built-in presets (10 / 3%, 20 / 5%, 50 / 8%) are designed so the threshold scales with the
+        lookback. They are good starting points for most broad market ETFs and large-cap stocks. For more
+        volatile assets, shift both numbers up together:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Broad ETFs / indices</strong> (SPY, QQQ, DIA) — use presets as-is (20 / 5% is the default)</li>
+        <li><strong>Large-cap individual stocks</strong> — 20 / 6–8% or 50 / 10%</li>
+        <li><strong>Sector ETFs / mid-cap stocks</strong> — 20 / 8% or 50 / 12%</li>
+        <li><strong>High-volatility stocks / small-cap / commodities</strong> — 20 / 10–15% or 50 / 15–20%</li>
+        <li><strong>Low-volatility income funds</strong> (CEFs, covered-call ETFs) — 20 / 3% or 10 / 2%</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Always verify against the output: after loading, open <strong>Advanced</strong> and check that the
+        long-run base rate shows a reasonable split across all three regimes. If one regime dominates above
+        ~70%, adjust the threshold (down if too much Sideways, up if too little) until the distribution looks
+        balanced for that asset.
       </p>
 
       <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Advanced Details</h4>
@@ -4481,6 +4582,13 @@ function ExportHelp() {
         </li>
       </ol>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Export Currency</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Source USD</strong> preserves the database values and is the mode to use for backups and reimport.</li>
+        <li><strong>Display CAD</strong> converts monetary columns using the active USD/CAD rate. Excel files include an Export Info sheet; CSV files include currency, rate source, and update-time columns.</li>
+        <li>CAD exports are presentation reports and should not be reimported because their money values have already been converted.</li>
+      </ul>
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Aggregate Mode</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         When the <strong>Aggregate</strong> portfolio is selected, the Excel export creates one sheet per
@@ -4584,6 +4692,28 @@ function SettingsHelp() {
         Single-Stock ETF list used by the Portfolio Builder optimizer, and offers a nuclear
         "Clear All Data" option.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Display Currency &amp; Exchange Rate</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        USD is the source currency stored in the database. Selecting CAD converts money displays using the cached USD/CAD rate.
+        The rate panel shows its source, market date, last update time, and whether the value came from the persistent cache.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Refresh Live Rate</strong> bypasses the six-hour cache and requests the latest Yahoo Finance close.</li>
+        <li><strong>Manual override</strong> replaces the effective display/export rate while retaining the latest live rate for comparison.</li>
+        <li><strong>Use Live Rate</strong> clears the override and immediately returns to the cached live rate.</li>
+        <li>If the live request fails, the app continues with the last saved rate and marks it stale.</li>
+      </ul>
+      <div style={{ marginTop: '1rem', marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/settings/display-currency-exchange-rate.png"
+          alt="Display Currency settings showing USD and CAD selection, the live exchange rate, refresh control, rate dates, and manual override"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+        <p style={{ fontSize: '0.9rem', color: 'var(--text-dim-2)', marginTop: '0.5rem' }}>
+          The Display Currency panel shows the active USD/CAD rate and its source, lets you refresh the live rate, and supports a manual rate override when needed.
+        </p>
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Overview</h3>
       <p style={{ marginBottom: '0.75rem' }}>
