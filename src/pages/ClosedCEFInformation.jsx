@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { API_BASE } from '../config'
 
@@ -143,9 +145,9 @@ function FundChart({ detail }) {
       hovermode: 'x unified',
     }
 
-    window.Plotly.newPlot(chartRef.current, traces, layout, { responsive: true, displayModeBar: false })
+    window.Plotly.newPlot(chartRef.current, traces, themedPlotlyLayout(layout, isDark), { responsive: true, displayModeBar: false })
     return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
-  }, [detail])
+  }, [detail, isDark])
 
   return <div ref={chartRef} className="cef-chart" />
 }
@@ -218,9 +220,9 @@ function TotalReturnChart({ ticker, period }) {
       shapes: [{ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 0, y1: 0, line: { dash: 'dot', color: '#556677', width: 1 } }],
     }
 
-    window.Plotly.newPlot(chartRef.current, traces, layout, { responsive: true, displayModeBar: false })
+    window.Plotly.newPlot(chartRef.current, traces, themedPlotlyLayout(layout, isDark), { responsive: true, displayModeBar: false })
     return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
-  }, [data])
+  }, [data, isDark])
 
   return (
     <section className="cef-chart-panel" style={{ marginTop: 18 }}>
@@ -272,9 +274,9 @@ function PerformanceBarChart({ rows, title, asOf }) {
       legend: { orientation: 'h', x: 0.5, xanchor: 'center', y: -0.18 },
     }
 
-    window.Plotly.newPlot(chartRef.current, traces, layout, { responsive: true, displayModeBar: false })
+    window.Plotly.newPlot(chartRef.current, traces, themedPlotlyLayout(layout, isDark), { responsive: true, displayModeBar: false })
     return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
-  }, [rows])
+  }, [rows, isDark])
 
   return (
     <section className="cef-chart-panel">
@@ -347,9 +349,9 @@ function AssetAllocationChart({ allocation }) {
       hovertemplate: '%{y}: %{x:.2f}%<extra></extra>',
     }]
 
-    window.Plotly.newPlot(chartRef.current, traces, layout, { responsive: true, displayModeBar: false })
+    window.Plotly.newPlot(chartRef.current, traces, themedPlotlyLayout(layout, isDark), { responsive: true, displayModeBar: false })
     return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
-  }, [rows])
+  }, [rows, isDark])
 
   if (!rows.length) return null
 
@@ -735,6 +737,7 @@ function FundDetail({ ticker }) {
 }
 
 export default function ClosedCEFInformation() {
+  const { isDark } = useTheme()
   const { ticker } = useParams()
   const navigate = useNavigate()
   const [data, setData] = useState(null)

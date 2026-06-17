@@ -101,9 +101,9 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
       {/* Peer Comparison */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
-          <span style={{ color: '#e0e8f5', fontWeight: 600, fontSize: '0.9rem' }}>Peer Comparison</span>
+          <span style={{ color: 'var(--text-strong)', fontWeight: 600, fontSize: '0.9rem' }}>Peer Comparison</span>
           <select value={peerTicker} onChange={e => { setPeerTicker(e.target.value); setPeerData(null) }}
-            style={{ background: '#1a1a2e', border: '1px solid #3a3a5c', borderRadius: 4, color: '#e0e0e0', padding: '0.3rem 0.5rem', fontSize: '0.82rem' }}>
+            style={{ background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 4, color: 'var(--text)', padding: '0.3rem 0.5rem', fontSize: '0.82rem' }}>
             {(tickers || []).map(t => <option key={t} value={t}>{t}</option>)}
           </select>
           <button onClick={fetchPeers} disabled={peerLoading} className="btn btn-primary" style={{ padding: '0.3rem 0.8rem', fontSize: '0.82rem' }}>
@@ -114,8 +114,8 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
         {peerData?.peers?.length > 0 ? (
           <>
             {peerData.category && (
-              <div style={{ fontSize: '0.78rem', color: '#8899aa', marginBottom: '0.5rem' }}>
-                Category: <span style={{ color: '#64b5f6' }}>{peerData.category}</span>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginBottom: '0.5rem' }}>
+                Category: <span style={{ color: 'var(--accent)' }}>{peerData.category}</span>
               </div>
             )}
             <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem', width: '100%' }}>
@@ -130,19 +130,19 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
               </thead>
               <tbody>
                 {peerData.peers.map(p => (
-                  <tr key={p.ticker} style={{ borderBottom: '1px solid #1a2a3e' }}>
-                    <td style={{ padding: '0.35rem 0.5rem', color: '#7ecfff', fontWeight: 600 }}>{p.ticker}</td>
-                    <td style={{ padding: '0.35rem 0.5rem', color: '#b0bec5', fontSize: '0.78rem' }}>{p.name || '—'}</td>
-                    <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right', color: '#4dff91' }}>
+                  <tr key={p.ticker} style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
+                    <td style={{ padding: '0.35rem 0.5rem', color: 'var(--accent-bright)', fontWeight: 600 }}>{p.ticker}</td>
+                    <td style={{ padding: '0.35rem 0.5rem', color: 'var(--text-muted)', fontSize: '0.78rem' }}>{p.name || '—'}</td>
+                    <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right', color: 'var(--pos)' }}>
                       {p.yield_pct != null ? p.yield_pct.toFixed(2) + '%' : '—'}
                     </td>
-                    <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right', color: (p.return_1y || 0) >= 0 ? '#4dff91' : '#ff6b6b' }}>
+                    <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right', color: (p.return_1y || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
                       {p.return_1y != null ? p.return_1y.toFixed(1) + '%' : '—'}
                     </td>
                     <td style={{ padding: '0.35rem 0.5rem' }}>
                       {!tickers.includes(p.ticker) && (
                         <button onClick={() => onAddTicker(p.ticker)} style={{
-                          background: 'none', border: '1px solid #3a5a8c', borderRadius: 4, color: '#64b5f6',
+                          background: 'none', border: '1px solid var(--p-3a5a8c)', borderRadius: 4, color: 'var(--accent)',
                           fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer',
                         }}>Add</button>
                       )}
@@ -153,16 +153,16 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
             </table>
           </>
         ) : peerData && !peerLoading ? (
-          <div style={{ color: '#8899aa', fontSize: '0.85rem' }}>No peers found for {peerTicker}.</div>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>No peers found for {peerTicker}.</div>
         ) : null}
       </div>
 
       {/* What-If Slider */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
-          <span style={{ color: '#e0e8f5', fontWeight: 600, fontSize: '0.9rem' }}>What-If Analysis</span>
+          <span style={{ color: 'var(--text-strong)', fontWeight: 600, fontSize: '0.9rem' }}>What-If Analysis</span>
           <select value={whatIfTicker} onChange={e => setWhatIfTicker(e.target.value)}
-            style={{ background: '#1a1a2e', border: '1px solid #3a3a5c', borderRadius: 4, color: '#e0e0e0', padding: '0.3rem 0.5rem', fontSize: '0.82rem' }}>
+            style={{ background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 4, color: 'var(--text)', padding: '0.3rem 0.5rem', fontSize: '0.82rem' }}>
             {(tickers || []).map(t => <option key={t} value={t}>{t}</option>)}
           </select>
         </div>
@@ -170,34 +170,34 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
         {result?.metrics?.length > 1 && result?.correlation ? (
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-              <span style={{ color: '#8899aa', fontSize: '0.82rem', width: 30 }}>0%</span>
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem', width: 30 }}>0%</span>
               <input type="range" min="0" max="50" value={whatIfWeight}
                 onChange={e => setWhatIfWeight(Number(e.target.value))}
                 style={{ flex: 1 }} />
-              <span style={{ color: '#8899aa', fontSize: '0.82rem', width: 35 }}>50%</span>
-              <span style={{ color: '#64b5f6', fontSize: '0.9rem', fontWeight: 600, width: 50, textAlign: 'right' }}>{whatIfWeight}%</span>
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem', width: 35 }}>50%</span>
+              <span style={{ color: 'var(--accent)', fontSize: '0.9rem', fontWeight: 600, width: 50, textAlign: 'right' }}>{whatIfWeight}%</span>
             </div>
 
             {whatIfResult && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
-                <div className="card" style={{ padding: '0.6rem', background: '#0a1628' }}>
-                  <div style={{ fontSize: '0.72rem', color: '#8899aa', marginBottom: '0.2rem' }}>Est. Annual Income</div>
-                  <div style={{ fontSize: '0.82rem', color: '#8899aa' }}>Current: <span style={{ color: '#e0e8f5', fontWeight: 600 }}>${whatIfResult.currentIncome.toLocaleString()}</span></div>
-                  <div style={{ fontSize: '0.82rem', color: whatIfResult.newIncome >= whatIfResult.currentIncome ? '#4dff91' : '#ff6b6b' }}>
+                <div className="card" style={{ padding: '0.6rem', background: 'var(--p-0a1628)' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginBottom: '0.2rem' }}>Est. Annual Income</div>
+                  <div style={{ fontSize: '0.82rem', color: 'var(--text-dim)' }}>Current: <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>${whatIfResult.currentIncome.toLocaleString()}</span></div>
+                  <div style={{ fontSize: '0.82rem', color: whatIfResult.newIncome >= whatIfResult.currentIncome ? 'var(--pos)' : 'var(--neg)' }}>
                     Projected: <span style={{ fontWeight: 600 }}>${whatIfResult.newIncome.toLocaleString()}</span>
                   </div>
                 </div>
-                <div className="card" style={{ padding: '0.6rem', background: '#0a1628' }}>
-                  <div style={{ fontSize: '0.72rem', color: '#8899aa', marginBottom: '0.2rem' }}>Portfolio Volatility</div>
-                  <div style={{ fontSize: '0.82rem', color: '#8899aa' }}>Current: <span style={{ color: '#e0e8f5', fontWeight: 600 }}>{whatIfResult.currentVol.toFixed(1)}%</span></div>
-                  <div style={{ fontSize: '0.82rem', color: whatIfResult.newVol <= whatIfResult.currentVol ? '#4dff91' : '#ff6b6b' }}>
+                <div className="card" style={{ padding: '0.6rem', background: 'var(--p-0a1628)' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginBottom: '0.2rem' }}>Portfolio Volatility</div>
+                  <div style={{ fontSize: '0.82rem', color: 'var(--text-dim)' }}>Current: <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{whatIfResult.currentVol.toFixed(1)}%</span></div>
+                  <div style={{ fontSize: '0.82rem', color: whatIfResult.newVol <= whatIfResult.currentVol ? 'var(--pos)' : 'var(--neg)' }}>
                     Projected: <span style={{ fontWeight: 600 }}>{whatIfResult.newVol.toFixed(1)}%</span>
                   </div>
                 </div>
-                <div className="card" style={{ padding: '0.6rem', background: '#0a1628' }}>
-                  <div style={{ fontSize: '0.72rem', color: '#8899aa', marginBottom: '0.2rem' }}>Weight Change</div>
-                  <div style={{ fontSize: '0.82rem', color: '#8899aa' }}>Current: <span style={{ color: '#e0e8f5', fontWeight: 600 }}>{whatIfResult.currentWeight}%</span></div>
-                  <div style={{ fontSize: '0.82rem', color: '#64b5f6' }}>
+                <div className="card" style={{ padding: '0.6rem', background: 'var(--p-0a1628)' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginBottom: '0.2rem' }}>Weight Change</div>
+                  <div style={{ fontSize: '0.82rem', color: 'var(--text-dim)' }}>Current: <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{whatIfResult.currentWeight}%</span></div>
+                  <div style={{ fontSize: '0.82rem', color: 'var(--accent)' }}>
                     Target: <span style={{ fontWeight: 600 }}>{whatIfResult.newWeight}%</span>
                   </div>
                 </div>
@@ -205,7 +205,7 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
             )}
           </>
         ) : (
-          <div style={{ color: '#8899aa', fontSize: '0.85rem', padding: '0.5rem' }}>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>
             What-If analysis requires 2+ tickers with correlation data. Run analysis with your portfolio loaded.
           </div>
         )}
@@ -215,6 +215,6 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
 }
 
 const th = {
-  padding: '0.4rem 0.5rem', borderBottom: '1px solid #2a3a4e',
-  color: '#8899aa', fontSize: '0.78rem', textAlign: 'left',
+  padding: '0.4rem 0.5rem', borderBottom: '1px solid var(--p-2a3a4e)',
+  color: 'var(--text-dim)', fontSize: '0.78rem', textAlign: 'left',
 }

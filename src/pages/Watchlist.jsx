@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
+import { useTheme } from '../context/ThemeContext'
+import { chartTheme } from '../utils/chartTheme'
 
 function SignalBadge({ signal }) {
   if (!signal || signal === '\u2014') return <span>{'\u2014'}</span>
@@ -78,7 +80,7 @@ function YieldCell({ ticker, computed, override, overridden, onSave }) {
         minWidth: 60,
         padding: '0.15rem 0.3rem',
         cursor: 'text',
-        color: overridden ? '#ffb74d' : 'inherit',
+        color: overridden ? 'var(--p-ffb74d)' : 'inherit',
         fontWeight: overridden ? 600 : 'inherit',
         borderRadius: 3,
       }}
@@ -139,7 +141,7 @@ function NotesCell({ ticker, value, onSave }) {
         minWidth: 140,
         padding: '0.15rem 0.3rem',
         cursor: 'text',
-        color: value ? 'inherit' : '#5a6878',
+        color: value ? 'inherit' : 'var(--p-5a6878)',
         fontStyle: value ? 'normal' : 'italic',
         borderRadius: 3,
       }}
@@ -173,7 +175,7 @@ function NavCell({ row, analysis, onSave }) {
   return (
     <td
       style={{
-        color: analysis?.nav_erosion_prob === 'Low' ? '#00c853' : analysis?.nav_erosion_prob === 'High' ? '#d50000' : analysis?.nav_erosion_prob === 'Medium' ? '#f9a825' : '#888',
+        color: analysis?.nav_erosion_prob === 'Low' ? 'var(--pos-strong)' : analysis?.nav_erosion_prob === 'High' ? 'var(--neg-strong)' : analysis?.nav_erosion_prob === 'Medium' ? 'var(--warning)' : 'var(--p-888)',
         fontWeight: 600,
         backgroundColor: analysis?.nav_erosion_prob === 'Low' ? 'rgba(0,200,83,0.12)' : analysis?.nav_erosion_prob === 'High' ? 'rgba(213,0,0,0.12)' : analysis?.nav_erosion_prob === 'Medium' ? 'rgba(249,168,37,0.12)' : 'transparent',
         minWidth: 128,
@@ -190,10 +192,10 @@ function NavCell({ row, analysis, onSave }) {
           style={{
             width: 48,
             height: 21,
-            border: '1px solid #294b73',
+            border: '1px solid var(--p-294b73)',
             borderRadius: 4,
-            background: '#0f1c36',
-            color: scope === 'test' ? '#7ecfff' : scope === 'skip' ? '#ffb300' : '#9aa8bd',
+            background: 'var(--p-0f1c36)',
+            color: scope === 'test' ? 'var(--accent-bright)' : scope === 'skip' ? 'var(--warning-money)' : 'var(--p-9aa8bd)',
             fontSize: '0.62rem',
             padding: '0 2px',
           }}
@@ -216,15 +218,15 @@ function NavCell({ row, analysis, onSave }) {
         style={{
           width: 86,
           marginTop: 3,
-          border: benchmarkInvalid ? '1px solid #d50000' : '1px solid #203a5f',
+          border: benchmarkInvalid ? '1px solid var(--neg-strong)' : '1px solid var(--p-203a5f)',
           borderRadius: 4,
-          background: '#0d1830',
-          color: benchmarkInvalid ? '#ffb3b3' : benchmarkOverride ? '#d7e8ff' : '#7d8799',
+          background: 'var(--p-0d1830)',
+          color: benchmarkInvalid ? 'var(--p-ffb3b3)' : benchmarkOverride ? 'var(--p-d7e8ff)' : 'var(--p-7d8799)',
           fontSize: '0.62rem',
           padding: '2px 4px',
         }}
       />
-      <div style={{ fontSize: '0.58rem', color: '#7d8799', lineHeight: 1.1 }}>
+      <div style={{ fontSize: '0.58rem', color: 'var(--p-7d8799)', lineHeight: 1.1 }}>
         {navLabel}{benchmarkLabel ? ` vs ${benchmarkLabel}` : ''}
       </div>
     </td>
@@ -233,6 +235,7 @@ function NavCell({ row, analysis, onSave }) {
 
 function WatchlistTickerModal({ ticker, onClose }) {
   const pf = useProfileFetch()
+  const { isDark } = useTheme()
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -264,6 +267,7 @@ function WatchlistTickerModal({ ticker, onClose }) {
     if (!data || !window.Plotly) return
     const el = document.getElementById('wl-ticker-chart')
     if (!el) return
+    const ct = chartTheme(isDark)
 
     const traces = [
       {
@@ -281,19 +285,20 @@ function WatchlistTickerModal({ ticker, onClose }) {
       },
     ]
     const layout = {
-      template: 'plotly_dark',
-      paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
-      title: { text: `${data.ticker} — 1 Year Return`, font: { size: 16, color: '#e0e8f5' } },
-      xaxis: { title: '', gridcolor: '#1a2233' },
-      yaxis: { title: 'Return %', gridcolor: '#1a2233', ticksuffix: '%' },
+      template: ct.template,
+      paper_bgcolor: ct.paper, plot_bgcolor: ct.plot,
+      font: { color: ct.font },
+      title: { text: `${data.ticker} — 1 Year Return`, font: { size: 16, color: ct.title } },
+      xaxis: { title: '', gridcolor: ct.grid, zerolinecolor: ct.zeroline },
+      yaxis: { title: 'Return %', gridcolor: ct.grid, zerolinecolor: ct.zeroline, ticksuffix: '%' },
       legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'center', x: 0.5, font: { size: 12 } },
       margin: { l: 50, r: 20, t: 60, b: 40 },
       hovermode: 'x unified',
-      shapes: [{ type: 'line', x0: data.dates[0], x1: data.dates[data.dates.length - 1], y0: 0, y1: 0, line: { dash: 'dot', color: '#556677', width: 1 } }],
+      shapes: [{ type: 'line', x0: data.dates[0], x1: data.dates[data.dates.length - 1], y0: 0, y1: 0, line: { dash: 'dot', color: ct.zeroline, width: 1 } }],
     }
     window.Plotly.newPlot(el, traces, layout, { responsive: true })
     return () => { if (el) window.Plotly.purge(el) }
-  }, [data])
+  }, [data, isDark])
 
   if (!ticker) return null
 
@@ -305,8 +310,8 @@ function WatchlistTickerModal({ ticker, onClose }) {
         {error && <div className="alert alert-error">{error}</div>}
         {data && (
           <>
-            <h2 style={{ color: '#7ecfff', marginBottom: '0.25rem' }}>{data.ticker} — {data.description}</h2>
-            <p style={{ color: '#8899aa', marginBottom: '1rem', fontSize: '0.9rem' }}>
+            <h2 style={{ color: 'var(--accent-bright)', marginBottom: '0.25rem' }}>{data.ticker} — {data.description}</h2>
+            <p style={{ color: 'var(--text-dim)', marginBottom: '1rem', fontSize: '0.9rem' }}>
               1 Year Return starting at {fmt(data.start_price)}
             </p>
             <div id="wl-ticker-chart" style={{ height: '400px' }} />
@@ -626,7 +631,7 @@ export default function Watchlist() {
                       <a
                         href="#"
                         onClick={(e) => { e.preventDefault(); setModalTicker(r.ticker) }}
-                        style={{ color: '#7ecfff', fontWeight: 600 }}
+                        style={{ color: 'var(--accent-bright)', fontWeight: 600 }}
                       >
                         {r.ticker}
                       </a>
@@ -646,16 +651,16 @@ export default function Watchlist() {
                     <td><SignalBadge signal={a?.ao_sig} /></td>
                     <td>
                       <SignalBadge signal={a?.rsi_sig} />
-                      {a?.rsi_val != null && <span style={{ color: '#888', fontSize: '0.75rem', marginLeft: 4 }}>{a.rsi_val}</span>}
+                      {a?.rsi_val != null && <span style={{ color: 'var(--p-888)', fontSize: '0.75rem', marginLeft: 4 }}>{a.rsi_val}</span>}
                     </td>
                     <td><SignalBadge signal={a?.macd_sig} /></td>
                     <td>
                       <SignalBadge signal={a?.sma50_sig} />
-                      {a?.sma50_pct != null && <span style={{ color: '#888', fontSize: '0.75rem', marginLeft: 4 }}>{fmtPct(a.sma50_pct)}</span>}
+                      {a?.sma50_pct != null && <span style={{ color: 'var(--p-888)', fontSize: '0.75rem', marginLeft: 4 }}>{fmtPct(a.sma50_pct)}</span>}
                     </td>
                     <td>
                       <SignalBadge signal={a?.sma200_sig} />
-                      {a?.sma200_pct != null && <span style={{ color: '#888', fontSize: '0.75rem', marginLeft: 4 }}>{fmtPct(a.sma200_pct)}</span>}
+                      {a?.sma200_pct != null && <span style={{ color: 'var(--p-888)', fontSize: '0.75rem', marginLeft: 4 }}>{fmtPct(a.sma200_pct)}</span>}
                     </td>
                     <td>{a?.sharpe != null ? a.sharpe.toFixed(2) : '\u2014'}</td>
                     <td>{a?.sortino != null ? a.sortino.toFixed(2) : '\u2014'}</td>

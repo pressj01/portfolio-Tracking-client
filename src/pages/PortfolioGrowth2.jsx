@@ -1,16 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { useTheme } from '../context/ThemeContext'
+import { chartTheme } from '../utils/chartTheme'
 
 const PERIODS = ['7d', '1m', '3m', '6m', 'YTD', '1y', '5y', 'all']
 const PERIOD_LABELS = { '7d': '7d', '1m': '1m', '3m': '3m', '6m': '6m', 'YTD': 'YTD', '1y': '1y', '5y': '5y', 'all': 'all' }
-
-const DARK = {
-  template: 'plotly_dark',
-  paper_bgcolor: '#0e1117',
-  plot_bgcolor: '#0e1117',
-  font: { color: '#e0e8f5' },
-}
-const GRID = '#1a2233'
 
 function TickerFilter({ tickers, selected, onChange }) {
   const [open, setOpen] = useState(false)
@@ -44,7 +38,7 @@ function TickerFilter({ tickers, selected, onChange }) {
       </button>
       {open && (
         <div className="growth-cat-dropdown" style={{ maxHeight: '400px', minWidth: '200px' }}>
-          <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
+          <label className="growth-cat-option" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
             <input type="checkbox" checked={allSelected} onChange={() => onChange([])} />
             <span>All Tickers</span>
           </label>
@@ -107,6 +101,7 @@ function TabButtons({ options, value, onChange }) {
 export default function PortfolioGrowth2() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
+  const { isDark } = useTheme()
 
   // Shared state
   const [period, setPeriod] = useState('1y')
@@ -148,12 +143,13 @@ export default function PortfolioGrowth2() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [period, selectedTickers, profitMode, plBasis, showTrades, groupBy, selection])
+  }, [period, selectedTickers, profitMode, plBasis, showTrades, showCostBasis, groupProfitSource, groupBy, selection])
 
   // ── Chart 1: Portfolio Value ──
   useEffect(() => {
     if (!data || !window.Plotly) return
     const Plotly = window.Plotly
+    const ct = chartTheme(isDark)
     const el = document.getElementById('g2-value-chart')
     if (!el) return
 
@@ -197,22 +193,27 @@ export default function PortfolioGrowth2() {
     }
 
     Plotly.newPlot(el, traces, {
-      ...DARK, height: 420,
-      title: { text: 'Portfolio value', font: { size: 16, color: '#90caf9' } },
+      template: ct.template,
+      paper_bgcolor: ct.paper,
+      plot_bgcolor: ct.plot,
+      font: { color: ct.font },
+      height: 420,
+      title: { text: 'Portfolio value', font: { size: 16, color: ct.title } },
       margin: { l: 60, r: 20, t: 50, b: 50 },
       hovermode: 'x unified',
       legend: { orientation: 'h', y: -0.12, xanchor: 'center', x: 0.5, font: { size: 11 } },
-      xaxis: { gridcolor: GRID },
-      yaxis: { gridcolor: GRID, tickformat: '$,.0f', title: '' },
+      xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
+      yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, tickformat: '$,.0f', title: '' },
     }, { responsive: true })
 
     return () => { if (document.getElementById('g2-value-chart')) Plotly.purge(el) }
-  }, [data, showCostBasis, showTrades])
+  }, [data, showCostBasis, showTrades, isDark])
 
   // ── Chart 2: Portfolio Performance ──
   useEffect(() => {
     if (!data || !window.Plotly) return
     const Plotly = window.Plotly
+    const ct = chartTheme(isDark)
     const el = document.getElementById('g2-perf-chart')
     if (!el) return
 
@@ -244,17 +245,21 @@ export default function PortfolioGrowth2() {
     )
 
     Plotly.newPlot(el, traces, {
-      ...DARK, height: 420,
-      title: { text: 'Portfolio performance', font: { size: 16, color: '#90caf9' } },
+      template: ct.template,
+      paper_bgcolor: ct.paper,
+      plot_bgcolor: ct.plot,
+      font: { color: ct.font },
+      height: 420,
+      title: { text: 'Portfolio performance', font: { size: 16, color: ct.title } },
       margin: { l: 60, r: 20, t: 50, b: 50 },
       hovermode: 'x unified',
       legend: { orientation: 'h', y: -0.12, xanchor: 'center', x: 0.5, font: { size: 11 } },
-      xaxis: { gridcolor: GRID },
-      yaxis: { gridcolor: GRID, tickformat: fmt, tickprefix: prefix, ticksuffix: suffix, title: '' },
+      xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
+      yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, tickformat: fmt, tickprefix: prefix, ticksuffix: suffix, title: '' },
     }, { responsive: true })
 
     return () => { if (document.getElementById('g2-perf-chart')) Plotly.purge(el) }
-  }, [data, groupProfitSource, profitMode])
+  }, [data, groupProfitSource, profitMode, isDark])
 
   return (
     <div className="page dashboard">
@@ -325,8 +330,8 @@ export default function PortfolioGrowth2() {
 
               <Toggle label="Group by the profit source" value={groupProfitSource} onChange={setGroupProfitSource} />
 
-              <div style={{ marginTop: '0.5rem' }}>
-                <div className="g2-control-label" style={{ marginBottom: '0.3rem' }}>Calculate P/L for:</div>
+              <div className="g2-pl-control">
+                <div className="g2-control-label g2-pl-label">Calculate P/L for:</div>
                 <TabButtons
                   options={[{ value: 'selected_period', label: 'Selected period' }, { value: 'first_trade', label: 'From the first trade' }]}
                   value={plBasis}

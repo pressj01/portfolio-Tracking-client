@@ -362,12 +362,12 @@ export default function NavErosionPortfolio() {
         its own starting dollar amount and reinvestment percentage. Your list is saved to the database
         and will persist between sessions.
         <br />
-        <span style={{ color: '#e05555', fontWeight: 600 }}>NAV Erosion = Yes</span> means the ETF's share-price
+        <span style={{ color: 'var(--neg-3)', fontWeight: 600 }}>NAV Erosion = Yes</span> means the ETF's share-price
         decline has outpaced distributions — you'd need more shares than you hold to recover your principal
         at the ending price.
         <br />
-        <span style={{ color: '#e05555', fontWeight: 600 }}>Red needed</span> means shares still needed to breakeven.
-        <span style={{ color: '#00c853', fontWeight: 600 }}> Green extra</span> means shares above breakeven.
+        <span style={{ color: 'var(--neg-3)', fontWeight: 600 }}>Red needed</span> means shares still needed to breakeven.
+        <span style={{ color: 'var(--pos-strong)', fontWeight: 600 }}> Green extra</span> means shares above breakeven.
         The percent is the gap as a share of break-even shares.
       </p>
 
@@ -386,7 +386,7 @@ export default function NavErosionPortfolio() {
               would need at the closing price to be worth your original principal.
             </p>
             <p>
-              <strong style={{ color: '#e05555' }}>NAV Erosion = Yes</strong> when the shares you actually
+              <strong style={{ color: 'var(--neg-3)' }}>NAV Erosion = Yes</strong> when the shares you actually
               accumulated (including everything reinvested) are <em>fewer</em> than those break-even shares —
               the share-price decline outran the distributions. The{' '}
               <strong>Shares Needed / Extra To Breakeven</strong> column shows that gap, and its percent is
@@ -474,12 +474,12 @@ export default function NavErosionPortfolio() {
         </select>
         <button className="nep-btn" onClick={loadSaved}>Load</button>
         <button className="nep-btn nep-btn-del" onClick={deleteSaved}>Delete</button>
-        {deleteMsg && <span style={{ color: '#00c853', fontSize: '0.78rem' }}>Deleted</span>}
+        {deleteMsg && <span style={{ color: 'var(--pos-strong)', fontSize: '0.78rem' }}>Deleted</span>}
       </div>
 
       {/* ETF input grid */}
       <div className="nep-grid-panel">
-        <div style={{ color: '#aaa', fontSize: '0.78rem', marginBottom: '0.55rem', lineHeight: 1.5 }}>
+        <div style={{ color: 'var(--p-aaa)', fontSize: '0.78rem', marginBottom: '0.55rem', lineHeight: 1.5 }}>
           Each row is one ETF. The two number boxes are the starting dollars assigned to that ETF and the
           percent of its distributions to reinvest during the backtest.
         </div>
@@ -559,8 +559,8 @@ export default function NavErosionPortfolio() {
           <button className="nep-btn" onClick={saveList}>Save List</button>
           <button className="nep-btn nep-btn-purple" onClick={showSaveBtForm}>Save Backtest&hellip;</button>
           <button className="ne-run-btn" onClick={runBacktest} disabled={loading}>Run Backtest</button>
-          {savedMsg && <span style={{ color: '#00c853', fontSize: '0.82rem' }}>Saved</span>}
-          <span style={{ color: '#555', fontSize: '0.78rem', marginLeft: 'auto' }}>
+          {savedMsg && <span style={{ color: 'var(--pos-strong)', fontSize: '0.82rem' }}>Saved</span>}
+          <span style={{ color: 'var(--p-555)', fontSize: '0.78rem', marginLeft: 'auto' }}>
             {gridRows.length} / {MAX_ROWS} ETFs
           </span>
         </div>
@@ -569,10 +569,10 @@ export default function NavErosionPortfolio() {
         {btFormOpen && (
           <div className="nep-bt-form">
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
-              <label style={{ fontSize: '0.78rem', color: '#a78bfa', whiteSpace: 'nowrap' }}>Backtest name:</label>
+              <label style={{ fontSize: '0.78rem', color: 'var(--purple)', whiteSpace: 'nowrap' }}>Backtest name:</label>
               <input
                 className="ne-input"
-                style={{ flex: 1, minWidth: 220, borderColor: '#a78bfa' }}
+                style={{ flex: 1, minWidth: 220, borderColor: 'var(--purple)' }}
                 maxLength={200}
                 placeholder="e.g. High-yield vs SPY 2020-2025"
                 value={btName}
@@ -592,15 +592,15 @@ export default function NavErosionPortfolio() {
                   type="checkbox"
                   checked={btOverwrite}
                   onChange={e => setBtOverwrite(e.target.checked)}
-                  style={{ accentColor: '#a78bfa', width: 14, height: 14, cursor: 'pointer' }}
+                  style={{ accentColor: 'var(--purple)', width: 14, height: 14, cursor: 'pointer' }}
                   id="nep-bt-overwrite"
                 />
-                <label htmlFor="nep-bt-overwrite" style={{ fontSize: '0.78rem', color: '#aaa', cursor: 'pointer' }}>
+                <label htmlFor="nep-bt-overwrite" style={{ fontSize: '0.78rem', color: 'var(--p-aaa)', cursor: 'pointer' }}>
                   Overwrite selected backtest (uncheck to save as new)
                 </label>
               </div>
             )}
-            {btError && <span style={{ color: '#e05555', fontSize: '0.78rem' }}>{btError}</span>}
+            {btError && <span style={{ color: 'var(--neg-3)', fontSize: '0.78rem' }}>{btError}</span>}
           </div>
         )}
       </div>
@@ -619,7 +619,7 @@ export default function NavErosionPortfolio() {
       {/* Results */}
       {results && !loading && (
         <div style={{ marginTop: '0.6rem' }}>
-          <h2 style={{ marginTop: 0, marginBottom: '0.7rem', fontSize: '1rem', color: '#ccc' }}>Results</h2>
+          <h2 style={{ marginTop: 0, marginBottom: '0.7rem', fontSize: '1rem', color: 'var(--p-ccc)' }}>Results</h2>
 
           {/* Summary strip */}
           {summary && (
@@ -666,7 +666,7 @@ export default function NavErosionPortfolio() {
               {summary.best && (
                 <StatTile
                   label="Best Performer"
-                  value={<span style={{ color: '#00c853', fontWeight: 700 }}>{summary.best.ticker}</span>}
+                  value={<span style={{ color: 'var(--pos-strong)', fontWeight: 700 }}>{summary.best.ticker}</span>}
                   color="#00c853"
                   sub={fmtPct(summary.best.total_return_pct || 0)}
                 />
@@ -674,7 +674,7 @@ export default function NavErosionPortfolio() {
               {summary.worst && (
                 <StatTile
                   label="Worst Performer"
-                  value={<span style={{ color: '#e05555', fontWeight: 700 }}>{summary.worst.ticker}</span>}
+                  value={<span style={{ color: 'var(--neg-3)', fontWeight: 700 }}>{summary.worst.ticker}</span>}
                   color="#e05555"
                   sub={fmtPct(summary.worst.total_return_pct || 0)}
                 />
@@ -685,7 +685,7 @@ export default function NavErosionPortfolio() {
             </div>
           )}
 
-          <h3 style={{ margin: '0 0 0.4rem', fontSize: '0.85rem', color: '#666', fontWeight: 400 }}>
+          <h3 style={{ margin: '0 0 0.4rem', fontSize: '0.85rem', color: 'var(--p-666)', fontWeight: 400 }}>
             Detail &mdash; click any header to sort
           </h3>
 
@@ -708,7 +708,7 @@ export default function NavErosionPortfolio() {
                         <td><strong>{r.ticker}</strong></td>
                         <td>{fmt$(r.amount || 0)}</td>
                         <td>{(r.reinvest_pct || 0)}%</td>
-                        <td colSpan={13} style={{ textAlign: 'left', color: '#e05555' }}>{r.error}</td>
+                        <td colSpan={13} style={{ textAlign: 'left', color: 'var(--neg-3)' }}>{r.error}</td>
                         <td></td>
                       </tr>
                     )
@@ -739,8 +739,8 @@ export default function NavErosionPortfolio() {
                       <td className={trPCls}>{fmtPct(r.total_return_pct || 0)}</td>
                       <td>
                         {r.has_erosion
-                          ? <span style={{ color: '#e05555', fontWeight: 700 }}>Yes</span>
-                          : <span style={{ color: '#00c853', fontWeight: 700 }}>No</span>}
+                          ? <span style={{ color: 'var(--neg-3)', fontWeight: 700 }}>Yes</span>
+                          : <span style={{ color: 'var(--pos-strong)', fontWeight: 700 }}>No</span>}
                       </td>
                       <td
                         className={defCls}
@@ -748,13 +748,13 @@ export default function NavErosionPortfolio() {
                       >
                         {fmtAbs4(r.final_deficit)} {gapKind} <span style={{ opacity: 0.8 }}>({fmtAbsPct(gapPct)})</span>
                       </td>
-                      <td style={{ color: r.coverage_ratio == null ? '#666' : navSeverityColor(navSeverity), fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
+                      <td style={{ color: r.coverage_ratio == null ? 'var(--p-666)' : navSeverityColor(navSeverity), fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
                         {r.coverage_ratio != null ? r.coverage_ratio.toFixed(4) : '\u2014'}
                       </td>
-                      <td style={{ textAlign: 'left', fontSize: '0.78rem', color: '#aaa' }}>
+                      <td style={{ textAlign: 'left', fontSize: '0.78rem', color: 'var(--p-aaa)' }}>
                         {r.warning
                           ? <span title={r.warning} style={{ cursor: 'help' }}>&#9888; {r.warning.substring(0, 40)}{r.warning.length > 40 ? '\u2026' : ''}</span>
-                          : <span style={{ color: '#555' }}>{'\u2014'}</span>}
+                          : <span style={{ color: 'var(--p-555)' }}>{'\u2014'}</span>}
                       </td>
                     </tr>
                   )

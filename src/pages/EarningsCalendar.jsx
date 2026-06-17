@@ -107,7 +107,7 @@ export default function EarningsCalendar() {
     })
   }, [events, filter, today])
 
-  if (loading) return <div style={{ padding: '2rem', color: '#8899aa' }}>Loading earnings calendar...</div>
+  if (loading) return <div style={{ padding: '2rem', color: 'var(--text-dim)' }}>Loading earnings calendar...</div>
 
   return (
     <div className="dc-page ec-page">
@@ -131,13 +131,13 @@ export default function EarningsCalendar() {
       </div>
 
       {filtered.length === 0 && events.length > 0 && (
-        <p style={{ color: '#8899aa', padding: '1rem 0' }}>
+        <p style={{ color: 'var(--text-dim)', padding: '1rem 0' }}>
           No earnings match this filter.
         </p>
       )}
 
       {events.length === 0 && (
-        <p style={{ color: '#8899aa' }}>
+        <p style={{ color: 'var(--text-dim)' }}>
           No earnings dates found for this portfolio. ETFs and funds typically don't report earnings; verify holdings include individual stocks.
         </p>
       )}
@@ -199,19 +199,19 @@ export default function EarningsCalendar() {
                   {ev.last_eps_actual !== null && ev.last_eps_actual !== undefined && (
                     <div
                       className="dc-date-chip"
-                      style={{ borderTopColor: beat ? '#00e89a' : (miss ? '#e05555' : '#334455') }}
+                      style={{ borderTopColor: beat ? 'var(--pos-bright)' : (miss ? 'var(--neg-3)' : 'var(--p-334455)') }}
                     >
                       <span className="dc-chip-label">Last Actual</span>
                       <span
                         className="dc-chip-val"
-                        style={{ color: beat ? '#00e89a' : (miss ? '#e05555' : '#b0c0d0'), fontWeight: 600 }}
+                        style={{ color: beat ? 'var(--pos-bright)' : (miss ? 'var(--neg-3)' : 'var(--p-b0c0d0)'), fontWeight: 600 }}
                       >
                         {fmtEps(ev.last_eps_actual)}
                       </span>
                     </div>
                   )}
                   {ev.last_eps_estimate !== null && ev.last_eps_estimate !== undefined && (
-                    <div className="dc-date-chip" style={{ borderTopColor: '#334455' }}>
+                    <div className="dc-date-chip" style={{ borderTopColor: 'var(--p-334455)' }}>
                       <span className="dc-chip-label">Last Est</span>
                       <span className="dc-chip-val">{fmtEps(ev.last_eps_estimate)}</span>
                     </div>

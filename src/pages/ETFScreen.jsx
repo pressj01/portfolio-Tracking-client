@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
-import Plot from 'react-plotly.js'
+import Plot from '../components/ThemedPlot'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
+import MarkovPanel from '../components/MarkovPanel'
+import { computeMarkov, REGIME_COLORS } from '../utils/markov'
 
 // ── Indicator helpers ────────────────────────────────────────────────────────
 
@@ -1943,11 +1947,11 @@ const CHIP_COLORS = ['#a0f0c0', '#FFD700', '#ff7eb3', '#b39ddb', '#ff8a65', '#4d
 
 // Match the web version: same blue family, distinct dash patterns
 const TRACE_STYLES = {
-  price:    { dash: 'dot',       color: '#7ecfff', width: 2,   label: 'Price' },
-  pricediv: { dash: 'longdash',  color: '#7ecfff', width: 2.5, label: 'Price + Divs' },
-  blend:    { dash: 'dash',      color: '#7ecfff', width: 2.5, label: '' },  // label set dynamically with %
-  total:    { dash: 'solid',     color: '#7ecfff', width: 3,   label: 'Total Return' },
-  drip:     { dash: 'solid',     color: '#7ecfff', width: 3,   label: '100% DRIP' },
+  price:    { dash: 'dot',       color: 'var(--accent-bright)', width: 2,   label: 'Price' },
+  pricediv: { dash: 'longdash',  color: 'var(--accent-bright)', width: 2.5, label: 'Price + Divs' },
+  blend:    { dash: 'dash',      color: 'var(--accent-bright)', width: 2.5, label: '' },  // label set dynamically with %
+  total:    { dash: 'solid',     color: 'var(--accent-bright)', width: 3,   label: 'Total Return' },
+  drip:     { dash: 'solid',     color: 'var(--accent-bright)', width: 3,   label: '100% DRIP' },
 }
 
 function pct(v) { return v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '—' }
@@ -2058,6 +2062,7 @@ function lastVisibleIndex(dates, start, end) {
 export default function ETFScreen() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
+  const { isDark } = useTheme()
   const [tab, setTab] = useState('technical') // 'technical' | 'returns'
   const [ticker, setTicker] = useState('')
   const [period, setPeriod] = useState('1y')
@@ -2202,6 +2207,44 @@ export default function ETFScreen() {
   const [studySearch, setStudySearch] = useState('')
   const [studiesPanelOpen, setStudiesPanelOpen] = useState(false)
 
+  // Markov regime params (Markov tab) — persisted like the other chart settings.
+  const [mkWindow, setMkWindow] = useState(() => {
+    const v = Number(localStorage.getItem('etf-markov-window')); return v >= 5 ? v : 20
+  })
+  const [mkThr, setMkThr] = useState(() => {
+    const v = Number(localStorage.getItem('etf-markov-thr')); return v >= 0.5 ? v : 5
+  })
+  useEffect(() => { localStorage.setItem('etf-markov-window', String(mkWindow)) }, [mkWindow])
+  useEffect(() => { localStorage.setItem('etf-markov-thr', String(mkThr)) }, [mkThr])
+
+  // Regime model + background shading for the Markov tab. Computed from the same
+  // OHLCV records the chart already holds, so the ribbon always matches the bars.
+  const markovResult = useMemo(
+    () => (tab === 'markov' ? computeMarkov(records, mkWindow, mkThr) : null),
+    [tab, records, mkWindow, mkThr],
+  )
+  // Contiguous runs of the same regime, as bar-index ranges. The actual chart
+  // shapes are built in the techData memo, where the price-pane y-domain is known
+  // (the shading must sit behind the candles only, not over the volume/indicator
+  // panes below it).
+  const regimeRuns = useMemo(() => {
+    if (tab !== 'markov' || !markovResult?.ok || !records.length) return []
+    const regimes = markovResult.regimes
+    const runs = []
+    let runStart = null, runRegime = null
+    for (let i = 0; i < regimes.length; i++) {
+      const r = regimes[i]
+      if (r === null) continue
+      if (runRegime === null) { runStart = i; runRegime = r }
+      else if (r !== runRegime) {
+        runs.push({ start: runStart, end: i, regime: runRegime }) // seamless: extend to next run
+        runStart = i; runRegime = r
+      }
+    }
+    if (runStart !== null) runs.push({ start: runStart, end: regimes.length - 1, regime: runRegime })
+    return runs
+  }, [tab, markovResult, records])
+
   // Returns tab state
   const [returnMode, setReturnMode] = useState('total')
   const [reinvest, setReinvest] = useState(100)
@@ -2338,13 +2381,13 @@ export default function ETFScreen() {
 
   // Auto-reload chart when period or interval changes (only if data already loaded)
   useEffect(() => {
-    if (tab === 'technical' && records.length) loadTechnical()
+    if (tab !== 'returns' && records.length) loadTechnical()
     else if (tab === 'returns' && returnData) loadReturns()
   }, [period, interval]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const loadChart = tab === 'technical' ? loadTechnical : loadReturns
-  const isLoading = tab === 'technical' ? loading : returnLoading
-  const canLoad = tab === 'technical' ? !!ticker.trim() : !!(ticker.trim() || compareTickers.length)
+  const loadChart = tab === 'returns' ? loadReturns : loadTechnical
+  const isLoading = tab === 'returns' ? returnLoading : loading
+  const canLoad = tab === 'returns' ? !!(ticker.trim() || compareTickers.length) : !!ticker.trim()
 
   const normalizeTicker = (value) => (value || '').trim().toUpperCase()
   const primaryTicker = normalizeTicker(ticker)
@@ -2428,8 +2471,8 @@ export default function ETFScreen() {
     return { mainTraces: mains, subplots: subs, indicatorShapes: shps }
   }, [records, indicators, ivData])
 
-  const { data: techData, layout: techLayout } = useMemo(() => {
-    if (!records.length) return { data: [], layout: {} }
+  const { data: techData, layout: techLayout, regimeShapes = [] } = useMemo(() => {
+    if (!records.length) return { data: [], layout: {}, regimeShapes: [] }
     const dates = records.map(r => r.date)
     const hasVolume = showVolume && records.some(r => r.volume > 0)
     const lowerCount = subplots.length + (hasVolume ? 1 : 0)
@@ -2505,16 +2548,23 @@ export default function ETFScreen() {
     const yPadTop = priceRange * (yExpandTopNum / 100)
     const yPadBot = priceRange * (yExpandBotNum / 100)
 
-    // X-axis: extend range by N bars into the future
+    // X-axis range: pad ~1.5 bars before the first bar so it clears the y-axis
+    // labels, and N bars into the future on the right (min 1 bar so the last bar
+    // isn't flush against the edge).
     const lastDate = dates[dates.length - 1]
     let xRange = undefined
-    if (xExpandNum > 0 && lastDate) {
-      // Estimate bar interval from last two dates
+    if (lastDate && dates.length > 1) {
       const d1 = new Date(dates[Math.max(0, dates.length - 2)])
       const d2 = new Date(lastDate)
       const barMs = Math.max(d2 - d1, 86400000) // at least 1 day
-      const futureDate = new Date(d2.getTime() + barMs * xExpandNum)
-      xRange = [dates[0], futureDate.toISOString().slice(0, 10)]
+      const intraday = (dates[0] || '').length > 10
+      const fmtX = (ms) => {
+        const iso = new Date(ms).toISOString()
+        return intraday ? iso.slice(0, 16).replace('T', ' ') : iso.slice(0, 10)
+      }
+      const leftMs = new Date(dates[0]).getTime() - barMs * 1.5
+      const rightMs = d2.getTime() + barMs * Math.max(xExpandNum, 1)
+      xRange = [fmtX(leftMs), fmtX(rightMs)]
     }
 
     // Build TOS-style x-axis ticks: month labels + spaced day numbers
@@ -2579,12 +2629,21 @@ export default function ETFScreen() {
       const axisIdx = hasVolume ? i + 3 : i + 2
       layout[`yaxis${axisIdx}`] = { title: sub.title, domain: domains[domainIdx], gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot' }
     })
+    // Markov regime shading — confined to the price pane (domains[0]) so it sits
+    // behind the candles only, not over the volume / indicator panes below.
+    const [priceBot, priceTop] = domains[0]
+    const regimeShapes = regimeRuns.map(run => ({
+      type: 'rect', xref: 'x', yref: 'paper', layer: 'below',
+      x0: dates[run.start], x1: dates[run.end], y0: priceBot, y1: priceTop,
+      fillcolor: REGIME_COLORS[run.regime], line: { width: 0 },
+    }))
+
     const fibShapes = fibSets.flatMap(f => f.shapes)
     const fibAnnotations = fibSets.flatMap(f => f.annotations)
-    layout.shapes = [...drawnShapes, ...indicatorShapes, ...fibShapes]
+    layout.shapes = [...regimeShapes, ...drawnShapes, ...indicatorShapes, ...fibShapes]
     if (fibAnnotations.length) layout.annotations = [...(layout.annotations || []), ...fibAnnotations]
-    return { data: traces, layout }
-  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, drawColor, drawDash, drawMode, drawnShapes, fibSets])
+    return { data: traces, layout, regimeShapes }
+  }, [records, chartType, chartScale, yExpandTopNum, yExpandBotNum, xExpandNum, tickerName, mainTraces, subplots, showVolume, indicatorShapes, regimeRuns, drawColor, drawDash, drawMode, drawnShapes, fibSets])
 
   // ── Return chart traces ────────────────────────────────────────────────────
 
@@ -2821,18 +2880,21 @@ export default function ETFScreen() {
       <div className="etf-tabs">
         <button className={`btn btn-sm${tab === 'technical' ? ' btn-active' : ''}`} onClick={() => setTab('technical')}>Technical</button>
         <button className={`btn btn-sm${tab === 'returns' ? ' btn-active' : ''}`} onClick={() => setTab('returns')}>Returns</button>
+        <button className={`btn btn-sm${tab === 'markov' ? ' btn-active' : ''}`} onClick={() => setTab('markov')}>Markov</button>
       </div>
 
       {/* Controls bar */}
       <div className="etf-controls">
         <div className="etf-ticker-input">
           <span className="etf-control-label">Primary</span>
-          <select value="" onChange={e => setPrimaryTicker(e.target.value)} title="Pick from portfolio">
-            <option value="">Portfolio...</option>
-            {portfolioTickers.map(t => (
-              <option key={t.ticker} value={t.ticker}>{t.ticker} — {t.description}</option>
-            ))}
-          </select>
+          {tab !== 'markov' && (
+            <select value="" onChange={e => setPrimaryTicker(e.target.value)} title="Pick from portfolio">
+              <option value="">Portfolio...</option>
+              {portfolioTickers.map(t => (
+                <option key={t.ticker} value={t.ticker}>{t.ticker} — {t.description}</option>
+              ))}
+            </select>
+          )}
           <input type="text" placeholder="Ticker (e.g. SPY)" value={ticker} onChange={e => setPrimaryTicker(e.target.value)} onKeyDown={handleKeyDown} />
           {primaryTicker && <span className="primary-chip">{primaryTicker}</span>}
           <button className="btn btn-primary" onClick={loadChart} disabled={isLoading || !canLoad}>
@@ -2862,7 +2924,7 @@ export default function ETFScreen() {
               <span className="etf-draw-sep">|</span>
             </>
           )}
-          {tab === 'technical' && (
+          {tab !== 'returns' && (
             <select className="etf-draw-select" value={period === '1d' || period === '5d' ? `${period}|${interval}` : ''} onChange={e => {
               if (!e.target.value) return
               const [p, i] = e.target.value.split('|')
@@ -2921,7 +2983,7 @@ export default function ETFScreen() {
           </select>
         </div>
 
-        {tab === 'technical' && (
+        {tab !== 'returns' && (
           <div className="etf-chart-toggle">
             <button className={`btn btn-sm${chartType === 'line' ? ' btn-active' : ''}`} onClick={() => setChartType('line')}>Line</button>
             <button className={`btn btn-sm${chartType === 'candlestick' ? ' btn-active' : ''}`} onClick={() => setChartType('candlestick')}>Candle</button>
@@ -2931,7 +2993,7 @@ export default function ETFScreen() {
             <button className={`btn btn-sm${chartScale === 'log' ? ' btn-active' : ''}`} onClick={() => setChartScale('log')}>Log</button>
             <button className={`btn btn-sm${chartScale === 'percent' ? ' btn-active' : ''}`} onClick={() => setChartScale('percent')}>%</button>
             <span className="etf-draw-sep">|</span>
-            <label style={{ fontSize: '0.75rem', color: '#aaa', marginRight: 2 }}>Y↑</label>
+            <label style={{ fontSize: '0.75rem', color: 'var(--p-aaa)', marginRight: 2 }}>Y↑</label>
             <div style={{ display: 'inline-flex', alignItems: 'center', position: 'relative' }}>
               <input className="etf-draw-select" value={yExpandTop}
                 style={{ width: 62, textAlign: 'center', paddingRight: 18 }}
@@ -2948,10 +3010,10 @@ export default function ETFScreen() {
                 <option value="30">30%</option>
                 <option value="50">50%</option>
               </select>
-              <span style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', fontSize: '0.6rem', color: '#666', pointerEvents: 'none' }}>▼</span>
+              <span style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', fontSize: '0.6rem', color: 'var(--p-666)', pointerEvents: 'none' }}>▼</span>
             </div>
-            <span style={{ fontSize: '0.7rem', color: '#666', marginLeft: 2, marginRight: 2 }}>%</span>
-            <label style={{ fontSize: '0.75rem', color: '#aaa', marginRight: 2 }}>Y↓</label>
+            <span style={{ fontSize: '0.7rem', color: 'var(--p-666)', marginLeft: 2, marginRight: 2 }}>%</span>
+            <label style={{ fontSize: '0.75rem', color: 'var(--p-aaa)', marginRight: 2 }}>Y↓</label>
             <div style={{ display: 'inline-flex', alignItems: 'center', position: 'relative' }}>
               <input className="etf-draw-select" value={yExpandBot}
                 style={{ width: 62, textAlign: 'center', paddingRight: 18 }}
@@ -2968,10 +3030,10 @@ export default function ETFScreen() {
                 <option value="30">30%</option>
                 <option value="50">50%</option>
               </select>
-              <span style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', fontSize: '0.6rem', color: '#666', pointerEvents: 'none' }}>▼</span>
+              <span style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', fontSize: '0.6rem', color: 'var(--p-666)', pointerEvents: 'none' }}>▼</span>
             </div>
-            <span style={{ fontSize: '0.7rem', color: '#666', marginLeft: 2, marginRight: 4 }}>%</span>
-            <label style={{ fontSize: '0.75rem', color: '#aaa', marginRight: 2 }}>X→</label>
+            <span style={{ fontSize: '0.7rem', color: 'var(--p-666)', marginLeft: 2, marginRight: 4 }}>%</span>
+            <label style={{ fontSize: '0.75rem', color: 'var(--p-aaa)', marginRight: 2 }}>X→</label>
             <div style={{ display: 'inline-flex', alignItems: 'center', position: 'relative' }}>
               <input className="etf-draw-select" value={xExpand}
                 style={{ width: 62, textAlign: 'center', paddingRight: 18 }}
@@ -2987,9 +3049,9 @@ export default function ETFScreen() {
                 <option value="100">100</option>
                 <option value="500">500</option>
               </select>
-              <span style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', fontSize: '0.6rem', color: '#666', pointerEvents: 'none' }}>▼</span>
+              <span style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', fontSize: '0.6rem', color: 'var(--p-666)', pointerEvents: 'none' }}>▼</span>
             </div>
-            <span style={{ fontSize: '0.7rem', color: '#666', marginLeft: 2, marginRight: 4 }}>bars</span>
+            <span style={{ fontSize: '0.7rem', color: 'var(--p-666)', marginLeft: 2, marginRight: 4 }}>bars</span>
             <span className="etf-draw-sep">|</span>
             <button className={`btn btn-sm${drawMode === 'trendline' ? ' btn-active' : ''}`} onClick={() => setDrawMode(m => m === 'trendline' ? null : 'trendline')}>Trendline</button>
             <button className={`btn btn-sm${drawMode === 'hline' ? ' btn-active' : ''}`} onClick={() => setDrawMode(m => m === 'hline' ? null : 'hline')}>H-Line</button>
@@ -3053,7 +3115,7 @@ export default function ETFScreen() {
             <input type="text" placeholder="Type ticker..." value={compareInput} onChange={e => setCompareInput(e.target.value.toUpperCase())} onKeyDown={e => { if (e.key === 'Enter') addCompare() }} />
             <button className="btn btn-sm" onClick={addCompare}>Add</button>
             {compareTickers.map((s, i) => (
-              <span key={s} className="compare-chip" style={{ background: CHIP_COLORS[i % CHIP_COLORS.length], color: '#111' }}>
+              <span key={s} className="compare-chip" style={{ background: CHIP_COLORS[i % CHIP_COLORS.length], color: 'var(--p-111)' }}>
                 {s} <button onClick={() => removeCompare(s)}>&times;</button>
               </span>
             ))}
@@ -3064,9 +3126,9 @@ export default function ETFScreen() {
       {error && <div className="etf-error">{error}</div>}
 
       <div className="etf-body">
-        {/* Sidebar: TOS-style studies (technical) or stats (returns) */}
+        {/* Sidebar: TOS-style studies (technical/markov) or stats (returns) */}
         <aside className="etf-indicators">
-          {tab === 'technical' ? (
+          {tab !== 'returns' ? (
             <>
               {/* Added Studies panel */}
               <h3>Added Studies</h3>
@@ -3178,8 +3240,8 @@ export default function ETFScreen() {
                   <div className="stat-row"><span>Total Return</span><span style={{ color: pctColor(st.total_ret) }}>{pct(st.total_ret)}</span></div>
                   <div className="stat-row"><span>Price Return</span><span style={{ color: pctColor(st.price_ret) }}>{pct(st.price_ret)}</span></div>
                   <div className="stat-row"><span>Div Contrib</span><span style={{ color: pctColor(st.div_contrib) }}>{pct(st.div_contrib)}</span></div>
-                  <div className="stat-row"><span>Annualised</span><span style={{ color: st.annualized != null ? pctColor(st.annualized) : '#888' }}>{pct(st.annualized)}</span></div>
-                  <div className="stat-row"><span>Max Drawdown</span><span style={{ color: '#ef5350' }}>{pct(st.max_drawdown)}</span></div>
+                  <div className="stat-row"><span>Annualised</span><span style={{ color: st.annualized != null ? pctColor(st.annualized) : 'var(--p-888)' }}>{pct(st.annualized)}</span></div>
+                  <div className="stat-row"><span>Max Drawdown</span><span style={{ color: 'var(--neg-2)' }}>{pct(st.max_drawdown)}</span></div>
                 </div>
               ))}
               {returnData?.warnings?.length > 0 && (
@@ -3207,7 +3269,7 @@ export default function ETFScreen() {
               <div className="return-summary-strip">
                 <div className="return-summary-card">
                   <div className="rsc-label">PERIOD</div>
-                  <div className="rsc-value" style={{ color: '#90caf9' }}>{periodLabel}</div>
+                  <div className="rsc-value" style={{ color: 'var(--accent-2)' }}>{periodLabel}</div>
                   {customWin && <div className="rsc-sub">{customWin[0]} → {customWin[1]}</div>}
                 </div>
                 <div className="return-summary-card">
@@ -3227,19 +3289,19 @@ export default function ETFScreen() {
                 </div>
                 <div className="return-summary-card">
                   <div className="rsc-label">{primarySym} ANN.</div>
-                  <div className="rsc-value" style={{ color: st.annualized != null ? pctColor(st.annualized) : '#888' }}>{pct(st.annualized)}</div>
+                  <div className="rsc-value" style={{ color: st.annualized != null ? pctColor(st.annualized) : 'var(--p-888)' }}>{pct(st.annualized)}</div>
                   <div className="rsc-sub">annualized</div>
                 </div>
                 <div className="return-summary-card">
                   <div className="rsc-label">{primarySym} MAX DD</div>
-                  <div className="rsc-value" style={{ color: '#ef5350' }}>{pct(st.max_drawdown)}</div>
+                  <div className="rsc-value" style={{ color: 'var(--neg-2)' }}>{pct(st.max_drawdown)}</div>
                   <div className="rsc-sub">max drawdown</div>
                 </div>
               </div>
             )
           })()}
 
-          {tab === 'technical' ? (
+          {tab !== 'returns' ? (
             records.length > 0 ? (
               <div ref={plotRef}>
                 <div className="etf-chart-title" style={{ display: 'flex', alignItems: 'center', gap: '1.2rem', flexWrap: 'wrap' }}>
@@ -3253,9 +3315,9 @@ export default function ETFScreen() {
                     const chgColor = chg >= 0 ? '#26A69A' : '#EF5350'
                     return (
                       <span style={{ fontSize: '0.82rem', fontWeight: 400, display: 'flex', gap: '0.8rem', alignItems: 'center' }}>
-                        <span style={{ color: '#90caf9' }}>H <span style={{ color: '#e0e0e0' }}>{last.high?.toFixed(2)}</span></span>
-                        <span style={{ color: '#90caf9' }}>L <span style={{ color: '#e0e0e0' }}>{last.low?.toFixed(2)}</span></span>
-                        <span style={{ color: '#90caf9' }}>C <span style={{ color: '#e0e0e0' }}>{last.close?.toFixed(2)}</span></span>
+                        <span style={{ color: 'var(--accent-2)' }}>H <span style={{ color: 'var(--text)' }}>{last.high?.toFixed(2)}</span></span>
+                        <span style={{ color: 'var(--accent-2)' }}>L <span style={{ color: 'var(--text)' }}>{last.low?.toFixed(2)}</span></span>
+                        <span style={{ color: 'var(--accent-2)' }}>C <span style={{ color: 'var(--text)' }}>{last.close?.toFixed(2)}</span></span>
                         {chg != null && (
                           <span style={{ color: chgColor, fontWeight: 500 }}>
                             {chg >= 0 ? '+' : ''}{chg.toFixed(2)} ({chgPct >= 0 ? '+' : ''}{chgPct.toFixed(2)}%)
@@ -3265,19 +3327,31 @@ export default function ETFScreen() {
                     )
                   })()}
                 </div>
+                {tab === 'markov' && (
+                  <MarkovPanel
+                    result={markovResult}
+                    windowBars={mkWindow}
+                    thr={mkThr}
+                    onChangeWindow={setMkWindow}
+                    onChangeThr={setMkThr}
+                  />
+                )}
                 {drawMode === 'fib' && (
-                  <div style={{ color: '#FFD740', fontSize: '0.8rem', padding: '4px 8px', background: '#2a2a3d', borderRadius: 4, marginBottom: 4 }}>
+                  <div style={{ color: 'var(--p-ffd740)', fontSize: '0.8rem', padding: '4px 8px', background: 'var(--p-2a2a3d)', borderRadius: 4, marginBottom: 4 }}>
                     {fibClicks.length === 0 ? 'Click the first point (swing high or low)' : 'Click the second point to complete Fibonacci retracement'}
                   </div>
                 )}
                 <div style={{ position: 'relative' }}>
-                  <Plot data={techData} layout={techLayout} config={{
+                  <Plot data={techData} layout={themedPlotlyLayout(techLayout, isDark)} config={{
                     responsive: true, displayModeBar: true, displaylogo: false,
                     modeBarButtonsToAdd: ['eraseshape'],
                   }} useResizeHandler style={{ width: '100%' }}
                   onRelayout={(e) => {
+                    // Shapes the user did not draw (indicator overlays + Markov regime bands)
+                    // must be excluded so they aren't captured as user drawings.
+                    const bgShapes = [...indicatorShapes, ...regimeShapes]
                     if (e.shapes) {
-                      setDrawnShapes(e.shapes.filter(s => !indicatorShapes.includes(s)))
+                      setDrawnShapes(e.shapes.filter(s => !bgShapes.includes(s)))
                     } else if (e['shapes[0]'] !== undefined || Object.keys(e).some(k => k.startsWith('shapes['))) {
                       const plotEl = plotRef.current?.querySelector('.js-plotly-plot')
                       if (plotEl && plotEl._fullLayout && plotEl._fullLayout.shapes) {
@@ -3287,7 +3361,7 @@ export default function ETFScreen() {
                           line: { color: s.line?.color, width: s.line?.width, dash: s.line?.dash },
                           fillcolor: s.fillcolor, opacity: s.opacity, path: s.path,
                         }))
-                        setDrawnShapes(allShapes.filter(s => !indicatorShapes.some(is => is.x0 === s.x0 && is.y0 === s.y0 && is.x1 === s.x1 && is.y1 === s.y1)))
+                        setDrawnShapes(allShapes.filter(s => !bgShapes.some(is => is.x0 === s.x0 && is.y0 === s.y0 && is.x1 === s.x1 && is.y1 === s.y1)))
                       }
                     }
                   }} />
@@ -3309,11 +3383,11 @@ export default function ETFScreen() {
             returnData?.series ? (
               <>
                 {(returnData.mode === 'all3' || returnData.mode === 'all4') && returnData.reinvest_pct === 100 && (
-                  <div style={{ background: 'rgba(255,152,0,0.1)', border: '1px solid rgba(255,152,0,0.3)', borderRadius: 6, padding: '0.4rem 0.75rem', marginBottom: '0.5rem', fontSize: '0.8rem', color: '#ff9800' }}>
+                  <div style={{ background: 'rgba(255,152,0,0.1)', border: '1px solid rgba(255,152,0,0.3)', borderRadius: 6, padding: '0.4rem 0.75rem', marginBottom: '0.5rem', fontSize: '0.8rem', color: 'var(--p-ff9800)' }}>
                     Reinvest is 100% — the Custom and DRIP lines are identical and overlap. Adjust the slider below 100% to see them diverge.
                   </div>
                 )}
-                <Plot data={returnPlotData} layout={returnPlotLayout} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} onRelayout={handleReturnRelayout} />
+                <Plot data={returnPlotData} layout={themedPlotlyLayout(returnPlotLayout, isDark)} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} onRelayout={handleReturnRelayout} />
               </>
             ) : (
               !returnLoading && <div className="etf-placeholder">Select a return mode and click Load to compare returns.</div>
@@ -3325,3 +3399,4 @@ export default function ETFScreen() {
     </div>
   )
 }
+

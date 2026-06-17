@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 
@@ -38,6 +40,7 @@ function fmtN(v, dec = 2) {
 }
 
 export default function PortfolioBuilder() {
+  const { isDark } = useTheme()
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const dialog = useDialog()
@@ -327,12 +330,12 @@ export default function PortfolioBuilder() {
         hovertemplate: hld.map(h =>
           `${h.ticker}<br>Return: ${h.annual_ret}%<br>Vol: ${h.annual_vol}%<br>Weight: ${h.weight_pct}%<br>Ulcer: ${h.ulcer_index ?? 'N/A'}<extra></extra>`
         ),
-      }], {
+      }], themedPlotlyLayout({
         ...layoutBase,
         title: { text: 'Risk vs Return (bubble = weight)', font: { color: '#ddd', size: 13 } },
         xaxis: { ...axisStyle, title: { text: 'Risk (Annualized Volatility %)', font: { color: '#ccc', size: 13 } }, zeroline: false },
         yaxis: { ...axisStyle, title: { text: 'Return (Annualized %)', font: { color: '#ccc', size: 13 } }, zeroline: true, zerolinecolor: '#444' },
-      }, { responsive: true })
+      }, isDark), { responsive: true })
     }
 
     // 2. Correlation heatmap
@@ -345,12 +348,12 @@ export default function PortfolioBuilder() {
         colorscale: [[0, '#d32f2f'], [0.5, '#111124'], [1, '#00e89a']],
         zmin: -1, zmax: 1, showscale: true,
         colorbar: { tickfont: { color: '#888' }, len: 0.8 },
-      }], {
+      }], themedPlotlyLayout({
         ...layoutBase, margin: { t: 45, r: 60, b: 90, l: 90 },
         title: { text: 'Correlation Matrix', font: { color: '#ddd', size: 13 } },
         xaxis: { color: '#888', tickangle: -45, tickfont: { size: 9 } },
         yaxis: { color: '#888', tickfont: { size: 9 }, autorange: 'reversed' },
-      }, { responsive: true })
+      }, isDark), { responsive: true })
     } else if (corrEl) {
       corrEl.innerHTML = '<p style="color:#555;text-align:center;padding:2rem">Need 2+ tickers for correlation.</p>'
     }
@@ -365,13 +368,13 @@ export default function PortfolioBuilder() {
         fillcolor: 'rgba(255,82,82,0.15)', line: { color: '#ff5252', width: 1.5 },
         mode: 'lines', name: 'Drawdown',
         hovertemplate: '%{x}: %{y:.2f}%<extra></extra>',
-      }], {
+      }], themedPlotlyLayout({
         ...layoutBase, margin: { t: 45, r: 20, b: 40, l: 60 },
         title: { text: 'Portfolio Drawdown', font: { color: '#ddd', size: 13 } },
         xaxis: axisStyle, yaxis: { ...axisStyle, tickformat: '.1f', ticksuffix: '%' },
-      }, { responsive: true })
+      }, isDark), { responsive: true })
     }
-  }, [analysisResult])
+  }, [analysisResult, isDark])
 
   // ── Compare ──────────────────────────────────────────────────────────────
   const toggleCompare = (pid) => {
@@ -416,7 +419,7 @@ export default function PortfolioBuilder() {
       }
     })
 
-    Plotly.newPlot(radarEl, traces, {
+    Plotly.newPlot(radarEl, traces, themedPlotlyLayout({
       polar: {
         radialaxis: { visible: true, range: [0, 100], color: '#888', gridcolor: '#1a1a2e' },
         angularaxis: { color: '#888' },
@@ -426,8 +429,8 @@ export default function PortfolioBuilder() {
       title: { text: 'Portfolio Comparison', font: { color: '#ddd', size: 13 } },
       margin: { t: 50, r: 40, b: 40, l: 40 },
       showlegend: true, legend: { font: { color: '#aaa' } },
-    }, { responsive: true })
-  }, [compareResult])
+    }, isDark), { responsive: true })
+  }, [compareResult, isDark])
 
   // ── All Weather ──────────────────────────────────────────────────────────
   const runAllWeather = async () => {
@@ -595,7 +598,7 @@ export default function PortfolioBuilder() {
       {/* ── Main Panel ───────────────────────────────────────────────────── */}
       <div className="pb-main">
         {!activeId ? (
-          <div style={{ color: '#556', textAlign: 'center', padding: '4rem 2rem', fontSize: '1.1rem' }}>
+          <div style={{ color: 'var(--p-556)', textAlign: 'center', padding: '4rem 2rem', fontSize: '1.1rem' }}>
             Select or create a portfolio to begin.
           </div>
         ) : (
@@ -666,7 +669,7 @@ export default function PortfolioBuilder() {
                 onKeyDown={e => e.key === 'Enter' && addHolding()}
               />
               <button className="btn-primary" onClick={addHolding}>Add</button>
-              <span style={{ color: '#8899aa', marginLeft: '1rem' }}>
+              <span style={{ color: 'var(--text-dim)', marginLeft: '1rem' }}>
                 Total Invested: {fmt$(totalInvested)}
               </span>
             </div>
@@ -746,12 +749,12 @@ export default function PortfolioBuilder() {
             {/* Grade Panel */}
             {gradeInfo && (
               <div className="card" style={{ marginTop: '1.5rem' }}>
-                <h3 style={{ marginBottom: '1rem', color: '#ddd' }}>Portfolio Report Card</h3>
+                <h3 style={{ marginBottom: '1rem', color: 'var(--p-ddd)' }}>Portfolio Report Card</h3>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', alignItems: 'flex-start' }}>
                   {/* Grade ring */}
                   <div className="pb-grade-ring">
                     <GradeBadge grade={gradeInfo.overall} large />
-                    <div style={{ color: '#8899aa', fontSize: '0.85rem', marginTop: '0.3rem' }}>
+                    <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginTop: '0.3rem' }}>
                       {gradeInfo.score} / 100
                     </div>
                   </div>
@@ -799,7 +802,7 @@ export default function PortfolioBuilder() {
             {/* Charts */}
             {analysisResult && (
               <div className="card" style={{ marginTop: '1.5rem' }}>
-                <h3 style={{ marginBottom: '1rem', color: '#ddd' }}>Risk & Performance Charts</h3>
+                <h3 style={{ marginBottom: '1rem', color: 'var(--p-ddd)' }}>Risk & Performance Charts</h3>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
                   <div style={{ flex: 1, minWidth: 340 }}>
                     <div id="pb-scatter" style={{ width: '100%', height: 380 }} />
@@ -859,12 +862,12 @@ export default function PortfolioBuilder() {
 
               return (
                 <div className="card" style={{ marginTop: '1.5rem' }}>
-                  <h3 style={{ marginBottom: '1rem', color: '#ddd' }}>Comparison</h3>
+                  <h3 style={{ marginBottom: '1rem', color: 'var(--p-ddd)' }}>Comparison</h3>
                   {hasDelta && (
                     <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '1rem', fontSize: '0.85rem' }}>
-                      <span style={{ color: '#4dff91' }}>{res[0].name}: {wins[0]} wins</span>
-                      <span style={{ color: '#ff6b6b' }}>{res[1].name}: {wins[1]} wins</span>
-                      <span style={{ color: '#8899aa' }}>Tied: {winners.filter(w => w === -1).length}</span>
+                      <span style={{ color: 'var(--pos)' }}>{res[0].name}: {wins[0]} wins</span>
+                      <span style={{ color: 'var(--neg)' }}>{res[1].name}: {wins[1]} wins</span>
+                      <span style={{ color: 'var(--text-dim)' }}>Tied: {winners.filter(w => w === -1).length}</span>
                     </div>
                   )}
                   <div id="pb-radar" style={{ width: '100%', height: 420 }} />
@@ -887,7 +890,7 @@ export default function PortfolioBuilder() {
                               const isLoser = hasDelta && winners[mi] >= 0 && winners[mi] !== ri
                               return (
                                 <td key={m.key} style={{
-                                  color: isWinner ? '#4dff91' : isLoser ? '#ff6b6b' : '#ddd',
+                                  color: isWinner ? 'var(--pos)' : isLoser ? 'var(--neg)' : 'var(--p-ddd)',
                                   fontWeight: isWinner ? 700 : 400,
                                 }}>
                                   {fmtMetric(m, r[m.key])}
@@ -899,15 +902,15 @@ export default function PortfolioBuilder() {
                           </tr>
                         ))}
                         {hasDelta && (
-                          <tr style={{ borderTop: '2px solid #334' }}>
-                            <td style={{ textAlign: 'left', color: '#8899aa', fontStyle: 'italic' }}>Difference</td>
-                            <td style={{ color: '#8899aa' }}>--</td>
+                          <tr style={{ borderTop: '2px solid var(--p-334)' }}>
+                            <td style={{ textAlign: 'left', color: 'var(--text-dim)', fontStyle: 'italic' }}>Difference</td>
+                            <td style={{ color: 'var(--text-dim)' }}>--</td>
                             {metrics.map((m, mi) => {
                               const better = winners[mi] === 0
                               const worse = winners[mi] === 1
                               return (
                                 <td key={m.key} style={{
-                                  color: better ? '#4dff91' : worse ? '#ff6b6b' : '#8899aa',
+                                  color: better ? 'var(--pos)' : worse ? 'var(--neg)' : 'var(--text-dim)',
                                   fontSize: '0.85rem',
                                 }}>
                                   {fmtDelta(m, res[0][m.key], res[1][m.key])}
@@ -965,12 +968,12 @@ export default function PortfolioBuilder() {
           }
           return (
             <div className="card" style={{ marginTop: '1.5rem' }}>
-              <h3 style={{ marginBottom: '1rem', color: '#ddd' }}>Comparison</h3>
+              <h3 style={{ marginBottom: '1rem', color: 'var(--p-ddd)' }}>Comparison</h3>
               {hasDelta && (
                 <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '1rem', fontSize: '0.85rem' }}>
-                  <span style={{ color: '#4dff91' }}>{res[0].name}: {wins[0]} wins</span>
-                  <span style={{ color: '#ff6b6b' }}>{res[1].name}: {wins[1]} wins</span>
-                  <span style={{ color: '#8899aa' }}>Tied: {winners.filter(w => w === -1).length}</span>
+                  <span style={{ color: 'var(--pos)' }}>{res[0].name}: {wins[0]} wins</span>
+                  <span style={{ color: 'var(--neg)' }}>{res[1].name}: {wins[1]} wins</span>
+                  <span style={{ color: 'var(--text-dim)' }}>Tied: {winners.filter(w => w === -1).length}</span>
                 </div>
               )}
               <div id="pb-radar" style={{ width: '100%', height: 420 }} />
@@ -993,7 +996,7 @@ export default function PortfolioBuilder() {
                           const isLoser = hasDelta && winners[mi] >= 0 && winners[mi] !== ri
                           return (
                             <td key={m.key} style={{
-                              color: isWinner ? '#4dff91' : isLoser ? '#ff6b6b' : '#ddd',
+                              color: isWinner ? 'var(--pos)' : isLoser ? 'var(--neg)' : 'var(--p-ddd)',
                               fontWeight: isWinner ? 700 : 400,
                             }}>
                               {fmtMetric(m, r[m.key])}
@@ -1005,15 +1008,15 @@ export default function PortfolioBuilder() {
                       </tr>
                     ))}
                     {hasDelta && (
-                      <tr style={{ borderTop: '2px solid #334' }}>
-                        <td style={{ textAlign: 'left', color: '#8899aa', fontStyle: 'italic' }}>Difference</td>
-                        <td style={{ color: '#8899aa' }}>--</td>
+                      <tr style={{ borderTop: '2px solid var(--p-334)' }}>
+                        <td style={{ textAlign: 'left', color: 'var(--text-dim)', fontStyle: 'italic' }}>Difference</td>
+                        <td style={{ color: 'var(--text-dim)' }}>--</td>
                         {metrics.map((m, mi) => {
                           const better = winners[mi] === 0
                           const worse = winners[mi] === 1
                           return (
                             <td key={m.key} style={{
-                              color: better ? '#4dff91' : worse ? '#ff6b6b' : '#8899aa',
+                              color: better ? 'var(--pos)' : worse ? 'var(--neg)' : 'var(--text-dim)',
                               fontSize: '0.85rem',
                             }}>
                               {fmtDelta(m, res[0][m.key], res[1][m.key])}
@@ -1035,7 +1038,7 @@ export default function PortfolioBuilder() {
         <div className="pb-modal-overlay" onClick={() => setAwOpen(false)}>
           <div className="pb-modal" onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ color: '#ddd', margin: 0 }}>
+              <h3 style={{ color: 'var(--p-ddd)', margin: 0 }}>
                 {{ all_weather: 'All Weather Portfolio', income_factory: "Bavaria's Income Factory", covered_call: 'Covered Call Income', dividend_growth: 'Dividend Growth', retirement_income: 'Retirement Income', growth: 'Growth Portfolio' }[awStrategy]}
               </h3>
               <button className="pb-port-del" onClick={() => setAwOpen(false)} style={{ fontSize: '1.4rem' }}>&times;</button>
@@ -1060,7 +1063,7 @@ export default function PortfolioBuilder() {
               ))}
             </div>
 
-            <p style={{ color: '#8899aa', fontSize: '0.85rem', marginBottom: '1rem' }}>
+            <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem' }}>
               {{ all_weather: 'Ray Dalio-style allocation: 30% Stocks, 40% Long Bonds, 15% Intermediate Bonds, 5-7.5% Gold, 2.5% Silver (income), 7.5% Commodities.',
                 income_factory: 'Steven Bavaria-style Income Factory: ~2/3 credit (HY bonds, CLOs, BDCs) + ~1/3 equity-income (covered calls, REITs, MLPs, preferred). Target 8-10%+ yield.',
                 covered_call: 'Option-premium focused: heavy covered-call ETFs (S&P 500, Nasdaq, single-stock) for maximum monthly income, anchored with dividend growth and bonds. Target 10-15%+ yield.',
@@ -1073,7 +1076,7 @@ export default function PortfolioBuilder() {
             {/* Controls */}
             <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem', alignItems: 'center' }}>
               <div>
-                <label style={{ color: '#8899aa', fontSize: '0.85rem' }}>Mode</label>
+                <label style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>Mode</label>
                 <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
                   {['income', 'growth'].map(m => (
                     <button
@@ -1086,7 +1089,7 @@ export default function PortfolioBuilder() {
                 </div>
               </div>
               <div>
-                <label style={{ color: '#8899aa', fontSize: '0.85rem' }}>ETF Selection</label>
+                <label style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>ETF Selection</label>
                 <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
                   <button
                     className={`aw-mode-btn ${awSelectionMode === 'auto' ? 'aw-mode-active' : ''}`}
@@ -1101,7 +1104,7 @@ export default function PortfolioBuilder() {
                 </div>
               </div>
               <div>
-                <label style={{ color: '#8899aa', fontSize: '0.85rem' }}>Budget ($)</label>
+                <label style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>Budget ($)</label>
                 <input
                   type="number"
                   value={awBudget}
@@ -1110,7 +1113,7 @@ export default function PortfolioBuilder() {
                 />
               </div>
               <div>
-                <label style={{ color: '#8899aa', fontSize: '0.85rem' }}>Funds / Class</label>
+                <label style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>Funds / Class</label>
                 <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
                   {[1, 2, 3, 4].map(n => (
                     <button
@@ -1178,7 +1181,7 @@ export default function PortfolioBuilder() {
                           <span className={`aw-source-tag aw-source-${a.source}`}>{a.source}</span>
                         </td>
                         <td>{fmt$(a.dollar_amount)}</td>
-                        {a.reasoning !== undefined && <td style={{ textAlign: 'left', color: '#8899aa', fontSize: '0.8rem' }}>{a.reasoning}</td>}
+                        {a.reasoning !== undefined && <td style={{ textAlign: 'left', color: 'var(--text-dim)', fontSize: '0.8rem' }}>{a.reasoning}</td>}
                       </tr>
                     ))}
                   </tbody>
@@ -1195,9 +1198,9 @@ export default function PortfolioBuilder() {
             {/* Rebalance Results */}
             {rebalanceResult && (
               <>
-                <h4 style={{ color: '#ddd', margin: '1.5rem 0 0.5rem', borderTop: '1px solid #333', paddingTop: '1rem' }}>
+                <h4 style={{ color: 'var(--p-ddd)', margin: '1.5rem 0 0.5rem', borderTop: '1px solid var(--p-333)', paddingTop: '1rem' }}>
                   Rebalance Suggestions
-                  <span style={{ color: '#8899aa', fontSize: '0.8rem', marginLeft: '0.8rem' }}>
+                  <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginLeft: '0.8rem' }}>
                     Total: {fmt$(rebalanceResult.total_value)}
                   </span>
                 </h4>
@@ -1240,8 +1243,8 @@ export default function PortfolioBuilder() {
                   </tbody>
                 </table>
                 {rebalanceResult.unclassified.length > 0 && (
-                  <div style={{ marginTop: '0.8rem', color: '#8899aa', fontSize: '0.8rem' }}>
-                    <strong style={{ color: '#ffb74d' }}>Unclassified holdings</strong> (not part of this strategy's template):
+                  <div style={{ marginTop: '0.8rem', color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+                    <strong style={{ color: 'var(--p-ffb74d)' }}>Unclassified holdings</strong> (not part of this strategy's template):
                     {' '}{rebalanceResult.unclassified.map(h => `${h.ticker} (${fmt$(h.amount)})`).join(', ')}
                   </div>
                 )}

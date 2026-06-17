@@ -146,6 +146,23 @@ def _capture_ratios(ticker_returns, bench_returns):
 
 # ── Scoring helpers ───────────────────────────────────────────────────────────
 
+def _beta(asset_returns, bench_returns):
+    try:
+        aligned = pd.concat([asset_returns, bench_returns], axis=1).dropna()
+        if len(aligned) < 30:
+            return None
+        aligned.columns = ["asset", "bench"]
+        bench_var = float(aligned["bench"].var())
+        if bench_var == 0 or np.isnan(bench_var):
+            return None
+        beta = float(aligned["asset"].cov(aligned["bench"]) / bench_var)
+        if np.isnan(beta) or np.isinf(beta):
+            return None
+        return round(beta, 2)
+    except Exception:
+        return None
+
+
 def _safe(v):
     if v is None:
         return None
@@ -317,6 +334,7 @@ def grade_portfolio(returns_df, weights_arr, bench_ret=None):
             uc, dc = _capture_ratios(aligned["port"], aligned["bench"])
             metrics["up_capture"] = _safe(uc)
             metrics["down_capture"] = _safe(dc)
+            metrics["beta"] = _safe(_beta(aligned["port"], aligned["bench"]))
 
     wt_sorted = sorted(w, reverse=True)
     metrics["top_weight"] = round(float(wt_sorted[0]) * 100, 2) if len(wt_sorted) else 0

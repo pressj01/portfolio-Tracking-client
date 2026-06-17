@@ -189,12 +189,12 @@ export default function SafeWithdrawal() {
   return (
     <div className="page">
       <h1>Safe Withdrawal Amount</h1>
-      <p style={{ color: '#8899aa', marginTop: '-1rem', marginBottom: '1.25rem', fontSize: '0.85rem' }}>
+      <p style={{ color: 'var(--text-dim)', marginTop: '-1rem', marginBottom: '1.25rem', fontSize: '0.85rem' }}>
         Estimates dividend cash left after DRIP and a {pct}% withdrawal target based on purchase cost.
       </p>
 
       {loading && <p>Loading...</p>}
-      {error && <p style={{ color: '#ff6b6b' }}>{error}</p>}
+      {error && <p style={{ color: 'var(--neg)' }}>{error}</p>}
 
       {!loading && !error && (
         <>
@@ -211,7 +211,7 @@ export default function SafeWithdrawal() {
                 </button>
                 {catOpen && (
                   <div className="growth-cat-dropdown">
-                    <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
+                    <label className="growth-cat-option" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
                       <input type="checkbox" checked={selCats.length === 0 && selSubs.length === 0}
                         onChange={() => { setSelCats([]); setSelSubs([]) }} />
                       <span>All Holdings</span>
@@ -318,7 +318,7 @@ export default function SafeWithdrawal() {
                 ))}
               </tbody>
               <tfoot>
-                <tr style={{ fontWeight: 700, background: '#0f3460' }}>
+                <tr style={{ fontWeight: 700, background: 'var(--border)' }}>
                   <td colSpan={7} style={{ textAlign: 'right' }}>Totals</td>
                   <td style={{ textAlign: 'right' }}>{fmt(totals.est_monthly_div)}</td>
                   <td></td>

@@ -26,6 +26,10 @@ class ManualHoldingEditApiTest(unittest.TestCase):
                 price_paid REAL,
                 current_price REAL,
                 purchase_value REAL,
+                original_price_paid REAL,
+                original_purchase_value REAL,
+                broker_price_paid REAL,
+                broker_purchase_value REAL,
                 current_value REAL,
                 gain_or_loss REAL,
                 gain_or_loss_percentage REAL,
@@ -51,6 +55,10 @@ class ManualHoldingEditApiTest(unittest.TestCase):
                 cash_not_reinvested REAL,
                 total_cash_reinvested REAL,
                 shares_bought_from_dividend REAL,
+                shares_bought_in_year REAL,
+                shares_in_month REAL,
+                withdraw_8pct_cost_annually REAL,
+                withdraw_8pct_per_month REAL,
                 nav_erosion_scope TEXT,
                 nav_benchmark_override TEXT
             );
@@ -62,7 +70,13 @@ class ManualHoldingEditApiTest(unittest.TestCase):
             CREATE TABLE ticker_categories (
                 ticker TEXT,
                 category_id INTEGER,
+                subcategory_id INTEGER,
                 profile_id INTEGER
+            );
+            CREATE TABLE subcategories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER,
+                name TEXT
             );
             CREATE TABLE dividend_payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,10 +118,12 @@ class ManualHoldingEditApiTest(unittest.TestCase):
         self._orig_get_connection = app_module.get_connection
         self._orig_populate_holdings = app_module.populate_holdings
         self._orig_populate_dividends = app_module.populate_dividends
+        self._orig_populate_income_tracking = app_module.populate_income_tracking
         self._orig_testing = app_module.app.testing
         app_module.get_connection = self._get_connection
         app_module.populate_holdings = lambda profile_id: None
         app_module.populate_dividends = lambda profile_id: None
+        app_module.populate_income_tracking = lambda profile_id: None
         app_module.app.testing = True
         self.client = app_module.app.test_client()
 
@@ -115,6 +131,7 @@ class ManualHoldingEditApiTest(unittest.TestCase):
         app_module.get_connection = self._orig_get_connection
         app_module.populate_holdings = self._orig_populate_holdings
         app_module.populate_dividends = self._orig_populate_dividends
+        app_module.populate_income_tracking = self._orig_populate_income_tracking
         app_module.app.testing = self._orig_testing
         Path(self.db_path).unlink(missing_ok=True)
 
@@ -246,6 +263,58 @@ class ManualHoldingEditApiTest(unittest.TestCase):
         self.assertAlmostEqual(broker["annual_yield_on_cost"], 24 / 120, places=8)
         self.assertAlmostEqual(broker["current_annual_yield"], 24 / 200, places=8)
         self.assertEqual(broker["purchase_value"], 120)
+
+    def test_reconcile_owner_syncs_aggregate_basis_fields(self):
+        conn = self._get_connection()
+        try:
+            app_module._ensure_basis_columns(conn)
+            conn.execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (6, 'Taxable', 1)")
+            conn.execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (7, 'IRA', 1)")
+            conn.execute(
+                "INSERT INTO all_account_info "
+                "(ticker, profile_id, quantity, price_paid, current_price, purchase_value, current_value, "
+                "gain_or_loss, gain_or_loss_percentage, percent_change, original_price_paid, "
+                "original_purchase_value, broker_price_paid, broker_purchase_value, reinvest, "
+                "dividend_paid, estim_payment_per_year, approx_monthly_income) "
+                "VALUES ('OVL', 1, 121, 56.94, 57.52, 6889.35, 6959.92, "
+                "70.57, 0.010243, 0.010243, 56.44, 2822, 56.44, 2822, 'N', 0, 0, 0)"
+            )
+            conn.execute(
+                "INSERT INTO all_account_info "
+                "(ticker, profile_id, quantity, price_paid, current_price, purchase_value, current_value, "
+                "gain_or_loss, gain_or_loss_percentage, percent_change, original_price_paid, "
+                "original_purchase_value, broker_price_paid, broker_purchase_value, reinvest, "
+                "dividend_paid, estim_payment_per_year, approx_monthly_income) "
+                "VALUES ('OVL', 6, 16, 56.45, 57.52, 903.2, 920.32, "
+                "17.12, 0.018955, 0.018955, 56.445, 903.12, 56.45, 903.2, 'N', 0, 0, 0)"
+            )
+            conn.execute(
+                "INSERT INTO all_account_info "
+                "(ticker, profile_id, quantity, price_paid, current_price, purchase_value, current_value, "
+                "gain_or_loss, gain_or_loss_percentage, percent_change, original_price_paid, "
+                "original_purchase_value, broker_price_paid, broker_purchase_value, reinvest, "
+                "dividend_paid, estim_payment_per_year, approx_monthly_income) "
+                "VALUES ('OVL', 7, 105, 56.54, 57.52, 5986.15, 6039.6, "
+                "53.45, 0.008928, 0.008928, 57.0138, 5986.35, 56.535, 5986.15, 'N', 0, 0, 0)"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        res = self.client.post("/api/profiles/reconcile-owner", json={})
+
+        self.assertEqual(res.status_code, 200)
+        row = self._row(
+            "SELECT quantity, purchase_value, original_price_paid, original_purchase_value, "
+            "broker_price_paid, broker_purchase_value "
+            "FROM all_account_info WHERE ticker = 'OVL' AND profile_id = 1"
+        )
+        self.assertEqual(row["quantity"], 121)
+        self.assertAlmostEqual(row["purchase_value"], 6889.35, places=2)
+        self.assertAlmostEqual(row["original_purchase_value"], 6889.47, places=2)
+        self.assertAlmostEqual(row["original_price_paid"], 6889.47 / 121, places=6)
+        self.assertAlmostEqual(row["broker_purchase_value"], 6889.35, places=2)
+        self.assertAlmostEqual(row["broker_price_paid"], 6889.35 / 121, places=6)
 
     def test_update_quantity_to_zero_clears_stale_position_values(self):
         self._execute(

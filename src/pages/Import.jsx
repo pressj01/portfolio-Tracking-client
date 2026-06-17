@@ -337,7 +337,7 @@ export default function Import() {
   return (
     <div className="page">
       <h1>Import Portfolio Data</h1>
-      <p style={{ color: '#7ecfff', marginBottom: '1rem', fontSize: '0.9rem' }}>
+      <p style={{ color: 'var(--accent-bright)', marginBottom: '1rem', fontSize: '0.9rem' }}>
         Importing into: <strong>{currentProfileName}</strong>
       </p>
       {(marketRefreshing || waitingForRefresh) && (
@@ -371,7 +371,7 @@ export default function Import() {
       {activeTab === 'owner' && (
         <div className="card">
           <h2>Import Your Dividend Tracking Spreadsheet</h2>
-          <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+          <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
             Upload your Excel file (.xlsm or .xlsx) with the "All Accounts" sheet format.
             This will import your holdings, dividend data, and payout history.
           </p>
@@ -391,7 +391,7 @@ export default function Import() {
                 onChange={(e) => setMultiSheet(e.target.checked)}
               />
               <strong>Import all sheets as separate portfolios</strong>
-              <span style={{ color: '#90a4ae', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+              <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
                 (each sheet becomes its own portfolio, named after the sheet)
               </span>
             </label>
@@ -449,7 +449,7 @@ export default function Import() {
               onChange={(e) => setAsTransactions(e.target.checked)}
             />
             <strong>Import rows as transactions</strong>
-            <span style={{ color: '#90a4ae', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+            <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
               (compares imported shares to current position — creates a BUY or SELL transaction for the difference)
             </span>
           </label>
@@ -468,7 +468,7 @@ export default function Import() {
       {activeTab === 'generic' && (
         <div className="card">
           <h2>Upload Your Portfolio</h2>
-          <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+          <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
             Upload an Excel file with at minimum <strong>Ticker</strong> and <strong>Shares</strong> columns.
             Optional columns: Price Paid, Dividend, Frequency, Ex-Div Date, DRIP.
             Market data will be enriched automatically via Yahoo Finance.
@@ -496,7 +496,7 @@ export default function Import() {
                 onChange={(e) => setMultiSheet(e.target.checked)}
               />
               <strong>Import all tabs as separate portfolios</strong>
-              <span style={{ color: '#90a4ae', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+              <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
                 (each filled tab creates a portfolio named after the tab)
               </span>
             </label>
@@ -514,7 +514,7 @@ export default function Import() {
                 onChange={(e) => setAsTransactions(e.target.checked)}
               />
               <strong>Import rows as transactions</strong>
-              <span style={{ color: '#90a4ae', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+              <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
                 (compares imported shares to current position — creates a BUY or SELL transaction for the difference)
               </span>
             </label>
@@ -528,9 +528,9 @@ export default function Import() {
             </button>
           </div>
 
-          <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid #2a3344' }}>
+          <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid var(--p-2a3344)' }}>
             <h2 style={{ marginTop: 0 }}>Import Watchlist</h2>
-            <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+            <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
               Import a watchlist file (.xlsx or .csv) with at minimum a <strong>Ticker</strong> column.
               Optional: <strong>Notes</strong>, <strong>Div Yield Override</strong>, <strong>NAV Erosion Scope</strong>,
               and <strong>NAV Benchmark Override</strong>. The watchlist is global &mdash; it is not tied to the selected portfolio.
@@ -557,7 +557,7 @@ export default function Import() {
                   onChange={(e) => setWlReplace(e.target.checked)}
                 />
                 <strong>Replace existing watchlist</strong>
-                <span style={{ color: '#90a4ae', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
                   (otherwise: merge &mdash; new tickers added, notes updated for existing)
                 </span>
               </label>
@@ -581,7 +581,7 @@ export default function Import() {
       {activeTab === 'txnHistory' && (
         <div className="card">
           <h2>Import Brokerage Positions, Transactions, and Snowball Data</h2>
-          <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+          <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
             {txnFormat === 'portfolio_export'
               ? <>Import the app's <strong>Holdings + Transactions Excel export</strong>. Preview shows the portfolio sheets and the Transactions sheet, then import restores both together from one file.</>
             : txnFormat === 'schwab'
@@ -838,7 +838,7 @@ export default function Import() {
                 <strong>{txnPreview.summary?.buys || 0}</strong> buys and <strong>{txnPreview.summary?.sells || 0}</strong> sells.
               </div>
 
-              <div style={{ maxHeight: '260px', overflow: 'auto', border: '1px solid #333', borderRadius: '6px', marginBottom: '1rem' }}>
+              <div style={{ maxHeight: '260px', overflow: 'auto', border: '1px solid var(--p-333)', borderRadius: '6px', marginBottom: '1rem' }}>
                 <table className="data-table" style={{ fontSize: '0.85rem' }}>
                   <thead>
                     <tr>
@@ -866,7 +866,7 @@ export default function Import() {
               </div>
 
               {(txnPreview.transactions || []).length > 0 && (
-                <div style={{ maxHeight: '360px', overflow: 'auto', border: '1px solid #333', borderRadius: '6px' }}>
+                <div style={{ maxHeight: '360px', overflow: 'auto', border: '1px solid var(--p-333)', borderRadius: '6px' }}>
                   <table className="data-table" style={{ fontSize: '0.8rem' }}>
                     <thead>
                       <tr>
@@ -885,7 +885,7 @@ export default function Import() {
                         <tr key={i}>
                           <td>{t.profile || txnPreview.target_profile_name || currentProfileName}</td>
                           <td>
-                            <span style={{ color: t.type === 'BUY' ? '#4caf50' : '#f44336', fontWeight: 600 }}>
+                            <span style={{ color: t.type === 'BUY' ? 'var(--p-4caf50)' : 'var(--p-f44336)', fontWeight: 600 }}>
                               {t.type}
                             </span>
                           </td>
@@ -904,7 +904,7 @@ export default function Import() {
                 </div>
               )}
               {(txnPreview.transactions || []).length > 100 && (
-                <p style={{ color: '#90a4ae', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                <p style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
                   Showing first 100 of {txnPreview.transactions.length} transactions.
                 </p>
               )}
@@ -920,7 +920,7 @@ export default function Import() {
                   onChange={(e) => setTxnNavOnly(e.target.checked)}
                 />
                 <strong>Record NAV only</strong>
-                <span style={{ color: '#90a4ae', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
                   (adds a chart snapshot for the selected NAV date without changing current holdings)
                 </span>
               </label>
@@ -952,7 +952,7 @@ export default function Import() {
                 )}
               </div>
 
-              <div style={{ maxHeight: '400px', overflow: 'auto', border: '1px solid #333', borderRadius: '6px' }}>
+              <div style={{ maxHeight: '400px', overflow: 'auto', border: '1px solid var(--p-333)', borderRadius: '6px' }}>
                 <table className="data-table" style={{ fontSize: '0.8rem' }}>
                   <thead>
                     <tr>
@@ -975,7 +975,7 @@ export default function Import() {
                         <td style={{ textAlign: 'right' }}>${p.cost_per_share.toFixed(2)}</td>
                         <td style={{ textAlign: 'right' }}>${p.current_price.toFixed(4)}</td>
                         <td style={{ textAlign: 'right' }}>${p.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        <td style={{ textAlign: 'right', color: (p.gain_or_loss || 0) >= 0 ? '#4caf50' : '#f44336' }}>
+                        <td style={{ textAlign: 'right', color: (p.gain_or_loss || 0) >= 0 ? 'var(--p-4caf50)' : 'var(--p-f44336)' }}>
                           ${(p.gain_or_loss || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td>{p.asset_type}</td>
@@ -1007,7 +1007,7 @@ export default function Import() {
                 )}
               </div>
 
-              <div style={{ maxHeight: '400px', overflow: 'auto', border: '1px solid #333', borderRadius: '6px' }}>
+              <div style={{ maxHeight: '400px', overflow: 'auto', border: '1px solid var(--p-333)', borderRadius: '6px' }}>
                 <table className="data-table" style={{ fontSize: '0.8rem' }}>
                   <thead>
                     <tr>
@@ -1026,7 +1026,7 @@ export default function Import() {
                       <tr key={i}>
                         <td>
                           <span style={{
-                            color: t.type === 'BUY' ? '#4caf50' : t.type === 'SELL' ? '#f44336' : '#ffb74d',
+                            color: t.type === 'BUY' ? 'var(--p-4caf50)' : t.type === 'SELL' ? 'var(--p-f44336)' : 'var(--p-ffb74d)',
                             fontWeight: 600,
                           }}>
                             {t.type}
@@ -1053,7 +1053,7 @@ export default function Import() {
                 </table>
               </div>
               {txnPreview.transactions.length > 100 && (
-                <p style={{ color: '#90a4ae', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                <p style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
                   Showing first 100 of {txnPreview.transactions.length} transactions.
                 </p>
               )}
@@ -1078,7 +1078,7 @@ export default function Import() {
       {backups.length > 0 && (
         <div className="card" style={{ marginTop: '1.5rem' }}>
           <h3>Database Backups</h3>
-          <p style={{ color: '#90a4ae', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+          <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
             A backup is created automatically before every import and dividend repair, and is kept separately per profile so imports for one account don't evict another account's history. If a change caused problems, restore to a previous state.
           </p>
           <table className="data-table" style={{ fontSize: '0.85rem' }}>

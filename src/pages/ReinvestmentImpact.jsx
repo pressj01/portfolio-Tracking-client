@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../components/ThemedPlot'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 
 const fmt$ = v => v == null ? '—' : '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
 const fmtShares = v => v == null ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -117,7 +119,7 @@ function StatTile({ label, value, color, sub }) {
     <div className="summary-card">
       <div className="summary-label">{label}</div>
       <div className="summary-value" style={color ? { color } : undefined}>{value}</div>
-      {sub && <div style={{ fontSize: '0.7rem', color: '#8899aa', marginTop: '0.2rem' }}>{sub}</div>}
+      {sub && <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>{sub}</div>}
     </div>
   )
 }
@@ -127,23 +129,23 @@ function BreakevenLeg({ title, leg, hint }) {
   const green = '#4dff91', amber = '#f59e0b'
   return (
     <div style={{ flex: '1 1 240px', minWidth: 240 }}>
-      <div style={{ fontSize: '0.75rem', color: '#8899aa', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.1rem' }}>{title}</div>
-      <div style={{ fontSize: '0.7rem', color: '#6a7892', marginBottom: '0.5rem' }}>{hint}</div>
+      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.1rem' }}>{title}</div>
+      <div style={{ fontSize: '0.7rem', color: 'var(--p-6a7892)', marginBottom: '0.5rem' }}>{hint}</div>
       {leg.brokenEven ? (
         <>
           <div style={{ fontSize: '1.4rem', fontWeight: 700, color: green }}>{fmtPct1(leg.pctAbove)}</div>
-          <div style={{ fontSize: '0.78rem', color: '#8899aa' }}>above break-even ✓</div>
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>above break-even ✓</div>
         </>
       ) : leg.wipedOut ? (
         <>
-          <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e05555' }}>{fmtPct1(leg.pctFromCost)}</div>
-          <div style={{ fontSize: '0.78rem', color: '#8899aa' }}>from cost — effectively wiped out</div>
+          <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--neg-3)' }}>{fmtPct1(leg.pctFromCost)}</div>
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>from cost — effectively wiped out</div>
           {leg.dripRecoverable ? (
-            <div style={{ marginTop: '0.4rem', fontSize: '0.85rem', color: '#c5d0dc' }}>
+            <div style={{ marginTop: '0.4rem', fontSize: '0.85rem', color: 'var(--p-c5d0dc)' }}>
               Price recovery unlikely, but reinvestment closes it in ~<span style={{ fontWeight: 600 }}>{fmtYears(leg.years)}</span> at a flat price
             </div>
           ) : (
-            <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: '#6a7892', fontStyle: 'italic' }}>
+            <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: 'var(--p-6a7892)', fontStyle: 'italic' }}>
               Recovery impractical at the current distribution rate
             </div>
           )}
@@ -151,12 +153,12 @@ function BreakevenLeg({ title, leg, hint }) {
       ) : (
         <>
           <div style={{ fontSize: '1.4rem', fontWeight: 700, color: amber }}>{fmtPct1(leg.pctToBreakeven)}</div>
-          <div style={{ fontSize: '0.78rem', color: '#8899aa' }}>needed to break even</div>
-          <div style={{ marginTop: '0.4rem', fontSize: '0.85rem', color: '#c5d0dc' }}>
-            <span style={{ color: '#a855f7', fontWeight: 600 }}>{fmtShares(leg.sharesNeeded)}</span> more shares at today's price
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>needed to break even</div>
+          <div style={{ marginTop: '0.4rem', fontSize: '0.85rem', color: 'var(--p-c5d0dc)' }}>
+            <span style={{ color: 'var(--p-a855f7)', fontWeight: 600 }}>{fmtShares(leg.sharesNeeded)}</span> more shares at today's price
           </div>
           {leg.years != null && (
-            <div style={{ fontSize: '0.85rem', color: '#c5d0dc' }}>
+            <div style={{ fontSize: '0.85rem', color: 'var(--p-c5d0dc)' }}>
               ~<span style={{ fontWeight: 600 }}>{fmtYears(leg.years)}</span> via reinvestment at a flat price
             </div>
           )}
@@ -172,7 +174,7 @@ function BreakevenPanel({ ticker, holding }) {
   return (
     <div className="da-chart-panel" style={{ marginBottom: '1rem' }}>
       <h3 style={{ marginTop: 0, marginBottom: '0.25rem' }}>Break-Even — {ticker}</h3>
-      <p style={{ color: '#8899aa', fontSize: '0.78rem', margin: '0 0 0.75rem' }}>
+      <p style={{ color: 'var(--text-dim)', fontSize: '0.78rem', margin: '0 0 0.75rem' }}>
         Cost basis {fmt$(be.cost)} · current value {fmt$(be.value)} · dividends received {fmt$(be.divs)}
       </p>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem' }}>
@@ -180,7 +182,7 @@ function BreakevenPanel({ ticker, holding }) {
         <BreakevenLeg title="Total return" hint="value + dividends collected vs. cost" leg={be.totalReturn} />
       </div>
       {be.annualIncome > 0 && (
-        <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0.6rem 0 0', fontStyle: 'italic' }}>
+        <p style={{ color: 'var(--p-6a7892)', fontSize: '0.72rem', margin: '0.6rem 0 0', fontStyle: 'italic' }}>
           Time-to-break-even assumes a flat price and reinvested distributions at the current annual rate ({fmt$(be.annualIncome)}/yr); price moves and distribution changes will shift it.
         </p>
       )}
@@ -191,6 +193,7 @@ function BreakevenPanel({ ticker, holding }) {
 export default function ReinvestmentImpact() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
+  const { isDark } = useTheme()
 
   const [mode, setMode] = useState('historical')   // historical | projection
   const [view, setView] = useState('monthly')
@@ -518,14 +521,14 @@ export default function ReinvestmentImpact() {
   return (
     <div className="page dashboard">
       <h1 style={{ marginBottom: '0.25rem' }}>Reinvestment Impact</h1>
-      <p style={{ color: '#8899aa', marginTop: 0, marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+      <p style={{ color: 'var(--text-dim)', marginTop: 0, marginBottom: '0.5rem', fontSize: '0.9rem' }}>
         How dividend reinvestment reshapes your payouts — share growth, rate changes, and price effects over time.
       </p>
       {portfolioReinvestPct != null && (
         <p style={{ marginTop: 0, marginBottom: '1rem', fontSize: '0.9rem' }}>
-          <span style={{ color: '#8899aa' }}>Currently reinvesting </span>
-          <span style={{ color: '#66bb6a', fontWeight: 700 }}>{portfolioReinvestPct.toFixed(1)}%</span>
-          <span style={{ color: '#8899aa' }}> of this portfolio's monthly income (used as the projection default below).</span>
+          <span style={{ color: 'var(--text-dim)' }}>Currently reinvesting </span>
+          <span style={{ color: 'var(--pos-muted)', fontWeight: 700 }}>{portfolioReinvestPct.toFixed(1)}%</span>
+          <span style={{ color: 'var(--text-dim)' }}> of this portfolio's monthly income (used as the projection default below).</span>
         </p>
       )}
 
@@ -568,7 +571,7 @@ export default function ReinvestmentImpact() {
               <select
                 value={monthsBack}
                 onChange={e => setMonthsBack(Number(e.target.value))}
-                style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: '#0a1929', color: '#c5d0dc', border: '1px solid #1a3a5c', borderRadius: '4px' }}
+                style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: 'var(--p-0a1929)', color: 'var(--p-c5d0dc)', border: '1px solid var(--p-1a3a5c)', borderRadius: '4px' }}
               >
                 {rangeOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
               </select>
@@ -589,7 +592,7 @@ export default function ReinvestmentImpact() {
                 </button>
                 {catOpen && (
                   <div className="growth-cat-dropdown">
-                    <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
+                    <label className="growth-cat-option" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
                       <input type="checkbox" checked={categories.length === 0 && subcategories.length === 0}
                         onChange={() => { setCategories([]); setSubcategories([]) }} />
                       <span>All Holdings</span>
@@ -642,7 +645,7 @@ export default function ReinvestmentImpact() {
               <select
                 value={scopeTicker}
                 onChange={e => setScopeTicker(e.target.value)}
-                style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: '#0a1929', color: '#c5d0dc', border: '1px solid #1a3a5c', borderRadius: '4px', minWidth: '160px' }}
+                style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: 'var(--p-0a1929)', color: 'var(--p-c5d0dc)', border: '1px solid var(--p-1a3a5c)', borderRadius: '4px', minWidth: '160px' }}
               >
                 <option value="">Whole Portfolio</option>
                 {holdings.map(h => <option key={h.ticker} value={h.ticker}>{h.ticker}</option>)}
@@ -656,7 +659,7 @@ export default function ReinvestmentImpact() {
             <div className="growth-filter-group">
               <label>Fund</label>
               <select value={projScopeTicker} onChange={e => { setProjScopeTicker(e.target.value); setProjCategories([]); setProjSubcats([]) }}
-                style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: '#0a1929', color: '#c5d0dc', border: '1px solid #1a3a5c', borderRadius: '4px', minWidth: '160px' }}>
+                style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: 'var(--p-0a1929)', color: 'var(--p-c5d0dc)', border: '1px solid var(--p-1a3a5c)', borderRadius: '4px', minWidth: '160px' }}>
                 <option value="">Whole Portfolio</option>
                 {holdings.map(h => <option key={h.ticker} value={h.ticker}>{h.ticker}</option>)}
               </select>
@@ -677,7 +680,7 @@ export default function ReinvestmentImpact() {
                 </button>
                 {projCatOpen && (
                   <div className="growth-cat-dropdown">
-                    <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
+                    <label className="growth-cat-option" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
                       <input type="checkbox" checked={projCategories.length === 0 && projSubcats.length === 0}
                         onChange={() => { setProjCategories([]); setProjSubcats([]) }} />
                       <span>All Holdings</span>
@@ -742,7 +745,7 @@ export default function ReinvestmentImpact() {
             <div className="growth-filter-group">
               <label>Market</label>
               <select value={marketType} onChange={e => setMarketType(e.target.value)}
-                style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: '#0a1929', color: '#c5d0dc', border: '1px solid #1a3a5c', borderRadius: '4px' }}>
+                style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: 'var(--p-0a1929)', color: 'var(--p-c5d0dc)', border: '1px solid var(--p-1a3a5c)', borderRadius: '4px' }}>
                 {MARKET_TYPES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
               </select>
             </div>
@@ -750,14 +753,14 @@ export default function ReinvestmentImpact() {
               <label>Reinvest %</label>
               <input type="number" min="0" max="100" value={reinvestPct}
                 onChange={e => setReinvestPct(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
-                style={{ width: '80px', padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: '#0a1929', color: '#c5d0dc', border: '1px solid #1a3a5c', borderRadius: '4px' }} />
+                style={{ width: '80px', padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: 'var(--p-0a1929)', color: 'var(--p-c5d0dc)', border: '1px solid var(--p-1a3a5c)', borderRadius: '4px' }} />
               {(portfolioReinvestPct != null || actualReinvest) && (
-                <div style={{ fontSize: '0.7rem', color: '#8899aa', marginTop: '0.2rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.2rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                   {portfolioReinvestPct != null && (
                     <span
                       onClick={() => setReinvestPct(Math.round(portfolioReinvestPct))}
                       title="Use the estimated DRIP mix from your reinvest settings"
-                      style={{ cursor: 'pointer', textDecoration: 'underline dotted', color: '#66bb6a' }}
+                      style={{ cursor: 'pointer', textDecoration: 'underline dotted', color: 'var(--pos-muted)' }}
                     >
                       Est: {portfolioReinvestPct.toFixed(1)}%
                     </span>
@@ -766,7 +769,7 @@ export default function ReinvestmentImpact() {
                     <span
                       onClick={() => setReinvestPct(Math.round(actualReinvest.pct_reinvested))}
                       title={`Actual reinvested share of distributions paid ${actualReinvest.window_start} to ${actualReinvest.window_end} (${actualReinvest.months_with_data} mo of data). Click to use.`}
-                      style={{ cursor: 'pointer', textDecoration: 'underline dotted', color: '#38bdf8' }}
+                      style={{ cursor: 'pointer', textDecoration: 'underline dotted', color: 'var(--p-38bdf8)' }}
                     >
                       Actual 3mo: {actualReinvest.pct_reinvested.toFixed(1)}%
                     </span>
@@ -778,7 +781,7 @@ export default function ReinvestmentImpact() {
               <label>Monthly Add $</label>
               <input type="number" min="0" value={monthlyContribution}
                 onChange={e => setMonthlyContribution(Math.max(0, Number(e.target.value) || 0))}
-                style={{ width: '110px', padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: '#0a1929', color: '#c5d0dc', border: '1px solid #1a3a5c', borderRadius: '4px' }} />
+                style={{ width: '110px', padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: 'var(--p-0a1929)', color: 'var(--p-c5d0dc)', border: '1px solid var(--p-1a3a5c)', borderRadius: '4px' }} />
             </div>
           </>
         )}
@@ -816,21 +819,21 @@ export default function ReinvestmentImpact() {
               <div className="da-chart-panel" style={{ marginBottom: '1rem' }}>
                 <Plot
                   data={distTraces}
-                  layout={{ ...DARK_LAYOUT, title: { text: 'Distributions Over Time', x: 0.5 }, height: 380, yaxis: { tickprefix: '$', gridcolor: '#293a5f' }, yaxis2: { title: 'Cumulative', tickprefix: '$', overlaying: 'y', side: 'right', gridcolor: 'rgba(0,0,0,0)', rangemode: 'tozero' }, xaxis: xAxis, showlegend: true, legend: { orientation: 'h', y: -0.2 } }}
+                  layout={themedPlotlyLayout({ ...DARK_LAYOUT, title: { text: 'Distributions Over Time', x: 0.5 }, height: 380, yaxis: { tickprefix: '$', gridcolor: '#293a5f' }, yaxis2: { title: 'Cumulative', tickprefix: '$', overlaying: 'y', side: 'right', gridcolor: 'rgba(0,0,0,0)', rangemode: 'tozero' }, xaxis: xAxis, showlegend: true, legend: { orientation: 'h', y: -0.2 } }, isDark)}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%' }}
                   useResizeHandler
                 />
-                <p style={{ color: '#8899aa', fontSize: '0.75rem', margin: '0.25rem 0 0', paddingLeft: '0.5rem' }}>
-                  <span style={{ color: '#4dff91' }}>■</span> Actual recorded payments&nbsp;&nbsp;
-                  <span style={{ color: '#38bdf8' }}>■</span> Reconstructed from price + distribution history&nbsp;&nbsp;
-                  <span style={{ color: '#94a3b8' }}>┄</span> Income each period if you had <strong>not</strong> reinvested (taken as cash)&nbsp;&nbsp;
-                  <span style={{ color: '#f59e0b' }}>━</span> Cumulative received (right axis)
+                <p style={{ color: 'var(--text-dim)', fontSize: '0.75rem', margin: '0.25rem 0 0', paddingLeft: '0.5rem' }}>
+                  <span style={{ color: 'var(--pos)' }}>■</span> Actual recorded payments&nbsp;&nbsp;
+                  <span style={{ color: 'var(--p-38bdf8)' }}>■</span> Reconstructed from price + distribution history&nbsp;&nbsp;
+                  <span style={{ color: 'var(--p-94a3b8)' }}>┄</span> Income each period if you had <strong>not</strong> reinvested (taken as cash)&nbsp;&nbsp;
+                  <span style={{ color: 'var(--p-f59e0b)' }}>━</span> Cumulative received (right axis)
                 </p>
-                <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0.15rem 0 0', paddingLeft: '0.5rem', fontStyle: 'italic' }}>
+                <p style={{ color: 'var(--p-6a7892)', fontSize: '0.72rem', margin: '0.15rem 0 0', paddingLeft: '0.5rem', fontStyle: 'italic' }}>
                   The dotted line is the distribution income you'd have collected each period had you taken the cash instead of reinvesting — lower because you'd own fewer shares. The gap above it is the income reinvesting created.
                 </p>
-                <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0.15rem 0 0', paddingLeft: '0.5rem', fontStyle: 'italic' }}>
+                <p style={{ color: 'var(--p-6a7892)', fontSize: '0.72rem', margin: '0.15rem 0 0', paddingLeft: '0.5rem', fontStyle: 'italic' }}>
                   Reconstruction models your current position reinvested across the window (per-event lot history isn't tracked), hybridized with actual recorded payments where available.
                 </p>
               </div>
@@ -839,12 +842,12 @@ export default function ReinvestmentImpact() {
                 <div className="da-chart-panel" style={{ marginBottom: '1rem' }}>
                   <Plot
                     data={rateTraces}
-                    layout={{ ...DARK_LAYOUT, title: { text: `Distribution per Share — ${scopeTicker}`, x: 0.5 }, height: 320, yaxis: { tickprefix: '$', gridcolor: '#293a5f', rangemode: 'tozero' }, xaxis: xAxis, showlegend: false }}
+                    layout={themedPlotlyLayout({ ...DARK_LAYOUT, title: { text: `Distribution per Share — ${scopeTicker}`, x: 0.5 }, height: 320, yaxis: { tickprefix: '$', gridcolor: '#293a5f', rangemode: 'tozero' }, xaxis: xAxis, showlegend: false }, isDark)}
                     config={{ responsive: true, displayModeBar: false }}
                     style={{ width: '100%' }}
                     useResizeHandler
                   />
-                  <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0.15rem 0 0', paddingLeft: '0.5rem', fontStyle: 'italic' }}>
+                  <p style={{ color: 'var(--p-6a7892)', fontSize: '0.72rem', margin: '0.15rem 0 0', paddingLeft: '0.5rem', fontStyle: 'italic' }}>
                     The fund's actual distribution paid per share each period — a falling trend means payout erosion, independent of how many shares you hold.
                   </p>
                 </div>
@@ -853,7 +856,7 @@ export default function ReinvestmentImpact() {
               <div className="da-chart-panel" style={{ marginBottom: '1rem' }}>
                 <Plot
                   data={shareTraces}
-                  layout={{ ...DARK_LAYOUT, title: { text: 'DRIP Share Growth', x: 0.5 }, height: 360, yaxis: { title: 'Shares added', gridcolor: '#293a5f' }, yaxis2: { title: 'Cumulative', overlaying: 'y', side: 'right', gridcolor: 'rgba(0,0,0,0)' }, xaxis: xAxis, legend: { orientation: 'h', y: -0.2 } }}
+                  layout={themedPlotlyLayout({ ...DARK_LAYOUT, title: { text: 'DRIP Share Growth', x: 0.5 }, height: 360, yaxis: { title: 'Shares added', gridcolor: '#293a5f' }, yaxis2: { title: 'Cumulative', overlaying: 'y', side: 'right', gridcolor: 'rgba(0,0,0,0)' }, xaxis: xAxis, legend: { orientation: 'h', y: -0.2 } }, isDark)}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%' }}
                   useResizeHandler
@@ -865,22 +868,22 @@ export default function ReinvestmentImpact() {
                   <button
                     type="button"
                     onClick={() => setDecompCumulative(false)}
-                    style={{ fontSize: '0.72rem', padding: '0.15rem 0.5rem', borderRadius: '4px', cursor: 'pointer', border: '1px solid #2a3a5a', background: decompCumulative ? 'transparent' : '#1c2a4b', color: decompCumulative ? '#8899aa' : '#cfe0ff' }}
+                    style={{ fontSize: '0.72rem', padding: '0.15rem 0.5rem', borderRadius: '4px', cursor: 'pointer', border: '1px solid var(--p-2a3a5a)', background: decompCumulative ? 'transparent' : 'var(--p-1c2a4b)', color: decompCumulative ? 'var(--text-dim)' : 'var(--p-cfe0ff)' }}
                   >Per period</button>
                   <button
                     type="button"
                     onClick={() => setDecompCumulative(true)}
-                    style={{ fontSize: '0.72rem', padding: '0.15rem 0.5rem', borderRadius: '4px', cursor: 'pointer', border: '1px solid #2a3a5a', background: decompCumulative ? '#1c2a4b' : 'transparent', color: decompCumulative ? '#cfe0ff' : '#8899aa' }}
+                    style={{ fontSize: '0.72rem', padding: '0.15rem 0.5rem', borderRadius: '4px', cursor: 'pointer', border: '1px solid var(--p-2a3a5a)', background: decompCumulative ? 'var(--p-1c2a4b)' : 'transparent', color: decompCumulative ? 'var(--p-cfe0ff)' : 'var(--text-dim)' }}
                   >Cumulative</button>
                 </div>
                 <Plot
                   data={decompTraces}
-                  layout={{ ...DARK_LAYOUT, title: { text: decompCumulative ? 'Why Payouts Changed (cumulative since window start)' : 'Why Payouts Changed (vs. prior period)', x: 0.5 }, height: 360, barmode: 'relative', yaxis: { tickprefix: '$', gridcolor: '#293a5f' }, xaxis: xAxis, legend: { orientation: 'h', y: -0.2 } }}
+                  layout={themedPlotlyLayout({ ...DARK_LAYOUT, title: { text: decompCumulative ? 'Why Payouts Changed (cumulative since window start)' : 'Why Payouts Changed (vs. prior period)', x: 0.5 }, height: 360, barmode: 'relative', yaxis: { tickprefix: '$', gridcolor: '#293a5f' }, xaxis: xAxis, legend: { orientation: 'h', y: -0.2 } }, isDark)}
                   config={{ responsive: true, displayModeBar: false }}
                   style={{ width: '100%' }}
                   useResizeHandler
                 />
-                <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0.15rem 0 0', paddingLeft: '0.5rem', fontStyle: 'italic' }}>
+                <p style={{ color: 'var(--p-6a7892)', fontSize: '0.72rem', margin: '0.15rem 0 0', paddingLeft: '0.5rem', fontStyle: 'italic' }}>
                   {decompCumulative
                     ? 'Running total of each effect since the window start. Green = extra income from DRIP share growth; blue = the fund changing its per-share rate; amber = the interaction of both.'
                     : 'Each bar sums to the net change in payout vs. the prior period. Green = more shares from DRIP; blue = the fund changed its per-share rate; amber = the interaction of both.'}
@@ -892,23 +895,23 @@ export default function ReinvestmentImpact() {
                   {(data.rate_raises?.length > 0 || data.rate_cuts?.length > 0) && (
                     <div style={{ flex: '1 1 320px' }}>
                       <h3 style={{ marginTop: 0 }}>Notable rate changes this window</h3>
-                      <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0 0 0.5rem', fontStyle: 'italic' }}>
+                      <p style={{ color: 'var(--p-6a7892)', fontSize: '0.72rem', margin: '0 0 0.5rem', fontStyle: 'italic' }}>
                         Dollar impact of each fund changing its per-share distribution (drives the blue bars above).
                       </p>
                       {data.rate_raises?.length > 0 && (
                         <div style={{ marginBottom: '0.5rem' }}>
                           {data.rate_raises.map(r => (
                             <div key={r.ticker} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.15rem 0' }}>
-                              <span><span style={{ color: '#4dff91' }}>▲</span> <strong style={{ cursor: 'pointer' }} onClick={() => setScopeTicker(r.ticker)}>{r.ticker}</strong></span>
-                              <span style={{ color: '#4dff91' }}>+{fmt$(r.rate_impact)}</span>
+                              <span><span style={{ color: 'var(--pos)' }}>▲</span> <strong style={{ cursor: 'pointer' }} onClick={() => setScopeTicker(r.ticker)}>{r.ticker}</strong></span>
+                              <span style={{ color: 'var(--pos)' }}>+{fmt$(r.rate_impact)}</span>
                             </div>
                           ))}
                         </div>
                       )}
                       {data.rate_cuts?.length > 0 && data.rate_cuts.map(r => (
                         <div key={r.ticker} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.15rem 0' }}>
-                          <span><span style={{ color: '#e05555' }}>▼</span> <strong style={{ cursor: 'pointer' }} onClick={() => setScopeTicker(r.ticker)}>{r.ticker}</strong></span>
-                          <span style={{ color: '#e05555' }}>{fmt$(r.rate_impact)}</span>
+                          <span><span style={{ color: 'var(--neg-3)' }}>▼</span> <strong style={{ cursor: 'pointer' }} onClick={() => setScopeTicker(r.ticker)}>{r.ticker}</strong></span>
+                          <span style={{ color: 'var(--neg-3)' }}>{fmt$(r.rate_impact)}</span>
                         </div>
                       ))}
                     </div>
@@ -916,13 +919,13 @@ export default function ReinvestmentImpact() {
                   {data.summary.drip_off?.length > 0 && (
                     <div style={{ flex: '1 1 320px' }}>
                       <h3 style={{ marginTop: 0 }}>DRIP off — cash not compounding</h3>
-                      <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0 0 0.5rem', fontStyle: 'italic' }}>
+                      <p style={{ color: 'var(--p-6a7892)', fontSize: '0.72rem', margin: '0 0 0.5rem', fontStyle: 'italic' }}>
                         These holdings paid distributions but aren't reinvesting — {fmt$(data.summary.cash_payout)} took as cash this window.
                       </p>
                       {data.summary.drip_off.map(d => (
                         <div key={d.ticker} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.15rem 0' }}>
                           <strong style={{ cursor: 'pointer' }} onClick={() => setScopeTicker(d.ticker)}>{d.ticker}</strong>
-                          <span style={{ color: '#8899aa' }}>{fmt$(d.payout)}</span>
+                          <span style={{ color: 'var(--text-dim)' }}>{fmt$(d.payout)}</span>
                         </div>
                       ))}
                     </div>
@@ -941,9 +944,9 @@ export default function ReinvestmentImpact() {
                       {data.per_ticker.map(t => (
                         <tr key={t.ticker} style={{ cursor: 'pointer' }} onClick={() => setScopeTicker(t.ticker)}>
                           <td style={{ fontWeight: 600 }}>{t.ticker}</td>
-                          <td style={{ color: '#8899aa' }}>{t.description}</td>
+                          <td style={{ color: 'var(--text-dim)' }}>{t.description}</td>
                           <td style={{ textAlign: 'right' }}>{fmt$(t.total_payout)}</td>
-                          <td style={{ textAlign: 'right', color: '#a855f7' }}>{fmtShares(t.total_drip_shares)}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--p-a855f7)' }}>{fmtShares(t.total_drip_shares)}</td>
                           <td>{t.reinvest ? '✓' : '—'}</td>
                         </tr>
                       ))}
@@ -953,7 +956,7 @@ export default function ReinvestmentImpact() {
               )}
             </>
           ) : (
-            <div style={{ textAlign: 'center', padding: '3rem', color: '#8899aa' }}>
+            <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-dim)' }}>
               No reinvestment history available for the selected filters and timeframe.
             </div>
           )}
@@ -978,12 +981,12 @@ export default function ReinvestmentImpact() {
           <div style={{
             display: 'flex', alignItems: 'flex-start', gap: '0.6rem',
             background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.35)',
-            borderLeft: '3px solid #38bdf8', borderRadius: '6px',
-            padding: '0.7rem 0.9rem', margin: '0 0 1rem', fontSize: '0.85rem', color: '#c5d0dc', lineHeight: 1.45,
+            borderLeft: '3px solid var(--p-38bdf8)', borderRadius: '6px',
+            padding: '0.7rem 0.9rem', margin: '0 0 1rem', fontSize: '0.85rem', color: 'var(--p-c5d0dc)', lineHeight: 1.45,
           }}>
-            <span style={{ color: '#38bdf8', fontSize: '1rem', fontWeight: 700, flexShrink: 0, lineHeight: 1.3 }}>ⓘ</span>
+            <span style={{ color: 'var(--p-38bdf8)', fontSize: '1rem', fontWeight: 700, flexShrink: 0, lineHeight: 1.3 }}>ⓘ</span>
             <span>
-              <strong style={{ color: '#e0e8f5' }}>Why this differs from the dashboard:</strong> Current annual income here is
+              <strong style={{ color: 'var(--text-strong)' }}>Why this differs from the dashboard:</strong> Current annual income here is
               computed from each holding's latest declared distribution × frequency × shares, so it can differ slightly from the
               dashboard's “Est. Annual Income,” which uses a smoothed per-holding estimate. The two diverge most for
               variable-payout option-income funds.
@@ -998,27 +1001,27 @@ export default function ReinvestmentImpact() {
             <div className="da-chart-panel" style={{ marginBottom: '1rem' }}>
               <Plot
                 data={projTraces}
-                layout={{ ...DARK_LAYOUT, title: { text: `Projected Income — ${projScopeTicker || 'Whole Portfolio'} (${marketType}, ${reinvestPct}% reinvested)`, x: 0.5 }, height: 420, yaxis: { tickprefix: '$', gridcolor: '#293a5f' }, xaxis: { gridcolor: '#1c2a4b' }, showlegend: false }}
+                layout={themedPlotlyLayout({ ...DARK_LAYOUT, title: { text: `Projected Income — ${projScopeTicker || 'Whole Portfolio'} (${marketType}, ${reinvestPct}% reinvested)`, x: 0.5 }, height: 420, yaxis: { tickprefix: '$', gridcolor: '#293a5f' }, xaxis: { gridcolor: '#1c2a4b' }, showlegend: false }, isDark)}
                 config={{ responsive: true, displayModeBar: false }}
                 style={{ width: '100%' }}
                 useResizeHandler
               />
             </div>
           ) : (
-            <div style={{ textAlign: 'center', padding: '3rem', color: '#8899aa' }}>No projection data.</div>
+            <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-dim)' }}>No projection data.</div>
           )}
 
           {shareGrowthTraces.length > 0 && (
             <div className="da-chart-panel">
               <Plot
                 data={shareGrowthTraces}
-                layout={{ ...DARK_LAYOUT, title: { text: `Share Count Growth by Scenario — ${projScopeTicker || 'Whole Portfolio'}`, x: 0.5 }, height: 380, yaxis: { title: 'Total shares', gridcolor: '#293a5f' }, xaxis: { gridcolor: '#1c2a4b' }, legend: { orientation: 'h', y: -0.2 } }}
+                layout={themedPlotlyLayout({ ...DARK_LAYOUT, title: { text: `Share Count Growth by Scenario — ${projScopeTicker || 'Whole Portfolio'}`, x: 0.5 }, height: 380, yaxis: { title: 'Total shares', gridcolor: '#293a5f' }, xaxis: { gridcolor: '#1c2a4b' }, legend: { orientation: 'h', y: -0.2 } }, isDark)}
                 config={{ responsive: true, displayModeBar: false }}
                 style={{ width: '100%' }}
                 useResizeHandler
               />
               {!projScopeTicker && (
-                <p style={{ color: '#6a7892', fontSize: '0.72rem', margin: '0.15rem 0 0', fontStyle: 'italic' }}>
+                <p style={{ color: 'var(--p-6a7892)', fontSize: '0.72rem', margin: '0.15rem 0 0', fontStyle: 'italic' }}>
                   Whole-portfolio share count sums shares across funds with different prices — select a single Fund above for a clean per-fund view.
                 </p>
               )}
@@ -1029,3 +1032,5 @@ export default function ReinvestmentImpact() {
     </div>
   )
 }
+
+

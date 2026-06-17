@@ -1,6 +1,9 @@
 import React, { useEffect, useRef } from 'react'
+import { useTheme } from '../../context/ThemeContext'
+import { themedPlotlyLayout } from '../../utils/chartTheme'
 
 export default function RiskReturnCharts({ result }) {
+  const { isDark } = useTheme()
   const rendered = useRef(false)
 
   useEffect(() => {
@@ -25,13 +28,13 @@ export default function RiskReturnCharts({ result }) {
         },
         hovertemplate: '%{text}<br>Vol: %{x:.1f}%<br>Return: %{y:.1f}%<extra></extra>',
         type: 'scatter',
-      }], {
+      }], themedPlotlyLayout({
         ...base,
         title: { text: 'Risk vs Return', font: { size: 14, color: '#e0e8f5' } },
         xaxis: { title: { text: 'Risk — Annualized Volatility (%)', font: axFont, standoff: 15 }, gridcolor: grid },
         yaxis: { title: { text: 'Return — Annualized Return (%)', font: axFont, standoff: 15 }, gridcolor: grid },
         height: 420, margin: { l: 80, r: 30, t: 50, b: 60 },
-      }, { responsive: true })
+      }, isDark), { responsive: true })
     }
 
     // Correlation heatmap
@@ -48,13 +51,13 @@ export default function RiskReturnCharts({ result }) {
         texttemplate: '%{text}',
         hovertemplate: '%{x} vs %{y}: %{z:.3f}<extra></extra>',
         colorbar: { title: 'Corr', tickvals: [-1, -0.5, 0, 0.5, 1] },
-      }], {
+      }], themedPlotlyLayout({
         ...base,
         title: { text: 'Correlation Heatmap', font: { size: 14, color: '#e0e8f5' } },
         xaxis: { side: 'bottom', tickangle: -45 },
         height: Math.max(350, labels.length * 40 + 100),
         margin: { l: 80, r: 60, t: 50, b: 80 },
-      }, { responsive: true })
+      }, isDark), { responsive: true })
     }
 
     // Drawdown chart
@@ -66,13 +69,13 @@ export default function RiskReturnCharts({ result }) {
         fill: 'tozeroy', fillcolor: 'rgba(239,83,80,0.2)',
         line: { color: '#ef5350', width: 1.5 },
         hovertemplate: '%{x}<br>Drawdown: %{y:.1f}%<extra></extra>',
-      }], {
+      }], themedPlotlyLayout({
         ...base,
         title: { text: 'Portfolio Drawdown', font: { size: 14, color: '#e0e8f5' } },
         xaxis: { title: { text: 'Date', font: axFont, standoff: 15 }, gridcolor: grid },
         yaxis: { title: { text: 'Drawdown (%)', font: axFont, standoff: 15 }, gridcolor: grid },
         height: 320, margin: { l: 80, r: 30, t: 50, b: 60 },
-      }, { responsive: true })
+      }, isDark), { responsive: true })
     }
 
     // Efficient Frontier
@@ -98,14 +101,14 @@ export default function RiskReturnCharts({ result }) {
         textfont: { color: '#ffb74d' },
         marker: { size: 12, color: '#ffb74d', symbol: 'diamond' },
       })
-      Plotly.newPlot(frontEl, traces, {
+      Plotly.newPlot(frontEl, traces, themedPlotlyLayout({
         ...base,
         title: { text: 'Efficient Frontier', font: { size: 14, color: '#e0e8f5' } },
         xaxis: { title: { text: 'Risk — Volatility (%)', font: axFont, standoff: 15 }, gridcolor: grid },
         yaxis: { title: { text: 'Return — Expected Return (%)', font: axFont, standoff: 15 }, gridcolor: grid },
         height: 420, margin: { l: 80, r: 30, t: 50, b: 60 },
         showlegend: true, legend: { font: { color: '#8899aa' } },
-      }, { responsive: true })
+      }, isDark), { responsive: true })
     }
 
     // Yield vs Risk scatter
@@ -122,13 +125,13 @@ export default function RiskReturnCharts({ result }) {
         },
         hovertemplate: '%{text}<br>Vol: %{x:.1f}%<br>Yield: %{y:.2f}%<extra></extra>',
         type: 'scatter',
-      }], {
+      }], themedPlotlyLayout({
         ...base,
         title: { text: 'Yield vs Risk', font: { size: 14, color: '#e0e8f5' } },
         xaxis: { title: { text: 'Risk — Volatility (%)', font: axFont, standoff: 15 }, gridcolor: grid },
         yaxis: { title: { text: 'Yield — Dividend Yield (%)', font: axFont, standoff: 15 }, gridcolor: grid },
         height: 420, margin: { l: 80, r: 30, t: 50, b: 60 },
-      }, { responsive: true })
+      }, isDark), { responsive: true })
     }
 
     return () => {
@@ -136,7 +139,7 @@ export default function RiskReturnCharts({ result }) {
         if (el) window.Plotly.purge(el)
       })
     }
-  }, [result])
+  }, [result, isDark])
 
   if (!result) return null
 

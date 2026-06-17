@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { useTheme } from '../context/ThemeContext'
 
 export default function Settings() {
   const pf = useProfileFetch()
   const { selection, currentProfileName, isAggregate } = useProfile()
+  const { theme, setTheme, isDark } = useTheme()
   const [stats, setStats] = useState(null)
   const [confirming, setConfirming] = useState(false)
   const [status, setStatus] = useState(null)
@@ -248,14 +250,47 @@ export default function Settings() {
 
   const tagStyle = (removable) => ({
     display: 'inline-flex', alignItems: 'center', gap: 4,
-    background: removable ? '#1a3a4a' : '#1a2a3a', color: removable ? '#7ecfff' : '#8899aa',
+    background: isDark
+      ? (removable ? '#1a3a4a' : '#1a2a3a')
+      : (removable ? '#dbeeff' : '#eef2f6'),
+    color: isDark
+      ? (removable ? '#7ecfff' : '#8899aa')
+      : (removable ? '#1565c0' : '#546e7a'),
     borderRadius: 4, padding: '2px 8px', fontSize: '0.8rem', margin: 2,
-    border: removable ? '1px solid #2a5a6a' : '1px solid #2a3a4a',
+    border: isDark
+      ? (removable ? '1px solid #2a5a6a' : '1px solid #2a3a4a')
+      : (removable ? '1px solid #90caf9' : '1px solid #b0bec5'),
   })
 
   return (
     <div className="page" style={{ maxWidth: 900 }}>
       <h1>Settings</h1>
+
+      {/* Appearance */}
+      <div className="card">
+        <h2>Appearance</h2>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+          Choose a light or dark color theme. Your choice is saved on this device.
+        </p>
+        <div className="theme-toggle" role="group" aria-label="Color theme">
+          <button
+            type="button"
+            className={`theme-toggle-btn${theme === 'dark' ? ' active' : ''}`}
+            onClick={() => setTheme('dark')}
+            aria-pressed={theme === 'dark'}
+          >
+            🌙 Dark
+          </button>
+          <button
+            type="button"
+            className={`theme-toggle-btn${theme === 'light' ? ' active' : ''}`}
+            onClick={() => setTheme('light')}
+            aria-pressed={theme === 'light'}
+          >
+            ☀️ Light
+          </button>
+        </div>
+      </div>
 
       {/* Data Overview */}
       <div className="card">
@@ -263,27 +298,27 @@ export default function Settings() {
         {stats ? (
           <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
             <div>
-              <span style={{ color: '#8899aa', fontSize: '0.8rem' }}>Holdings</span>
-              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#7ecfff' }}>{stats.holdings}</div>
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Holdings</span>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--accent-bright)' }}>{stats.holdings}</div>
             </div>
             <div>
-              <span style={{ color: '#8899aa', fontSize: '0.8rem' }}>Dividend Records</span>
-              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#7ecfff' }}>{stats.dividends}</div>
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Dividend Records</span>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--accent-bright)' }}>{stats.dividends}</div>
             </div>
             <div>
-              <span style={{ color: '#8899aa', fontSize: '0.8rem' }}>Income Tracking</span>
-              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#7ecfff' }}>{stats.income_tracking}</div>
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Income Tracking</span>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--accent-bright)' }}>{stats.income_tracking}</div>
             </div>
           </div>
         ) : (
-          <p style={{ color: '#8899aa' }}>Loading...</p>
+          <p style={{ color: 'var(--text-dim)' }}>Loading...</p>
         )}
       </div>
 
       {/* NAV Benchmark Overrides */}
       <div className="card">
         <h2>NAV Benchmark Overrides</h2>
-        <p style={{ color: '#90a4ae', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
           Automatic NAV erosion checks infer benchmarks from ticker, fund name, and strategy.
           Add an override when a new fund needs a specific underlying.
         </p>
@@ -294,7 +329,7 @@ export default function Settings() {
 
         {Object.keys(navOverrides).length > 0 && (
           <div style={{ marginBottom: '0.75rem' }}>
-            <span style={{ color: '#8899aa', fontSize: '0.75rem', display: 'block', marginBottom: 4 }}>Overrides</span>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem', display: 'block', marginBottom: 4 }}>Overrides</span>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
               {Object.entries(navOverrides).sort(([a], [b]) => a.localeCompare(b)).map(([ticker, benchmark]) => (
                 <span key={ticker} style={tagStyle(true)}>
@@ -303,7 +338,7 @@ export default function Settings() {
                     onClick={() => handleRemoveNavOverride(ticker)}
                     disabled={navSaving}
                     style={{
-                      background: 'none', border: 'none', color: '#ff6b6b',
+                      background: 'none', border: 'none', color: 'var(--neg)',
                       cursor: 'pointer', padding: '0 2px', fontSize: '0.9rem', lineHeight: 1,
                     }}
                     title={`Remove ${ticker}`}
@@ -346,7 +381,7 @@ export default function Settings() {
       {/* Single-Stock ETFs */}
       <div className="card">
         <h2>Single-Stock ETFs</h2>
-        <p style={{ color: '#90a4ae', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
           These tickers are excluded from BUY recommendations in Optimize Returns and Balanced mode
           (unless the slider is at 100%). They are still allowed in Optimize Income.
         </p>
@@ -356,7 +391,7 @@ export default function Settings() {
         )}
 
         <div style={{ marginBottom: '0.75rem' }}>
-          <span style={{ color: '#8899aa', fontSize: '0.75rem', display: 'block', marginBottom: 4 }}>Built-in ({builtinEtfs.length})</span>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem', display: 'block', marginBottom: 4 }}>Built-in ({builtinEtfs.length})</span>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
             {builtinEtfs.map(t => <span key={t} style={tagStyle(false)}>{t}</span>)}
           </div>
@@ -364,7 +399,7 @@ export default function Settings() {
 
         {userEtfs.length > 0 && (
           <div style={{ marginBottom: '0.75rem' }}>
-            <span style={{ color: '#8899aa', fontSize: '0.75rem', display: 'block', marginBottom: 4 }}>Your additions ({userEtfs.length})</span>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem', display: 'block', marginBottom: 4 }}>Your additions ({userEtfs.length})</span>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
               {userEtfs.map(t => (
                 <span key={t} style={tagStyle(true)}>
@@ -373,7 +408,7 @@ export default function Settings() {
                     onClick={() => handleRemoveEtf(t)}
                     disabled={etfSaving}
                     style={{
-                      background: 'none', border: 'none', color: '#ff6b6b',
+                      background: 'none', border: 'none', color: 'var(--neg)',
                       cursor: 'pointer', padding: '0 2px', fontSize: '0.9rem', lineHeight: 1,
                     }}
                     title={`Remove ${t}`}
@@ -403,7 +438,7 @@ export default function Settings() {
       {/* Tax-Loss Harvesting Rates */}
       <div className="card">
         <h2>Tax-Loss Harvesting Rates</h2>
-        <p style={{ color: '#90a4ae', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
           Used by the Tax-Loss Harvest page to estimate the tax saved when realizing a loss.
           Enter as percentages (e.g. 32 for 32%).
         </p>
@@ -413,7 +448,7 @@ export default function Settings() {
         )}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(110px, 1fr)) auto', gap: '0.5rem', alignItems: 'end' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.85rem', color: '#c0cdd8' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.85rem', color: 'var(--p-c0cdd8)' }}>
             Short-term (%)
             <input
               type="number" step="0.01" min="0" max="100"
@@ -422,7 +457,7 @@ export default function Settings() {
               disabled={taxSaving}
             />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.85rem', color: '#c0cdd8' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.85rem', color: 'var(--p-c0cdd8)' }}>
             Long-term (%)
             <input
               type="number" step="0.01" min="0" max="100"
@@ -431,7 +466,7 @@ export default function Settings() {
               disabled={taxSaving}
             />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.85rem', color: '#c0cdd8' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.85rem', color: 'var(--p-c0cdd8)' }}>
             State (%)
             <input
               type="number" step="0.01" min="0" max="100"
@@ -449,10 +484,10 @@ export default function Settings() {
       {/* Database Backups */}
       <div className="card">
         <h2>Database Backups</h2>
-        <p style={{ color: '#90a4ae', marginBottom: '0.5rem', fontSize: '0.85rem' }}>
-          Backups are stored in: <code style={{ color: '#80cbc4', fontSize: '0.8rem' }}>{backupDir || 'backend/backups/'}</code>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.5rem', fontSize: '0.85rem' }}>
+          Backups are stored in: <code style={{ color: 'var(--p-80cbc4)', fontSize: '0.8rem' }}>{backupDir || 'backend/backups/'}</code>
         </p>
-        <p style={{ color: '#90a4ae', marginBottom: '1rem', fontSize: '0.85rem' }}>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem', fontSize: '0.85rem' }}>
           Auto backups are created before each import. Pre-operation backups are created before repair/sync operations.
           To restore, use the Import page's Restore tab.
         </p>
@@ -462,9 +497,9 @@ export default function Settings() {
         )}
 
         {backupLoading ? (
-          <p style={{ color: '#8899aa' }}>Loading...</p>
+          <p style={{ color: 'var(--text-dim)' }}>Loading...</p>
         ) : backups.length === 0 ? (
-          <p style={{ color: '#8899aa' }}>No backups found.</p>
+          <p style={{ color: 'var(--text-dim)' }}>No backups found.</p>
         ) : (
           <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
             <table style={{ width: '100%', fontSize: '0.8rem' }}>
@@ -487,7 +522,7 @@ export default function Settings() {
                     <td style={{ padding: '0.3rem 0.5rem', whiteSpace: 'nowrap' }}>{b.label}</td>
                     <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>{b.size_mb} MB</td>
                     <td style={{ padding: '0.3rem 0.5rem' }}>
-                      <span style={{ color: b.kind === 'pre-operation' ? '#ffcc80' : '#a5d6a7', fontSize: '0.75rem' }}>
+                      <span style={{ color: b.kind === 'pre-operation' ? 'var(--p-ffcc80)' : 'var(--p-a5d6a7)', fontSize: '0.75rem' }}>
                         {b.kind === 'pre-operation' ? 'pre-op' : 'auto'}
                       </span>
                     </td>
@@ -517,7 +552,7 @@ export default function Settings() {
       {/* Clear Data */}
       <div className="card">
         <h2>Clear All Data</h2>
-        <p style={{ color: '#90a4ae', marginBottom: '1rem', fontSize: '0.9rem' }}>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem', fontSize: '0.9rem' }}>
           This will permanently delete all holdings, dividends, income tracking, and payout data
           for <strong>{isAggregate ? 'the active aggregate view' : (currentProfileName || 'the current portfolio')}</strong> only.
           Other portfolios are not touched. A database backup is created automatically — you can restore it from the Import page.
@@ -537,7 +572,7 @@ export default function Settings() {
           </button>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <span style={{ color: '#ef9a9a', fontWeight: 600 }}>Are you sure? This cannot be undone.</span>
+            <span style={{ color: 'var(--p-ef9a9a)', fontWeight: 600 }}>Are you sure? This cannot be undone.</span>
             <button className="btn btn-danger" onClick={handleClearAll} disabled={loading}>
               {loading ? 'Clearing...' : 'Yes, Delete Everything'}
             </button>

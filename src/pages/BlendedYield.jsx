@@ -835,7 +835,7 @@ export default function BlendedYield() {
               {f.allocDollar > 0 && (
                 <div className="by-fund-metric">
                   <span className="by-metric-label">After-Tax Income</span>
-                  <span className="by-metric-value" style={{ color: '#4dff91' }}>{fmtMoney2(f.netIncome)}</span>
+                  <span className="by-metric-value" style={{ color: 'var(--pos)' }}>{fmtMoney2(f.netIncome)}</span>
                 </div>
               )}
             </div>
@@ -873,11 +873,11 @@ export default function BlendedYield() {
             </div>
             <div className="by-stat">
               <div className="by-stat-label">After-Tax Annual</div>
-              <div className="by-stat-value" style={{ color: '#4dff91' }}>{fmtMoney(portfolio.totalNetIncome)}</div>
+              <div className="by-stat-value" style={{ color: 'var(--pos)' }}>{fmtMoney(portfolio.totalNetIncome)}</div>
             </div>
             <div className="by-stat">
               <div className="by-stat-label">After-Tax Monthly</div>
-              <div className="by-stat-value" style={{ color: '#4dff91' }}>{fmtMoney(Math.round(portfolio.totalNetIncome / 12))}</div>
+              <div className="by-stat-value" style={{ color: 'var(--pos)' }}>{fmtMoney(Math.round(portfolio.totalNetIncome / 12))}</div>
             </div>
           </div>
 
@@ -922,7 +922,7 @@ export default function BlendedYield() {
                     <td>{fmtPct(f.allocPct, 1)}</td>
                     <td>{fmtMoney(f.allocDollar)}</td>
                     <td>{fmtMoney2(f.grossIncome)}</td>
-                    <td style={{ color: '#4dff91' }}>{fmtMoney2(f.netIncome)}</td>
+                    <td style={{ color: 'var(--pos)' }}>{fmtMoney2(f.netIncome)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -934,7 +934,7 @@ export default function BlendedYield() {
                   <td><strong>{fmtPct(portfolio.totalAllocPct, 1)}</strong></td>
                   <td><strong>{fmtMoney(totalInvestment)}</strong></td>
                   <td><strong>{fmtMoney2(portfolio.totalGrossIncome)}</strong></td>
-                  <td style={{ color: '#4dff91' }}><strong>{fmtMoney2(portfolio.totalNetIncome)}</strong></td>
+                  <td style={{ color: 'var(--pos)' }}><strong>{fmtMoney2(portfolio.totalNetIncome)}</strong></td>
                 </tr>
               </tfoot>
             </table>

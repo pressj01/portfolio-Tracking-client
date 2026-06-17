@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 
 const fmt = v => v != null ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—'
@@ -24,6 +26,7 @@ const WEEKLY_RANGE = [
 ]
 
 export default function DividendHistory() {
+  const { isDark } = useTheme()
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const [view, setView] = useState('monthly')
@@ -163,10 +166,10 @@ export default function DividendHistory() {
       }
     }
 
-    Plotly.newPlot(chartRef.current, traces, layout, { responsive: true })
+    Plotly.newPlot(chartRef.current, traces, themedPlotlyLayout(layout, isDark), { responsive: true })
 
     return () => { if (chartRef.current) Plotly.purge(chartRef.current) }
-  }, [data, view, showCumulative])
+  }, [data, view, showCumulative, isDark])
 
   const rangeOptions = view === 'monthly' ? MONTHLY_RANGE : view === 'weekly' ? WEEKLY_RANGE : null
   const trendPeriodLabel = view === 'yearly' ? 'YEAR' : view === 'monthly' ? 'MONTH' : 'PERIOD'
@@ -206,7 +209,7 @@ export default function DividendHistory() {
             <select
               value={monthsBack}
               onChange={e => setMonthsBack(Number(e.target.value))}
-              style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: '#0a1929', color: '#c5d0dc', border: '1px solid #1a3a5c', borderRadius: '4px' }}
+              style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem', background: 'var(--p-0a1929)', color: 'var(--p-c5d0dc)', border: '1px solid var(--p-1a3a5c)', borderRadius: '4px' }}
             >
               {rangeOptions.map(opt => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -231,7 +234,7 @@ export default function DividendHistory() {
             </button>
             {catOpen && (
               <div className="growth-cat-dropdown">
-                <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
+                <label className="growth-cat-option" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
                   <input type="checkbox" checked={categories.length === 0 && subcategories.length === 0}
                     onChange={() => { setCategories([]); setSubcategories([]) }} />
                   <span>All Holdings</span>
@@ -282,7 +285,7 @@ export default function DividendHistory() {
         {/* Cumulative toggle */}
         <div className="growth-filter-group">
           <label>&nbsp;</label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.85rem', color: '#c5d0dc' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--p-c5d0dc)' }}>
             <input type="checkbox" checked={showCumulative} onChange={e => setShowCumulative(e.target.checked)} />
             Show Cumulative
           </label>
@@ -314,7 +317,7 @@ export default function DividendHistory() {
             </div>
             <div className="summary-card">
               <div className="summary-label">{growthLabel}</div>
-              <div className="summary-value" style={{ color: data.summary.trend_pct >= 0 ? '#4dff91' : '#ff6b6b' }}>
+              <div className="summary-value" style={{ color: data.summary.trend_pct >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
                 {data.summary.trend_pct >= 0 ? '+' : ''}{data.summary.trend_pct}%
               </div>
             </div>
@@ -326,13 +329,13 @@ export default function DividendHistory() {
               <div ref={chartRef} style={{ width: '100%', height: '500px' }} />
             </div>
           ) : (
-            <div style={{ textAlign: 'center', padding: '3rem', color: '#8899aa' }}>
+            <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-dim)' }}>
               No dividend data available for the selected timeframe.
             </div>
           )}
 
           {categories.length > 0 && view === 'weekly' && (
-            <p style={{ color: '#8899aa', fontSize: '0.8rem', marginTop: '0.5rem', fontStyle: 'italic' }}>
+            <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginTop: '0.5rem', fontStyle: 'italic' }}>
               Note: Weekly values are estimated proportionally when filtering by category.
             </p>
           )}

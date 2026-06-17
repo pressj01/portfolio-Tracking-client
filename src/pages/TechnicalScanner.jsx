@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfileFetch } from '../context/ProfileContext'
 
 const DAILY_PERIODS = ['1mo', '3mo', '6mo', '1y', '2y', '5y', '10y']
@@ -46,15 +48,15 @@ function ScannerChartModal({ ticker, timeframe, period, onClose }) {
     if (!figData || !figLayout || !window.Plotly) return
     const el = document.getElementById('scanner-chart')
     if (!el) return
-    window.Plotly.newPlot(el, figData, { ...figLayout, autosize: true }, { responsive: true })
+    window.Plotly.newPlot(el, figData, themedPlotlyLayout({ ...figLayout, autosize: true }, isDark), { responsive: true })
     return () => { if (el) window.Plotly.purge(el) }
-  }, [figData, figLayout])
+  }, [figData, figLayout, isDark])
 
   if (!ticker) return null
 
   return (
     <div className="modal-overlay" onClick={onClose} style={{ zIndex: 1000 }}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '950px', background: '#0e1117' }}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '950px', background: 'var(--surface-sunken)' }}>
         <button className="modal-close" onClick={onClose}>&times;</button>
         {loading && <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>}
         {error && <div className="alert alert-error">{error}</div>}
@@ -65,6 +67,7 @@ function ScannerChartModal({ ticker, timeframe, period, onClose }) {
 }
 
 export default function TechnicalScanner() {
+  const { isDark } = useTheme()
   const pf = useProfileFetch()
   const [tickers, setTickers] = useState([])
   const [input, setInput] = useState('')
@@ -170,15 +173,15 @@ export default function TechnicalScanner() {
   return (
     <div className="page-container" style={{ maxWidth: 1100, margin: '0 auto', padding: '1.5rem' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem' }}>
-          <h1 style={{ margin: 0, color: '#7ecfff' }}>Single Strategy Scanner</h1>
+          <h1 style={{ margin: 0, color: 'var(--accent-bright)' }}>Single Strategy Scanner</h1>
         <button className="btn btn-xs btn-outline" onClick={() => setShowHelp(h => !h)}>
           {showHelp ? 'Hide Help' : 'Help'}
         </button>
       </div>
 
       {showHelp && (
-        <div className="help-box" style={{ marginBottom: '1rem', padding: '1rem', background: '#111124',
-          border: '1px solid #2a2a4e', borderRadius: '6px', fontSize: '0.88rem', color: '#b0bec5' }}>
+        <div className="help-box" style={{ marginBottom: '1rem', padding: '1rem', background: 'var(--p-111124)',
+          border: '1px solid var(--p-2a2a4e)', borderRadius: '6px', fontSize: '0.88rem', color: 'var(--text-muted)' }}>
           <p style={{ margin: '0 0 0.5rem' }}><strong>Scan Conditions (all must be true for BUY):</strong></p>
           <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
             <li>50 SMA at or above the 175 SMA</li>
@@ -197,8 +200,8 @@ export default function TechnicalScanner() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          style={{ width: '120px', padding: '0.35rem 0.5rem', background: '#111124',
-            border: '1px solid #3a3a5c', borderRadius: '4px', color: '#e0e8f5', fontSize: '0.88rem' }}
+          style={{ width: '120px', padding: '0.35rem 0.5rem', background: 'var(--p-111124)',
+            border: '1px solid var(--p-3a3a5c)', borderRadius: '4px', color: 'var(--text-strong)', fontSize: '0.88rem' }}
         />
         <button className="btn btn-xs btn-primary" onClick={addTicker}>Add</button>
       </div>
@@ -217,24 +220,24 @@ export default function TechnicalScanner() {
 
       {/* Condition settings */}
       <div className="scanner-controls" style={{ fontSize: '0.85rem' }}>
-        <label style={{ color: '#8899aa' }}>SMA Proximity:
+        <label style={{ color: 'var(--text-dim)' }}>SMA Proximity:
           <input type="number" min="1" max="50" step="1" value={smaPct}
             onChange={(e) => setSmaPct(Number(e.target.value) || 5)}
-            style={{ width: '50px', marginLeft: '0.4rem', padding: '0.25rem 0.4rem', background: '#111124',
-              border: '1px solid #3a3a5c', borderRadius: '4px', color: '#e0e8f5', fontSize: '0.85rem', textAlign: 'center' }}
+            style={{ width: '50px', marginLeft: '0.4rem', padding: '0.25rem 0.4rem', background: 'var(--p-111124)',
+              border: '1px solid var(--p-3a3a5c)', borderRadius: '4px', color: 'var(--text-strong)', fontSize: '0.85rem', textAlign: 'center' }}
           />%
         </label>
-        <label style={{ color: '#8899aa' }}>Stochastic %K:
+        <label style={{ color: 'var(--text-dim)' }}>Stochastic %K:
           <input type="number" min="0" max="100" step="1" value={stochMin}
             onChange={(e) => setStochMin(Number(e.target.value) || 0)}
-            style={{ width: '50px', marginLeft: '0.4rem', padding: '0.25rem 0.4rem', background: '#111124',
-              border: '1px solid #3a3a5c', borderRadius: '4px', color: '#e0e8f5', fontSize: '0.85rem', textAlign: 'center' }}
+            style={{ width: '50px', marginLeft: '0.4rem', padding: '0.25rem 0.4rem', background: 'var(--p-111124)',
+              border: '1px solid var(--p-3a3a5c)', borderRadius: '4px', color: 'var(--text-strong)', fontSize: '0.85rem', textAlign: 'center' }}
           />
           <span style={{ margin: '0 0.3rem' }}>to</span>
           <input type="number" min="0" max="100" step="1" value={stochMax}
             onChange={(e) => setStochMax(Number(e.target.value) || 100)}
-            style={{ width: '50px', padding: '0.25rem 0.4rem', background: '#111124',
-              border: '1px solid #3a3a5c', borderRadius: '4px', color: '#e0e8f5', fontSize: '0.85rem', textAlign: 'center' }}
+            style={{ width: '50px', padding: '0.25rem 0.4rem', background: 'var(--p-111124)',
+              border: '1px solid var(--p-3a3a5c)', borderRadius: '4px', color: 'var(--text-strong)', fontSize: '0.85rem', textAlign: 'center' }}
           />
         </label>
       </div>
@@ -248,8 +251,8 @@ export default function TechnicalScanner() {
         <select
           value={period}
           onChange={(e) => setPeriod(e.target.value)}
-          style={{ padding: '0.35rem 0.5rem', background: '#111124',
-            border: '1px solid #3a3a5c', borderRadius: '4px', color: '#e0e8f5', fontSize: '0.85rem' }}
+          style={{ padding: '0.35rem 0.5rem', background: 'var(--p-111124)',
+            border: '1px solid var(--p-3a3a5c)', borderRadius: '4px', color: 'var(--text-strong)', fontSize: '0.85rem' }}
         >
           {periods.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
@@ -280,7 +283,7 @@ export default function TechnicalScanner() {
                 <tr key={r.ticker}>
                   <td>
                     <a href="#" onClick={(e) => { e.preventDefault(); setModalTicker(r.ticker) }}
-                       style={{ color: '#7ecfff', textDecoration: 'none', fontWeight: 600 }}>
+                       style={{ color: 'var(--accent-bright)', textDecoration: 'none', fontWeight: 600 }}>
                       {r.ticker}
                     </a>
                   </td>
@@ -300,13 +303,13 @@ export default function TechnicalScanner() {
       )}
 
       {!loading && rows.length === 0 && tickers.length > 0 && (
-        <p style={{ color: '#8899aa', textAlign: 'center', marginTop: '2rem' }}>
+        <p style={{ color: 'var(--text-dim)', textAlign: 'center', marginTop: '2rem' }}>
           Click "Run Scan" to analyze your tickers.
         </p>
       )}
 
       {tickers.length === 0 && (
-        <p style={{ color: '#8899aa', textAlign: 'center', marginTop: '2rem' }}>
+        <p style={{ color: 'var(--text-dim)', textAlign: 'center', marginTop: '2rem' }}>
           Add tickers above to get started.
         </p>
       )}

@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { useTheme } from '../context/ThemeContext'
+import { chartTheme } from '../utils/chartTheme'
 
 const PERIODS = ['1y', '5y', 'max']
 const PERIOD_LABELS = { '1y': '1Y', '5y': '5Y', 'max': 'Max' }
@@ -23,6 +25,7 @@ function MetricCard({ label, value }) {
 export default function Growth() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
+  const { isDark } = useTheme()
   const [period, setPeriod] = useState('1y')
   const [benchmark, setBenchmark] = useState('SPY')
   const [benchInput, setBenchInput] = useState('SPY')
@@ -41,31 +44,57 @@ export default function Growth() {
   const [error, setError] = useState(null)
 
   useEffect(() => {
+    const controller = new AbortController()
+    let active = true
+
     setLoading(true)
     setError(null)
     const params = new URLSearchParams({ period, benchmark })
     if (categories.length) params.set('category', categories.join(','))
     if (subcategories.length) params.set('subcategory', subcategories.join(','))
-    pf(`/api/growth/data?${params}`)
-      .then(r => r.json())
+    pf(`/api/growth/data?${params}`, { signal: controller.signal })
+      .then(async r => {
+        const d = await r.json().catch(() => ({}))
+        if (!r.ok) {
+          throw new Error(d.detail || d.error || `Request failed (${r.status})`)
+        }
+        return d
+      })
       .then(d => {
+        if (!active) return
         if (d.error) throw new Error(d.error)
         setData(d)
       })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
-  }, [period, benchmark, categories, subcategories, selection])
+      .catch(e => {
+        if (!active || e.name === 'AbortError') return
+        setData(null)
+        setError(e.message)
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [period, benchmark, categories, subcategories, selection, pf])
 
   useEffect(() => {
     if (!data || !window.Plotly) return
     const Plotly = window.Plotly
-    const dark = {
-      template: 'plotly_dark',
-      paper_bgcolor: '#0e1117',
-      plot_bgcolor: '#0e1117',
-      font: { color: '#e0e8f5' },
+    const ct = chartTheme(isDark)
+    const layoutBase = {
+      template: ct.template,
+      paper_bgcolor: ct.paper,
+      plot_bgcolor: ct.plot,
+      font: { color: ct.font },
+      hoverlabel: {
+        bgcolor: ct.surface,
+        bordercolor: ct.grid,
+        font: { color: ct.title },
+      },
     }
-    const gridColor = '#1a2233'
     const ids = []
 
     // ── Price-only chart ──
@@ -79,13 +108,13 @@ export default function Growth() {
         traces.push({ x: data.benchmark_price.dates, y: data.benchmark_price.values, name: data.benchmark_ticker, line: { color: '#ff9800', width: 2, dash: 'dot' }, hovertemplate: '%{y:.1f}<extra>' + data.benchmark_ticker + '</extra>' })
       }
       Plotly.newPlot(priceEl, traces, {
-        ...dark, height: 380,
-        title: { text: 'Portfolio Value (Price Only)', font: { size: 14, color: '#90caf9' } },
+        ...layoutBase, height: 380,
+        title: { text: 'Portfolio Value (Price Only)', font: { size: 14, color: ct.title } },
         margin: { l: 50, r: 20, t: 50, b: 40 },
         hovermode: 'x unified',
         legend: { orientation: 'h', y: -0.15, xanchor: 'center', x: 0.5, font: { size: 11 } },
-        xaxis: { gridcolor: gridColor },
-        yaxis: { gridcolor: gridColor, title: 'Indexed (100)' },
+        xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
+        yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, title: 'Indexed (100)' },
       }, { responsive: true })
     }
 
@@ -100,13 +129,13 @@ export default function Growth() {
         traces.push({ x: data.benchmark_total.dates, y: data.benchmark_total.values, name: data.benchmark_ticker, line: { color: '#ff9800', width: 2, dash: 'dot' }, hovertemplate: '%{y:.1f}<extra>' + data.benchmark_ticker + '</extra>' })
       }
       Plotly.newPlot(totalEl, traces, {
-        ...dark, height: 380,
-        title: { text: 'Total Return (incl. Dividends)', font: { size: 14, color: '#90caf9' } },
+        ...layoutBase, height: 380,
+        title: { text: 'Total Return (incl. Dividends)', font: { size: 14, color: ct.title } },
         margin: { l: 50, r: 20, t: 50, b: 40 },
         hovermode: 'x unified',
         legend: { orientation: 'h', y: -0.15, xanchor: 'center', x: 0.5, font: { size: 11 } },
-        xaxis: { gridcolor: gridColor },
-        yaxis: { gridcolor: gridColor, title: 'Indexed (100)' },
+        xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
+        yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, title: 'Indexed (100)' },
       }, { responsive: true })
     }
 
@@ -125,11 +154,11 @@ export default function Growth() {
         hovertemplate: '%{x:.1f}%<extra>' + p + '</extra>',
       }))
       Plotly.newPlot(barEl, traces, {
-        ...dark,
+        ...layoutBase,
         barmode: 'group',
-        title: { text: 'Performance by Ticker', font: { size: 14, color: '#90caf9' } },
-        xaxis: { gridcolor: gridColor, title: 'Return %', ticksuffix: '%' },
-        yaxis: { gridcolor: gridColor, automargin: true },
+        title: { text: 'Performance by Ticker', font: { size: 14, color: ct.title } },
+        xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, title: 'Return %', ticksuffix: '%' },
+        yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, automargin: true },
         legend: { orientation: 'h', y: -0.08, xanchor: 'center', x: 0.5, font: { size: 11 } },
         margin: { l: 80, r: 20, t: 50, b: 60 },
         height: Math.max(400, tickers.length * 30 + 120),
@@ -145,16 +174,16 @@ export default function Growth() {
       Plotly.newPlot(heatEl, [{
         z, x: data.heatmap.windows, y: data.heatmap.tickers,
         type: 'heatmap',
-        colorscale: [[0, '#c62828'], [0.5, '#1a1a2e'], [1, '#2e7d32']],
+        colorscale: [[0, '#c62828'], [0.5, ct.plot], [1, '#2e7d32']],
         zmid: 0,
         text: textVals, texttemplate: '%{text}',
         hovertemplate: '%{y} %{x}: %{z:.1f}%<extra></extra>',
         colorbar: { title: '%', ticksuffix: '%' },
       }], {
-        ...dark, showlegend: false,
-        title: { text: 'Performance Heatmap', font: { size: 14, color: '#90caf9' } },
-        yaxis: { gridcolor: gridColor, automargin: true },
-        xaxis: { gridcolor: gridColor },
+        ...layoutBase, showlegend: false,
+        title: { text: 'Performance Heatmap', font: { size: 14, color: ct.title } },
+        yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, automargin: true },
+        xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
         margin: { l: 80, r: 20, t: 50, b: 40 },
         height: Math.max(400, data.heatmap.tickers.length * 28 + 100),
       }, { responsive: true })
@@ -166,7 +195,7 @@ export default function Growth() {
         if (el) Plotly.purge(el)
       })
     }
-  }, [data])
+  }, [data, isDark])
 
   const handleBenchGo = () => {
     const val = benchInput.trim().toUpperCase()
@@ -195,7 +224,7 @@ export default function Growth() {
             </button>
             {catOpen && (
               <div className="growth-cat-dropdown">
-                <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
+                <label className="growth-cat-option" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
                   <input
                     type="checkbox"
                     checked={categories.length === 0 && subcategories.length === 0}

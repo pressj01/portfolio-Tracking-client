@@ -3,6 +3,8 @@ import { useProfileFetch } from '../context/ProfileContext'
 import { API_BASE } from '../config'
 import DistributionHistoryChart from '../components/DistributionHistoryChart'
 import { returnVsYield } from '../utils/returnVsYield'
+import { useTheme } from '../context/ThemeContext'
+import { chartTheme } from '../utils/chartTheme'
 
 const fmtMoney = (v) => {
   if (v == null) return '-'
@@ -52,6 +54,7 @@ function Field({ label, value }) {
 
 function ResearchChart({ ticker }) {
   const pf = useProfileFetch()
+  const { isDark } = useTheme()
   const chartRef = useRef(null)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -75,6 +78,7 @@ function ResearchChart({ ticker }) {
 
   useEffect(() => {
     if (!data || !window.Plotly || !chartRef.current) return
+    const ct = chartTheme(isDark)
     const traces = [
       {
         x: data.dates,
@@ -96,14 +100,15 @@ function ResearchChart({ ticker }) {
       },
     ]
     const layout = {
-      template: 'plotly_dark',
-      paper_bgcolor: '#16213e',
-      plot_bgcolor: '#16213e',
-      title: { text: `${data.ticker} - One Year Return`, font: { size: 16, color: '#e0e8f5' } },
+      template: ct.template,
+      paper_bgcolor: ct.surface,
+      plot_bgcolor: ct.surface,
+      font: { color: ct.font },
+      title: { text: `${data.ticker} - One Year Return`, font: { size: 16, color: ct.title } },
       margin: { l: 58, r: 22, t: 56, b: 42 },
       height: 440,
-      xaxis: { gridcolor: '#1a2a3e', type: 'date' },
-      yaxis: { title: 'Return %', gridcolor: '#1a2a3e', ticksuffix: '%' },
+      xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, type: 'date' },
+      yaxis: { title: 'Return %', gridcolor: ct.grid, zerolinecolor: ct.zeroline, ticksuffix: '%' },
       legend: { orientation: 'h', y: 1.05, x: 0.5, xanchor: 'center' },
       hovermode: 'x unified',
       shapes: data.dates?.length ? [{
@@ -112,12 +117,12 @@ function ResearchChart({ ticker }) {
         x1: data.dates[data.dates.length - 1],
         y0: 0,
         y1: 0,
-        line: { dash: 'dot', color: '#556677', width: 1 },
+        line: { dash: 'dot', color: ct.zeroline, width: 1 },
       }] : [],
     }
     window.Plotly.newPlot(chartRef.current, traces, layout, { responsive: true, displayModeBar: false })
     return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
-  }, [data])
+  }, [data, isDark])
 
   return (
     <section className="research-chart-section" id="annual-chart">
@@ -130,6 +135,7 @@ function ResearchChart({ ticker }) {
 
 function AverageReturnChart({ kind, ticker, benchmark }) {
   const pf = useProfileFetch()
+  const { isDark } = useTheme()
   const chartRef = useRef(null)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -154,6 +160,7 @@ function AverageReturnChart({ kind, ticker, benchmark }) {
 
   useEffect(() => {
     if (!data || !window.Plotly || !chartRef.current) return
+    const ct = chartTheme(isDark)
 
     const labels = (data.periods || []).map(row => row.label)
     const traces = (data.series || []).map((series) => ({
@@ -168,25 +175,26 @@ function AverageReturnChart({ kind, ticker, benchmark }) {
     }))
 
     const layout = {
-      template: 'plotly_dark',
-      paper_bgcolor: '#16213e',
-      plot_bgcolor: '#16213e',
+      template: ct.template,
+      paper_bgcolor: ct.surface,
+      plot_bgcolor: ct.surface,
+      font: { color: ct.font },
       title: {
         text: 'Average Return',
-        font: { size: 16, color: '#e0e8f5' },
+        font: { size: 16, color: ct.title },
       },
       barmode: 'group',
       margin: { l: 52, r: 20, t: 64, b: 48 },
       height: 430,
-      xaxis: { gridcolor: '#1a2a3e' },
-      yaxis: { title: 'Return %', gridcolor: '#1a2a3e', ticksuffix: '%' },
+      xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
+      yaxis: { title: 'Return %', gridcolor: ct.grid, zerolinecolor: ct.zeroline, ticksuffix: '%' },
       legend: { orientation: 'h', y: 1.08, x: 0.5, xanchor: 'center' },
       hovermode: 'x unified',
     }
 
     window.Plotly.newPlot(chartRef.current, traces, layout, { responsive: true, displayModeBar: false })
     return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
-  }, [data])
+  }, [data, isDark])
 
   return (
     <section className="research-chart-section" id="average-return-chart">
@@ -241,7 +249,7 @@ function ETFResult({ data, onOpenChart, return1y }) {
     ['Dividend Frequency', data.dividend_frequency || '-'],
     [yieldLabel, fmtPct(data.estimated_yield_pct)],
     ['30-Day SEC Yield', fmtPct(data.sec_30_day_yield_pct)],
-    ['1Y Ret vs Yield', return1y == null ? '-' : <span style={{ color: rvy?.color || '#6f7890' }} title={rvy ? `1Y Return ${rvy.totalReturnPct?.toFixed(2)}% vs Yield ${rvy.yieldOnCost?.toFixed(2)}% (spread ${rvy.spread?.toFixed(2)}%)` : undefined}>{rvy?.label || '-'}</span>],
+    ['1Y Ret vs Yield', return1y == null ? '-' : <span style={{ color: rvy?.color || 'var(--p-6f7890)' }} title={rvy ? `1Y Return ${rvy.totalReturnPct?.toFixed(2)}% vs Yield ${rvy.yieldOnCost?.toFixed(2)}% (spread ${rvy.spread?.toFixed(2)}%)` : undefined}>{rvy?.label || '-'}</span>],
     ['TTM Dividend/Share', data.ttm_dividend_per_share == null ? '-' : '$' + fmtNum(data.ttm_dividend_per_share, 4)],
     ['Last Dividend', data.last_dividend ? `${fmtMoney(data.last_dividend.amount)} on ${data.last_dividend.date}` : '-'],
     ['Source', (() => {
@@ -338,7 +346,7 @@ function StockResult({ data, onOpenChart, return1y }) {
     ['Dividend Frequency', data.dividend_frequency || '-'],
     ['Dividend Rate', fmtMoney(data.dividend_rate)],
     ['Dividend Yield', fmtPct(data.dividend_yield_pct)],
-    ['1Y Ret vs Yield', return1y == null ? '-' : <span style={{ color: rvyStock?.color || '#6f7890' }} title={rvyStock ? `1Y Return ${rvyStock.totalReturnPct?.toFixed(2)}% vs Yield ${rvyStock.yieldOnCost?.toFixed(2)}% (spread ${rvyStock.spread?.toFixed(2)}%)` : undefined}>{rvyStock?.label || '-'}</span>],
+    ['1Y Ret vs Yield', return1y == null ? '-' : <span style={{ color: rvyStock?.color || 'var(--p-6f7890)' }} title={rvyStock ? `1Y Return ${rvyStock.totalReturnPct?.toFixed(2)}% vs Yield ${rvyStock.yieldOnCost?.toFixed(2)}% (spread ${rvyStock.spread?.toFixed(2)}%)` : undefined}>{rvyStock?.label || '-'}</span>],
     ['Payout Ratio', fmtPct(data.payout_ratio_pct)],
     ['TTM Dividend/Share', data.ttm_dividend_per_share == null ? '-' : '$' + fmtNum(data.ttm_dividend_per_share, 4)],
     ['Last Dividend', data.last_dividend ? `${fmtMoney(data.last_dividend.amount)} on ${data.last_dividend.date}` : '-'],
@@ -487,9 +495,9 @@ function ETFBrowserSection() {
             style={{
               width: '100%',
               padding: '0.5rem 0.75rem',
-              backgroundColor: '#1a1a2e',
-              color: '#fff',
-              border: '1px solid #4a5568',
+              backgroundColor: 'var(--bg)',
+              color: 'var(--white)',
+              border: '1px solid var(--p-4a5568)',
               borderRadius: '4px',
               fontSize: '0.9rem',
             }}
@@ -503,9 +511,9 @@ function ETFBrowserSection() {
             style={{
               width: '100%',
               padding: '0.5rem 0.75rem',
-              backgroundColor: '#1a1a2e',
-              color: '#fff',
-              border: '1px solid #4a5568',
+              backgroundColor: 'var(--bg)',
+              color: 'var(--white)',
+              border: '1px solid var(--p-4a5568)',
               borderRadius: '4px',
               fontSize: '0.9rem',
             }}
@@ -519,44 +527,44 @@ function ETFBrowserSection() {
       </div>
 
       {error && (
-        <div style={{ color: '#ff6b6b', marginBottom: '1rem', padding: '0.75rem', backgroundColor: 'rgba(255, 107, 107, 0.1)', borderRadius: '4px' }}>
+        <div style={{ color: 'var(--neg)', marginBottom: '1rem', padding: '0.75rem', backgroundColor: 'rgba(255, 107, 107, 0.1)', borderRadius: '4px' }}>
           Error: {error}
         </div>
       )}
 
       {loading && (
-        <div style={{ color: '#90caf9', marginBottom: '1rem' }}>Loading...</div>
+        <div style={{ color: 'var(--accent-2)', marginBottom: '1rem' }}>Loading...</div>
       )}
 
       {!loading && !searchTerm && !selectedProvider && (
-        <div style={{ color: '#8899aa', marginBottom: '1rem' }}>
+        <div style={{ color: 'var(--text-dim)', marginBottom: '1rem' }}>
           Search for a ticker, fund name, or select a provider to get started.
         </div>
       )}
 
       {!loading && (searchTerm || selectedProvider) && sorted.length === 0 && (
-        <div style={{ color: '#8899aa', marginBottom: '1rem' }}>
+        <div style={{ color: 'var(--text-dim)', marginBottom: '1rem' }}>
           No funds found matching your criteria.
         </div>
       )}
 
       {!loading && sorted.length > 0 && sorted[0]?.source === 'yahoo' && (
-        <div style={{ color: '#ffb74d', fontSize: '0.85rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span style={{ background: '#7b4f00', padding: '0.15rem 0.5rem', borderRadius: 4, fontWeight: 700 }}>Yahoo Finance</span>
+        <div style={{ color: 'var(--p-ffb74d)', fontSize: '0.85rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ background: 'var(--p-7b4f00)', padding: '0.15rem 0.5rem', borderRadius: 4, fontWeight: 700 }}>Yahoo Finance</span>
           Not in local database — pulled live from Yahoo Finance
         </div>
       )}
 
       {sorted.length > 0 && (
         <div className="etf-results" style={{ marginTop: '1rem' }}>
-          <div style={{ color: '#8899aa', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
             Showing {sorted.length} of {total} funds
           </div>
 
-          <div className="sticky-table-wrap" style={{ overflowX: 'auto', border: '1px solid #4a5568', borderRadius: '4px' }}>
+          <div className="sticky-table-wrap" style={{ overflowX: 'auto', border: '1px solid var(--p-4a5568)', borderRadius: '4px' }}>
             <table className="etf-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
               <thead>
-                <tr style={{ backgroundColor: '#2a2a3e', borderBottom: '2px solid #4a5568' }}>
+                <tr style={{ backgroundColor: 'var(--p-2a2a3e)', borderBottom: '2px solid var(--p-4a5568)' }}>
                   <th onClick={() => setSortKey('symbol')} style={{ ...headerStyle, cursor: 'pointer', minWidth: '80px' }}>
                     Ticker {sortKey === 'symbol' ? '▼' : ''}
                   </th>
@@ -586,13 +594,13 @@ function ETFBrowserSection() {
                     key={`${fund.symbol}-${idx}`}
                     style={{
                       backgroundColor: selectedTicker === fund.symbol
-                        ? '#1e2d45'
-                        : idx % 2 === 0 ? '#1a1a2e' : '#16192a',
-                      borderBottom: '1px solid #4a5568',
+                        ? 'var(--p-1e2d45)'
+                        : idx % 2 === 0 ? 'var(--bg)' : 'var(--p-16192a)',
+                      borderBottom: '1px solid var(--p-4a5568)',
                     }}
                   >
                     <td
-                      style={{ ...cellStyle, fontWeight: 700, color: '#7ecfff', cursor: 'pointer' }}
+                      style={{ ...cellStyle, fontWeight: 700, color: 'var(--accent-bright)', cursor: 'pointer' }}
                       onClick={() => {
                         const next = selectedTicker === fund.symbol ? null : fund.symbol
                         setSelectedTicker(next)
@@ -603,7 +611,7 @@ function ETFBrowserSection() {
                       {fund.symbol}
                     </td>
                     <td
-                      style={{ ...cellStyle, textAlign: 'left', cursor: 'pointer', color: '#c8d8f0' }}
+                      style={{ ...cellStyle, textAlign: 'left', cursor: 'pointer', color: 'var(--p-c8d8f0)' }}
                       onClick={() => {
                         const next = selectedTicker === fund.symbol ? null : fund.symbol
                         setSelectedTicker(next)
@@ -631,12 +639,12 @@ function ETFBrowserSection() {
       {selectedTicker && (
         <div ref={chartRef} style={{ marginTop: '2rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.5rem' }}>
-            <span style={{ color: '#90caf9', fontWeight: 700, fontSize: '1rem' }}>
+            <span style={{ color: 'var(--accent-2)', fontWeight: 700, fontSize: '1rem' }}>
               {selectedTicker} — 1-Year Return
             </span>
             <button
               onClick={() => setSelectedTicker(null)}
-              style={{ background: 'none', border: '1px solid #4a5568', color: '#8899aa', borderRadius: 4, padding: '0.2rem 0.6rem', cursor: 'pointer', fontSize: '0.8rem' }}
+              style={{ background: 'none', border: '1px solid var(--p-4a5568)', color: 'var(--text-dim)', borderRadius: 4, padding: '0.2rem 0.6rem', cursor: 'pointer', fontSize: '0.8rem' }}
             >
               Close
             </button>
@@ -651,15 +659,15 @@ function ETFBrowserSection() {
 const headerStyle = {
   padding: '0.5rem 0.75rem',
   textAlign: 'center',
-  color: '#90caf9',
+  color: 'var(--accent-2)',
   fontWeight: 700,
-  borderRight: '1px solid #4a5568',
+  borderRight: '1px solid var(--p-4a5568)',
 }
 
 const cellStyle = {
   padding: '0.5rem 0.75rem',
   textAlign: 'center',
-  borderRight: '1px solid #3a3a4e',
+  borderRight: '1px solid var(--p-3a3a4e)',
 }
 
 export default function SecurityResearch() {

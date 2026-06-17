@@ -1443,6 +1443,10 @@ def _auto_reconcile_owner():
             CASE WHEN SUM(quantity) > 0 THEN SUM(purchase_value) / SUM(quantity) ELSE 0 END as price_paid,
             MAX(current_price) as current_price,
             SUM(purchase_value) as purchase_value,
+            CASE WHEN SUM(quantity) > 0 THEN SUM(COALESCE(original_purchase_value, purchase_value)) / SUM(quantity) ELSE 0 END as original_price_paid,
+            SUM(COALESCE(original_purchase_value, purchase_value)) as original_purchase_value,
+            CASE WHEN SUM(quantity) > 0 THEN SUM(COALESCE(broker_purchase_value, purchase_value)) / SUM(quantity) ELSE 0 END as broker_price_paid,
+            SUM(COALESCE(broker_purchase_value, purchase_value)) as broker_purchase_value,
             SUM(current_value) as current_value,
             SUM(gain_or_loss) as gain_or_loss,
             CASE WHEN SUM(purchase_value) > 0 THEN SUM(gain_or_loss) / SUM(purchase_value) ELSE 0 END as gain_or_loss_percentage,
@@ -1480,7 +1484,8 @@ def _auto_reconcile_owner():
     # are preserved since sub-profiles don't track those.
     sync_fields = [
         "description", "classification_type", "quantity", "price_paid",
-        "current_price", "purchase_value", "current_value", "gain_or_loss",
+        "current_price", "purchase_value", "original_price_paid", "original_purchase_value",
+        "broker_price_paid", "broker_purchase_value", "current_value", "gain_or_loss",
         "gain_or_loss_percentage", "percent_change", "div_frequency", "reinvest",
         "ex_div_date", "div_pay_date", "div", "dividend_paid",
         "estim_payment_per_year", "approx_monthly_income",
@@ -1783,6 +1788,10 @@ def reconcile_owner():
             CASE WHEN SUM(quantity) > 0 THEN SUM(purchase_value) / SUM(quantity) ELSE 0 END as price_paid,
             MAX(current_price) as current_price,
             SUM(purchase_value) as purchase_value,
+            CASE WHEN SUM(quantity) > 0 THEN SUM(COALESCE(original_purchase_value, purchase_value)) / SUM(quantity) ELSE 0 END as original_price_paid,
+            SUM(COALESCE(original_purchase_value, purchase_value)) as original_purchase_value,
+            CASE WHEN SUM(quantity) > 0 THEN SUM(COALESCE(broker_purchase_value, purchase_value)) / SUM(quantity) ELSE 0 END as broker_price_paid,
+            SUM(COALESCE(broker_purchase_value, purchase_value)) as broker_purchase_value,
             SUM(current_value) as current_value,
             SUM(gain_or_loss) as gain_or_loss,
             CASE WHEN SUM(purchase_value) > 0 THEN SUM(gain_or_loss) / SUM(purchase_value) ELSE 0 END as gain_or_loss_percentage,
@@ -1831,7 +1840,8 @@ def reconcile_owner():
     # total_divs_received, paid_for_itself, current_month_income.
     update_fields = [
         "description", "classification_type", "quantity", "price_paid",
-        "current_price", "purchase_value", "current_value", "gain_or_loss",
+        "current_price", "purchase_value", "original_price_paid", "original_purchase_value",
+        "broker_price_paid", "broker_purchase_value", "current_value", "gain_or_loss",
         "gain_or_loss_percentage", "percent_change", "div_frequency", "reinvest",
         "ex_div_date", "div_pay_date", "div", "dividend_paid",
         "estim_payment_per_year", "approx_monthly_income",
@@ -11683,7 +11693,7 @@ def portfolio_summary_data():
     import warnings
     import numpy as np
     import yfinance as yf
-    from grading import ticker_score, grade_portfolio, letter_grade
+    from grading import ticker_score, grade_portfolio, letter_grade, _beta
     warnings.filterwarnings("ignore")
 
     is_agg, pids = get_profile_filter()
@@ -11703,14 +11713,15 @@ def portfolio_summary_data():
     # Weights within the 30-min window will be slightly stale if prices move, which
     # is acceptable for grade/ratio display; a buy/sell changes the ticker set and
     # naturally invalidates.
-    cache_key = (tuple(pids), tuple(sorted(r["ticker"] for r in rows)))
+    cache_key = ("summary-beta-v2-ticker-risk", tuple(pids), tuple(sorted(r["ticker"] for r in rows)))
     default_ticker_grades = {t: {"grade": "N/A", "score": None} for t in tickers}
     cache_entry = _PORTFOLIO_SUMMARY_CACHE.get(cache_key)
     cached_ts, cached = cache_entry if cache_entry else (0, None)
     now = time.time()
     if cached and (now - cached_ts) < _PORTFOLIO_SUMMARY_TTL_SEC:
         return jsonify(cached)
-    all_dl = list(set(tickers + ["SPY"]))
+    benchmark_symbols = {"sp500": "SPY", "nasdaq": "QQQ"}
+    all_dl = list(set(tickers + list(benchmark_symbols.values())))
 
     # Detect renamed tickers and include both old and new in download
     rename_map = {}
@@ -11755,24 +11766,49 @@ def portfolio_summary_data():
 
     bench_close = close["SPY"] if "SPY" in close.columns else None
     bench_ret = bench_close.pct_change().dropna() if bench_close is not None else None
+    benchmark_returns = {}
+    for benchmark_key, benchmark_symbol in benchmark_symbols.items():
+        benchmark_close = close[benchmark_symbol] if benchmark_symbol in close.columns else None
+        benchmark_returns[benchmark_key] = benchmark_close.pct_change().dropna() if benchmark_close is not None else None
+    benchmark_closes = [
+        (symbol, close[symbol])
+        for symbol in benchmark_symbols.values()
+        if symbol in close.columns
+    ]
 
     ticker_grades = {}
+    ticker_risk = {}
     available = []
     for t in tickers:
         if t not in close.columns:
             ticker_grades[t] = {"grade": "N/A", "score": None}
+            ticker_risk[t] = {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
             continue
         tc = close[t].dropna()
         if len(tc) < 30:
             ticker_grades[t] = {"grade": "N/A", "score": None}
+            ticker_risk[t] = {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
             continue
         try:
             tr = tc.pct_change().dropna()
             score, *_ = ticker_score(tc, tr, bench_ret)
             ticker_grades[t] = {"grade": letter_grade(score), "score": score}
+            computed_beta, beta_benchmark = _best_fit_beta(tc, benchmark_closes)
+            delta_up = delta_down = None
+            if beta_benchmark:
+                beta_close = dict(benchmark_closes).get(beta_benchmark)
+                if beta_close is not None:
+                    delta_up, delta_down = _capture_deltas(tc, beta_close)
+            ticker_risk[t] = {
+                "beta": computed_beta,
+                "beta_benchmark": beta_benchmark,
+                "delta_up": delta_up,
+                "delta_down": delta_down,
+            }
             available.append(t)
         except Exception:
             ticker_grades[t] = {"grade": "N/A", "score": None}
+            ticker_risk[t] = {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
 
     import numpy as np
     portfolio_grade_info = {}
@@ -11789,6 +11825,14 @@ def portfolio_summary_data():
             portfolio_grade_info["omega"] = pm.get("omega")
             portfolio_grade_info["max_drawdown"] = pm.get("max_drawdown")
             portfolio_grade_info["ulcer_index"] = pm.get("ulcer_index")
+            portfolio_grade_info["beta_sp500"] = pm.get("beta")
+            portfolio_daily = returns_df.dot(weights_arr / weights_arr.sum()) if weights_arr.sum() > 0 else None
+            benchmark_betas = {}
+            if portfolio_daily is not None:
+                for benchmark_key, benchmark_ret in benchmark_returns.items():
+                    benchmark_betas[benchmark_key] = _beta(portfolio_daily, benchmark_ret) if benchmark_ret is not None else None
+            portfolio_grade_info["beta_nasdaq"] = benchmark_betas.get("nasdaq")
+            portfolio_grade_info["benchmark_betas"] = benchmark_betas
         except Exception:
             portfolio_grade_info = {}
 
@@ -11799,7 +11843,7 @@ def portfolio_summary_data():
     if not portfolio_grade_info and cached:
         portfolio_grade_info = cached.get("portfolio_grade", {}) or {}
 
-    response = {"ticker_grades": ticker_grades, "portfolio_grade": portfolio_grade_info}
+    response = {"ticker_grades": ticker_grades, "ticker_risk": ticker_risk, "portfolio_grade": portfolio_grade_info}
     # Only cache a usable result. Caching an empty grade from a transient/partial
     # yfinance download would pin blank tiles for the full 30-min TTL, so the
     # grades would "stick" blank across account switches and chart refreshes until

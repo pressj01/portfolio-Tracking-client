@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react'
+import { useTheme } from '../../context/ThemeContext'
+import { themedPlotlyLayout } from '../../utils/chartTheme'
 import { useProfileFetch } from '../../context/ProfileContext'
 
 export default function IncomeCharts({ tickers, result, period }) {
+  const { isDark } = useTheme()
   const pf = useProfileFetch()
   const [calendarData, setCalendarData] = useState(null)
   const [yieldData, setYieldData] = useState(null)
@@ -58,11 +61,11 @@ export default function IncomeCharts({ tickers, result, period }) {
         type: 'pie', hole: 0.45, marker: { colors },
         textinfo: 'label+percent', textfont: { size: 11, color: '#e0e8f5' },
         hovertemplate: '%{label}: %{value:.1f}%<extra></extra>',
-      }], {
+      }], themedPlotlyLayout({
         ...base, title: { text: 'By Sector', font: { size: 14, color: '#e0e8f5' } },
         height: 380, margin: { t: 50, b: 20, l: 20, r: 20 },
         showlegend: true, legend: { font: { color: '#8899aa', size: 10 }, orientation: 'h', y: -0.05 },
-      }, { responsive: true })
+      }, isDark), { responsive: true })
     }
 
     const typeEl = document.getElementById('income-type-pie')
@@ -73,18 +76,18 @@ export default function IncomeCharts({ tickers, result, period }) {
         type: 'pie', hole: 0.45, marker: { colors: colors.slice(3) },
         textinfo: 'label+percent', textfont: { size: 11, color: '#e0e8f5' },
         hovertemplate: '%{label}: %{value:.1f}%<extra></extra>',
-      }], {
+      }], themedPlotlyLayout({
         ...base, title: { text: 'By Asset Type', font: { size: 14, color: '#e0e8f5' } },
         height: 380, margin: { t: 50, b: 20, l: 20, r: 20 },
         showlegend: true, legend: { font: { color: '#8899aa', size: 10 }, orientation: 'h', y: -0.05 },
-      }, { responsive: true })
+      }, isDark), { responsive: true })
     }
 
     return () => {
       if (sectorEl) window.Plotly.purge(sectorEl)
       if (typeEl) window.Plotly.purge(typeEl)
     }
-  }, [result?.sector_breakdown])
+  }, [result?.sector_breakdown, isDark])
 
   // Render income calendar stacked bar
   useEffect(() => {
@@ -98,16 +101,16 @@ export default function IncomeCharts({ tickers, result, period }) {
       marker: { color: colors[i % colors.length] },
       hovertemplate: `${t.ticker}: $%{y:,.0f}<extra></extra>`,
     }))
-    window.Plotly.newPlot(el, traces, {
+    window.Plotly.newPlot(el, traces, themedPlotlyLayout({
       paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
       barmode: 'stack',
       title: { text: 'Income Calendar — Monthly Distribution', font: { size: 14, color: '#e0e8f5' } },
       xaxis: { color: '#8899aa' }, yaxis: { title: { text: 'Monthly Income ($)', font: { size: 12, color: '#e0e8f5' } }, gridcolor: '#1a2a3e', color: '#8899aa' },
       height: 400, margin: { l: 70, r: 30, t: 50, b: 40 },
       showlegend: true, legend: { font: { color: '#8899aa', size: 10 }, orientation: 'h', y: -0.15 },
-    }, { responsive: true })
+    }, isDark), { responsive: true })
     return () => window.Plotly.purge(el)
-  }, [calendarData])
+  }, [calendarData, isDark])
 
   // Render yield trend
   useEffect(() => {
@@ -120,16 +123,16 @@ export default function IncomeCharts({ tickers, result, period }) {
       line: { color: colors[i % colors.length], width: 2 },
       hovertemplate: `${s.ticker}: %{y:.2f}%<extra></extra>`,
     }))
-    window.Plotly.newPlot(el, traces, {
+    window.Plotly.newPlot(el, traces, themedPlotlyLayout({
       paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
       title: { text: 'Trailing 12-Month Yield Trend', font: { size: 14, color: '#e0e8f5' } },
       xaxis: { gridcolor: '#1a2a3e', color: '#8899aa' },
       yaxis: { title: { text: 'TTM Yield (%)', font: { size: 12, color: '#e0e8f5' } }, gridcolor: '#1a2a3e', color: '#8899aa' },
       height: 400, margin: { l: 70, r: 30, t: 50, b: 40 },
       showlegend: true, legend: { font: { color: '#8899aa' } },
-    }, { responsive: true })
+    }, isDark), { responsive: true })
     return () => window.Plotly.purge(el)
-  }, [yieldData])
+  }, [yieldData, isDark])
 
   // Render NAV erosion chart
   useEffect(() => {
@@ -146,7 +149,7 @@ export default function IncomeCharts({ tickers, result, period }) {
       traces.push({ x: s.dates, y: s.total_return_line, name: 'Total Return', type: 'scatter', mode: 'lines',
         line: { color: '#64b5f6', width: 2, dash: 'dot' }, yaxis: 'y' })
     }
-    window.Plotly.newPlot(el, traces, {
+    window.Plotly.newPlot(el, traces, themedPlotlyLayout({
       paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
       title: { text: `NAV Erosion — ${navTicker}`, font: { size: 14, color: '#e0e8f5' } },
       xaxis: { gridcolor: '#1a2a3e', color: '#8899aa' },
@@ -154,9 +157,9 @@ export default function IncomeCharts({ tickers, result, period }) {
       yaxis2: { title: { text: 'Cumul. Distributions ($)', font: { size: 12, color: '#4caf50' } }, color: '#4caf50', overlaying: 'y', side: 'right' },
       height: 420, margin: { l: 70, r: 70, t: 50, b: 40 },
       showlegend: true, legend: { font: { color: '#8899aa' } },
-    }, { responsive: true })
+    }, isDark), { responsive: true })
     return () => window.Plotly.purge(el)
-  }, [navData, navTicker])
+  }, [navData, navTicker, isDark])
 
   return (
     <>
@@ -168,7 +171,7 @@ export default function IncomeCharts({ tickers, result, period }) {
         </div>
       )}
       {!result?.sector_breakdown && (
-        <div className="card" style={{ padding: '1rem', marginBottom: '1rem', color: '#8899aa', fontSize: '0.85rem' }}>
+        <div className="card" style={{ padding: '1rem', marginBottom: '1rem', color: 'var(--text-dim)', fontSize: '0.85rem' }}>
           Sector breakdown data not available. Run analysis to load.
         </div>
       )}
@@ -176,42 +179,42 @@ export default function IncomeCharts({ tickers, result, period }) {
       {/* Income Calendar */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         {calendarLoading ? (
-          <div style={{ textAlign: 'center', padding: '1.5rem', color: '#8899aa' }}><span className="spinner" /> Loading income calendar...</div>
+          <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}><span className="spinner" /> Loading income calendar...</div>
         ) : calendarData?.tickers?.length ? (
           <div id="income-calendar-chart" />
         ) : (
-          <div style={{ color: '#8899aa', fontSize: '0.85rem', padding: '0.5rem' }}>No income calendar data available for selected tickers.</div>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>No income calendar data available for selected tickers.</div>
         )}
       </div>
 
       {/* Yield Trend */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         {yieldLoading ? (
-          <div style={{ textAlign: 'center', padding: '1.5rem', color: '#8899aa' }}><span className="spinner" /> Loading yield trends...</div>
+          <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}><span className="spinner" /> Loading yield trends...</div>
         ) : yieldData?.series?.length ? (
           <div id="income-yield-trend" />
         ) : (
-          <div style={{ color: '#8899aa', fontSize: '0.85rem', padding: '0.5rem' }}>No yield trend data available.</div>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>No yield trend data available.</div>
         )}
       </div>
 
       {/* NAV Erosion Visualizer */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-          <span style={{ color: '#e0e8f5', fontWeight: 600, fontSize: '0.85rem' }}>NAV Erosion Visualizer</span>
+          <span style={{ color: 'var(--text-strong)', fontWeight: 600, fontSize: '0.85rem' }}>NAV Erosion Visualizer</span>
           <select
             value={navTicker} onChange={e => setNavTicker(e.target.value)}
-            style={{ background: '#1a1a2e', border: '1px solid #3a3a5c', borderRadius: 4, color: '#e0e0e0', padding: '0.3rem 0.5rem', fontSize: '0.82rem' }}
+            style={{ background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 4, color: 'var(--text)', padding: '0.3rem 0.5rem', fontSize: '0.82rem' }}
           >
             {(tickers || []).map(t => <option key={t} value={t}>{t}</option>)}
           </select>
         </div>
         {navLoading ? (
-          <div style={{ textAlign: 'center', padding: '1.5rem', color: '#8899aa' }}><span className="spinner" /> Loading NAV data...</div>
+          <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}><span className="spinner" /> Loading NAV data...</div>
         ) : navData?.series?.length ? (
           <div id="income-nav-erosion" />
         ) : (
-          <div style={{ color: '#8899aa', fontSize: '0.85rem', padding: '0.5rem' }}>Select a ticker to view NAV erosion analysis.</div>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>Select a ticker to view NAV erosion analysis.</div>
         )}
       </div>
     </>

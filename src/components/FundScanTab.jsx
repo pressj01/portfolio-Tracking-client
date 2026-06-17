@@ -8,32 +8,7 @@ import { API_BASE } from '../config'
 // one client-side with the same grader the single-ticker deep dive uses — so the
 // composite, verdict, and the bundled risk-adjusted-ratio criterion all match.
 
-const badgeStyle = (badge) => {
-  const base = {
-    display: 'inline-block', padding: '0.2rem 0.55rem', borderRadius: 4,
-    fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase',
-  }
-  if (badge === 'pass') return { ...base, background: '#0f4e2e', color: '#7be5a8', border: '1px solid #1d8a52' }
-  if (badge === 'warn') return { ...base, background: '#5a4a14', color: '#ffd76a', border: '1px solid #a3812a' }
-  if (badge === 'fail') return { ...base, background: '#5a1a1a', color: '#ff8a8a', border: '1px solid #a83232' }
-  return { ...base, background: '#1f2e52', color: '#8aa0c8', border: '1px solid #2a3e6b' }
-}
-const toneColors = (tone) => (
-  tone === 'pass' ? { fg: '#7be5a8' }
-    : tone === 'warn' ? { fg: '#ffd76a' }
-    : tone === 'fail' ? { fg: '#ff8a8a' }
-    : { fg: '#8aa0c8' }
-)
-
-const INPUT_STYLE = {
-  flex: 1, background: '#0d1b33', border: '1px solid #1a3a5c', borderRadius: 4,
-  color: '#e0e8f5', padding: '0.5rem 0.7rem', fontSize: '0.95rem',
-}
-const SELECT_STYLE = {
-  background: '#0d1b33', border: '1px solid #1a3a5c', borderRadius: 4,
-  color: '#e0e8f5', padding: '0.45rem 0.6rem', fontSize: '0.9rem', minWidth: 200,
-}
-const LABEL_STYLE = { color: '#90a4ae', fontSize: '0.78rem', display: 'block', marginBottom: 3 }
+const LABEL_STYLE = { color: 'var(--text-dim)', fontSize: '0.78rem', display: 'block', marginBottom: 3 }
 
 const num = (v) => {
   if (v === null || v === undefined || v === '') return null
@@ -187,7 +162,7 @@ export default function FundScanTab({
   const th = (col) => (
     <th key={col.key} onClick={() => toggleSort(col.key)} style={{
       cursor: 'pointer', textAlign: col.align || 'right', padding: '0.5rem 0.6rem',
-      color: sortKey === col.key ? '#58c4d8' : '#90a4ae', whiteSpace: 'nowrap', userSelect: 'none',
+      color: sortKey === col.key ? 'var(--teal-2)' : 'var(--text-dim-2)', whiteSpace: 'nowrap', userSelect: 'none',
     }}>
       {col.label}{sortKey === col.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
     </th>
@@ -196,7 +171,7 @@ export default function FundScanTab({
   const cb = (checked, set, label, disabled = false) => (
     <label style={{
       display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.9rem',
-      color: disabled ? '#5b6b86' : '#b8c8e0', cursor: disabled ? 'not-allowed' : 'pointer',
+      color: disabled ? 'var(--p-5b6b86)' : 'var(--p-b8c8e0)', cursor: disabled ? 'not-allowed' : 'pointer',
     }}>
       <input type="checkbox" checked={checked} disabled={disabled} onChange={e => set(e.target.checked)} />
       {label}
@@ -205,12 +180,12 @@ export default function FundScanTab({
 
   return (
     <>
-      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '0.6rem' }}>
+      <div className="stock-check-scan-controls">
         <input
           value={tickersText}
           onChange={e => setTickersText(e.target.value)}
           placeholder="Optional: paste extra tickers (space/comma separated)"
-          style={{ ...INPUT_STYLE, minWidth: 320 }}
+          className="stock-check-input stock-check-scan-input"
         />
         <button type="button" className="btn btn-primary" onClick={runScan} disabled={loading}>Scan</button>
       </div>
@@ -223,11 +198,11 @@ export default function FundScanTab({
       {allowCefUniverse && useCefUniverse && (
         <div style={{
           display: 'flex', gap: '0.9rem', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: '1rem',
-          padding: '0.85rem 1rem', background: '#0f1e3b', border: '1px solid #1c2e52', borderRadius: 6,
+          padding: '0.85rem 1rem', background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6,
         }}>
           <div>
             <label style={LABEL_STYLE}>CEF category</label>
-            <select value={cefCategory} onChange={e => setCefCategory(e.target.value)} style={SELECT_STYLE} disabled={cefMetaLoading}>
+            <select value={cefCategory} onChange={e => setCefCategory(e.target.value)} className="stock-check-input stock-check-source-select" disabled={cefMetaLoading}>
               <option value="">All categories</option>
               {(cefMeta?.categories || []).map(c => <option key={c} value={c}>{c}</option>)}
             </select>
@@ -235,13 +210,13 @@ export default function FundScanTab({
           {(cefMeta?.strategies || []).length > 0 && (
             <div>
               <label style={LABEL_STYLE}>CEF strategy</label>
-              <select value={cefStrategy} onChange={e => setCefStrategy(e.target.value)} style={SELECT_STYLE} disabled={cefMetaLoading}>
+              <select value={cefStrategy} onChange={e => setCefStrategy(e.target.value)} className="stock-check-input stock-check-source-select" disabled={cefMetaLoading}>
                 <option value="">All strategies</option>
                 {cefMeta.strategies.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
           )}
-          <div style={{ flex: 1, minWidth: 240, color: '#8aa0c8', fontSize: '0.82rem', lineHeight: 1.5 }}>
+          <div style={{ flex: 1, minWidth: 240, color: 'var(--p-8aa0c8)', fontSize: '0.82rem', lineHeight: 1.5 }}>
             {cefMetaLoading
               ? 'Loading CEF categories…'
               : 'The CEF universe has hundreds of funds. Pick a category to scan a focused slice — results are still capped at the scan limit, so a very large category (e.g. Municipal Bond) shows the first batch.'}
@@ -254,7 +229,7 @@ export default function FundScanTab({
 
       {data && (
         <>
-          <div style={{ color: '#90a4ae', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+          <div style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
             Scored {data.returned} {kindLabel} of {data.requested} scanned. Graded peer-relative within this batch; the
             risk column bundles Sharpe / Sortino / Calmar / Omega / Ulcer into one 0–100 score.
             {data.truncated && ` Capped at ${data.scan_limit}.`}
@@ -262,43 +237,42 @@ export default function FundScanTab({
           </div>
 
           {data.skipped?.length > 0 && (
-            <div style={{ background: '#1f2e52', border: '1px solid #2a3e6b', borderRadius: 6, padding: '0.6rem 0.9rem', marginBottom: '0.75rem', color: '#b8c8e0', fontSize: '0.85rem', lineHeight: 1.5 }}>
-              <strong style={{ color: '#ffd76a' }}>{data.skipped.length} skipped</strong>
+            <div style={{ background: 'var(--p-1f2e52)', border: '1px solid var(--p-2a3e6b)', borderRadius: 6, padding: '0.6rem 0.9rem', marginBottom: '0.75rem', color: 'var(--p-b8c8e0)', fontSize: '0.85rem', lineHeight: 1.5 }}>
+              <strong style={{ color: 'var(--p-ffd76a)' }}>{data.skipped.length} skipped</strong>
               {' '}— this scanner only evaluates {kindLabel}. These are a different fund type; use the suggested evaluator:
-              <div style={{ marginTop: '0.4rem', color: '#cfd8e3' }}>
+              <div style={{ marginTop: '0.4rem', color: 'var(--p-cfd8e3)' }}>
                 {data.skipped.map(f => `${f.ticker} (${f.kind}${f.suggestion ? ` → ${f.suggestion}` : ''})`).join(', ')}
               </div>
             </div>
           )}
 
           {rows.length > 0 && (
-            <div style={{ overflowX: 'auto', background: '#1a2744', border: '1px solid #243356', borderRadius: 8 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+            <div className="stock-check-table-wrap">
+              <table className="stock-check-table">
                 <thead>
-                  <tr style={{ borderBottom: '1px solid #243356', background: '#0f1e3b' }}>
+                  <tr style={{ borderBottom: '1px solid var(--p-243356)', background: 'var(--p-0f1e3b)' }}>
                     {columns.map(th)}
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map(r => {
-                    const col = toneColors(r.tone)
                     return (
-                      <tr key={r.ticker} style={{ borderBottom: '1px solid #1c2a48' }}>
+                      <tr key={r.ticker} style={{ borderBottom: '1px solid var(--p-1c2a48)' }}>
                         {columns.map(c => {
                           if (c.key === 'ticker') {
-                            return <td key={c.key} style={{ padding: '0.5rem 0.6rem' }}><strong style={{ color: '#58c4d8' }}>{r.ticker}</strong></td>
+                            return <td key={c.key} style={{ padding: '0.5rem 0.6rem' }}><strong style={{ color: 'var(--teal-2)' }}>{r.ticker}</strong></td>
                           }
                           if (c.key === 'verdict') {
-                            return <td key={c.key} style={{ padding: '0.5rem 0.6rem' }}><span style={{ ...badgeStyle(r.tone), color: col.fg }}>{r.verdict}</span></td>
+                            return <td key={c.key} style={{ padding: '0.5rem 0.6rem' }}><span className={`stock-check-badge tone-${r.tone}`}>{r.verdict}</span></td>
                           }
                           if (c.key === 'name') {
-                            return <td key={c.key} style={{ padding: '0.5rem 0.6rem', color: '#b8c8e0', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</td>
+                            return <td key={c.key} style={{ padding: '0.5rem 0.6rem', color: 'var(--p-b8c8e0)', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</td>
                           }
                           const isStrong = c.key === 'composite'
                           return (
                             <td key={c.key} style={{
                               padding: '0.5rem 0.6rem', textAlign: c.align || 'right',
-                              color: '#e6edf7', fontWeight: isStrong ? 700 : 400,
+                              color: 'var(--p-e6edf7)', fontWeight: isStrong ? 700 : 400,
                             }}>{c.fmt(r)}</td>
                           )
                         })}
@@ -310,7 +284,7 @@ export default function FundScanTab({
             </div>
           )}
           {data.returned === 0 && data.skipped?.length === 0 && (
-            <div style={{ background: '#0f1e3b', border: '1px solid #1c2e52', borderRadius: 6, padding: '1rem', color: '#b8c8e0' }}>
+            <div style={{ background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6, padding: '1rem', color: 'var(--p-b8c8e0)' }}>
               No {kindLabel} found in the selected sources.
             </div>
           )}

@@ -145,20 +145,20 @@ export default function Export() {
   return (
     <div className="page">
       <h1>Export Portfolio Data</h1>
-      <p style={{ color: '#7ecfff', marginBottom: '1rem', fontSize: '0.9rem' }}>
+      <p style={{ color: 'var(--accent-bright)', marginBottom: '1rem', fontSize: '0.9rem' }}>
         Exporting from: <strong>{currentProfileName}</strong>
       </p>
 
       <div className="card">
         <h2>Export Holdings</h2>
-        <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
           Download your portfolio data. The exported file uses the same column format
           as the upload template, so it can be reimported using either
           the <strong>Generic Upload</strong> or <strong>My Spreadsheet</strong> import tabs.
         </p>
 
         {isAggregate && (
-          <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+          <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
             Aggregate mode: Excel export creates a separate sheet per portfolio.
             CSV combines all portfolios into one file.
             Reimport Excel with <strong>"Import all sheets as separate portfolios"</strong> checked.
@@ -191,7 +191,7 @@ export default function Export() {
 
       <div className="card" style={{ marginTop: '1.5rem' }}>
         <h2>Export Watchlist</h2>
-        <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
           Download your watchlist (tickers and notes). Watchlist is global &mdash; not tied to the
           selected portfolio. The exported file can be reimported on the Import page under the
           <strong> Generic Upload</strong> tab.
@@ -203,7 +203,7 @@ export default function Export() {
           </div>
         ) : (
           <>
-            <p style={{ color: '#90a4ae', marginBottom: '1rem', fontSize: '0.9rem' }}>
+            <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem', fontSize: '0.9rem' }}>
               {watchlistCount} ticker{watchlistCount === 1 ? '' : 's'} in watchlist.
             </p>
             <div style={{ display: 'flex', gap: '1rem' }}>
@@ -228,13 +228,13 @@ export default function Export() {
 
       <div className="card" style={{ marginTop: '1.5rem' }}>
         <h2>Export Holdings with Transactions</h2>
-        <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
           Download one Excel workbook containing your holdings plus a Transactions sheet
           for the related ticker activity in the selected portfolio.
         </p>
 
         {isAggregate && (
-          <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+          <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
             Aggregate mode: holdings are split by portfolio sheet, and transactions are
             combined into one Transactions sheet with the source portfolio included.
           </p>

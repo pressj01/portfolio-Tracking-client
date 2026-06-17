@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../components/ThemedPlot'
 import { useProfileFetch } from '../context/ProfileContext'
 import DistributionHistoryChart from '../components/DistributionHistoryChart'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 
 const PERIODS = [
   { value: '1mo', label: '1M' },
@@ -215,6 +217,7 @@ function fmtFundamental(value, fmt) {
 
 export default function StockComparer() {
   const pf = useProfileFetch()
+  const { isDark } = useTheme()
   const [tickers, setTickers] = useState([])
   const [input, setInput] = useState('')
   const inputRef = useRef(null)
@@ -756,7 +759,7 @@ export default function StockComparer() {
         <section className="etfc-section etfc-chart-card">
           <Plot
             data={chart.data}
-            layout={chart.layout}
+            layout={themedPlotlyLayout(chart.layout, isDark)}
             config={{ responsive: true, displayModeBar: true, displaylogo: false }}
             useResizeHandler
             style={{ width: '100%', height: 560 }}
@@ -820,7 +823,7 @@ export default function StockComparer() {
                         <td key={col.key} title={bm ? `Beta regressed against ${bm} (best-fitting benchmark)` : undefined}>
                           {format('beta', row.beta)}
                           {bm && row.beta != null && (
-                            <span style={{ color: '#6f7890', fontSize: '0.8em', marginLeft: 4 }}>vs {bm}</span>
+                            <span style={{ color: 'var(--p-6f7890)', fontSize: '0.8em', marginLeft: 4 }}>vs {bm}</span>
                           )}
                         </td>
                       )
@@ -848,7 +851,7 @@ export default function StockComparer() {
             {averageData.summary} These numbers are adjusted for stock splits and assume dividends are reinvested.
           </div>
         )}
-        <Plot data={averageChart.data} layout={averageChart.layout} config={{ responsive: true, displayModeBar: false }} useResizeHandler style={{ width: '100%', height: 390 }} />
+        <Plot data={averageChart.data} layout={themedPlotlyLayout(averageChart.layout, isDark)} config={{ responsive: true, displayModeBar: false }} useResizeHandler style={{ width: '100%', height: 390 }} />
         {averageData?.periods?.length > 0 && (
           <div className="etfc-average-table-wrap">
             <table className="etfc-average-table">
@@ -942,3 +945,4 @@ export default function StockComparer() {
     </div>
   )
 }
+

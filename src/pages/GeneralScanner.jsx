@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfileFetch } from '../context/ProfileContext'
 
 const TABS = [
@@ -290,6 +292,7 @@ const STOCH_OPTIONS = [
 ]
 
 export default function GeneralScanner() {
+  const { isDark } = useTheme()
   const pf = useProfileFetch()
   const [tab, setTab] = useState('overview')
   const [rows, setRows] = useState([])
@@ -666,7 +669,7 @@ export default function GeneralScanner() {
         if (d.error) return
         const el = document.getElementById('scanner-chart-popup')
         if (el && window.Plotly) {
-          window.Plotly.newPlot(el, d.fig_data, { ...d.fig_layout, autosize: true }, { responsive: true })
+          window.Plotly.newPlot(el, d.fig_data, themedPlotlyLayout({ ...d.fig_layout, autosize: true }, isDark), { responsive: true })
         }
       })
       .catch(() => {})
@@ -675,7 +678,7 @@ export default function GeneralScanner() {
       const el = document.getElementById('scanner-chart-popup')
       if (el && window.Plotly) window.Plotly.purge(el)
     }
-  }, [chartTicker, chartPeriod, pf])
+  }, [chartTicker, chartPeriod, pf, isDark])
 
   const columns = TAB_COLUMNS[tab] || TAB_COLUMNS.overview
   const activeFilterChips = []
@@ -736,21 +739,21 @@ export default function GeneralScanner() {
       <div style={{
         marginBottom: '1rem',
         padding: '1rem 1.1rem',
-        border: '1px solid #30363d',
+        border: '1px solid var(--p-30363d)',
         borderRadius: '8px',
-        background: 'linear-gradient(135deg, #111827 0%, #0f1724 55%, #121a2a 100%)',
+        background: 'linear-gradient(135deg, var(--p-111827) 0%, var(--p-0f1724) 55%, var(--p-121a2a) 100%)',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <div>
             <h2 style={{ margin: 0 }}>General Scanner</h2>
-            <div style={{ marginTop: '0.35rem', color: '#8b949e', fontSize: '0.9rem' }}>
+            <div style={{ marginTop: '0.35rem', color: 'var(--p-8b949e)', fontSize: '0.9rem' }}>
               Finviz-style market screener for your custom universe or one-off ticker pulls, with descriptive, fundamental, technical, and ETF views.
             </div>
           </div>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', color: '#9fb0c3', fontSize: '0.85rem' }}>
-            <span>{activeTickers.length ? 'Ad Hoc' : 'Universe'}: <strong style={{ color: '#e6edf3' }}>{activeTickers.length || universe.length}</strong></span>
-            <span>Results: <strong style={{ color: '#e6edf3' }}>{total}</strong></span>
-            <span>View: <strong style={{ color: '#e6edf3' }}>{TABS.find(t => t.key === tab)?.label}</strong></span>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', color: 'var(--p-9fb0c3)', fontSize: '0.85rem' }}>
+            <span>{activeTickers.length ? 'Ad Hoc' : 'Universe'}: <strong style={{ color: 'var(--p-e6edf3)' }}>{activeTickers.length || universe.length}</strong></span>
+            <span>Results: <strong style={{ color: 'var(--p-e6edf3)' }}>{total}</strong></span>
+            <span>View: <strong style={{ color: 'var(--p-e6edf3)' }}>{TABS.find(t => t.key === tab)?.label}</strong></span>
           </div>
         </div>
       </div>
@@ -758,12 +761,12 @@ export default function GeneralScanner() {
       <div style={{
         marginBottom: '1rem',
         padding: '0.9rem',
-        border: '1px solid #30363d',
+        border: '1px solid var(--p-30363d)',
         borderRadius: '8px',
-        background: '#11161f',
+        background: 'var(--p-11161f)',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.55rem' }}>
-          <div style={{ color: '#c9d1d9', fontWeight: 600 }}>Pull Stocks or ETFs Without Saving Them</div>
+          <div style={{ color: 'var(--p-c9d1d9)', fontWeight: 600 }}>Pull Stocks or ETFs Without Saving Them</div>
           {activeTickers.length > 0 && (
             <button className="btn btn-sm" onClick={() => { setActiveTickers([]); setPage(1) }}>
               Back to Saved Universe
@@ -789,7 +792,7 @@ export default function GeneralScanner() {
             Force Pull
           </button>
         </div>
-        <div style={{ marginTop: '0.45rem', color: '#8b949e', fontSize: '0.8rem' }}>
+        <div style={{ marginTop: '0.45rem', color: 'var(--p-8b949e)', fontSize: '0.8rem' }}>
           This fetches data into scanner cache for a one-off screen without adding those tickers to the saved universe.
         </div>
       </div>
@@ -797,12 +800,12 @@ export default function GeneralScanner() {
       <div style={{
         marginBottom: '1rem',
         padding: '0.75rem 0.9rem',
-        border: '1px solid #2c3440',
+        border: '1px solid var(--p-2c3440)',
         borderRadius: '8px',
-        background: '#11161f',
+        background: 'var(--p-11161f)',
       }}>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ color: '#8b949e', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Filters</span>
+          <span style={{ color: 'var(--p-8b949e)', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Filters</span>
           {TABS.map(t => (
             <button
               key={t.key}
@@ -810,9 +813,9 @@ export default function GeneralScanner() {
               style={{
                 padding: '0.4rem 0.8rem',
                 borderRadius: '999px',
-                border: tab === t.key ? '1px solid #58a6ff' : '1px solid #30363d',
-                background: tab === t.key ? '#17263e' : '#0f141c',
-                color: tab === t.key ? '#8ec5ff' : '#9aa7b4',
+                border: tab === t.key ? '1px solid var(--p-58a6ff)' : '1px solid var(--p-30363d)',
+                background: tab === t.key ? 'var(--p-17263e)' : 'var(--p-0f141c)',
+                color: tab === t.key ? 'var(--p-8ec5ff)' : 'var(--p-9aa7b4)',
                 fontSize: '0.82rem',
                 fontWeight: 600,
                 cursor: 'pointer',
@@ -821,10 +824,10 @@ export default function GeneralScanner() {
               {t.label}
             </button>
           ))}
-          <span style={{ marginLeft: 'auto', color: '#8b949e', fontSize: '0.82rem' }}>
+          <span style={{ marginLeft: 'auto', color: 'var(--p-8b949e)', fontSize: '0.82rem' }}>
             {signal
-              ? <>Signal <strong style={{ color: '#d0d7de' }}>{SIGNAL_OPTIONS.find(o => o.value === signal)?.label || signal}</strong></>
-              : <>Order by <strong style={{ color: '#d0d7de' }}>{(TAB_COLUMNS[tab] || []).find(c => c.key === sortCol)?.label || sortCol}</strong> {sortDir === 'asc' ? 'asc' : 'desc'}</>}
+              ? <>Signal <strong style={{ color: 'var(--p-d0d7de)' }}>{SIGNAL_OPTIONS.find(o => o.value === signal)?.label || signal}</strong></>
+              : <>Order by <strong style={{ color: 'var(--p-d0d7de)' }}>{(TAB_COLUMNS[tab] || []).find(c => c.key === sortCol)?.label || sortCol}</strong> {sortDir === 'asc' ? 'asc' : 'desc'}</>}
           </span>
         </div>
       </div>
@@ -841,23 +844,23 @@ export default function GeneralScanner() {
           Refresh Data
         </button>
         <button className="btn btn-sm" onClick={() => handleRefresh(true)} disabled={refreshing}
-          style={{ borderColor: '#da8b45', color: '#da8b45' }}
+          style={{ borderColor: 'var(--p-da8b45)', color: 'var(--p-da8b45)' }}
           title="Re-fetch all ticker info from Yahoo Finance (ignores cache)">
           Force Refresh
         </button>
-        {!refreshing && refreshProgress && <span style={{ fontSize: '0.85rem', color: '#8899aa' }}>{refreshProgress}</span>}
+        {!refreshing && refreshProgress && <span style={{ fontSize: '0.85rem', color: 'var(--text-dim)' }}>{refreshProgress}</span>}
       </div>
 
       {activeFilterChips.length > 0 && (
         <div style={{
           marginBottom: '1rem',
           padding: '0.75rem 0.9rem',
-          border: '1px solid #30363d',
+          border: '1px solid var(--p-30363d)',
           borderRadius: '8px',
-          background: '#0f141c',
+          background: 'var(--p-0f141c)',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-            <div style={{ color: '#c9d1d9', fontSize: '0.9rem' }}>Active filters</div>
+            <div style={{ color: 'var(--p-c9d1d9)', fontSize: '0.9rem' }}>Active filters</div>
             <button className="btn btn-sm" onClick={resetFilters}>Clear All Filters</button>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
@@ -868,15 +871,15 @@ export default function GeneralScanner() {
                 gap: '0.35rem',
                 padding: '0.28rem 0.55rem',
                 borderRadius: '999px',
-                background: '#17202d',
-                border: '1px solid #30435a',
-                color: '#c7d3e0',
+                background: 'var(--p-17202d)',
+                border: '1px solid var(--p-30435a)',
+                color: 'var(--p-c7d3e0)',
                 fontSize: '0.8rem',
               }}>
                 {chip.label}
                 <button
                   onClick={() => clearChip(chip.key)}
-                  style={{ background: 'none', border: 'none', color: '#ff8a8a', cursor: 'pointer', padding: 0, fontSize: '0.95rem', lineHeight: 1 }}
+                  style={{ background: 'none', border: 'none', color: 'var(--neg-soft)', cursor: 'pointer', padding: 0, fontSize: '0.95rem', lineHeight: 1 }}
                 >
                   ×
                 </button>
@@ -889,17 +892,17 @@ export default function GeneralScanner() {
       {/* Refresh overlay with spinner */}
       {refreshing && (
         <div style={{
-          background: 'rgba(13,17,23,0.85)', border: '1px solid #30363d', borderRadius: '8px',
+          background: 'rgba(13,17,23,0.85)', border: '1px solid var(--p-30363d)', borderRadius: '8px',
           padding: '2rem', marginBottom: '1rem', display: 'flex', flexDirection: 'column',
           alignItems: 'center', gap: '1rem',
         }}>
           <div style={{
-            width: '48px', height: '48px', border: '4px solid #21262d',
-            borderTopColor: '#58a6ff', borderRadius: '50%',
+            width: '48px', height: '48px', border: '4px solid var(--p-21262d)',
+            borderTopColor: 'var(--p-58a6ff)', borderRadius: '50%',
             animation: 'spin 0.8s linear infinite',
           }} />
-          <div style={{ color: '#c9d1d9', fontSize: '1rem', fontWeight: 500 }}>{refreshProgress}</div>
-          <div style={{ color: '#8b949e', fontSize: '0.85rem' }}>
+          <div style={{ color: 'var(--p-c9d1d9)', fontSize: '1rem', fontWeight: 500 }}>{refreshProgress}</div>
+          <div style={{ color: 'var(--p-8b949e)', fontSize: '0.85rem' }}>
             This may take a few minutes for {universe.length} tickers...
           </div>
         </div>
@@ -907,7 +910,7 @@ export default function GeneralScanner() {
 
       {/* Universe Panel */}
       {showUniverse && (
-        <div style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: '6px', padding: '1rem', marginBottom: '1rem' }}>
+        <div style={{ background: 'var(--p-161b22)', border: '1px solid var(--p-30363d)', borderRadius: '6px', padding: '1rem', marginBottom: '1rem' }}>
           <h4 style={{ margin: '0 0 0.75rem 0' }}>Ticker Universe</h4>
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
             <input
@@ -924,7 +927,7 @@ export default function GeneralScanner() {
             <button className="btn btn-sm btn-primary" onClick={addTickers}>Add</button>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.85rem', color: '#8899aa', alignSelf: 'center' }}>Presets:</span>
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-dim)', alignSelf: 'center' }}>Presets:</span>
             {Object.keys(presets).map(k => (
               <button key={k} className="btn btn-sm" onClick={() => loadPreset(k)}>
                 {k.replace(/_/g, ' ')}
@@ -933,10 +936,10 @@ export default function GeneralScanner() {
             <button className="btn btn-sm" onClick={resetToDefaults}>
               Reset to Defaults
             </button>
-            <button className="btn btn-sm" style={{ color: '#3fb950' }} onClick={saveAsDefaults}>
+            <button className="btn btn-sm" style={{ color: 'var(--p-3fb950)' }} onClick={saveAsDefaults}>
               Save as Defaults
             </button>
-            <button className="btn btn-sm" style={{ marginLeft: 'auto', color: '#f85149' }} onClick={clearAllTickers}>
+            <button className="btn btn-sm" style={{ marginLeft: 'auto', color: 'var(--p-f85149)' }} onClick={clearAllTickers}>
               Clear All
             </button>
           </div>
@@ -944,11 +947,11 @@ export default function GeneralScanner() {
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', maxHeight: '120px', overflowY: 'auto' }}>
               {universe.map(u => (
                 <span key={u.ticker} style={{
-                  background: '#21262d', padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem',
+                  background: 'var(--p-21262d)', padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem',
                   display: 'inline-flex', alignItems: 'center', gap: '4px',
                 }}>
                   {u.ticker}
-                  <span style={{ cursor: 'pointer', color: '#f85149', fontWeight: 'bold' }}
+                  <span style={{ cursor: 'pointer', color: 'var(--p-f85149)', fontWeight: 'bold' }}
                     onClick={() => removeTickers([u.ticker])}>&times;</span>
                 </span>
               ))}
@@ -959,11 +962,11 @@ export default function GeneralScanner() {
 
       {/* Filters Panel */}
       {showFilters && (
-        <div style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: '6px', padding: '1rem', marginBottom: '1rem' }}>
+        <div style={{ background: 'var(--p-161b22)', border: '1px solid var(--p-30363d)', borderRadius: '6px', padding: '1rem', marginBottom: '1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
             <div>
               <h4 style={{ margin: 0 }}>Screen Filters</h4>
-              <div style={{ color: '#8b949e', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+              <div style={{ color: 'var(--p-8b949e)', fontSize: '0.8rem', marginTop: '0.2rem' }}>
                 Descriptive, fundamental, technical, and ETF fields organized in a tighter Finviz-style layout.
               </div>
             </div>
@@ -971,7 +974,7 @@ export default function GeneralScanner() {
           </div>
 
           {/* Dropdown filters */}
-          <div style={{ color: '#7d8590', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.45rem' }}>
+          <div style={{ color: 'var(--p-7d8590)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.45rem' }}>
             Descriptive
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '0.5rem', marginBottom: '0.75rem' }}>
@@ -1027,7 +1030,7 @@ export default function GeneralScanner() {
           </div>
 
           {/* Range filters */}
-          <div style={{ color: '#7d8590', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.45rem' }}>
+          <div style={{ color: 'var(--p-7d8590)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.45rem' }}>
             Fundamental
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.5rem', marginBottom: '0.75rem' }}>
@@ -1069,7 +1072,7 @@ export default function GeneralScanner() {
           </div>
 
           {/* Technical indicator filters (Finviz-style dropdowns) */}
-          <div style={{ color: '#7d8590', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.45rem' }}>
+          <div style={{ color: 'var(--p-7d8590)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.45rem' }}>
             Technical
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.5rem' }}>
@@ -1121,13 +1124,13 @@ export default function GeneralScanner() {
         gap: '1rem',
         marginBottom: '0.5rem',
         padding: '0.7rem 0.9rem',
-        border: '1px solid #30363d',
+        border: '1px solid var(--p-30363d)',
         borderRadius: '8px 8px 0 0',
-        background: '#121923',
+        background: 'var(--p-121923)',
         flexWrap: 'wrap',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-          <div style={{ color: '#c9d1d9', fontSize: '0.9rem', fontWeight: 600 }}>
+          <div style={{ color: 'var(--p-c9d1d9)', fontSize: '0.9rem', fontWeight: 600 }}>
             {TABS.find(t => t.key === tab)?.label} View
           </div>
           {TABS.map(t => (
@@ -1137,9 +1140,9 @@ export default function GeneralScanner() {
               style={{
                 padding: '0.35rem 0.7rem',
                 borderRadius: '999px',
-                border: tab === t.key ? '1px solid #58a6ff' : '1px solid #30363d',
-                background: tab === t.key ? '#17263e' : '#0f141c',
-                color: tab === t.key ? '#8ec5ff' : '#9aa7b4',
+                border: tab === t.key ? '1px solid var(--p-58a6ff)' : '1px solid var(--p-30363d)',
+                background: tab === t.key ? 'var(--p-17263e)' : 'var(--p-0f141c)',
+                color: tab === t.key ? 'var(--p-8ec5ff)' : 'var(--p-9aa7b4)',
                 fontSize: '0.8rem',
                 fontWeight: 600,
                 cursor: 'pointer',
@@ -1149,7 +1152,7 @@ export default function GeneralScanner() {
             </button>
           ))}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.82rem', color: '#8b949e' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.82rem', color: 'var(--p-8b949e)' }}>
           <span>{total > 0 ? `${total} result${total !== 1 ? 's' : ''}` : 'No results'}</span>
           <span>Page {page} / {pages}</span>
           <span>{perPage} per page</span>
@@ -1159,18 +1162,18 @@ export default function GeneralScanner() {
       {error && <div className="alert alert-error">{error}</div>}
 
       {/* Results Table */}
-      <div style={{ overflow: 'auto', maxHeight: '70vh', border: '1px solid #30363d', borderTop: 'none', borderRadius: '0 0 8px 8px' }}>
+      <div style={{ overflow: 'auto', maxHeight: '70vh', border: '1px solid var(--p-30363d)', borderTop: 'none', borderRadius: '0 0 8px 8px' }}>
         <table className="data-table" style={{ width: '100%', fontSize: '0.85rem' }}>
           <thead>
             <tr>
-              <th style={{ width: '40px', textAlign: 'right', position: 'sticky', top: 0, zIndex: 3, background: '#13203a' }}>#</th>
+              <th style={{ width: '40px', textAlign: 'right', position: 'sticky', top: 0, zIndex: 3, background: 'var(--p-13203a)' }}>#</th>
               {columns.map(col => (
                 <th
                   key={col.key}
                   style={{
                     cursor: col.sortable ? 'pointer' : 'default', whiteSpace: 'nowrap', userSelect: 'none',
                     textAlign: col.fmt ? 'right' : undefined,
-                    position: 'sticky', top: 0, zIndex: 3, background: '#13203a',
+                    position: 'sticky', top: 0, zIndex: 3, background: 'var(--p-13203a)',
                   }}
                   onClick={() => col.sortable && handleSort(col.key)}
                 >
@@ -1184,14 +1187,14 @@ export default function GeneralScanner() {
             {loading && rows.length === 0 ? (
               <tr><td colSpan={columns.length + 1} style={{ textAlign: 'center', padding: '2rem' }}><span className="spinner" /></td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={columns.length + 1} style={{ textAlign: 'center', padding: '2rem', color: '#8899aa' }}>
+              <tr><td colSpan={columns.length + 1} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>
                 {universe.length === 0
                   ? 'Add tickers to your universe to get started'
                   : 'No results. Try refreshing data or adjusting filters.'}
               </td></tr>
             ) : rows.map((row, idx) => (
               <tr key={row.ticker}>
-                <td style={{ color: '#8899aa', textAlign: 'right' }}>{(page - 1) * perPage + idx + 1}</td>
+                <td style={{ color: 'var(--text-dim)', textAlign: 'right' }}>{(page - 1) * perPage + idx + 1}</td>
                 {columns.map(col => {
                   const val = row[col.key]
                   const display = fmtVal(val, col.fmt)
@@ -1208,7 +1211,7 @@ export default function GeneralScanner() {
                   if (col.key === 'ticker') {
                     return (
                       <td key={col.key} style={{
-                        whiteSpace: 'nowrap', cursor: 'pointer', color: '#58a6ff',
+                        whiteSpace: 'nowrap', cursor: 'pointer', color: 'var(--p-58a6ff)',
                       }} onClick={() => openChart(row.ticker)}>
                         {display}
                       </td>
@@ -1251,26 +1254,26 @@ export default function GeneralScanner() {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }} onClick={(e) => { if (e.target === e.currentTarget) setChartTicker(null) }}>
           <div style={{
-            background: '#0e1117', border: '1px solid #30363d', borderRadius: '8px',
+            background: 'var(--surface-sunken)', border: '1px solid var(--p-30363d)', borderRadius: '8px',
             width: '95vw', maxWidth: '1200px', maxHeight: '95vh', overflow: 'auto',
             padding: '1rem', position: 'relative',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                <h3 style={{ margin: 0, color: '#e0e8f5' }}>{chartTicker} Technical Analysis</h3>
+                <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>{chartTicker} Technical Analysis</h3>
                 <div style={{ display: 'flex', gap: '4px' }}>
                   {['3mo', '6mo', '1y', '2y', '5y'].map(p => (
                     <button key={p} className="btn btn-sm"
-                      style={chartPeriod === p ? { background: '#1f6feb', color: '#fff', borderColor: '#1f6feb' } : {}}
+                      style={chartPeriod === p ? { background: 'var(--p-1f6feb)', color: 'var(--white)', borderColor: 'var(--p-1f6feb)' } : {}}
                       onClick={() => setChartPeriod(p)}>
                       {p}
                     </button>
                   ))}
                 </div>
-                {chartLoading && <span style={{ color: '#8899aa', fontSize: '0.85rem' }}>Loading...</span>}
+                {chartLoading && <span style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>Loading...</span>}
               </div>
               <button onClick={() => setChartTicker(null)}
-                style={{ background: 'none', border: 'none', color: '#8899aa', fontSize: '1.5rem', cursor: 'pointer', padding: '0 8px' }}>
+                style={{ background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: '1.5rem', cursor: 'pointer', padding: '0 8px' }}>
                 &times;
               </button>
             </div>

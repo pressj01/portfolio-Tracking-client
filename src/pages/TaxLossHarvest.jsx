@@ -31,10 +31,10 @@ function MetricCard({ label, value, sub, color }) {
 
 function WashBadge({ status, clearsOn }) {
   if (status === 'clear') {
-    return <span style={{ background: 'rgba(77,255,145,0.15)', color: '#4dff91', padding: '2px 8px', borderRadius: 4, fontSize: '0.8rem' }}>Clear</span>
+    return <span style={{ background: 'rgba(77,255,145,0.15)', color: 'var(--pos)', padding: '2px 8px', borderRadius: 4, fontSize: '0.8rem' }}>Clear</span>
   }
   return (
-    <span title={clearsOn ? `Clears on ${clearsOn}` : ''} style={{ background: 'rgba(255,107,107,0.15)', color: '#ff6b6b', padding: '2px 8px', borderRadius: 4, fontSize: '0.8rem' }}>
+    <span title={clearsOn ? `Clears on ${clearsOn}` : ''} style={{ background: 'rgba(255,107,107,0.15)', color: 'var(--neg)', padding: '2px 8px', borderRadius: 4, fontSize: '0.8rem' }}>
       Wash sale{clearsOn ? ` → ${clearsOn}` : ''}
     </span>
   )
@@ -45,7 +45,7 @@ function TermPill({ term }) {
   return (
     <span style={{
       background: isLong ? 'rgba(123,140,255,0.15)' : 'rgba(255,184,108,0.15)',
-      color: isLong ? '#7B8CFF' : '#FFB86C',
+      color: isLong ? 'var(--p-7b8cff)' : 'var(--p-ffb86c)',
       padding: '2px 8px', borderRadius: 4, fontSize: '0.75rem', fontWeight: 600,
     }}>
       {term === 'long' ? 'LT' : term === 'short' ? 'ST' : '?'}
@@ -70,10 +70,10 @@ function ReplacementBox({ ticker }) {
     return () => { stale = true }
   }, [ticker])
 
-  if (loading) return <div style={{ color: '#8899aa', fontSize: '0.85rem' }}>Loading suggestions...</div>
-  if (err) return <div style={{ color: '#ff6b6b', fontSize: '0.85rem' }}>{err}</div>
+  if (loading) return <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>Loading suggestions...</div>
+  if (err) return <div style={{ color: 'var(--neg)', fontSize: '0.85rem' }}>{err}</div>
   if (!data?.suggestions?.length) {
-    return <div style={{ color: '#8899aa', fontSize: '0.85rem' }}>No close replacement candidates found for this holding's type and income profile.</div>
+    return <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>No close replacement candidates found for this holding's type and income profile.</div>
   }
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -83,18 +83,18 @@ function ReplacementBox({ ticker }) {
           padding: '0.55rem 0.75rem', borderRadius: 4, fontSize: '0.85rem', maxWidth: 360,
         }}>
           <div>
-            <strong style={{ color: '#7B8CFF' }}>{s.ticker}</strong>
-            {s.type && <span style={{ color: '#8899aa', marginLeft: '0.5rem' }}>{s.type}</span>}
-            {s.yield != null && <span style={{ color: '#2EFDB5', marginLeft: '0.5rem' }}>{fmtPct(s.yield)}</span>}
-            {fmtPctDelta(s.yield_delta) && <span style={{ color: '#90caf9', marginLeft: '0.4rem' }}>({fmtPctDelta(s.yield_delta)})</span>}
+            <strong style={{ color: 'var(--p-7b8cff)' }}>{s.ticker}</strong>
+            {s.type && <span style={{ color: 'var(--text-dim)', marginLeft: '0.5rem' }}>{s.type}</span>}
+            {s.yield != null && <span style={{ color: 'var(--p-2efdb5)', marginLeft: '0.5rem' }}>{fmtPct(s.yield)}</span>}
+            {fmtPctDelta(s.yield_delta) && <span style={{ color: 'var(--accent-2)', marginLeft: '0.4rem' }}>({fmtPctDelta(s.yield_delta)})</span>}
           </div>
-          {s.name && <div style={{ color: '#c0cdd8', marginTop: 3 }}>{s.name}</div>}
-          <div style={{ color: '#8899aa', marginTop: 4 }}>{s.category}</div>
+          {s.name && <div style={{ color: 'var(--p-c0cdd8)', marginTop: 3 }}>{s.name}</div>}
+          <div style={{ color: 'var(--text-dim)', marginTop: 4 }}>{s.category}</div>
           {s.match_reasons?.length > 0 && (
-            <div style={{ color: '#90caf9', marginTop: 4, fontSize: '0.78rem' }}>{s.match_reasons.join(' | ')}</div>
+            <div style={{ color: 'var(--accent-2)', marginTop: 4, fontSize: '0.78rem' }}>{s.match_reasons.join(' | ')}</div>
           )}
           {s.warnings?.length > 0 && (
-            <div style={{ color: '#FFB86C', marginTop: 4, fontSize: '0.78rem' }}>{s.warnings.join(' | ')}</div>
+            <div style={{ color: 'var(--p-ffb86c)', marginTop: 4, fontSize: '0.78rem' }}>{s.warnings.join(' | ')}</div>
           )}
         </div>
       ))}
@@ -107,15 +107,15 @@ function CandidateRow({ row, expanded, onToggle, onPlan }) {
     <>
       <tr style={{ cursor: 'pointer' }} onClick={onToggle}>
         <td style={{ width: 24 }}>{expanded ? '▼' : '▶'}</td>
-        <td><strong>{row.ticker}</strong>{row.is_drip_lot && <span title="DRIP lot" style={{ marginLeft: 6, color: '#FFB86C', fontSize: '0.7rem' }}>DRIP</span>}</td>
+        <td><strong>{row.ticker}</strong>{row.is_drip_lot && <span title="DRIP lot" style={{ marginLeft: 6, color: 'var(--p-ffb86c)', fontSize: '0.7rem' }}>DRIP</span>}</td>
         <td>{fmtDate(row.buy_date)}</td>
         <td style={{ textAlign: 'right' }}>{fmtShares(row.open_shares)}</td>
         <td style={{ textAlign: 'right' }}>{fmt(row.cost_per_share)}</td>
         <td style={{ textAlign: 'right' }}>{fmt(row.current_price)}</td>
-        <td style={{ textAlign: 'right', color: '#ff6b6b', fontWeight: 600 }}>{fmtSigned(row.unrealized_loss)}</td>
+        <td style={{ textAlign: 'right', color: 'var(--neg)', fontWeight: 600 }}>{fmtSigned(row.unrealized_loss)}</td>
         <td style={{ textAlign: 'center' }}><TermPill term={row.term} /></td>
         <td><WashBadge status={row.wash_status} clearsOn={row.wash_clears_on} /></td>
-        <td style={{ textAlign: 'right', color: '#2EFDB5' }}>{fmt(row.est_tax_saved)}</td>
+        <td style={{ textAlign: 'right', color: 'var(--p-2efdb5)' }}>{fmt(row.est_tax_saved)}</td>
         <td>
           <button
             className="btn btn-primary"
@@ -129,22 +129,22 @@ function CandidateRow({ row, expanded, onToggle, onPlan }) {
         <tr>
           <td colSpan={11} style={{ background: 'rgba(255,255,255,0.02)', padding: '1rem 1.5rem' }}>
             <div style={{ marginBottom: '0.8rem' }}>
-              <h4 style={{ color: '#90caf9', marginBottom: '0.4rem', fontSize: '0.95rem' }}>Replacement candidates (similar type and income profile)</h4>
+              <h4 style={{ color: 'var(--accent-2)', marginBottom: '0.4rem', fontSize: '0.95rem' }}>Replacement candidates (similar type and income profile)</h4>
               <ReplacementBox ticker={row.ticker} />
             </div>
             {row.wash_status !== 'clear' && row.wash_offenders?.length > 0 && (
               <div>
-                <h4 style={{ color: '#ff6b6b', marginBottom: '0.4rem', fontSize: '0.95rem' }}>Blocking transactions (wash-sale window)</h4>
-                <ul style={{ paddingLeft: '1.2rem', color: '#c0cdd8', fontSize: '0.85rem', margin: 0 }}>
+                <h4 style={{ color: 'var(--neg)', marginBottom: '0.4rem', fontSize: '0.95rem' }}>Blocking transactions (wash-sale window)</h4>
+                <ul style={{ paddingLeft: '1.2rem', color: 'var(--p-c0cdd8)', fontSize: '0.85rem', margin: 0 }}>
                   {row.wash_offenders.map(o => (
                     <li key={o.txn_id}>
                       {fmtDate(o.date)} — bought {fmtShares(o.shares)} shares
-                      {o.is_drip && <span style={{ marginLeft: 6, color: '#FFB86C' }}>(DRIP)</span>}
-                      <span style={{ color: '#8899aa', marginLeft: 6 }}>txn #{o.txn_id}, profile {o.profile_id}</span>
+                      {o.is_drip && <span style={{ marginLeft: 6, color: 'var(--p-ffb86c)' }}>(DRIP)</span>}
+                      <span style={{ color: 'var(--text-dim)', marginLeft: 6 }}>txn #{o.txn_id}, profile {o.profile_id}</span>
                     </li>
                   ))}
                 </ul>
-                {row.wash_clears_on && <p style={{ marginTop: '0.5rem', color: '#FFB86C', fontSize: '0.85rem' }}>
+                {row.wash_clears_on && <p style={{ marginTop: '0.5rem', color: 'var(--p-ffb86c)', fontSize: '0.85rem' }}>
                   Window clears on <strong>{row.wash_clears_on}</strong>.
                 </p>}
               </div>
@@ -238,9 +238,9 @@ export default function TaxLossHarvest() {
   return (
     <div className="page">
       <h1>Tax-Loss Harvest</h1>
-      <p style={{ color: '#8899aa', marginBottom: '1.5rem' }}>
+      <p style={{ color: 'var(--text-dim)', marginBottom: '1.5rem' }}>
         Per-lot loss candidates from your current holdings, with wash-sale checks and replacement suggestions.
-        Tax savings are estimates only — set your marginal rates in <a href="/settings" style={{ color: '#90caf9' }}>Settings</a>.
+        Tax savings are estimates only — set your marginal rates in <a href="/settings" style={{ color: 'var(--accent-2)' }}>Settings</a>.
       </p>
 
       {actionStatus && (
@@ -306,7 +306,7 @@ export default function TaxLossHarvest() {
 
           {tab === 'candidates' && (
             <>
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', color: '#c0cdd8', marginBottom: '0.5rem' }}>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', color: 'var(--p-c0cdd8)', marginBottom: '0.5rem' }}>
                 <input type="checkbox" checked={hideBlocked} onChange={e => setHideBlocked(e.target.checked)} />
                 Hide wash-sale-blocked lots
               </label>
@@ -370,8 +370,8 @@ export default function TaxLossHarvest() {
                         <tr key={p.id}>
                           <td><strong>{p.ticker}</strong></td>
                           <td style={{ textAlign: 'right' }}>{fmtShares(p.shares)}</td>
-                          <td style={{ textAlign: 'right', color: '#ff6b6b' }}>{fmtSigned(p.est_loss)}</td>
-                          <td style={{ textAlign: 'right', color: '#2EFDB5' }}>{fmt(p.est_tax_saved)}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--neg)' }}>{fmtSigned(p.est_loss)}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--p-2efdb5)' }}>{fmt(p.est_tax_saved)}</td>
                           <td>{p.status}</td>
                           <td>{fmtDate(p.created_at)}</td>
                           <td>
@@ -390,7 +390,7 @@ export default function TaxLossHarvest() {
             </>
           )}
 
-          <p style={{ marginTop: '1.5rem', fontSize: '0.8rem', color: '#8899aa', maxWidth: '60rem' }}>
+          <p style={{ marginTop: '1.5rem', fontSize: '0.8rem', color: 'var(--text-dim)', maxWidth: '60rem' }}>
             <strong>Disclaimer:</strong> This tool is informational only. Wash-sale rules across accounts, IRA-related wash issues,
             and "substantially identical" interpretations may vary. Confirm any harvest with a tax professional before trading.
           </p>

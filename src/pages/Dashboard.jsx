@@ -3,6 +3,8 @@ import { API_BASE } from '../config'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
+import { useTheme } from '../context/ThemeContext'
+import { chartTheme } from '../utils/chartTheme'
 import { returnVsYield } from '../utils/returnVsYield'
 import { readDashboardCache, writeDashboardCache } from '../utils/dashboardCache'
 
@@ -30,13 +32,13 @@ const shortDate = (value) => {
 }
 const pct = (v) => (v == null ? '—' : (Number(v) * 100).toFixed(2) + '%')
 const navSeverityFromRatio = (v) => v == null ? null : v > 0.75 ? 'High' : v > 0.25 ? 'Medium' : 'Low'
-const navSeverityColor = (severity) => severity === 'High' ? '#ff6b6b' : severity === 'Medium' ? '#ffb300' : severity === 'Low' ? '#4dff91' : '#6f7890'
-const navSeverityBg = (severity) => severity === 'High' ? 'rgba(255,107,107,0.12)' : severity === 'Medium' ? 'rgba(255,179,0,0.12)' : 'rgba(77,255,145,0.12)'
+const navSeverityColor = (severity) => severity === 'High' ? 'var(--neg)' : severity === 'Medium' ? 'var(--warning-money)' : severity === 'Low' ? 'var(--pos)' : 'var(--text-dim)'
+const navSeverityBg = (severity) => severity === 'High' ? 'color-mix(in srgb, var(--neg) 14%, transparent)' : severity === 'Medium' ? 'color-mix(in srgb, var(--warning-money) 14%, transparent)' : 'color-mix(in srgb, var(--pos) 14%, transparent)'
 const navSeverityText = (severity) => severity === 'High' ? 'High Benchmark-Adjusted NAV Erosion' : severity === 'Medium' ? 'Moderate Benchmark-Adjusted NAV Erosion' : 'Low Benchmark-Adjusted NAV Erosion'
 
-function SummaryCard({ label, value, sub, color, className }) {
+function SummaryCard({ label, value, sub, color, className, title }) {
   return (
-    <div className={`summary-card ${className || ''}`}>
+    <div className={`summary-card ${className || ''}`} title={title}>
       <div className="summary-label">{label}</div>
       <div className="summary-value" style={color ? { color } : undefined}>{value}</div>
       {sub && <div className="summary-sub">{sub}</div>}
@@ -51,12 +53,68 @@ function GradeBadge({ grade, large }) {
   return <span className={`grade-badge ${cls} ${large ? 'grade-lg' : ''}`}>{grade}</span>
 }
 
+function BenchmarkBetaCard({ benchmark, onBenchmarkChange, beta, exposure }) {
+  const options = [
+    { key: 'sp500', label: 'S&P 500' },
+    { key: 'nasdaq', label: 'Nasdaq' },
+  ]
+  const benchmarkLabel = options.find(option => option.key === benchmark)?.label || 'benchmark'
+  const betaNumber = beta == null ? null : Number(beta)
+  const value = betaNumber == null || !Number.isFinite(betaNumber) ? '--' : `${betaNumber.toFixed(2)}x`
+  const relativeMovePct = betaNumber == null || !Number.isFinite(betaNumber) ? null : betaNumber * 100
+  const onePctMove = exposure == null || !Number.isFinite(Number(exposure)) ? null : exposure * 0.01
+  const betaBucket = betaNumber == null || !Number.isFinite(betaNumber)
+    ? null
+    : betaNumber < 0.5
+      ? 'Below conservative income'
+      : betaNumber <= 0.7
+        ? 'Conservative income'
+        : betaNumber <= 0.9
+          ? 'Balanced income'
+          : betaNumber <= 1.15
+            ? 'Aggressive income'
+            : 'Very aggressive income'
+
+  return (
+    <div
+      className="summary-card summary-card-beta"
+      title="Portfolio beta compares the portfolio's return sensitivity to the selected benchmark."
+    >
+      <div className="summary-label-row">
+        <div className="summary-label">Portfolio Beta</div>
+        <div className="benchmark-toggle" aria-label="Beta benchmark">
+          {options.map(option => (
+            <button
+              key={option.key}
+              type="button"
+              className={benchmark === option.key ? 'active' : ''}
+              onClick={() => onBenchmarkChange(option.key)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="summary-value">{value}</div>
+      {relativeMovePct == null ? (
+        <div className="summary-sub">Relative move unavailable</div>
+      ) : (
+        <>
+          <div className="summary-sub">{betaBucket}</div>
+          <div className="summary-sub">~{relativeMovePct.toFixed(0)}% of {benchmarkLabel} moves</div>
+          {onePctMove != null && <div className="summary-sub">~{fmt(onePctMove, 0)} per 1% benchmark move</div>}
+        </>
+      )}
+    </div>
+  )
+}
+
 function UpcomingDividends({ events }) {
   if (!events || events.length === 0) {
     return (
       <div className="upcoming-dividends card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-        <h3 style={{ color: '#90caf9', marginBottom: '0.5rem', fontSize: '1rem' }}>Upcoming Dividends This Week</h3>
-        <p style={{ color: '#8899aa', fontSize: '0.85rem' }}>No ex-dividend dates in the next 7 days.</p>
+        <h3 style={{ color: 'var(--accent-2)', marginBottom: '0.5rem', fontSize: '1rem' }}>Upcoming Dividends This Week</h3>
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>No ex-dividend dates in the next 7 days.</p>
       </div>
     )
   }
@@ -66,25 +124,25 @@ function UpcomingDividends({ events }) {
   return (
     <div className="upcoming-dividends card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-        <h3 style={{ color: '#90caf9', margin: 0, fontSize: '1rem' }}>Upcoming Dividends This Week</h3>
-        <span style={{ color: '#4dff91', fontWeight: 700, fontSize: '0.95rem' }}>Est. Total: {fmt(totalEst)}</span>
+        <h3 style={{ color: 'var(--accent-2)', margin: 0, fontSize: '1rem' }}>Upcoming Dividends This Week</h3>
+        <span style={{ color: 'var(--pos)', fontWeight: 700, fontSize: '0.95rem' }}>Est. Total: {fmt(totalEst)}</span>
       </div>
       <div className="upcoming-grid">
         {events.map((e, i) => (
           <div key={i} className="upcoming-event" style={{ borderLeft: `3px solid ${e.color}` }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ color: '#7ecfff', fontWeight: 700 }}>{e.ticker}</span>
+              <span style={{ color: 'var(--accent-bright)', fontWeight: 700 }}>{e.ticker}</span>
               <span className="upcoming-freq" style={{ color: e.color }}>{e.freq_label}</span>
             </div>
-            <div style={{ fontSize: '0.8rem', color: '#8899aa', marginTop: '0.2rem' }}>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
               Ex: {e.ex_weekday} {new Date(e.ex_date + 'T00:00').toLocaleDateString()}
             </div>
-            <div style={{ fontSize: '0.8rem', color: '#8899aa' }}>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
               Pay: {e.pay_estimated === false ? '' : '~'}{e.pay_weekday} {new Date(e.pay_date + 'T00:00').toLocaleDateString()}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem' }}>
-              <span style={{ fontSize: '0.8rem', color: '#90a4ae' }}>${e.amount}/share</span>
-              <span style={{ fontSize: '0.85rem', color: '#4dff91', fontWeight: 600 }}>{fmt(e.est_payment)}</span>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-dim-2)' }}>${e.amount}/share</span>
+              <span style={{ fontSize: '0.85rem', color: 'var(--pos)', fontWeight: 600 }}>{fmt(e.est_payment)}</span>
             </div>
           </div>
         ))}
@@ -101,6 +159,7 @@ const DONUT_COLORS = [
 
 function PortfolioOverview({ groups, categories, totalValue }) {
   const chartRef = React.useRef(null)
+  const { isDark } = useTheme()
   const [catId, setCatId] = useState(null)   // null = all categories
   const [subId, setSubId] = useState(null)    // null = all sub-categories
 
@@ -184,7 +243,7 @@ function PortfolioOverview({ groups, categories, totalValue }) {
       traces.push({
         labels: sliceLabels, values: sliceValues,
         type: 'pie', hole: 0.55,
-        marker: { colors: sliceColors, line: { color: '#16213e', width: 1.5 } },
+        marker: { colors: sliceColors, line: { color: chartTheme(isDark).surface, width: 1.5 } },
         textinfo: 'none',
         hovertemplate: '%{customdata}<extra></extra>',
         customdata: sliceHovers,
@@ -201,9 +260,10 @@ function PortfolioOverview({ groups, categories, totalValue }) {
       })
     }
 
+    const ct = chartTheme(isDark)
     const layout = {
-      template: 'plotly_dark',
-      paper_bgcolor: '#16213e', plot_bgcolor: '#16213e',
+      template: ct.template,
+      paper_bgcolor: ct.surface, plot_bgcolor: ct.surface,
       margin: { l: 10, r: 10, t: 10, b: 10 },
       showlegend: false,
       height: 280, width: 280,
@@ -211,22 +271,22 @@ function PortfolioOverview({ groups, categories, totalValue }) {
     }
     window.Plotly.newPlot(chartRef.current, traces, layout, { responsive: true, displayModeBar: false })
     return () => { if (chartRef.current) window.Plotly.purge(chartRef.current) }
-  }, [displayGroups, showTargetRing, totalTarget])
+  }, [displayGroups, showTargetRing, totalTarget, isDark])
 
   if (!groups || !groups.length) return null
 
   const selectStyle = {
-    background: '#0f3460', color: '#e0e8f5', border: '1px solid #1a2a4a',
+    background: 'var(--border)', color: 'var(--text-strong)', border: '1px solid var(--border)',
     borderRadius: 6, padding: '0.3rem 0.5rem', fontSize: '0.8rem',
   }
   const canFilter = categories && categories.length > 0
 
   return (
     <div className="portfolio-overview card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem' }}>
-      <h3 style={{ color: '#90caf9', margin: '0 0 0.75rem', fontSize: '1rem' }}>Portfolio</h3>
+      <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.75rem', fontSize: '1rem' }}>Portfolio</h3>
       {canFilter && (
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-          <span style={{ color: '#8899aa', fontSize: '0.8rem' }}>Category:</span>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Category:</span>
           <select
             value={catId ?? ''}
             onChange={e => { const v = e.target.value; setCatId(v === '' ? null : Number(v)); setSubId(null) }}
@@ -237,7 +297,7 @@ function PortfolioOverview({ groups, categories, totalValue }) {
           </select>
           {selectedCat && (selectedCat.subcategories?.length > 0) && (
             <>
-              <span style={{ color: '#8899aa', fontSize: '0.8rem' }}>Sub-category:</span>
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Sub-category:</span>
               <select
                 value={subId ?? ''}
                 onChange={e => { const v = e.target.value; setSubId(v === '' ? null : Number(v)) }}
@@ -251,7 +311,7 @@ function PortfolioOverview({ groups, categories, totalValue }) {
           {catId != null && (
             <button
               onClick={() => { setCatId(null); setSubId(null) }}
-              style={{ ...selectStyle, cursor: 'pointer', color: '#90caf9' }}
+              style={{ ...selectStyle, cursor: 'pointer', color: 'var(--accent-2)' }}
             >
               Clear
             </button>
@@ -263,13 +323,13 @@ function PortfolioOverview({ groups, categories, totalValue }) {
         <div style={{ flex: 1, overflowX: 'auto', minWidth: 0 }}>
           <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid #0f3460' }}>
-                <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Name</th>
-                <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Value/Invested</th>
-                <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Gain</th>
-                {showTargetRing && <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Target</th>}
-                <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Allocation</th>
-                {showTargetRing && <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Diff</th>}
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Name</th>
+                <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Value/Invested</th>
+                <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Gain</th>
+                {showTargetRing && <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Target</th>}
+                <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Allocation</th>
+                {showTargetRing && <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Diff</th>}
               </tr>
             </thead>
             <tbody>
@@ -281,42 +341,42 @@ function PortfolioOverview({ groups, categories, totalValue }) {
                 const target = Number(g.target_pct) || 0
                 const diff = showTargetRing && target > 0 ? alloc - target : null
                 return (
-                  <tr key={g.name} style={{ borderBottom: '1px solid #0a1628' }}>
+                  <tr key={g.name} style={{ borderBottom: '1px solid var(--p-0a1628)' }}>
                     <td style={{ padding: '0.5rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: color, flexShrink: 0 }} />
                         <div>
-                          <div style={{ color: '#e0e8f5', fontWeight: 600 }}>{g.name}</div>
-                          <div style={{ color: '#8899aa', fontSize: '0.75rem' }}>{g.count} item{g.count !== 1 ? 's' : ''}</div>
+                          <div style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{g.name}</div>
+                          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>{g.count} item{g.count !== 1 ? 's' : ''}</div>
                         </div>
                       </div>
                     </td>
                     <td style={{ textAlign: 'right', padding: '0.5rem' }}>
-                      <div style={{ color: '#e0e8f5' }}>{fmt(g.value)}</div>
-                      <div style={{ color: '#8899aa', fontSize: '0.75rem' }}>{fmt(g.invested)}</div>
+                      <div style={{ color: 'var(--text-strong)' }}>{fmt(g.value)}</div>
+                      <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>{fmt(g.invested)}</div>
                     </td>
                     <td style={{ textAlign: 'right', padding: '0.5rem' }}>
-                      <div style={{ color: gain >= 0 ? '#4dff91' : '#ff6b6b' }}>{gain >= 0 ? '+' : ''}{fmt(gain)}</div>
-                      <div style={{ color: gain >= 0 ? '#4dff91' : '#ff6b6b', fontSize: '0.75rem' }}>
+                      <div style={{ color: gain >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{gain >= 0 ? '+' : ''}{fmt(gain)}</div>
+                      <div style={{ color: gain >= 0 ? 'var(--pos)' : 'var(--neg)', fontSize: '0.75rem' }}>
                         {gain >= 0 ? '▲' : '▼'} {Math.abs(gainPct).toFixed(2)}%
                       </div>
                     </td>
                     {showTargetRing && (
-                      <td style={{ textAlign: 'right', padding: '0.5rem', color: '#8899aa' }}>
+                      <td style={{ textAlign: 'right', padding: '0.5rem', color: 'var(--text-dim)' }}>
                         {target > 0 ? `${target.toFixed(0)}%` : '—'}
                       </td>
                     )}
                     <td style={{ textAlign: 'right', padding: '0.5rem' }}>
-                      <div style={{ color: '#e0e8f5' }}>{alloc.toFixed(2)}%</div>
+                      <div style={{ color: 'var(--text-strong)' }}>{alloc.toFixed(2)}%</div>
                     </td>
                     {showTargetRing && (
                       <td style={{ textAlign: 'right', padding: '0.5rem' }}>
                         {diff != null ? (
-                          <div style={{ color: diff >= 0 ? '#4dff91' : '#ff6b6b', fontWeight: 600 }}>
+                          <div style={{ color: diff >= 0 ? 'var(--pos)' : 'var(--neg)', fontWeight: 600 }}>
                             {diff >= 0 ? '+' : ''}{diff.toFixed(1)}%
                           </div>
                         ) : (
-                          <span style={{ color: '#8899aa' }}>—</span>
+                          <span style={{ color: 'var(--text-dim)' }}>—</span>
                         )}
                       </td>
                     )}
@@ -333,6 +393,7 @@ function PortfolioOverview({ groups, categories, totalValue }) {
 
 function TickerModal({ ticker, onClose }) {
   const pf = useProfileFetch()
+  const { isDark } = useTheme()
   const { selection } = useProfile()
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
@@ -378,8 +439,8 @@ function TickerModal({ ticker, onClose }) {
           {
             x: data.dates, y: data.total_return,
             mode: 'lines', name: 'Total Return %',
-            line: { color: '#4dff91', width: 2 },
-            fill: 'tonexty', fillcolor: 'rgba(77,255,145,0.08)',
+            line: { color: isDark ? '#4dff91' : '#15803d', width: 2 },
+            fill: 'tonexty', fillcolor: isDark ? 'rgba(77,255,145,0.08)' : 'rgba(21,128,61,0.10)',
             hovertemplate: '%{y:.2f}%<extra>Total</extra>',
           },
         ]
@@ -391,24 +452,25 @@ function TickerModal({ ticker, onClose }) {
             hovertemplate: '$%{y:.2f}<extra>Price</extra>',
           },
         ]
+    const ct = chartTheme(isDark)
     const layout = {
-      template: 'plotly_dark',
-      paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
-      title: { text: `${data.ticker} — ${hasTotalReturn ? 'Return Since Purchase' : 'Recent Price History'}`, font: { size: 16, color: '#e0e8f5' } },
-      xaxis: { title: '', gridcolor: '#1a2233' },
+      template: ct.template,
+      paper_bgcolor: ct.paper, plot_bgcolor: ct.plot,
+      title: { text: `${data.ticker} — ${hasTotalReturn ? 'Return Since Purchase' : 'Recent Price History'}`, font: { size: 16, color: ct.title } },
+      xaxis: { title: '', gridcolor: ct.grid },
       yaxis: hasTotalReturn
-        ? { title: 'Return %', gridcolor: '#1a2233', ticksuffix: '%' }
-        : { title: 'Price', gridcolor: '#1a2233', tickprefix: '$' },
+        ? { title: 'Return %', gridcolor: ct.grid, ticksuffix: '%' }
+        : { title: 'Price', gridcolor: ct.grid, tickprefix: '$' },
       legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'center', x: 0.5, font: { size: 12 } },
       margin: { l: 50, r: 20, t: 60, b: 40 },
       hovermode: 'x unified',
       shapes: hasTotalReturn
-        ? [{ type: 'line', x0: data.dates[0], x1: data.dates[data.dates.length - 1], y0: 0, y1: 0, line: { dash: 'dot', color: '#556677', width: 1 } }]
+        ? [{ type: 'line', x0: data.dates[0], x1: data.dates[data.dates.length - 1], y0: 0, y1: 0, line: { dash: 'dot', color: ct.zeroline, width: 1 } }]
         : [],
     }
     window.Plotly.newPlot(el, traces, layout, { responsive: true })
     return () => { if (el) window.Plotly.purge(el) }
-  }, [data])
+  }, [data, isDark])
 
   if (!ticker) return null
 
@@ -420,12 +482,12 @@ function TickerModal({ ticker, onClose }) {
         {error && <div className="alert alert-error">{error}</div>}
         {data && (
           <>
-            <h2 style={{ color: '#7ecfff', marginBottom: '0.25rem' }}>{data.ticker} — {data.description}</h2>
-            <p style={{ color: '#8899aa', marginBottom: '1rem', fontSize: '0.9rem' }}>
+            <h2 style={{ color: 'var(--accent-bright)', marginBottom: '0.25rem' }}>{data.ticker} — {data.description}</h2>
+            <p style={{ color: 'var(--text-dim)', marginBottom: '1rem', fontSize: '0.9rem' }}>
               Purchased {new Date(data.purchase_date).toLocaleDateString()} at {fmt(data.price_paid)}
             </p>
             {data.note && (
-              <p style={{ color: '#ffcc80', margin: '-0.5rem 0 1rem', fontSize: '0.85rem' }}>{data.note}</p>
+              <p style={{ color: 'var(--p-ffcc80)', margin: '-0.5rem 0 1rem', fontSize: '0.85rem' }}>{data.note}</p>
             )}
             <div id="ticker-chart" style={{ height: '400px' }} />
           </>
@@ -443,6 +505,7 @@ function safeJson(r) {
 
 export default function Dashboard() {
   const pf = useProfileFetch()
+  const { isDark } = useTheme()
   const { runMarketRefresh } = useMarketRefresh()
   const { profileId, profiles, isAggregate, selection, currentProfileName, basisMode } = useProfile()
   const [holdings, setHoldings] = useState([])
@@ -450,7 +513,10 @@ export default function Dashboard() {
   const [refreshStatus, setRefreshStatus] = useState(null)
   const [gradeStatus, setGradeStatus] = useState(null)
   const [tickerGrades, setTickerGrades] = useState({})
+  const [tickerRisk, setTickerRisk] = useState({})
+  const [tickerRiskLoading, setTickerRiskLoading] = useState(false)
   const [portfolioGrade, setPortfolioGrade] = useState({})
+  const [betaBenchmark, setBetaBenchmark] = useState('sp500')
   const [upcomingDivs, setUpcomingDivs] = useState([])
   const [incomeSummary, setIncomeSummary] = useState(null)
   const [sortCol, setSortCol] = useState(null)
@@ -470,7 +536,7 @@ export default function Dashboard() {
   const [navRepairing, setNavRepairing] = useState(false)
   const [actionCenter, setActionCenter] = useState(null)
   const navChartRef = useRef(null)
-  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v13_${selection}_${basisMode}`, [selection, basisMode])
+  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v16_${selection}_${basisMode}`, [selection, basisMode])
   const currentProfile = useMemo(
     () => profiles.find(p => p.id === profileId) || null,
     [profiles, profileId],
@@ -508,6 +574,8 @@ export default function Dashboard() {
       setIncomeSummary(cached.incomeSummary || null)
       setUpcomingDivs(cached.upcomingDivs || [])
       setTickerGrades(cached.tickerGrades || {})
+      setTickerRisk(cached.tickerRisk || {})
+      setTickerRiskLoading(false)
       setPortfolioGrade(cached.portfolioGrade || {})
       setPortfolioCoverage(cached.portfolioCoverage ?? null)
       setPortfolioCoverageSeverity(cached.portfolioCoverageSeverity ?? null)
@@ -521,6 +589,8 @@ export default function Dashboard() {
       setIncomeSummary(null)
       setUpcomingDivs([])
       setTickerGrades({})
+      setTickerRisk({})
+      setTickerRiskLoading(false)
       setPortfolioGrade({})
       setPortfolioCoverage(null)
       setPortfolioCoverageSeverity(null)
@@ -641,16 +711,19 @@ export default function Dashboard() {
               }
             })
             .catch(() => {})
+          setTickerRiskLoading(true)
           pf('/api/portfolio-summary/data')
             .then(safeJson)
             .then(g => {
               if (stale || !g) return
               if (g.ticker_grades) setTickerGrades(g.ticker_grades)
+              if (g.ticker_risk) setTickerRisk(g.ticker_risk)
               // {} is truthy — only overwrite when grades were actually computed,
               // so an empty/failed response never blanks good grade tiles.
               if (g.portfolio_grade && Object.keys(g.portfolio_grade).length) setPortfolioGrade(g.portfolio_grade)
             })
             .catch(() => {})
+            .finally(() => { if (!stale) setTickerRiskLoading(false) })
 
           setRefreshStatus('Updating prices & dividends...')
           runMarketRefresh({ statusMessage: 'Updating prices & dividends...' })
@@ -669,11 +742,13 @@ export default function Dashboard() {
               setHoldings(updated)
               if (summary) setIncomeSummary(summary)
               setGradeStatus('Loading risk grades...')
+              setTickerRiskLoading(true)
               return pf('/api/portfolio-summary/data')
                 .then(safeJson)
                 .then(g => {
                   if (stale || !g) return
                   if (g.ticker_grades) setTickerGrades(g.ticker_grades)
+                  if (g.ticker_risk) setTickerRisk(g.ticker_risk)
                   // {} is truthy — only overwrite when grades were actually
                   // computed, so the post-refresh fetch can't clobber the good
                   // grades the first fetch already set with an empty response.
@@ -682,6 +757,7 @@ export default function Dashboard() {
                   setTimeout(() => { if (!stale) setGradeStatus(null) }, 3000)
                 })
                 .catch(() => { if (!stale) setGradeStatus('Grade loading failed.') })
+                .finally(() => { if (!stale) setTickerRiskLoading(false) })
             })
             .catch(() => {
               if (!stale) {
@@ -702,6 +778,7 @@ export default function Dashboard() {
       incomeSummary,
       upcomingDivs,
       tickerGrades,
+      tickerRisk,
       portfolioGrade,
       portfolioCoverage,
       portfolioCoverageSeverity,
@@ -717,6 +794,7 @@ export default function Dashboard() {
     incomeSummary,
     upcomingDivs,
     tickerGrades,
+    tickerRisk,
     portfolioGrade,
     portfolioCoverage,
     portfolioCoverageSeverity,
@@ -764,6 +842,17 @@ export default function Dashboard() {
     return { ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, reinvestPct, annualIncome, dripSharesMonthly, dripSharesYearly, currentValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, currentMonthIncome, currentMonthReinvested, currentMonthNotReinvested, currentMonthReinvestPct }
   }, [holdings, incomeSummary])
 
+  const marketExposure = useMemo(() => {
+    const betas = portfolioGrade?.benchmark_betas || {}
+    const selectedBeta = betaBenchmark === 'nasdaq'
+      ? (betas.nasdaq ?? portfolioGrade?.beta_nasdaq)
+      : (betas.sp500 ?? portfolioGrade?.beta_sp500 ?? portfolioGrade?.beta)
+    const betaNumber = selectedBeta == null ? null : Number(selectedBeta)
+    const currentValue = Number(totals.currentValue || 0)
+    const betaAdjustedExposure = Number.isFinite(betaNumber) ? currentValue * betaNumber : null
+    return { beta: betaNumber, betaAdjustedExposure }
+  }, [portfolioGrade, betaBenchmark, totals.currentValue])
+
   // Enrich holdings with computed fields
   const enrichedHoldings = useMemo(() => {
     return holdings
@@ -789,10 +878,14 @@ export default function Dashboard() {
           ret_vs_yld_sort: rvy ? rvy.spread : -999,
           _coverage: tickerCoverage[h.ticker] ?? null,
           _coverage_meta: tickerCoverageMeta[h.ticker] || null,
+          _risk: tickerRisk[h.ticker] || null,
+          _beta_sort: tickerRisk[h.ticker]?.beta ?? -999,
+          _delta_up_sort: tickerRisk[h.ticker]?.delta_up ?? -999,
+          _delta_down_sort: tickerRisk[h.ticker]?.delta_down ?? -999,
           _grade_sort: ({ 'A+': 13, 'A': 12, 'A-': 11, 'B+': 10, 'B': 9, 'B-': 8, 'C+': 7, 'C': 6, 'C-': 5, 'D+': 4, 'D': 3, 'D-': 2, 'F': 1 })[tickerGrades[h.ticker]?.grade] || 0,
         }
       })
-  }, [holdings, totals, tickerCoverage, tickerCoverageMeta, tickerGrades, rvyMode])
+  }, [holdings, totals, tickerCoverage, tickerCoverageMeta, tickerGrades, tickerRisk, rvyMode])
   const portfolioNavSeverity = portfolioCoverageSeverity || navSeverityFromRatio(portfolioCoverage)
   const portfolioNavColor = navSeverityColor(portfolioNavSeverity)
 
@@ -888,9 +981,13 @@ export default function Dashboard() {
     </th>
   )
 
-  const gradeColor = (v) => v >= 0 ? '#4dff91' : '#ff6b6b'
+  const gradeColor = (v) => v >= 0 ? 'var(--pos)' : 'var(--neg)'
+  const riskNum = (v, loading = false) => {
+    if (v == null || !Number.isFinite(Number(v))) return loading ? '...' : '—'
+    return Number(v).toFixed(2)
+  }
   const pfiVal = (v) => v == null ? 0 : v * 100
-  const pfiColor = (v) => { const p = pfiVal(v); return p >= 100 ? '#4dff91' : p >= 50 ? '#ffd700' : undefined }
+  const pfiColor = (v) => { const p = pfiVal(v); return p >= 100 ? 'var(--pos)' : p >= 50 ? '#ffd700' : undefined }
 
   const currentMonth = new Date().toLocaleString('default', { month: 'long' })
   const currentMonthSub = useMemo(() => {
@@ -959,9 +1056,10 @@ export default function Dashboard() {
     const oneDayMs = 24 * 60 * 60 * 1000
     const spanMs = (maxDate - minDate) + 2 * datePadding
     const isLongRange = spanMs > 370 * oneDayMs
+    const ct = chartTheme(isDark)
     const xaxis = {
-      gridcolor: '#1a2233',
-      color: '#8899aa',
+      gridcolor: ct.grid,
+      color: ct.font,
       type: 'date',
       tickformat: isLongRange ? '%b %Y' : '%b %d',
       tickangle: 0,
@@ -976,10 +1074,10 @@ export default function Dashboard() {
     }
     if (xRange) xaxis.range = xRange
     const layout = {
-      template: 'plotly_dark',
-      paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
+      template: ct.template,
+      paper_bgcolor: ct.paper, plot_bgcolor: ct.plot,
       xaxis,
-      yaxis: { title: { text: 'Portfolio Value ($)', font: { size: 12, color: '#8899aa' } }, gridcolor: '#1a2233', color: '#8899aa', tickprefix: '$', range: yRange },
+      yaxis: { title: { text: 'Portfolio Value ($)', font: { size: 12, color: ct.font } }, gridcolor: ct.grid, color: ct.font, tickprefix: '$', range: yRange },
       margin: { l: 90, r: 20, t: 10, b: 52 },
       height: 300,
       hovermode: 'x unified',
@@ -996,7 +1094,7 @@ export default function Dashboard() {
         // Plot cleanup should not affect dashboard rendering.
       }
     }
-  }, [navHistory])
+  }, [navHistory, isDark])
 
   if (loading) {
     return <div className="page" style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
@@ -1018,7 +1116,7 @@ export default function Dashboard() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <div>
           <h1 style={{ marginBottom: 0 }}>Portfolio Dashboard</h1>
-          <p style={{ color: '#8899aa', fontSize: '0.85rem', margin: '0.25rem 0 0' }}>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', margin: '0.25rem 0 0' }}>
             {currentProfileName} — {enrichedHoldings.length} holding{enrichedHoldings.length !== 1 ? 's' : ''}
           </p>
         </div>
@@ -1041,8 +1139,8 @@ export default function Dashboard() {
         <div className="card" style={{ padding: '0.85rem 1rem', marginBottom: '1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', marginBottom: '0.65rem', flexWrap: 'wrap' }}>
             <div>
-              <h3 style={{ color: '#90caf9', margin: 0, fontSize: '1rem' }}>Action Center</h3>
-              <p style={{ color: '#8899aa', margin: '0.15rem 0 0', fontSize: '0.82rem' }}>
+              <h3 style={{ color: 'var(--accent-2)', margin: 0, fontSize: '1rem' }}>Action Center</h3>
+              <p style={{ color: 'var(--text-dim)', margin: '0.15rem 0 0', fontSize: '0.82rem' }}>
                 {actionCenter.summary?.item_count || actionCenter.items.length} follow-up{(actionCenter.summary?.item_count || actionCenter.items.length) !== 1 ? 's' : ''} found for this portfolio.
               </p>
             </div>
@@ -1052,26 +1150,26 @@ export default function Dashboard() {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.5rem' }}>
             {actionCenter.items.slice(0, 4).map(item => {
-              const color = item.priority === 'warning' ? '#ffd54f' : item.priority === 'success' ? '#4dff91' : '#7ecfff'
+              const color = item.priority === 'warning' ? 'var(--warning-text)' : item.priority === 'success' ? 'var(--pos)' : 'var(--accent-bright)'
               return (
                 <NavLink
                   key={item.id}
                   to={item.route || '/action-center'}
                   style={{
                     display: 'block',
-                    border: `1px solid ${color}55`,
+                    border: `1px solid color-mix(in srgb, ${color} 35%, transparent)`,
                     borderLeft: `3px solid ${color}`,
                     borderRadius: 6,
                     padding: '0.55rem 0.65rem',
-                    background: '#10192e',
-                    color: '#e0e8f5',
+                    background: 'var(--surface-inset)',
+                    color: 'var(--text-strong)',
                   }}
                 >
                   <div style={{ color, fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', marginBottom: 2 }}>
                     {item.kind || 'portfolio'}
                   </div>
                   <div style={{ fontWeight: 700, fontSize: '0.88rem', lineHeight: 1.25 }}>{item.title}</div>
-                  <div style={{ color: '#9aa8bd', fontSize: '0.76rem', marginTop: 3, lineHeight: 1.35 }}>{item.detail}</div>
+                  <div style={{ color: 'var(--text-dim)', fontSize: '0.76rem', marginTop: 3, lineHeight: 1.35 }}>{item.detail}</div>
                 </NavLink>
               )
             })}
@@ -1087,22 +1185,28 @@ export default function Dashboard() {
           value={portfolioGrade.overall ? <GradeBadge grade={portfolioGrade.overall} large /> : '—'}
           sub={portfolioGrade.score != null ? `Score: ${portfolioGrade.score}` : null}
         />
+        <BenchmarkBetaCard
+          benchmark={betaBenchmark}
+          onBenchmarkChange={setBetaBenchmark}
+          beta={marketExposure.beta}
+          exposure={marketExposure.betaAdjustedExposure}
+        />
         <SummaryCard label="Ulcer Index" value={portfolioGrade.ulcer_index ?? '—'} />
         <SummaryCard label="Calmar Ratio" value={portfolioGrade.calmar ?? '—'} />
         <SummaryCard label="Omega Ratio" value={portfolioGrade.omega ?? '—'} />
         <SummaryCard label="Sortino Ratio" value={portfolioGrade.sortino ?? '—'} />
         <SummaryCard label="Sharpe Ratio" value={portfolioGrade.sharpe ?? '—'} />
-        <SummaryCard label="YTD Dividends" value={fmt(totals.ytdDivs)} color="#4dff91" />
-        <SummaryCard label={`${currentMonth} Income`} value={fmt(totals.currentMonthIncome)} color="#4dff91" sub={currentMonthSub} />
-        <SummaryCard label="Est. Monthly Income" value={fmt(totals.monthlyIncome)} color="#4dff91" sub="Annual estimate / 12" />
-        <SummaryCard label="Est. Mo$ Reinvested" value={fmt(totals.monthlyReinvested)} color="#7ecfff" sub="Forward run-rate" />
-        <SummaryCard label="Est. Mo$ Not Reinvested" value={fmt(totals.monthlyNotReinvested)} color="#ffb300" sub="Forward run-rate" />
-        <SummaryCard label="Est. % Reinvested" value={pct(totals.reinvestPct)} color="#66bb6a" sub="Forward run-rate" />
-        <SummaryCard label={`${currentMonth} Reinvested`} value={fmt(totals.currentMonthReinvested)} color="#7ecfff" sub={currentMonthSub} />
-        <SummaryCard label={`${currentMonth} Not Reinvested`} value={fmt(totals.currentMonthNotReinvested)} color="#ffb300" sub={currentMonthSub} />
-        <SummaryCard label={`${currentMonth} % Reinvested`} value={totals.currentMonthReinvestPct != null ? pct(totals.currentMonthReinvestPct) : '—'} color="#66bb6a" sub={currentMonthSub} />
-        <SummaryCard label="Est. Annual Income" value={fmt(totals.annualIncome)} color="#4dff91" />
-        <SummaryCard label="Portfolio Value" value={fmt(totals.currentValue)} color="#7ecfff" />
+        <SummaryCard label="YTD Dividends" value={fmt(totals.ytdDivs)} color="var(--pos)" />
+        <SummaryCard label={`${currentMonth} Income`} value={fmt(totals.currentMonthIncome)} color="var(--pos)" sub={currentMonthSub} />
+        <SummaryCard label="Est. Monthly Income" value={fmt(totals.monthlyIncome)} color="var(--pos)" sub="Annual estimate / 12" />
+        <SummaryCard label="Est. Mo$ Reinvested" value={fmt(totals.monthlyReinvested)} color="var(--accent-bright)" sub="Forward run-rate" />
+        <SummaryCard label="Est. Mo$ Not Reinvested" value={fmt(totals.monthlyNotReinvested)} color="var(--warning-money)" sub="Forward run-rate" />
+        <SummaryCard label="Est. % Reinvested" value={pct(totals.reinvestPct)} color="var(--pos-muted)" sub="Forward run-rate" />
+        <SummaryCard label={`${currentMonth} Reinvested`} value={fmt(totals.currentMonthReinvested)} color="var(--accent-bright)" sub={currentMonthSub} />
+        <SummaryCard label={`${currentMonth} Not Reinvested`} value={fmt(totals.currentMonthNotReinvested)} color="var(--warning-money)" sub={currentMonthSub} />
+        <SummaryCard label={`${currentMonth} % Reinvested`} value={totals.currentMonthReinvestPct != null ? pct(totals.currentMonthReinvestPct) : '—'} color="var(--pos-muted)" sub={currentMonthSub} />
+        <SummaryCard label="Est. Annual Income" value={fmt(totals.annualIncome)} color="var(--pos)" />
+        <SummaryCard label="Portfolio Value" value={fmt(totals.currentValue)} color="var(--accent-bright)" />
         <SummaryCard label="Avg Yield on Cost" value={pct(totals.avgYoc)} />
         <SummaryCard label="Current Yield" value={pct(totals.currentYield)} />
         <SummaryCard
@@ -1143,11 +1247,11 @@ export default function Dashboard() {
             value={sp500.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             sub={
               <span>
-                <span style={{ color: sp500.day_pct >= 0 ? '#4dff91' : '#ff6b6b' }}>
+                <span style={{ color: sp500.day_pct >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
                   Day: {sp500.day_pct >= 0 ? '+' : ''}{sp500.day_pct.toFixed(2)}%
                 </span>
                 {' · '}
-                <span style={{ color: sp500.ytd_pct >= 0 ? '#4dff91' : '#ff6b6b' }}>
+                <span style={{ color: sp500.ytd_pct >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
                   YTD: {sp500.ytd_pct >= 0 ? '+' : ''}{sp500.ytd_pct.toFixed(2)}%
                 </span>
               </span>
@@ -1159,7 +1263,7 @@ export default function Dashboard() {
       {/* Portfolio Equity Curve */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-          <h3 style={{ color: '#90caf9', margin: 0, fontSize: '1rem' }}>Portfolio Value Over Time</h3>
+          <h3 style={{ color: 'var(--accent-2)', margin: 0, fontSize: '1rem' }}>Portfolio Value Over Time</h3>
           <button
             className="btn btn-secondary"
             style={{ fontSize: '0.8rem', padding: '0.25rem 0.6rem' }}
@@ -1250,7 +1354,7 @@ export default function Dashboard() {
           )}
         </div>
         {navHistory.length >= 1 ? <div ref={navChartRef} /> : (
-          <p style={{ color: '#8899aa', fontSize: '0.85rem', margin: '1rem 0' }}>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', margin: '1rem 0' }}>
             No NAV snapshots yet. Click "Record NAV" or import data to start tracking.
           </p>
         )}
@@ -1258,7 +1362,16 @@ export default function Dashboard() {
 
       {/* Grade Thresholds (collapsible) */}
       <details className="card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem' }}>
-        <summary style={{ cursor: 'pointer', color: '#90caf9', fontWeight: 500 }}>Grade Thresholds Guide</summary>
+        <summary style={{ cursor: 'pointer', color: 'var(--accent-2)', fontWeight: 500 }}>Grade & Exposure Guide</summary>
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.82rem', lineHeight: 1.45, margin: '0.75rem 0 0' }}>
+          Portfolio beta is an exposure readout, not an input to the composite grade. It estimates how sensitive the portfolio is to the selected benchmark: 1.00x moves roughly with the benchmark, 0.80x moves about 80% as much, and 1.20x moves about 120% as much. The dollar estimate below beta translates a 1% benchmark move into an approximate portfolio-value move.
+        </p>
+        <div style={{ color: 'var(--text-dim)', fontSize: '0.82rem', lineHeight: 1.45, marginTop: '0.5rem' }}>
+          <div>Conservative income: 0.50-0.70 beta</div>
+          <div>Balanced income: 0.70-0.90 beta</div>
+          <div>Aggressive income: 0.90-1.15 beta</div>
+          <div>Very aggressive: &gt;1.15 beta</div>
+        </div>
         <div style={{ marginTop: '0.75rem', overflowX: 'auto' }}>
           <table style={{ fontSize: '0.8rem' }}>
             <thead>
@@ -1301,13 +1414,16 @@ export default function Dashboard() {
               <SortHeader col="gain_or_loss_percentage" align="right" tip="Unrealized gain or loss percentage">G/L%</SortHeader>
               <SortHeader col="price_return_pct" align="right" tip="Price-only return (excludes dividends)">PrRtn</SortHeader>
               <SortHeader col="total_return_pct" align="right" tip="Total return including dividends">TotRtn</SortHeader>
+              <SortHeader col="_beta_sort" align="right" tip="Price-return beta versus the ticker's best-fitting benchmark, usually SPY or QQQ">Beta</SortHeader>
+              <SortHeader col="_delta_up_sort" align="right" tip="Approximate effective delta on benchmark up-days from return regression; lower than down delta can indicate capped upside">Delta Up</SortHeader>
+              <SortHeader col="_delta_down_sort" align="right" tip="Approximate effective delta on benchmark down-days from return regression; higher than up delta can indicate fuller downside participation">Delta Down</SortHeader>
               <th style={{ textAlign: 'center', whiteSpace: 'nowrap', cursor: 'default', userSelect: 'none' }} title="Total return vs yield — Good means total return exceeds yield, Poor means yield exceeds total return (price erosion)">
                 <span style={{ cursor: 'pointer' }} onClick={() => setSortCol(sc => sc === 'ret_vs_yld_sort' ? sc : 'ret_vs_yld_sort')}>RvY</span>
                 {' '}
                 <span
                   onClick={() => setRvyMode(m => m === 'yoc' ? 'cur' : 'yoc')}
                   title={rvyMode === 'yoc' ? 'Using Yield on Cost — click to switch to Current Yield' : 'Using Current Yield — click to switch to Yield on Cost'}
-                  style={{ fontSize: '0.65rem', background: rvyMode === 'yoc' ? '#1a3a5c' : '#1a3a2a', color: rvyMode === 'yoc' ? '#7ecfff' : '#4dff91', border: `1px solid ${rvyMode === 'yoc' ? '#294b73' : '#2a5c3a'}`, borderRadius: 3, padding: '1px 4px', cursor: 'pointer', fontWeight: 600 }}
+                  style={{ fontSize: '0.65rem', background: rvyMode === 'yoc' ? 'var(--p-1a3a5c)' : 'var(--p-1a3a2a)', color: rvyMode === 'yoc' ? 'var(--accent-bright)' : 'var(--pos)', border: `1px solid ${rvyMode === 'yoc' ? 'var(--p-294b73)' : 'var(--p-2a5c3a)'}`, borderRadius: 3, padding: '1px 4px', cursor: 'pointer', fontWeight: 600 }}
                 >
                   {rvyMode === 'yoc' ? 'YOC' : 'CYld'}
                 </span>
@@ -1331,6 +1447,7 @@ export default function Dashboard() {
           <tbody>
             {sorted.map(h => {
               const g = tickerGrades[h.ticker]
+              const risk = h._risk || {}
               const cov = h._coverage
               const navMeta = h._coverage_meta || {}
               const navSeverity = navMeta.nav_erosion_severity || navSeverityFromRatio(cov)
@@ -1360,7 +1477,7 @@ export default function Dashboard() {
                     <a
                       href="#"
                       onClick={(e) => { e.preventDefault(); setModalTicker(h.ticker) }}
-                      style={{ color: '#7ecfff', fontWeight: 600 }}
+                      style={{ color: 'var(--accent-bright)', fontWeight: 600 }}
                     >
                       {h.ticker}
                     </a>
@@ -1376,25 +1493,46 @@ export default function Dashboard() {
                   <td style={{ textAlign: 'right', color: gradeColor(h.gain_or_loss_percentage) }}>{pct(h.gain_or_loss_percentage)}</td>
                   <td style={{ textAlign: 'right', color: gradeColor(h.price_return_pct) }}>{pct(h.price_return_pct)}</td>
                   <td style={{ textAlign: 'right', color: gradeColor(h.total_return_pct) }}>{pct(h.total_return_pct)}</td>
-                  <td style={{ textAlign: 'center', color: h.ret_vs_yld?.color || '#6f7890', fontWeight: 600 }} title={h.ret_vs_yld ? `Total Return ${h.ret_vs_yld.totalReturnPct?.toFixed(2)}% vs Yield ${h.ret_vs_yld.yieldOnCost?.toFixed(2)}% (spread ${h.ret_vs_yld.spread?.toFixed(2)}%)` : 'N/A'}>{h.ret_vs_yld?.label || '—'}</td>
+                  <td
+                    style={{ textAlign: 'right', whiteSpace: 'nowrap' }}
+                    title={risk.beta_benchmark ? `Beta regressed against ${risk.beta_benchmark}, the best-fitting benchmark for this ticker.` : 'Beta unavailable'}
+                  >
+                    {riskNum(risk.beta, tickerRiskLoading)}
+                    {risk.beta_benchmark && risk.beta != null && (
+                      <span style={{ color: 'var(--p-6f7890)', fontSize: '0.8em', marginLeft: 3 }}>vs {risk.beta_benchmark}</span>
+                    )}
+                  </td>
+                  <td
+                    style={{ textAlign: 'right', color: 'var(--p-2f9d55)' }}
+                    title={risk.beta_benchmark ? `Approximate effective delta on ${risk.beta_benchmark} up-days. This is a price-regression proxy, not true option delta.` : 'Approximate up-delta unavailable'}
+                  >
+                    {riskNum(risk.delta_up, tickerRiskLoading)}
+                  </td>
+                  <td
+                    style={{ textAlign: 'right', color: 'var(--p-d94b4b)' }}
+                    title={risk.beta_benchmark ? `Approximate effective delta on ${risk.beta_benchmark} down-days. This is a price-regression proxy, not true option delta.` : 'Approximate down-delta unavailable'}
+                  >
+                    {riskNum(risk.delta_down, tickerRiskLoading)}
+                  </td>
+                  <td style={{ textAlign: 'center', color: h.ret_vs_yld?.color || 'var(--p-6f7890)', fontWeight: 600 }} title={h.ret_vs_yld ? `Total Return ${h.ret_vs_yld.totalReturnPct?.toFixed(2)}% vs Yield ${h.ret_vs_yld.yieldOnCost?.toFixed(2)}% (spread ${h.ret_vs_yld.spread?.toFixed(2)}%)` : 'N/A'}>{h.ret_vs_yld?.label || '—'}</td>
                   <td style={{ textAlign: 'right' }}>{h.div != null && h.div > 0 ? `$${Number(h.div).toFixed(4)}` : '—'}</td>
                   <td style={{ textAlign: 'right' }}>{pct(h.current_annual_yield)}</td>
                   <td style={{ textAlign: 'right' }}>{pct(h.annual_yield_on_cost)}</td>
-                  <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(h.ytd_divs)}</td>
-                  <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(h.current_month_income)}</td>
-                  <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(h.approx_monthly_income)}</td>
-                  <td style={{ textAlign: 'right', color: '#9ad7ff' }}>{fmtShares(h.drip_shares_monthly)}</td>
-                  <td style={{ textAlign: 'right', color: '#7ecfff' }}>{fmt(h.monthly_income_reinvested)}</td>
-                  <td style={{ textAlign: 'right', color: '#ffb300' }}>{fmt(h.monthly_income_not_reinvested)}</td>
-                  <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(h.estim_payment_per_year)}</td>
-                  <td style={{ textAlign: 'right', color: '#9ad7ff' }}>{fmtShares(h.drip_shares_yearly)}</td>
+                  <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(h.ytd_divs)}</td>
+                  <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(h.current_month_income)}</td>
+                  <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(h.approx_monthly_income)}</td>
+                  <td style={{ textAlign: 'right', color: 'var(--accent-soft)' }}>{fmtShares(h.drip_shares_monthly)}</td>
+                  <td style={{ textAlign: 'right', color: 'var(--accent-bright)' }}>{fmt(h.monthly_income_reinvested)}</td>
+                  <td style={{ textAlign: 'right', color: 'var(--warning-money)' }}>{fmt(h.monthly_income_not_reinvested)}</td>
+                  <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(h.estim_payment_per_year)}</td>
+                  <td style={{ textAlign: 'right', color: 'var(--accent-soft)' }}>{fmtShares(h.drip_shares_yearly)}</td>
                   <td style={{ textAlign: 'right', color: pfiColor(h.paid_for_itself), fontWeight: pfiVal(h.paid_for_itself) >= 100 ? 700 : 400 }}>
                     {h.paid_for_itself == null ? '—' : (h.paid_for_itself * 100).toFixed(2) + '%'}
                   </td>
                   <td
                     style={{
                       textAlign: 'right',
-                      color: cov == null ? '#6f7890' : navColor,
+                      color: cov == null ? 'var(--p-6f7890)' : navColor,
                       fontWeight: cov != null ? 600 : 400,
                       minWidth: 92,
                     }}
@@ -1411,10 +1549,10 @@ export default function Dashboard() {
                         style={{
                           width: 46,
                           height: 20,
-                          border: '1px solid #294b73',
+                          border: '1px solid var(--p-294b73)',
                           borderRadius: 4,
-                          background: '#0f1c36',
-                          color: navScope === 'test' ? '#7ecfff' : navScope === 'skip' ? '#ffb300' : '#9aa8bd',
+                          background: 'var(--p-0f1c36)',
+                          color: navScope === 'test' ? 'var(--accent-bright)' : navScope === 'skip' ? 'var(--warning-money)' : 'var(--p-9aa8bd)',
                           fontSize: '0.62rem',
                           padding: '0 2px',
                         }}
@@ -1443,16 +1581,16 @@ export default function Dashboard() {
                       style={{
                         width: 74,
                         marginTop: 2,
-                        border: navBenchmarkInvalid ? '1px solid #ff6b6b' : '1px solid #203a5f',
+                        border: navBenchmarkInvalid ? '1px solid var(--neg)' : '1px solid var(--p-203a5f)',
                         borderRadius: 4,
-                        background: '#0d1830',
-                        color: navBenchmarkInvalid ? '#ffb3b3' : navBenchmark ? '#d7e8ff' : '#7d8799',
+                        background: 'var(--p-0d1830)',
+                        color: navBenchmarkInvalid ? 'var(--p-ffb3b3)' : navBenchmark ? 'var(--p-d7e8ff)' : 'var(--p-7d8799)',
                         fontSize: '0.58rem',
                         padding: '1px 3px',
                         textAlign: 'right',
                       }}
                     />
-                    <div style={{ fontSize: '0.58rem', color: '#7d8799', lineHeight: 1.1 }}>{navLabel}</div>
+                    <div style={{ fontSize: '0.58rem', color: 'var(--p-7d8799)', lineHeight: 1.1 }}>{navLabel}</div>
                   </td>
                   <td style={{ textAlign: 'center' }}>{g ? <GradeBadge grade={g.grade} /> : '—'}</td>
                 </tr>
@@ -1460,19 +1598,19 @@ export default function Dashboard() {
             })}
           </tbody>
           <tfoot>
-            <tr style={{ fontWeight: 700, borderTop: '2px solid #0f3460' }}>
+            <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
               <td colSpan={10} style={{ textAlign: 'right' }}>Totals</td>
               <td style={{ textAlign: 'right', color: gradeColor(totals.priceReturn) }}>{pct(totals.priceReturn)}</td>
               <td style={{ textAlign: 'right', color: gradeColor(totals.totalReturn) }}>{pct(totals.totalReturn)}</td>
-              <td colSpan={3} />
-              <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.ytdDivs)}</td>
-              <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.currentMonthIncome)}</td>
-              <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.monthlyIncome)}</td>
-              <td style={{ textAlign: 'right', color: '#9ad7ff' }}>{fmtShares(totals.dripSharesMonthly)}</td>
-              <td style={{ textAlign: 'right', color: '#7ecfff' }}>{fmt(totals.monthlyReinvested)}</td>
-              <td style={{ textAlign: 'right', color: '#ffb300' }}>{fmt(totals.monthlyNotReinvested)}</td>
-              <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.annualIncome)}</td>
-              <td style={{ textAlign: 'right', color: '#9ad7ff' }}>{fmtShares(totals.dripSharesYearly)}</td>
+              <td colSpan={7} />
+              <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(totals.ytdDivs)}</td>
+              <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(totals.currentMonthIncome)}</td>
+              <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(totals.monthlyIncome)}</td>
+              <td style={{ textAlign: 'right', color: 'var(--accent-soft)' }}>{fmtShares(totals.dripSharesMonthly)}</td>
+              <td style={{ textAlign: 'right', color: 'var(--accent-bright)' }}>{fmt(totals.monthlyReinvested)}</td>
+              <td style={{ textAlign: 'right', color: 'var(--warning-money)' }}>{fmt(totals.monthlyNotReinvested)}</td>
+              <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(totals.annualIncome)}</td>
+              <td style={{ textAlign: 'right', color: 'var(--accent-soft)' }}>{fmtShares(totals.dripSharesYearly)}</td>
               <td colSpan={3} />
             </tr>
           </tfoot>

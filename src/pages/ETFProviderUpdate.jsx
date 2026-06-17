@@ -86,9 +86,9 @@ export default function ETFProviderUpdate() {
           style={{
             minWidth: 260,
             padding: '0.5rem 0.75rem',
-            backgroundColor: '#1a1a2e',
-            color: '#fff',
-            border: '1px solid #4a5568',
+            backgroundColor: 'var(--bg)',
+            color: 'var(--white)',
+            border: '1px solid var(--p-4a5568)',
             borderRadius: 4,
             fontSize: '0.9rem',
           }}

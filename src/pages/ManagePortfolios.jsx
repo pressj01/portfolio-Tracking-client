@@ -271,7 +271,7 @@ export default function ManagePortfolios() {
                   </div>
                 ) : (
                   <span
-                    style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', borderBottom: '1px dashed #64b5f6' }}
+                    style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', borderBottom: '1px dashed var(--accent)' }}
                     onClick={() => startRename(p)}
                     title="Click to rename"
                   >
@@ -316,7 +316,7 @@ export default function ManagePortfolios() {
               <td style={{ textAlign: 'center' }}>
                 <button className="btn btn-sm" onClick={() => setProfileId(String(p.id))} title="Switch to this portfolio">Select</button>
                 {p.holdings_count > 0 && (
-                  <button className="btn btn-sm" style={{ marginLeft: '0.5rem', borderColor: '#f0ad4e', color: '#f0ad4e' }} onClick={() => clearPortfolioData(p)} title="Clear all data (keep portfolio)">Clear</button>
+                  <button className="btn btn-sm" style={{ marginLeft: '0.5rem', borderColor: 'var(--p-f0ad4e)', color: 'var(--p-f0ad4e)' }} onClick={() => clearPortfolioData(p)} title="Clear all data (keep portfolio)">Clear</button>
                 )}
                 {p.id !== 1 && (
                   <button className="btn btn-sm btn-danger" style={{ marginLeft: '0.5rem' }} onClick={() => deletePortfolio(p)}>Delete</button>
@@ -332,18 +332,18 @@ export default function ManagePortfolios() {
         <h3 style={{ margin: 0 }}>Aggregates</h3>
         <button className="btn btn-primary btn-sm" onClick={createAggregate}>+ Add Aggregate</button>
       </div>
-      <p style={{ color: '#aaa', marginBottom: '1rem', fontSize: '0.9rem' }}>
+      <p style={{ color: 'var(--p-aaa)', marginBottom: '1rem', fontSize: '0.9rem' }}>
         Define one or more virtual portfolios that combine selected real portfolios. Each aggregate appears in the portfolio selector.
       </p>
 
       {profiles.length <= 1 ? (
-        <p style={{ color: '#888', fontStyle: 'italic' }}>Add at least one additional portfolio to use aggregates.</p>
+        <p style={{ color: 'var(--p-888)', fontStyle: 'italic' }}>Add at least one additional portfolio to use aggregates.</p>
       ) : aggregates.length === 0 ? (
-        <p style={{ color: '#888', fontStyle: 'italic' }}>No aggregates yet. Click "+ Add Aggregate" to create one.</p>
+        <p style={{ color: 'var(--p-888)', fontStyle: 'italic' }}>No aggregates yet. Click "+ Add Aggregate" to create one.</p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           {aggregates.map(agg => (
-            <div key={agg.id} style={{ border: '1px solid #333', borderRadius: '6px', padding: '0.75rem 1rem' }}>
+            <div key={agg.id} style={{ border: '1px solid var(--p-333)', borderRadius: '6px', padding: '0.75rem 1rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.5rem' }}>
                 {editingAggId === agg.id ? (
                   <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -360,7 +360,7 @@ export default function ManagePortfolios() {
                   </div>
                 ) : (
                   <span
-                    style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600, fontSize: '1.05rem', borderBottom: '1px dashed #64b5f6' }}
+                    style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600, fontSize: '1.05rem', borderBottom: '1px dashed var(--accent)' }}
                     onClick={() => startRenameAggregate(agg)}
                     title="Click to rename"
                   >
@@ -373,7 +373,7 @@ export default function ManagePortfolios() {
                   <button className="btn btn-sm btn-danger" onClick={() => deleteAggregate(agg)}>Delete</button>
                 </div>
               </div>
-              <div style={{ color: '#aaa', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
+              <div style={{ color: 'var(--p-aaa)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
                 Members ({agg.member_ids.length} of {summary.filter(p => p.id !== 1).length}):
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem 1rem' }}>
@@ -394,13 +394,13 @@ export default function ManagePortfolios() {
       )}
 
       {ownerImportUsed && (
-        <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid #333' }}>
+        <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid var(--p-333)' }}>
           <h3 style={{ marginBottom: '0.5rem' }}>Sync Owner</h3>
-          <p style={{ color: '#aaa', marginBottom: '1rem', fontSize: '0.9rem' }}>
+          <p style={{ color: 'var(--p-aaa)', marginBottom: '1rem', fontSize: '0.9rem' }}>
             Update Owner (profile 1) to match the combined totals of a chosen source set. Missing tickers are added; tickers no longer in the source are removed.
           </p>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-            <label style={{ fontSize: '0.9rem', color: '#ccc' }}>Source:</label>
+            <label style={{ fontSize: '0.9rem', color: 'var(--p-ccc)' }}>Source:</label>
             <select
               value={reconcileAggId}
               onChange={(e) => setReconcileAggId(e.target.value)}

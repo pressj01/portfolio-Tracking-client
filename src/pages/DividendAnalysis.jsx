@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { useTheme } from '../context/ThemeContext'
+import { chartTheme, themedPlotlyLayout } from '../utils/chartTheme'
 
 function GradeBadge({ grade, large }) {
   if (!grade || grade === 'N/A') return <span className={`grade-badge grade-na ${large ? 'grade-lg' : ''}`}>N/A</span>
@@ -61,6 +63,7 @@ const DONUT_COLORS = [
 
 function YieldPayoutChart({ rows }) {
   const chartRef = useRef(null)
+  const { isDark } = useTheme()
   const [metric, setMetric] = useState('yield_pct')
   const [group, setGroup] = useState('holdings')
   const [metricOpen, setMetricOpen] = useState(false)
@@ -137,6 +140,7 @@ function YieldPayoutChart({ rows }) {
   useEffect(() => {
     if (!chartData || !chartRef.current || !window.Plotly) return
     const el = chartRef.current
+    const ct = chartTheme(isDark)
 
     const traces = [
       {
@@ -164,22 +168,16 @@ function YieldPayoutChart({ rows }) {
       },
     ]
 
-    const layout = {
-      template: 'plotly_dark',
-      paper_bgcolor: '#1a1f2e',
-      plot_bgcolor: 'rgba(255,255,255,0.03)',
-      font: { color: '#e0e8f5' },
+    const layout = themedPlotlyLayout({
       margin: { t: 10, b: chartData.labels.length > 15 ? 120 : 80, l: 60, r: 60 },
       xaxis: {
         tickangle: chartData.labels.length > 10 ? -45 : 0,
         tickfont: { size: chartData.labels.length > 30 ? 9 : 11 },
-        gridcolor: '#1a2233',
       },
       yaxis: {
         title: 'Yield (%)',
         titlefont: { color: '#38bdf8', size: 12 },
         tickfont: { color: '#38bdf8' },
-        gridcolor: '#1a2233',
         ticksuffix: '%',
         separatethousands: true,
       },
@@ -195,11 +193,11 @@ function YieldPayoutChart({ rows }) {
       },
       legend: { orientation: 'h', y: 1.12, x: 0.5, xanchor: 'center' },
       bargap: 0.15,
-    }
+    }, isDark)
 
-    window.Plotly.newPlot(el, traces, layout, { responsive: true })
+    window.Plotly.newPlot(el, traces, themedPlotlyLayout(layout, isDark), { responsive: true })
     return () => window.Plotly.purge(el)
-  }, [chartData, metric])
+  }, [chartData, metric, isDark])
 
   if (!rows?.length) return null
 
@@ -210,14 +208,14 @@ function YieldPayoutChart({ rows }) {
     position: 'relative', display: 'inline-block',
   }
   const btnStyle = {
-    background: 'transparent', border: '1px solid #334155', color: '#e0e8f5',
+    background: 'transparent', border: '1px solid var(--p-334155)', color: 'var(--text-strong)',
     padding: '0.3rem 0.7rem', borderRadius: '4px', cursor: 'pointer', fontSize: '0.85rem',
     minWidth: '130px', textAlign: 'left',
   }
   const menuStyle = {
     position: 'absolute', top: '100%', right: 0, zIndex: 20,
-    background: '#1e293b', border: '1px solid #334155', borderRadius: '4px',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.5)', minWidth: '140px',
+    background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: '4px',
+    boxShadow: '0 4px 12px var(--panel-dim)', minWidth: '140px',
   }
   const itemStyle = (active) => ({
     padding: '0.4rem 0.75rem', cursor: 'pointer', fontSize: '0.85rem',
@@ -228,8 +226,8 @@ function YieldPayoutChart({ rows }) {
   return (
     <div className="da-chart-panel" style={{ gridColumn: '1 / -1' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1rem 0.25rem' }}>
-        <div style={{ fontSize: '1rem', fontWeight: 600, color: '#e0e8f5' }}>
-          Yield/Payout <span style={{ fontSize: '0.75rem', color: '#8899aa', cursor: 'help' }} title="Compare yield and payout across your portfolio grouped by different dimensions">&#9432;</span>
+        <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-strong)' }}>
+          Yield/Payout <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', cursor: 'help' }} title="Compare yield and payout across your portfolio grouped by different dimensions">&#9432;</span>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <div ref={metricRef} style={dropdownStyle}>
@@ -268,7 +266,7 @@ function YieldPayoutChart({ rows }) {
           </div>
         </div>
       </div>
-      <div style={{ padding: '0 1rem 0.35rem', color: '#9aa8ba', fontSize: '0.78rem', lineHeight: 1.35 }}>
+      <div style={{ padding: '0 1rem 0.35rem', color: 'var(--p-9aa8ba)', fontSize: '0.78rem', lineHeight: 1.35 }}>
         Blue bars show estimated annual yield on the left axis. Purple dots show estimated annual payout dollars on the right axis. Compare bars to bars and dots to dots; a high-yield holding may still pay fewer dollars if the position is small.
       </div>
       <div ref={chartRef} style={{ width: '100%', height: '400px' }} />
@@ -278,6 +276,7 @@ function YieldPayoutChart({ rows }) {
 
 function CategoryDividendsChart({ rows, categories }) {
   const chartRef = useRef(null)
+  const { isDark } = useTheme()
   const [categoryId, setCategoryId] = useState('')
   const [subcategoryId, setSubcategoryId] = useState('')
 
@@ -352,6 +351,7 @@ function CategoryDividendsChart({ rows, categories }) {
   useEffect(() => {
     if (!chartRef.current || !window.Plotly) return
     const el = chartRef.current
+    const ct = chartTheme(isDark)
 
     if (!chartData?.labels?.length) {
       window.Plotly.purge(el)
@@ -364,29 +364,26 @@ function CategoryDividendsChart({ rows, categories }) {
       hole: 0.55,
       labels: chartData.labels,
       values: chartData.values,
-      marker: { colors, line: { color: '#16213e', width: 1.5 } },
+      marker: { colors, line: { color: ct.surface, width: 1.5 } },
       textinfo: 'none',
       hovertemplate: '%{label}: $%{value:,.2f}<br>%{percent}<extra></extra>',
       sort: false,
     }]
-    const layout = {
-      template: 'plotly_dark',
-      paper_bgcolor: '#16213e',
-      plot_bgcolor: '#16213e',
+    const layout = themedPlotlyLayout({
       margin: { l: 10, r: 10, t: 10, b: 10 },
       showlegend: false,
       height: 280,
       width: 280,
-    }
+    }, isDark, { surface: true })
 
-    window.Plotly.newPlot(el, traces, layout, { responsive: true, displayModeBar: false })
+    window.Plotly.newPlot(el, traces, themedPlotlyLayout(layout, isDark), { responsive: true, displayModeBar: false })
     return () => window.Plotly.purge(el)
-  }, [chartData])
+  }, [chartData, isDark])
 
   const controlStyle = {
-    background: '#0f3460',
-    border: '1px solid #1a2a4a',
-    color: '#e0e8f5',
+    background: 'var(--border)',
+    border: '1px solid var(--p-1a2a4a)',
+    color: 'var(--text-strong)',
     borderRadius: '6px',
     padding: '0.3rem 0.5rem',
     fontSize: '0.82rem',
@@ -401,16 +398,16 @@ function CategoryDividendsChart({ rows, categories }) {
 
   return (
     <div className="da-chart-panel" style={{ padding: '0.75rem 1rem' }}>
-      <h3 style={{ color: '#90caf9', margin: '0 0 0.75rem', fontSize: '1rem' }}>Total Dividends Received</h3>
+      <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.75rem', fontSize: '1rem' }}>Total Dividends Received</h3>
       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-        <span style={{ color: '#8899aa', fontSize: '0.8rem' }}>Category:</span>
+        <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Category:</span>
         <select style={controlStyle} value={categoryId} onChange={e => { setCategoryId(e.target.value); setSubcategoryId('') }} title="Filter category">
           <option value="">All categories</option>
           {(categories || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         {selectedCategory && selectedCategory.subcategories?.length > 0 && (
           <>
-            <span style={{ color: '#8899aa', fontSize: '0.8rem' }}>Sub-category:</span>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Sub-category:</span>
             <select style={controlStyle} value={subcategoryId} onChange={e => setSubcategoryId(e.target.value)} title="Filter subcategory">
               <option value="">All sub-categories</option>
               {selectedCategory.subcategories.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -420,7 +417,7 @@ function CategoryDividendsChart({ rows, categories }) {
         {categoryId && (
           <button
             onClick={() => { setCategoryId(''); setSubcategoryId('') }}
-            style={{ ...controlStyle, cursor: 'pointer', color: '#90caf9' }}
+            style={{ ...controlStyle, cursor: 'pointer', color: 'var(--accent-2)' }}
           >
             Clear
           </button>
@@ -430,15 +427,15 @@ function CategoryDividendsChart({ rows, categories }) {
         <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start' }}>
           <div ref={chartRef} style={{ width: 280, flexShrink: 0 }} />
           <div style={{ flex: 1, overflowX: 'auto', minWidth: 0 }}>
-            <div style={{ color: '#8899aa', fontSize: '0.8rem', marginBottom: '0.5rem' }}>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: '0.5rem' }}>
               {heading} - {fmt(chartData.total)} total dividends received
             </div>
             <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ background: '#0f3460' }}>
-                  <th style={{ textAlign: 'left', padding: '0.55rem 0.65rem', color: '#b5c5d8' }}>{nameLabel}</th>
-                  <th style={{ textAlign: 'right', padding: '0.55rem 0.65rem', color: '#b5c5d8' }}>Total Dividends</th>
-                  <th style={{ textAlign: 'right', padding: '0.55rem 0.65rem', color: '#b5c5d8' }}>Share</th>
+                <tr style={{ background: 'var(--border)' }}>
+                  <th style={{ textAlign: 'left', padding: '0.55rem 0.65rem', color: 'var(--p-b5c5d8)' }}>{nameLabel}</th>
+                  <th style={{ textAlign: 'right', padding: '0.55rem 0.65rem', color: 'var(--p-b5c5d8)' }}>Total Dividends</th>
+                  <th style={{ textAlign: 'right', padding: '0.55rem 0.65rem', color: 'var(--p-b5c5d8)' }}>Share</th>
                 </tr>
               </thead>
               <tbody>
@@ -446,18 +443,18 @@ function CategoryDividendsChart({ rows, categories }) {
                   const color = DONUT_COLORS[i % DONUT_COLORS.length]
                   const share = chartData.total ? (g.value / chartData.total) * 100 : 0
                   return (
-                    <tr key={g.name} style={{ borderBottom: '1px solid #0f3460' }}>
+                    <tr key={g.name} style={{ borderBottom: '1px solid var(--border)' }}>
                       <td style={{ padding: '0.55rem 0.65rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
                           <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: color, flexShrink: 0 }} />
                           <div>
-                            <div style={{ color: '#e0e8f5', fontWeight: 600 }}>{g.name}</div>
-                            <div style={{ color: '#8899aa', fontSize: '0.75rem' }}>{g.count} item{g.count !== 1 ? 's' : ''}</div>
+                            <div style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{g.name}</div>
+                            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>{g.count} item{g.count !== 1 ? 's' : ''}</div>
                           </div>
                         </div>
                       </td>
-                      <td style={{ textAlign: 'right', padding: '0.55rem 0.65rem', color: '#e0e8f5' }}>{fmt(g.value)}</td>
-                      <td style={{ textAlign: 'right', padding: '0.55rem 0.65rem', color: '#e0e8f5' }}>{share.toFixed(2)}%</td>
+                      <td style={{ textAlign: 'right', padding: '0.55rem 0.65rem', color: 'var(--text-strong)' }}>{fmt(g.value)}</td>
+                      <td style={{ textAlign: 'right', padding: '0.55rem 0.65rem', color: 'var(--text-strong)' }}>{share.toFixed(2)}%</td>
                     </tr>
                   )
                 })}
@@ -466,7 +463,7 @@ function CategoryDividendsChart({ rows, categories }) {
           </div>
         </div>
       ) : (
-        <div style={{ height: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8899aa' }}>
+        <div style={{ height: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)' }}>
           No dividend history for the selected category filters.
           <div ref={chartRef} style={{ display: 'none' }} />
         </div>
@@ -477,6 +474,7 @@ function CategoryDividendsChart({ rows, categories }) {
 
 function DividendPipelineChart({ pipeline }) {
   const chartRef = useRef(null)
+  const { isDark } = useTheme()
   const [selectedMonth, setSelectedMonth] = useState('')
 
   useEffect(() => {
@@ -487,6 +485,7 @@ function DividendPipelineChart({ pipeline }) {
   useEffect(() => {
     if (!pipeline?.months?.length || !chartRef.current || !window.Plotly) return
     const el = chartRef.current
+    const ct = chartTheme(isDark)
     const labels = pipeline.labels || pipeline.months
     const months = pipeline.months
     const valueFor = (month, key) => Number(pipeline.totals?.[month]?.[key] || 0)
@@ -539,27 +538,23 @@ function DividendPipelineChart({ pipeline }) {
       name: 'Total',
       text: totals.map(v => v > 0 ? `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : ''),
       textposition: 'top center',
-      textfont: { color: '#e0e8f5', size: 11 },
+      textfont: { color: ct.title, size: 11 },
       hoverinfo: 'skip',
       showlegend: false,
     })
     const maxTotal = Math.max(...totals, 100)
-    const layout = {
+    const layout = themedPlotlyLayout({
       title: `Dividend Pipeline - Next 12 Months | Bar total = full monthly projection${pipeline.as_of ? ` | As of ${pipeline.as_of}` : ''}`,
-      template: 'plotly_dark',
-      paper_bgcolor: '#1a1f2e',
-      plot_bgcolor: 'rgba(255,255,255,0.03)',
-      font: { color: '#e0e8f5' },
       barmode: 'stack',
-      xaxis: { type: 'category', categoryorder: 'array', categoryarray: labels, gridcolor: '#1a2233' },
-      yaxis: { title: 'Dividend Income ($)', gridcolor: '#1a2233', tickprefix: '$', range: [0, maxTotal * 1.28] },
+      xaxis: { type: 'category', categoryorder: 'array', categoryarray: labels },
+      yaxis: { title: 'Dividend Income ($)', tickprefix: '$', range: [0, maxTotal * 1.28] },
       legend: { orientation: 'h', y: 1.12, x: 0.5, xanchor: 'center' },
       margin: { t: 70, b: 60, l: 70, r: 20 },
-    }
+    }, isDark)
 
-    window.Plotly.newPlot(el, traces, layout, { responsive: true, displayModeBar: false })
+    window.Plotly.newPlot(el, traces, themedPlotlyLayout(layout, isDark), { responsive: true, displayModeBar: false })
     return () => window.Plotly.purge(el)
-  }, [pipeline])
+  }, [pipeline, isDark])
 
   if (!pipeline?.months?.length) return null
 
@@ -584,60 +579,60 @@ function DividendPipelineChart({ pipeline }) {
   return (
     <div className="da-chart-panel">
       <div style={{ padding: '0.75rem 1rem 0.25rem' }}>
-        <div style={{ fontSize: '1rem', fontWeight: 600, color: '#e0e8f5', marginBottom: '0.35rem' }}>
+        <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-strong)', marginBottom: '0.35rem' }}>
           Dividend Pipeline
         </div>
-        <div style={{ color: '#9aa8ba', fontSize: '0.78rem', lineHeight: 1.35 }}>
+        <div style={{ color: 'var(--p-9aa8ba)', fontSize: '0.78rem', lineHeight: 1.35 }}>
           Stacked by certainty. The gray segment is only the remaining unconfirmed estimate; the full monthly projection is the total height of all stacked segments.
         </div>
       </div>
       <div ref={chartRef} className="da-chart-div" style={{ height: '420px' }} />
       <div style={{ padding: '0 1rem 1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
-          <label style={{ color: '#8899aa', fontSize: '0.82rem' }}>Month</label>
+          <label style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Month</label>
           <select
             value={selectedMonth}
             onChange={e => setSelectedMonth(e.target.value)}
-            style={{ background: '#0f3460', color: '#e0e8f5', border: '1px solid #1a2a4a', borderRadius: 6, padding: '0.3rem 0.5rem', fontSize: '0.82rem' }}
+            style={{ background: 'var(--border)', color: 'var(--text-strong)', border: '1px solid var(--p-1a2a4a)', borderRadius: 6, padding: '0.3rem 0.5rem', fontSize: '0.82rem' }}
           >
             {pipeline.months.map((m, i) => <option key={m} value={m}>{pipeline.labels?.[i] || m}</option>)}
           </select>
-          <span style={{ color: '#e0e8f5', fontSize: '0.85rem' }}>
+          <span style={{ color: 'var(--text-strong)', fontSize: '0.85rem' }}>
             {selectedLabel}: {fmt(monthTotal)}
           </span>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.65rem', color: '#9aa8ba', fontSize: '0.8rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.65rem', color: 'var(--p-9aa8ba)', fontSize: '0.8rem' }}>
           {['received', 'earned_not_paid', 'declared', 'estimated'].map(key => (
             <span key={key}>
-              {bucketLabel[key]}: <strong style={{ color: '#e0e8f5' }}>{fmt(selectedTotals[key] || 0)}</strong>
+              {bucketLabel[key]}: <strong style={{ color: 'var(--text-strong)' }}>{fmt(selectedTotals[key] || 0)}</strong>
             </span>
           ))}
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', fontSize: '0.84rem', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ background: '#0f3460' }}>
-                <th style={{ textAlign: 'left', padding: '0.5rem 0.6rem', color: '#b5c5d8' }}>Ticker</th>
-                <th style={{ textAlign: 'left', padding: '0.5rem 0.6rem', color: '#b5c5d8' }}>Status</th>
-                <th style={{ textAlign: 'center', padding: '0.5rem 0.6rem', color: '#b5c5d8' }}>Ex-Date</th>
-                <th style={{ textAlign: 'center', padding: '0.5rem 0.6rem', color: '#b5c5d8' }}>Pay Date</th>
-                <th style={{ textAlign: 'right', padding: '0.5rem 0.6rem', color: '#b5c5d8' }}>Amount</th>
-                <th style={{ textAlign: 'left', padding: '0.5rem 0.6rem', color: '#b5c5d8' }}>Source</th>
+              <tr style={{ background: 'var(--border)' }}>
+                <th style={{ textAlign: 'left', padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)' }}>Ticker</th>
+                <th style={{ textAlign: 'left', padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)' }}>Status</th>
+                <th style={{ textAlign: 'center', padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)' }}>Ex-Date</th>
+                <th style={{ textAlign: 'center', padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)' }}>Pay Date</th>
+                <th style={{ textAlign: 'right', padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)' }}>Amount</th>
+                <th style={{ textAlign: 'left', padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)' }}>Source</th>
               </tr>
             </thead>
             <tbody>
               {details.length ? details.map((d, i) => (
-                <tr key={`${d.ticker}-${d.status}-${d.pay_date}-${i}`} style={{ borderBottom: '1px solid #0f3460' }}>
-                  <td style={{ padding: '0.5rem 0.6rem', color: '#e0e8f5', fontWeight: 600 }}>{d.ticker}</td>
-                  <td style={{ padding: '0.5rem 0.6rem', color: statusColor[d.status] || '#e0e8f5' }}>{d.status}</td>
-                  <td style={{ padding: '0.5rem 0.6rem', textAlign: 'center', color: '#cbd5e1' }}>{d.ex_date || '\u2014'}</td>
-                  <td style={{ padding: '0.5rem 0.6rem', textAlign: 'center', color: '#cbd5e1' }}>{d.pay_date || '\u2014'}</td>
-                  <td style={{ padding: '0.5rem 0.6rem', textAlign: 'right', color: '#e0e8f5' }}>{fmt(d.amount)}</td>
-                  <td style={{ padding: '0.5rem 0.6rem', color: '#8899aa' }}>{d.source || '\u2014'}</td>
+                <tr key={`${d.ticker}-${d.status}-${d.pay_date}-${i}`} style={{ borderBottom: '1px solid var(--border)' }}>
+                  <td style={{ padding: '0.5rem 0.6rem', color: 'var(--text-strong)', fontWeight: 600 }}>{d.ticker}</td>
+                  <td style={{ padding: '0.5rem 0.6rem', color: statusColor[d.status] || 'var(--text-strong)' }}>{d.status}</td>
+                  <td style={{ padding: '0.5rem 0.6rem', textAlign: 'center', color: 'var(--p-cbd5e1)' }}>{d.ex_date || '\u2014'}</td>
+                  <td style={{ padding: '0.5rem 0.6rem', textAlign: 'center', color: 'var(--p-cbd5e1)' }}>{d.pay_date || '\u2014'}</td>
+                  <td style={{ padding: '0.5rem 0.6rem', textAlign: 'right', color: 'var(--text-strong)' }}>{fmt(d.amount)}</td>
+                  <td style={{ padding: '0.5rem 0.6rem', color: 'var(--text-dim)' }}>{d.source || '\u2014'}</td>
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={6} style={{ padding: '1rem', textAlign: 'center', color: '#8899aa' }}>
+                  <td colSpan={6} style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-dim)' }}>
                     No pipeline details for this month.
                   </td>
                 </tr>
@@ -653,6 +648,7 @@ function DividendPipelineChart({ pipeline }) {
 export default function DividendAnalysis() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
+  const { isDark } = useTheme()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -724,7 +720,7 @@ export default function DividendAnalysis() {
       if (!el || !data.charts[key]) return
       ids.push(elId)
       const fig = JSON.parse(data.charts[key])
-      Plotly.newPlot(el, fig.data, fig.layout, cfg)
+      Plotly.newPlot(el, fig.data, themedPlotlyLayout(fig.layout, isDark), cfg)
     })
 
     return () => {
@@ -733,7 +729,7 @@ export default function DividendAnalysis() {
         if (el) Plotly.purge(el)
       })
     }
-  }, [data])
+  }, [data, isDark])
 
   const handleSort = (col) => {
     if (sortCol === col) {
@@ -827,7 +823,7 @@ export default function DividendAnalysis() {
             </button>
             {catOpen && (
               <div className="growth-cat-dropdown">
-                <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
+                <label className="growth-cat-option" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
                   <input
                     type="checkbox"
                     checked={categories.length === 0 && subcategories.length === 0}
@@ -914,27 +910,27 @@ export default function DividendAnalysis() {
 
           {/* At-Risk Holdings detail */}
           {atRiskCount > 0 && (
-            <details className="card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem', borderLeft: '3px solid #ff6b6b' }}>
-              <summary style={{ cursor: 'pointer', color: '#ff6b6b', fontWeight: 600, fontSize: '0.95rem' }}>
+            <details className="card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem', borderLeft: '3px solid var(--neg)' }}>
+              <summary style={{ cursor: 'pointer', color: 'var(--neg)', fontWeight: 600, fontSize: '0.95rem' }}>
                 {atRiskCount} Holding{atRiskCount !== 1 ? 's' : ''} at Risk — {fmt(dividendSafety.portfolio_income_at_risk)} Annual Income at Risk
               </summary>
               <div style={{ marginTop: '0.75rem', overflowX: 'auto' }}>
                 <table style={{ fontSize: '0.85rem', width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
-                    <tr style={{ borderBottom: '1px solid #0f3460' }}>
-                      <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Ticker</th>
-                      <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Type</th>
-                      <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Risk Level</th>
-                      <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Safety Score</th>
-                      <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Est. Annual Income</th>
-                      <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: '#8899aa' }}>Reason(s)</th>
+                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                      <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Ticker</th>
+                      <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Type</th>
+                      <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Risk Level</th>
+                      <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Safety Score</th>
+                      <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Est. Annual Income</th>
+                      <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Reason(s)</th>
                     </tr>
                   </thead>
                   <tbody>
                     {dividendSafety.at_risk_holdings.map(h => (
-                      <tr key={h.ticker} style={{ borderBottom: '1px solid #0a1628' }}>
-                        <td style={{ padding: '0.4rem 0.5rem', color: '#7ecfff', fontWeight: 600 }}>{h.ticker}</td>
-                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center', color: '#e0e8f5' }}>
+                      <tr key={h.ticker} style={{ borderBottom: '1px solid var(--p-0a1628)' }}>
+                        <td style={{ padding: '0.4rem 0.5rem', color: 'var(--accent-bright)', fontWeight: 600 }}>{h.ticker}</td>
+                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center', color: 'var(--text-strong)' }}>
                           <SafetyModelLabel model={h.score_model} />
                         </td>
                         <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center' }}>
@@ -943,8 +939,8 @@ export default function DividendAnalysis() {
                         <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center' }}>
                           <SafetyScore score={h.safety_score} />
                         </td>
-                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: '#ffb300' }}>{fmt(h.est_annual_income)}</td>
-                        <td style={{ padding: '0.4rem 0.5rem', color: '#e0e8f5', fontSize: '0.8rem' }}>
+                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: 'var(--warning-money)' }}>{fmt(h.est_annual_income)}</td>
+                        <td style={{ padding: '0.4rem 0.5rem', color: 'var(--text-strong)', fontSize: '0.8rem' }}>
                           {h.risk_reasons?.length ? h.risk_reasons.join('; ') : 'No specific reason available'}
                         </td>
                       </tr>
@@ -972,7 +968,7 @@ export default function DividendAnalysis() {
                   {recalcing ? 'Recalculating...' : 'Recalculate from Holdings'}
                 </button>
               </div>
-              {recalcMsg && <div style={{ fontSize: '0.8rem', color: '#7ecfff', marginBottom: '0.25rem' }}>{recalcMsg}</div>}
+              {recalcMsg && <div style={{ fontSize: '0.8rem', color: 'var(--accent-bright)', marginBottom: '0.25rem' }}>{recalcMsg}</div>}
               <div id="da-chart-monthly-received" className="da-chart-div" />
             </div>}
             {data.charts.total_divs_ticker && <div className="da-chart-panel"><div id="da-chart-total-divs-ticker" className="da-chart-div" /></div>}
@@ -981,7 +977,7 @@ export default function DividendAnalysis() {
           </div>
 
           {/* Data table */}
-          <p style={{ color: '#8899aa', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Click any column header to sort. Click again to reverse.</p>
+          <p style={{ color: 'var(--text-dim)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Click any column header to sort. Click again to reverse.</p>
           <div className="sticky-table-wrap" style={{ maxHeight: '70vh' }}>
             <table>
               <thead>
@@ -989,7 +985,7 @@ export default function DividendAnalysis() {
                   {columns.map(col => (
                     <th key={col.key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: col.align || 'left', width: col.width || undefined }} onClick={() => handleSort(col.key)} title={col.tip || ''}>
                       {col.label}{col.tip ? ' \u24D8' : ''}
-                      <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === col.key ? '#7ecfff' : '#8899aa' }}>
+                      <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === col.key ? 'var(--accent-bright)' : 'var(--text-dim)' }}>
                         {sortIcon(col.key)}
                       </span>
                     </th>
@@ -1027,7 +1023,7 @@ export default function DividendAnalysis() {
               </tbody>
               {data.totals && (
                 <tfoot>
-                  <tr style={{ borderTop: '2px solid #0f3460', background: '#16213e' }}>
+                  <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
                     <td colSpan={3}><strong>Totals</strong></td>
                     <td colSpan={5}></td>
                     <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.approx_monthly_income)}</strong></td>

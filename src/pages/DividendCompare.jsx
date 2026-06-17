@@ -29,7 +29,7 @@ function DivTable({ rows, showQty, sortCol, sortAsc, onSort, title }) {
   )
 
   const na = (entry, field) => {
-    if (entry.error && entry[field] == null) return <span style={{ color: '#666', fontSize: '0.75rem' }}>N/A</span>
+    if (entry.error && entry[field] == null) return <span style={{ color: 'var(--p-666)', fontSize: '0.75rem' }}>N/A</span>
     return null
   }
 
@@ -44,7 +44,7 @@ function DivTable({ rows, showQty, sortCol, sortAsc, onSort, title }) {
 
   return (
     <div className="holdings-table-wrap" style={{ marginBottom: '1.5rem' }}>
-      {title && <h2 style={{ color: '#90caf9', padding: '0.75rem 1rem 0', margin: 0 }}>{title}</h2>}
+      {title && <h2 style={{ color: 'var(--accent-2)', padding: '0.75rem 1rem 0', margin: 0 }}>{title}</h2>}
       <table className="holdings-table">
         <thead>
           <tr>
@@ -64,30 +64,30 @@ function DivTable({ rows, showQty, sortCol, sortAsc, onSort, title }) {
         <tbody>
           {sorted.map(r => (
             <tr key={r.ticker}>
-              <td style={{ color: '#7ecfff', fontWeight: 600 }}>{r.ticker}</td>
+              <td style={{ color: 'var(--accent-bright)', fontWeight: 600 }}>{r.ticker}</td>
               <td style={{ maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.description}</td>
               <td style={{ textAlign: 'center' }}>{r.div_frequency || '—'}</td>
               <td style={{ textAlign: 'right' }}>{fmt(r.current_price)}</td>
               {showQty && <td style={{ textAlign: 'right' }}>{r.quantity != null ? (Number.isInteger(r.quantity) ? r.quantity : parseFloat(r.quantity.toFixed(3))) : '—'}</td>}
-              <td style={{ textAlign: 'right', color: r.forward_annual_dividend != null ? '#4dff91' : undefined }}>
+              <td style={{ textAlign: 'right', color: r.forward_annual_dividend != null ? 'var(--pos)' : undefined }}>
                 {na(r, 'forward_annual_dividend') || fmt4(r.forward_annual_dividend)}
               </td>
-              <td style={{ textAlign: 'right', color: r.forward_dividend_yield != null ? '#4dff91' : undefined }}>
+              <td style={{ textAlign: 'right', color: r.forward_dividend_yield != null ? 'var(--pos)' : undefined }}>
                 {na(r, 'forward_dividend_yield') || pct(r.forward_dividend_yield)}
               </td>
               {showQty && (
-                <td style={{ textAlign: 'right', color: r.forward_income != null ? '#4dff91' : undefined }}>
+                <td style={{ textAlign: 'right', color: r.forward_income != null ? 'var(--pos)' : undefined }}>
                   {na(r, 'forward_income') || fmt(r.forward_income)}
                 </td>
               )}
-              <td style={{ textAlign: 'right', color: r.ttm_dividend != null ? '#7ecfff' : undefined }}>
+              <td style={{ textAlign: 'right', color: r.ttm_dividend != null ? 'var(--accent-bright)' : undefined }}>
                 {na(r, 'ttm_dividend') || fmt4(r.ttm_dividend)}
               </td>
-              <td style={{ textAlign: 'right', color: r.ttm_dividend_yield != null ? '#7ecfff' : undefined }}>
+              <td style={{ textAlign: 'right', color: r.ttm_dividend_yield != null ? 'var(--accent-bright)' : undefined }}>
                 {na(r, 'ttm_dividend_yield') || pct(r.ttm_dividend_yield)}
               </td>
               {showQty && (
-                <td style={{ textAlign: 'right', color: r.ttm_income != null ? '#7ecfff' : undefined }}>
+                <td style={{ textAlign: 'right', color: r.ttm_income != null ? 'var(--accent-bright)' : undefined }}>
                   {na(r, 'ttm_income') || fmt(r.ttm_income)}
                 </td>
               )}
@@ -96,17 +96,17 @@ function DivTable({ rows, showQty, sortCol, sortAsc, onSort, title }) {
         </tbody>
         {totals && (
           <tfoot>
-            <tr style={{ fontWeight: 700, borderTop: '2px solid #0f3460' }}>
+            <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
               <td colSpan={showQty ? 7 : 6} style={{ textAlign: 'right' }}>Totals</td>
-              {showQty && <td style={{ textAlign: 'right', color: '#4dff91' }}>{fmt(totals.forward_income)}</td>}
+              {showQty && <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(totals.forward_income)}</td>}
               <td colSpan={2} />
-              {showQty && <td style={{ textAlign: 'right', color: '#7ecfff' }}>{fmt(totals.ttm_income)}</td>}
+              {showQty && <td style={{ textAlign: 'right', color: 'var(--accent-bright)' }}>{fmt(totals.ttm_income)}</td>}
             </tr>
           </tfoot>
         )}
       </table>
       {rows.length === 0 && (
-        <p style={{ color: '#8899aa', textAlign: 'center', padding: '1rem' }}>No data to display.</p>
+        <p style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '1rem' }}>No data to display.</p>
       )}
     </div>
   )
@@ -187,7 +187,7 @@ export default function DividendCompare() {
   return (
     <div className="page">
       <h1>Dividend Compare — Forward vs TTM</h1>
-      <p style={{ color: '#8899aa', fontSize: '0.85rem', marginTop: '-0.5rem', marginBottom: '1rem' }}>
+      <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginTop: '-0.5rem', marginBottom: '1rem' }}>
         {currentProfileName} — {holdings.length} holding{holdings.length !== 1 ? 's' : ''}
       </p>
 
@@ -202,7 +202,7 @@ export default function DividendCompare() {
 
       {/* Ticker Lookup Section */}
       <div className="card" style={{ padding: '1rem', marginBottom: '1rem' }}>
-        <h2 style={{ color: '#90caf9', margin: '0 0 0.75rem' }}>Look Up Tickers</h2>
+        <h2 style={{ color: 'var(--accent-2)', margin: '0 0 0.75rem' }}>Look Up Tickers</h2>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             type="text"

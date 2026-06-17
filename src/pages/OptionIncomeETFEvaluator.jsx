@@ -75,17 +75,6 @@ function saveThresholds(t) {
   try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(t)) } catch {}
 }
 
-const badgeStyle = (badge) => {
-  const base = {
-    display: 'inline-block', padding: '0.2rem 0.55rem', borderRadius: 4,
-    fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase',
-  }
-  if (badge === 'pass') return { ...base, background: '#0f4e2e', color: '#7be5a8', border: '1px solid #1d8a52' }
-  if (badge === 'warn') return { ...base, background: '#5a4a14', color: '#ffd76a', border: '1px solid #a3812a' }
-  if (badge === 'fail') return { ...base, background: '#5a1a1a', color: '#ff8a8a', border: '1px solid #a83232' }
-  return { ...base, background: '#1f2e52', color: '#8aa0c8', border: '1px solid #2a3e6b' }
-}
-
 const fmtMoney = (n) => {
   if (n === null || n === undefined || !Number.isFinite(Number(n))) return '-'
   const v = Number(n)
@@ -103,10 +92,10 @@ function ThresholdEditor({ criterion, thresholds, onChange }) {
   if (!t) return null
   const update = (patch) => onChange({ ...thresholds, [key]: { ...t, ...patch } })
 
-  const labelStyle = { color: '#90a4ae', fontSize: '0.78rem', display: 'block', marginBottom: 2 }
+  const labelStyle = { color: 'var(--text-dim)', fontSize: '0.78rem', display: 'block', marginBottom: 2 }
   const inputStyle = {
-    background: '#0d1b33', border: '1px solid #1a3a5c', borderRadius: 4,
-    color: '#e0e8f5', padding: '0.3rem 0.5rem', fontSize: '0.85rem', width: 90,
+    background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 4,
+    color: 'var(--text-strong)', padding: '0.3rem 0.5rem', fontSize: '0.85rem', width: 90,
   }
 
   let controls = null
@@ -206,11 +195,11 @@ function ThresholdEditor({ criterion, thresholds, onChange }) {
     <div style={{
       display: 'flex', flexWrap: 'wrap', gap: '0.9rem', alignItems: 'flex-end',
       marginTop: '0.75rem', padding: '0.75rem 0.9rem',
-      background: '#0f1e3b', border: '1px solid #1c2e52', borderRadius: 6,
+      background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6,
     }}>
       {controls}
-      <div style={{ flex: 1, minWidth: 220, color: '#8aa0c8', fontSize: '0.82rem', lineHeight: 1.5 }}>
-        <strong style={{ color: '#58c4d8' }}>Best practice:</strong> {criterion.threshold.bestPractice}
+      <div style={{ flex: 1, minWidth: 220, color: 'var(--p-8aa0c8)', fontSize: '0.82rem', lineHeight: 1.5 }}>
+        <strong style={{ color: 'var(--teal-2)' }}>Best practice:</strong> {criterion.threshold.bestPractice}
       </div>
     </div>
   )
@@ -219,27 +208,27 @@ function ThresholdEditor({ criterion, thresholds, onChange }) {
 function CriterionCard({ criterion, thresholds, onChangeThresholds }) {
   const c = criterion
   return (
-    <div className="cef-guide-card" style={{ background: '#1a2744', border: '1px solid #243356', borderRadius: 8 }}>
+    <div className="cef-guide-card" style={{ background: 'var(--p-1a2744)', border: '1px solid var(--p-243356)', borderRadius: 8 }}>
       <div style={{ padding: '1rem 1.2rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <span className="cef-guide-number">{c.id}</span>
           <span className="cef-guide-question" style={{ flex: 1 }}>{c.question}</span>
-          <span style={badgeStyle(c.badge)}>{c.badge}</span>
+          <span className={`stock-check-badge tone-${c.badge}`}>{c.badge}</span>
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem 1.2rem', paddingLeft: 42, color: '#b8c8e0' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem 1.2rem', paddingLeft: 42, color: 'var(--p-b8c8e0)' }}>
           {c.metrics.map((m, i) => (
             <div key={i} style={{ fontSize: '0.88rem' }}>
-              <span style={{ color: '#90a4ae' }}>{m.label}: </span>
-              <strong style={{ color: '#e6edf7' }}>{m.value}</strong>
+              <span style={{ color: 'var(--text-dim-2)' }}>{m.label}: </span>
+              <strong style={{ color: 'var(--p-e6edf7)' }}>{m.value}</strong>
             </div>
           ))}
         </div>
-        <div style={{ paddingLeft: 42, color: '#cfd8e3', fontSize: '0.9rem', lineHeight: 1.5 }}>
+        <div style={{ paddingLeft: 42, color: 'var(--p-cfd8e3)', fontSize: '0.9rem', lineHeight: 1.5 }}>
           {c.rationale}
         </div>
         {(QUESTION_DETAILS[c.id] || []).length > 0 && (
-          <details style={{ paddingLeft: 42, color: '#90a4ae', fontSize: '0.85rem' }}>
-            <summary style={{ cursor: 'pointer', color: '#58c4d8' }}>What to check</summary>
+          <details style={{ paddingLeft: 42, color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
+            <summary style={{ cursor: 'pointer', color: 'var(--teal-2)' }}>What to check</summary>
             <ul style={{ margin: '0.4rem 0 0.2rem 1rem' }}>
               {QUESTION_DETAILS[c.id].map((d, i) => <li key={i} style={{ margin: '0.2rem 0' }}>{d}</li>)}
             </ul>
@@ -256,21 +245,21 @@ function CriterionCard({ criterion, thresholds, onChangeThresholds }) {
 function HeaderCard({ fund }) {
   return (
     <div style={{
-      background: '#1a2744', border: '1px solid #243356', borderRadius: 8,
+      background: 'var(--p-1a2744)', border: '1px solid var(--p-243356)', borderRadius: 8,
       padding: '1rem 1.2rem', marginBottom: '1rem',
     }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem 1.5rem', alignItems: 'baseline' }}>
-        <h2 style={{ margin: 0, color: '#e6edf7' }}>{fund.ticker}</h2>
-        <span style={{ color: '#b8c8e0', fontSize: '1rem' }}>{fund.name}</span>
+        <h2 style={{ margin: 0, color: 'var(--p-e6edf7)' }}>{fund.ticker}</h2>
+        <span style={{ color: 'var(--p-b8c8e0)', fontSize: '1rem' }}>{fund.name}</span>
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem 1.5rem', marginTop: '0.6rem', color: '#b8c8e0', fontSize: '0.9rem' }}>
-        <span><span style={{ color: '#90a4ae' }}>Category: </span><strong style={{ color: '#e6edf7' }}>{fund.category || 'n/a'}</strong></span>
-        <span><span style={{ color: '#90a4ae' }}>Strategy: </span><strong style={{ color: '#e6edf7' }}>{fund.etf_strategy || 'n/a'}</strong></span>
-        <span><span style={{ color: '#90a4ae' }}>Fund family: </span><strong style={{ color: '#e6edf7' }}>{fund.fund_family || 'n/a'}</strong></span>
-        <span><span style={{ color: '#90a4ae' }}>Price: </span><strong style={{ color: '#e6edf7' }}>{fund.price != null ? `$${Number(fund.price).toFixed(2)}` : '-'}</strong></span>
-        <span><span style={{ color: '#90a4ae' }}>Yield: </span><strong style={{ color: '#e6edf7' }}>{fmtPct(fund.yield_pct || fund.dividend_yield)}</strong></span>
-        <span><span style={{ color: '#90a4ae' }}>AUM: </span><strong style={{ color: '#e6edf7' }}>{fmtMoney(fund.aum)}</strong></span>
-        <span><span style={{ color: '#90a4ae' }}>Inception: </span><strong style={{ color: '#e6edf7' }}>{fund.inception_date || '-'}</strong></span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem 1.5rem', marginTop: '0.6rem', color: 'var(--p-b8c8e0)', fontSize: '0.9rem' }}>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>Category: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.category || 'n/a'}</strong></span>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>Strategy: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.etf_strategy || 'n/a'}</strong></span>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>Fund family: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.fund_family || 'n/a'}</strong></span>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>Price: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.price != null ? `$${Number(fund.price).toFixed(2)}` : '-'}</strong></span>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>Yield: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fmtPct(fund.yield_pct || fund.dividend_yield)}</strong></span>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>AUM: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fmtMoney(fund.aum)}</strong></span>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>Inception: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.inception_date || '-'}</strong></span>
       </div>
     </div>
   )
@@ -289,10 +278,10 @@ const UNDERLYING_OPTIONS = [
 ]
 
 function AlternativesControls({ underlyingOverride, setUnderlyingOverride, autoUnderlying, targetYield, setTargetYield, minYield, setMinYield, fundYield }) {
-  const labelStyle = { color: '#90a4ae', fontSize: '0.78rem', display: 'block', marginBottom: 3 }
+  const labelStyle = { color: 'var(--text-dim)', fontSize: '0.78rem', display: 'block', marginBottom: 3 }
   const inputStyle = {
-    background: '#0d1b33', border: '1px solid #1a3a5c', borderRadius: 4,
-    color: '#e0e8f5', padding: '0.4rem 0.55rem', fontSize: '0.88rem',
+    background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 4,
+    color: 'var(--text-strong)', padding: '0.4rem 0.55rem', fontSize: '0.88rem',
   }
   const autoLabel = UNDERLYING_LABELS[autoUnderlying] || 'Other'
   const hasMin = minYield.trim() !== '' && Number(minYield) > 0
@@ -312,7 +301,7 @@ function AlternativesControls({ underlyingOverride, setUnderlyingOverride, autoU
   return (
     <div style={{
       marginTop: '1.5rem', padding: '0.85rem 1rem',
-      background: '#0f1e3b', border: '1px solid #1c2e52', borderRadius: 6,
+      background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6,
       display: 'flex', flexWrap: 'wrap', gap: '0.9rem 1.4rem', alignItems: 'flex-end',
     }}>
       <div>
@@ -346,9 +335,9 @@ function AlternativesControls({ underlyingOverride, setUnderlyingOverride, autoU
           style={{ ...inputStyle, width: 100 }}
         />
       </div>
-      <div style={{ flex: 1, minWidth: 220, color: '#8aa0c8', fontSize: '0.82rem', lineHeight: 1.5 }}>
+      <div style={{ flex: 1, minWidth: 220, color: 'var(--p-8aa0c8)', fontSize: '0.82rem', lineHeight: 1.5 }}>
         Alternatives must track the selected underlying and yield{' '}
-        <strong style={{ color: '#58c4d8' }}>
+        <strong style={{ color: 'var(--teal-2)' }}>
           {floor != null ? `≥ ${floor.toFixed(2)}%` : 'at least 94% of the baseline'}
         </strong>{' '}
         ({floorSource || 'default'}).
@@ -360,29 +349,29 @@ function AlternativesControls({ underlyingOverride, setUnderlyingOverride, autoU
 function AltCard({ alt }) {
   return (
     <div style={{
-      background: '#1a2744', border: '1px solid #243356', borderRadius: 8, padding: '0.8rem 1rem',
+      background: 'var(--p-1a2744)', border: '1px solid var(--p-243356)', borderRadius: 8, padding: '0.8rem 1rem',
     }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem 1rem', alignItems: 'baseline' }}>
-        <strong style={{ color: '#58c4d8' }}>{alt.fund.ticker}</strong>
-        <span style={{ color: '#b8c8e0', flex: 1 }}>{alt.fund.name}</span>
+        <strong style={{ color: 'var(--teal-2)' }}>{alt.fund.ticker}</strong>
+        <span style={{ color: 'var(--p-b8c8e0)', flex: 1 }}>{alt.fund.name}</span>
         {alt.isSingleStock && (
           <span style={{
             fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
-            background: '#5a4a14', color: '#ffd76a', border: '1px solid #a3812a',
+            background: 'var(--p-5a4a14)', color: 'var(--p-ffd76a)', border: '1px solid var(--p-a3812a)',
             borderRadius: 4, padding: '0.1rem 0.4rem',
           }}>
             Single-stock — higher risk
           </span>
         )}
-        <span style={{ color: '#90a4ae', fontSize: '0.85rem' }}>
-          Yield <strong style={{ color: '#e6edf7' }}>{fmtPct(alt.fund.yield_pct || alt.fund.dividend_yield)}</strong>
+        <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
+          Yield <strong style={{ color: 'var(--p-e6edf7)' }}>{fmtPct(alt.fund.yield_pct || alt.fund.dividend_yield)}</strong>
         </span>
-        <span style={{ color: '#90a4ae', fontSize: '0.85rem' }}>
-          Composite <strong style={{ color: '#e6edf7' }}>{alt.composite.toFixed(1)}</strong>
+        <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
+          Composite <strong style={{ color: 'var(--p-e6edf7)' }}>{alt.composite.toFixed(1)}</strong>
         </span>
       </div>
-      <div style={{ color: '#cfd8e3', fontSize: '0.88rem', marginTop: '0.35rem' }}>
-        <span style={{ color: '#90a4ae' }}>Why listed: </span>
+      <div style={{ color: 'var(--p-cfd8e3)', fontSize: '0.88rem', marginTop: '0.35rem' }}>
+        <span style={{ color: 'var(--text-dim-2)' }}>Why listed: </span>
         {alt.reasons.join('; ')}.
       </div>
     </div>
@@ -396,10 +385,10 @@ function AlternativesList({ alternatives, fallbackAlternatives, peerCount, effec
   const showFallback = alternatives.length === 0 && fallbackAlternatives.length > 0
   return (
     <div style={{ marginTop: '1rem' }}>
-      <h2 style={{ color: '#e6edf7', fontSize: '1.1rem', margin: '0 0 0.4rem' }}>
+      <h2 style={{ color: 'var(--p-e6edf7)', fontSize: '1.1rem', margin: '0 0 0.4rem' }}>
         Quality alternatives{filterLabel ? ` — ${filterLabel}` : ''}
       </h2>
-      <p style={{ color: '#90a4ae', fontSize: '0.86rem', margin: '0 0 0.8rem' }}>
+      <p style={{ color: 'var(--text-dim-2)', fontSize: '0.86rem', margin: '0 0 0.8rem' }}>
         Option-income ETFs that clear the checklist and pass quality checks against this fund's NAV trend,
         total return, history, and structure{filterLabel ? `, restricted to ${filterLabel} underliers` : ''}. {peerCount} peers screened.
         Single-stock income ETFs are excluded unless the selected fund is also single-stock: they are typically far more volatile than a
@@ -412,8 +401,8 @@ function AlternativesList({ alternatives, fallbackAlternatives, peerCount, effec
       ) : showFallback ? (
         <>
           <div style={{
-            background: '#5a1a1a', border: '1px solid #a83232', borderRadius: 6,
-            padding: '0.8rem 1rem', marginBottom: '0.7rem', color: '#ff8a8a', fontSize: '0.9rem',
+            background: 'var(--p-5a1a1a)', border: '1px solid var(--p-a83232)', borderRadius: 6,
+            padding: '0.8rem 1rem', marginBottom: '0.7rem', color: 'var(--neg-soft)', fontSize: '0.9rem',
           }}>
             All {filterLabel || 'matching'} peers fail the checklist — these are the highest-scoring options in this space, but none earned a passing grade.
           </div>
@@ -422,7 +411,7 @@ function AlternativesList({ alternatives, fallbackAlternatives, peerCount, effec
           </div>
         </>
       ) : (
-        <div style={{ background: '#0f1e3b', border: '1px solid #1c2e52', borderRadius: 6, padding: '1rem', color: '#b8c8e0' }}>
+        <div style={{ background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6, padding: '1rem', color: 'var(--p-b8c8e0)' }}>
           No option-income peers found for this underlying group.
         </div>
       )}
@@ -449,11 +438,7 @@ export default function OptionIncomeETFEvaluator() {
     <button
       type="button"
       onClick={() => setTab(key)}
-      style={{
-        background: tab === key ? '#1d3a6b' : 'transparent',
-        border: '1px solid #2a3e6b', borderRadius: 4, color: tab === key ? '#e6edf7' : '#8aa0c8',
-        padding: '0.4rem 0.9rem', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 600,
-      }}
+      className={`stock-check-tab${tab === key ? ' is-active' : ''}`}
     >{label}</button>
   )
 
@@ -528,15 +513,15 @@ export default function OptionIncomeETFEvaluator() {
   }, [result])
 
   return (
-    <div className="page cef-page">
-      <div className="cef-title-row">
+    <div className="page cef-page stock-check-page">
+      <div className="cef-title-row stock-check-title-row">
         <div>
           <h1>Option-Income ETF Evaluator</h1>
           <p>Enter an option-income / derivative-income ETF ticker. Six criteria are scored against editable thresholds tailored to the income trade-off, and better alternatives are surfaced.</p>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.1rem' }}>
+      <div className="stock-check-tabs" role="tablist" aria-label="Option-income ETF checklist mode">
         {tabBtn('deep', 'Deep Dive')}
         {tabBtn('scan', 'Scan a List')}
       </div>
@@ -555,17 +540,12 @@ export default function OptionIncomeETFEvaluator() {
         />
       ) : (
       <>
-      <form onSubmit={submit} style={{
-        display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0 0 1rem', maxWidth: 520,
-      }}>
+      <form onSubmit={submit} className="stock-check-search">
         <input
           value={inputTicker}
           onChange={e => setInputTicker(e.target.value.toUpperCase())}
           placeholder="e.g. JEPI, QYLD, SPYI, DIVO..."
-          style={{
-            flex: 1, background: '#0d1b33', border: '1px solid #1a3a5c', borderRadius: 4,
-            color: '#e0e8f5', padding: '0.5rem 0.7rem', fontSize: '0.95rem', textTransform: 'uppercase',
-          }}
+          className="stock-check-input stock-check-ticker-input"
           autoFocus
         />
         <button type="submit" className="btn btn-primary" disabled={loading}>Evaluate</button>
@@ -576,12 +556,12 @@ export default function OptionIncomeETFEvaluator() {
 
       {fund && !isOptionIncome && (
         <div style={{
-          background: '#5a4a14', border: '1px solid #a3812a', borderRadius: 6,
-          padding: '0.8rem 1rem', marginBottom: '1rem', color: '#ffd76a', fontSize: '0.92rem',
+          background: 'var(--p-5a4a14)', border: '1px solid var(--p-a3812a)', borderRadius: 6,
+          padding: '0.8rem 1rem', marginBottom: '1rem', color: 'var(--p-ffd76a)', fontSize: '0.92rem',
         }}>
           <strong>{fund.ticker}</strong> is not classified as an option-income ETF.
           You may get more relevant results from the{' '}
-          <Link to="/etf-buying-checklist-evaluator" style={{ color: '#58c4d8' }}>general ETF Evaluator</Link>.
+          <Link to="/etf-buying-checklist-evaluator" style={{ color: 'var(--teal-2)' }}>general ETF Evaluator</Link>.
           The option-income evaluation below still runs, but peer comparisons use option-income funds.
         </div>
       )}
@@ -591,23 +571,23 @@ export default function OptionIncomeETFEvaluator() {
           <HeaderCard fund={fund} />
 
           <div style={{
-            background: '#0f1e3b', border: '1px solid #1c2e52', borderRadius: 6,
+            background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6,
             padding: '0.7rem 1rem', marginBottom: '1rem',
             display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.6rem',
           }}>
-            <div style={{ color: '#b8c8e0', fontSize: '0.9rem' }}>
-              <strong style={{ color: '#58c4d8' }}>Composite score:</strong>{' '}
-              <span style={{ color: '#e6edf7', fontSize: '1.1rem', fontWeight: 700 }}>
+            <div style={{ color: 'var(--p-b8c8e0)', fontSize: '0.9rem' }}>
+              <strong style={{ color: 'var(--teal-2)' }}>Composite score:</strong>{' '}
+              <span style={{ color: 'var(--p-e6edf7)', fontSize: '1.1rem', fontWeight: 700 }}>
                 {result.composite === null ? 'n/a' : result.composite.toFixed(1)}
               </span>
-              <span style={{ color: '#90a4ae' }}> / 100</span>
-              <span style={{ color: '#90a4ae', marginLeft: '0.7rem', fontSize: '0.85rem' }}>
+              <span style={{ color: 'var(--text-dim-2)' }}> / 100</span>
+              <span style={{ color: 'var(--text-dim-2)', marginLeft: '0.7rem', fontSize: '0.85rem' }}>
                 (average of scored criteria 2-7)
               </span>
             </div>
             <button type="button" onClick={() => setThresholds(OPTION_DEFAULT_THRESHOLDS)} style={{
-              background: 'transparent', border: '1px solid #2a3e6b', borderRadius: 4,
-              color: '#8aa0c8', padding: '0.3rem 0.7rem', cursor: 'pointer', fontSize: '0.82rem',
+              background: 'transparent', border: '1px solid var(--p-2a3e6b)', borderRadius: 4,
+              color: 'var(--p-8aa0c8)', padding: '0.3rem 0.7rem', cursor: 'pointer', fontSize: '0.82rem',
             }}>
               Reset thresholds to defaults
             </button>
@@ -624,22 +604,22 @@ export default function OptionIncomeETFEvaluator() {
               marginTop: '1.25rem', padding: '1rem 1.2rem', borderRadius: 8,
               display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.6rem 1rem',
               ...(verdict.tone === 'pass'
-                ? { background: '#0f4e2e', border: '1px solid #1d8a52' }
+                ? { background: 'var(--p-0f4e2e)', border: '1px solid var(--p-1d8a52)' }
                 : verdict.tone === 'warn'
-                ? { background: '#5a4a14', border: '1px solid #a3812a' }
+                ? { background: 'var(--p-5a4a14)', border: '1px solid var(--p-a3812a)' }
                 : verdict.tone === 'fail'
-                ? { background: '#5a1a1a', border: '1px solid #a83232' }
-                : { background: '#1f2e52', border: '1px solid #2a3e6b' }),
+                ? { background: 'var(--p-5a1a1a)', border: '1px solid var(--p-a83232)' }
+                : { background: 'var(--p-1f2e52)', border: '1px solid var(--p-2a3e6b)' }),
             }}>
               <span style={{
                 fontSize: '1.25rem', fontWeight: 800, letterSpacing: '0.02em',
-                color: verdict.tone === 'pass' ? '#7be5a8'
-                  : verdict.tone === 'warn' ? '#ffd76a'
-                  : verdict.tone === 'fail' ? '#ff8a8a' : '#8aa0c8',
+                color: verdict.tone === 'pass' ? 'var(--p-7be5a8)'
+                  : verdict.tone === 'warn' ? 'var(--p-ffd76a)'
+                  : verdict.tone === 'fail' ? 'var(--neg-soft)' : 'var(--p-8aa0c8)',
               }}>
                 Verdict: {verdict.label}
               </span>
-              <span style={{ color: '#e6edf7', fontSize: '0.92rem', flex: 1, minWidth: 260 }}>
+              <span style={{ color: 'var(--p-e6edf7)', fontSize: '0.92rem', flex: 1, minWidth: 260 }}>
                 {verdict.detail}
               </span>
             </div>
@@ -664,10 +644,10 @@ export default function OptionIncomeETFEvaluator() {
 
           <div style={{
             marginTop: '1.5rem', padding: '0.8rem 1rem',
-            background: '#0f1e3b', border: '1px solid #1c2e52', borderRadius: 6,
-            color: '#90a4ae', fontSize: '0.84rem', lineHeight: 1.55,
+            background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6,
+            color: 'var(--text-dim-2)', fontSize: '0.84rem', lineHeight: 1.55,
           }}>
-            <strong style={{ color: '#58c4d8' }}>Notes:</strong> Data is fetched live from yfinance.
+            <strong style={{ color: 'var(--teal-2)' }}>Notes:</strong> Data is fetched live from yfinance.
             Peers are drawn from a curated list of ~150 option-income ETFs cached in the scanner.
             Yield sustainability compares yield to long-term total return; NAV erosion measures the annualized
             share-price (price-only) trend over the fund's full history, which exposes distributions funded by

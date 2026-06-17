@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
-import Plot from 'react-plotly.js'
+import Plot from '../components/ThemedPlot'
 import { useDialog } from '../components/DialogProvider'
 
 const MAX_ROWS = 80
@@ -367,13 +367,13 @@ function DripProjectionsPanel() {
             {catOpen && (
               <div style={{
                 position: 'absolute', top: '100%', left: 0, zIndex: 50, marginTop: 4,
-                background: '#16213e', border: '1px solid #0f3460', borderRadius: 6,
+                background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6,
                 minWidth: 200, maxHeight: 300, overflowY: 'auto', padding: '0.4rem 0',
                 boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
               }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem', cursor: 'pointer', borderBottom: '1px solid #0f3460', marginBottom: '0.2rem', color: '#e0e8f5', fontSize: '0.85rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem', cursor: 'pointer', borderBottom: '1px solid var(--border)', marginBottom: '0.2rem', color: 'var(--text-strong)', fontSize: '0.85rem' }}>
                   <input type="checkbox" checked={selectedCats.length === 0 && selectedSubs.length === 0}
-                    onChange={() => { setSelectedCats([]); setSelectedSubs([]) }} style={{ accentColor: '#64b5f6' }} />
+                    onChange={() => { setSelectedCats([]); setSelectedSubs([]) }} style={{ accentColor: 'var(--accent)' }} />
                   <span>All Holdings</span>
                 </label>
                 {categories.map(c => {
@@ -381,7 +381,7 @@ function DripProjectionsPanel() {
                   const subs = c.subcategories || []
                   return (
                     <React.Fragment key={c.id}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem', cursor: 'pointer', color: '#b0bec5', fontSize: '0.85rem' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                         <input
                           type="checkbox"
                           checked={catChecked}
@@ -396,12 +396,12 @@ function DripProjectionsPanel() {
                               setSelectedCats(prev => prev.filter(n => n !== c.name))
                             }
                           }}
-                          style={{ accentColor: '#64b5f6' }}
+                          style={{ accentColor: 'var(--accent)' }}
                         />
                         <span>{c.name}</span>
                       </label>
                       {subs.map(s => (
-                        <label key={`sub-${s.id}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem 0.35rem 1.9rem', cursor: 'pointer', color: '#b0bec5', fontSize: '0.85rem', opacity: catChecked ? 0.5 : 1 }}>
+                        <label key={`sub-${s.id}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem 0.35rem 1.9rem', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.85rem', opacity: catChecked ? 0.5 : 1 }}>
                           <input
                             type="checkbox"
                             disabled={catChecked}
@@ -410,7 +410,7 @@ function DripProjectionsPanel() {
                               if (e.target.checked) setSelectedSubs(prev => [...prev, String(s.id)])
                               else setSelectedSubs(prev => prev.filter(id => id !== String(s.id)))
                             }}
-                            style={{ accentColor: '#64b5f6' }}
+                            style={{ accentColor: 'var(--accent)' }}
                           />
                           <span>{s.name}</span>
                         </label>
@@ -435,19 +435,19 @@ function DripProjectionsPanel() {
           {tickerFilterOpen && (
             <div style={{
               position: 'absolute', top: '100%', left: 0, zIndex: 50, marginTop: 4,
-              background: '#16213e', border: '1px solid #0f3460', borderRadius: 6,
+              background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6,
               minWidth: 180, maxHeight: 350, overflowY: 'auto', padding: '0.4rem 0',
               boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
             }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem', cursor: 'pointer', borderBottom: '1px solid #0f3460', marginBottom: '0.2rem', color: '#e0e8f5', fontSize: '0.85rem' }}>
-                <input type="checkbox" checked={selectedTickers.length === 0 && holdings.length > 0} onChange={() => { setSelectedTickers([]); if (holdings.length === 0) fetchProjection() }} style={{ accentColor: '#64b5f6' }} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem', cursor: 'pointer', borderBottom: '1px solid var(--border)', marginBottom: '0.2rem', color: 'var(--text-strong)', fontSize: '0.85rem' }}>
+                <input type="checkbox" checked={selectedTickers.length === 0 && holdings.length > 0} onChange={() => { setSelectedTickers([]); if (holdings.length === 0) fetchProjection() }} style={{ accentColor: 'var(--accent)' }} />
                 <span>All</span>
               </label>
               {(() => {
                 const baseList = portfolioTickers.length > 0 ? portfolioTickers : allTickers
                 const customOnly = customTickers.filter(c => !baseList.includes(c.ticker)).map(c => c.ticker).sort()
                 const tickerItem = (t, isCustom) => (
-                  <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.25rem 0.75rem', cursor: 'pointer', color: isCustom ? '#ffb74d' : '#b0bec5', fontSize: '0.82rem' }}>
+                  <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.25rem 0.75rem', cursor: 'pointer', color: isCustom ? 'var(--p-ffb74d)' : 'var(--text-muted)', fontSize: '0.82rem' }}>
                     <input
                       type="checkbox"
                       checked={selectedTickers.includes(t)}
@@ -459,7 +459,7 @@ function DripProjectionsPanel() {
                           setSelectedTickers(prev => prev.filter(x => x !== t))
                         }
                       }}
-                      style={{ accentColor: isCustom ? '#ffb74d' : '#64b5f6' }}
+                      style={{ accentColor: isCustom ? 'var(--p-ffb74d)' : 'var(--accent)' }}
                     />
                     <span>{t}</span>
                   </label>
@@ -469,7 +469,7 @@ function DripProjectionsPanel() {
                     {[...baseList].sort().map(t => tickerItem(t, false))}
                     {customOnly.length > 0 && (
                       <>
-                        <div style={{ borderTop: '1px solid #0f3460', margin: '0.3rem 0', padding: '0.2rem 0.75rem', color: '#ffb74d', fontSize: '0.75rem', fontWeight: 600 }}>Added</div>
+                        <div style={{ borderTop: '1px solid var(--border)', margin: '0.3rem 0', padding: '0.2rem 0.75rem', color: 'var(--p-ffb74d)', fontSize: '0.75rem', fontWeight: 600 }}>Added</div>
                         {customOnly.map(t => tickerItem(t, true))}
                       </>
                     )}
@@ -497,7 +497,7 @@ function DripProjectionsPanel() {
           </button>
         </div>
         {(selectedTickers.length > 0 || customTickers.length > 0 || holdings.length > 0) && (
-          <button onClick={clearTickerFilter} className="nep-btn" style={{ padding: '0.4rem 0.6rem', fontSize: '0.82rem', background: '#6b2020', alignSelf: 'flex-end' }}>
+          <button onClick={clearTickerFilter} className="nep-btn" style={{ padding: '0.4rem 0.6rem', fontSize: '0.82rem', background: 'var(--p-6b2020)', alignSelf: 'flex-end' }}>
             Clear
           </button>
         )}
@@ -519,10 +519,10 @@ function DripProjectionsPanel() {
           </select>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <button onClick={saveSettings} disabled={saving} className="nep-btn" style={{ background: '#1a6b3c' }}>
+          <button onClick={saveSettings} disabled={saving} className="nep-btn" style={{ background: 'var(--p-1a6b3c)' }}>
             {saving ? 'Saving...' : 'Save Settings'}
           </button>
-          {savedMsg && <span style={{ color: '#4dff91', fontSize: '0.78rem' }}>Saved!</span>}
+          {savedMsg && <span style={{ color: 'var(--pos)', fontSize: '0.78rem' }}>Saved!</span>}
         </div>
       </div>
 
@@ -531,7 +531,7 @@ function DripProjectionsPanel() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <span className="ne-label">Monthly Contribution:</span>
-            <span style={{ color: '#8899aa' }}>$</span>
+            <span style={{ color: 'var(--text-dim)' }}>$</span>
             <input
               type="number" min="0" step="100"
               className="ne-input" style={{ width: 100 }}
@@ -542,8 +542,8 @@ function DripProjectionsPanel() {
           </div>
           {monthlyAmount > 0 && (
             <>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', color: '#b0bec5', fontSize: '0.82rem' }}>
-                <input type="checkbox" checked={contributionTargeted} onChange={e => setContributionTargeted(e.target.checked)} style={{ accentColor: '#64b5f6' }} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                <input type="checkbox" checked={contributionTargeted} onChange={e => setContributionTargeted(e.target.checked)} style={{ accentColor: 'var(--accent)' }} />
                 Target Specific ETFs
               </label>
               {contributionTargeted && (
@@ -559,12 +559,12 @@ function DripProjectionsPanel() {
                   {contribPickerOpen && (
                     <div style={{
                       position: 'absolute', top: '100%', left: 0, zIndex: 50, marginTop: 4,
-                      background: '#16213e', border: '1px solid #0f3460', borderRadius: 6,
+                      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6,
                       minWidth: 180, maxHeight: 300, overflowY: 'auto', padding: '0.4rem 0',
                       boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
                     }}>
                       {allTickers.map(t => (
-                        <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.3rem 0.75rem', cursor: 'pointer', color: '#b0bec5', fontSize: '0.82rem' }}>
+                        <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.3rem 0.75rem', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
                           <input
                             type="checkbox"
                             checked={contributionTargets.includes(t)}
@@ -572,7 +572,7 @@ function DripProjectionsPanel() {
                               if (e.target.checked) setContributionTargets(prev => [...prev, t])
                               else setContributionTargets(prev => prev.filter(x => x !== t))
                             }}
-                            style={{ accentColor: '#64b5f6' }}
+                            style={{ accentColor: 'var(--accent)' }}
                           />
                           <span>{t}</span>
                         </label>
@@ -581,8 +581,8 @@ function DripProjectionsPanel() {
                   )}
                 </div>
               )}
-              <span style={{ color: '#8899aa', fontSize: '0.78rem' }}>
-                Per ETF: <span style={{ color: '#7ecfff' }}>{fmt$(perEtfContrib)}</span>/mo
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>
+                Per ETF: <span style={{ color: 'var(--accent-bright)' }}>{fmt$(perEtfContrib)}</span>/mo
               </span>
             </>
           )}
@@ -592,18 +592,18 @@ function DripProjectionsPanel() {
       {/* Distribution Redirects */}
       <div className="nep-card" style={{ padding: '0.6rem 0.75rem', marginBottom: '0.75rem' }}>
         <div
-          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', color: '#e0e8f5', fontSize: '0.85rem' }}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', color: 'var(--text-strong)', fontSize: '0.85rem' }}
           onClick={() => setRedirectsOpen(o => !o)}
         >
           <span>{redirectsOpen ? '\u25BC' : '\u25B6'}</span>
           <span style={{ fontWeight: 600 }}>Distribution Redirects</span>
           {redirects.filter(r => r.source && r.target).length > 0 && (
-            <span style={{ color: '#ffb74d', fontSize: '0.76rem' }}>({redirects.filter(r => r.source && r.target).length} active)</span>
+            <span style={{ color: 'var(--p-ffb74d)', fontSize: '0.76rem' }}>({redirects.filter(r => r.source && r.target).length} active)</span>
           )}
         </div>
         {redirectsOpen && (
           <div style={{ marginTop: '0.5rem' }}>
-            <p style={{ color: '#8899aa', fontSize: '0.76rem', margin: '0 0 0.5rem 0' }}>
+            <p style={{ color: 'var(--text-dim)', fontSize: '0.76rem', margin: '0 0 0.5rem 0' }}>
               Redirect dividends from one ETF to buy shares of another instead of reinvesting into itself.
             </p>
             {redirects.map((rd, i) => (
@@ -618,7 +618,7 @@ function DripProjectionsPanel() {
                     <option key={t} value={t}>{t}</option>
                   ))}
                 </select>
-                <span style={{ color: '#ffb74d', fontSize: '1rem' }}>{'\u2192'}</span>
+                <span style={{ color: 'var(--p-ffb74d)', fontSize: '1rem' }}>{'\u2192'}</span>
                 <select
                   className="ne-input" style={{ width: 100, fontSize: '0.82rem' }}
                   value={rd.target}
@@ -629,7 +629,7 @@ function DripProjectionsPanel() {
                     <option key={t} value={t}>{t}</option>
                   ))}
                 </select>
-                <button onClick={() => removeRedirect(i)} style={{ background: 'none', border: 'none', color: '#ff6b6b', cursor: 'pointer', fontSize: '1rem', padding: '0 0.3rem' }}>{'\u2715'}</button>
+                <button onClick={() => removeRedirect(i)} style={{ background: 'none', border: 'none', color: 'var(--neg)', cursor: 'pointer', fontSize: '1rem', padding: '0 0.3rem' }}>{'\u2715'}</button>
               </div>
             ))}
             <button onClick={addRedirect} className="nep-btn" style={{ padding: '0.25rem 0.6rem', fontSize: '0.78rem', marginTop: '0.25rem' }}>
@@ -656,9 +656,9 @@ function DripProjectionsPanel() {
       {/* Table */}
       <div className="nep-card" style={{ padding: '0.5rem', marginBottom: '1rem', overflowX: 'auto' }}>
         {loading ? (
-          <div style={{ textAlign: 'center', padding: '2rem', color: '#8899aa' }}><span className="spinner" /> Loading projections...</div>
+          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}><span className="spinner" /> Loading projections...</div>
         ) : holdings.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '2rem', color: '#8899aa' }}>No holdings found. Import portfolio data to use DRIP projections.</div>
+          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>No holdings found. Import portfolio data to use DRIP projections.</div>
         ) : (
           <table className="nep-table" style={{ fontSize: '0.8rem' }}>
             <thead>
@@ -694,12 +694,12 @@ function DripProjectionsPanel() {
             <tbody>
               {displayHoldings.map(h => (
                 <tr key={h.ticker}>
-                  <td style={{ color: '#7ecfff', fontWeight: 600 }}>
+                  <td style={{ color: 'var(--accent-bright)', fontWeight: 600 }}>
                     {h.ticker}
-                    {h.redirect_target && <span style={{ color: '#ffb74d', fontSize: '0.65rem', marginLeft: 4 }} title={`Dividends redirected to ${h.redirect_target}`}>{'\u2192'}{h.redirect_target}</span>}
+                    {h.redirect_target && <span style={{ color: 'var(--p-ffb74d)', fontSize: '0.65rem', marginLeft: 4 }} title={`Dividends redirected to ${h.redirect_target}`}>{'\u2192'}{h.redirect_target}</span>}
                   </td>
-                  <td style={{ color: '#b0bec5', fontSize: '0.76rem', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.description || '\u2014'}</td>
-                  <td style={{ color: '#ab97c6', fontSize: '0.76rem' }}>{h.category}</td>
+                  <td style={{ color: 'var(--text-muted)', fontSize: '0.76rem', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.description || '\u2014'}</td>
+                  <td style={{ color: 'var(--p-ab97c6)', fontSize: '0.76rem' }}>{h.category}</td>
                   <td style={{ textAlign: 'right', padding: '0.2rem 0.4rem' }}>
                     <input
                       type="number"
@@ -727,8 +727,8 @@ function DripProjectionsPanel() {
                   <td style={{ textAlign: 'right' }}>{h.shares?.toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
                   <td style={{ textAlign: 'right' }}>{fmt$(h.price)}</td>
                   <td style={{ textAlign: 'right' }}>{h.div_per_share != null ? '$' + h.div_per_share.toFixed(4) : '\u2014'}</td>
-                  <td style={{ color: '#8899aa', fontSize: '0.76rem' }}>{h.frequency || '\u2014'}</td>
-                  <td style={{ textAlign: 'right', color: '#ffb74d' }}>{h.yield_pct != null ? h.yield_pct.toFixed(2) + '%' : '\u2014'}</td>
+                  <td style={{ color: 'var(--text-dim)', fontSize: '0.76rem' }}>{h.frequency || '\u2014'}</td>
+                  <td style={{ textAlign: 'right', color: 'var(--p-ffb74d)' }}>{h.yield_pct != null ? h.yield_pct.toFixed(2) + '%' : '\u2014'}</td>
                   <td style={{ textAlign: 'right', padding: '0.2rem 0.3rem' }}>
                     <select
                       value={dripSettings[h.ticker] ?? ''}
@@ -739,19 +739,19 @@ function DripProjectionsPanel() {
                       {DRIP_PCT_OPTIONS.map(p => <option key={p} value={p}>{p}%</option>)}
                     </select>
                   </td>
-                  <td style={{ textAlign: 'right', color: '#7ecfff', fontWeight: 600 }}>
+                  <td style={{ textAlign: 'right', color: 'var(--accent-bright)', fontWeight: 600 }}>
                     {h.projected_shares?.toLocaleString('en-US', { maximumFractionDigits: 2 })}
-                    {h.new_shares > 0 && <span style={{ color: '#00e89a', fontSize: '0.68rem', marginLeft: 4 }}>+{h.new_shares.toLocaleString('en-US', { maximumFractionDigits: 2 })}</span>}
+                    {h.new_shares > 0 && <span style={{ color: 'var(--pos-bright)', fontSize: '0.68rem', marginLeft: 4 }}>+{h.new_shares.toLocaleString('en-US', { maximumFractionDigits: 2 })}</span>}
                   </td>
-                  <td style={{ textAlign: 'right', color: '#00e89a', fontWeight: 600 }}>{fmt$(h.projected_annual_income)}</td>
+                  <td style={{ textAlign: 'right', color: 'var(--pos-bright)', fontWeight: 600 }}>{fmt$(h.projected_annual_income)}</td>
                 </tr>
               ))}
-              <tr style={{ borderTop: '2px solid #0f3460', background: '#16213e' }}>
+              <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
                 <td colSpan={3}><strong>TOTAL</strong></td>
                 <td colSpan={5}></td>
                 <td></td>
-                <td style={{ textAlign: 'right', color: '#7ecfff', fontWeight: 700 }}>+{displayTotals.total_new_shares?.toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
-                <td style={{ textAlign: 'right', color: '#00e89a', fontWeight: 700 }}>{fmt$(displayTotals.projected_annual_income)}</td>
+                <td style={{ textAlign: 'right', color: 'var(--accent-bright)', fontWeight: 700 }}>+{displayTotals.total_new_shares?.toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                <td style={{ textAlign: 'right', color: 'var(--pos-bright)', fontWeight: 700 }}>{fmt$(displayTotals.projected_annual_income)}</td>
               </tr>
             </tbody>
           </table>
@@ -1645,7 +1645,7 @@ export default function PortfolioIncomeSim() {
               )
             })}
           </div>
-          <div style={{ color: '#888', fontSize: '0.76rem', lineHeight: 1.4 }}>
+          <div style={{ color: 'var(--p-888)', fontSize: '0.76rem', lineHeight: 1.4 }}>
             Bias adjusts the ticker's own historical return path. Bullish improves the scenario, but funds with severe historical price decay can still decline.
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1669,7 +1669,7 @@ export default function PortfolioIncomeSim() {
         <label className="pis-reinv-toggle">
           <input type="checkbox" checked={reinvestCompare}
             onChange={e => setReinvestCompare(e.target.checked)}
-            style={{ accentColor: '#a78bfa', marginRight: 6 }} />
+            style={{ accentColor: 'var(--purple)', marginRight: 6 }} />
           Compare Reinvestment Impact
         </label>
         {reinvestCompare && (
@@ -1677,7 +1677,7 @@ export default function PortfolioIncomeSim() {
             <span className="ne-label">0%</span>
             <input type="range" min="0" max="100" step="1" value={reinvestSlider}
               onChange={e => setReinvestSlider(parseInt(e.target.value))}
-              style={{ flex: 1, maxWidth: 300, accentColor: '#a78bfa' }} />
+              style={{ flex: 1, maxWidth: 300, accentColor: 'var(--purple)' }} />
             <span className="ne-label">100%</span>
             <input className="ne-input" type="number" min="0" max="100" step="1"
               value={reinvestSlider} onChange={e => setReinvestSlider(Math.min(100, Math.max(0, parseInt(e.target.value) || 0)))}
@@ -1703,7 +1703,7 @@ export default function PortfolioIncomeSim() {
         <button className="nep-btn" onClick={openRename}>Rename</button>
         <button className="nep-btn" onClick={updateSaved}>Update</button>
         <button className="nep-btn nep-btn-del" onClick={deleteSaved}>Delete</button>
-        {deleteMsg && <span style={{ color: '#00c853', fontSize: '0.78rem' }}>Deleted</span>}
+        {deleteMsg && <span style={{ color: 'var(--pos-strong)', fontSize: '0.78rem' }}>Deleted</span>}
       </div>
 
       {/* Rename form */}
@@ -1718,7 +1718,7 @@ export default function PortfolioIncomeSim() {
             <button className="nep-btn nep-btn-purple" onClick={confirmRename}>Rename</button>
             <button className="nep-btn" onClick={() => setRenameFormOpen(false)}>Cancel</button>
           </div>
-          {renameError && <span style={{ color: '#e05555', fontSize: '0.78rem' }}>{renameError}</span>}
+          {renameError && <span style={{ color: 'var(--neg-3)', fontSize: '0.78rem' }}>{renameError}</span>}
         </div>
       )}
 
@@ -1726,7 +1726,7 @@ export default function PortfolioIncomeSim() {
       <div className="nep-grid-panel">
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
           <button className="nep-btn" onClick={addRow} disabled={gridRows.length >= MAX_ROWS}>+ Add ETF Row</button>
-          <span style={{ fontSize: '0.75rem', color: '#666' }}>
+          <span style={{ fontSize: '0.75rem', color: 'var(--p-666)' }}>
             Add tickers to simulate — one per row ({gridRows.length} / {MAX_ROWS})
           </span>
         </div>
@@ -1740,7 +1740,7 @@ export default function PortfolioIncomeSim() {
                 <th style={{ textAlign: 'left', width: 140 }}>Yield Override %</th>
                 <th style={{ width: 40 }}></th>
               </tr>
-              <tr style={{ fontSize: '0.68rem', color: '#666' }}>
+              <tr style={{ fontSize: '0.68rem', color: 'var(--p-666)' }}>
                 <th style={{ textAlign: 'left', fontWeight: 400, paddingTop: 0 }}>ETF / stock symbol</th>
                 <th style={{ textAlign: 'left', fontWeight: 400, paddingTop: 0 }}>$ to invest</th>
                 <th style={{ textAlign: 'left', fontWeight: 400, paddingTop: 0 }}>% divs reinvested</th>
@@ -1768,7 +1768,7 @@ export default function PortfolioIncomeSim() {
                   </td>
                   <td style={{ padding: '0.3rem 0.4rem' }}>
                     <input className="ne-input" type="number" min="0" max="100" step="0.1"
-                      style={{ width: 100, textAlign: 'right', borderColor: '#2a4a3e' }} placeholder="auto"
+                      style={{ width: 100, textAlign: 'right', borderColor: 'var(--p-2a4a3e)' }} placeholder="auto"
                       value={r.yield_override} onChange={e => updateRow(i, 'yield_override', e.target.value)} />
                   </td>
                   <td style={{ padding: '0.3rem 0.4rem', textAlign: 'center' }}>
@@ -1803,20 +1803,20 @@ export default function PortfolioIncomeSim() {
                       onClick={compSelectAll}>Select All</button>
                     <button className="nep-btn" style={{ fontSize: '0.75rem', padding: '2px 8px' }}
                       onClick={compClearAll}>Clear All</button>
-                    <span style={{ color: '#aaa', fontSize: '0.75rem', marginLeft: 'auto' }}>{compPortfolioCount} / {compPortfolioTickers.length}</span>
+                    <span style={{ color: 'var(--p-aaa)', fontSize: '0.75rem', marginLeft: 'auto' }}>{compPortfolioCount} / {compPortfolioTickers.length}</span>
                   </div>
                   <div style={{ maxHeight: 260, overflowY: 'auto' }}>
                     {filteredCompPortfolio.map(t => (
                       <label key={t.ticker} className="pis-comp-dropdown-item">
                         <input type="checkbox" checked={compTickers.includes(t.ticker)}
                           onChange={() => toggleCompPortfolio(t.ticker)}
-                          style={{ accentColor: '#7ecfff' }} />
+                          style={{ accentColor: 'var(--accent-bright)' }} />
                         <span style={{ fontWeight: 600, minWidth: 55 }}>{t.ticker}</span>
-                        <span style={{ color: '#888', fontSize: '0.78rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.description}</span>
+                        <span style={{ color: 'var(--p-888)', fontSize: '0.78rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.description}</span>
                       </label>
                     ))}
                     {filteredCompPortfolio.length === 0 && (
-                      <div style={{ padding: '0.5rem', color: '#555', textAlign: 'center', fontSize: '0.82rem' }}>No tickers found</div>
+                      <div style={{ padding: '0.5rem', color: 'var(--p-555)', textAlign: 'center', fontSize: '0.82rem' }}>No tickers found</div>
                     )}
                   </div>
                 </div>
@@ -1837,32 +1837,32 @@ export default function PortfolioIncomeSim() {
               {compTickers.map(t => (
                 <span key={t} className="pis-comp-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                   <strong>{t}</strong>
-                  <span style={{ fontSize: '0.74rem', color: '#888', whiteSpace: 'nowrap' }}>Amount $</span>
+                  <span style={{ fontSize: '0.74rem', color: 'var(--p-888)', whiteSpace: 'nowrap' }}>Amount $</span>
                   <input type="number" min="0" step="500"
                     value={compAmount[t] || 10000}
                     onChange={e => updateCompAmount(t, e.target.value)}
                     title="Initial investment amount for this ticker"
-                    style={{ width: 72, textAlign: 'right', background: '#1a1a2e', border: '1px solid #3a3a5c',
-                      borderRadius: 3, color: '#ccc', fontSize: '0.82rem', padding: '2px 4px' }} />
-                  <span style={{ fontSize: '0.74rem', color: '#888', whiteSpace: 'nowrap' }}>Reinvest:</span>
+                    style={{ width: 72, textAlign: 'right', background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)',
+                      borderRadius: 3, color: 'var(--p-ccc)', fontSize: '0.82rem', padding: '2px 4px' }} />
+                  <span style={{ fontSize: '0.74rem', color: 'var(--p-888)', whiteSpace: 'nowrap' }}>Reinvest:</span>
                   <input type="number" min="0" max="100" step="1"
                     value={compReinvest[t] || 0}
                     onChange={e => updateCompReinvest(t, e.target.value)}
                     title="Dividend reinvestment % for this ticker"
-                    style={{ width: 52, textAlign: 'center', background: '#1a1a2e', border: '1px solid #3a3a5c',
-                      borderRadius: 3, color: (compReinvest[t] || 0) > 0 ? '#00e89a' : '#888',
+                    style={{ width: 52, textAlign: 'center', background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)',
+                      borderRadius: 3, color: (compReinvest[t] || 0) > 0 ? 'var(--pos-bright)' : 'var(--p-888)',
                       fontSize: '0.82rem', padding: '2px 4px' }} />
-                  <span style={{ fontSize: '0.68rem', color: '#666' }}>%</span>
-                  <span style={{ fontSize: '0.74rem', color: '#888', whiteSpace: 'nowrap' }}>Yield Override:</span>
+                  <span style={{ fontSize: '0.68rem', color: 'var(--p-666)' }}>%</span>
+                  <span style={{ fontSize: '0.74rem', color: 'var(--p-888)', whiteSpace: 'nowrap' }}>Yield Override:</span>
                   <input type="number" min="0" max="100" step="0.1"
                     value={compYieldOverride[t] != null ? compYieldOverride[t] : ''}
                     onChange={e => updateCompYieldOverride(t, e.target.value)}
                     title="Manual yield override % (leave blank for auto)"
                     placeholder="auto"
-                    style={{ width: 58, textAlign: 'center', background: '#1a1a2e', border: '1px solid #2a4a3e',
-                      borderRadius: 3, color: compYieldOverride[t] != null ? '#00e89a' : '#888',
+                    style={{ width: 58, textAlign: 'center', background: 'var(--bg)', border: '1px solid var(--p-2a4a3e)',
+                      borderRadius: 3, color: compYieldOverride[t] != null ? 'var(--pos-bright)' : 'var(--p-888)',
                       fontSize: '0.82rem', padding: '2px 4px' }} />
-                  <span style={{ fontSize: '0.68rem', color: '#666' }}>%</span>
+                  <span style={{ fontSize: '0.68rem', color: 'var(--p-666)' }}>%</span>
                   <button onClick={() => removeCompTicker(t)} className="pis-comp-tag-x">&times;</button>
                 </span>
               ))}
@@ -1880,8 +1880,8 @@ export default function PortfolioIncomeSim() {
             Save Simulation&hellip;
           </button>
           <button className="ne-run-btn" onClick={runSim} disabled={loading}>Run</button>
-          {savedMsg && <span style={{ color: '#00c853', fontSize: '0.82rem' }}>Saved</span>}
-          <span style={{ color: '#555', fontSize: '0.78rem', marginLeft: 'auto' }}>
+          {savedMsg && <span style={{ color: 'var(--pos-strong)', fontSize: '0.82rem' }}>Saved</span>}
+          <span style={{ color: 'var(--p-555)', fontSize: '0.78rem', marginLeft: 'auto' }}>
             {gridRows.filter(r => r.ticker.trim()).length} / {MAX_ROWS} ETFs
           </span>
         </div>
@@ -1891,7 +1891,7 @@ export default function PortfolioIncomeSim() {
           <div className="nep-bt-form" style={{ marginTop: '0.5rem' }}>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               <label className="ne-label">Name:</label>
-              <input className="ne-input" style={{ flex: 1, minWidth: 200, borderColor: '#a78bfa' }}
+              <input className="ne-input" style={{ flex: 1, minWidth: 200, borderColor: 'var(--purple)' }}
                 maxLength={200} placeholder="e.g. High-yield 3yr bearish"
                 value={saveName} onChange={e => setSaveName(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') confirmSaveSim(); if (e.key === 'Escape') setSaveFormOpen(false) }}
@@ -1899,7 +1899,7 @@ export default function PortfolioIncomeSim() {
               <button className="nep-btn nep-btn-purple" style={{ fontWeight: 600 }} onClick={confirmSaveSim}>Save</button>
               <button className="nep-btn" onClick={() => setSaveFormOpen(false)}>Cancel</button>
             </div>
-            {saveError && <span style={{ color: '#e05555', fontSize: '0.78rem' }}>{saveError}</span>}
+            {saveError && <span style={{ color: 'var(--neg-3)', fontSize: '0.78rem' }}>{saveError}</span>}
           </div>
         )}
       </div>
@@ -1908,7 +1908,7 @@ export default function PortfolioIncomeSim() {
       {pickerOpen && (
         <div className="pis-picker-overlay" onClick={e => { if (e.target === e.currentTarget) setPickerOpen(false) }}>
           <div className="pis-picker-modal">
-            <h2 style={{ margin: '0 0 0.6rem', fontSize: '1rem', color: '#ccc' }}>Select from Portfolio</h2>
+            <h2 style={{ margin: '0 0 0.6rem', fontSize: '1rem', color: 'var(--p-ccc)' }}>Select from Portfolio</h2>
             <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
               <input className="ne-input" style={{ flex: 1, minWidth: 150 }}
                 placeholder="Search ticker or name..."
@@ -1917,9 +1917,9 @@ export default function PortfolioIncomeSim() {
                 autoFocus />
               <button className="nep-btn" onClick={pickerSelectAll}>Select All</button>
               <button className="nep-btn" onClick={pickerClearAll}>Clear All</button>
-              <span style={{ color: '#aaa', fontSize: '0.78rem' }}>{pickerChecked.size} selected</span>
+              <span style={{ color: 'var(--p-aaa)', fontSize: '0.78rem' }}>{pickerChecked.size} selected</span>
             </div>
-            <div style={{ maxHeight: 400, overflow: 'auto', border: '1px solid #2a2a3e', borderRadius: 6 }}>
+            <div style={{ maxHeight: 400, overflow: 'auto', border: '1px solid var(--p-2a2a3e)', borderRadius: 6 }}>
               <table className="sst" style={{ fontSize: '0.82rem' }}>
                 <thead>
                   <tr>
@@ -1941,20 +1941,20 @@ export default function PortfolioIncomeSim() {
                           <input type="checkbox" disabled={already}
                             checked={pickerChecked.has(t.ticker)}
                             onChange={() => togglePickerCheck(t.ticker)}
-                            style={{ accentColor: '#00e89a', cursor: already ? 'not-allowed' : 'pointer' }} />
+                            style={{ accentColor: 'var(--pos-bright)', cursor: already ? 'not-allowed' : 'pointer' }} />
                         </td>
                         <td style={{ fontWeight: 700 }}>{t.ticker}</td>
-                        <td style={{ color: '#aaa', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        <td style={{ color: 'var(--p-aaa)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                           title={t.description}>{t.description}</td>
-                        <td style={{ color: '#666', fontSize: '0.75rem' }}>{t.type}</td>
-                        <td style={{ textAlign: 'right', color: '#7ecfff' }}>{t.current_yield.toFixed(2)}%</td>
+                        <td style={{ color: 'var(--p-666)', fontSize: '0.75rem' }}>{t.type}</td>
+                        <td style={{ textAlign: 'right', color: 'var(--accent-bright)' }}>{t.current_yield.toFixed(2)}%</td>
                         <td style={{ textAlign: 'right' }}>{fmt$(t.amount)}</td>
                         <td style={{ textAlign: 'right' }}>{t.drip ? '100%' : '0%'}</td>
                       </tr>
                     )
                   })}
                   {filteredPicker.length === 0 && (
-                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: '1rem', color: '#555' }}>No tickers found.</td></tr>
+                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: '1rem', color: 'var(--p-555)' }}>No tickers found.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -1982,7 +1982,7 @@ export default function PortfolioIncomeSim() {
       {/* Results */}
       {results && !loading && (
         <div style={{ marginTop: '0.6rem' }}>
-          <h2 style={{ marginTop: 0, marginBottom: '0.7rem', fontSize: '1rem', color: '#ccc' }}>Results</h2>
+          <h2 style={{ marginTop: 0, marginBottom: '0.7rem', fontSize: '1rem', color: 'var(--p-ccc)' }}>Results</h2>
 
           {/* Summary */}
           {summary && (
@@ -1997,15 +1997,15 @@ export default function PortfolioIncomeSim() {
               <StatTile label="NAV Erosion" value={summary.erosionCount + ' of ' + summary.erosionValid}
                 color={summary.erosionCount > 0 ? '#e05555' : '#00c853'} sub="funds showing erosion" />
               {summary.validCount === 1 && summary.best && <StatTile label="Only Performer"
-                value={<span style={{ color: summary.best.gain_loss_pct >= 0 ? '#00c853' : '#e05555', fontWeight: 700 }}>{summary.best.ticker}</span>}
+                value={<span style={{ color: summary.best.gain_loss_pct >= 0 ? 'var(--pos-strong)' : 'var(--neg-3)', fontWeight: 700 }}>{summary.best.ticker}</span>}
                 color={summary.best.gain_loss_pct >= 0 ? '#00c853' : '#e05555'}
                 sub={fmtCompactPct(summary.best.gain_loss_pct, true)}
                 title={fmtPct(summary.best.gain_loss_pct)} />}
               {summary.validCount > 1 && summary.best && <StatTile label="Best Performer"
-                value={<span style={{ color: '#00c853', fontWeight: 700 }}>{summary.best.ticker}</span>}
+                value={<span style={{ color: 'var(--pos-strong)', fontWeight: 700 }}>{summary.best.ticker}</span>}
                 color="#00c853" sub={fmtCompactPct(summary.best.gain_loss_pct, true)} title={fmtPct(summary.best.gain_loss_pct)} />}
               {summary.validCount > 1 && summary.worst && <StatTile label="Worst Performer"
-                value={<span style={{ color: '#e05555', fontWeight: 700 }}>{summary.worst.ticker}</span>}
+                value={<span style={{ color: 'var(--neg-3)', fontWeight: 700 }}>{summary.worst.ticker}</span>}
                 color="#e05555" sub={fmtCompactPct(summary.worst.gain_loss_pct, true)} title={fmtPct(summary.worst.gain_loss_pct)} />}
               {mode === 'simulate' && (
                 <StatTile label="Market Bias"
@@ -2016,7 +2016,7 @@ export default function PortfolioIncomeSim() {
           )}
 
           {/* Results table */}
-          <h3 style={{ margin: '0 0 0.4rem', fontSize: '0.85rem', color: '#666', fontWeight: 400 }}>
+          <h3 style={{ margin: '0 0 0.4rem', fontSize: '0.85rem', color: 'var(--p-666)', fontWeight: 400 }}>
             Detail &mdash; click any header to sort
           </h3>
           <div className="nep-tbl-wrap">
@@ -2031,15 +2031,15 @@ export default function PortfolioIncomeSim() {
                   <th rowSpan={2}>End Price</th>
                   <th rowSpan={2}>Price &Delta;%</th>
                   <th rowSpan={2}>TTM Yield</th>
-                  <th colSpan={6} style={{ textAlign: 'center', borderBottom: '2px solid #e05555', color: '#e05555' }}>0% Reinvest</th>
-                  <th colSpan={6} style={{ textAlign: 'center', borderBottom: '2px solid #00c853', color: '#00c853' }}>{compareReinvestPct}% Reinvest</th>
+                  <th colSpan={6} style={{ textAlign: 'center', borderBottom: '2px solid var(--neg-3)', color: 'var(--neg-3)' }}>0% Reinvest</th>
+                  <th colSpan={6} style={{ textAlign: 'center', borderBottom: '2px solid var(--pos-strong)', color: 'var(--pos-strong)' }}>{compareReinvestPct}% Reinvest</th>
                   <th rowSpan={2}>NAV Erosion</th>
                   <th rowSpan={2}>Deficit</th>
                   <th rowSpan={2}>Note</th>
                 </tr>
                 <tr>
-                  {compareSubHeaders.map(h => <th key={'b_'+h} style={{ color: '#e08888', fontSize: '0.78rem' }}>{h}</th>)}
-                  {compareSubHeaders.map(h => <th key={'r_'+h} style={{ color: '#66d98a', fontSize: '0.78rem' }}>{h}</th>)}
+                  {compareSubHeaders.map(h => <th key={'b_'+h} style={{ color: 'var(--p-e08888)', fontSize: '0.78rem' }}>{h}</th>)}
+                  {compareSubHeaders.map(h => <th key={'r_'+h} style={{ color: 'var(--p-66d98a)', fontSize: '0.78rem' }}>{h}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -2049,10 +2049,10 @@ export default function PortfolioIncomeSim() {
                     const r = item.row
                     if (r.error && !r.start_price) {
                       return (
-                        <tr key={idx} style={r.is_comparison ? { background: '#0d0d22' } : {}}>
+                        <tr key={idx} style={r.is_comparison ? { background: 'var(--p-0d0d22)' } : {}}>
                           <td><strong>{r.ticker}{r.is_comparison ? ' [C]' : ''}</strong></td>
                           <td><MoneyValue value={r.amount || 0} /></td>
-                          <td colSpan={19} style={{ textAlign: 'left', color: '#e05555' }}>{r.error}</td>
+                          <td colSpan={19} style={{ textAlign: 'left', color: 'var(--neg-3)' }}>{r.error}</td>
                         </tr>
                       )
                     }
@@ -2062,13 +2062,13 @@ export default function PortfolioIncomeSim() {
                     const effCls = (r.effective_yield_pct || 0) >= 10 ? 'pct-up' : ''
                     const defCls = (r.final_deficit || 0) > 0 ? 'ne-deficit' : 'ne-surplus'
                     return (
-                      <tr key={idx} style={r.is_comparison ? { background: '#0d0d22' } : {}}>
+                      <tr key={idx} style={r.is_comparison ? { background: 'var(--p-0d0d22)' } : {}}>
                         <td><strong>{r.ticker}{r.is_comparison ? ' [C]' : ''}</strong></td>
                         <td><MoneyValue value={r.amount} /></td>
                         <td><MoneyValue value={r.start_price} /></td>
                         <td><MoneyValue value={r.end_price} /></td>
                         <td className={pCls}><PctValue value={r.price_delta_pct} signed /></td>
-                        <td>{r.ttm_yield_pct != null ? r.ttm_yield_pct.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                        <td>{r.ttm_yield_pct != null ? r.ttm_yield_pct.toFixed(2) + '%' : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
                         {/* Single row spans both groups */}
                         <td><MoneyValue value={r.total_dist} /></td>
                         <td className={effCls}><PctValue value={r.effective_yield_pct || 0} /></td>
@@ -2076,13 +2076,13 @@ export default function PortfolioIncomeSim() {
                         <td><MoneyValue value={r.final_value} /></td>
                         <td className={glCls}><MoneyValue value={r.gain_loss_dollar} /></td>
                         <td className={glPCls}><PctValue value={r.gain_loss_pct} signed /></td>
-                        <td colSpan={6} style={{ textAlign: 'center', color: '#555' }}>&mdash;</td>
+                        <td colSpan={6} style={{ textAlign: 'center', color: 'var(--p-555)' }}>&mdash;</td>
                         <td>{r.has_erosion
-                          ? <span style={{ color: '#e05555', fontWeight: 700 }}>Yes</span>
-                          : <span style={{ color: '#00c853', fontWeight: 700 }}>No</span>}</td>
+                          ? <span style={{ color: 'var(--neg-3)', fontWeight: 700 }}>Yes</span>
+                          : <span style={{ color: 'var(--pos-strong)', fontWeight: 700 }}>No</span>}</td>
                         <td className={defCls}>{parseFloat(r.final_deficit || 0).toFixed(4)}</td>
-                        <td style={{ textAlign: 'left', fontSize: '0.78rem', color: '#aaa', minWidth: 180, whiteSpace: 'normal' }}>
-                          {r.warning ? <span style={{ color: '#f9a825' }}>&#9888; {r.warning}</span> : <span style={{ color: '#555' }}>&mdash;</span>}
+                        <td style={{ textAlign: 'left', fontSize: '0.78rem', color: 'var(--p-aaa)', minWidth: 180, whiteSpace: 'normal' }}>
+                          {r.warning ? <span style={{ color: 'var(--warning)' }}>&#9888; {r.warning}</span> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}
                         </td>
                       </tr>
                     )
@@ -2103,36 +2103,36 @@ export default function PortfolioIncomeSim() {
                   // NAV Erosion from baseline only
                   const defCls = (b.final_deficit || 0) > 0 ? 'ne-deficit' : 'ne-surplus'
                   return (
-                    <tr key={idx} style={shared.is_comparison ? { background: '#0d0d22' } : {}}>
+                    <tr key={idx} style={shared.is_comparison ? { background: 'var(--p-0d0d22)' } : {}}>
                       <td><strong>{item.ticker}{item.is_comparison ? ' [C]' : ''}</strong></td>
                       <td><MoneyValue value={shared.amount} /></td>
                       <td><MoneyValue value={shared.start_price} /></td>
                       <td><MoneyValue value={shared.end_price} /></td>
                       <td className={pCls}><PctValue value={shared.price_delta_pct} signed /></td>
-                      <td>{shared.ttm_yield_pct != null ? shared.ttm_yield_pct.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td>{shared.ttm_yield_pct != null ? shared.ttm_yield_pct.toFixed(2) + '%' : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
                       {/* 0% Reinvest columns */}
-                      <td>{b.total_dist != null ? <MoneyValue value={b.total_dist} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td className={bEffCls}>{b.effective_yield_pct != null ? <PctValue value={b.effective_yield_pct} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td>{b.total_reinvested != null ? <MoneyValue value={b.total_reinvested} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td>{b.final_value != null ? <MoneyValue value={b.final_value} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td className={bGlCls}>{b.gain_loss_dollar != null ? <MoneyValue value={b.gain_loss_dollar} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td className={bGlPCls}>{b.gain_loss_pct != null ? <PctValue value={b.gain_loss_pct} signed /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td>{b.total_dist != null ? <MoneyValue value={b.total_dist} /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td className={bEffCls}>{b.effective_yield_pct != null ? <PctValue value={b.effective_yield_pct} /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td>{b.total_reinvested != null ? <MoneyValue value={b.total_reinvested} /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td>{b.final_value != null ? <MoneyValue value={b.final_value} /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td className={bGlCls}>{b.gain_loss_dollar != null ? <MoneyValue value={b.gain_loss_dollar} /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td className={bGlPCls}>{b.gain_loss_pct != null ? <PctValue value={b.gain_loss_pct} signed /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
                       {/* X% Reinvest columns */}
-                      <td>{r.total_dist != null ? <MoneyValue value={r.total_dist} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td className={rEffCls}>{r.effective_yield_pct != null ? <PctValue value={r.effective_yield_pct} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td>{r.total_reinvested != null ? <MoneyValue value={r.total_reinvested} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td>{r.final_value != null ? <MoneyValue value={r.final_value} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td className={rGlCls}>{r.gain_loss_dollar != null ? <MoneyValue value={r.gain_loss_dollar} /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      <td className={rGlPCls}>{r.gain_loss_pct != null ? <PctValue value={r.gain_loss_pct} signed /> : <span style={{ color: '#555' }}>&mdash;</span>}</td>
+                      <td>{r.total_dist != null ? <MoneyValue value={r.total_dist} /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td className={rEffCls}>{r.effective_yield_pct != null ? <PctValue value={r.effective_yield_pct} /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td>{r.total_reinvested != null ? <MoneyValue value={r.total_reinvested} /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td>{r.final_value != null ? <MoneyValue value={r.final_value} /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td className={rGlCls}>{r.gain_loss_dollar != null ? <MoneyValue value={r.gain_loss_dollar} /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td className={rGlPCls}>{r.gain_loss_pct != null ? <PctValue value={r.gain_loss_pct} signed /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
                       {/* NAV Erosion from baseline */}
                       <td>{b.has_erosion
-                        ? <span style={{ color: '#e05555', fontWeight: 700 }}>Yes</span>
-                        : <span style={{ color: '#00c853', fontWeight: 700 }}>No</span>}</td>
+                        ? <span style={{ color: 'var(--neg-3)', fontWeight: 700 }}>Yes</span>
+                        : <span style={{ color: 'var(--pos-strong)', fontWeight: 700 }}>No</span>}</td>
                       <td className={defCls}>{parseFloat(b.final_deficit || 0).toFixed(4)}</td>
-                      <td style={{ textAlign: 'left', fontSize: '0.78rem', color: '#aaa', minWidth: 180, whiteSpace: 'normal' }}>
+                      <td style={{ textAlign: 'left', fontSize: '0.78rem', color: 'var(--p-aaa)', minWidth: 180, whiteSpace: 'normal' }}>
                         {(shared.warning)
-                          ? <span style={{ color: '#f9a825' }}>&#9888; {shared.warning}</span>
-                          : <span style={{ color: '#555' }}>&mdash;</span>}
+                          ? <span style={{ color: 'var(--warning)' }}>&#9888; {shared.warning}</span>
+                          : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}
                       </td>
                     </tr>
                   )
@@ -2170,11 +2170,11 @@ export default function PortfolioIncomeSim() {
                 {sortedResults.map((r, idx) => {
                   if (r.error && !r.start_price) {
                     return (
-                      <tr key={idx} style={r.is_comparison ? { background: '#0d0d22' } : {}}>
+                      <tr key={idx} style={r.is_comparison ? { background: 'var(--p-0d0d22)' } : {}}>
                         <td><strong>{r.ticker}{r.is_comparison ? ' [C]' : ''}</strong></td>
                         <td><MoneyValue value={r.amount || 0} /></td>
                         <td>{(r.reinvest_pct || 0)}%</td>
-                        <td colSpan={isSim ? 15 : 12} style={{ textAlign: 'left', color: '#e05555' }}>{r.error}</td>
+                        <td colSpan={isSim ? 15 : 12} style={{ textAlign: 'left', color: 'var(--neg-3)' }}>{r.error}</td>
                         <td></td>
                       </tr>
                     )
@@ -2185,21 +2185,21 @@ export default function PortfolioIncomeSim() {
                   const effCls = (r.effective_yield_pct || 0) >= 10 ? 'pct-up' : ''
                   const defCls = r.final_deficit > 0 ? 'ne-deficit' : 'ne-surplus'
                   return (
-                    <tr key={idx} style={r.is_comparison ? { background: '#0d0d22' } : {}}>
+                    <tr key={idx} style={r.is_comparison ? { background: 'var(--p-0d0d22)' } : {}}>
                       <td>
                         <strong>{r.ticker}{r.is_comparison ? ' [C]' : ''}</strong>
-                        {r.compare_group === 'baseline' && <span style={{ marginLeft: 6, fontSize: '0.72rem', color: '#e05555', fontWeight: 600 }}>0%</span>}
-                        {r.compare_group === 'reinvested' && <span style={{ marginLeft: 6, fontSize: '0.72rem', color: '#00c853', fontWeight: 600 }}>{r.reinvest_pct}%</span>}
+                        {r.compare_group === 'baseline' && <span style={{ marginLeft: 6, fontSize: '0.72rem', color: 'var(--neg-3)', fontWeight: 600 }}>0%</span>}
+                        {r.compare_group === 'reinvested' && <span style={{ marginLeft: 6, fontSize: '0.72rem', color: 'var(--pos-strong)', fontWeight: 600 }}>{r.reinvest_pct}%</span>}
                       </td>
                       <td><MoneyValue value={r.amount} /></td>
                       <td>{r.reinvest_pct}%</td>
                       <td><MoneyValue value={r.start_price} /></td>
                       <td><MoneyValue value={r.end_price} /></td>
                       <td className={pCls}><PctValue value={r.price_delta_pct} signed /></td>
-                      <td>{r.ttm_yield_pct != null ? r.ttm_yield_pct.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>
-                      {isSim && <td style={{ color: (r.sim_stats?.hist_mean_monthly || 0) >= 0 ? '#4dff91' : '#ff6b6b' }}>{r.sim_stats?.hist_mean_monthly != null ? r.sim_stats.hist_mean_monthly.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>}
-                      {isSim && <td>{r.sim_stats?.hist_sigma_monthly != null ? r.sim_stats.hist_sigma_monthly.toFixed(2) + '%' : <span style={{ color: '#555' }}>&mdash;</span>}</td>}
-                      {isSim && <td style={{ color: (r.sim_stats?.hist_skewness || 0) < -0.3 ? '#f9a825' : '#aaa' }}>{r.sim_stats?.hist_skewness != null ? r.sim_stats.hist_skewness.toFixed(2) : <span style={{ color: '#555' }}>&mdash;</span>}</td>}
+                      <td>{r.ttm_yield_pct != null ? r.ttm_yield_pct.toFixed(2) + '%' : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      {isSim && <td style={{ color: (r.sim_stats?.hist_mean_monthly || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{r.sim_stats?.hist_mean_monthly != null ? r.sim_stats.hist_mean_monthly.toFixed(2) + '%' : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>}
+                      {isSim && <td>{r.sim_stats?.hist_sigma_monthly != null ? r.sim_stats.hist_sigma_monthly.toFixed(2) + '%' : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>}
+                      {isSim && <td style={{ color: (r.sim_stats?.hist_skewness || 0) < -0.3 ? 'var(--warning)' : 'var(--p-aaa)' }}>{r.sim_stats?.hist_skewness != null ? r.sim_stats.hist_skewness.toFixed(2) : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>}
                       <td><MoneyValue value={r.total_dist} /></td>
                       <td className={effCls}><PctValue value={r.effective_yield_pct} /></td>
                       <td><MoneyValue value={r.total_reinvested} /></td>
@@ -2207,13 +2207,13 @@ export default function PortfolioIncomeSim() {
                       <td className={glCls}><MoneyValue value={r.gain_loss_dollar} /></td>
                       <td className={glPCls}><PctValue value={r.gain_loss_pct} signed /></td>
                       <td>{r.has_erosion
-                        ? <span style={{ color: '#e05555', fontWeight: 700 }}>Yes</span>
-                        : <span style={{ color: '#00c853', fontWeight: 700 }}>No</span>}</td>
+                        ? <span style={{ color: 'var(--neg-3)', fontWeight: 700 }}>Yes</span>
+                        : <span style={{ color: 'var(--pos-strong)', fontWeight: 700 }}>No</span>}</td>
                       <td className={defCls}>{parseFloat(r.final_deficit).toFixed(4)}</td>
-                      <td style={{ textAlign: 'left', fontSize: '0.78rem', color: '#aaa', minWidth: 180, whiteSpace: 'normal' }}>
+                      <td style={{ textAlign: 'left', fontSize: '0.78rem', color: 'var(--p-aaa)', minWidth: 180, whiteSpace: 'normal' }}>
                         {r.warning
-                          ? <span style={{ color: '#f9a825' }}>&#9888; {r.warning}</span>
-                          : <span style={{ color: '#555' }}>&mdash;</span>}
+                          ? <span style={{ color: 'var(--warning)' }}>&#9888; {r.warning}</span>
+                          : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}
                       </td>
                     </tr>
                   )
@@ -2243,8 +2243,8 @@ export default function PortfolioIncomeSim() {
           {/* Charts */}
           {chartableResults.length > 0 && (
             <div style={{ marginTop: '1.2rem' }}>
-              <h3 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem', color: '#ccc' }}>Charts</h3>
-              <p style={{ margin: '0 0 0.75rem', color: '#aaa', fontSize: '0.82rem', lineHeight: 1.5 }}>
+              <h3 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem', color: 'var(--p-ccc)' }}>Charts</h3>
+              <p style={{ margin: '0 0 0.75rem', color: 'var(--p-aaa)', fontSize: '0.82rem', lineHeight: 1.5 }}>
                 The first chart compares ending portfolio value with no reinvestment versus your selected reinvestment rate.
                 The second chart compares cumulative dividend distributions over the same period. Red is the 0% reinvestment
                 baseline; green is the reinvestment scenario.
@@ -2309,3 +2309,4 @@ export default function PortfolioIncomeSim() {
     </div>
   )
 }
+

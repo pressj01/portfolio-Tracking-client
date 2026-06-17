@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { returnVsYield } from '../utils/returnVsYield'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 
 // 30 bright, high-contrast colors for dark backgrounds
 const PALETTE = [
@@ -26,6 +28,7 @@ function MetricCard({ label, value, className }) {
 export default function TotalReturn() {
   const pf = useProfileFetch()
   const { selection, basisMode } = useProfile()
+  const { isDark } = useTheme()
   const [categories, setCategories] = useState([])
   const [subcategories, setSubcategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
@@ -146,7 +149,7 @@ export default function TotalReturn() {
         // Add left margin for the colored labels
         bar.layout.margin = { ...bar.layout.margin, l: 75 }
       }
-      Plotly.newPlot(barEl, bar.data, bar.layout, cfg)
+      Plotly.newPlot(barEl, bar.data, themedPlotlyLayout(bar.layout, isDark), cfg)
     }
 
     return () => {
@@ -155,7 +158,7 @@ export default function TotalReturn() {
         if (el) Plotly.purge(el)
       })
     }
-  }, [chartData])
+  }, [chartData, isDark])
 
   // Render scatter chart
   useEffect(() => {
@@ -241,9 +244,9 @@ export default function TotalReturn() {
       },
     }
 
-    Plotly.newPlot(el, fig.data, fig.layout, { responsive: true })
+    Plotly.newPlot(el, fig.data, themedPlotlyLayout(fig.layout, isDark), { responsive: true })
     return () => { if (el) Plotly.purge(el) }
-  }, [summary, scatterReturnMode])
+  }, [summary, scatterReturnMode, isDark])
 
   // Fetch comparison chart data
   useEffect(() => {
@@ -307,9 +310,9 @@ export default function TotalReturn() {
       margin: { t: 50, b: 80, l: 60, r: 20 },
     }
 
-    Plotly.newPlot(el, traces, layout, { responsive: true })
+    Plotly.newPlot(el, traces, themedPlotlyLayout(layout, isDark), { responsive: true })
     return () => Plotly.purge(el)
-  }, [cmpData, cmpMode])
+  }, [cmpData, cmpMode, isDark])
 
   const handleCmpExtraSubmit = (e) => {
     e.preventDefault()
@@ -412,7 +415,7 @@ export default function TotalReturn() {
             </button>
             {catOpen && (
               <div className="growth-cat-dropdown">
-                <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
+                <label className="growth-cat-option" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
                   <input type="checkbox" checked={categories.length === 0 && subcategories.length === 0}
                     onChange={() => { setCategories([]); setSubcategories([]) }} />
                   <span>All Holdings</span>
@@ -467,20 +470,20 @@ export default function TotalReturn() {
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
             <MetricCard label="Total Invested" value={fmtInt(t.total_invested)} />
             <MetricCard label="Current Value" value={fmtInt(t.current_value)} />
-            <MetricCard label="Price Gain / Loss" value={<span style={{ color: (t.price_gl || 0) >= 0 ? '#4dff91' : '#ff6b6b' }}>{fmtInt(t.price_gl)}</span>} />
+            <MetricCard label="Price Gain / Loss" value={<span style={{ color: (t.price_gl || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.price_gl)}</span>} />
             <MetricCard label="Total Divs Received" value={fmtInt(t.total_divs)} />
-            <MetricCard label="Total Return $" value={<span style={{ color: (t.total_return_dollar || 0) >= 0 ? '#4dff91' : '#ff6b6b' }}>{fmtInt(t.total_return_dollar)}</span>} />
-            <MetricCard label="Total Return %" value={<span style={{ color: (t.total_return_pct || 0) >= 0 ? '#4dff91' : '#ff6b6b' }}>{fmtPct(t.total_return_pct)}</span>} />
+            <MetricCard label="Total Return $" value={<span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>} />
+            <MetricCard label="Total Return %" value={<span style={{ color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.total_return_pct)}</span>} />
             {chartData?.spy_ret != null && (
               <MetricCard label={`SPY - ${chartData.period_label || '1Y'}`}
-                value={<span style={{ color: chartData.spy_ret >= 0 ? '#4dff91' : '#ff6b6b' }}>{fmtPct(chartData.spy_ret)}</span>} />
+                value={<span style={{ color: chartData.spy_ret >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(chartData.spy_ret)}</span>} />
             )}
           </div>
         </>
       )}
 
       {/* Charts */}
-      {chartLoading && <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', color: '#8899aa', padding: '0.6rem 0' }}><span className="spinner" /> Fetching data from Yahoo Finance...</div>}
+      {chartLoading && <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', color: 'var(--text-dim)', padding: '0.6rem 0' }}><span className="spinner" /> Fetching data from Yahoo Finance...</div>}
       {chartError && <div className="alert alert-error">{chartError}</div>}
 
       {chartData && !chartLoading && (
@@ -509,7 +512,7 @@ export default function TotalReturn() {
             </button>
             {cmpTickerOpen && (
               <div className="growth-cat-dropdown" style={{ maxHeight: '300px', overflowY: 'auto' }}>
-                <div style={{ display: 'flex', gap: '0.3rem', padding: '0.3rem 0.6rem', borderBottom: '1px solid #0f3460', marginBottom: '0.2rem' }}>
+                <div style={{ display: 'flex', gap: '0.3rem', padding: '0.3rem 0.6rem', borderBottom: '1px solid var(--border)', marginBottom: '0.2rem' }}>
                   <button className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={() => setCmpTickers([...allTickers])}>All</button>
                   <button className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={() => setCmpTickers([])}>Clear</button>
                 </div>
@@ -533,12 +536,12 @@ export default function TotalReturn() {
             <div style={{ display: 'flex', gap: '0.3rem' }}>
               <input type="text" value={cmpExtraInput} onChange={e => setCmpExtraInput(e.target.value.toUpperCase())}
                 placeholder="e.g. SPY QQQ VOO"
-                style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem', background: '#0d1520', border: '1px solid #0f3460', borderRadius: '4px', color: '#e0e0e0', width: '200px' }} />
+                style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem', background: 'var(--p-0d1520)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text)', width: '200px' }} />
               <button type="submit" className="btn btn-primary" style={{ padding: '0.4rem 0.7rem', fontSize: '0.85rem' }}>Add</button>
               {cmpExtra && <button type="button" className="btn btn-secondary" style={{ padding: '0.4rem 0.7rem', fontSize: '0.85rem' }}
                 onClick={() => { setCmpExtra(''); setCmpExtraInput('') }}>Clear</button>}
             </div>
-            {cmpExtra && <div style={{ fontSize: '0.8rem', color: '#7ecfff', marginTop: '0.25rem' }}>{cmpExtra.split(',').join(', ')}</div>}
+            {cmpExtra && <div style={{ fontSize: '0.8rem', color: 'var(--accent-bright)', marginTop: '0.25rem' }}>{cmpExtra.split(',').join(', ')}</div>}
           </form>
 
           {/* Period */}
@@ -571,10 +574,10 @@ export default function TotalReturn() {
           </div>
         </div>
 
-        {cmpLoading && <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', color: '#8899aa', padding: '0.6rem 0' }}><span className="spinner" /> Loading comparison data...</div>}
+        {cmpLoading && <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', color: 'var(--text-dim)', padding: '0.6rem 0' }}><span className="spinner" /> Loading comparison data...</div>}
         {cmpError && <div className="alert alert-error">{cmpError}</div>}
         {!cmpData && !cmpLoading && !cmpError && (cmpTickers.length === 0 && !cmpExtra) && (
-          <p style={{ color: '#556677', fontStyle: 'italic', padding: '2rem 0', textAlign: 'center' }}>Select portfolio tickers or add external tickers to see the comparison chart.</p>
+          <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', padding: '2rem 0', textAlign: 'center' }}>Select portfolio tickers or add external tickers to see the comparison chart.</p>
         )}
         <div id="tr-chart-compare" style={{ minHeight: cmpData ? '550px' : '0', marginBottom: '2rem' }} />
       </div>
@@ -607,7 +610,7 @@ export default function TotalReturn() {
       {summary && !summaryLoading && summary.rows.length > 0 && (
         <>
           <h2 style={{ marginTop: '1.5rem', marginBottom: '0.25rem' }}>Holdings — All-Time Total Return Summary</h2>
-          <p style={{ color: '#8899aa', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Click any column header to sort.</p>
+          <p style={{ color: 'var(--text-dim)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Click any column header to sort.</p>
           <div className="sticky-table-wrap" style={{ maxHeight: '70vh' }}>
             <table>
               <thead>
@@ -622,7 +625,7 @@ export default function TotalReturn() {
                           <span
                             onClick={() => setRvyMode(m => m === 'yoc' ? 'cur' : 'yoc')}
                             title={rvyMode === 'yoc' ? 'Using Yield on Cost — click to switch to Current Yield' : 'Using Current Yield — click to switch to Yield on Cost'}
-                            style={{ fontSize: '0.65rem', background: rvyMode === 'yoc' ? '#1a3a5c' : '#1a3a2a', color: rvyMode === 'yoc' ? '#7ecfff' : '#4dff91', border: `1px solid ${rvyMode === 'yoc' ? '#294b73' : '#2a5c3a'}`, borderRadius: 3, padding: '1px 4px', cursor: 'pointer', fontWeight: 600 }}
+                            style={{ fontSize: '0.65rem', background: rvyMode === 'yoc' ? 'var(--p-1a3a5c)' : 'var(--p-1a3a2a)', color: rvyMode === 'yoc' ? 'var(--accent-bright)' : 'var(--pos)', border: `1px solid ${rvyMode === 'yoc' ? 'var(--p-294b73)' : 'var(--p-2a5c3a)'}`, borderRadius: 3, padding: '1px 4px', cursor: 'pointer', fontWeight: 600 }}
                           >
                             {rvyMode === 'yoc' ? 'YOC' : 'CYld'}
                           </span>
@@ -632,7 +635,7 @@ export default function TotalReturn() {
                     return (
                       <th key={col.key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: columnAlign(col.key) }} onClick={() => handleSort(sk)}>
                         {col.label}
-                        <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === sk ? '#7ecfff' : '#8899aa' }}>
+                        <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === sk ? 'var(--accent-bright)' : 'var(--text-dim)' }}>
                           {sortIcon(sk)}
                         </span>
                       </th>
@@ -664,15 +667,15 @@ export default function TotalReturn() {
                 ))}
               </tbody>
               <tfoot>
-                <tr style={{ borderTop: '2px solid #0f3460', background: '#16213e' }}>
+                <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
                   <td colSpan={5}><strong>Portfolio Total</strong></td>
                   <td style={{ textAlign: 'right' }}><strong>{fmt(t.total_invested)}</strong></td>
                   <td style={{ textAlign: 'right' }}><strong>{fmt(t.current_value)}</strong></td>
-                  <td style={{ textAlign: 'right', color: (t.price_gl || 0) >= 0 ? '#4dff91' : '#ff6b6b' }}><strong>{fmt(t.price_gl)}</strong></td>
+                  <td style={{ textAlign: 'right', color: (t.price_gl || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(t.price_gl)}</strong></td>
                   <td></td>
                   <td style={{ textAlign: 'right' }}><strong>{fmt(t.total_divs)}</strong></td>
-                  <td style={{ textAlign: 'right', color: (t.total_return_dollar || 0) >= 0 ? '#4dff91' : '#ff6b6b' }}><strong>{fmt(t.total_return_dollar)}</strong></td>
-                  <td style={{ textAlign: 'right', color: (t.total_return_pct || 0) >= 0 ? '#4dff91' : '#ff6b6b' }}><strong>{fmtPct(t.total_return_pct)}</strong></td>
+                  <td style={{ textAlign: 'right', color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(t.total_return_dollar)}</strong></td>
+                  <td style={{ textAlign: 'right', color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(t.total_return_pct)}</strong></td>
                   <td></td>
                 </tr>
               </tfoot>

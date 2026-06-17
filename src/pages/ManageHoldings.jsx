@@ -40,9 +40,9 @@ function InfoHint({ text }) {
           width: 18,
           height: 18,
           borderRadius: '50%',
-          border: '1px solid #4fc3f7',
+          border: '1px solid var(--p-4fc3f7)',
           background: 'rgba(79, 195, 247, 0.12)',
-          color: '#90caf9',
+          color: 'var(--accent-2)',
           fontSize: '0.72rem',
           fontWeight: 700,
           lineHeight: '16px',
@@ -63,10 +63,10 @@ function InfoHint({ text }) {
           maxWidth: '70vw',
           padding: '0.45rem 0.55rem',
           borderRadius: 6,
-          border: '1px solid #31517a',
-          background: '#101a33',
+          border: '1px solid var(--p-31517a)',
+          background: 'var(--p-101a33)',
           boxShadow: '0 8px 22px rgba(0,0,0,0.35)',
-          color: '#c8d8ef',
+          color: 'var(--p-c8d8ef)',
           fontSize: '0.72rem',
           lineHeight: 1.35,
           whiteSpace: 'normal',
@@ -221,7 +221,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
         <form onSubmit={handleSubmit}>
 
           {/* Section: Basic Info */}
-          <h3 style={{ color: '#90a4ae', fontSize: '0.85rem', marginBottom: '0.5rem', borderBottom: '1px solid #0f3460', paddingBottom: '0.3rem' }}>BASIC INFO</h3>
+          <h3 style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginBottom: '0.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.3rem' }}>BASIC INFO</h3>
           {lookupMsg && (
             <div className={`alert ${lookupMsg.startsWith('Could not') ? 'alert-error' : 'alert-info'}`} style={{ marginBottom: '0.75rem', padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}>
               {lookupMsg}
@@ -272,7 +272,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
           </div>
 
           {/* Section: Position */}
-          <h3 style={{ color: '#90a4ae', fontSize: '0.85rem', marginBottom: '0.5rem', marginTop: '1rem', borderBottom: '1px solid #0f3460', paddingBottom: '0.3rem' }}>POSITION</h3>
+          <h3 style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginBottom: '0.5rem', marginTop: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.3rem' }}>POSITION</h3>
           {hasTxns && (
             <div className="alert alert-info" style={{ marginBottom: '0.75rem', padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}>
               Shares, Price Paid, and Purchase Date are managed by transactions. Use the Txn button to add or edit lots.
@@ -300,7 +300,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
           </div>
 
           {/* Section: Dividend Info */}
-          <h3 style={{ color: '#90a4ae', fontSize: '0.85rem', marginBottom: '0.5rem', marginTop: '1rem', borderBottom: '1px solid #0f3460', paddingBottom: '0.3rem' }}>DIVIDEND INFO</h3>
+          <h3 style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginBottom: '0.5rem', marginTop: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.3rem' }}>DIVIDEND INFO</h3>
           <div className="form-row">
             <div className="form-group">
               <label>Div/Share</label>
@@ -325,7 +325,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
                   onChange={(e) => set('reinvest', e.target.checked ? 'Y' : 'N')}
                   style={{ width: '18px', height: '18px', cursor: 'pointer' }}
                 />
-                <span style={{ color: '#90a4ae', fontSize: '0.85rem' }}>{form.reinvest === 'Y' ? 'Yes' : 'No'}</span>
+                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>{form.reinvest === 'Y' ? 'Yes' : 'No'}</span>
               </div>
             </div>
             <div className="form-group">
@@ -339,7 +339,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
           </div>
 
           {/* Section: Dividend Tracking / Total Returns */}
-          <h3 style={{ color: '#90a4ae', fontSize: '0.85rem', marginBottom: '0.5rem', marginTop: '1rem', borderBottom: '1px solid #0f3460', paddingBottom: '0.3rem' }}>DIVIDEND TRACKING / TOTAL RETURNS</h3>
+          <h3 style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginBottom: '0.5rem', marginTop: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.3rem' }}>DIVIDEND TRACKING / TOTAL RETURNS</h3>
           <div className="form-row">
             <div className="form-group">
               <label>Dividends Paid</label>
@@ -370,7 +370,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
           </div>
 
           {/* Section: Reinvestment */}
-          <h3 style={{ color: '#90a4ae', fontSize: '0.85rem', marginBottom: '0.5rem', marginTop: '1rem', borderBottom: '1px solid #0f3460', paddingBottom: '0.3rem' }}>REINVESTMENT</h3>
+          <h3 style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginBottom: '0.5rem', marginTop: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.3rem' }}>REINVESTMENT</h3>
           <div className="form-row">
             <div className="form-group">
               <label>Cash Not Reinvested</label>
@@ -640,18 +640,18 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
             <table style={{ width: '100%', fontSize: '0.85rem', minWidth: '900px' }}>
               <thead>
                 <tr>
-                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Type</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Date</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Shares</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Price</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Fees</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Cost/Proceeds</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Realized G/L</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2, borderLeft: '1px solid #1a3a5c' }}>Position</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Avg Cost</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Total Cost</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Notes</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#16213e', zIndex: 2 }}>Actions</th>
+                  <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Type</th>
+                  <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Date</th>
+                  <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Shares</th>
+                  <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Price</th>
+                  <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Fees</th>
+                  <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Cost/Proceeds</th>
+                  <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Realized G/L</th>
+                  <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2, borderLeft: '1px solid var(--p-1a3a5c)' }}>Position</th>
+                  <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Avg Cost</th>
+                  <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Total Cost</th>
+                  <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Notes</th>
+                  <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -662,19 +662,19 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
                     : ((txn.shares || 0) * (txn.price_per_share || 0)) + (txn.fees || 0)
                   return (
                   <tr key={txn.id}>
-                    <td style={{ color: isSell ? '#ef9a9a' : '#81c784', fontWeight: 600 }}>{isSell ? 'SELL' : 'BUY'}</td>
+                    <td style={{ color: isSell ? 'var(--p-ef9a9a)' : 'var(--p-81c784)', fontWeight: 600 }}>{isSell ? 'SELL' : 'BUY'}</td>
                     <td>
                       <div>{txn.transaction_date || '-'}</div>
-                      {txn.created_at && <div style={{ fontSize: '0.7rem', color: '#90a4ae' }}>{new Date(txn.created_at + 'Z').toLocaleString()}</div>}
+                      {txn.created_at && <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)' }}>{new Date(txn.created_at + 'Z').toLocaleString()}</div>}
                     </td>
                     <td>{fmt(txn.shares, 3)}</td>
                     <td>${fmt(txn.price_per_share)}</td>
                     <td>${fmt(txn.fees)}</td>
                     <td>${fmt(amount)}</td>
-                    <td style={{ color: txn.realized_gain > 0 ? '#81c784' : txn.realized_gain < 0 ? '#ef9a9a' : undefined }}>
+                    <td style={{ color: txn.realized_gain > 0 ? 'var(--p-81c784)' : txn.realized_gain < 0 ? 'var(--p-ef9a9a)' : undefined }}>
                       {txn.realized_gain != null ? '$' + fmt(txn.realized_gain) : '-'}
                     </td>
-                    <td style={{ borderLeft: '1px solid #1a3a5c', fontWeight: 600 }}>{fmt(txn.position_after, 3)}</td>
+                    <td style={{ borderLeft: '1px solid var(--p-1a3a5c)', fontWeight: 600 }}>{fmt(txn.position_after, 3)}</td>
                     <td>${fmt(txn.avg_cost_after)}</td>
                     <td>${fmt(txn.total_cost_after)}</td>
                     <td style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{txn.notes || '-'}</td>
@@ -694,7 +694,7 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
         {!isNew && loading && <div style={{ textAlign: 'center', padding: '1rem' }}><span className="spinner" /></div>}
 
         {/* Add/Edit transaction form */}
-        <h3 style={{ color: '#90a4ae', fontSize: '0.85rem', marginBottom: '0.5rem', borderBottom: '1px solid #0f3460', paddingBottom: '0.3rem' }}>
+        <h3 style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginBottom: '0.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.3rem' }}>
           {editId ? 'EDIT TRANSACTION' : 'ADD TRANSACTION'}
         </h3>
         <form onSubmit={handleSubmit}>
@@ -748,9 +748,9 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
                   style={{
                     padding: '0.4rem 1.2rem', fontSize: '0.85rem', fontWeight: 600, border: 'none', borderRadius: '4px', cursor: 'pointer',
                     background: form.transaction_type === t
-                      ? (t === 'BUY' ? '#2e7d32' : '#c62828')
+                      ? (t === 'BUY' ? 'var(--success-solid)' : 'var(--danger-solid)')
                       : 'rgba(255,255,255,0.1)',
-                    color: form.transaction_type === t ? '#fff' : '#90a4ae',
+                    color: form.transaction_type === t ? 'var(--white)' : 'var(--text-dim-2)',
                   }}
                   onClick={() => {
                     setForm(prev => ({ ...prev, transaction_type: t }))
@@ -764,15 +764,15 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
 
           {/* Lot picker for SELL */}
           {!isNew && form.transaction_type === 'SELL' && openLots.length > 0 && (
-            <div style={{ marginBottom: '0.75rem', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', border: '1px solid #1a3a5c' }}>
+            <div style={{ marginBottom: '0.75rem', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', border: '1px solid var(--p-1a3a5c)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.5rem' }}>
-                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#90a4ae' }}>Cost Basis Method:</span>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-dim-2)' }}>Cost Basis Method:</span>
                 {['FIFO', 'SPECIFIC'].map(m => (
                   <button key={m} type="button"
                     style={{
                       padding: '0.25rem 0.8rem', fontSize: '0.8rem', fontWeight: 600, border: 'none', borderRadius: '4px', cursor: 'pointer',
-                      background: lotMode === m ? '#1565c0' : 'rgba(255,255,255,0.1)',
-                      color: lotMode === m ? '#fff' : '#90a4ae',
+                      background: lotMode === m ? 'var(--primary-hover)' : 'rgba(255,255,255,0.1)',
+                      color: lotMode === m ? 'var(--white)' : 'var(--text-dim-2)',
                     }}
                     onClick={() => { setLotMode(m); if (m === 'FIFO') setLotAlloc({}) }}
                   >{m === 'FIFO' ? 'FIFO (default)' : 'Specific Lots'}</button>
@@ -782,12 +782,12 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
                 <>
                   <table style={{ width: '100%', fontSize: '0.82rem', marginBottom: '0.5rem' }}>
                     <thead>
-                      <tr style={{ borderBottom: '1px solid #1a3a5c' }}>
-                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: '#90a4ae', textAlign: 'left' }}>Buy Date</th>
-                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: '#90a4ae', textAlign: 'right' }}>Price</th>
-                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: '#90a4ae', textAlign: 'right' }}>Cost/Share</th>
-                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: '#90a4ae', textAlign: 'right' }}>Available</th>
-                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: '#90a4ae', textAlign: 'right' }}>Sell Qty</th>
+                      <tr style={{ borderBottom: '1px solid var(--p-1a3a5c)' }}>
+                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: 'var(--text-dim-2)', textAlign: 'left' }}>Buy Date</th>
+                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: 'var(--text-dim-2)', textAlign: 'right' }}>Price</th>
+                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: 'var(--text-dim-2)', textAlign: 'right' }}>Cost/Share</th>
+                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: 'var(--text-dim-2)', textAlign: 'right' }}>Available</th>
+                        <th style={{ padding: '0.3rem 0.5rem', fontWeight: 600, color: 'var(--text-dim-2)', textAlign: 'right' }}>Sell Qty</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -816,8 +816,8 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
                       ))}
                     </tbody>
                   </table>
-                  <div style={{ fontSize: '0.8rem', color: '#90a4ae' }}>
-                    Total to sell: <span style={{ color: '#e0e8f0', fontWeight: 600 }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-dim-2)' }}>
+                    Total to sell: <span style={{ color: 'var(--p-e0e8f0)', fontWeight: 600 }}>
                       {fmt(lotTotal, 3)}
                     </span> shares
                   </div>
@@ -846,7 +846,7 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
                 style={{ width: '100%' }}
               />
               {form.transaction_type === 'SELL' && openLots.length > 0 && (
-                <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginTop: '0.25rem' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-dim-2)', marginTop: '0.25rem' }}>
                   Available: {fmt(openLotTotal, 3)} shares
                 </div>
               )}
@@ -878,43 +878,44 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
 }
 
 // Column definitions for sortable table
-const FROZEN_COLS = 4 // first 4 columns are frozen
-const FROZEN_WIDTHS = [80, 180, 90, 70] // px widths for frozen cols
+const FROZEN_COLS = 5 // first 5 columns are frozen
+const FROZEN_WIDTHS = [80, 180, 96, 76, 76] // px widths for frozen cols
 const FROZEN_LEFT = FROZEN_WIDTHS.map((_, i) =>
   FROZEN_WIDTHS.slice(0, i).reduce((s, w) => s + w, 0)
 )
 
 const COLUMNS = [
-  { key: 'ticker', label: 'Ticker', type: 'string' },
-  { key: 'description', label: 'Description', type: 'string' },
-  { key: 'category', label: 'Category', type: 'string' },
-  { key: 'quantity', label: 'Shares', type: 'number' },
-  { key: 'base_quantity', label: 'Base Shares', type: 'number', width: 105 },
-  { key: 'shares_bought_from_dividend', label: 'DRIP Shares', type: 'number', width: 110 },
-  { key: 'total_cash_reinvested', label: 'Cash Reinvested', type: 'number', width: 130 },
-  { key: 'price_paid', label: 'Price Paid', type: 'number', width: 115 },
-  { key: 'current_price', label: 'Current', type: 'number', width: 95 },
-  { key: 'purchase_date', label: 'Purchase Date', type: 'string', width: 120 },
-  { key: 'purchase_value', label: 'Cost Basis', type: 'number', width: 115 },
-  { key: 'current_value', label: 'Value', type: 'number', width: 105 },
-  { key: 'gain_or_loss', label: 'Gain/Loss', type: 'number', width: 115 },
-  { key: 'gain_or_loss_percentage', label: 'G/L %', type: 'number', width: 90 },
-  { key: 'div', label: 'Div/Share', type: 'number', width: 95 },
-  { key: 'div_frequency', label: 'Freq', type: 'string', width: 70 },
-  { key: 'ex_div_date', label: 'Ex-Div Date', type: 'string', width: 110 },
-  { key: 'div_pay_date', label: 'Pay Date', type: 'string', width: 95 },
-  { key: 'reinvest', label: 'DRIP', type: 'string', width: 70 },
-  { key: 'estim_payment_per_year', label: 'Est. Annual', type: 'number', width: 110 },
-  { key: 'approx_monthly_income', label: 'Monthly', type: 'number', width: 100 },
-  { key: 'annual_yield_on_cost', label: 'YOC', type: 'number', width: 80 },
-  { key: 'current_annual_yield', label: 'Yield', type: 'number', width: 80 },
-  { key: 'dividend_paid', label: 'Div Paid', type: 'number', width: 100 },
-  { key: 'ytd_divs', label: 'YTD Divs', type: 'number', width: 100 },
-  { key: 'total_divs_received', label: 'Total Divs', type: 'number', width: 105 },
-  { key: 'paid_for_itself', label: 'Paid For Itself', type: 'number', width: 125 },
-  { key: 'dividend_actuals_source', label: 'Div Src', type: 'string', width: 85 },
-  { key: '_shares_if_reinvested', label: 'Shares if Reinvested', type: 'number', width: 155 },
-  { key: 'realized_gains', label: 'Realized G/L', type: 'number', width: 120 },
+  { key: 'ticker', label: 'Ticker', type: 'string', tip: 'Security ticker symbol' },
+  { key: 'description', label: 'Description', type: 'string', tip: 'Security name / description' },
+  { key: 'category', label: 'Category', type: 'string', tip: 'Investment category assigned to this holding' },
+  { key: 'percent_of_account', label: '% Acct', type: 'number', compact: true, tip: 'Percent of total account value held in this security' },
+  { key: 'quantity', label: 'Shares', type: 'number', tip: 'Total shares currently held (base + DRIP shares)' },
+  { key: 'base_quantity', label: 'Base Shares', type: 'number', width: 105, tip: 'Original shares purchased, excluding DRIP-acquired shares' },
+  { key: 'shares_bought_from_dividend', label: 'DRIP Shares', type: 'number', width: 110, tip: 'Shares acquired through dividend reinvestment (DRIP)' },
+  { key: 'total_cash_reinvested', label: 'Cash Reinvested', type: 'number', width: 130, tip: 'Total cash dividend income that has been reinvested via DRIP' },
+  { key: 'price_paid', label: 'Price Paid', type: 'number', width: 115, tip: 'Average price paid per share (cost basis per share)' },
+  { key: 'current_price', label: 'Current', type: 'number', width: 95, tip: 'Current market price per share' },
+  { key: 'purchase_date', label: 'Purchase Date', type: 'string', width: 120, tip: 'Date of original purchase (or earliest lot date)' },
+  { key: 'purchase_value', label: 'Cost Basis', type: 'number', width: 115, tip: 'Total original cost basis (price paid × shares)' },
+  { key: 'current_value', label: 'Value', type: 'number', width: 105, tip: 'Current market value (current price × shares)' },
+  { key: 'gain_or_loss', label: 'Gain/Loss', type: 'number', width: 115, tip: 'Unrealized gain or loss in dollars (current value − cost basis)' },
+  { key: 'gain_or_loss_percentage', label: 'G/L %', type: 'number', width: 90, tip: 'Unrealized gain or loss as a percentage of cost basis' },
+  { key: 'div', label: 'Div/Share', type: 'number', width: 95, tip: 'Most recent dividend paid per share' },
+  { key: 'div_frequency', label: 'Freq', type: 'string', width: 70, tip: 'Dividend payment frequency (M = Monthly, Q = Quarterly, W = Weekly, A = Annual)' },
+  { key: 'ex_div_date', label: 'Ex-Div Date', type: 'string', width: 110, tip: 'Ex-dividend date — you must own shares before this date to receive the next dividend' },
+  { key: 'div_pay_date', label: 'Pay Date', type: 'string', width: 95, tip: 'Date the dividend is actually paid to shareholders' },
+  { key: 'reinvest', label: 'DRIP', type: 'string', width: 70, tip: 'Whether dividends are being reinvested (Y = reinvesting, N = taking as cash)' },
+  { key: 'estim_payment_per_year', label: 'Est. Annual', type: 'number', width: 110, tip: 'Estimated total annual dividend income from this holding' },
+  { key: 'approx_monthly_income', label: 'Monthly', type: 'number', width: 100, tip: 'Estimated monthly dividend income from this holding' },
+  { key: 'annual_yield_on_cost', label: 'YOC', type: 'number', width: 80, tip: 'Yield on Cost — annual dividend income as a percentage of your original cost basis' },
+  { key: 'current_annual_yield', label: 'Yield', type: 'number', width: 80, tip: 'Current annual dividend yield based on the current market price' },
+  { key: 'dividend_paid', label: 'Div Paid', type: 'number', width: 100, tip: 'Last dividend amount actually paid per share' },
+  { key: 'ytd_divs', label: 'YTD Divs', type: 'number', width: 100, tip: 'Total dividend income received year-to-date for this holding' },
+  { key: 'total_divs_received', label: 'Total Divs', type: 'number', width: 105, tip: 'Cumulative total dividend income received since purchase' },
+  { key: 'paid_for_itself', label: 'Paid For Itself', type: 'number', width: 125, tip: 'Percentage of original cost basis recovered through dividends received' },
+  { key: 'dividend_actuals_source', label: 'Div Src', type: 'string', width: 85, tip: 'Source of dividend actuals data (e.g. Schwab, Fidelity, Yahoo, Snapshot)' },
+  { key: '_shares_if_reinvested', label: 'Shares if Reinvested', type: 'number', width: 155, tip: 'Hypothetical total shares if all dividends ever received had been reinvested at current price' },
+  { key: 'realized_gains', label: 'Realized G/L', type: 'number', width: 120, tip: 'Realized gain or loss from shares already sold' },
 ]
 
 const DEFAULT_COLUMN_WIDTH = 96
@@ -1053,8 +1054,8 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
     ? tickers.filter(t => t.ticker.toLowerCase().includes(filter.toLowerCase()))
     : tickers
 
-  const thStyle = { padding: '6px 10px', textAlign: 'center', borderBottom: '2px solid #334155', position: 'sticky', top: 0, background: '#0a1929', zIndex: 2 }
-  const tdStyle = { padding: '5px 10px', borderBottom: '1px solid #1a2233' }
+  const thStyle = { padding: '6px 10px', textAlign: 'center', borderBottom: '2px solid var(--p-334155)', position: 'sticky', top: 0, background: 'var(--p-0a1929)', zIndex: 2 }
+  const tdStyle = { padding: '5px 10px', borderBottom: '1px solid var(--grid-line)' }
 
   return (
     <div style={{
@@ -1069,7 +1070,7 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
             <input
               type="text" placeholder="Filter ticker..." value={filter}
               onChange={e => setFilter(e.target.value)}
-              style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #334155', background: '#0f1b2d', color: '#e0e0e0', fontSize: '0.8rem', width: 130 }}
+              style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid var(--p-334155)', background: 'var(--p-0f1b2d)', color: 'var(--text)', fontSize: '0.8rem', width: 130 }}
             />
             <button className="btn btn-primary" onClick={handleSync} disabled={syncing}>
               {syncing ? <><span className="spinner" /> Syncing...</> : 'Sync to Owner'}
@@ -1077,7 +1078,7 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
             <button className="btn btn-secondary" onClick={onClose}>Close</button>
           </div>
         </div>
-        <p style={{ fontSize: '0.75rem', color: '#888', margin: '0 0 0.5rem' }}>
+        <p style={{ fontSize: '0.75rem', color: 'var(--p-888)', margin: '0 0 0.5rem' }}>
           Toggle DRIP per ticker per account. Click "Sync to Owner" to update Owner's DRIP flags and share counts.
         </p>
 
@@ -1086,18 +1087,18 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
           const dripIncome = tickers.reduce((s, t) => s + (t.drip_income || 0), 0)
           const pct = totalIncome > 0 ? (dripIncome / totalIncome * 100) : 0
           return (
-            <div style={{ display: 'flex', gap: '2rem', marginBottom: '0.75rem', padding: '0.6rem 1rem', background: '#0f1b2d', borderRadius: 6, fontSize: '0.85rem' }}>
+            <div style={{ display: 'flex', gap: '2rem', marginBottom: '0.75rem', padding: '0.6rem 1rem', background: 'var(--p-0f1b2d)', borderRadius: 6, fontSize: '0.85rem' }}>
               <div>
-                <span style={{ color: '#888' }}>Total Annual Income: </span>
-                <span style={{ color: '#e0e0e0', fontWeight: 600 }}>${totalIncome.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                <span style={{ color: 'var(--p-888)' }}>Total Annual Income: </span>
+                <span style={{ color: 'var(--text)', fontWeight: 600 }}>${totalIncome.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
               </div>
               <div>
-                <span style={{ color: '#888' }}>DRIP Income: </span>
-                <span style={{ color: '#66bb6a', fontWeight: 600 }}>${dripIncome.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                <span style={{ color: 'var(--p-888)' }}>DRIP Income: </span>
+                <span style={{ color: 'var(--pos-muted)', fontWeight: 600 }}>${dripIncome.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
               </div>
               <div>
-                <span style={{ color: '#888' }}>% Reinvested: </span>
-                <span style={{ color: '#7ecfff', fontWeight: 600 }}>{pct.toFixed(1)}%</span>
+                <span style={{ color: 'var(--p-888)' }}>% Reinvested: </span>
+                <span style={{ color: 'var(--accent-bright)', fontWeight: 600 }}>{pct.toFixed(1)}%</span>
               </div>
             </div>
           )
@@ -1122,26 +1123,26 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
                 {filtered.map(t => (
                   <tr key={t.ticker}>
                     <td style={{ ...tdStyle, fontWeight: 600, textAlign: 'left' }}>{t.ticker}</td>
-                    <td style={{ ...tdStyle, textAlign: 'center', color: '#aaa' }}>{t.total_qty.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                    <td style={{ ...tdStyle, textAlign: 'center', color: 'var(--p-aaa)' }}>{t.total_qty.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
                     {profiles.map(p => {
                       const a = t.accounts[String(p.id)]
-                      if (!a) return <td key={p.id} style={{ ...tdStyle, textAlign: 'center', color: '#555' }}>—</td>
+                      if (!a) return <td key={p.id} style={{ ...tdStyle, textAlign: 'center', color: 'var(--p-555)' }}>—</td>
                       return (
                         <td key={p.id} style={{ ...tdStyle, textAlign: 'center' }}>
                           <label style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                             <input
                               type="checkbox" checked={a.reinvest}
                               onChange={() => handleToggle(t.ticker, p.id, a.reinvest)}
-                              style={{ accentColor: '#4caf50', cursor: 'pointer' }}
+                              style={{ accentColor: 'var(--p-4caf50)', cursor: 'pointer' }}
                             />
-                            <span style={{ color: a.reinvest ? '#66bb6a' : '#888', fontSize: '0.75rem' }}>
+                            <span style={{ color: a.reinvest ? 'var(--pos-muted)' : 'var(--p-888)', fontSize: '0.75rem' }}>
                               {a.qty.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                             </span>
                           </label>
                         </td>
                       )
                     })}
-                    <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 600, color: t.owner_drip ? '#66bb6a' : '#888' }}>
+                    <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 600, color: t.owner_drip ? 'var(--pos-muted)' : 'var(--p-888)' }}>
                       {t.owner_drip ? `✓ ${t.drip_qty.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '—'}
                     </td>
                   </tr>
@@ -1152,7 +1153,7 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
         )}
 
         {dirty && (
-          <div style={{ padding: '0.5rem 0 0', fontSize: '0.75rem', color: '#f9a825', textAlign: 'center' }}>
+          <div style={{ padding: '0.5rem 0 0', fontSize: '0.75rem', color: 'var(--warning)', textAlign: 'center' }}>
             Changes made — click "Sync to Owner" to update Owner's DRIP flags
           </div>
         )}
@@ -1255,6 +1256,9 @@ export default function ManageHoldings() {
       return (h.reinvest === 'Y' && h.estim_payment_per_year && h.current_price)
         ? h.estim_payment_per_year / h.current_price : 0
     }
+    if (key === 'percent_of_account') {
+      return h.percent_of_account ?? (totalCurrentValue > 0 ? (Number(h.current_value) || 0) / totalCurrentValue : 0)
+    }
     return h[key]
   }
 
@@ -1264,6 +1268,8 @@ export default function ManageHoldings() {
     if (divSourceFilter === 'imported') return IMPORTED_DIV_SOURCES.includes(source)
     return source === divSourceFilter
   })
+
+  const totalCurrentValue = holdings.reduce((sum, h) => sum + (Number(h.current_value) || 0), 0)
 
   const sortedHoldings = [...filteredHoldings].sort((a, b) => {
     const col = COLUMNS.find(c => c.key === sortKey)
@@ -1543,15 +1549,15 @@ export default function ManageHoldings() {
             </>
           )}
           <button className="btn btn-success" onClick={handleAdd}>+ Add Holding</button>
-          <button className="btn btn-success" style={{ background: '#2e7d32' }} onClick={() => { setTxnTicker(null); setTxnIsNew(true) }}>+ Add/Edit via Transaction</button>
+          <button className="btn btn-success" style={{ background: 'var(--success-solid)' }} onClick={() => { setTxnTicker(null); setTxnIsNew(true) }}>+ Add/Edit via Transaction</button>
         </div>
       </div>
 
       {hasDividendRefreshResult && (
         <section style={{ marginBottom: '1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-            <h2 style={{ margin: 0, fontSize: '1rem', color: '#90caf9' }}>Latest Refresh Result</h2>
-            <div style={{ fontSize: '0.78rem', color: '#90a4ae' }}>{dividendRefreshDateLabel}</div>
+            <h2 style={{ margin: 0, fontSize: '1rem', color: 'var(--accent-2)' }}>Latest Refresh Result</h2>
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-dim-2)' }}>{dividendRefreshDateLabel}</div>
           </div>
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
             {dividendRefreshAccounts.map(account => {
@@ -1564,32 +1570,32 @@ export default function ManageHoldings() {
               return (
                 <div key={account.profile_id} className="card" style={{
                   flex: '1 1 220px', minWidth: 180, padding: '0.75rem 1rem',
-                  borderTop: '3px solid #2e7d32',
+                  borderTop: '3px solid var(--success-solid)',
                 }}>
-                  <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>
                     {account.name}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '1.25rem', fontWeight: 700, color: '#4fc3f7' }}>
+                    <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--p-4fc3f7)' }}>
                       {fmtCurrency(distributionTotal)}
                     </span>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem', color: '#a5d6a7' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.72rem', color: 'var(--p-a5d6a7)' }}>
                       month-to-date payable distributions
                       <InfoHint text="Total estimated cash from holdings with pay dates from the start of the refresh month through the refresh date. These can be inserted, updated, or skipped if payment history already has the row." />
                     </span>
                   </div>
-                  <div style={{ fontSize: '0.72rem', color: '#78909c', marginTop: '0.2rem' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--p-78909c)', marginTop: '0.2rem' }}>
                     {fmtCurrency(account.accrued_dividends)} post-refresh accrual estimate
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', fontSize: '0.72rem', color: '#78909c', marginTop: '0.2rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', fontSize: '0.72rem', color: 'var(--p-78909c)', marginTop: '0.2rem' }}>
                     <span>{changedDividendFields} holding dividend field{changedDividendFields === 1 ? '' : 's'} changed</span>
                     <InfoHint text="Holding fields are the dividend metadata columns on the holdings row, such as dividend/share, ex-date, pay date, frequency, YTD, and current-month income." />
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', fontSize: '0.72rem', color: '#78909c', marginTop: '0.2rem', lineHeight: 1.35 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', fontSize: '0.72rem', color: 'var(--p-78909c)', marginTop: '0.2rem', lineHeight: 1.35 }}>
                     <span>Payment history: {insertedPayments} recorded, {updatedPayments} updated, {existingPayments} already existed</span>
                     <InfoHint text="Payment history rows are dividend_payments entries created by Refresh for payable distributions. Existing imported or already-matching refresh rows are counted separately." />
                   </div>
-                  <div style={{ fontSize: '0.72rem', color: '#90a4ae', marginTop: '0.45rem' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', marginTop: '0.45rem' }}>
                     {distributions.length > 0 ? `Payable distributions through ${dividendRefreshDateLabel}` : `No payable distributions through ${dividendRefreshDateLabel}`}
                   </div>
                   {distributions.length > 0 && (
@@ -1598,10 +1604,10 @@ export default function ManageHoldings() {
                         <span key={item.ticker} style={{
                           display: 'inline-flex', gap: '0.25rem', alignItems: 'center',
                           padding: '0.2rem 0.45rem', borderRadius: 4,
-                          background: 'rgba(76, 175, 80, 0.12)', color: '#c8e6c9',
+                          background: 'rgba(76, 175, 80, 0.12)', color: 'var(--p-c8e6c9)',
                           fontSize: '0.72rem', whiteSpace: 'nowrap',
                         }}>
-                          <strong style={{ color: '#81c784' }}>{item.ticker}</strong>
+                          <strong style={{ color: 'var(--p-81c784)' }}>{item.ticker}</strong>
                           {fmtCurrency(item.amount)}
                         </span>
                       ))}
@@ -1616,7 +1622,7 @@ export default function ManageHoldings() {
 
       {accrualSummary && accrualSummary.length > 0 && (
         <section style={{ marginBottom: '0.75rem' }}>
-          <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem', color: '#90caf9' }}>Post-Refresh Accrual Estimate</h2>
+          <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem', color: 'var(--accent-2)' }}>Post-Refresh Accrual Estimate</h2>
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
             {accrualSummary.map(account => {
               const days = account.days_since_last_refresh
@@ -1625,15 +1631,15 @@ export default function ManageHoldings() {
               return (
                 <div key={account.profile_id} className="card" style={{
                   flex: '1 1 250px', minWidth: 220, padding: '0.65rem 1rem',
-                  borderTop: '3px solid #1565c0',
+                  borderTop: '3px solid var(--primary-hover)',
                 }}>
-                  <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.2rem' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.2rem' }}>
                     {account.name}
                   </div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#4fc3f7' }}>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--p-4fc3f7)' }}>
                     {hasData ? fmtCurrency(account.accrued_dividends) : '-'}
                   </div>
-                  <div style={{ fontSize: '0.72rem', color: '#78909c', marginTop: '0.15rem' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--p-78909c)', marginTop: '0.15rem' }}>
                     {hasData
                       ? account.confirmed_payments > 0
                         ? `${account.confirmed_payments} payment${account.confirmed_payments !== 1 ? 's' : ''} since refresh`
@@ -1651,14 +1657,14 @@ export default function ManageHoldings() {
                             alignItems: 'center',
                             gap: '0.45rem',
                             fontSize: '0.72rem',
-                            color: '#b7c7d9',
+                            color: 'var(--p-b7c7d9)',
                           }}
                         >
-                          <strong style={{ color: '#81d4fa', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <strong style={{ color: 'var(--p-81d4fa)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {payment.ticker}
                           </strong>
-                          <span style={{ color: '#90a4ae', whiteSpace: 'nowrap' }}>{fmtShortDate(payment.expected_pay_date)}</span>
-                          <span style={{ color: '#c8e6c9', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                          <span style={{ color: 'var(--text-dim-2)', whiteSpace: 'nowrap' }}>{fmtShortDate(payment.expected_pay_date)}</span>
+                          <span style={{ color: 'var(--p-c8e6c9)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                             {fmtCurrency(payment.amount)}
                           </span>
                         </div>
@@ -1677,20 +1683,20 @@ export default function ManageHoldings() {
       {!loading && holdings.length > 0 && (
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
           <div className="card" style={{ flex: '1 1 140px', minWidth: 140, padding: '0.65rem 1rem' }}>
-            <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Est. Monthly Income</div>
-            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#4dff91' }}>${fmt(incTotals.monthlyIncome)}</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Est. Monthly Income</div>
+            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--pos)' }}>${fmt(incTotals.monthlyIncome)}</div>
           </div>
           <div className="card" style={{ flex: '1 1 140px', minWidth: 140, padding: '0.65rem 1rem' }}>
-            <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mo$ Reinvested</div>
-            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#7ecfff' }}>${fmt(incTotals.reinvested)}</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mo$ Reinvested</div>
+            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--accent-bright)' }}>${fmt(incTotals.reinvested)}</div>
           </div>
           <div className="card" style={{ flex: '1 1 140px', minWidth: 140, padding: '0.65rem 1rem' }}>
-            <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mo$ Not Reinvested</div>
-            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#ffb300' }}>${fmt(incTotals.notReinvested)}</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mo$ Not Reinvested</div>
+            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--warning-money)' }}>${fmt(incTotals.notReinvested)}</div>
           </div>
           <div className="card" style={{ flex: '1 1 140px', minWidth: 140, padding: '0.65rem 1rem' }}>
-            <div style={{ fontSize: '0.72rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.05em' }}>% Reinvested</div>
-            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#66bb6a' }}>{incTotals.reinvestPct.toFixed(1)}%</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>% Reinvested</div>
+            <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--pos-muted)' }}>{incTotals.reinvestPct.toFixed(1)}%</div>
           </div>
         </div>
       )}
@@ -1717,8 +1723,10 @@ export default function ManageHoldings() {
                     key={col.key}
                     onClick={() => handleSort(col.key)}
                     className={i < FROZEN_COLS ? 'frozen-col' : undefined}
+                    title={col.tip || ''}
                     style={{
                       cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none',
+                      textAlign: col.align || 'left',
                       ...(i < FROZEN_COLS ? {
                         position: 'sticky',
                         left: FROZEN_LEFT[i],
@@ -1736,7 +1744,7 @@ export default function ManageHoldings() {
                       }),
                     }}
                   >
-                    {col.label}<span style={{ fontSize: '0.65rem', opacity: 0.7 }}>{sortArrow(col.key)}</span>
+                    {col.label}{col.tip && !col.compact ? ' ⓘ' : ''}<span style={{ fontSize: '0.65rem', opacity: 0.7 }}>{sortArrow(col.key)}</span>
                   </th>
                 ))}
                 <th>Actions</th>
@@ -1758,7 +1766,7 @@ export default function ManageHoldings() {
                       <a
                         href="#"
                         onClick={(e) => { e.preventDefault(); handleEdit(h) }}
-                        style={{ color: '#64b5f6', textDecoration: 'none', cursor: 'pointer' }}
+                        style={{ color: 'var(--accent)', textDecoration: 'none', cursor: 'pointer' }}
                         onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
                         onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
                       >
@@ -1770,7 +1778,8 @@ export default function ManageHoldings() {
                     {h.description || '-'}
                   </td>
                   <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[2], width: FROZEN_WIDTHS[2], minWidth: FROZEN_WIDTHS[2], maxWidth: FROZEN_WIDTHS[2], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{h.category || '-'}</td>
-                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[3], width: FROZEN_WIDTHS[3], minWidth: FROZEN_WIDTHS[3], maxWidth: FROZEN_WIDTHS[3], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{fmt(h.quantity)}</td>
+                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[3], width: FROZEN_WIDTHS[3], minWidth: FROZEN_WIDTHS[3], maxWidth: FROZEN_WIDTHS[3], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{fmtPct(h.percent_of_account ?? (totalCurrentValue > 0 ? (Number(h.current_value) || 0) / totalCurrentValue : 0))}</td>
+                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[4], width: FROZEN_WIDTHS[4], minWidth: FROZEN_WIDTHS[4], maxWidth: FROZEN_WIDTHS[4], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{fmt(h.quantity)}</td>
                   <td>{fmt(h.base_quantity, 4)}</td>
                   <td>{fmt(h.shares_bought_from_dividend, 4)}</td>
                   <td>{h.total_cash_reinvested != null ? '$' + fmt(h.total_cash_reinvested) : '-'}</td>
@@ -1779,10 +1788,10 @@ export default function ManageHoldings() {
                   <td>{h.purchase_date || '-'}</td>
                   <td>${fmt(h.purchase_value)}</td>
                   <td>${fmt(h.current_value)}</td>
-                  <td style={{ color: h.gain_or_loss >= 0 ? '#81c784' : '#ef9a9a' }}>
+                  <td style={{ color: h.gain_or_loss >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)' }}>
                     ${fmt(h.gain_or_loss)}
                   </td>
-                  <td style={{ color: h.gain_or_loss_percentage >= 0 ? '#81c784' : '#ef9a9a' }}>
+                  <td style={{ color: h.gain_or_loss_percentage >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)' }}>
                     {fmtPct(h.gain_or_loss_percentage)}
                   </td>
                   <td>${fmt(h.div, 4)}</td>
@@ -1848,7 +1857,7 @@ export default function ManageHoldings() {
                       ? fmt(h.estim_payment_per_year / h.current_price, 3)
                       : '-'}
                   </td>
-                  <td style={{ color: h.realized_gains > 0 ? '#81c784' : h.realized_gains < 0 ? '#ef9a9a' : undefined }}>
+                  <td style={{ color: h.realized_gains > 0 ? 'var(--p-81c784)' : h.realized_gains < 0 ? 'var(--p-ef9a9a)' : undefined }}>
                     {h.realized_gains ? '$' + fmt(h.realized_gains) : '-'}
                   </td>
                   <td>
@@ -1865,26 +1874,26 @@ export default function ManageHoldings() {
                       {expandedTickers[h.ticker] === 'loading' ? (
                         <div style={{ padding: '0.75rem', textAlign: 'center' }}><span className="spinner" /></div>
                       ) : expandedTickers[h.ticker].length === 0 ? (
-                        <div style={{ padding: '0.75rem 1rem', fontSize: '0.85rem', color: '#90a4ae' }}>
+                        <div style={{ padding: '0.75rem 1rem', fontSize: '0.85rem', color: 'var(--text-dim-2)' }}>
                           No transaction lots recorded. Use the Txn button to add purchase lots.
                         </div>
                       ) : (
                         <div style={{ padding: '0.5rem 1rem' }}>
                           <table style={{ width: 'auto', fontSize: '0.82rem', marginBottom: 0 }}>
                             <thead>
-                              <tr style={{ borderBottom: '1px solid #1a3a5c' }}>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Type</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Date</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Shares</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Price</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Fees</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Cost/Proceeds</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Unrealized G/L</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Realized G/L</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2, borderLeft: '1px solid #1a3a5c' }}>Position</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Avg Cost</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Total Cost</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: '#90a4ae', position: 'sticky', top: 30, background: '#13203a', zIndex: 2 }}>Notes</th>
+                              <tr style={{ borderBottom: '1px solid var(--p-1a3a5c)' }}>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Type</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Date</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Shares</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Price</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Fees</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Cost/Proceeds</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Unrealized G/L</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Realized G/L</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2, borderLeft: '1px solid var(--p-1a3a5c)' }}>Position</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Avg Cost</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Total Cost</th>
+                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Notes</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -1897,22 +1906,22 @@ export default function ManageHoldings() {
                                 const lotGL = isSell ? null : lotValue - (((txn.shares || 0) * (txn.price_per_share || 0)) + (txn.fees || 0))
                                 return (
                                   <tr key={txn.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                                    <td style={{ padding: '0.3rem 0.75rem', color: isSell ? '#ef9a9a' : '#81c784', fontWeight: 600 }}>{isSell ? 'SELL' : 'BUY'}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem', color: isSell ? 'var(--p-ef9a9a)' : 'var(--p-81c784)', fontWeight: 600 }}>{isSell ? 'SELL' : 'BUY'}</td>
                                     <td style={{ padding: '0.3rem 0.75rem' }}>
                                       <div>{txn.transaction_date || '-'}</div>
-                                      {txn.created_at && <div style={{ fontSize: '0.7rem', color: '#90a4ae' }}>{new Date(txn.created_at + 'Z').toLocaleString()}</div>}
+                                      {txn.created_at && <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)' }}>{new Date(txn.created_at + 'Z').toLocaleString()}</div>}
                                     </td>
                                     <td style={{ padding: '0.3rem 0.75rem' }}>{fmt(txn.shares, 3)}</td>
                                     <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(txn.price_per_share)}</td>
                                     <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(txn.fees)}</td>
                                     <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(lotCost)}</td>
-                                    <td style={{ padding: '0.3rem 0.75rem', color: lotGL != null ? (lotGL >= 0 ? '#81c784' : '#ef9a9a') : undefined }}>
+                                    <td style={{ padding: '0.3rem 0.75rem', color: lotGL != null ? (lotGL >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)') : undefined }}>
                                       {lotGL != null ? '$' + fmt(lotGL) : '-'}
                                     </td>
-                                    <td style={{ padding: '0.3rem 0.75rem', color: txn.realized_gain != null ? (txn.realized_gain >= 0 ? '#81c784' : '#ef9a9a') : undefined }}>
+                                    <td style={{ padding: '0.3rem 0.75rem', color: txn.realized_gain != null ? (txn.realized_gain >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)') : undefined }}>
                                       {txn.realized_gain != null ? '$' + fmt(txn.realized_gain) : '-'}
                                     </td>
-                                    <td style={{ padding: '0.3rem 0.75rem', borderLeft: '1px solid #1a3a5c', fontWeight: 600 }}>{fmt(txn.position_after, 3)}</td>
+                                    <td style={{ padding: '0.3rem 0.75rem', borderLeft: '1px solid var(--p-1a3a5c)', fontWeight: 600 }}>{fmt(txn.position_after, 3)}</td>
                                     <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(txn.avg_cost_after)}</td>
                                     <td style={{ padding: '0.3rem 0.75rem' }}>${fmt(txn.total_cost_after)}</td>
                                     <td style={{ padding: '0.3rem 0.75rem', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{txn.notes || '-'}</td>
@@ -1931,7 +1940,7 @@ export default function ManageHoldings() {
             </tbody>
           </table>
           {sortedHoldings.length === 0 && (
-            <div style={{ padding: '1.25rem', textAlign: 'center', color: '#90a4ae' }}>
+            <div style={{ padding: '1.25rem', textAlign: 'center', color: 'var(--text-dim-2)' }}>
               No holdings match the selected Div Src filter.
             </div>
           )}
@@ -1953,15 +1962,15 @@ export default function ManageHoldings() {
               &times;
             </button>
             <h2>Dividend Repair Preview</h2>
-            <p style={{ color: '#cfd8dc', marginTop: 0 }}>{repairPreview.message}</p>
+            <p style={{ color: 'var(--p-cfd8dc)', marginTop: 0 }}>{repairPreview.message}</p>
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', margin: '1rem 0' }}>
-              <div style={{ color: '#81c784', fontWeight: 700 }}>Imported: {previewImportedTotal}</div>
-              <div style={{ color: '#64b5f6', fontWeight: 700 }}>Yahoo: {previewTotals.yahoo ?? repairPreview.yahoo_updated}</div>
-              <div style={{ color: '#ce93d8', fontWeight: 700 }}>Snapshot: {previewTotals.snapshot ?? repairPreview.snapshot_updated ?? 0}</div>
-              <div style={{ color: '#b0bec5', fontWeight: 700 }}>Dates/Amounts: {repairPreview.metadata_updated ?? 0}</div>
-              <div style={{ color: '#ffcc80', fontWeight: 700 }}>Official: {repairPreview.official_updated ?? 0}</div>
-              <div style={{ color: '#90a4ae', fontWeight: 700 }}>No source: {repairPreview.none_updated}</div>
-              <div style={{ color: '#e0e0e0', fontWeight: 700 }}>Mode: {activeRepairModeLabel}</div>
+              <div style={{ color: 'var(--p-81c784)', fontWeight: 700 }}>Imported: {previewImportedTotal}</div>
+              <div style={{ color: 'var(--accent)', fontWeight: 700 }}>Yahoo: {previewTotals.yahoo ?? repairPreview.yahoo_updated}</div>
+              <div style={{ color: 'var(--p-ce93d8)', fontWeight: 700 }}>Snapshot: {previewTotals.snapshot ?? repairPreview.snapshot_updated ?? 0}</div>
+              <div style={{ color: 'var(--text-muted)', fontWeight: 700 }}>Dates/Amounts: {repairPreview.metadata_updated ?? 0}</div>
+              <div style={{ color: 'var(--p-ffcc80)', fontWeight: 700 }}>Official: {repairPreview.official_updated ?? 0}</div>
+              <div style={{ color: 'var(--text-dim-2)', fontWeight: 700 }}>No source: {repairPreview.none_updated}</div>
+              <div style={{ color: 'var(--text)', fontWeight: 700 }}>Mode: {activeRepairModeLabel}</div>
             </div>
             <table style={{ width: '100%', fontSize: '0.86rem', marginBottom: '1rem' }}>
               <thead>

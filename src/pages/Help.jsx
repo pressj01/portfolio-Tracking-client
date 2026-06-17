@@ -47,18 +47,16 @@ const GROUPS = [
       { id: 'gains-losses', label: 'Gains & Losses' },
       { id: 'safe-withdrawal', label: 'Safe Withdrawal' },
       { id: 'dividend-calculator', label: 'Dividend Calculator' },
+      { id: 'watchlist', label: 'Watchlist' },
     ],
   },
   {
     id: 'etfs',
-    label: "ETF's",
+    label: 'Checklists',
     sections: [
       { id: 'stock-buying-checklist', label: 'Stock Buying Checklist' },
       { id: 'etf-buying-checklist-evaluator', label: 'ETF Checklist Evaluator' },
       { id: 'option-income-etf-evaluator', label: 'Option-Income ETF Evaluator' },
-      { id: 'etf-screen', label: 'Stock & ETF Analysis' },
-      { id: 'etf-comparer', label: 'ETF Comparer' },
-      { id: 'stock-comparer', label: 'Stock Comparer' },
     ],
   },
   {
@@ -72,23 +70,29 @@ const GROUPS = [
     id: 'analysis',
     label: 'Analysis',
     sections: [
-      { id: 'general-scanner', label: 'General Scanner' },
+      { type: 'heading', label: 'Research & Compare' },
       { id: 'security-research', label: 'Security Research' },
-      { id: 'watchlist', label: 'Watchlist' },
+      { id: 'etf-screen', label: 'Stock & ETF Analysis' },
+      { id: 'etf-comparer', label: 'ETF Comparer' },
+      { id: 'stock-comparer', label: 'Stock Comparer' },
+      { id: 'dist-compare', label: 'Distribution Compare' },
+      { type: 'heading', label: 'Screeners & Signals' },
+      { id: 'general-scanner', label: 'General Scanner' },
+      { id: 'single-strategy', label: 'Single Strategy Scanner' },
       { id: 'buy-sell', label: 'Buy/Sell Signals' },
+      { type: 'heading', label: 'Income & NAV Risk' },
       { id: 'nav-erosion', label: 'NAV Erosion' },
-      { id: 'nav-screener', label: 'NAV Screener' },
-      { id: 'single-strategy', label: 'Single Strategy' },
-      { id: 'income-sim', label: 'Income Sim' },
-      { id: 'correlation', label: 'Correlation' },
-      { id: 'analytics', label: 'Analytics' },
+      { id: 'nav-screener', label: 'NAV Erosion Screener' },
+      { id: 'income-sim', label: 'Income Simulator' },
+      { id: 'income-growth', label: 'Income Growth' },
+      { type: 'heading', label: 'Portfolio Diagnostics' },
+      { id: 'analytics', label: 'Portfolio Analytics' },
+      { id: 'correlation', label: 'Correlation Matrix' },
+      { id: 'consolidation', label: 'Consolidation Analysis' },
+      { id: 'macro-dashboard', label: 'Macro Regime Dashboard' },
+      { type: 'heading', label: 'Planning & Optimization' },
       { id: 'portfolio-builder', label: 'Portfolio Builder' },
       { id: 'portfolio-tester', label: 'Portfolio Tester' },
-      { id: 'dist-compare', label: 'Dist Compare' },
-      { id: 'consolidation', label: 'Consolidation' },
-      { id: 'macro-dashboard', label: 'Macro Dashboard' },
-      { id: 'income-growth', label: 'Income Growth' },
-      { id: 'retirement-readiness', label: 'Retirement Readiness' },
       { id: 'rebalance-wizard', label: 'Rebalance Wizard' },
     ],
   },
@@ -122,7 +126,8 @@ function Overview() {
         <li><strong>Dividends</strong> — Dividend analysis, calendar view, dividend history, dividend compare, and dividend calculator.</li>
         <li><strong>Growth</strong> — Portfolio growth charts, total return tracking, gains &amp; losses breakdown, and safe withdrawal rate analysis.</li>
         <li><strong>Watchlist</strong> — Track tickers outside your portfolio with live price and dividend data.</li>
-        <li><strong>Analysis</strong> — Stock and ETF Analysis, ETF Comparer, Stock Comparer, Security Research, General Scanner, Single Strategy Scanner, Buy/Sell Signals, NAV Erosion analysis, NAV Erosion Screener, Income Simulator, Income Growth, Correlation Matrix, Portfolio Analytics, Portfolio Builder, Portfolio Tester, Distribution Compare, Consolidation Analysis, Macro Regime Dashboard, and Rebalance Wizard.</li>
+        <li><strong>Checklists</strong> — Stock, ETF, and option-income ETF evaluators for structured pre-buy reviews.</li>
+        <li><strong>Analysis</strong> — Organized into Research &amp; Compare, Screeners &amp; Signals, Income &amp; NAV Risk, Portfolio Diagnostics, and Planning &amp; Optimization. These groups cover security research, comparison tools, scanners, NAV erosion checks, income simulations, portfolio analytics, consolidation, macro regime context, portfolio testing, and rebalancing.</li>
         <li><strong>Taxes</strong> — Annual Tax Report with realized gains/losses and dividend income summaries.</li>
         <li><strong>Multi-Portfolio</strong> — Create multiple portfolios and view them individually or as an aggregate.</li>
         <li><strong>Market Data</strong> — Prices, dividends, and ex-div dates refresh automatically from Yahoo Finance.</li>
@@ -161,10 +166,10 @@ function ImportHelp() {
         Dashboard data so the next Dashboard load reflects the newly imported holdings and payments.
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Brokerage Position Templates</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Brokerage Position Templates</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/brokerage-import-tab-overview.jpg" alt="Import Brokerage Positions and Snowball Data tab showing format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/brokerage-import-tab-overview.jpg" alt="Import Brokerage Positions and Snowball Data tab showing format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -179,13 +184,13 @@ function ImportHelp() {
 
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem', marginTop: '0.5rem' }}>
         <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
-          <img src="./help-screenshots/import/schwab-positions-import.jpg" alt="Charles Schwab Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+          <img src="./help-screenshots/import/schwab-positions-import.jpg" alt="Charles Schwab Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
         </div>
         <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
-          <img src="./help-screenshots/import/etrade-positions-import.jpg" alt="E*TRADE Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+          <img src="./help-screenshots/import/etrade-positions-import.jpg" alt="E*TRADE Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
         </div>
         <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
-          <img src="./help-screenshots/import/fidelity-positions-import.jpg" alt="Fidelity Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+          <img src="./help-screenshots/import/fidelity-positions-import.jpg" alt="Fidelity Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
         </div>
       </div>
 
@@ -223,7 +228,7 @@ function ImportHelp() {
         When a Positions import has been done first, transaction imports store history without overwriting your holdings data.
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Reimporting Old or Partial Files</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Reimporting Old or Partial Files</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Transaction-history files are incremental.</strong> Reimporting an older transaction file skips duplicate BUY/SELL rows that already exist for the same ticker, date, shares, and price. New rows in a later export are added.</li>
         <li><strong>Dividend payments are deduped by ticker, account, and payment date.</strong> If the app previously created a refresh estimate for that date, an imported broker dividend replaces the estimate; otherwise the duplicate payment is skipped.</li>
@@ -232,7 +237,7 @@ function ImportHelp() {
         <li><strong>Reimporting an old Positions file can roll holdings back.</strong> It will update share counts, cost basis, values, and stale holdings to match that older file. Restore from the automatic backup if the snapshot was not the one you meant to apply.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Transaction History Imports</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Transaction History Imports</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The import page includes several transaction-history importers. These are different from position imports:
         they record individual BUY, SELL, and DIVIDEND events rather than setting current holdings directly.
@@ -256,7 +261,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/schwab-transactions-import.jpg" alt="Partial history warning and Charles Schwab Transactions format" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/schwab-transactions-import.jpg" alt="Partial history warning and Charles Schwab Transactions format" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>E*TRADE (Transactions)</h4>
@@ -269,7 +274,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/etrade-transactions-import.jpg" alt="E*TRADE Transactions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/etrade-transactions-import.jpg" alt="E*TRADE Transactions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Fidelity (Transactions)</h4>
@@ -282,7 +287,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/fidelity-transactions-import.jpg" alt="Fidelity Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/fidelity-transactions-import.jpg" alt="Fidelity Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Robinhood (Positions PDF)</h4>
@@ -294,7 +299,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/robinhood-positions-import.jpg" alt="Robinhood Positions PDF format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/robinhood-positions-import.jpg" alt="Robinhood Positions PDF format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Robinhood (Transactions)</h4>
@@ -306,7 +311,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/robinhood-transactions-import.jpg" alt="Robinhood Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/robinhood-transactions-import.jpg" alt="Robinhood Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Snowball Transactions</h4>
@@ -326,7 +331,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/snowball-transactions-import.jpg" alt="Snowball Transactions format selector with automatic backup notice" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/snowball-transactions-import.jpg" alt="Snowball Transactions format selector with automatic backup notice" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Common Steps (All Transaction Formats)</h4>
@@ -339,7 +344,7 @@ function ImportHelp() {
         <li>Duplicate transactions (same ticker, date, shares, price) are automatically skipped on re-import.</li>
       </ol>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Database Backups &amp; Restore</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Database Backups &amp; Restore</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         A database backup is created automatically before every import (positions, transactions, and spreadsheet imports) and before applying dividend repair.
         The last 5 backups are kept; older ones are pruned automatically.
@@ -353,14 +358,14 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/automatic-backup-notice.jpg" alt="Automatic database backup notice shown before each import" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/automatic-backup-notice.jpg" alt="Automatic database backup notice shown before each import" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       {/* ── My Spreadsheet ──────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: My Spreadsheet (Owner Format)</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: My Spreadsheet (Owner Format)</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/owner-spreadsheet-import.jpg" alt="My Spreadsheet tab showing the owner-format import interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/owner-spreadsheet-import.jpg" alt="My Spreadsheet tab showing the owner-format import interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <p style={{ marginBottom: '0.75rem' }}>
@@ -415,10 +420,10 @@ function ImportHelp() {
       </div>
 
       {/* ── Generic Upload ──────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 2: Generic Upload</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 2: Generic Upload</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/generic-upload-tab.jpg" alt="Generic Upload tab showing portfolio upload and watchlist import sections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/generic-upload-tab.jpg" alt="Generic Upload tab showing portfolio upload and watchlist import sections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <p style={{ marginBottom: '0.75rem' }}>
@@ -442,7 +447,7 @@ function ImportHelp() {
           Price Paid, Current Price, Dividend, Frequency, Ex-Div Date, Pay Date, DRIP, Category, Purchase Date,
           Dividends Paid, YTD Divs, Total Divs Received, and more.
           <div style={{ marginBottom: '0.75rem', marginTop: '0.75rem' }}>
-            <img src="./help-screenshots/import/generic-portfolio-template-download.jpg" alt="Upload Your Portfolio section with Download Template button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+            <img src="./help-screenshots/import/generic-portfolio-template-download.jpg" alt="Upload Your Portfolio section with Download Template button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
           </div>
         </li>
         <li>
@@ -465,7 +470,7 @@ function ImportHelp() {
       </ol>
 
       <h4 style={{ marginTop: '1rem', marginBottom: '0.4rem' }}>Supported Columns (Generic Template)</h4>
-      <p style={{ marginBottom: '0.5rem', color: '#90a4ae', fontSize: '0.9rem' }}>
+      <p style={{ marginBottom: '0.5rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
         Only <strong>Ticker</strong> and <strong>Shares</strong> are required. All others are optional — Yahoo Finance fills in what it can.
       </p>
       <div style={{ overflowX: 'auto' }}>
@@ -496,7 +501,7 @@ function ImportHelp() {
             ].map(([col, req, desc]) => (
               <tr key={col}>
                 <td style={{ padding: '0.4rem 0.75rem', fontWeight: req === 'Yes' ? 600 : 400 }}>{col}</td>
-                <td style={{ padding: '0.4rem 0.75rem', color: req === 'Yes' ? '#81c784' : '#90a4ae' }}>{req}</td>
+                <td style={{ padding: '0.4rem 0.75rem', color: req === 'Yes' ? 'var(--p-81c784)' : 'var(--text-dim-2)' }}>{req}</td>
                 <td style={{ padding: '0.4rem 0.75rem' }}>{desc}</td>
               </tr>
             ))}
@@ -514,7 +519,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/generic-upload-merge-mode-notice.jpg" alt="Generic Upload merge mode notice and Merge Portfolio button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/import/generic-upload-merge-mode-notice.jpg" alt="Generic Upload merge mode notice and Merge Portfolio button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
     </div>
   )
@@ -530,7 +535,7 @@ function ActionCenterHelp() {
         It is accessible from the top navigation bar and also shows a preview panel on the Dashboard.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         At the top of the page, five cards give a quick status snapshot:
       </p>
@@ -542,7 +547,7 @@ function ActionCenterHelp() {
         <li><strong>Monthly Income</strong> — estimated monthly dividend income for the portfolio.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Priority Filters</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Priority Filters</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Use the filter buttons to focus the list:
       </p>
@@ -553,7 +558,7 @@ function ActionCenterHelp() {
         <li><strong>Clear</strong> — shows success-priority items that are in good shape.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Action Items</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Action Items</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Each item card shows:
       </p>
@@ -564,14 +569,14 @@ function ActionCenterHelp() {
         <li><strong>Open button</strong> — navigates directly to the relevant page in the app so you can act on the item.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Dashboard Preview</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Dashboard Preview</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The Dashboard shows a compact preview of up to four Action Center items at the top of the page.
         Each preview card links directly to the relevant page. Click <strong>Open Action Center</strong> to
         see the full list with filters and details.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When Action Items Are Generated</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When Action Items Are Generated</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Items are computed from the data already in the app — holdings, dividend history, category weights,
         and income estimates. They are recalculated each time you open the Action Center or Dashboard.
@@ -592,9 +597,9 @@ function DashboardHelp() {
       </p>
 
       <div style={{ marginBottom: '1rem' }}>
-        <img src="./help-screenshots/dashboard/Dashboard_top.jpg" alt="Top of the Dashboard showing the Basis and portfolio selectors, Action Center preview, the full summary cards strip with estimated and actual reinvestment cards, the Portfolio Value Over Time chart, and Upcoming Dividends This Week" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/dashboard/Dashboard_top.jpg" alt="Top of the Dashboard showing the Basis and portfolio selectors, Action Center preview, the full summary cards strip with estimated and actual reinvestment cards, the Portfolio Value Over Time chart, and Upcoming Dividends This Week" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
-      <p style={{ marginBottom: '1.25rem', color: '#90a4ae', fontSize: '0.9rem' }}>
+      <p style={{ marginBottom: '1.25rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
         <strong>Top of the page</strong> (above): the <strong>Basis</strong> and <strong>portfolio</strong> selectors in the
         header; the <strong>Action Center</strong> preview panel with follow-up items; the full <strong>summary cards
         strip</strong> covering portfolio grade, risk ratios, income totals, the estimated vs. actual reinvestment cards,
@@ -603,16 +608,16 @@ function DashboardHelp() {
         Week</strong> section.
       </p>
       <div style={{ marginBottom: '1rem' }}>
-        <img src="./help-screenshots/dashboard/dashboard_bottom.jpg" alt="Lower Dashboard showing the category allocation donut chart with value, gain, and allocation per category, and the full holdings table with per-holding columns including the NAV testing controls" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/dashboard/dashboard_bottom.jpg" alt="Lower Dashboard showing the category allocation donut chart with value, gain, and allocation per category, and the full holdings table with per-holding columns including the NAV testing controls" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
-      <p style={{ marginBottom: '0.75rem', color: '#90a4ae', fontSize: '0.9rem' }}>
+      <p style={{ marginBottom: '0.75rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
         <strong>Lower on the page</strong> (above): the <strong>category allocation</strong> donut chart — each slice is a
         category (Anchors, Boosters, Gold &amp; Silver, Growth, BDC, Hedged Anchor, Juicers, Energy, …) with its value
         invested, gain, and percent allocation — followed by the full <strong>holdings table</strong> with all per-holding
         columns and the inline NAV testing controls described below.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The top section displays key metrics as cards:
       </p>
@@ -624,7 +629,7 @@ function DashboardHelp() {
         <li><strong>Est. Monthly Income</strong> — estimated monthly dividend income across all holdings (annual estimate ÷ 12).</li>
       </ul>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.4rem' }}>Reinvestment cards: Estimated vs. Actual</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.4rem' }}>Reinvestment cards: Estimated vs. Actual</h4>
       <p style={{ marginBottom: '0.6rem' }}>
         The reinvestment split is shown two ways. The <strong>Estimated</strong> cards are a steady forward run-rate — your
         reinvest settings applied to estimated income — so they read the same on the 1st of the month as on the 30th, which
@@ -663,7 +668,7 @@ function DashboardHelp() {
         <li><strong>S&amp;P 500</strong> — the current S&amp;P 500 index level with its day's change, as a market reference alongside your portfolio's returns.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP$ and Cash$ Columns</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP$ and Cash$ Columns</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The holdings table includes two columns that split estimated monthly income by reinvestment status:
       </p>
@@ -689,7 +694,7 @@ function DashboardHelp() {
         the DRIP Matrix to manage DRIP across all accounts at once.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The main table lists all holdings with sortable columns. Click any column header to sort.
         Key columns include:
@@ -711,7 +716,7 @@ function DashboardHelp() {
         <li><strong>Grd</strong> — composite grade for the holding.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Return vs. Yield (RvY)</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Return vs. Yield (RvY)</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The <strong>RvY</strong> column answers a single question: is the total return on this holding exceeding what the yield alone would suggest, or is price erosion eating into the dividend income?
       </p>
@@ -730,7 +735,7 @@ function DashboardHelp() {
         <strong>Why CYld is the default:</strong> For income-focused funds (covered call ETFs, high-yield payers), YOC can appear very high when the price has drifted lower, producing a Good reading even as NAV erodes. Current yield keeps the comparison anchored to today's reality and is consistent with what a new investor would experience.
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>NAV Testing Controls</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>NAV Testing Controls</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The NAV column is designed for income funds where the distribution may be funded partly by option premium,
         leverage, return of capital, or other strategies that can pressure share price over time. It is not meant
@@ -759,7 +764,7 @@ function DashboardHelp() {
         automatic benchmark rules.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Value Over Time</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Value Over Time</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the summary cards, an equity curve chart tracks your portfolio's total market value over time.
         Each data point is a NAV (Net Asset Value) snapshot — the sum of <code>shares × current price</code>
@@ -778,7 +783,7 @@ function DashboardHelp() {
         makes it easy to capture a value on any day without running a full import.
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Action Center Preview</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Action Center Preview</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Near the top of the Dashboard, an <strong>Action Center</strong> card shows up to four follow-up items
         generated automatically from your portfolio data. Items are grouped by priority: amber for "Needs Review",
@@ -787,7 +792,7 @@ function DashboardHelp() {
         The preview is hidden when the portfolio has no action items.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Upcoming Dividends</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Upcoming Dividends</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the summary cards, a card shows dividends expected this week based on ex-dividend dates,
         with estimated payout amounts per holding. Pay dates prefixed with <strong>~</strong> are estimated;
@@ -810,17 +815,17 @@ function HoldingsHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/holdings/holdings-page.jpg" alt="Holdings page full view showing table and controls" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/holdings/holdings-page.jpg" alt="Holdings page full view showing table and controls" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Detailed Views and Features</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Detailed Views and Features</h3>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/holdings/complete-holdings-table.jpg" alt="Holdings table overview" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/holdings/complete-holdings-table.jpg" alt="Holdings table overview" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       {/* ── Table Overview ──────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Table Overview</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Table Overview</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Sorting</strong> — Click any column header to sort ascending/descending. An arrow indicates the active sort.</li>
         <li><strong>Frozen columns</strong> — Ticker, Description, Category, and Shares stay visible as you scroll horizontally.</li>
@@ -829,16 +834,16 @@ function HoldingsHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/holdings/drip-setting.jpg" alt="DRIP setting in Holdings table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>The DRIP checkbox appears in the Holdings table and can be toggled directly without opening the edit form. When enabled, dividends are automatically reinvested into additional shares using historical prices from the payment date.</p>
+        <img src="./help-screenshots/holdings/drip-setting.jpg" alt="DRIP setting in Holdings table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>The DRIP checkbox appears in the Holdings table and can be toggled directly without opening the edit form. When enabled, dividends are automatically reinvested into additional shares using historical prices from the payment date.</p>
       </div>
 
       {/* ── % Reinvested Card ─────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>% Reinvested Card (Income Summary)</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>% Reinvested Card (Income Summary)</h3>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/holdings/Updated-holdings.jpg" alt="Holdings income summary cards including % Reinvested" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>
+        <img src="./help-screenshots/holdings/Updated-holdings.jpg" alt="Holdings income summary cards including % Reinvested" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>
           The income summary above the table now includes a <strong>% Reinvested</strong> card alongside
           Est. Monthly Income, Mo$ Reinvested, and Mo$ Not Reinvested.
         </p>
@@ -851,7 +856,7 @@ function HoldingsHelp() {
         <li><strong>Est. Monthly Income</strong> — total estimated monthly income across all displayed holdings.</li>
         <li><strong>Mo$ Reinvested</strong> — the dollar portion of monthly income being reinvested (DRIP on).</li>
         <li><strong>Mo$ Not Reinvested</strong> — the portion being taken as cash (DRIP off).</li>
-        <li><strong style={{ color: '#66bb6a' }}>% Reinvested</strong> — the income-weighted fraction being reinvested: Mo$ Reinvested ÷ Est. Monthly Income × 100. This updates <strong>live</strong> as you toggle DRIP checkboxes in the table, so you can immediately see the portfolio-level impact of any change.</li>
+        <li><strong style={{ color: 'var(--pos-muted)' }}>% Reinvested</strong> — the income-weighted fraction being reinvested: Mo$ Reinvested ÷ Est. Monthly Income × 100. This updates <strong>live</strong> as you toggle DRIP checkboxes in the table, so you can immediately see the portfolio-level impact of any change.</li>
       </ul>
 
       <p style={{ marginBottom: '0.75rem' }}>
@@ -873,7 +878,7 @@ function HoldingsHelp() {
       </p>
 
       {/* ── Toolbar Buttons ─────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Toolbar Buttons</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Toolbar Buttons</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Refresh Prices &amp; Divs</strong> - Fetches the latest prices, dividend amounts, ex-div dates, pay dates, and dividend frequency from Yahoo Finance for the currently selected Holdings scope. Individual accounts refresh only themselves; Owner refreshes its included source accounts; Aggregate refreshes its configured member accounts. Refresh requests are coordinated across Dashboard and Holdings, so if one refresh is already running, the next request waits for it instead of starting a second overlapping refresh.</li>
         <li><strong>Latest Refresh Result</strong> - After Refresh Prices &amp; Divs finishes, a temporary result section appears near the top of the Holdings screen. Each account card shows:
@@ -914,17 +919,17 @@ function HoldingsHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/holdings/add-holding.jpg" alt="Add Holding form" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>The Add Holding form allows you to quickly create a new position by entering the ticker, company name, category, number of shares, current price, and dividend information directly. This creates a "direct" position without transaction-lot tracking.</p>
+        <img src="./help-screenshots/holdings/add-holding.jpg" alt="Add Holding form" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>The Add Holding form allows you to quickly create a new position by entering the ticker, company name, category, number of shares, current price, and dividend information directly. This creates a "direct" position without transaction-lot tracking.</p>
       </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/holdings/add-transaction.jpg" alt="Add Transaction form" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>The Add Transaction form records a BUY transaction, establishing cost basis and creating a transaction lot that can later be sold (SELL) for capital gains tracking. This method provides full transaction history and lot-level cost tracking.</p>
+        <img src="./help-screenshots/holdings/add-transaction.jpg" alt="Add Transaction form" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>The Add Transaction form records a BUY transaction, establishing cost basis and creating a transaction lot that can later be sold (SELL) for capital gains tracking. This method provides full transaction history and lot-level cost tracking.</p>
       </div>
 
       {/* ── Maintenance Actions in Detail ───────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Maintenance Actions in Detail</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Maintenance Actions in Detail</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The four maintenance buttons in the toolbar (<strong>Refresh Prices &amp; Divs</strong>,
         <strong> Preview Div Repair</strong>, <strong>DRIP Matrix</strong>, and
@@ -932,7 +937,7 @@ function HoldingsHelp() {
         problem — they overlap in places but are <em>not</em> interchangeable.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Refresh Prices &amp; Divs</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Refresh Prices &amp; Divs</h4>
       <p style={{ marginBottom: '0.5rem' }}>
         <strong>What it does.</strong> Calls Yahoo Finance for every ticker currently held in the active
         portfolio scope and updates the holdings table with the latest:
@@ -972,11 +977,11 @@ function HoldingsHelp() {
       </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/holdings/refresh-data.jpg" alt="Refresh Prices and Dividends" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>The "Refresh Prices & Divs" button fetches the latest market data from Yahoo Finance for all holdings. The Latest Refresh Result section shows a summary of what was updated: current prices, dividend amounts, DRIP shares, accrued income since the last refresh, and estimated upcoming payment rows added to your dividend history.</p>
+        <img src="./help-screenshots/holdings/refresh-data.jpg" alt="Refresh Prices and Dividends" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>The "Refresh Prices & Divs" button fetches the latest market data from Yahoo Finance for all holdings. The Latest Refresh Result section shows a summary of what was updated: current prices, dividend amounts, DRIP shares, accrued income since the last refresh, and estimated upcoming payment rows added to your dividend history.</p>
       </div>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Preview Div Repair</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Preview Div Repair</h4>
       <p style={{ marginBottom: '0.5rem' }}>
         <strong>What it does.</strong> Runs the dividend-repair engine in <em>dry-run</em> mode using the
         repair mode you've selected in the dropdown next to it. It rebuilds each holding's dividend
@@ -1018,7 +1023,7 @@ function HoldingsHelp() {
         result is not what you wanted.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>DRIP Matrix (Owner only)</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>DRIP Matrix (Owner only)</h4>
       <p style={{ marginBottom: '0.5rem' }}>
         <strong>What it does.</strong> Opens a per-ticker × per-account grid of DRIP checkboxes covering
         every holding across every sub-account that's included in Owner. Each cell shows the share count
@@ -1052,7 +1057,7 @@ function HoldingsHelp() {
         portfolios with many holdings.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Sync DRIP from Accounts (Owner only)</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Sync DRIP from Accounts (Owner only)</h4>
       <p style={{ marginBottom: '0.5rem' }}>
         <strong>What it does.</strong> Recomputes Owner's per-ticker DRIP flags and DRIP-eligible share
         counts from the current state of the included sub-accounts, using these rules:
@@ -1083,7 +1088,7 @@ function HoldingsHelp() {
       </p>
 
       {/* ── Row Actions ─────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Row Action Buttons</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Row Action Buttons</h3>
       <p style={{ marginBottom: '0.5rem' }}>Each row in the table has three action buttons:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Edit</strong> — Opens the Add/Edit form pre-filled with the holding's current data.</li>
@@ -1092,7 +1097,7 @@ function HoldingsHelp() {
       </ul>
 
       {/* ── Adding a Holding (Direct) ──────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Adding a Holding (Direct — No Transaction)</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Adding a Holding (Direct — No Transaction)</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Use this method when you just want to record a position without tracking individual purchase lots.
       </p>
@@ -1126,7 +1131,7 @@ function HoldingsHelp() {
       </ol>
 
       {/* ── Adding via Transaction ─────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Adding a Holding via Transaction</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Adding a Holding via Transaction</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Use this method when you want to track individual purchase lots. The position (shares, price paid, cost basis)
         is calculated automatically from the sum of your transaction lots.
@@ -1168,7 +1173,7 @@ function HoldingsHelp() {
       </div>
 
       {/* ── Editing a Holding ──────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Editing a Holding</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Editing a Holding</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         There are two ways to open the edit form:
       </p>
@@ -1187,8 +1192,8 @@ function HoldingsHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/holdings/edit-holding-simple.jpg" alt="Edit holding without transactions" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>When editing a "direct" holding (one without transaction lots), all fields are editable. You can update shares, price paid, dividend information, category, and DRIP status directly. Calculated fields like Cost Basis and Gain/Loss update automatically.</p>
+        <img src="./help-screenshots/holdings/edit-holding-simple.jpg" alt="Edit holding without transactions" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>When editing a "direct" holding (one without transaction lots), all fields are editable. You can update shares, price paid, dividend information, category, and DRIP status directly. Calculated fields like Cost Basis and Gain/Loss update automatically.</p>
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>With Transactions</h4>
@@ -1199,12 +1204,12 @@ function HoldingsHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/holdings/edit-holding-with-lots.jpg" alt="Edit holding with transactions" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>When editing a holding with transaction lots, the Position fields (Shares, Price Paid, Purchase Date) are locked and grayed out because they are calculated from your transaction history. You can still edit dividend information, category, and DRIP status. Use the "Txn" button to modify the transaction lots themselves.</p>
+        <img src="./help-screenshots/holdings/edit-holding-with-lots.jpg" alt="Edit holding with transactions" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>When editing a holding with transaction lots, the Position fields (Shares, Price Paid, Purchase Date) are locked and grayed out because they are calculated from your transaction history. You can still edit dividend information, category, and DRIP status. Use the "Txn" button to modify the transaction lots themselves.</p>
       </div>
 
       {/* ── Managing Transactions ──────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Managing Transactions on an Existing Holding</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Managing Transactions on an Existing Holding</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Click the "Txn" button on any row to open the Transaction modal for that ticker.
       </p>
@@ -1245,7 +1250,7 @@ function HoldingsHelp() {
       </ol>
 
       {/* ── Deleting a Holding ─────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Deleting a Holding</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Deleting a Holding</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Click the "Del" button on the holding's row.</li>
         <li>A confirmation dialog appears: "Delete TICKER?"</li>
@@ -1258,7 +1263,7 @@ function HoldingsHelp() {
       </div>
 
       {/* ── Inline Expand ──────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Viewing Transaction Lots Inline</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Viewing Transaction Lots Inline</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         You don't need to open the Txn modal just to <em>view</em> lots. Click the small triangle (&#9654;) to the left
         of any ticker to expand an inline sub-table showing all transaction lots for that holding — including Type,
@@ -1272,7 +1277,7 @@ function HoldingsHelp() {
       </p>
 
       {/* ── DRIP Simulation ────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>How the DRIP Flag Works</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>How the DRIP Flag Works</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Setting DRIP to <strong>Y</strong> on a holding does <em>not</em> automatically add shares in real
         time. Instead, every time you run <strong>Refresh Prices &amp; Divs</strong>, the app runs a
@@ -1281,7 +1286,7 @@ function HoldingsHelp() {
         you to log every DRIP lot manually.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>What the simulation does</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>What the simulation does</h4>
       <p style={{ marginBottom: '0.5rem' }}>
         Starting from your <strong>base quantity</strong> (the share count as of your last broker import)
         and <strong>import date</strong>, the simulation walks forward through every dividend-per-share
@@ -1303,7 +1308,7 @@ function HoldingsHelp() {
         <li><strong>Estimated Annual Income</strong> — recalculated from the DRIP-adjusted share count, so income projections grow as shares accumulate.</li>
       </ul>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Why the simulated count will drift from your broker</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Why the simulated count will drift from your broker</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         The simulation uses Yahoo Finance dividend history and closing prices — not your broker's actual
         reinvestment records. Brokers sometimes use NAV or a slightly different price for DRIP purchases,
@@ -1312,7 +1317,7 @@ function HoldingsHelp() {
         your brokerage statement shows.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Keeping it accurate</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Keeping it accurate</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Re-import broker positions periodically.</strong> A positions import sets <code>base_quantity</code>
             to your real broker share count and resets <code>import_date</code> to today. The simulation
@@ -1352,14 +1357,14 @@ function ReinvestmentImpactHelp() {
       </p>
 
       {/* ── Historical ─────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Historical Tab</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Historical Tab</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Replays your portfolio's dividend-reinvestment history using recorded payments and Yahoo Finance
         price history, then charts that history at Annual, Monthly, or Weekly granularity. Use the filters
         to focus on any time window, category slice, or individual holding.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Filters</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Filters</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Granularity</strong> — Annual, Monthly, or Weekly grouping of the data.</li>
         <li><strong>Time Range</strong> — adjusts to the granularity (e.g. 3 Mo – 24 Mo for Weekly; 2 – 10 Yr for Annual).</li>
@@ -1367,7 +1372,7 @@ function ReinvestmentImpactHelp() {
         <li><strong>Scope</strong> — zoom in to a single ticker. Selecting a fund narrows all charts to that holding and reveals the Break-Even panel and the per-share rate trend chart.</li>
       </ul>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Summary Tiles</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Summary Tiles</h4>
       <p style={{ marginBottom: '0.5rem' }}>Six tiles summarise the selected window at a glance:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Total Distributions</strong> — the total cash paid out to you across all holdings in the window.</li>
@@ -1379,15 +1384,15 @@ function ReinvestmentImpactHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/reinvestment-impact/historical-overview.jpg" alt="Reinvestment Impact historical overview" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Historical tab: all six summary tiles, Distributions Over Time (with the "if not reinvested" dotted line and cumulative amber line), and DRIP Share Growth chart.</p>
+        <img src="./help-screenshots/reinvestment-impact/historical-overview.jpg" alt="Reinvestment Impact historical overview" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>Historical tab: all six summary tiles, Distributions Over Time (with the "if not reinvested" dotted line and cumulative amber line), and DRIP Share Growth chart.</p>
       </div>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Charts</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Charts</h4>
 
       <p style={{ marginBottom: '0.5rem' }}><strong>Distributions Over Time</strong></p>
       <p style={{ marginBottom: '0.75rem' }}>
-        The main bar chart shows total payouts per period. <span style={{ color: '#4dff91' }}>Green bars</span> are actual recorded payments from your dividend history; <span style={{ color: '#38bdf8' }}>blue bars</span> are reconstructed from Yahoo Finance price and dividend-per-share data (used where individual lot history isn't imported). The chart hybridises the two: actual payments take priority where available.
+        The main bar chart shows total payouts per period. <span style={{ color: 'var(--pos)' }}>Green bars</span> are actual recorded payments from your dividend history; <span style={{ color: 'var(--p-38bdf8)' }}>blue bars</span> are reconstructed from Yahoo Finance price and dividend-per-share data (used where individual lot history isn't imported). The chart hybridises the two: actual payments take priority where available.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Dotted line — "Income if not reinvested"</strong>: what each period's income would have been had you taken distributions as cash instead of reinvesting. Because DRIP adds shares over time, this line sits below the bars — the gap between the bar and the dotted line in any period is the extra income that compounding created.</li>
@@ -1396,17 +1401,17 @@ function ReinvestmentImpactHelp() {
 
       <p style={{ marginBottom: '0.5rem' }}><strong>DRIP Share Growth</strong></p>
       <p style={{ marginBottom: '0.75rem' }}>
-        <span style={{ color: '#a855f7' }}>Purple bars</span> show the incremental new shares bought each period by reinvesting that period's cash. The <span style={{ color: '#f59e0b' }}>amber line</span> (right axis) is the running cumulative total of all DRIP shares purchased since the window start. The cumulative line growing smoothly upward means compounding is working as intended; a plateau means reinvestment slowed (rate cut, DRIP turned off, etc.).
+        <span style={{ color: 'var(--p-a855f7)' }}>Purple bars</span> show the incremental new shares bought each period by reinvesting that period's cash. The <span style={{ color: 'var(--p-f59e0b)' }}>amber line</span> (right axis) is the running cumulative total of all DRIP shares purchased since the window start. The cumulative line growing smoothly upward means compounding is working as intended; a plateau means reinvestment slowed (rate cut, DRIP turned off, etc.).
       </p>
 
-      <p style={{ marginBottom: '0.5rem' }}><strong>Distribution per Share</strong> <span style={{ color: '#6a7892', fontSize: '0.85em' }}>(single-ticker scope only)</span></p>
+      <p style={{ marginBottom: '0.5rem' }}><strong>Distribution per Share</strong> <span style={{ color: 'var(--p-6a7892)', fontSize: '0.85em' }}>(single-ticker scope only)</span></p>
       <p style={{ marginBottom: '0.75rem' }}>
         When you scope to a single fund, this chart appears showing the fund's actual distribution paid per share each period. This is the most direct measure of whether a fund is sustaining, growing, or eroding its payout. A falling line means the fund is paying less per share — regardless of how many shares you hold. Combine this with the Distributions Over Time chart: if your total bars are still rising while this line is falling, it means DRIP is masking underlying rate erosion by adding more shares.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/reinvestment-impact/historical-attribution.jpg" alt="Why Payouts Changed attribution chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Why Payouts Changed chart in per-period mode, with the Per period / Cumulative toggle top-right.</p>
+        <img src="./help-screenshots/reinvestment-impact/historical-attribution.jpg" alt="Why Payouts Changed attribution chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>Why Payouts Changed chart in per-period mode, with the Per period / Cumulative toggle top-right.</p>
       </div>
 
       <p style={{ marginBottom: '0.5rem' }}><strong>Why Payouts Changed</strong></p>
@@ -1414,22 +1419,22 @@ function ReinvestmentImpactHelp() {
         This attribution chart answers the question: <em>why did my income go up or down?</em> Every period's payout change is split into three forces:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
-        <li><span style={{ color: '#4dff91' }}>■ <strong>Share growth (DRIP)</strong></span> — the portion of the change explained purely by owning more shares from reinvesting. This is always a small, steady positive contribution — it compounds quietly every period.</li>
-        <li><span style={{ color: '#38bdf8' }}>■ <strong>Distribution rate</strong></span> — the portion caused by the fund itself raising or cutting its per-share payment. This is usually the dominant driver of big swings: a large blue bar above zero means a rate raise lifted income; a large blue bar below zero means a rate cut hit it.</li>
-        <li><span style={{ color: '#f59e0b' }}>■ <strong>Interaction</strong></span> — a small mathematical cross-term that appears when both share count and rate change in the same period. It's usually tiny and can be ignored; it just ensures the three pieces add up exactly to the total change.</li>
+        <li><span style={{ color: 'var(--pos)' }}>■ <strong>Share growth (DRIP)</strong></span> — the portion of the change explained purely by owning more shares from reinvesting. This is always a small, steady positive contribution — it compounds quietly every period.</li>
+        <li><span style={{ color: 'var(--p-38bdf8)' }}>■ <strong>Distribution rate</strong></span> — the portion caused by the fund itself raising or cutting its per-share payment. This is usually the dominant driver of big swings: a large blue bar above zero means a rate raise lifted income; a large blue bar below zero means a rate cut hit it.</li>
+        <li><span style={{ color: 'var(--p-f59e0b)' }}>■ <strong>Interaction</strong></span> — a small mathematical cross-term that appears when both share count and rate change in the same period. It's usually tiny and can be ignored; it just ensures the three pieces add up exactly to the total change.</li>
       </ul>
       <p style={{ marginBottom: '1rem' }}>
         Bars above zero mean income rose that period; bars below zero mean it fell. Toggle <strong>Per period</strong> to see each period's change in isolation, or <strong>Cumulative</strong> to see the running total of each effect since the window start — the cumulative view directly answers "over the whole window, how much of my income growth came from DRIP versus rate changes?"
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/reinvestment-impact/historical-rate-changes.jpg" alt="Notable rate changes and DRIP off panels" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Notable rate changes (left) and DRIP off — cash not compounding (right), followed by the Top Contributors table.</p>
+        <img src="./help-screenshots/reinvestment-impact/historical-rate-changes.jpg" alt="Notable rate changes and DRIP off panels" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>Notable rate changes (left) and DRIP off — cash not compounding (right), followed by the Top Contributors table.</p>
       </div>
 
       <p style={{ marginBottom: '0.5rem' }}><strong>Notable Rate Changes</strong></p>
       <p style={{ marginBottom: '0.75rem' }}>
-        Shows the top three rate raises (<span style={{ color: '#4dff91' }}>▲ green</span>) and top three rate cuts (<span style={{ color: '#e05555' }}>▼ red</span>) by dollar impact across the window. The dollar figure next to each ticker is how much that fund's distribution-rate change added or subtracted from your total income — these are the funds driving the blue bars in the attribution chart. Click any ticker to scope all charts to that holding.
+        Shows the top three rate raises (<span style={{ color: 'var(--pos)' }}>▲ green</span>) and top three rate cuts (<span style={{ color: 'var(--neg-3)' }}>▼ red</span>) by dollar impact across the window. The dollar figure next to each ticker is how much that fund's distribution-rate change added or subtracted from your total income — these are the funds driving the blue bars in the attribution chart. Click any ticker to scope all charts to that holding.
       </p>
 
       <p style={{ marginBottom: '0.5rem' }}><strong>DRIP Off — Cash Not Compounding</strong></p>
@@ -1443,7 +1448,7 @@ function ReinvestmentImpactHelp() {
       </p>
 
       {/* ── Break-Even Panel ──────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Break-Even Panel (Single Ticker)</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Break-Even Panel (Single Ticker)</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         When you scope to a single holding (via Scope in Historical mode, or Fund in Projection mode),
         a <strong>Break-Even</strong> panel appears showing how far the position is from recovering
@@ -1455,8 +1460,8 @@ function ReinvestmentImpactHelp() {
         <li>
           <strong>Cost Basis</strong> — compares position value (shares × current price) to what you paid.
           <ul style={{ paddingLeft: '1.25rem', marginTop: '0.25rem', lineHeight: '1.7' }}>
-            <li>If <em>underwater</em>: shows <span style={{ color: '#f59e0b' }}>% still needed to break even</span>, how many more shares at today's price would close the gap, and approximately how long reinvestment alone takes to get there at a flat price.</li>
-            <li>If <em>recovered</em>: shows <span style={{ color: '#4dff91' }}>% above break-even ✓</span>.</li>
+            <li>If <em>underwater</em>: shows <span style={{ color: 'var(--p-f59e0b)' }}>% still needed to break even</span>, how many more shares at today's price would close the gap, and approximately how long reinvestment alone takes to get there at a flat price.</li>
+            <li>If <em>recovered</em>: shows <span style={{ color: 'var(--pos)' }}>% above break-even ✓</span>.</li>
           </ul>
         </li>
         <li>
@@ -1469,18 +1474,18 @@ function ReinvestmentImpactHelp() {
       </p>
 
       {/* ── Projection ──────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Projection Tab</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Projection Tab</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Projects how portfolio income and share count evolve over 1–20 years under three market scenarios
         simultaneously, using the current distribution rate and your chosen reinvestment percentage.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/reinvestment-impact/projections_new.jpg" alt="Projection tab for the whole portfolio showing the Fund, Categories, Horizon, Market, Reinvest %, and Monthly Add controls with the Est and Actual 3-month reinvestment seeds beneath Reinvest %, the Current Annual Income / Projected / Growth tiles, and the Projected Income and Share Count Growth charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Projection tab for the whole portfolio in the neutral scenario over 10 years. Note the header line "Currently reinvesting X%" and the two clickable seeds — <strong>Est</strong> and <strong>Actual 3mo</strong> — directly under the Reinvest % input.</p>
+        <img src="./help-screenshots/reinvestment-impact/projections_new.jpg" alt="Projection tab for the whole portfolio showing the Fund, Categories, Horizon, Market, Reinvest %, and Monthly Add controls with the Est and Actual 3-month reinvestment seeds beneath Reinvest %, the Current Annual Income / Projected / Growth tiles, and the Projected Income and Share Count Growth charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>Projection tab for the whole portfolio in the neutral scenario over 10 years. Note the header line "Currently reinvesting X%" and the two clickable seeds — <strong>Est</strong> and <strong>Actual 3mo</strong> — directly under the Reinvest % input.</p>
       </div>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Controls</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Controls</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Fund</strong> — project a single holding instead of the whole portfolio. Selecting a fund reveals the Break-Even panel and clears any active category filter.</li>
         <li><strong>Categories</strong> — multi-select to restrict the projection to one or more portfolio categories (e.g. project only your Boosters). Hidden when a specific Fund is selected.</li>
@@ -1488,43 +1493,43 @@ function ReinvestmentImpactHelp() {
         <li><strong>Market</strong> — Neutral (modest +1%/yr distribution growth), Bullish (+4%/yr), or Bearish (first-year shock then gradual recovery). All three scenarios are computed simultaneously; the income chart switches instantly when you change Market without re-fetching.</li>
         <li><strong>Reinvest %</strong> — the fraction of each distribution that is reinvested as new shares. It auto-seeds from your estimated DRIP mix so you start from a real-world baseline, and you can freely override it to model what-if scenarios. Two clickable seeds sit beneath the input:
           <ul style={{ paddingLeft: '1.25rem', lineHeight: '1.7', marginTop: '0.3rem' }}>
-            <li><strong style={{ color: '#66bb6a' }}>Est: X%</strong> — your estimated DRIP mix from the reinvest settings (the default seed). Click to apply.</li>
-            <li><strong style={{ color: '#38bdf8' }}>Actual 3mo: Y%</strong> — the share of distributions you <em>actually</em> reinvested over the trailing <strong>3 completed months</strong>, from recorded payments split per account. Click to apply.</li>
+            <li><strong style={{ color: 'var(--pos-muted)' }}>Est: X%</strong> — your estimated DRIP mix from the reinvest settings (the default seed). Click to apply.</li>
+            <li><strong style={{ color: 'var(--p-38bdf8)' }}>Actual 3mo: Y%</strong> — the share of distributions you <em>actually</em> reinvested over the trailing <strong>3 completed months</strong>, from recorded payments split per account. Click to apply.</li>
           </ul>
           The actual figure deliberately uses completed months and excludes the in-progress month, so it is stable and available from the first of any month — no start-of-month ramp-up. The two often agree closely; when they diverge it reflects recent payment timing.</li>
         <li><strong>Monthly Add $</strong> — a fixed dollar contribution added each month, allocated across holdings by market value weight.</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/reinvestment-impact/projections-categories.jpg" alt="Projection with categories filter" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Projection scoped to a single category (e.g. Boosters), showing only that slice of the portfolio's projected income.</p>
+        <img src="./help-screenshots/reinvestment-impact/projections-categories.jpg" alt="Projection with categories filter" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>Projection scoped to a single category (e.g. Boosters), showing only that slice of the portfolio's projected income.</p>
       </div>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Summary Tiles</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Summary Tiles</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Current Annual Income</strong> — computed as Σ(latest declared distribution × frequency × shares) for the selected scope. This can differ slightly from the dashboard's "Est. Annual Income," which uses a smoothed per-holding estimate; the gap is largest for variable-payout option-income funds whose most recent declared distribution differs from their trailing average.</li>
         <li><strong>Projected in N yr</strong> — the annualised income in the final year of the simulation for the selected market scenario.</li>
         <li><strong>Growth</strong> — percentage change from current to projected.</li>
       </ul>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Charts</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Charts</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Projected Income</strong> — line chart for the selected market scenario. Shows monthly income for horizons ≤ 5 yr, annual totals for longer horizons.</li>
         <li><strong>Share Count Growth by Scenario</strong> — all three scenarios (Bullish, Neutral, Bearish) plotted together so you can see how differently compounding plays out under each market path. For single-fund views this shows clean per-fund share growth; the whole-portfolio view sums shares across all funds (different prices, so the absolute number is less meaningful).</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/reinvestment-impact/projection-all-holdings.jpg" alt="Projection all holdings scenario comparison" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Share Count Growth chart showing all three scenarios side by side for easy comparison.</p>
+        <img src="./help-screenshots/reinvestment-impact/projection-all-holdings.jpg" alt="Projection all holdings scenario comparison" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>Share Count Growth chart showing all three scenarios side by side for easy comparison.</p>
       </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/reinvestment-impact/projection-individualtop.jpg" alt="Projection individual fund top" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <img src="./help-screenshots/reinvestment-impact/projection-indiv-bottom.jpg" alt="Projection individual fund bottom" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333', marginTop: '0.75rem' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>Projecting a single fund shows the Break-Even panel, the income chart, and the per-fund share-count growth across all three scenarios.</p>
+        <img src="./help-screenshots/reinvestment-impact/projection-individualtop.jpg" alt="Projection individual fund top" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/reinvestment-impact/projection-indiv-bottom.jpg" alt="Projection individual fund bottom" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)', marginTop: '0.75rem' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>Projecting a single fund shows the Break-Even panel, the income chart, and the per-fund share-count growth across all three scenarios.</p>
       </div>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>How the Projection Model Works</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>How the Projection Model Works</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Each holding's latest declared distribution per share grows at the scenario's annual rate (Neutral +1%, Bullish +4%, Bearish shock then recovery).</li>
         <li>Distributions flagged for reinvestment buy new shares at the drifted price; those shares earn dividends in every subsequent period — compounding.</li>
@@ -1555,9 +1560,15 @@ function CategoriesHelp() {
         a <strong>target allocation</strong> to see how close your real allocation is to your plan.
         This helps you make informed rebalancing decisions and ensures your portfolio stays aligned with your investment strategy.
       </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Categories can also contain <strong>sub-categories</strong>. Use them when a category is still the right
+        top-level bucket, but you want a finer breakdown inside it — for example splitting an income category into
+        option-income ETFs, BDCs, REITs, or preferreds. Those sub-categories are not just labels on this page:
+        the portfolio analysis pages that expose a Categories filter can now filter by individual sub-categories too.
+      </p>
 
       {/* ── Page Layout ──────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Page Layout</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Page Layout</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The Categories page is split into three main areas:
       </p>
@@ -1580,7 +1591,8 @@ function CategoriesHelp() {
           <strong>Category Cards (left panel)</strong> — One card per category showing the category name,
           number of tickers, actual allocation percentage, dollar value, a small progress bar,
           and a Quality score (when the Target Assistant is active).
-          Cards are expandable to show the individual tickers inside.
+          Cards are expandable to show the individual tickers inside. If a category has sub-categories, the
+          card also shows a sub-category count badge and expands into nested sub-category rows.
         </li>
         <li>
           <strong>Unallocated Assets (right panel, sticky)</strong> — Lists all tickers that haven't been
@@ -1595,19 +1607,19 @@ function CategoriesHelp() {
       </p>
 
       {/* ── Color Coding ──────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Allocation Color Coding</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Allocation Color Coding</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         When a category has a target allocation set, the percentage and progress bar are color-coded:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><span style={{ color: '#00e89a', fontWeight: 600 }}>Green</span> — Within 3% of target (on track).</li>
-        <li><span style={{ color: '#ffc107', fontWeight: 600 }}>Yellow</span> — 3–8% away from target (slightly off).</li>
-        <li><span style={{ color: '#ff6b6b', fontWeight: 600 }}>Red</span> — More than 8% away from target (needs attention).</li>
-        <li><span style={{ color: '#7ecfff', fontWeight: 600 }}>Blue</span> — No target set (informational only).</li>
+        <li><span style={{ color: 'var(--pos-bright)', fontWeight: 600 }}>Green</span> — Within 3% of target (on track).</li>
+        <li><span style={{ color: 'var(--amber)', fontWeight: 600 }}>Yellow</span> — 3–8% away from target (slightly off).</li>
+        <li><span style={{ color: 'var(--neg)', fontWeight: 600 }}>Red</span> — More than 8% away from target (needs attention).</li>
+        <li><span style={{ color: 'var(--accent-bright)', fontWeight: 600 }}>Blue</span> — No target set (informational only).</li>
       </ul>
 
       {/* ── Creating a Category ───────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Creating a Category</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Creating a Category</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li><strong>Click "+ New Category"</strong> in the top-right corner.</li>
         <li>
@@ -1621,14 +1633,32 @@ function CategoriesHelp() {
         <li><strong>Click "Create"</strong>. The category card appears in the left panel, initially empty.</li>
       </ol>
 
-      {/* ── Assigning Tickers ─────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Assigning Tickers to a Category</h3>
+      {/* ── Creating Sub-categories ───────────────────────────── */}
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Creating Sub-categories</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        There are two ways to assign unallocated tickers to a category:
+        Sub-categories live inside a parent category. They let you keep the same top-level allocation target while
+        organizing the holdings inside that bucket more precisely.
+      </p>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
+        <li><strong>Expand a category</strong> by clicking its card header.</li>
+        <li>Click <strong>"+ Sub-category"</strong> in the expanded category controls.</li>
+        <li>Enter a name such as "Preferreds", "REITs", "Gold", "Covered Calls", or any label that fits your portfolio.</li>
+        <li>Click <strong>"Create"</strong>. The new sub-category appears under the parent category.</li>
+      </ol>
+      <p style={{ marginBottom: '1rem' }}>
+        Sub-categories do not have separate target allocation percentages. The parent category owns the portfolio
+        target, while each sub-category shows its own dollar value, portfolio percentage, and share of the parent category.
+      </p>
+
+      {/* ── Assigning Tickers ─────────────────────────────────── */}
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Assigning Tickers to a Category or Sub-category</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        There are two ways to assign unallocated tickers to a category. When a sub-category is expanded, the same
+        click-to-assign workflow targets that sub-category instead of the parent category.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/categories/category-cards-unallocated-assets.jpg" alt="Category cards and Unallocated Assets panel" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>
+        <img src="./help-screenshots/categories/category-cards-unallocated-assets.jpg" alt="Category cards and Unallocated Assets panel" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>
           Category cards are the working area for organizing holdings. The number badge beside each category name shows how many tickers are assigned, the blue bar shows its current portfolio weight, and the right side shows Quality, allocation percentage, and dollar value. The Unallocated Assets panel on the right is the source list for tickers that still need a category.
         </p>
       </div>
@@ -1642,7 +1672,8 @@ function CategoriesHelp() {
         </li>
         <li>
           <strong>Click any ticker pill</strong> in the Unallocated panel. It is immediately assigned to the
-          expanded category — no confirmation needed. The category's count, value, and allocation update instantly.
+          expanded category or sub-category — no confirmation needed. The category's count, value, and allocation
+          update instantly.
         </li>
       </ol>
 
@@ -1665,8 +1696,15 @@ function CategoriesHelp() {
         </li>
       </ol>
 
+      <h4 style={{ marginTop: '0.75rem', marginBottom: '0.4rem' }}>Moving Tickers Between Sub-categories</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        After a category has sub-categories, the expanded ticker table includes a <strong>Sub-category</strong>
+        dropdown for each holding. Use it to move a ticker into another sub-category or back to
+        <em> no sub-category</em> while keeping it inside the same parent category.
+      </p>
+
       {/* ── Unassigning Tickers ────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Unassigning Tickers</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Unassigning Tickers</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         To remove a ticker from a category (returning it to the Unallocated panel):
       </p>
@@ -1689,8 +1727,16 @@ function CategoriesHelp() {
         </li>
       </ol>
 
+      {/* ── Managing Sub-categories ───────────────────────────── */}
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Managing Sub-categories</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Rename</strong> — expand the parent category, then click <strong>Rename</strong> on the sub-category row.</li>
+        <li><strong>Delete</strong> — click the <strong>&times;</strong> button on the sub-category row. Its tickers stay assigned to the parent category but move to the <em>no sub-category</em> group.</li>
+        <li><strong>Unclassified holdings</strong> — if a category has sub-categories, any ticker that belongs to the parent but not to a sub-category appears under <strong>Not in a sub-category</strong>. Use the dropdown beside the ticker to place it.</li>
+      </ul>
+
       {/* ── Editing a Category ────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Editing a Category</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Editing a Category</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li><strong>Expand the category</strong> by clicking its card header.</li>
         <li>Click the <strong>"Edit"</strong> button in the top-right of the expanded area.</li>
@@ -1699,7 +1745,7 @@ function CategoriesHelp() {
       </ol>
 
       {/* ── Deleting a Category ───────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Deleting a Category</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Deleting a Category</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li><strong>Expand the category</strong> by clicking its card header.</li>
         <li>Click the <strong>"Delete"</strong> button in the top-right of the expanded area.</li>
@@ -1713,7 +1759,7 @@ function CategoriesHelp() {
       </ol>
 
       {/* ── Target Assistant ──────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Target Assistant</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Target Assistant</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The Target Assistant appears automatically when at least one category has a target allocation set.
         It analyzes the current allocation, income yield, weekly-payer exposure, and NAV risk flags for
@@ -1748,8 +1794,8 @@ function CategoriesHelp() {
         <li><strong>Reason</strong> — plain-language explanation of why the suggestion moved up or down.</li>
       </ul>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/categories/target-assistant-suggestion-table.jpg" alt="Target Assistant suggested target table with Quality scores and dollar moves" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
-        <p style={{ fontSize: '0.9rem', color: '#aaa', marginTop: '0.5rem' }}>
+        <img src="./help-screenshots/categories/target-assistant-suggestion-table.jpg" alt="Target Assistant suggested target table with Quality scores and dollar moves" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>
           Use the suggestion table as the final review before saving target changes. The Suggested column shows the assistant's proposed target weight, $ To Suggested estimates how much would need to move, and Reason explains why the category is being increased or trimmed. Click a Quality score to see which tickers are contributing to the score, including income concentration, weekly-payer exposure, high-yield reliance, NAV monitors, or confirmed high NAV ratio.
         </p>
       </div>
@@ -1801,9 +1847,14 @@ function CategoriesHelp() {
       </ul>
 
       {/* ── Expanded Category View ────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Expanded Category Details</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Expanded Category Details</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        When you expand a category card, you see a table listing each ticker in that category with:
+        When you expand a category card, you see a table listing each ticker in that category. If the category has
+        sub-categories, the expanded view first shows each sub-category with its own ticker count, portfolio
+        percentage, percentage of the parent category, and dollar value.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Expanding a sub-category shows the tickers inside it with:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker</strong> — The stock/ETF symbol.</li>
@@ -1811,6 +1862,7 @@ function CategoriesHelp() {
         <li><strong>Value</strong> — Current market value of that position.</li>
         <li><strong>Freq</strong> — Dividend payment frequency. Weekly payers are highlighted in green.</li>
         <li><strong>% of Category</strong> — What percentage of the category's total value this ticker represents.</li>
+        <li><strong>Sub-category</strong> — When sub-categories exist, a dropdown for moving the ticker within the parent category.</li>
         <li><strong>&times;</strong> — Unassign button to remove the ticker from this category.</li>
       </ul>
       <p>
@@ -1822,8 +1874,23 @@ function CategoriesHelp() {
         Old zero-share tickers are cleaned out automatically instead of lingering in the picker.
       </div>
 
+      {/* ── Category and Sub-category Filters ─────────────────── */}
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filtering by Category or Sub-category</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The same hierarchy you build here is available in portfolio analysis filters. Pages such as
+        <strong> Growth</strong>, <strong>Total Return</strong>, <strong>Dividend Analysis</strong>,
+        <strong> Dividend History</strong>, <strong>Reinvestment Impact</strong>, <strong>Income Sim</strong>,
+        and <strong>Safe Withdrawal</strong> show a Categories dropdown when categories exist.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Select a <strong>parent category</strong> to include every holding in that category.</li>
+        <li>Select one or more <strong>sub-categories</strong> to focus on only those narrower groups.</li>
+        <li>Selecting a whole parent category supersedes any sub-category selections inside it, so the dropdown clears those child selections automatically.</li>
+        <li>Use <strong>All Holdings</strong> to clear both category and sub-category filters.</li>
+      </ul>
+
       {/* ── Dashboard Overview ────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Dashboard Overview</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Dashboard Overview</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Once you define categories, a <strong>Portfolio Overview</strong> section appears on the Dashboard
         above the holdings table. It displays a <strong>donut chart</strong> on the left showing your
@@ -1847,6 +1914,7 @@ function CategoriesHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>Categories can also be assigned when adding or editing a holding on the Holdings page — the Category dropdown there lists all categories you've created.</li>
         <li>Importing holdings that already have a Category column will auto-create categories and assign tickers during import.</li>
+        <li>Use sub-categories when you want narrower filters without creating more top-level target buckets.</li>
         <li>Target allocations don't need to add up to 100% — you might intentionally leave some portfolio value uncategorized.</li>
         <li>The allocation bar at the top gives you a quick visual sense of balance without needing to read individual numbers.</li>
       </ul>
@@ -1867,11 +1935,11 @@ function GrowthHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/growth/filters-and-metrics.jpg" alt="Growth page filters and metrics strip" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/growth/filters-and-metrics.jpg" alt="Growth page filters and metrics strip" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       {/* ── Filters ────────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Three filters at the top of the page control what data is displayed. Changing any filter
         triggers a fresh data fetch — all charts and metrics update together.
@@ -1897,7 +1965,7 @@ function GrowthHelp() {
       </ul>
 
       {/* ── Metrics Strip ──────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Metrics Strip</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Metrics Strip</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         A row of summary cards appears below the filters:
       </p>
@@ -1921,10 +1989,10 @@ function GrowthHelp() {
       </ul>
 
       {/* ── Charts ─────────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Charts</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Charts</h3>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/growth/performance-charts.jpg" alt="Growth page performance charts including price-only and total return charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/growth/performance-charts.jpg" alt="Growth page performance charts including price-only and total return charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Price-Only Chart</h4>
@@ -1955,14 +2023,14 @@ function GrowthHelp() {
       <h4 style={{ marginBottom: '0.4rem' }}>Performance Heatmap</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         A color-coded grid with tickers on the Y-axis and time windows on the X-axis. Each cell shows
-        the percentage return for that ticker over that period. Colors range from <span style={{ color: '#ff6b6b' }}>red</span> (negative)
-        through dark (near zero) to <span style={{ color: '#81c784' }}>green</span> (positive).
+        the percentage return for that ticker over that period. Colors range from <span style={{ color: 'var(--neg)' }}>red</span> (negative)
+        through dark (near zero) to <span style={{ color: 'var(--p-81c784)' }}>green</span> (positive).
         This gives you an at-a-glance view of which holdings have been strong or weak across different
         time horizons. Hover over any cell to see the exact value.
       </p>
 
       {/* ── How to Use ─────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Optimization View</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Optimization View</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The Optimization tab is an income-smoothing planner. It takes the calendar's known or
         estimated pay dates, dividend frequency, dividend amount, share count, and estimated annual
@@ -1976,7 +2044,7 @@ function GrowthHelp() {
         ticker is attractive, safe, undervalued, or appropriate to buy.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Top Cards</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Top Cards</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Average monthly income</strong> - the projected 12-month total divided by 12. This should closely match the Dividends page's estimated monthly income, apart from rounding.</li>
         <li><strong>Lowest month</strong> - the month with the lowest projected dividend income in the next 12 months.</li>
@@ -1984,7 +2052,7 @@ function GrowthHelp() {
         <li><strong>Total shortfall</strong> - the sum of all below-average months' shortfalls. This is not a required investment amount; it is a way to measure how uneven the calendar is.</li>
       </ul>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>12-Month Income Smoothing Heatmap</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>12-Month Income Smoothing Heatmap</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Month tile</strong> - projected dividend income expected to be paid in that calendar month.</li>
         <li><strong>Green tile</strong> - month is at or above the portfolio's average monthly income.</li>
@@ -1993,7 +2061,7 @@ function GrowthHelp() {
         <li><strong>"Below avg"</strong> - percentage shortfall versus the average monthly income. For example, "10% below avg" means that month is projected to be 10% lighter than the portfolio average month.</li>
       </ul>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Shortfall Months Table</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Shortfall Months Table</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Month</strong> - the calendar month being analyzed.</li>
         <li><strong>Projected</strong> - estimated dividend income expected to be paid in that month.</li>
@@ -2001,7 +2069,7 @@ function GrowthHelp() {
         <li><strong>Top current payers</strong> - current holdings projected to pay in that month, sorted by estimated dollar contribution from highest to lowest.</li>
       </ul>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Suggestions</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Suggestions</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Suggestions translate the shortfall table into plain language. If January is below average,
         the page may say January needs about a certain dollar amount to match the average month.
@@ -2009,7 +2077,7 @@ function GrowthHelp() {
         must add that exact amount or buy a specific ticker.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Schedule-Fit Candidates</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Schedule-Fit Candidates</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Schedule-Fit Candidates are funds whose known pay dates overlap your current shortfall
         months. This is pay-date fit only, not a buy recommendation. A ticker can rank highly here
@@ -2026,7 +2094,7 @@ function GrowthHelp() {
         <li><strong>Est. cost</strong> - approximate cost of those what-if shares using the latest available price.</li>
       </ul>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1rem', marginBottom: '0.4rem' }}>Candidate Universe</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Candidate Universe</h4>
       <p style={{ marginBottom: '1rem' }}>
         The Candidate Universe lists the fund families and seeded tickers the app is allowed to
         consider for future schedule-fit analysis. Tickers without schedule data are shown as tracked
@@ -2034,7 +2102,7 @@ function GrowthHelp() {
         to holdings or watchlist and refreshing dividend metadata can make it eligible for scoring.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>
           <strong>Start with the default view</strong> — 1Y period, SPY benchmark, all holdings.
@@ -2077,10 +2145,10 @@ function PortfolioGrowth2Help() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/growth-2/Screenshot 2026-05-09 095042.jpg" alt="Portfolio Growth 2 performance chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/growth-2/Screenshot 2026-05-09 095042.jpg" alt="Portfolio Growth 2 performance chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Controls</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Controls</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
           <strong>Period</strong> - Eight buttons covering 7d, 1m, 3m, 6m, YTD, 1y, 5y, and all. Controls
@@ -2094,7 +2162,7 @@ function PortfolioGrowth2Help() {
         </li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart 1 - Portfolio Value</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart 1 - Portfolio Value</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Shows the total dollar value of your portfolio over the selected period, calculated as current
         share quantities multiplied by historical daily closing prices. This is not a simulated backtest -
@@ -2119,7 +2187,7 @@ function PortfolioGrowth2Help() {
         </li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart 2 - Portfolio Performance</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart 2 - Portfolio Performance</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Shows your cumulative profit or loss over the selected period, optionally broken down by source.
         All values start at zero at the beginning of the period, or at your cost basis depending on the
@@ -2173,7 +2241,7 @@ function PortfolioGrowth2Help() {
         </li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tips</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tips</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Use <strong>Show cost basis</strong> and <strong>"From the first trade"</strong> together to
           see at a glance how far your portfolio is above or below your total investment.</li>
@@ -2202,11 +2270,11 @@ function DividendsHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/dividends/Screenshot 2026-05-09 095253.jpg" alt="Dividend Analysis page" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/dividends/Screenshot 2026-05-09 095253.jpg" alt="Dividend Analysis page" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       {/* ── Filters ────────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Category Filter</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Category Filter</h3>
       <p style={{ marginBottom: '1rem' }}>
         A category dropdown at the top lets you filter the analysis to specific categories (same behavior
         as the Growth page). Select one or more categories to see dividend metrics for just those groups,
@@ -2215,7 +2283,7 @@ function DividendsHelp() {
       </p>
 
       {/* ── Metrics Strip ──────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Metrics Strip</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Metrics Strip</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         A row of summary cards across the top provides key income metrics at a glance:
       </p>
@@ -2250,7 +2318,7 @@ function DividendsHelp() {
       </ul>
 
       {/* ── Charts ─────────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Charts</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Charts</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Six interactive Plotly charts are displayed in a responsive grid:
       </p>
@@ -2294,7 +2362,7 @@ function DividendsHelp() {
       </p>
 
       {/* ── Data Table ─────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Data Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Data Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the charts is a sortable data table with one row per holding and a totals row at the bottom.
         Click any column header to sort — click again to reverse the direction. Sort arrows indicate
@@ -2309,15 +2377,15 @@ function DividendsHelp() {
         <li><strong>YTD Divs</strong> — Year-to-date dividends received for this holding.</li>
         <li><strong>Total Divs</strong> — Lifetime total dividends received (shown in bold).</li>
         <li><strong>Paid For Itself</strong> — Percentage of cost recovered through dividends.
-          Colored <span style={{ color: '#4dff91' }}>green</span> at 100%+ and <span style={{ color: '#ffd700' }}>gold</span> at 50%+.</li>
+          Colored <span style={{ color: 'var(--pos)' }}>green</span> at 100%+ and <span style={{ color: 'var(--p-ffd700)' }}>gold</span> at 50%+.</li>
         <li><strong>Div Paid</strong> — Estimated cash amount of one dividend payment for your current share count.</li>
         <li><strong>Est. Annual</strong> — Estimated annual dividend income from this holding.</li>
         <li><strong>Est. Monthly</strong> — Estimated monthly dividend income.</li>
         <li><strong>Yield on Cost</strong> — Annual dividend yield based on your purchase price (what you're earning on your original investment).</li>
         <li><strong>Current Yield</strong> — Annual dividend yield based on today's market price.</li>
         <li><strong>Gain / Loss</strong> — Unrealized capital gain or loss. Colored
-          <span style={{ color: '#4dff91' }}> green</span> if positive,
-          <span style={{ color: '#ff6b6b' }}> red</span> if negative.</li>
+          <span style={{ color: 'var(--pos)' }}> green</span> if positive,
+          <span style={{ color: 'var(--neg)' }}> red</span> if negative.</li>
       </ul>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Row Highlighting</h4>
@@ -2333,7 +2401,7 @@ function DividendsHelp() {
       </p>
 
       {/* ── How to Use ─────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>
           <strong>Check the metrics strip</strong> for a quick snapshot — your estimated monthly and
@@ -2377,11 +2445,11 @@ function DivCalendarHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/div-calendar/Screenshot 2026-05-09 100041.jpg" alt="Dividend Calendar" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/div-calendar/Screenshot 2026-05-09 100041.jpg" alt="Dividend Calendar" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       {/* ── What the Page Shows ─────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calendar View</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calendar View</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The Calendar tab shows each holding with an ex-dividend date as a card in a grid layout.
         Cards are sorted chronologically and contain:
@@ -2415,7 +2483,7 @@ function DivCalendarHelp() {
       </ul>
 
       {/* ── Paid Status ─────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Paid Status Indicators</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Paid Status Indicators</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Cards automatically show whether a payment has already been made:
       </p>
@@ -2423,7 +2491,7 @@ function DivCalendarHelp() {
         <li>
           <strong>Paid this week</strong> — The pay date fell within the current calendar week
           (Monday through today). The card dims slightly, the left border turns dark green,
-          and a green <span style={{ color: '#00e89a' }}>✓ paid this week</span> badge appears
+          and a green <span style={{ color: 'var(--pos-bright)' }}>✓ paid this week</span> badge appears
           next to the ticker.
         </li>
         <li>
@@ -2436,7 +2504,7 @@ function DivCalendarHelp() {
       </ul>
 
       {/* ── Filters ─────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Three filter buttons appear above the card grid. Click one to narrow the view:
       </p>
@@ -2461,7 +2529,7 @@ function DivCalendarHelp() {
       </p>
 
       {/* ── Estimated vs Confirmed ──────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Estimated vs. Confirmed Pay Dates</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Estimated vs. Confirmed Pay Dates</h3>
       <p style={{ marginBottom: '1rem' }}>
         A note in the filter bar explains the asterisk convention:
         <em> "* estimated pay date | no asterisk = confirmed"</em>.
@@ -2471,7 +2539,7 @@ function DivCalendarHelp() {
       </p>
 
       {/* ── How to Use ──────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>
           <strong>Select "Upcoming" filter</strong> to see your forward dividend schedule. This clears
@@ -2521,10 +2589,10 @@ function EarningsCalendarHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/earnings-calendar/Screenshot 2026-05-09 100408.jpg" alt="Earnings Calendar" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/earnings-calendar/Screenshot 2026-05-09 100408.jpg" alt="Earnings Calendar" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What the Page Shows</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What the Page Shows</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Each holding with an earnings date appears as a card. Cards are sorted upcoming-first
         (soonest at the top), then past earnings most-recent first. Each card contains:
@@ -2551,7 +2619,7 @@ function EarningsCalendarHelp() {
         </li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Upcoming</strong> (default) &mdash; Future earnings only.</li>
         <li><strong>Next 30 Days</strong> &mdash; Reports landing in the next month.</li>
@@ -2559,7 +2627,7 @@ function EarningsCalendarHelp() {
         <li><strong>All</strong> &mdash; Everything on file for your holdings.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Sources</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Sources</h3>
       <p style={{ marginBottom: '1rem' }}>
         The app layers several sources to maximize coverage. For each ticker it starts with Yahoo
         Finance (via yfinance), then fills any missing fields from three Nasdaq endpoints in turn:
@@ -2570,13 +2638,13 @@ function EarningsCalendarHelp() {
         earnings, so they are silently omitted from the calendar &mdash; an empty page usually
         means the active portfolio holds no individual stocks.
       </p>
-      <p style={{ marginBottom: '1rem', color: '#90a4ae', fontSize: '0.85rem' }}>
+      <p style={{ marginBottom: '1rem', color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
         Note: Zacks's per-symbol earnings pages are gated by Imperva bot detection, so they can't
         be scraped from the backend. If Zacks ever publishes an open feed, it would be a natural
         addition here.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Start in <strong>Upcoming</strong> to see what earnings dates are on the horizon.</li>
         <li>Switch to <strong>Past 30 Days</strong> after a busy week to scan for misses on income holdings.</li>
@@ -2600,16 +2668,16 @@ function DivCompareHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/div-compare/Screenshot 2026-05-09 100606.jpg" alt="Dividend Compare" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/div-compare/Screenshot 2026-05-09 100606.jpg" alt="Dividend Compare" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       {/* ── Forward vs TTM ─────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Forward vs. TTM — What's the Difference?</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Forward vs. TTM — What's the Difference?</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
           <strong>Forward Annual Dividend (Fwd Ann. Div/Sh)</strong> — The projected annual dividend
           per share based on the most recent declared dividend, annualized. This is what you expect
-          to receive going forward if the current rate holds. Shown in <span style={{ color: '#4dff91' }}>green</span>.
+          to receive going forward if the current rate holds. Shown in <span style={{ color: 'var(--pos)' }}>green</span>.
         </li>
         <li>
           <strong>Forward Annual Yield (Fwd Ann. Yield)</strong> — Forward dividend divided by the
@@ -2622,7 +2690,7 @@ function DivCompareHelp() {
         <li>
           <strong>TTM Dividend/Share (TTM Div/Sh)</strong> — The sum of all dividends actually paid
           per share over the trailing 12 months. This is historical fact, not projection.
-          Shown in <span style={{ color: '#7ecfff' }}>blue</span>.
+          Shown in <span style={{ color: 'var(--accent-bright)' }}>blue</span>.
         </li>
         <li>
           <strong>TTM Annual Yield (TTM Ann. Yield)</strong> — TTM dividend divided by current price.
@@ -2638,7 +2706,7 @@ function DivCompareHelp() {
       </p>
 
       {/* ── Portfolio Holdings Table ────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Holdings Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Holdings Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The top table shows all holdings in your currently selected portfolio. It includes a
         <strong> Qty</strong> column (shares held) and the income columns (Fwd Ann. Income, TTM Ann. Income)
@@ -2652,7 +2720,7 @@ function DivCompareHelp() {
       </p>
 
       {/* ── Ticker Lookup ───────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Look Up Tickers</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Look Up Tickers</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the holdings table is a lookup tool that lets you research any ticker — whether you own
         it or not. This is useful for comparing your holdings against similar ETFs or stocks you're
@@ -2681,7 +2749,7 @@ function DivCompareHelp() {
       </ol>
 
       {/* ── How to Use ──────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>
           <strong>Sort by Fwd Ann. Yield</strong> to rank your holdings by their projected income
@@ -2717,10 +2785,10 @@ function DividendHistoryHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/dividend-history/Screenshot 2026-05-09 100726.jpg" alt="Dividend History" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/dividend-history/Screenshot 2026-05-09 100726.jpg" alt="Dividend History" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Views and Ranges</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Views and Ranges</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Yearly</strong> — shows annual totals as a bar chart.</li>
         <li><strong>Monthly</strong> — shows monthly dividends as an area chart with an optional 3-month moving average.</li>
@@ -2729,7 +2797,7 @@ function DividendHistoryHelp() {
         <li><strong>Partial current period</strong> - The current month is labeled like <em>Apr '26 partial</em>, the current year is labeled like <em>2026 YTD</em>, and today's weekly entry is labeled <em>today</em>. These labels mean the period is still incomplete.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Sources</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Sources</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Broker payments</strong> - Imported dividend transactions from Schwab, E*TRADE, Fidelity, Snowball, or generic sources are treated as actual payment history.</li>
         <li><strong>Refresh estimates</strong> - Refresh Prices &amp; Divs can add source <code>refresh_estimate</code> rows when a holding's expected pay date matches the refresh date. These rows let the history chart begin tracking same-day distributions even before a broker transaction file is imported. Dividend repair excludes them from actual payment totals so they do not replace or inflate imported broker actuals.</li>
@@ -2737,14 +2805,14 @@ function DividendHistoryHelp() {
         <li><strong>Legacy payout tables</strong> - If older monthly or weekly payout tables exist for an account, Dividend History keeps using that history and only fills missing periods with refresh-estimated rows. A new refresh estimate will not hide the older history.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters and Overlay</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters and Overlay</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Category filter</strong> — limit the history to selected portfolio categories.</li>
         <li><strong>Show Cumulative</strong> — overlays a cumulative dividends line on a second axis.</li>
         <li><strong>Weekly category note</strong> — when filtering weekly history by category, values are estimated proportionally for the selected slice.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Strip</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Strip</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The cards above the chart show total dividends, average period amount, min, max, and the change from
         the first period in the selected range.
@@ -2773,11 +2841,11 @@ function TotalReturnHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/total-return/Screenshot 2026-05-09 100848.jpg" alt="Total Return analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/total-return/Screenshot 2026-05-09 100848.jpg" alt="Total Return analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       {/* ── Category Filter ─────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Category Filter</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Category Filter</h3>
       <p style={{ marginBottom: '1rem' }}>
         If you have categories defined, a filter dropdown appears at the top. Select one or more
         categories to narrow the summary, charts, and table to just those holdings. "All Holdings"
@@ -2785,7 +2853,7 @@ function TotalReturnHelp() {
       </p>
 
       {/* ── Summary Strip ───────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Strip</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Strip</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         A row of metric cards shows all-time portfolio figures (since each position was purchased):
       </p>
@@ -2798,13 +2866,13 @@ function TotalReturnHelp() {
         <li><strong>Total Return %</strong> — Total Return $ as a percentage of Total Invested.</li>
         <li><strong>SPY — 1Y</strong> — SPY's 1-year price return, shown as a live benchmark reference.</li>
       </ul>
-      <p style={{ marginBottom: '1rem', color: '#90a4ae', fontSize: '0.9rem' }}>
+      <p style={{ marginBottom: '1rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
         Note: Summary figures are <strong>all-time since purchase</strong>. The charts below pull
         live data from Yahoo Finance for the selected period.
       </p>
 
       {/* ── Total Return Bar Chart ──────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Total Return % by Ticker Chart</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Total Return % by Ticker Chart</h3>
       <p style={{ marginBottom: '1rem' }}>
         A horizontal bar chart showing each holding's total return percentage over the trailing
         1 year (live from Yahoo Finance, including dividends). Bars are color-coded per ticker —
@@ -2814,7 +2882,7 @@ function TotalReturnHelp() {
       </p>
 
       {/* ── Performance Comparison ──────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Performance Comparison Chart</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Performance Comparison Chart</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         A fully customizable line chart that lets you plot any combination of your holdings and
         external tickers side by side on a normalized scale (all lines start at 100). This is ideal
@@ -2851,7 +2919,7 @@ function TotalReturnHelp() {
       </p>
 
       {/* ── Scatter Chart ───────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Total Return % vs. Yield on Cost Scatter</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Total Return % vs. Yield on Cost Scatter</h3>
       <p style={{ marginBottom: '1rem' }}>
         A bubble scatter chart plotting each holding's all-time total return (Y-axis) against its
         annual yield on cost (X-axis). Bubble size represents position size. This chart reveals
@@ -2861,7 +2929,7 @@ function TotalReturnHelp() {
       </p>
 
       {/* ── Holdings Table ──────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table — All-Time Total Return Summary</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table — All-Time Total Return Summary</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         A sortable table with one row per holding showing the full all-time return breakdown.
         Click any column header to sort; click again to reverse. A Portfolio Total row at the
@@ -2884,7 +2952,7 @@ function TotalReturnHelp() {
       </ul>
 
       {/* ── How to Use ──────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>
           <strong>Check the summary strip first</strong> — Total Return % gives you your all-time
@@ -2928,11 +2996,11 @@ function GainsLossesHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/gains-losses/Screenshot 2026-05-09 101659.jpg" alt="Gains and Losses breakdown" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/gains-losses/Screenshot 2026-05-09 101659.jpg" alt="Gains and Losses breakdown" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       {/* ── Category Filter ─────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Category Filter</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Category Filter</h3>
       <p style={{ marginBottom: '1rem' }}>
         If you have categories defined, a dropdown appears at the top. Select one or more
         categories to filter all summary cards, tables, and charts to just those holdings.
@@ -2940,7 +3008,7 @@ function GainsLossesHelp() {
       </p>
 
       {/* ── Summary Cards ───────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Two rows of metric cards show the high-level numbers:
       </p>
@@ -2960,7 +3028,7 @@ function GainsLossesHelp() {
       </ul>
 
       {/* ── Tabs ─────────────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Tabs</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Tabs</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Three tabs let you drill into the detail behind the summary numbers. All tables are sortable
         by clicking any column header.
@@ -2985,7 +3053,7 @@ function GainsLossesHelp() {
         <li><strong>Total G/L %</strong> — Total G/L as a percentage of Invested.</li>
         <li><strong>RvY</strong> — Return vs. Yield. Compares the Total G/L % to the holding's dividend yield. <strong>Good</strong> (green) when total return exceeds yield; <strong>Poor</strong> (red) when yield exceeds total return. A toggle in the column header switches between <strong>CYld</strong> (current yield, default) and <strong>YOC</strong> (yield on cost). See the Dashboard help section for a full explanation.</li>
       </ul>
-      <p style={{ marginBottom: '1rem', color: '#90a4ae', fontSize: '0.9rem' }}>
+      <p style={{ marginBottom: '1rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
         A Portfolio Total footer row sums key columns across all holdings.
       </p>
 
@@ -3029,7 +3097,7 @@ function GainsLossesHelp() {
       </ul>
 
       {/* ── Charts ───────────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the table, a set of charts visualize your gains and losses over time. Use the period
         buttons (3M, 6M, 1Y, 2Y, 3Y, 5Y) to change the time range. All chart data is fetched
@@ -3051,7 +3119,7 @@ function GainsLossesHelp() {
       </ul>
 
       {/* ── How to Use ──────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>
           <strong>Check the summary cards first</strong> — Compare Price G/L to Total G/L in each
@@ -3080,7 +3148,7 @@ function GainsLossesHelp() {
       </ol>
 
       {/* ── Key Concepts ────────────────────────────────────────── */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Key Concepts</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Key Concepts</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Price G/L vs Total G/L</strong> — Price G/L is capital appreciation only. Total G/L
           adds dividends received. For income-focused portfolios, the difference can be dramatic — a
@@ -3105,19 +3173,19 @@ function SafeWithdrawalHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/safe-withdrawal/Screenshot 2026-05-09 101918.jpg" alt="Safe Withdrawal Rate calculator" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/safe-withdrawal/Screenshot 2026-05-09 101918.jpg" alt="Safe Withdrawal Rate calculator" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What It Shows</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What It Shows</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>N% of Cost / Week, Month, Year</strong> — withdrawal amounts at the selected percent of original cost basis.</li>
         <li><strong>Est Monthly Dividends</strong> — current estimated monthly income from the selected holdings.</li>
-        <li><strong>Break-even % (Portfolio YoC)</strong> — aggregate yield on cost for the selected holdings. Any withdrawal rate above this eats into principal. The card turns <span style={{ color: '#4ade80' }}>green</span> when your selected percent is below break-even and <span style={{ color: '#ff6b6b' }}>red</span> when it exceeds it.</li>
+        <li><strong>Break-even % (Portfolio YoC)</strong> — aggregate yield on cost for the selected holdings. Any withdrawal rate above this eats into principal. The card turns <span style={{ color: 'var(--p-4ade80)' }}>green</span> when your selected percent is below break-even and <span style={{ color: 'var(--neg)' }}>red</span> when it exceeds it.</li>
         <li><strong>Yield on Cost / Current Yield</strong> — side-by-side context for each holding.</li>
         <li><strong>Sustainable flag</strong> — highlights holdings where current income meets or exceeds the selected percent-of-cost target.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters and Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters and Table</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Percent of Cost dropdown</strong> — pick any rate from 1% to 30% (default 8%). All column labels, row amounts, totals, and the break-even comparison recalculate live.</li>
         <li><strong>Category filter</strong> — focus the view on one or more categories. Break-even % reflects only the filtered holdings.</li>
@@ -3139,10 +3207,10 @@ function GeneralScannerHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/general-scanner/Screenshot 2026-05-09 125140.jpg" alt="General Scanner interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/general-scanner/Screenshot 2026-05-09 125140.jpg" alt="General Scanner interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Saved Universe vs Ad Hoc Pulls</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Saved Universe vs Ad Hoc Pulls</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li><strong>Saved Universe</strong> — this is your persistent scanner list. Refresh Data and Force Refresh work against this saved universe.</li>
         <li><strong>Pull Stocks or ETFs Without Saving Them</strong> — use this box to type tickers such as <code>AAPL MSFT QQQ SPYI</code> and screen them temporarily without adding them to the saved universe.</li>
@@ -3150,7 +3218,7 @@ function GeneralScannerHelp() {
         <li><strong>Back to Saved Universe</strong> returns the page to your normal saved scanner universe.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Views</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Views</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li><strong>Descriptive</strong> — basic company or ETF identity fields such as ticker, company, sector, industry, country, market cap, price, and volume.</li>
         <li><strong>Fundamental</strong> — valuation and quality fields such as P/E, forward P/E, PEG, dividend yield, margin, ROE, debt/equity, and beta.</li>
@@ -3158,14 +3226,14 @@ function GeneralScannerHelp() {
         <li><strong>ETF</strong> — ETF-specific fields such as strategy, cap size, category, expense ratio, AUM, and dividend yield.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Refresh Buttons</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Refresh Buttons</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li><strong>Refresh Data</strong> updates scanner prices and cached fields for the saved universe using the existing cache where possible.</li>
         <li><strong>Force Refresh</strong> re-fetches ticker info from Yahoo Finance and is the best choice after adding a lot of new tickers or when classifications look stale.</li>
         <li>If you were on a temporary ad hoc pull, refresh switches you back to the saved universe so you do not stay stuck on a tiny temporary subset.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Filters and Signals</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Filters and Signals</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li><strong>Signal</strong> presets include Top Gainers, Top Losers, New High, New Low, Most Active, Unusual Volume, Overbought, Oversold, and several SMA-based setups.</li>
         <li><strong>Active filter chips</strong> appear above the results table and can be removed one at a time.</li>
@@ -3173,14 +3241,14 @@ function GeneralScannerHelp() {
         <li><strong>ETF Strategy</strong> lets you screen option-income, bonds, preferred, BDC, CEF, and other ETF groups from the ETF classification data in cache.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Universe Management</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Universe Management</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li><strong>Universe</strong> opens the saved ticker list so you can add or remove names manually.</li>
         <li><strong>Reset to Defaults</strong> replaces your current saved scanner universe with the built-in default stock and ETF list and clears cached scanner data. The app now requires typed confirmation before it runs.</li>
         <li><strong>Save as Defaults</strong> writes the current universe to the local defaults file so that universe can be reused later.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Tips</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Tips</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>If a screen looks unexpectedly small, check the active filter chips first. A leftover Type, ETF Strategy, Signal, or Market Cap filter is usually the reason.</li>
         <li>For large updates to the universe, use <strong>Force Refresh</strong> after adding the new names.</li>
@@ -3200,17 +3268,17 @@ function SecurityResearchHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/security-research/Screenshot 2026-05-09 103658.jpg" alt="Security Research page" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/security-research/Screenshot 2026-05-09 103658.jpg" alt="Security Research page" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Lookup Modes</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Lookup Modes</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>ETF</strong> - enter an ETF ticker to review the fund name, objective, issuer, category, legal type, expense ratio, assets, NAV, inception date, yield data, top holdings, and allocation breakdown.</li>
         <li><strong>Stock</strong> - enter a stock ticker to review business description, sector and industry, valuation metrics, fundamentals, dividend data, and payout context.</li>
         <li><strong>Lookup</strong> - fetches the selected ticker using the current ETF or Stock mode. Pressing Enter in the ticker box also runs the lookup.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>ETF Research Results</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>ETF Research Results</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Name &amp; Description</strong> summarizes the fund objective or description.</li>
         <li><strong>Metric grid</strong> shows issuer, category, legal type, expense ratio, total assets, NAV, inception date, dividend frequency, estimated yield, SEC yield, <strong>1Y Ret vs Yield</strong>, TTM dividend per share, and source link when available.</li>
@@ -3218,7 +3286,7 @@ function SecurityResearchHelp() {
         <li><strong>Allocation</strong> displays sector or asset-class weights as horizontal bars.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Stock Research Results</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Stock Research Results</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Business Description</strong> gives a plain-language company summary.</li>
         <li><strong>Valuation</strong> includes price, market cap, enterprise value, beta, trailing and forward P/E, price/book, and price/sales.</li>
@@ -3226,7 +3294,7 @@ function SecurityResearchHelp() {
         <li><strong>Dividends</strong> includes dividend frequency, rate, yield, <strong>1Y Ret vs Yield</strong>, payout ratio, TTM dividend per share, and last dividend when available.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>1Y Return vs. Yield</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>1Y Return vs. Yield</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The <strong>1Y Ret vs Yield</strong> field appears in the ETF metric grid (next to the yield fields) and in the Stock dividends section.
         It compares the ticker's trailing one-year total return to its current dividend yield to give a quick signal on whether the return justifies the income:
@@ -3236,17 +3304,17 @@ function SecurityResearchHelp() {
         <li><strong>Poor</strong> (red) — the current yield is higher than the 1-year total return. The position is paying income, but price decline over the past year has offset more than the dividend provided.</li>
         <li><strong>—</strong> — shown when 1-year return data has not yet loaded or the ticker pays no dividend.</li>
       </ul>
-      <p style={{ marginBottom: '0.75rem', color: '#90a4ae', fontSize: '0.9rem' }}>
+      <p style={{ marginBottom: '0.75rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
         The 1-year return data is fetched from the same source as the Annual Chart (Yahoo Finance total return). The value populates a few seconds after the research result loads. No toggle is available here because there is no portfolio cost basis — only current market yield is used.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Annual Chart</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Annual Chart</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Click <strong>Open Annual Chart</strong> from any research result to show a one-year chart comparing price return and total return.
         The chart scrolls into view below the research cards and helps you see whether dividends materially changed the one-year outcome.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Average Return Chart</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Average Return Chart</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the annual chart, an <strong>Average Return</strong> bar chart shows average annualized returns over standard multi-year windows
         (1Y, 3Y, 5Y, 10Y, and since inception where available), comparing the ticker against its selected benchmark.
@@ -3254,7 +3322,7 @@ function SecurityResearchHelp() {
         This helps you quickly assess whether the ticker has outperformed its reference index over multiple time horizons.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Distribution History Chart</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Distribution History Chart</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the average return chart, a <strong>Distribution History</strong> bar chart shows recent dividend
         or distribution payments for the looked-up ticker. When the chart is in <strong>Yield %</strong> mode,
@@ -3264,7 +3332,7 @@ function SecurityResearchHelp() {
         resets to Monthly.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>When to Use It</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>When to Use It</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>Use Security Research for a fast first pass on a single ticker.</li>
         <li>Use ETF Comparer or Stock Comparer when you need to compare multiple tickers side-by-side with a full return history chart and comparison table.</li>
@@ -3283,21 +3351,22 @@ function ETFScreenHelp() {
         The ETF/Stock Analysis page is an advanced technical analysis and returns-simulation tool.
         You can chart any ticker with professional indicators, draw trendlines, and overlay comparison
         tickers — then switch to a Returns tab to simulate the impact of dividend reinvestment (DRIP)
-        at any percentage over any time period.
+        at any percentage over any time period. A third <strong>Markov</strong> tab adds a regime model
+        that labels each bar Bull / Bear / Sideways and estimates what tends to happen next.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/etf-screen/Line_Chart.jpg" alt="ETF Screening chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-screen/etf-analysis-overview.png" alt="Stock and ETF Analysis showing the Technical, Returns, and Markov tabs with a candlestick chart and StochasticMACD study" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Loading a Ticker</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Loading a Ticker</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Type a ticker symbol in the input field and click <strong>Load</strong> (or press Enter).</li>
         <li>Select a <strong>time period</strong>: 1D, 5D, 1W, 1M, 3M, 6M, YTD, 1Y, or 5Y.</li>
         <li>The main chart loads with price data and volume bars below it.</li>
       </ol>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart Controls</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart Controls</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Chart Type</strong> — Toggle between Line and Candlestick.</li>
         <li><strong>Scale</strong> — Linear, Logarithmic, or Percentage. Use Log for long-term charts; Percentage to normalize from a 100-base.</li>
@@ -3306,7 +3375,7 @@ function ETFScreenHelp() {
         <li><strong>Volume</strong> — Toggle volume bars on or off.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Technical Indicators</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Technical Indicators</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Click any indicator name in the sidebar to add it to the chart. Most indicators appear as
         a subplot panel below the price chart. Click an indicator's header to expand its parameter settings.
@@ -3319,7 +3388,7 @@ function ETFScreenHelp() {
       </ul>
       <p style={{ marginBottom: '1rem' }}>Remove any indicator by clicking its × or toggling it off in the sidebar.</p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Drawing Tools</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Drawing Tools</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Select a drawing mode from the toolbar to annotate the chart:
       </p>
@@ -3335,14 +3404,14 @@ function ETFScreenHelp() {
         Click an existing drawing to select and delete it.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparison Tickers</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparison Tickers</h3>
       <p style={{ marginBottom: '1rem' }}>
         Add comparison tickers to overlay multiple securities on the same chart. Each additional
         ticker gets a unique colored line and appears as a chip below the input. Remove a comparison
         ticker by clicking the × on its chip.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Returns Tab</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Returns Tab</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Switch to the <strong>Returns</strong> tab to analyze historical performance including dividends.
       </p>
@@ -3352,6 +3421,62 @@ function ETFScreenHelp() {
         <li><strong>Return Summary Strip</strong> — Shows the period, total return %, price return %, dividend contribution %, annualized return, and max drawdown for the loaded ticker.</li>
         <li><strong>Comparison Statistics</strong> — If comparison tickers are added, a sidebar shows the same metrics for each one side-by-side.</li>
       </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Markov Tab</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Markov</strong> tab uses the same chart as Technical — candlesticks, volume, studies,
+        and drawing tools all work identically — and shades it by <strong>market regime</strong>. Each bar
+        is labeled <span style={{ color: 'var(--pos)' }}>Bull</span>, <span style={{ color: 'var(--neg)' }}>Bear</span>,
+        or Sideways, then a Markov chain estimates how regimes tend to follow one another. Enter a ticker
+        and click <strong>Load</strong> (there is no portfolio dropdown on this tab — it is ticker-driven).
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/etf-screen/markov-tab.png" alt="Markov tab showing the regime badge, next-bar forecast, trend stickiness, threshold controls, and regime-shaded candlestick chart for MSFT" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+      </div>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Reading the Panel</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Regime badge</strong> — The current regime (Bull / Bear / Sideways) as of the most recent bar.</li>
+        <li><strong>What usually comes next</strong> — Given today's regime, the historical probability that the next bar is Bull, Sideways, or Bear (the dominant outcome is emphasized). This is a base-rate tendency, <em>not</em> a price prediction.</li>
+        <li><strong>Trend stickiness</strong> — How likely the current regime is to persist (High ≥ 80%, Moderate ≥ 60%, otherwise Low/choppy). High stickiness means trends tend to continue; low means the regime flips often.</li>
+        <li><strong>Regime shading</strong> — The chart background behind the candles is tinted by regime (green Bull, rose Bear, faint grey Sideways) so you can see how regimes line up with price.</li>
+      </ul>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Lookback &amp; Move Threshold</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Two controls define what counts as a regime, and they directly change the predictions:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Lookback (bars)</strong> — How many bars back each bar's price move is measured over.</li>
+        <li><strong>Move threshold (%)</strong> — How big that ±% move must be to label a bar Bull or Bear; anything smaller is Sideways. <strong>Raise</strong> it and fewer bars qualify as Bull/Bear (more Sideways — a more conservative, longer-trend read); <strong>lower</strong> it and the model reacts to smaller moves (more Bull/Bear labels, choppier, more frequent regime flips).</li>
+      </ul>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Recommended Threshold Values</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        There is no single right number — the threshold should match how much the asset typically moves over
+        your lookback window. The reference default is <strong>20 bars / ±5%</strong>. Judge it by the output:
+        if one regime dominates (e.g. 90%+ Sideways) lower the threshold; if the regime flips almost every bar
+        with little Sideways, raise it. Aim for a mix where Bull, Bear, and Sideways all occur. Good starting
+        points for a ~20-bar lookback:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Broad ETFs / indices</strong> (SPY, QQQ) — ±3–5%</li>
+        <li><strong>Large-cap individual stocks</strong> — ±5–8%</li>
+        <li><strong>High-volatility / small-cap / crypto</strong> — ±8–15%</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Scale the threshold up with the lookback — a longer window accumulates bigger moves — which is why the
+        presets pair shorter windows with smaller thresholds (10 / 3%, 20 / 5%, 50 / 8%).
+      </p>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Advanced Details</h4>
+      <p style={{ marginBottom: '1rem' }}>
+        Click <strong>Advanced</strong> to reveal the full 3×3 <strong>transition matrix</strong> (rows = today's
+        regime, columns = next bar; each row sums to 100% and the diagonal is persistence) and the
+        <strong> long-run base rate</strong> — the share of time price spends in each regime over the long run if
+        these odds hold. The base rate is a backdrop for comparison, not a forecast.
+      </p>
     </div>
   )
 }
@@ -3369,10 +3494,10 @@ function WatchlistHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/watchlist/Screenshot 2026-05-09 102831.jpg" alt="Watchlist with price and dividend data" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/watchlist/Screenshot 2026-05-09 102831.jpg" alt="Watchlist with price and dividend data" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Type a ticker symbol in the input field (auto-converts to uppercase).</li>
         <li>Optionally type a note explaining why you're watching it (e.g., "considering for income sleeve").</li>
@@ -3380,13 +3505,13 @@ function WatchlistHelp() {
         <li>To remove a ticker, click the <strong>Remove</strong> button on its row.</li>
       </ol>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Signal Count Badges</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Signal Count Badges</h3>
       <p style={{ marginBottom: '1rem' }}>
         At the top of the table, summary badges show how many tickers have a BUY, SELL, or NEUTRAL
         overall signal — a quick pulse check on your watchlist as a whole.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Table Columns</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Table Columns</h3>
       <p style={{ marginBottom: '0.5rem' }}>Click any column header to sort. All 18 columns:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker</strong> — Symbol.</li>
@@ -3404,7 +3529,7 @@ function WatchlistHelp() {
         <li><strong>1Y Return</strong> — Total 12-month return percentage.</li>
         <li><strong>NAV Ratio</strong> — fund price decline divided by TTM distribution yield, only when the benchmark is flat or up. Lagging a rising benchmark is not treated as structural NAV erosion.</li>
         <li><strong>NAV Signal</strong> — BUY/NEUTRAL/SELL from the ratio, with SELL/High forced when price declines 50%+ or the ending share deficit is 5%+.</li>
-        <li><strong>NAV Erosion</strong> — Probability label: <span style={{ color: '#81c784' }}>Low</span>, <span style={{ color: '#ffc107' }}>Medium</span>, or <span style={{ color: '#ef9a9a' }}>High</span>. Indicates whether the income wrapper appears to be losing price/NAV faster than its distribution stream justifies.</li>
+        <li><strong>NAV Erosion</strong> — Probability label: <span style={{ color: 'var(--p-81c784)' }}>Low</span>, <span style={{ color: 'var(--amber)' }}>Medium</span>, or <span style={{ color: 'var(--p-ef9a9a)' }}>High</span>. Indicates whether the income wrapper appears to be losing price/NAV faster than its distribution stream justifies.</li>
         <li><strong>Notes</strong> — Your custom notes for this ticker.</li>
         <li><strong>Actions</strong> — Remove button.</li>
       </ul>
@@ -3424,17 +3549,17 @@ function BuySellHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/buy-sell-signals/Screenshot 2026-05-09 103926.jpg" alt="Buy/Sell Signals dashboard" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/buy-sell-signals/Screenshot 2026-05-09 103926.jpg" alt="Buy/Sell Signals dashboard" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Signal Summary Badges</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Signal Summary Badges</h3>
       <p style={{ marginBottom: '1rem' }}>
         At the top, four badges show total counts: BUY, SELL, NEUTRAL, and TOTAL tickers analyzed.
         A timestamp shows when the data was last refreshed. Click <strong>Refresh</strong> to re-fetch
         the latest prices and recalculate all signals.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Treemap</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Treemap</h3>
       <p style={{ marginBottom: '1rem' }}>
         A color-coded treemap visualizes all holdings simultaneously. Each rectangle's size represents
         the position's dollar value in your portfolio — larger rectangles are bigger positions.
@@ -3443,7 +3568,7 @@ function BuySellHelp() {
         bearish territory. Hover over any rectangle to see the ticker and signal details.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Signal Detail Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Signal Detail Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         A scrollable table below the treemap lists every ticker with all 18 signal columns.
         Click any column header to sort. All columns:
@@ -3469,7 +3594,7 @@ function BuySellHelp() {
         <li><strong>Portfolio $</strong> — Market value of this position (blank for watchlist tickers).</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li><strong>Scan the treemap</strong> for a quick visual — are most large positions green or red?</li>
         <li><strong>Check summary badges</strong> to see the overall signal balance across your portfolio.</li>
@@ -3496,10 +3621,10 @@ function NavErosionHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/nav-erosion/Screenshot 2026-05-09 110511.jpg" alt="NAV Erosion analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/nav-erosion/Screenshot 2026-05-09 110511.jpg" alt="NAV Erosion analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What is NAV Erosion?</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What is NAV Erosion?</h3>
       <p style={{ marginBottom: '1rem' }}>
         NAV (Net Asset Value) erosion occurs when a fund's share price falls faster than its
         distributions can compensate for. A fund paying a 15% annual distribution yield but losing
@@ -3510,17 +3635,17 @@ function NavErosionHelp() {
         is not automatically treated as structural NAV erosion.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Formula</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Formula</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The benchmark-adjusted NAV erosion ratio is computed as:
       </p>
       <pre style={{
-        background: '#1a1a1a',
-        border: '1px solid #333',
+        background: 'var(--p-1a1a1a)',
+        border: '1px solid var(--p-333)',
         borderRadius: '4px',
         padding: '0.75rem 1rem',
         marginBottom: '0.75rem',
-        color: '#e0e0e0',
+        color: 'var(--text)',
         fontSize: '0.95rem',
         whiteSpace: 'pre-wrap',
       }}>{`Ratio = |Fund Price Return| ÷ TTM Distribution Yield   (when erosion applies)
@@ -3559,7 +3684,7 @@ Where:
         <code> distribution$ = TTM dist per share × shares</code>.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Inputs</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Inputs</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker</strong> — The ETF or fund to analyze (e.g., JEPI, XYLD, QYLD).</li>
         <li><strong>Initial Investment</strong> — Dollar amount to start with (default $10,000).</li>
@@ -3567,7 +3692,7 @@ Where:
         <li><strong>Reinvestment %</strong> — Drag the slider or type a number (0–100%). At 0%, all distributions are taken as cash. At 100%, all distributions buy more shares (full DRIP). Use values between to simulate partial reinvestment.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Automatic Benchmark Context</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Automatic Benchmark Context</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         NAV erosion is benchmark-adjusted so a fund is not punished just because its whole underlying market is weak.
         The app chooses a best-effort benchmark from known ticker mappings and fund description keywords. Examples:
@@ -3580,7 +3705,7 @@ Where:
         or enter a custom benchmark ticker/composite when the automatic benchmark is not the right fit.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Statistics</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Statistics</h3>
       <p style={{ marginBottom: '0.75rem' }}>After running the backtest, a strip of metric tiles shows:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Total Distributions</strong> — All cash paid out over the period.</li>
@@ -3593,13 +3718,13 @@ Where:
         <li><strong>Total NAV Erosion Ratio</strong> — Benchmark-adjusted ratio for the selected period. Ratio-only severity is low at 0.25 or below, moderate from 0.25–0.75, and high above 0.75. The screen also forces High for a 50%+ price decline or a 5%+ final share deficit.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Main Line Chart</strong> — Shows share price (blue), portfolio value (green), and a dashed gray break-even threshold over time. If the green line stays above the dashed line, your investment is holding its own.</li>
         <li><strong>NAV Erosion Ratio Chart</strong> — Monthly benchmark-adjusted NAV erosion ratio plotted over time with color-coded markers: green at or below 0.25, orange at or below 0.75, red above 0.75. The headline severity can still be High from the price-decline or share-deficit rules even when the period ratio is moderate.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Monthly Detail Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Monthly Detail Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>A sortable month-by-month table with 12 columns:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Date</strong> — Month/year.</li>
@@ -3612,11 +3737,11 @@ Where:
         <li><strong>Total Shares</strong> — Cumulative shares held.</li>
         <li><strong>Portfolio Value</strong> — Current total value.</li>
         <li><strong>Break-Even Shares</strong> — Shares needed to recover original investment at current price.</li>
-        <li><strong>Shares Needed / Extra To Breakeven</strong> — The share gap versus break-even, shown as shares plus percent. <span style={{ color: '#ef9a9a' }}>Red needed = you need that many more shares</span>; <span style={{ color: '#81c784' }}>green extra = you have that many shares above break-even</span>.</li>
+        <li><strong>Shares Needed / Extra To Breakeven</strong> — The share gap versus break-even, shown as shares plus percent. <span style={{ color: 'var(--p-ef9a9a)' }}>Red needed = you need that many more shares</span>; <span style={{ color: 'var(--p-81c784)' }}>green extra = you have that many shares above break-even</span>.</li>
         <li><strong>NAV Ratio</strong> — That month's benchmark-adjusted NAV erosion ratio, color-coded.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Enter a high-yield ticker (QYLD, XYLD, JEPI, SVOL, etc.) and set your investment amount.</li>
         <li>Start with a wide date range (e.g., 2018–present) to capture a full market cycle.</li>
@@ -3642,10 +3767,10 @@ function NavScreenerHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/nav-erosion-portfolio/Screenshot 2026-05-09 112656.jpg" alt="NAV Erosion Screener portfolio backtest grid" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/nav-erosion-portfolio/Screenshot 2026-05-09 112656.jpg" alt="NAV Erosion Screener portfolio backtest grid" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Building Your Backtest Grid</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Building Your Backtest Grid</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Each row in the grid represents one ETF. Enter the <strong>Ticker</strong>, <strong>Initial Investment $</strong>, and <strong>% of Divs to Reinvest</strong> (0–100).</li>
         <li>Click <strong>+Add ETF</strong> to add more rows (up to 80).</li>
@@ -3654,14 +3779,14 @@ function NavScreenerHelp() {
         <li>Click <strong>Run Backtest</strong> to analyze all rows.</li>
       </ol>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Saving and Loading Backtests</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Saving and Loading Backtests</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Save List</strong> — Saves the current ticker grid (tickers, amounts, reinvest %) without the date range. Useful for persisting your standard watchlist.</li>
         <li><strong>Save Backtest…</strong> — Saves the full scenario including date range and grid under a custom name. The save form lets you overwrite an existing backtest or create a new one.</li>
         <li><strong>Saved Backtests dropdown</strong> — Load a previously saved scenario. Click <strong>Load</strong> to restore it, or <strong>Delete</strong> to remove it permanently.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Strip</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Strip</h3>
       <p style={{ marginBottom: '0.75rem' }}>After running, 11 metric tiles show portfolio-wide results:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Total Invested, Total Final Value, Total Gain/Loss, Portfolio Return %</li>
@@ -3672,7 +3797,7 @@ function NavScreenerHelp() {
         <li>Error Count (tickers where no data was found)</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>A sortable 17-column table with a TOTAL footer row:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker, Amount, Reinvest %</strong> — Your inputs.</li>
@@ -3702,17 +3827,17 @@ function SingleStrategyHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/scanner/Screenshot 2026-05-09 125056.jpg" alt="Single Strategy Scanner results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/scanner/Screenshot 2026-05-09 125056.jpg" alt="Single Strategy Scanner results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Ticker List and Saved Settings</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Ticker List and Saved Settings</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker chips</strong> — add tickers one at a time, then remove them with the × button.</li>
         <li><strong>Saved list</strong> — the page loads and saves your scanner ticker list to the backend, so it is ready next time you open it.</li>
         <li><strong>Saved thresholds</strong> — SMA proximity and stochastic settings are remembered locally.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Scan Rules</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Scan Rules</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Trend filter</strong> — 50 SMA must be at or above the 175 SMA.</li>
         <li><strong>SMA proximity</strong> — price must be within the selected percentage band around the 175 SMA.</li>
@@ -3720,7 +3845,7 @@ function SingleStrategyHelp() {
         <li><strong>Daily or Weekly</strong> — switching timeframe changes the available lookback periods and reruns the scan after your first manual run.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Sortable table</strong> — shows ticker, signal, close, SMAs, stochastic reading, and distance from the 175 SMA.</li>
         <li><strong>Chart modal</strong> — click a ticker in the results to open a chart with the scanner indicators for the selected timeframe and period.</li>
@@ -3742,10 +3867,10 @@ function IncomeSimHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 113052.jpg" alt="Income Simulator projections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 113052.jpg" alt="Income Simulator projections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP Projections Panel</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP Projections Panel</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The left panel controls which holdings are included and how dividends are handled:
       </p>
@@ -3760,10 +3885,10 @@ function IncomeSimHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 113238.jpg" alt="Income Simulator settings and filters panel" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 113238.jpg" alt="Income Simulator settings and filters panel" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Simulation Modes</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Simulation Modes</h3>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Historical Mode</h4>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -3773,7 +3898,7 @@ function IncomeSimHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 113309.jpg" alt="Income Simulator historical projection results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 113309.jpg" alt="Income Simulator historical projection results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Simulate Mode</h4>
@@ -3791,7 +3916,7 @@ function IncomeSimHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 113942.jpg" alt="Income Simulator forward projection with market bias" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 113942.jpg" alt="Income Simulator forward projection with market bias" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Comparison Mode</h4>
@@ -3803,7 +3928,7 @@ function IncomeSimHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 114242.jpg" alt="Income Simulator comparison mode with multiple tickers" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 114242.jpg" alt="Income Simulator comparison mode with multiple tickers" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
       <p style={{ marginBottom: '0.75rem' }}>
         You can also turn on <strong>Compare Reinvestment Impact</strong> to show baseline vs. reinvested
@@ -3811,14 +3936,14 @@ function IncomeSimHelp() {
         paired rows so you can see exactly what reinvestment changes.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Saved Scenarios</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Saved Scenarios</h3>
       <p style={{ marginBottom: '1rem' }}>
         Click <strong>Save Scenario…</strong> to name and store your current simulation setup.
         Load saved scenarios from the dropdown to quickly compare different strategies without
         re-entering all parameters. Rename or delete saved scenarios as needed.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts and Results</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts and Results</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Income Chart</strong> — Bars showing projected income per period, with a cumulative growth line overlay.</li>
         <li><strong>Comparison Charts</strong> — In comparison mode, separate lines per ticker show projected income and cumulative portfolio value.</li>
@@ -3827,15 +3952,15 @@ function IncomeSimHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 114346.jpg" alt="Income Simulator results table and charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 114346.jpg" alt="Income Simulator results table and charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 115416.jpg" alt="Income projection chart with dividend distributions" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 115416.jpg" alt="Income projection chart with dividend distributions" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 115453.jpg" alt="Monthly dividend chart with smoothing" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 115453.jpg" alt="Monthly dividend chart with smoothing" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
     </div>
   )
@@ -3855,10 +3980,10 @@ function CorrelationHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/correlation/Screenshot 2026-05-09 120623.jpg" alt="Correlation Matrix heatmap" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/correlation/Screenshot 2026-05-09 120623.jpg" alt="Correlation Matrix heatmap" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Type a ticker and click <strong>Add</strong> (or press Enter). It appears as a chip below the input.</li>
         <li>Add at least <strong>2 tickers</strong> — the Run button is disabled until you have 2 or more.</li>
@@ -3866,18 +3991,18 @@ function CorrelationHelp() {
         <li>Click <strong>Clear</strong> to reset everything.</li>
       </ol>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Period Selection</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Period Selection</h3>
       <p style={{ marginBottom: '1rem' }}>
         Choose from 3 months, 6 months, 1 year, 2 years, 5 years, or Max. Longer periods smooth out
         short-term noise and show structural relationships. Shorter periods reveal how assets behaved
         during recent market conditions.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
-          <strong>Correlation Heatmap</strong> — A color-coded grid. <span style={{ color: '#81c784' }}>Green</span> cells
-          (near +1.0) mean tickers move together. <span style={{ color: '#ef9a9a' }}>Red</span> cells (near −1.0) mean they
+          <strong>Correlation Heatmap</strong> — A color-coded grid. <span style={{ color: 'var(--p-81c784)' }}>Green</span> cells
+          (near +1.0) mean tickers move together. <span style={{ color: 'var(--p-ef9a9a)' }}>Red</span> cells (near −1.0) mean they
           move opposite. Yellow/orange near 0 means uncorrelated. Hover over any cell for the exact value to 3 decimal places.
         </li>
         <li>
@@ -3885,7 +4010,7 @@ function CorrelationHelp() {
         </li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Add your main income ETFs (JEPI, SCHD, QYLD, etc.) and run to see how correlated they are. High correlation between income funds means your income sources could all be hit at once in a downturn.</li>
         <li>Add SPY or TLT (bonds) to see how your portfolio correlates to broad market moves. A negative correlation with TLT suggests bond exposure would help in a market selloff.</li>
@@ -3908,23 +4033,23 @@ function AnalyticsHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/analytics/Screenshot 2026-05-09 121143.jpg" alt="Portfolio Analytics dashboard" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/analytics/Screenshot 2026-05-09 121143.jpg" alt="Portfolio Analytics dashboard" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Loading Tickers</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Loading Tickers</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Manual entry</strong> — Type a ticker and click Add (or Enter). Repeat for each ticker. Remove with the × chip button.</li>
         <li><strong>Load Portfolio</strong> — Instantly loads all your current portfolio holdings. The button shows the count.</li>
         <li><strong>Clear</strong> — Resets the ticker list.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Settings</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Settings</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Benchmark</strong> — Defaults to SPY. Change to any ticker for comparison.</li>
         <li><strong>Period</strong> — 1M, 3M, 6M, YTD, 1Y, 2Y, 5Y, or Max.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Analysis Mode</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Analysis Mode</h3>
       <p style={{ marginBottom: '0.75rem' }}>Click <strong>Analyze</strong> to run the base analysis. Results include:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Portfolio Grade Card</strong> — Letter grade (A+ through F) and numeric score with a breakdown bar showing individual grades and weights for Risk, Income, Diversification, and other dimensions.</li>
@@ -3950,7 +4075,7 @@ function AnalyticsHelp() {
         <li><strong>NAV Erosion Ratio</strong> — Benchmark-adjusted NAV erosion ratio for eligible income funds, with High severity also triggered by a 50%+ price decline or 5%+ ending share deficit.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Optimization Modes</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Optimization Modes</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         After running Analyze, three optimization buttons appear:
       </p>
@@ -3965,7 +4090,7 @@ function AnalyticsHelp() {
         and target allocation %. Save snapshots to compare multiple optimization scenarios side by side.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart Tabs</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart Tabs</h3>
       <p style={{ marginBottom: '1rem' }}>After analysis, tabs appear with additional visuals:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Risk & Returns</strong> — Scatter and return charts.</li>
@@ -3990,10 +4115,10 @@ function PortfolioBuilderHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/portfolio-builder/Screenshot 2026-05-09 122850.jpg" alt="Portfolio Builder optimizer" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/portfolio-builder/Screenshot 2026-05-09 122850.jpg" alt="Portfolio Builder optimizer" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Managing Portfolios</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Managing Portfolios</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Saved portfolios appear in a <strong>left sidebar list</strong>. Click one to load it.</li>
         <li>Click the portfolio title to <strong>rename</strong> it inline.</li>
@@ -4001,7 +4126,7 @@ function PortfolioBuilderHelp() {
         <li>Delete portfolios with the trash icon in the sidebar.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Holdings</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Holdings</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Type a ticker symbol in the input field.</li>
         <li>Enter a <strong>dollar amount</strong> for that position.</li>
@@ -4010,7 +4135,7 @@ function PortfolioBuilderHelp() {
         <li>Remove a holding with the <strong>×</strong> button on its row.</li>
       </ol>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Running Analysis</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Running Analysis</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Set the <strong>Period</strong> and <strong>Benchmark</strong> (default SPY), then click
         <strong> Analyze</strong>. Results are identical in format to the Portfolio Analytics page:
@@ -4018,7 +4143,7 @@ function PortfolioBuilderHelp() {
         Income & Allocation, Backtesting, Tools).
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table Columns</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table Columns</h3>
       <p style={{ marginBottom: '0.75rem' }}>After analysis runs, the holdings table expands with metrics:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker, Grade, Score, Weight %, Current Price, Shares, Dollar Amount</strong></li>
@@ -4026,14 +4151,14 @@ function PortfolioBuilderHelp() {
         <li><strong>Max Drawdown, Annual Return, Total Return, Annual Volatility, NAV Erosion Ratio</strong></li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparing Portfolios</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparing Portfolios</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Check the checkbox next to <strong>2 or more portfolios</strong> in the left sidebar.</li>
         <li>Click <strong>Compare</strong>. A radar chart and metrics comparison table appear.</li>
         <li>The comparison table highlights the <strong>winner</strong> (▲) and <strong>loser</strong> (▼) for each metric between portfolios.</li>
       </ol>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Strategies</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Strategies</h3>
       <p style={{ marginBottom: '1rem' }}>
         Click <strong>Strategies</strong> to access pre-built allocation templates. The All Weather
         strategy builder lets you choose fund classes (stocks, bonds, gold, etc.), select mode
@@ -4057,7 +4182,7 @@ function PortfolioTesterHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/portfolio-tester/Screenshot 2026-05-09 123458.jpg" alt="Portfolio Tester backtest results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/portfolio-tester/Screenshot 2026-05-09 123458.jpg" alt="Portfolio Tester backtest results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
@@ -4067,7 +4192,7 @@ function PortfolioTesterHelp() {
         dates with the same settings so you can see which one would have done better.
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Building Portfolio A and B</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Building Portfolio A and B</h3>
       <p style={{ marginBottom: '0.5rem' }}>Each portfolio card lets you build the allocation four different ways:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Type a ticker + optional weight %</strong> and click <strong>Add</strong> (or press Enter). If no weight is given, it's added at 0% and you can click Equal or Normalize to distribute.</li>
@@ -4087,7 +4212,7 @@ function PortfolioTesterHelp() {
         The row footer shows the running total in green (at 100%) or amber (off).
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Run Settings</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Run Settings</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Start / End</strong> date inputs, plus <strong>preset buttons</strong>: 6M, 1Y, 2Y, 3Y, 4Y, 5Y, 10Y, 15Y, 20Y, 25Y. Presets set end to today and start to N years before.</li>
         <li><strong>Initial</strong> — starting investment for the backtest (default $10,000). Applied equally to both portfolios and the benchmark.</li>
@@ -4097,7 +4222,7 @@ function PortfolioTesterHelp() {
         <li><strong>Reinvest dividends</strong> — only meaningful if Include Dividends is on. When on (DRIP), distributions buy more shares at the pay date; when off, they accumulate as cash drag and are tallied as "total distributions paid."</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Coverage Validation (Hard Stop)</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Coverage Validation (Hard Stop)</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Before simulating, the app verifies that <strong>every ticker in both portfolios has price history
         on or before the requested start date</strong>. If any are missing, the run is rejected with a red
@@ -4114,7 +4239,7 @@ function PortfolioTesterHelp() {
         the backtest start date so every ticker has coverage.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Head-to-Head Score Card</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Head-to-Head Score Card</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         At the top of the results, eight key metrics are shown as side-by-side score cards with the
         winning value <strong>bolded in green with a ✓</strong>:
@@ -4131,7 +4256,7 @@ function PortfolioTesterHelp() {
         present; with one portfolio, it shows its values without a winner concept.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Total Return</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Total Return</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the score cards, a <strong>Portfolio Total Return</strong> section shows a summary card for each portfolio
         with the total return percentage, dollar gain/loss, initial investment amount, and final value.
@@ -4139,7 +4264,7 @@ function PortfolioTesterHelp() {
         of how much each portfolio gained or lost over the backtest period.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Performance Summary Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Performance Summary Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Full metrics table with one row per portfolio plus (optionally) the benchmark:
       </p>
@@ -4153,25 +4278,25 @@ function PortfolioTesterHelp() {
         <li><strong>Divs Paid $</strong> — total distributions received across the run.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Growth & Drawdown</strong> — Dual-panel chart. The top panel shows portfolio value over time starting at your Initial amount. The bottom panel shows <strong>drawdown from peak</strong> (% below the running all-time high; 0% = at peak, −20% = 20% below prior peak and not yet recovered). A gray zero-reference line anchors the drawdown panel.</li>
         <li><strong>Annual Returns</strong> — Grouped bar chart by calendar year. <strong>Only complete Jan–Dec years</strong> are shown — partial-year stubs are excluded so short runs don't get misleading bars. If your range doesn't cover a full year, the panel shows a note telling you to extend the range.</li>
         <li><strong>Rolling 1-Year CAGR</strong> — Rolling trailing-12-month return for each portfolio, useful for spotting which regime periods each strategy excelled in.</li>
         <li><strong>Monthly Dividend Income</strong> — Grouped bars of cash distributions received per month. Only shown when Include Dividends is on. Bars are anchored to the month-start so labels line up cleanly with the calendar. A caption under the chart totals the distributions for each portfolio.</li>
       </ul>
-      <p style={{ marginBottom: '1rem', color: '#8899aa', fontSize: '0.88rem' }}>
+      <p style={{ marginBottom: '1rem', color: 'var(--text-dim)', fontSize: '0.88rem' }}>
         All chart values are formatted to two decimal places on both hover tooltips and axis ticks.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Coverage Footer</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Coverage Footer</h3>
       <p style={{ marginBottom: '1rem' }}>
         Below the charts, a small gray footer lists every ticker used in the run and the earliest
         Yahoo Finance date available for it. This helps you spot tickers that silently shortened the
         effective window (e.g., an ETF that launched partway through a 10-year range).
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tips</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tips</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>To compare your <strong>real portfolio</strong> against a single-fund alternative, click <strong>Load All Current</strong> on A and add a single ticker at 100% weight on B.</li>
         <li>To compare <strong>two subsets</strong> of your portfolio (e.g., income sleeve vs. growth sleeve), use <strong>Pick Tickers…</strong> on each side to cherry-pick what goes where.</li>
@@ -4196,10 +4321,10 @@ function DistCompareHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/dist-compare/Screenshot 2026-05-09 123641.jpg" alt="Distribution Compare analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/dist-compare/Screenshot 2026-05-09 123641.jpg" alt="Distribution Compare analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Mode & Comparison Type</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Mode & Comparison Type</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Historical</strong> — Uses actual dividend and price history for the simulation.</li>
         <li><strong>Simulation</strong> — Projects forward using a selected market condition.</li>
@@ -4208,7 +4333,7 @@ function DistCompareHelp() {
         <li><strong>Duration</strong> — 1–20 years for simulation mode.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Configuring Funds</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Configuring Funds</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Set <strong>Fund A</strong> and <strong>Fund B</strong> tickers — type the symbol and click Lookup to fetch live data.</li>
         <li>Optionally add <strong>Fund C</strong> as a third comparison or benchmark.</li>
@@ -4217,7 +4342,7 @@ function DistCompareHelp() {
         <li>Toggle <strong>DRIP on/off</strong> per fund — when on, distributions buy more shares; when off, income is taken as cash.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Withdrawal Settings</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Withdrawal Settings</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Monthly Withdrawal</strong> — Dollar amount withdrawn each month from distributions.</li>
         <li><strong>Strategy</strong> — Fixed amount, dynamic (adjusts with income), or percentage of portfolio value.</li>
@@ -4225,7 +4350,7 @@ function DistCompareHelp() {
         <li><strong>Dynamic Reduction</strong> — Automatically reduce the withdrawal by a set % when the portfolio falls below a threshold, extending longevity.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Monthly Tables</strong> — Month-by-month breakdown per fund showing: Month, Price, Shares, Portfolio Value, Distribution/Share, Income, Withdrawal, Excess/Shortfall (green = income covers withdrawal; red = shortfall), Cumulative Income, and ROI.</li>
         <li><strong>Summary Cards</strong> — Side-by-side final values: Final Portfolio Value, Total Withdrawn, Total Distributions, Initial vs Remaining Shares, Total Value.</li>
@@ -4233,7 +4358,7 @@ function DistCompareHelp() {
         <li><strong>Charts</strong> — Portfolio Value Over Time, Total Value with crossover annotations, Cumulative Distributions, Share Count, and Price Trend for all funds on the same axes.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Saving and Exporting</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Saving and Exporting</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Save Setup</strong> — Persists your fund configuration and settings as a named chip. Click any saved chip to reload it instantly.</li>
         <li><strong>Export Excel</strong> — Exports the full monthly detail tables for all funds to a spreadsheet.</li>
@@ -4258,11 +4383,11 @@ function ConsolidationHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/consolidation/Screenshot 2026-05-09 124407.jpg" alt="Consolidation Analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/consolidation/Screenshot 2026-05-09 124407.jpg" alt="Consolidation Analysis" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       {/* Overlap Tab */}
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: Overlap Analysis</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: Overlap Analysis</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Scans your portfolio for clusters of tickers that move together (high correlation), indicating
         redundancy. If QYLD and XYLD have a 0.95 correlation, they're essentially the same bet.
@@ -4280,7 +4405,7 @@ function ConsolidationHelp() {
       </ul>
 
       {/* Simulator Tab */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 2: Consolidation Simulator</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 2: Consolidation Simulator</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Simulates what would happen if you sold one position and moved the proceeds into another.
         Shows the before/after impact on your portfolio income and value, and compares the two
@@ -4301,7 +4426,7 @@ function ConsolidationHelp() {
       </ul>
 
       {/* Market Regime Tab */}
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 3: Market Regime Analysis</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 3: Market Regime Analysis</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Shows how each of your holdings has performed during different market conditions — bull runs,
         bear markets, sideways chop, and high volatility periods. This reveals which holdings are
@@ -4336,7 +4461,7 @@ function ExportHelp() {
         a Transactions sheet so you can round-trip holdings and lot history from one file.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Export</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Export</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>
           <strong>Select the portfolio</strong> you want to export using the navbar dropdown.
@@ -4356,7 +4481,7 @@ function ExportHelp() {
         </li>
       </ol>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Aggregate Mode</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Aggregate Mode</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         When the <strong>Aggregate</strong> portfolio is selected, the Excel export creates one sheet per
         sub-portfolio. The combined holdings + transactions export also keeps one sheet per portfolio and adds a Transactions sheet.
@@ -4386,10 +4511,10 @@ function PortfoliosHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/portfolios/manage-portfolios-overview-blurred.jpg" alt="Manage Portfolios page showing portfolio table with total values blurred" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/portfolios/manage-portfolios-overview-blurred.jpg" alt="Manage Portfolios page showing portfolio table with total values blurred" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Each row shows a portfolio's name, holding count, total value, and creation date.
       </p>
@@ -4418,7 +4543,7 @@ function PortfoliosHelp() {
         DRIP$/Cash$ columns use the Owner configuration to determine which accounts' DRIP flags to consider.
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Combined Portfolios (Aggregate)</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Combined Portfolios (Aggregate)</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The Combined Portfolios aggregate is a read-only combined view of multiple portfolios. It appears in the navbar dropdown
         when configured. Use the "Combined" checkboxes in the table above to select which portfolios are included.
@@ -4430,7 +4555,7 @@ function PortfoliosHelp() {
         <li>To remove the aggregate entirely, click <strong>"Delete Aggregate"</strong>.</li>
       </ol>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Reconcile Owner</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Reconcile Owner</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         This feature is available when the Owner-format import has been used. It updates the Owner portfolio
         (profile 1) to match the combined holdings of all portfolios with <strong>Owner</strong> checked.
@@ -4460,14 +4585,14 @@ function SettingsHelp() {
         "Clear All Data" option.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Overview</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Overview</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Shows three counts for the currently selected portfolio: number of <strong>Holdings</strong>,
         <strong> Dividend Records</strong>, and <strong>Income Tracking</strong> rows.
         Use this to confirm a successful import or to check whether a portfolio has data before clearing it.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Single-Stock ETFs</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Single-Stock ETFs</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Single-stock ETFs are leveraged or inverse products tied to a single underlying stock
         (e.g. NVDL, TSLL, MSFO). The Portfolio Builder optimizer suppresses BUY recommendations for
@@ -4480,7 +4605,7 @@ function SettingsHelp() {
         <li><strong>Add tickers</strong> — type one or more ticker symbols (comma- or space-separated) into the input box and click <strong>Add</strong> or press Enter.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Clear All Data</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Clear All Data</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Permanently deletes all holdings, dividends, income tracking, and payout data for the
         currently selected portfolio. The portfolio itself is kept — only its data is removed.
@@ -4509,10 +4634,10 @@ function MacroDashboardHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124729.jpg" alt="Macro Regime Dashboard" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124729.jpg" alt="Macro Regime Dashboard" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: Macro Conditions</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: Macro Conditions</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Displays the current macro regime (e.g., Stable Inflation + Stable Rates) along with alert
         badges for notable conditions like Oil Rising or Rising Volatility. Shows sparkline charts
@@ -4521,10 +4646,10 @@ function MacroDashboardHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124802.jpg" alt="Macro Conditions tab showing economic indicators" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124802.jpg" alt="Macro Conditions tab showing economic indicators" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 2: Portfolio Exposure</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 2: Portfolio Exposure</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Analyzes how each holding is classified by macro sensitivity (e.g., Rate Sensitive, Inflation Hedge,
         Oil Linked, Volatility Linked). Shows a breakdown of your portfolio value across sensitivity
@@ -4537,10 +4662,10 @@ function MacroDashboardHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124826.jpg" alt="Portfolio Exposure breakdown by macro sensitivity" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124826.jpg" alt="Portfolio Exposure breakdown by macro sensitivity" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 3: Rebalancing Tilts</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 3: Rebalancing Tilts</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Based on current macro conditions, suggests which sensitivity categories to overweight or
         underweight. Provides per-holding action recommendations (increase, hold, reduce, sell)
@@ -4548,10 +4673,10 @@ function MacroDashboardHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124844.jpg" alt="Rebalancing Tilts recommendations" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124844.jpg" alt="Rebalancing Tilts recommendations" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 4: Income Benchmark</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 4: Income Benchmark</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Compares your portfolio's income allocation against a target benchmark split across 8 income
         categories: Covered Call, BDCs, CEFs, REITs, Preferred Stock, Dividend Growth, Commodities/Gold,
@@ -4567,10 +4692,10 @@ function MacroDashboardHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124904.jpg" alt="Income Benchmark allocation comparison" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124904.jpg" alt="Income Benchmark allocation comparison" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 5: Classifications</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 5: Classifications</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Lets you override the system's automatic macro sensitivity classification for any holding.
         The system classifies holdings using description keywords and classification types, but you
@@ -4584,17 +4709,17 @@ function MacroDashboardHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124932.jpg" alt="Classifications tab for macro sensitivity overrides" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124932.jpg" alt="Classifications tab for macro sensitivity overrides" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 6: Regime Quadrants</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 6: Regime Quadrants</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Uses a Markov Chain transition model to classify the current macroeconomic regime into one of
         four quadrants based on the direction of growth and inflation, then projects forward probabilities
         of transitioning to other regimes. Data is sourced from FRED economic indicators and market proxies.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The Four Quadrants</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The Four Quadrants</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Q1 Goldilocks</strong> — Growth UP + Inflation DOWN. Favors equities, tech, and growth stocks.</li>
         <li><strong>Q2 Reflation</strong> — Growth UP + Inflation UP. Favors commodities, energy, and equities.</li>
@@ -4603,10 +4728,10 @@ function MacroDashboardHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124944.jpg" alt="Regime Quadrants showing macro classification" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124944.jpg" alt="Regime Quadrants showing macro classification" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How Classification Works</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How Classification Works</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         The current quadrant is determined using real economic data from FRED (Federal Reserve Economic Data):
       </p>
@@ -4617,7 +4742,7 @@ function MacroDashboardHelp() {
         <li>If Growth Z {'>'} 0 and Inflation Z {'<'} 0 → Q1 Goldilocks. Growth Z {'>'} 0 and Inflation Z {'>'} 0 → Q2 Reflation. And so on.</li>
       </ul>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>FRED Economic Indicators Card</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>FRED Economic Indicators Card</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Shows the raw Z-scores for each FRED series along with their direction (Rising/Falling) and
         extremity level (Normal, Elevated, or Extreme). "Elevated" means the Z-score is above 1.0,
@@ -4625,7 +4750,7 @@ function MacroDashboardHelp() {
         and whether mean-reversion is likely.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Regime Quadrant Map (Scatter Plot)</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Regime Quadrant Map (Scatter Plot)</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         A 2D scatter plot showing 5 years of weekly observations. The X-axis is the growth score
         and the Y-axis is the inflation score. Each dot is color-coded by quadrant. The orange
@@ -4633,7 +4758,7 @@ function MacroDashboardHelp() {
         the origin (0,0) — points in the upper-right are Q2 Reflation, upper-left are Q3 Stagflation, etc.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>This Week's Outlook — Next Week Probabilities</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>This Week's Outlook — Next Week Probabilities</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Four cards showing <strong>this week's specific</strong> probability of transitioning to each quadrant
         next week. Unlike the historical transition matrix (which shows long-run averages), these probabilities
@@ -4647,7 +4772,7 @@ function MacroDashboardHelp() {
         <li><strong>Similar historical weeks</strong> — The subtitle shows how many past weeks matched current momentum conditions. More matches mean higher confidence in the adjusted probabilities.</li>
       </ul>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Historical Transition Matrix (Heatmap)</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Historical Transition Matrix (Heatmap)</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         A 4×4 grid showing the <strong>long-run historical</strong> probability of moving from one quadrant (row) to another
         (column) in a single week. These are unadjusted averages across all observations — they do not factor
@@ -4661,14 +4786,14 @@ function MacroDashboardHelp() {
         <li>Compare this matrix to the "This Week's Outlook" cards above to see how current conditions shift the probabilities versus the long-run baseline.</li>
       </ul>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>4-Week Outlook Cards</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>4-Week Outlook Cards</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Four cards above the forward projections chart showing the probability of being in each
         quadrant at the 4-week horizon. The highest-probability quadrant is highlighted with
         a colored border. This is the quick-read summary of where things are heading.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Forward Projections (Stacked Bar Chart)</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Forward Projections (Stacked Bar Chart)</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Shows the probability distribution across all four quadrants at 1, 2, 4, 8, and 13 week
         horizons. Calculated using matrix exponentiation (raising the transition matrix to the
@@ -4676,7 +4801,7 @@ function MacroDashboardHelp() {
         long-run equilibrium distribution as mean-reversion takes effect.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Markov Chain Transition Bars</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Markov Chain Transition Bars</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Horizontal bar chart showing 1-week transition probabilities from the current quadrant.
         The "Stay in Q{'{n}'}'" bar shows persistence probability. Other bars show the chance of
@@ -4684,7 +4809,7 @@ function MacroDashboardHelp() {
         "Primary Risk" if above 25%.
       </p>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Interpretation Card</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Interpretation Card</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         A narrative summary that puts the numbers in context:
       </p>
@@ -4695,7 +4820,7 @@ function MacroDashboardHelp() {
         <li><strong>Likely Direction of Change</strong> — A paragraph explaining what FRED data suggests about where conditions are heading, including specific Z-scores and their implications.</li>
       </ul>
 
-      <h4 style={{ color: '#90caf9', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Asset Class Performance Table</h4>
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Asset Class Performance Table</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Shows how five asset classes (Tech/Growth, Commodities, Gold, Long-Treasuries, Healthcare/Staples)
         historically perform in each quadrant, rated as Best, Good, Neutral, Underperform, or Avoid.
@@ -4722,7 +4847,7 @@ function IncomeGrowthHelp() {
         run uses those on-screen assumptions until you reset them.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Controls</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Controls</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Scenario</strong> — Bullish models a normal expansion (+4% annual distribution growth, +8% price drift), Neutral uses modest nominal growth (+1% distributions, +3% price), and Bearish applies a first-year shock (-35% distributions, -25% price) followed by gradual recovery. The model also caps forward yields by scenario, with tighter caps on unusually high current payouts so they mean-revert instead of compounding forever as if fully sustainable.</li>
         <li><strong>Timeframe</strong> — 1 to 20 years. Preset buttons or custom input.</li>
@@ -4731,14 +4856,14 @@ function IncomeGrowthHelp() {
         <li><strong>Deterministic / Monte Carlo toggle</strong> — Choose a single fixed base case or a 300-path range of possible outcomes.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Projection Methods</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Projection Methods</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Deterministic</strong> — Runs one fixed projection using the selected scenario's dividend growth and price drift. The same inputs produce the same result, so it is best for a clean base case.</li>
         <li><strong>Monte Carlo (300 paths)</strong> — Runs 300 randomized paths around the selected scenario. Dividend changes and price changes vary month to month, then the chart displays the median path with a 10th-to-90th percentile band.</li>
         <li><strong>P10 / P90</strong> — These columns appear in Monte Carlo mode. P10 is the lower 10th-percentile outcome and P90 is the upper 90th-percentile outcome for that month or year.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP and Partial Shares</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>DRIP and Partial Shares</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         When viewing the Owner (aggregate) portfolio, DRIP reinvestment calculations use only the shares from
         sub-accounts that have DRIP enabled for each ticker — not the full aggregate share count. For example,
@@ -4748,7 +4873,7 @@ function IncomeGrowthHelp() {
         to see and control which accounts have DRIP enabled for each ticker.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Display</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Display</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Timeframe &le; 5 years</strong> — Monthly view: line chart and table showing month-by-month income with year subtotals. Income is smoothed evenly across months rather than spiking in pay months.</li>
         <li><strong>Timeframe &gt; 5 years</strong> — Annual view: bar chart and table showing year-over-year income changes.</li>
@@ -4756,7 +4881,7 @@ function IncomeGrowthHelp() {
         <li><strong>Monte Carlo columns</strong> — P10 (pessimistic 10th percentile) and P90 (optimistic 90th percentile) appear when Monte Carlo is enabled.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Breakdown</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Breakdown</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the timeline, a sortable table shows each holding's starting shares, ending shares (after
         DRIP and monthly contributions), frequency, current annual income, projected annual income, growth
@@ -4777,7 +4902,7 @@ function RetirementReadinessHelp() {
         assumptions, then projects how surplus reinvestment can change the income path over time.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Core Inputs</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Core Inputs</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Monthly Expenses</strong> - how much cash you need every month to live on. This is the baseline income target.</li>
         <li><strong>MEPB Ratio</strong> - your Monthly Expense Protection Buffer safety multiplier. If expenses are $4,500 and MEPB is 3, the model wants stressed portfolio income of $13,500 per month.</li>
@@ -4787,7 +4912,7 @@ function RetirementReadinessHelp() {
         <li><strong>Years</strong> - how far forward the model projects income, expenses, surplus reinvestment, and cash reserve.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Stress Inputs</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Stress Inputs</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Expense Inflation %</strong> - annual rate at which monthly expenses increase over time.</li>
         <li><strong>Income Growth %</strong> - annual growth or decline assumption for portfolio income after the initial stress cuts.</li>
@@ -4796,7 +4921,7 @@ function RetirementReadinessHelp() {
         <li><strong>Price Drawdown %</strong> - stress reduction to portfolio value. It mainly affects the assumed yield of reinvested surplus during the stressed period.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Readiness badge</strong> - Covered, Ready, Close, Building, or Risky based on stressed income, buffer target, cash runway, and whether non-investment inflows already cover expenses.</li>
         <li><strong>Bear Buffer Ratio</strong> - bear-market after-tax income divided by the expenses the portfolio must pay.</li>
@@ -4820,10 +4945,10 @@ function DividendCalculatorHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/dividend-calculator/Screenshot 2026-05-09 102110.jpg" alt="Dividend Calculator projections interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/dividend-calculator/Screenshot 2026-05-09 102110.jpg" alt="Dividend Calculator projections interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calculation Settings</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calculation Settings</h3>
       <p style={{ marginBottom: '0.5rem' }}>
         Set your global assumptions once at the top of the page. These apply to every ticker you add and can be
         adjusted at any time — the projection updates when you click <strong>Recalculate</strong>.
@@ -4837,7 +4962,7 @@ function DividendCalculatorHelp() {
         <li><strong>Dividends Reinvested (DRIP)</strong> — Percentage of net dividends reinvested each period (0–100%). Anything not reinvested is tracked as cash dividends.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Type a symbol (e.g. <code>SCHD</code>, <code>JEPI</code>, <code>AAPL</code>) into the ticker bar and click
         <strong> Add Ticker</strong>. The app fetches current price, dividend yield, dividend growth rate, and
@@ -4850,7 +4975,7 @@ function DividendCalculatorHelp() {
         back to defaults.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Per-Ticker Inputs</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Per-Ticker Inputs</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Initial Investment / Stock Price / Number of Shares</strong> — These three fields stay in sync. Editing any one of them recomputes the others. Override the share count or price if you want to model a position different from the live market.</li>
         <li><strong>Initial Dividend Yield</strong> — Annual yield based on the trailing distribution. Drives the first-year income.</li>
@@ -4860,7 +4985,7 @@ function DividendCalculatorHelp() {
         <li><strong>Payout Frequency</strong> — Weekly, Monthly, Quarterly, Semi-Annually, or Annually. Higher frequencies compound faster when DRIP is on.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Running the Calculation</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Running the Calculation</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Click <strong>Calculate</strong> to project results. Whenever inputs change after a calculation, a
         <strong> Needs recalculation</strong> badge appears next to the settings card and a banner above the
@@ -4868,7 +4993,7 @@ function DividendCalculatorHelp() {
         is saved to the database.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Summary Stats</strong> — Ending Wealth (final portfolio value plus uncollected cash dividends), Annual / Monthly Dividend Income at the final year, Yield on Cost, and total Estimated Dividend Taxes after Return of Capital adjustments.</li>
         <li><strong>Portfolio &amp; Income Chart</strong> — Combined view of portfolio value (filled area), cumulative dividends, and annual income on a secondary axis.</li>
@@ -4877,7 +5002,7 @@ function DividendCalculatorHelp() {
         <li><strong>Per-Ticker Final Values</strong> — When two or more tickers are loaded, an additional table compares each ticker's final shares, portfolio value, income, taxes, and dividends. Useful for picking between candidates.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How DRIP Compounds</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How DRIP Compounds</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Each period the model: (1) pays the gross dividend on current shares, (2) subtracts taxes on the taxable
         portion (gross x (1 - ROC%) x tax rate), (3) splits the net dividend between reinvested and cash based
@@ -4886,7 +5011,7 @@ function DividendCalculatorHelp() {
         payout frequencies, higher dividend growth, and lower taxes all amplify long-run compounding.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tips</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tips</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li>Use the per-ticker comparison table to evaluate two or more funds with similar yields but different growth or ROC profiles.</li>
         <li>Set DRIP to 0% to model income-now scenarios (retirement) and 100% to model accumulation phases.</li>
@@ -4906,7 +5031,7 @@ function ETFProviderUpdateHelp() {
         for a selected ETF provider by pulling the latest data from StockAnalysis.com.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Select a provider from the dropdown (e.g. YieldMax, NEOS, Global X).</li>
         <li>Review the current summary cards showing provider name, fund count, total assets, and average expense ratio.</li>
@@ -4918,24 +5043,24 @@ function ETFProviderUpdateHelp() {
         and distribution source attribution.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Examples</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Examples</h3>
       <p style={{ marginBottom: '1rem' }}>
         Here are some examples of the ETF Provider Update screen with different ETF providers:
       </p>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <p style={{ fontSize: '0.9rem', color: '#90a4ae', marginBottom: '0.5rem', fontStyle: 'italic' }}>BlackRock provider showing 484 funds with $4.3T in assets</p>
-        <img src="./help-screenshots/etf-provider-update/blackrock-example.jpg" alt="ETF Provider Update example showing BlackRock provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--text-dim-2)', marginBottom: '0.5rem', fontStyle: 'italic' }}>BlackRock provider showing 484 funds with $4.3T in assets</p>
+        <img src="./help-screenshots/etf-provider-update/blackrock-example.jpg" alt="ETF Provider Update example showing BlackRock provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <p style={{ fontSize: '0.9rem', color: '#90a4ae', marginBottom: '0.5rem', fontStyle: 'italic' }}>State Street provider showing 183 funds with $1.8T in assets</p>
-        <img src="./help-screenshots/etf-provider-update/state-street-example.jpg" alt="ETF Provider Update example showing State Street provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--text-dim-2)', marginBottom: '0.5rem', fontStyle: 'italic' }}>State Street provider showing 183 funds with $1.8T in assets</p>
+        <img src="./help-screenshots/etf-provider-update/state-street-example.jpg" alt="ETF Provider Update example showing State Street provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <p style={{ fontSize: '0.9rem', color: '#90a4ae', marginBottom: '0.5rem', fontStyle: 'italic' }}>Invesco provider showing 238 funds with $871B in assets</p>
-        <img src="./help-screenshots/etf-provider-update/invesco-example.jpg" alt="ETF Provider Update example showing Invesco provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--text-dim-2)', marginBottom: '0.5rem', fontStyle: 'italic' }}>Invesco provider showing 238 funds with $871B in assets</p>
+        <img src="./help-screenshots/etf-provider-update/invesco-example.jpg" alt="ETF Provider Update example showing Invesco provider with fund metrics" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
     </div>
   )
@@ -4982,7 +5107,7 @@ function AnnualTaxReportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/tax-report/tax-report-summary-form-previews.jpg" alt="Annual Tax Report summary cards and Form 1099-DIV and Form 8949 previews" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/tax-report/tax-report-summary-form-previews.jpg" alt="Annual Tax Report summary cards and Form 1099-DIV and Form 8949 previews" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ marginBottom: '0.5rem' }}>Tabs</h3>
@@ -5007,7 +5132,7 @@ function AnnualTaxReportHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/tax-report/tax-report-dividends-overrides.jpg" alt="Annual Tax Report Dividends tab with per-ticker tax treatment overrides" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/tax-report/tax-report-dividends-overrides.jpg" alt="Annual Tax Report Dividends tab with per-ticker tax treatment overrides" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <p><strong>Realized Lots</strong></p>
@@ -5018,7 +5143,7 @@ function AnnualTaxReportHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/tax-report/tax-report-realized-lots.jpg" alt="Annual Tax Report Realized Lots tab with closed tax lots and gain or loss detail" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/tax-report/tax-report-realized-lots.jpg" alt="Annual Tax Report Realized Lots tab with closed tax lots and gain or loss detail" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Where the numbers come from</h3>
@@ -5102,17 +5227,17 @@ function ETFComparerHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/etf-comparer/return-chart.jpg" alt="ETF Comparer return chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-comparer/return-chart.jpg" alt="ETF Comparer return chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Type one or more ETF tickers (comma- or space-separated) in the input field and press <strong>Add</strong> or Enter.</li>
         <li>Each ticker appears as a chip below the input. Click the × on a chip to remove it.</li>
         <li>Up to seven tickers can be loaded simultaneously.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Return Chart</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Return Chart</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Period</strong> — 1M, 3M, 6M, YTD, 1Y, 2Y, 5Y, 10Y, or MAX.</li>
         <li><strong>Return Mode</strong> — choose Total Return (price + reinvested dividends), Price Only, Price + Dividends (cash), Both (total and price), All Three, or All Four traces per ticker.</li>
@@ -5122,7 +5247,7 @@ function ETFComparerHelp() {
         <li><strong>Range slider</strong> — drag to zoom into a specific date range within the selected period.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Distribution History</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Distribution History</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The Distribution History section appears below the main return chart. It shows one ETF at a time so the monthly
         distribution bars stay readable when several ETFs are loaded. Use the ticker buttons to switch which ETF is shown,
@@ -5142,10 +5267,10 @@ function ETFComparerHelp() {
         resets the toggle to Monthly automatically.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/etf-comparer/distribution-history.jpg" alt="ETF Comparer distribution history chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-comparer/distribution-history.jpg" alt="ETF Comparer distribution history chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Comparison Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Comparison Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         A sortable table shows live market data for each ticker. Symbol and Fund Name columns are always visible;
         all other columns are optional. Click <strong>Indicators</strong> to open the column picker and toggle which fields appear.
@@ -5165,10 +5290,10 @@ function ETFComparerHelp() {
         return, yield, and spread values. This column is on by default and can be hidden via the Indicators menu.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/etf-comparer/comparison-table.jpg" alt="ETF Comparer comparison table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-comparer/comparison-table.jpg" alt="ETF Comparer comparison table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Average Return Bar Chart</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Average Return Bar Chart</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the comparison table, a grouped bar chart shows average annualized returns for each ticker
         across standard time windows (year-to-date, 1Y, 5Y, 10Y, and inception where available). This makes it easy to spot which ETF has led
@@ -5179,16 +5304,16 @@ function ETFComparerHelp() {
         <strong> Return (%)</strong> in the heading so values such as 19.27 are clearly understood as 19.27%.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/etf-comparer/average-returns.jpg" alt="ETF Comparer average return bar chart and multi-period table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-comparer/average-returns.jpg" alt="ETF Comparer average return bar chart and multi-period table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Multi-Period Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Multi-Period Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         A tabular summary shows the same available average-return windows for each ticker. Blank cells mean that ticker
         does not have enough history or aligned data for that period.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>When to Use It</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>When to Use It</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>Use ETF Comparer when you want to evaluate several ETFs head-to-head with full return history and fund metrics.</li>
         <li>Use Stock Comparer for the same workflow applied to individual stocks, with stock-specific fundamentals (market cap, PE, PEG, margins, etc.).</li>
@@ -5211,26 +5336,26 @@ function StockComparerHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/stock-comparer/return-chart.jpg" alt="Stock Comparer return chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/stock-comparer/return-chart.jpg" alt="Stock Comparer return chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Type one or more stock tickers (comma- or space-separated) and press <strong>Add</strong> or Enter.</li>
         <li>Each ticker appears as a colored chip. Click × to remove it.</li>
         <li>Up to seven tickers can be compared simultaneously.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Return Chart</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Return Chart</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Identical controls to ETF Comparer: period selector (1M–MAX), return mode (Total Return, Price Only, Price + Divs, Both, All Three, All Four),
         reinvestment % slider, % / index toggle, end labels, and a date range slider.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/stock-comparer/distribution-history.jpg" alt="Stock Comparer distribution history chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/stock-comparer/distribution-history.jpg" alt="Stock Comparer distribution history chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Comparison Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Comparison Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Symbol and Company Name are always visible. Optional columns include stock-specific fields not available for ETFs:
         market cap, forward PE, PEG ratio, dividend growth rate, and EPS (TTM), in addition to the common fields
@@ -5238,18 +5363,18 @@ function StockComparerHelp() {
         debt/equity, 52-week high/low, sector, industry, max drawdown, revenue, profit margin).
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/stock-comparer/comparison-table.jpg" alt="Stock Comparer comparison table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/stock-comparer/comparison-table.jpg" alt="Stock Comparer comparison table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Average Return Bar Chart &amp; Multi-Period Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Average Return Bar Chart &amp; Multi-Period Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Same as ETF Comparer — grouped bar chart of 1Y/3Y/5Y/10Y annualized returns and a tabular multi-period summary.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/stock-comparer/average-returns.jpg" alt="Stock Comparer average return bar chart and multi-period table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/stock-comparer/average-returns.jpg" alt="Stock Comparer average return bar chart and multi-period table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Distribution History</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Distribution History</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The Distribution History section shows up to three years of dividend payments for each stock as a bar chart.
         Use the ticker buttons to switch which stock is displayed, or use <strong>Hide Chart</strong> to collapse the section.
@@ -5263,7 +5388,7 @@ function StockComparerHelp() {
         with different frequencies. Switching back to <strong>$ Amount</strong> resets to Monthly.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Key Fundamentals Cards</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Key Fundamentals Cards</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the charts and table, each loaded stock gets a fundamentals card showing 24 metrics organized into groups:
       </p>
@@ -5294,10 +5419,10 @@ function RebalanceWizardHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/rebalance-wizard/Screenshot 2026-05-09 122956.jpg" alt="Rebalance Wizard trade plan" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/rebalance-wizard/Screenshot 2026-05-09 122956.jpg" alt="Rebalance Wizard trade plan" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Settings</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Settings</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Income Mode</strong> — <em>Preserve current income</em> sets the income floor to the portfolio's current monthly income. <em>Use custom floor only</em> lets you specify a different floor via the Minimum Monthly Income field.</li>
         <li><strong>Rebalance Priority</strong> — <em>Match targets while preserving income</em> prioritizes closing allocation gaps subject to the income floor. <em>Maximize income while reducing drift</em> picks higher-yielding candidates first.</li>
@@ -5309,7 +5434,7 @@ function RebalanceWizardHelp() {
         <li><strong>Allow Sells</strong> — Uncheck to generate buy-only trades (useful when adding new cash without trimming existing holdings).</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Plan Summary Cards</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Plan Summary Cards</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         After generating, summary cards show:
       </p>
@@ -5323,7 +5448,7 @@ function RebalanceWizardHelp() {
         <li><strong>Execution</strong> — count of trades by status (pending / reviewed / placed / filled / skipped).</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Trade List</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Trade List</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Each generated trade shows the action (BUY/SELL), ticker, category, dollar amount, shares, price, yield,
         monthly income delta, and cumulative portfolio yield after the trade. You can:
@@ -5343,14 +5468,14 @@ function RebalanceWizardHelp() {
         Suspicious high-yield replacements (yield above 2× the portfolio average or 25%, whichever is higher) are also flagged.
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Category Candidates</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Category Candidates</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The <strong>Candidates</strong> section lets you set preferred tickers per category.
         Preferred tickers are ranked first when the optimizer picks buy candidates for that category.
         Drag candidates up or down to set priority order, then click <strong>Save Preferences</strong> to persist them and regenerate the plan.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Saving and Loading Plans</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Saving and Loading Plans</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Give the plan a name and click <strong>Save Plan</strong> to persist it to the database.</li>
         <li>Previously saved plans appear in the <strong>Saved Plans</strong> dropdown with projected income and status.</li>
@@ -5359,7 +5484,7 @@ function RebalanceWizardHelp() {
         <li>Click <strong>Delete</strong> to remove the selected saved plan.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Exports</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Exports</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li><strong>Export Trade List (CSV)</strong> — exports the effective trade list with action, ticker, category, shares, amount, price, yield, income delta, and reason.</li>
         <li><strong>Export Broker Ticket (CSV)</strong> — exports a broker-ready format including execution status and notes, suitable for copy/pasting into a trade journal or broker order system.</li>
@@ -5399,7 +5524,7 @@ function TaxLossHarvestHelp() {
         <img
           src="./help-screenshots/Tax-loss/tax-loss-harvest-overview.jpg"
           alt="Tax-Loss Harvest page showing summary cards and candidate table with wash-sale status badges"
-          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
         />
       </div>
 
@@ -5415,7 +5540,7 @@ function TaxLossHarvestHelp() {
         <li><strong>Current</strong> — Current market price from the most recent holdings refresh.</li>
         <li><strong>Unrealized $</strong> — The dollar loss at current price. Shown in red.</li>
         <li><strong>Term</strong> — <strong>ST</strong> (short-term, held ≤ 365 days) or <strong>LT</strong> (long-term, held &gt; 365 days). Determines which tax rate applies.</li>
-        <li><strong>Wash</strong> — <span style={{ color: '#4dff91' }}>Clear</span> means no conflicting buy in the last 30 days; <span style={{ color: '#ff6b6b' }}>Wash sale → date</span> means a buy of the same ticker occurred within the window and the harvest is blocked until that date.</li>
+        <li><strong>Wash</strong> — <span style={{ color: 'var(--pos)' }}>Clear</span> means no conflicting buy in the last 30 days; <span style={{ color: 'var(--neg)' }}>Wash sale → date</span> means a buy of the same ticker occurred within the window and the harvest is blocked until that date.</li>
         <li><strong>Tax Saved</strong> — Estimated tax saved if this lot is harvested, using your configured marginal rates.</li>
         <li><strong>Plan button</strong> — Only enabled for Clear lots. Click to add the harvest to your plan.</li>
       </ul>
@@ -5510,7 +5635,7 @@ function BlendedYieldHelp() {
         <img
           src="./help-screenshots/blended-yield/01-portfolio-setup.jpg"
           alt="Blended Yield Calculator tax profile and fund cards"
-          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
         />
       </div>
 
@@ -5525,7 +5650,7 @@ function BlendedYieldHelp() {
         <img
           src="./help-screenshots/blended-yield/02-portfolio-summary.jpg"
           alt="Portfolio Summary results, allocation bar, and breakdown table"
-          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
         />
       </div>
 
@@ -5546,7 +5671,7 @@ function BlendedYieldHelp() {
         <img
           src="./help-screenshots/blended-yield/03-tax-bracket-settings.jpg"
           alt="Tax Bracket Settings editor with editable Federal, LTCG, California, Arizona, and Pennsylvania brackets"
-          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }}
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
         />
       </div>
 
@@ -5592,7 +5717,7 @@ function StockBuyingChecklistHelp() {
         evaluators for funds.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Two Modes</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Two Modes</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li><strong>Deep Dive</strong> — Type one ticker for a full scorecard: a Fundamental composite, a
           Technical composite, a blended verdict, and eight expandable criteria cards. If you enter a fund
@@ -5602,7 +5727,7 @@ function StockBuyingChecklistHelp() {
           its sector <em>within the batch you scanned</em>.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Automatic Fund Filtering</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Automatic Fund Filtering</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The Scan tab automatically detects and skips funds so they don't appear alongside stocks or receive
         misleading fundamental scores. The following types are filtered out:
@@ -5619,13 +5744,13 @@ function StockBuyingChecklistHelp() {
         silently disappears. REITs are <em>not</em> filtered — they file standard company financials and
         can be graded as stocks.
       </p>
-      <p style={{ marginBottom: '0.75rem', color: '#9aa7b8', fontSize: '0.9rem' }}>
+      <p style={{ marginBottom: '0.75rem', color: 'var(--p-9aa7b8)', fontSize: '0.9rem' }}>
         For skipped tickers, use the dedicated evaluators: <strong>ETF Buying Checklist</strong> for broad
         ETFs, <strong>Option-Income ETF Evaluator</strong> for covered-call/put-write funds, and
         <strong>CEF Buying Checklist</strong> for closed-end funds and BDCs.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Fundamental Criteria</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Fundamental Criteria</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li><strong>Valuation</strong> — P/E, forward P/E, PEG, P/B, P/S, and EV/EBITDA versus the sector (lower is better).</li>
         <li><strong>Profitability</strong> — Net, operating, and gross margins plus return on equity and assets.</li>
@@ -5633,7 +5758,7 @@ function StockBuyingChecklistHelp() {
         <li><strong>Balance-Sheet Health</strong> — Debt/equity, current ratio, and (for payers) the dividend payout ratio.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Technical Criteria</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Technical Criteria</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li><strong>Trend</strong> — Price versus the 50- and 200-day moving averages, including the golden/death cross.</li>
         <li><strong>Momentum</strong> — MACD (12/26/9) and RSI (14).</li>
@@ -5641,14 +5766,14 @@ function StockBuyingChecklistHelp() {
         <li><strong>Volume &amp; Range</strong> — On-balance-volume trend, volume vs. its 20-day average, and where price sits in its 52-week range.</li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Blended Verdict</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Blended Verdict</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The Fundamental and Technical composites are combined (60% fundamental / 40% technical by default) into a
         verdict of <strong>Strong Buy</strong>, <strong>Buy</strong>, <strong>Hold</strong>, or <strong>Avoid</strong>.
         Keeping the two scores separate is deliberate: it lets you spot a great company with poor entry timing,
         or a hot chart on a weak business, instead of hiding that distinction in one number.
       </p>
-      <p style={{ marginBottom: '0.75rem', color: '#9aa7b8', fontSize: '0.9rem' }}>
+      <p style={{ marginBottom: '0.75rem', color: 'var(--p-9aa7b8)', fontSize: '0.9rem' }}>
         Data is fetched live from Yahoo Finance. This is decision support, not investment advice.
       </p>
     </div>
@@ -5667,7 +5792,7 @@ function ETFBuyingChecklistHelp() {
         covered-call and put-write funds.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Two Modes</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Two Modes</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>
           <strong>Deep Dive</strong> — Type one ticker for a full scored breakdown: seven criteria cards,
@@ -5683,10 +5808,10 @@ function ETFBuyingChecklistHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf_checklist_top.jpg" alt="ETF Buying Checklist Evaluator top — ticker lookup, verdict card, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf_checklist_top.jpg" alt="ETF Buying Checklist Evaluator top — ticker lookup, verdict card, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Seven Criteria</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Seven Criteria</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>
           <strong>1. Strategy Fit</strong> — Does the fund's index, sector, or mandate match your intended exposure?
@@ -5723,7 +5848,7 @@ function ETFBuyingChecklistHelp() {
         </li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Risk-Adjusted Scoring</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Risk-Adjusted Scoring</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Criterion 7 bundles five standard risk-adjusted return ratios into a single 0–100 score. The ratios
         are computed on the <strong>dividend-adjusted (total-return) price series</strong> so
@@ -5749,14 +5874,14 @@ function ETFBuyingChecklistHelp() {
         <li><strong>Max Drawdown</strong> — the largest peak-to-trough decline in the history window.
           Default weight: 10%. The remaining 5% goes to down-capture ratio when a benchmark is available.</li>
       </ul>
-      <p style={{ marginBottom: '0.75rem', color: '#9aa7b8', fontSize: '0.9rem' }}>
+      <p style={{ marginBottom: '0.75rem', color: 'var(--p-9aa7b8)', fontSize: '0.9rem' }}>
         The weighted composite of these sub-scores produces the Risk criterion's 0–100 number. A score of
         80+ earns a PASS badge; 50–79 earns WARN; below 50 earns FAIL. When fewer than ~250 trading
         days (~1 year) of history exist the criterion shows an info badge and is excluded from the
         composite average so new funds are never penalised for being young.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Composite Score &amp; Verdict</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Composite Score &amp; Verdict</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The composite is the simple average of all <em>scored</em> criteria (criteria with a numeric score —
         informational and insufficient-data criteria are excluded). Verdict thresholds: composite ≥ 70 with
@@ -5765,17 +5890,17 @@ function ETFBuyingChecklistHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf-buy-checklist-bottom.jpg" alt="ETF Buying Checklist Evaluator bottom — smart alternatives and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf-buy-checklist-bottom.jpg" alt="ETF Buying Checklist Evaluator bottom — smart alternatives and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Smart Alternatives</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Smart Alternatives</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         When the evaluated fund scores poorly, a Smart Alternatives section appears listing ETFs in the same
         strategy group that score higher on the composite. Each alternative shows the specific improvements
         (lower expense ratio, better total return, larger fund, etc.).
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Each scoreable criterion has an inline threshold editor under its card. Adjust Pass/Warn/Fail
         boundaries to match your standards — e.g. tightening the expense ratio to 0.05% for core
@@ -5784,7 +5909,7 @@ function ETFBuyingChecklistHelp() {
         top of the page to restore factory settings.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When to Use It</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When to Use It</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>Use this evaluator for any ETF that is not primarily an option-income or covered-call fund.</li>
         <li>Use the <strong>Option-Income ETF Evaluator</strong> for JEPI, XYLD, QYLD, SPYI, and similar covered-call or put-write ETFs — they have different criteria, especially around NAV erosion and track record.</li>
@@ -5808,7 +5933,7 @@ function OptionIncomeETFHelp() {
         volatility picture alongside the income-specific checks.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Two Modes</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Two Modes</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>
           <strong>Deep Dive</strong> — Type one option-income ETF ticker for a full scorecard: eight
@@ -5828,10 +5953,10 @@ function OptionIncomeETFHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/option-income-etf-evaluator/option-income-etf-evaluator-top.jpg" alt="Option-Income ETF Evaluator top — ticker lookup, underlying strategy, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/option-income-etf-evaluator/option-income-etf-evaluator-top.jpg" alt="Option-Income ETF Evaluator top — ticker lookup, underlying strategy, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Eight Criteria</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Eight Criteria</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>
           <strong>1. Strategy Fit</strong> — Confirms the fund is an option-income product and that its strategy
@@ -5880,7 +6005,7 @@ function OptionIncomeETFHelp() {
         </li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Risk-Adjusted Scoring</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Risk-Adjusted Scoring</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Criterion 8 bundles five risk-adjusted return ratios into a single 0–100 score displayed both
         in the criterion card and as a <strong>Risk</strong> column in the Scan a List table. The ratios
@@ -5905,13 +6030,13 @@ function OptionIncomeETFHelp() {
         <li><strong>Max Drawdown</strong> — peak-to-trough decline over the history window. Weight: 10%.
           The remaining 5% goes to down-capture ratio when a benchmark is available.</li>
       </ul>
-      <p style={{ marginBottom: '0.75rem', color: '#9aa7b8', fontSize: '0.9rem' }}>
+      <p style={{ marginBottom: '0.75rem', color: 'var(--p-9aa7b8)', fontSize: '0.9rem' }}>
         Composite thresholds: ≥ 80 → PASS · 50–79 → WARN · &lt; 50 → FAIL. Funds with fewer than ~250
         trading days (~1 year) of history show an info badge and are excluded from the composite so new
         funds are never scored as failures for being young.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Why One Bundled Criterion?</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Why One Bundled Criterion?</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Sharpe, Sortino, Calmar, Omega, and Ulcer are highly correlated — a fund that scores well on one
         tends to score well on all five. Treating them as five separate criteria would let the risk
@@ -5920,10 +6045,10 @@ function OptionIncomeETFHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/option-income-etf-evaluator/option-income-etf-evaluator-bottom.jpg" alt="Option-Income ETF Evaluator bottom — verdict, smart alternatives, and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/option-income-etf-evaluator/option-income-etf-evaluator-bottom.jpg" alt="Option-Income ETF Evaluator bottom — verdict, smart alternatives, and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Composite Score &amp; Verdict</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Composite Score &amp; Verdict</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The composite is the simple average of all scored criteria (criteria with a numeric score;
         informational and insufficient-data criteria are excluded). Composite ≥ 70 with no failing
@@ -5931,7 +6056,7 @@ function OptionIncomeETFHelp() {
         otherwise → <strong>Do Not Buy</strong>.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Underlying Strategy Detection</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Underlying Strategy Detection</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The evaluator auto-detects what the fund writes options on — S&amp;P 500, Nasdaq 100, Russell 2000,
         a single stock, gold/commodity, or a fixed-income underlying — and shows this at the top of the
@@ -5939,7 +6064,7 @@ function OptionIncomeETFHelp() {
         type of underlier.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Smart Alternatives</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Smart Alternatives</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         When the fund scores below the passing threshold, Smart Alternatives lists option-income peers that
         clear all quality checks and target the same underlying. You can filter by underlying, set a target
@@ -5948,14 +6073,14 @@ function OptionIncomeETFHelp() {
         is itself single-stock.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         All seven scoreable criteria have inline threshold editors. Adjust them to match your personal
         tolerance. Settings are saved in browser local storage and persist between sessions. Click
         <strong> Reset thresholds to defaults</strong> at the top of the page to restore factory settings.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When to Use It</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When to Use It</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>Use this evaluator for any ETF that primarily generates income from selling options (covered calls, puts, collars).</li>
         <li>Use the <strong>ETF Buying Checklist Evaluator</strong> for standard index, sector, or dividend ETFs without an option-overlay strategy.</li>
@@ -5977,7 +6102,7 @@ function CEFBuyingChecklistHelp() {
         composite verdict, and suggests alternatives when the fund falls short.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Two Modes</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Two Modes</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>
           <strong>Deep Dive</strong> — Type a CEF ticker for a full scored breakdown. Data is sourced from
@@ -6001,17 +6126,17 @@ function CEFBuyingChecklistHelp() {
           Premium/Discount, Composite score, a Risk bundle score, and individual ratio columns.
         </li>
       </ul>
-      <p style={{ marginBottom: '0.75rem', color: '#9aa7b8', fontSize: '0.9rem' }}>
+      <p style={{ marginBottom: '0.75rem', color: 'var(--p-9aa7b8)', fontSize: '0.9rem' }}>
         <strong>CEF detection note:</strong> Yahoo Finance frequently labels closed-end funds as ordinary
         equities. The scanner uses the CEF Connect universe as the authoritative CEF list so funds like
         ADX, BST, and PDI are correctly identified even though Yahoo calls them stocks.
       </p>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/cef/cef_evaluator.jpg" alt="CEF Buying Checklist Evaluator top — ticker lookup, CEF header data, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/cef/cef_evaluator.jpg" alt="CEF Buying Checklist Evaluator top — ticker lookup, CEF header data, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Eight Criteria</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Eight Criteria</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>
           <strong>1. Strategy Fit &amp; Mandate</strong> — Does the fund's stated mandate (bond, equity,
@@ -6062,7 +6187,7 @@ function CEFBuyingChecklistHelp() {
         </li>
       </ul>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Risk-Adjusted Scoring</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Risk-Adjusted Scoring</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Criterion 8 bundles five risk ratios into a single 0–100 score displayed both in the criterion
         card and as a <strong>Risk</strong> column in the Scan a List table.
@@ -6082,13 +6207,13 @@ function CEFBuyingChecklistHelp() {
         <li><strong>Max Drawdown</strong> — peak-to-trough decline. Weight: 10%. Down-capture
           ratio gets the remaining 5% when a benchmark is available.</li>
       </ul>
-      <p style={{ marginBottom: '0.75rem', color: '#9aa7b8', fontSize: '0.9rem' }}>
+      <p style={{ marginBottom: '0.75rem', color: 'var(--p-9aa7b8)', fontSize: '0.9rem' }}>
         The sub-scores are weighted and averaged to a 0–100 composite. ≥ 80 → PASS · 50–79 → WARN
         · &lt; 50 → FAIL. Funds with fewer than ~250 trading days get an info badge and are excluded
         from the composite — new funds are never scored as failures for being young.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Composite Score &amp; Verdict</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Composite Score &amp; Verdict</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The composite is the simple average of all scored criteria (informational and
         insufficient-data criteria are excluded). Verdict: composite ≥ 70 with no failing
@@ -6097,10 +6222,10 @@ function CEFBuyingChecklistHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/cef/cef_evaluator_bottom.jpg" alt="CEF Buying Checklist Evaluator bottom — verdict card, alternatives, and threshold editors" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid #333' }} />
+        <img src="./help-screenshots/cef/cef_evaluator_bottom.jpg" alt="CEF Buying Checklist Evaluator bottom — verdict card, alternatives, and threshold editors" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Better Alternatives</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Better Alternatives</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The alternatives section compares the current CEF against peers that score higher on the same checklist.
         When the fund name, strategy, or category indicates a recognizable theme — such as infrastructure,
@@ -6114,7 +6239,7 @@ function CEFBuyingChecklistHelp() {
         to the broader CEF category so the alternatives list still has enough funds to compare.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Five criteria have inline threshold editors: Distribution Sustainability gap, Discount/Premium
         bounds, Leverage level, Expense Ratio cutoffs, and Liquidity (volume minimums). Thresholds are
@@ -6122,7 +6247,7 @@ function CEFBuyingChecklistHelp() {
         to defaults</strong> at the top of the page to restore factory settings.
       </p>
 
-      <h3 style={{ color: '#64b5f6', marginTop: '1.5rem', marginBottom: '0.5rem' }}>CEF-Specific Tips</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>CEF-Specific Tips</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li><strong>Always use limit orders</strong> — market orders in thinly traded CEFs can result in significantly worse fills than the displayed price.</li>
         <li><strong>Check Section 19(a) notices</strong> — published monthly by most CEFs, they break down how much of each distribution is income vs. return of capital.</li>
@@ -6192,9 +6317,11 @@ export default function Help() {
   const [activeGroup, setActiveGroup] = useState('overview')
   const [activeSection, setActiveSection] = useState('overview')
 
+  const firstContentSection = (group) => group.sections.find(section => section.type !== 'heading')
+
   const handleGroupClick = (group) => {
     setActiveGroup(group.id)
-    setActiveSection(group.sections[0].id)
+    setActiveSection(firstContentSection(group)?.id)
   }
 
   const currentGroup = GROUPS.find(g => g.id === activeGroup)
@@ -6204,11 +6331,11 @@ export default function Help() {
     <div className="page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
         <h1>Help</h1>
-        <span style={{ color: '#90a4ae', fontSize: '0.85rem' }}>Version {APP_VERSION}</span>
+        <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>Version {APP_VERSION}</span>
       </div>
 
       {/* Group selector */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', borderBottom: '2px solid #0f3460', paddingBottom: '0.75rem' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', borderBottom: '2px solid var(--border)', paddingBottom: '0.75rem' }}>
         {GROUPS.map(g => (
           <button
             key={g.id}
@@ -6220,8 +6347,8 @@ export default function Help() {
               cursor: 'pointer',
               fontWeight: 600,
               fontSize: '0.9rem',
-              background: activeGroup === g.id ? '#1976d2' : '#0f3460',
-              color: activeGroup === g.id ? '#fff' : '#90a4ae',
+              background: activeGroup === g.id ? 'var(--primary)' : 'var(--border)',
+              color: activeGroup === g.id ? 'var(--white)' : 'var(--text-dim-2)',
               transition: 'background 0.15s',
             }}
           >
@@ -6232,15 +6359,19 @@ export default function Help() {
 
       {/* Sub-tabs (hidden when group has only one section) */}
       {currentGroup && currentGroup.sections.length > 1 && (
-        <div className="tabs" style={{ marginBottom: '1.5rem' }}>
-          {currentGroup.sections.map(s => (
-            <button
-              key={s.id}
-              className={`tab ${activeSection === s.id ? 'active' : ''}`}
-              onClick={() => setActiveSection(s.id)}
-            >
-              {s.label}
-            </button>
+        <div className="tabs help-tabs" style={{ marginBottom: '1.5rem' }}>
+          {currentGroup.sections.map((s, index) => (
+            s.type === 'heading' ? (
+              <div key={`${s.label}-${index}`} className="tab-heading">{s.label}</div>
+            ) : (
+              <button
+                key={s.id}
+                className={`tab ${activeSection === s.id ? 'active' : ''}`}
+                onClick={() => setActiveSection(s.id)}
+              >
+                {s.label}
+              </button>
+            )
           ))}
         </div>
       )}

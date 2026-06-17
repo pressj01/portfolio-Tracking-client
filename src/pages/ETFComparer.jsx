@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../components/ThemedPlot'
 import { useProfileFetch } from '../context/ProfileContext'
 import DistributionHistoryChart from '../components/DistributionHistoryChart'
 import { returnVsYield } from '../utils/returnVsYield'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 
 const PERIODS = [
   { value: '1mo', label: '1M' },
@@ -192,6 +194,7 @@ function lastVisibleIndex(dates, start, end) {
 
 export default function ETFComparer() {
   const pf = useProfileFetch()
+  const { isDark } = useTheme()
   const [tickers, setTickers] = useState([])
   const [input, setInput] = useState('')
   const inputRef = useRef(null)
@@ -768,7 +771,7 @@ export default function ETFComparer() {
         <section className="etfc-section etfc-chart-card">
           <Plot
             data={chart.data}
-            layout={chart.layout}
+            layout={themedPlotlyLayout(chart.layout, isDark)}
             config={{ responsive: true, displayModeBar: true, displaylogo: false }}
             useResizeHandler
             style={{ width: '100%', height: 560 }}
@@ -866,7 +869,7 @@ export default function ETFComparer() {
                     if (col.key === 'ret_vs_yld') {
                       const rvy = row.ret_vs_yld
                       return (
-                        <td key={col.key} style={{ color: rvy?.color || '#6f7890', textAlign: 'center' }}
+                        <td key={col.key} style={{ color: rvy?.color || 'var(--p-6f7890)', textAlign: 'center' }}
                           title={rvy ? `1Y Return ${rvy.totalReturnPct?.toFixed(2)}% vs Yield ${rvy.yieldOnCost?.toFixed(2)}% (spread ${rvy.spread?.toFixed(2)}%)` : undefined}>
                           {rvy?.label || '-'}
                         </td>
@@ -878,7 +881,7 @@ export default function ETFComparer() {
                         <td key={col.key} title={bm ? `Beta regressed against ${bm} (best-fitting benchmark)` : undefined}>
                           {format('beta', row.beta)}
                           {bm && row.beta != null && (
-                            <span style={{ color: '#6f7890', fontSize: '0.8em', marginLeft: 4 }}>vs {bm}</span>
+                            <span style={{ color: 'var(--p-6f7890)', fontSize: '0.8em', marginLeft: 4 }}>vs {bm}</span>
                           )}
                         </td>
                       )
@@ -893,9 +896,9 @@ export default function ETFComparer() {
                             : undefined}>
                           {has ? (
                             <>
-                              <span style={{ color: '#2f9d55' }}>↑{number(up)}</span>
-                              <span style={{ color: '#6f7890', margin: '0 3px' }}>/</span>
-                              <span style={{ color: '#d94b4b' }}>↓{number(dn)}</span>
+                              <span style={{ color: 'var(--p-2f9d55)' }}>↑{number(up)}</span>
+                              <span style={{ color: 'var(--p-6f7890)', margin: '0 3px' }}>/</span>
+                              <span style={{ color: 'var(--p-d94b4b)' }}>↓{number(dn)}</span>
                             </>
                           ) : '-'}
                         </td>
@@ -927,9 +930,9 @@ export default function ETFComparer() {
             {averageData.summary} These numbers are adjusted for stock splits and assume dividends are reinvested.
           </div>
         )}
-        <Plot data={averageChart.data} layout={averageChart.layout} config={{ responsive: true, displayModeBar: false }} useResizeHandler style={{ width: '100%', height: 390 }} />
+        <Plot data={averageChart.data} layout={themedPlotlyLayout(averageChart.layout, isDark)} config={{ responsive: true, displayModeBar: false }} useResizeHandler style={{ width: '100%', height: 390 }} />
         {averageData?.common_history && (
-          <div className="etfc-note" style={{ fontSize: '0.82em', color: '#9aa7c2' }}>
+          <div className="etfc-note" style={{ fontSize: '0.82em', color: 'var(--p-9aa7c2)' }}>
             <strong>Common History</strong> compares every fund over the identical window since the latest
             inception ({averageData.common_history.start} → {averageData.common_history.end},{' '}
             {averageData.common_history.years}y{averageData.common_history.annualized ? ', annualized' : ', cumulative'}).
@@ -998,3 +1001,4 @@ export default function ETFComparer() {
     </div>
   )
 }
+

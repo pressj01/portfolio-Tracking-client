@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react'
+import { useTheme } from '../../context/ThemeContext'
+import { themedPlotlyLayout } from '../../utils/chartTheme'
 import { useProfileFetch } from '../../context/ProfileContext'
 
 export default function BacktestCharts({ tickers, result, period }) {
+  const { isDark } = useTheme()
   const pf = useProfileFetch()
   const [backtestData, setBacktestData] = useState(null)
   const [rollingData, setRollingData] = useState(null)
@@ -42,16 +45,16 @@ export default function BacktestCharts({ tickers, result, period }) {
       line: { color: colors[i % colors.length], width: 2 },
       hovertemplate: `${s.ticker}: $%{y:,.0f}<extra></extra>`,
     }))
-    window.Plotly.newPlot(el, traces, {
+    window.Plotly.newPlot(el, traces, themedPlotlyLayout({
       ...base,
       title: { text: 'Growth of $10,000', font: { size: 14, color: '#e0e8f5' } },
       xaxis: { gridcolor: '#1a2a3e', color: '#8899aa' },
       yaxis: { title: { text: 'Value ($)', font: { size: 12, color: '#e0e8f5' } }, gridcolor: '#1a2a3e', color: '#8899aa' },
       height: 420, margin: { l: 70, r: 30, t: 50, b: 40 },
       showlegend: true, legend: { font: { color: '#8899aa' } },
-    }, { responsive: true })
+    }, isDark), { responsive: true })
     return () => window.Plotly.purge(el)
-  }, [backtestData])
+  }, [backtestData, isDark])
 
   // Render risk contribution bar chart
   useEffect(() => {
@@ -68,15 +71,15 @@ export default function BacktestCharts({ tickers, result, period }) {
       y: sorted.map(r => r.ticker), x: sorted.map(r => r.pct), type: 'bar', orientation: 'h',
       marker: { color: sorted.map(r => (r.pct > (weightMap[r.ticker] || 0)) ? '#ef5350' : '#4caf50') },
       hovertemplate: '%{y}: %{x:.1f}% of risk<extra></extra>',
-    }], {
+    }], themedPlotlyLayout({
       ...base,
       title: { text: 'Risk Contribution by Holding', font: { size: 14, color: '#e0e8f5' } },
       xaxis: { title: { text: '% of Portfolio Risk', font: { size: 12, color: '#e0e8f5' } }, gridcolor: '#1a2a3e', color: '#8899aa' },
       yaxis: { autorange: 'reversed', color: '#8899aa' },
       height: Math.max(300, rc.length * 30 + 100), margin: { l: 80, r: 30, t: 50, b: 50 },
-    }, { responsive: true })
+    }, isDark), { responsive: true })
     return () => window.Plotly.purge(el)
-  }, [result?.risk_contribution, result?.metrics])
+  }, [result?.risk_contribution, result?.metrics, isDark])
 
   // Render rolling Sharpe/Sortino
   useEffect(() => {
@@ -89,7 +92,7 @@ export default function BacktestCharts({ tickers, result, period }) {
         line: { color: colors[i % colors.length], width: 2 },
         hovertemplate: `${s.ticker}: %{y:.2f}<extra></extra>`,
       }))
-      window.Plotly.newPlot(sharpeEl, traces, {
+      window.Plotly.newPlot(sharpeEl, traces, themedPlotlyLayout({
         ...base,
         title: { text: `Rolling Sharpe Ratio (${rollingWindow}-day)`, font: { size: 14, color: '#e0e8f5' } },
         xaxis: { gridcolor: '#1a2a3e', color: '#8899aa' },
@@ -97,7 +100,7 @@ export default function BacktestCharts({ tickers, result, period }) {
         height: 380, margin: { l: 60, r: 30, t: 50, b: 40 },
         showlegend: true, legend: { font: { color: '#8899aa' } },
         shapes: [{ type: 'line', x0: 0, x1: 1, xref: 'paper', y0: 1, y1: 1, line: { color: '#4caf50', width: 1, dash: 'dot' } }],
-      }, { responsive: true })
+      }, isDark), { responsive: true })
     }
 
     const sortinoEl = document.getElementById('backtest-rolling-sortino')
@@ -107,7 +110,7 @@ export default function BacktestCharts({ tickers, result, period }) {
         line: { color: colors[i % colors.length], width: 2 },
         hovertemplate: `${s.ticker}: %{y:.2f}<extra></extra>`,
       }))
-      window.Plotly.newPlot(sortinoEl, traces, {
+      window.Plotly.newPlot(sortinoEl, traces, themedPlotlyLayout({
         ...base,
         title: { text: `Rolling Sortino Ratio (${rollingWindow}-day)`, font: { size: 14, color: '#e0e8f5' } },
         xaxis: { gridcolor: '#1a2a3e', color: '#8899aa' },
@@ -115,25 +118,25 @@ export default function BacktestCharts({ tickers, result, period }) {
         height: 380, margin: { l: 60, r: 30, t: 50, b: 40 },
         showlegend: true, legend: { font: { color: '#8899aa' } },
         shapes: [{ type: 'line', x0: 0, x1: 1, xref: 'paper', y0: 1.5, y1: 1.5, line: { color: '#4caf50', width: 1, dash: 'dot' } }],
-      }, { responsive: true })
+      }, isDark), { responsive: true })
     }
 
     return () => {
       if (sharpeEl) window.Plotly.purge(sharpeEl)
       if (sortinoEl) window.Plotly.purge(sortinoEl)
     }
-  }, [rollingData, rollingWindow])
+  }, [rollingData, rollingWindow, isDark])
 
   return (
     <>
       {/* Growth of $10K */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         {backtestLoading ? (
-          <div style={{ textAlign: 'center', padding: '1.5rem', color: '#8899aa' }}><span className="spinner" /> Loading backtest...</div>
+          <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}><span className="spinner" /> Loading backtest...</div>
         ) : backtestData?.series?.length ? (
           <div id="backtest-growth" />
         ) : (
-          <div style={{ color: '#8899aa', fontSize: '0.85rem', padding: '0.5rem' }}>No backtest data available.</div>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>No backtest data available.</div>
         )}
       </div>
 
@@ -142,7 +145,7 @@ export default function BacktestCharts({ tickers, result, period }) {
         {result?.risk_contribution?.length ? (
           <div id="backtest-risk-contrib" />
         ) : (
-          <div style={{ color: '#8899aa', fontSize: '0.85rem', padding: '0.5rem' }}>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>
             Risk contribution requires 2+ tickers with portfolio weights. Run analysis with your portfolio loaded.
           </div>
         )}
@@ -151,25 +154,25 @@ export default function BacktestCharts({ tickers, result, period }) {
       {/* Rolling Sharpe / Sortino */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-          <span style={{ color: '#e0e8f5', fontWeight: 600, fontSize: '0.85rem' }}>Rolling Risk Metrics</span>
+          <span style={{ color: 'var(--text-strong)', fontWeight: 600, fontSize: '0.85rem' }}>Rolling Risk Metrics</span>
           {[{ label: '3M', val: 63 }, { label: '6M', val: 126 }, { label: '12M', val: 252 }].map(w => (
             <button key={w.val} onClick={() => setRollingWindow(w.val)} style={{
               padding: '0.25rem 0.6rem', borderRadius: 4, cursor: 'pointer', fontSize: '0.78rem',
-              border: rollingWindow === w.val ? '1px solid #64b5f6' : '1px solid #3a3a5c',
-              background: rollingWindow === w.val ? '#1a3a5c' : '#1a1a2e',
-              color: rollingWindow === w.val ? '#64b5f6' : '#8899aa',
+              border: rollingWindow === w.val ? '1px solid var(--accent)' : '1px solid var(--p-3a3a5c)',
+              background: rollingWindow === w.val ? 'var(--p-1a3a5c)' : 'var(--bg)',
+              color: rollingWindow === w.val ? 'var(--accent)' : 'var(--text-dim)',
             }}>{w.label}</button>
           ))}
         </div>
         {rollingLoading ? (
-          <div style={{ textAlign: 'center', padding: '1.5rem', color: '#8899aa' }}><span className="spinner" /> Loading rolling metrics...</div>
+          <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}><span className="spinner" /> Loading rolling metrics...</div>
         ) : rollingData?.sharpe?.length ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
             <div id="backtest-rolling-sharpe" />
             <div id="backtest-rolling-sortino" />
           </div>
         ) : (
-          <div style={{ color: '#8899aa', fontSize: '0.85rem', padding: '0.5rem' }}>No rolling metrics data available.</div>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>No rolling metrics data available.</div>
         )}
       </div>
     </>

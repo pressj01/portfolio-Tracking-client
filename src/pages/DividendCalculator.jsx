@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../components/ThemedPlot'
 import { useProfileFetch } from '../context/ProfileContext'
 
 const FREQ_OPTIONS = [
@@ -1239,11 +1239,11 @@ export default function DividendCalculator() {
 
       {pickerOpen && (
         <div style={{
-          border: '1px solid #1a4480', borderRadius: 6, marginBottom: '1rem',
-          background: '#0f1a33', padding: '0.6rem 0.75rem',
+          border: '1px solid var(--p-1a4480)', borderRadius: 6, marginBottom: '1rem',
+          background: 'var(--p-0f1a33)', padding: '0.6rem 0.75rem',
         }}>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
-            <span style={{ color: '#9bb4d6', fontSize: '0.85rem' }}>
+            <span style={{ color: 'var(--p-9bb4d6)', fontSize: '0.85rem' }}>
               Test portfolio holdings ({currentHoldings.length} total):
             </span>
             <div style={{ flex: 1 }} />
@@ -1252,17 +1252,17 @@ export default function DividendCalculator() {
               onChange={e => setPickerSearch(e.target.value)}
               placeholder="Search ticker…"
               style={{
-                width: 140, padding: '0.3rem 0.5rem', background: '#16213e',
-                border: '1px solid #1a4480', borderRadius: 4, color: '#e0e8f5', fontSize: '0.85rem',
+                width: 140, padding: '0.3rem 0.5rem', background: 'var(--surface)',
+                border: '1px solid var(--p-1a4480)', borderRadius: 4, color: 'var(--text-strong)', fontSize: '0.85rem',
               }}
             />
             <button type="button" className="btn btn-sm" onClick={pickEntirePortfolio}>Select All</button>
             <button type="button" className="btn btn-sm" onClick={pickNone}>Deselect All</button>
           </div>
-          <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #1a2a3e', borderRadius: 4 }}>
+          <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--p-1a2a3e)', borderRadius: 4 }}>
             <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ background: '#16213e', color: '#9bb4d6' }}>
+                <tr style={{ background: 'var(--surface)', color: 'var(--p-9bb4d6)' }}>
                   <th style={{ padding: '0.3rem 0.5rem', width: 32 }}></th>
                   <th style={{ padding: '0.3rem 0.5rem', textAlign: 'left' }}>Ticker</th>
                   <th style={{ padding: '0.3rem 0.5rem', textAlign: 'left' }}>Description</th>
@@ -1271,14 +1271,14 @@ export default function DividendCalculator() {
               </thead>
               <tbody>
                 {visiblePickerHoldings.length === 0 && (
-                  <tr><td colSpan={4} style={{ padding: '0.6rem', color: '#6b7d99', textAlign: 'center' }}>
+                  <tr><td colSpan={4} style={{ padding: '0.6rem', color: 'var(--p-6b7d99)', textAlign: 'center' }}>
                     {currentHoldings.length ? 'No tickers match your search' : 'No portfolio holdings available'}
                   </td></tr>
                 )}
                 {visiblePickerHoldings.map(h => (
                   <tr
                     key={h.ticker}
-                    style={{ borderTop: '1px solid #1a2a3e', cursor: 'pointer' }}
+                    style={{ borderTop: '1px solid var(--p-1a2a3e)', cursor: 'pointer' }}
                     onClick={() => togglePicked(h.ticker)}
                   >
                     <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
@@ -1289,9 +1289,9 @@ export default function DividendCalculator() {
                         onClick={e => e.stopPropagation()}
                       />
                     </td>
-                    <td style={{ padding: '0.3rem 0.5rem', color: '#e0e8f5' }}>{h.ticker}</td>
-                    <td style={{ padding: '0.3rem 0.5rem', color: '#9bb4d6' }}>{h.description || ''}</td>
-                    <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: '#9bb4d6' }}>
+                    <td style={{ padding: '0.3rem 0.5rem', color: 'var(--text-strong)' }}>{h.ticker}</td>
+                    <td style={{ padding: '0.3rem 0.5rem', color: 'var(--p-9bb4d6)' }}>{h.description || ''}</td>
+                    <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: 'var(--p-9bb4d6)' }}>
                       {h.current_value != null ? fmtMoneyShort(h.current_value) : '—'}
                     </td>
                   </tr>
@@ -1300,7 +1300,7 @@ export default function DividendCalculator() {
             </table>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-            <span style={{ color: '#9bb4d6', fontSize: '0.85rem' }}>{picked.size} selected</span>
+            <span style={{ color: 'var(--p-9bb4d6)', fontSize: '0.85rem' }}>{picked.size} selected</span>
             <div style={{ flex: 1 }} />
             <button type="button" className="btn" onClick={() => setPickerOpen(false)}>Cancel</button>
             <button
@@ -1833,3 +1833,4 @@ export default function DividendCalculator() {
     </div>
   )
 }
+

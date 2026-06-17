@@ -29,6 +29,10 @@ class HoldingsTransactionTest(unittest.TestCase):
                 quantity REAL,
                 price_paid REAL,
                 purchase_value REAL,
+                original_price_paid REAL,
+                original_purchase_value REAL,
+                broker_price_paid REAL,
+                broker_purchase_value REAL,
                 purchase_date TEXT,
                 base_quantity REAL,
                 import_date TEXT,
@@ -465,7 +469,13 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             CREATE TABLE ticker_categories (
                 ticker TEXT,
                 category_id INTEGER,
+                subcategory_id INTEGER,
                 profile_id INTEGER
+            );
+            CREATE TABLE subcategories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER,
+                name TEXT
             );
             CREATE TABLE dividends (
                 ticker TEXT,

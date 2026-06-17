@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
-import Plot from 'react-plotly.js'
+import Plot from '../components/ThemedPlot'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 
 function fmt$(v) {
   return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -51,6 +53,7 @@ function StatTile({ label, value, color, subtext }) {
 export default function NavErosion() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
+  const { isDark } = useTheme()
   const [ticker, setTicker] = useState('')
   const [amount, setAmount] = useState('10000')
   const [startDate, setStartDate] = useState('2015-01-01')
@@ -144,18 +147,18 @@ export default function NavErosion() {
         This tool shows month-by-month how many extra shares you need to reinvest to preserve
         your original portfolio value — and what happens at any chosen reinvestment level (0–100%).
         <br />
-        <span style={{ color: '#7ecfff' }}>Blue line</span> = share price &nbsp;&middot;&nbsp;
-        <span style={{ color: '#00e89a' }}>Green line</span> = portfolio value &nbsp;&middot;&nbsp;
-        <span style={{ color: '#888' }}>Dashed gray</span> = initial investment (break-even)
+        <span style={{ color: 'var(--accent-bright)' }}>Blue line</span> = share price &nbsp;&middot;&nbsp;
+        <span style={{ color: 'var(--pos-bright)' }}>Green line</span> = portfolio value &nbsp;&middot;&nbsp;
+        <span style={{ color: 'var(--p-888)' }}>Dashed gray</span> = initial investment (break-even)
         <br /><br />
-        <strong style={{ color: '#ccc' }}>Shares Needed / Extra To Breakeven</strong> compares your shares held to break-even shares
+        <strong style={{ color: 'var(--p-ccc)' }}>Shares Needed / Extra To Breakeven</strong> compares your shares held to break-even shares
         (Initial Investment &divide; Current Price).
-        <span style={{ color: '#e05555', fontWeight: 600 }}> Red needed</span> means you are short that many shares.
-        <span style={{ color: '#00c853', fontWeight: 600 }}> Green extra</span> means you have that many shares above break-even.
+        <span style={{ color: 'var(--neg-3)', fontWeight: 600 }}> Red needed</span> means you are short that many shares.
+        <span style={{ color: 'var(--pos-strong)', fontWeight: 600 }}> Green extra</span> means you have that many shares above break-even.
         The percent is the gap as a share of break-even shares.
         <br /><br />
-        <strong style={{ color: '#ccc' }}>Severity</strong> uses the benchmark-adjusted NAV ratio, but is forced
-        <span style={{ color: '#e05555', fontWeight: 600 }}> High</span> when price falls 50%+ or the final
+        <strong style={{ color: 'var(--p-ccc)' }}>Severity</strong> uses the benchmark-adjusted NAV ratio, but is forced
+        <span style={{ color: 'var(--neg-3)', fontWeight: 600 }}> High</span> when price falls 50%+ or the final
         share deficit is 5%+ of break-even shares.
       </p>
 
@@ -205,7 +208,7 @@ export default function NavErosion() {
         </div>
         <div className="ne-field" style={{ minWidth: 180 }}>
           <label className="ne-label">
-            Reinvest %: <span style={{ color: '#7ecfff', fontWeight: 700 }}>{reinvest}%</span>
+            Reinvest %: <span style={{ color: 'var(--accent-bright)', fontWeight: 700 }}>{reinvest}%</span>
           </label>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <input
@@ -214,7 +217,7 @@ export default function NavErosion() {
               max="100"
               value={reinvest}
               step="1"
-              style={{ flex: 1, accentColor: '#7ecfff' }}
+              style={{ flex: 1, accentColor: 'var(--accent-bright)' }}
               onChange={e => setReinvest(Number(e.target.value))}
             />
             <input
@@ -261,8 +264,8 @@ export default function NavErosion() {
           <div className="ne-stat-tile">
             <div className="ne-stat-val">
               {s.has_erosion
-                ? <span style={{ color: '#e05555', fontWeight: 700 }}>Yes</span>
-                : <span style={{ color: '#00c853', fontWeight: 700 }}>No</span>}
+                ? <span style={{ color: 'var(--neg-3)', fontWeight: 700 }}>Yes</span>
+                : <span style={{ color: 'var(--pos-strong)', fontWeight: 700 }}>No</span>}
             </div>
             <div className="ne-stat-lbl">NAV Erosion</div>
           </div>
@@ -300,7 +303,7 @@ export default function NavErosion() {
         <div style={{ marginBottom: '1.5rem' }}>
           <Plot
             data={figData}
-            layout={{ ...figLayout, autosize: true }}
+            layout={themedPlotlyLayout({ ...figLayout, autosize: true }, isDark)}
             useResizeHandler
             style={{ width: '100%', height: 420 }}
             config={{ responsive: true }}
@@ -339,7 +342,7 @@ export default function NavErosion() {
                   name: 'High Threshold (0.75)',
                 },
               ]}
-              layout={{
+              layout={themedPlotlyLayout({
                 title: `${ticker.trim().toUpperCase()} — Monthly NAV Erosion Ratio`,
                 template: 'plotly_dark',
                 margin: { t: 50, l: 60, r: 30, b: 50 },
@@ -360,7 +363,7 @@ export default function NavErosion() {
                   fillcolor: 'rgba(0,0,0,0)',
                   line: { width: 0 },
                 }],
-              }}
+              }, isDark)}
               useResizeHandler
               style={{ width: '100%', height: 320 }}
               config={{ responsive: true }}
@@ -374,7 +377,7 @@ export default function NavErosion() {
         <>
           <h2 className="ne-table-title">
             Monthly Detail
-            <span style={{ fontWeight: 400, fontSize: '0.75rem', color: '#666' }}>&nbsp;&mdash; click any header to sort</span>
+            <span style={{ fontWeight: 400, fontSize: '0.75rem', color: 'var(--p-666)' }}>&nbsp;&mdash; click any header to sort</span>
           </h2>
           <div className="ne-tbl-outer">
             <table className="sst" id="ne-tbl">
@@ -414,7 +417,7 @@ export default function NavErosion() {
                       >
                         {fmtAbs4(r.shares_deficit)} {gapKind} <span style={{ opacity: 0.8 }}>({fmtAbsPct(gapPct)})</span>
                       </td>
-                      <td style={{ color: r.coverage_ratio == null ? '#666' : navSeverityColor(navSeverityFromRatio(r.coverage_ratio)), fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
+                      <td style={{ color: r.coverage_ratio == null ? 'var(--p-666)' : navSeverityColor(navSeverityFromRatio(r.coverage_ratio)), fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
                         {r.coverage_ratio != null ? r.coverage_ratio.toFixed(4) : '\u2014'}
                       </td>
                     </tr>
@@ -428,3 +431,4 @@ export default function NavErosion() {
     </div>
   )
 }
+

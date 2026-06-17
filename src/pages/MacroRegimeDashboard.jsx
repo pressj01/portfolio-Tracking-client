@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../components/ThemedPlot'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useNavigate } from 'react-router-dom'
 
@@ -63,8 +63,8 @@ function ConditionsTab({ pf }) {
 
   useEffect(() => { load() }, [load])
 
-  if (loading) return <p style={{ color: '#90caf9' }}>Loading macro conditions...</p>
-  if (error) return <p style={{ color: '#ef5350' }}>{error}</p>
+  if (loading) return <p style={{ color: 'var(--accent-2)' }}>Loading macro conditions...</p>
+  if (error) return <p style={{ color: 'var(--neg-2)' }}>{error}</p>
   if (!data) return null
 
   const indicators = data.indicators || {}
@@ -82,23 +82,23 @@ function ConditionsTab({ pf }) {
       {/* Regime badge */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center', marginBottom: '1rem' }}>
         <div style={{
-          background: 'linear-gradient(135deg, #1a237e, #283593)',
-          border: '1px solid #3949ab',
+          background: 'linear-gradient(135deg, var(--p-1a237e), var(--p-283593))',
+          border: '1px solid var(--p-3949ab)',
           borderRadius: 8, padding: '0.75rem 1.25rem',
         }}>
-          <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>Current Regime</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#e0e8f0' }}>{data.current_regime}</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim-2)', marginBottom: 4 }}>Current Regime</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--p-e0e8f0)' }}>{data.current_regime}</div>
         </div>
         {data.overlays?.length > 0 && data.overlays.map((o, i) => (
           <div key={i} style={{
-            background: o.includes('High Volatility') ? '#4a1010' : '#1a3a1a',
-            border: `1px solid ${o.includes('High Volatility') || o.includes('Rising') ? '#c62828' : '#2e7d32'}`,
+            background: o.includes('High Volatility') ? 'var(--p-4a1010)' : 'var(--p-1a3a1a)',
+            border: `1px solid ${o.includes('High Volatility') || o.includes('Rising') ? 'var(--danger-solid)' : 'var(--success-solid)'}`,
             borderRadius: 8, padding: '0.5rem 1rem', fontSize: '0.9rem', fontWeight: 600,
-            color: o.includes('High Volatility') || o.includes('Rising Vol') ? '#ef5350' : '#4caf50',
+            color: o.includes('High Volatility') || o.includes('Rising Vol') ? 'var(--neg-2)' : 'var(--p-4caf50)',
           }}>{o}</div>
         ))}
       </div>
-      <p style={{ color: '#8899aa', fontSize: '0.85rem', marginBottom: '1.25rem' }}>{data.regime_description}</p>
+      <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1.25rem' }}>{data.regime_description}</p>
 
       {/* Indicator cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.75rem' }}>
@@ -110,26 +110,26 @@ function ConditionsTab({ pf }) {
 
           return (
             <div key={key} style={{
-              background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+              background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: 8,
               padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: 6,
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 600, color: '#e0e8f0', fontSize: '0.9rem' }}>{ind.label}</span>
+                <span style={{ fontWeight: 600, color: 'var(--p-e0e8f0)', fontSize: '0.9rem' }}>{ind.label}</span>
                 <span style={{ color: arrow.color, fontWeight: 700, fontSize: '0.85rem' }}>
                   {arrow.symbol} {ind.direction}
                 </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                <span style={{ fontSize: '1.3rem', fontWeight: 700, color: '#fff' }}>
+                <span style={{ fontSize: '1.3rem', fontWeight: 700, color: 'var(--white)' }}>
                   {key === 'oil' || key === 'gold' ? fmt$(ind.value) : fmtNum(ind.value)}
                 </span>
                 <span style={{
                   fontSize: '0.8rem', fontWeight: 600,
-                  color: ind.change_3m > 0 ? '#4caf50' : ind.change_3m < 0 ? '#ef5350' : '#90a4ae',
+                  color: ind.change_3m > 0 ? 'var(--p-4caf50)' : ind.change_3m < 0 ? 'var(--neg-2)' : 'var(--text-dim-2)',
                 }}>
                   {ind.change_3m != null ? ((ind.change_3m > 0 ? '+' : '') + fmtNum(ind.change_3m) +
                     (key === 'rates_10y' || key === 'rates_short' || key === 'vix' ? ' pts' : '%')) : '--'}
-                  <span style={{ color: '#607d8b', marginLeft: 4 }}>3mo</span>
+                  <span style={{ color: 'var(--text-faint)', marginLeft: 4 }}>3mo</span>
                 </span>
               </div>
               {/* Sparkline */}
@@ -182,8 +182,8 @@ function ExposureTab({ pf }) {
 
   useEffect(() => { load() }, [load])
 
-  if (loading) return <p style={{ color: '#90caf9' }}>Analyzing portfolio exposure...</p>
-  if (error) return <p style={{ color: '#ef5350' }}>{error}</p>
+  if (loading) return <p style={{ color: 'var(--accent-2)' }}>Analyzing portfolio exposure...</p>
+  if (error) return <p style={{ color: 'var(--neg-2)' }}>{error}</p>
   if (!data) return null
 
   const by_sens = data.by_sensitivity || {}
@@ -202,18 +202,18 @@ function ExposureTab({ pf }) {
       {/* Regime + Alignment header */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
         <div style={{
-          background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+          background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: 8,
           padding: '0.75rem 1.25rem', textAlign: 'center',
         }}>
-          <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>Current Regime</div>
-          <div style={{ fontSize: '1rem', fontWeight: 700, color: '#e0e8f0' }}>{data.current_regime}</div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)', marginBottom: 4 }}>Current Regime</div>
+          <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--p-e0e8f0)' }}>{data.current_regime}</div>
         </div>
 
         <div style={{
-          background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+          background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: 8,
           padding: '0.75rem 1.25rem', textAlign: 'center', minWidth: 180,
         }}>
-          <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>Portfolio Alignment</div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)', marginBottom: 4 }}>Portfolio Alignment</div>
           <div style={{ fontSize: '1.4rem', fontWeight: 700, color: labelColor(data.alignment_label) }}>
             {fmtNum(data.portfolio_alignment_score)}
           </div>
@@ -223,19 +223,19 @@ function ExposureTab({ pf }) {
         </div>
 
         <div style={{
-          background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+          background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: 8,
           padding: '0.75rem 1.25rem', textAlign: 'center',
         }}>
-          <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>Total Value</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#e0e8f0' }}>{fmt$(data.total_value)}</div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)', marginBottom: 4 }}>Total Value</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--p-e0e8f0)' }}>{fmt$(data.total_value)}</div>
         </div>
       </div>
 
       {/* Unclassified warning */}
       {data.unclassified_warning && (
         <div style={{
-          background: '#4a3510', border: '1px solid #f9a825', borderRadius: 6,
-          padding: '0.6rem 1rem', marginBottom: '1rem', color: '#ffca28', fontSize: '0.85rem',
+          background: 'var(--p-4a3510)', border: '1px solid var(--warning)', borderRadius: 6,
+          padding: '0.6rem 1rem', marginBottom: '1rem', color: 'var(--p-ffca28)', fontSize: '0.85rem',
         }}>
           Warning: {data.unclassified_warning}
         </div>
@@ -299,11 +299,11 @@ function ExposureTab({ pf }) {
       </div>
 
       {/* Holdings table */}
-      <h3 style={{ color: '#e0e8f0', marginBottom: '0.5rem' }}>Holdings Detail</h3>
+      <h3 style={{ color: 'var(--p-e0e8f0)', marginBottom: '0.5rem' }}>Holdings Detail</h3>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
           <thead>
-            <tr style={{ borderBottom: '2px solid #334155' }}>
+            <tr style={{ borderBottom: '2px solid var(--p-334155)' }}>
               <th style={thStyle}>Ticker</th>
               <th style={thStyle}>Description</th>
               <th style={thStyle}>Pillar</th>
@@ -322,7 +322,7 @@ function ExposureTab({ pf }) {
                 onMouseEnter={() => setHoveredRow(i)}
                 onMouseLeave={() => setHoveredRow(-1)}
                 style={{
-                  borderBottom: '1px solid #1e293b',
+                  borderBottom: '1px solid var(--p-1e293b)',
                   background: hoveredRow === i
                     ? 'rgba(144,202,249,0.12)'
                     : h.macro_label === 'Unfavorable' ? 'rgba(239,83,80,0.06)'
@@ -330,7 +330,7 @@ function ExposureTab({ pf }) {
                   cursor: 'default',
                   transition: 'background 0.15s ease',
               }}>
-                <td style={{ ...tdStyle, fontWeight: 600, color: '#90caf9' }}>{h.ticker}</td>
+                <td style={{ ...tdStyle, fontWeight: 600, color: 'var(--accent-2)' }}>{h.ticker}</td>
                 <td style={{ ...tdStyle, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {h.description}
                 </td>
@@ -341,16 +341,16 @@ function ExposureTab({ pf }) {
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
                     {h.sensitivity_tags?.map((tag, ti) => (
                       <span key={ti} style={{
-                        background: barColors[tag] || '#555', color: '#000',
+                        background: barColors[tag] || 'var(--p-555)', color: 'var(--black)',
                         borderRadius: 4, padding: '1px 6px', fontSize: '0.7rem', fontWeight: 600,
                       }}>{tag.replace(/_/g, ' ')}</span>
                     ))}
                   </div>
                 </td>
-                <td style={{ ...tdStyle, color: '#90a4ae', fontSize: '0.75rem' }}>{h.sensitivity_source}</td>
+                <td style={{ ...tdStyle, color: 'var(--text-dim-2)', fontSize: '0.75rem' }}>{h.sensitivity_source}</td>
                 <td style={{ ...tdStyle, textAlign: 'center' }}>
                   <span style={{
-                    background: scoreBadgeColor(h.macro_score), color: '#fff',
+                    background: scoreBadgeColor(h.macro_score), color: 'var(--white)',
                     borderRadius: 4, padding: '2px 8px', fontWeight: 700, fontSize: '0.8rem',
                   }}>{fmtNum(h.macro_score)}</span>
                 </td>
@@ -361,7 +361,7 @@ function ExposureTab({ pf }) {
                   {h.macro_label === 'Unfavorable' && (
                     <button
                       style={{
-                        background: '#1a237e', color: '#90caf9', border: '1px solid #3949ab',
+                        background: 'var(--p-1a237e)', color: 'var(--accent-2)', border: '1px solid var(--p-3949ab)',
                         borderRadius: 4, padding: '3px 8px', cursor: 'pointer', fontSize: '0.72rem',
                       }}
                       onClick={() => navigate(`/consolidation?tab=simulator&sell=${h.ticker}`)}
@@ -402,8 +402,8 @@ function TiltsTab({ pf }) {
 
   useEffect(() => { load() }, [load])
 
-  if (loading) return <p style={{ color: '#90caf9' }}>Generating rebalancing suggestions...</p>
-  if (error) return <p style={{ color: '#ef5350' }}>{error}</p>
+  if (loading) return <p style={{ color: 'var(--accent-2)' }}>Generating rebalancing suggestions...</p>
+  if (error) return <p style={{ color: 'var(--neg-2)' }}>{error}</p>
   if (!data) return null
 
   const suggestions = data.suggestions || []
@@ -417,26 +417,26 @@ function TiltsTab({ pf }) {
       {/* Header */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
         <div style={{
-          background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+          background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: 8,
           padding: '0.75rem 1.25rem',
         }}>
-          <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>Current Regime</div>
-          <div style={{ fontSize: '1rem', fontWeight: 700, color: '#e0e8f0' }}>{data.current_regime}</div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)', marginBottom: 4 }}>Current Regime</div>
+          <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--p-e0e8f0)' }}>{data.current_regime}</div>
         </div>
         {data.conditions && (
           <div style={{
-            background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+            background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: 8,
             padding: '0.75rem 1.25rem',
           }}>
-            <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>Active Conditions</div>
-            <div style={{ fontSize: '1rem', fontWeight: 700, color: '#ffca28' }}>{data.conditions}</div>
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)', marginBottom: 4 }}>Active Conditions</div>
+            <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--p-ffca28)' }}>{data.conditions}</div>
           </div>
         )}
         <div style={{
-          background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+          background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: 8,
           padding: '0.75rem 1.25rem',
         }}>
-          <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>Alignment Score</div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)', marginBottom: 4 }}>Alignment Score</div>
           <div style={{ fontSize: '1.2rem', fontWeight: 700, color: labelColor(data.alignment_score > 0.3 ? 'Favorable' : data.alignment_score < -0.3 ? 'Unfavorable' : 'Neutral') }}>
             {fmtNum(data.alignment_score)}
           </div>
@@ -446,32 +446,32 @@ function TiltsTab({ pf }) {
       {/* Breakeven Rebalancing Target */}
       {data.breakeven_target?.tags?.length > 0 && (
         <div style={{
-          background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+          background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: 8,
           padding: '1rem 1.25rem', marginBottom: '1rem',
         }}>
-          <h3 style={{ color: '#e0e8f0', margin: '0 0 0.5rem' }}>
+          <h3 style={{ color: 'var(--p-e0e8f0)', margin: '0 0 0.5rem' }}>
             Rebalance to Breakeven
-            <span style={{ fontSize: '0.75rem', color: '#90a4ae', fontWeight: 400, marginLeft: 8 }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim-2)', fontWeight: 400, marginLeft: 8 }}>
               Shift {fmtPct(data.breakeven_target.total_shift_pct)} ({fmt$(data.breakeven_target.total_shift_needed)}) from unfavorable {'->'} favorable to reach neutral alignment
             </span>
           </h3>
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-            <div style={{ background: 'rgba(239,83,80,0.1)', border: '1px solid #c62828', borderRadius: 6, padding: '0.4rem 0.75rem', textAlign: 'center' }}>
-              <div style={{ fontSize: '0.65rem', color: '#ef9a9a' }}>Unfavorable</div>
-              <div style={{ fontSize: '1rem', fontWeight: 700, color: '#ef5350' }}>{fmtPct(data.breakeven_target.current_unfavorable_pct)}</div>
+            <div style={{ background: 'rgba(239,83,80,0.1)', border: '1px solid var(--danger-solid)', borderRadius: 6, padding: '0.4rem 0.75rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '0.65rem', color: 'var(--p-ef9a9a)' }}>Unfavorable</div>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--neg-2)' }}>{fmtPct(data.breakeven_target.current_unfavorable_pct)}</div>
             </div>
-            <div style={{ background: 'rgba(255,202,40,0.08)', border: '1px solid #f9a825', borderRadius: 6, padding: '0.4rem 0.75rem', textAlign: 'center' }}>
-              <div style={{ fontSize: '0.65rem', color: '#fff59d' }}>Neutral</div>
-              <div style={{ fontSize: '1rem', fontWeight: 700, color: '#ffca28' }}>{fmtPct(data.breakeven_target.current_neutral_pct)}</div>
+            <div style={{ background: 'rgba(255,202,40,0.08)', border: '1px solid var(--warning)', borderRadius: 6, padding: '0.4rem 0.75rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '0.65rem', color: 'var(--p-fff59d)' }}>Neutral</div>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--p-ffca28)' }}>{fmtPct(data.breakeven_target.current_neutral_pct)}</div>
             </div>
-            <div style={{ background: 'rgba(76,175,80,0.08)', border: '1px solid #2e7d32', borderRadius: 6, padding: '0.4rem 0.75rem', textAlign: 'center' }}>
-              <div style={{ fontSize: '0.65rem', color: '#a5d6a7' }}>Favorable</div>
-              <div style={{ fontSize: '1rem', fontWeight: 700, color: '#4caf50' }}>{fmtPct(data.breakeven_target.current_favorable_pct)}</div>
+            <div style={{ background: 'rgba(76,175,80,0.08)', border: '1px solid var(--success-solid)', borderRadius: 6, padding: '0.4rem 0.75rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '0.65rem', color: 'var(--p-a5d6a7)' }}>Favorable</div>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--p-4caf50)' }}>{fmtPct(data.breakeven_target.current_favorable_pct)}</div>
             </div>
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid #334155' }}>
+              <tr style={{ borderBottom: '1px solid var(--p-334155)' }}>
                 <th style={{ ...thStyle, width: '30%' }}>Asset Class</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>Current %</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>Target %</th>
@@ -481,20 +481,20 @@ function TiltsTab({ pf }) {
             </thead>
             <tbody>
               {data.breakeven_target.tags.map((t, i) => (
-                <tr key={i} style={{ borderBottom: '1px solid #1a2233' }}>
-                  <td style={{ ...tdStyle, fontWeight: 600, color: '#81c784' }}>{t.label}</td>
+                <tr key={i} style={{ borderBottom: '1px solid var(--grid-line)' }}>
+                  <td style={{ ...tdStyle, fontWeight: 600, color: 'var(--p-81c784)' }}>{t.label}</td>
                   <td style={{ ...tdStyle, textAlign: 'right' }}>{fmtPct(t.current_pct)}</td>
-                  <td style={{ ...tdStyle, textAlign: 'right', color: '#4caf50' }}>{fmtPct(t.target_pct)}</td>
-                  <td style={{ ...tdStyle, textAlign: 'right', color: '#ffca28', fontWeight: 600 }}>+{fmtPct(t.gap_pct)}</td>
-                  <td style={{ ...tdStyle, textAlign: 'right', color: '#4caf50' }}>{fmt$(t.gap_dollars)}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-4caf50)' }}>{fmtPct(t.target_pct)}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-ffca28)', fontWeight: 600 }}>+{fmtPct(t.gap_pct)}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-4caf50)' }}>{fmt$(t.gap_dollars)}</td>
                 </tr>
               ))}
-              <tr style={{ borderTop: '2px solid #334155' }}>
-                <td style={{ ...tdStyle, fontWeight: 700, color: '#e0e8f0' }}>Total Shift</td>
+              <tr style={{ borderTop: '2px solid var(--p-334155)' }}>
+                <td style={{ ...tdStyle, fontWeight: 700, color: 'var(--p-e0e8f0)' }}>Total Shift</td>
                 <td style={tdStyle}></td>
                 <td style={tdStyle}></td>
-                <td style={{ ...tdStyle, textAlign: 'right', color: '#ffca28', fontWeight: 700 }}>+{fmtPct(data.breakeven_target.total_shift_pct)}</td>
-                <td style={{ ...tdStyle, textAlign: 'right', color: '#4caf50', fontWeight: 700 }}>{fmt$(data.breakeven_target.total_shift_needed)}</td>
+                <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-ffca28)', fontWeight: 700 }}>+{fmtPct(data.breakeven_target.total_shift_pct)}</td>
+                <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-4caf50)', fontWeight: 700 }}>{fmt$(data.breakeven_target.total_shift_needed)}</td>
               </tr>
             </tbody>
           </table>
@@ -505,7 +505,7 @@ function TiltsTab({ pf }) {
         {/* Next dollar pie chart */}
         {pieLabels.length > 0 && (
           <div style={{ flex: '0 1 380px' }}>
-            <h3 style={{ color: '#e0e8f0', marginBottom: '0.5rem' }}>Where Your Next Dollar Should Go</h3>
+            <h3 style={{ color: 'var(--p-e0e8f0)', marginBottom: '0.5rem' }}>Where Your Next Dollar Should Go</h3>
             <Plot
               data={[{
                 type: 'pie',
@@ -531,7 +531,7 @@ function TiltsTab({ pf }) {
 
         {/* Suggestion cards */}
         <div style={{ flex: '1 1 400px' }}>
-          <h3 style={{ color: '#e0e8f0', marginBottom: '0.5rem' }}>Suggestions</h3>
+          <h3 style={{ color: 'var(--p-e0e8f0)', marginBottom: '0.5rem' }}>Suggestions</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {suggestions.map((s, i) => {
               const isIncrease = s.action === 'increase'
@@ -552,21 +552,21 @@ function TiltsTab({ pf }) {
                       {actionLabel}: {s.target_label || 'Current Allocation'}
                     </span>
                     {s.current_pct != null && (
-                      <span style={{ fontSize: '0.8rem', color: '#90a4ae' }}>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-dim-2)' }}>
                         {fmtPct(s.current_pct)} {'->'} {fmtPct(s.suggested_pct)}
                       </span>
                     )}
                   </div>
-                  <p style={{ color: '#b0bec5', fontSize: '0.82rem', margin: '4px 0 8px' }}>{s.reason}</p>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', margin: '4px 0 8px' }}>{s.reason}</p>
 
                   {/* Tickers */}
                   {(s.tickers_in_portfolio?.length > 0 || s.tickers_to_consider_reducing?.length > 0) && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
                       {(s.tickers_in_portfolio || s.tickers_to_consider_reducing || []).map((t, ti) => (
                         <span key={ti} style={{
-                          background: '#263238', border: '1px solid #455a64',
+                          background: 'var(--p-263238)', border: '1px solid var(--secondary-solid)',
                           borderRadius: 4, padding: '2px 8px', fontSize: '0.75rem',
-                          color: '#90caf9', fontWeight: 600,
+                          color: 'var(--accent-2)', fontWeight: 600,
                         }}>{t}</span>
                       ))}
                     </div>
@@ -575,15 +575,15 @@ function TiltsTab({ pf }) {
                   {/* Candidate ETFs for categories user lacks exposure */}
                   {isIncrease && s.candidate_etfs?.length > 0 && (
                     <div style={{ marginTop: 6, marginBottom: 6 }}>
-                      <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4, fontWeight: 600 }}>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim-2)', marginBottom: 4, fontWeight: 600 }}>
                         Consider adding:
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                         {s.candidate_etfs.map((c, ci) => (
                           <span key={ci} style={{
-                            background: '#1a3a1a', border: '1px solid #2e7d32',
+                            background: 'var(--p-1a3a1a)', border: '1px solid var(--success-solid)',
                             borderRadius: 4, padding: '2px 8px', fontSize: '0.75rem',
-                            color: '#81c784', fontWeight: 600,
+                            color: 'var(--p-81c784)', fontWeight: 600,
                           }} title={c.name}>{c.ticker}</span>
                         ))}
                       </div>
@@ -594,7 +594,7 @@ function TiltsTab({ pf }) {
                   {isReduce && s.consolidation_link && s.tickers_to_consider_reducing?.length > 0 && (
                     <button
                       style={{
-                        background: '#1a237e', color: '#90caf9', border: '1px solid #3949ab',
+                        background: 'var(--p-1a237e)', color: 'var(--accent-2)', border: '1px solid var(--p-3949ab)',
                         borderRadius: 4, padding: '4px 12px', cursor: 'pointer', fontSize: '0.78rem',
                         marginTop: 4,
                       }}
@@ -719,8 +719,8 @@ function IncomeBenchmarkTab({ pf }) {
       .finally(() => setTargetSaving(false))
   }, [pf, defaults, load])
 
-  if (loading) return <p style={{ color: '#90caf9' }}>Analyzing portfolio against income benchmark...</p>
-  if (error) return <p style={{ color: '#ef5350' }}>{error}</p>
+  if (loading) return <p style={{ color: 'var(--accent-2)' }}>Analyzing portfolio against income benchmark...</p>
+  if (error) return <p style={{ color: 'var(--neg-2)' }}>{error}</p>
   if (!data) return null
 
   const { comparison, holdings_detail, summary } = data
@@ -738,11 +738,11 @@ function IncomeBenchmarkTab({ pf }) {
           { label: 'Diversification', value: summary.diversification_score + '/100' },
         ].map((c, i) => (
           <div key={i} style={{
-            background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+            background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: 8,
             padding: '0.6rem 1rem', minWidth: 130,
           }}>
-            <div style={{ fontSize: '0.65rem', color: '#90a4ae', marginBottom: 3 }}>{c.label}</div>
-            <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#e0e8f0' }}>{c.value}</div>
+            <div style={{ fontSize: '0.65rem', color: 'var(--text-dim-2)', marginBottom: 3 }}>{c.label}</div>
+            <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--p-e0e8f0)' }}>{c.value}</div>
           </div>
         ))}
       </div>
@@ -751,22 +751,22 @@ function IncomeBenchmarkTab({ pf }) {
       {!editingTargets ? (
         <div style={{ marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <button onClick={() => setEditingTargets(true)}
-            style={{ background: '#334155', color: '#90caf9', border: '1px solid #475569', borderRadius: 6,
+            style={{ background: 'var(--p-334155)', color: 'var(--accent-2)', border: '1px solid var(--p-475569)', borderRadius: 6,
               padding: '0.35rem 0.75rem', fontSize: '0.75rem', cursor: 'pointer' }}>
             Edit Targets
           </button>
-          {isCustom && <span style={{ fontSize: '0.7rem', color: '#ffca28' }}>Custom targets active</span>}
+          {isCustom && <span style={{ fontSize: '0.7rem', color: 'var(--p-ffca28)' }}>Custom targets active</span>}
         </div>
       ) : (
         <div style={{
-          background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+          background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: 8,
           padding: '0.75rem 1rem', marginBottom: '0.75rem',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-            <span style={{ fontWeight: 600, color: '#e0e8f0', fontSize: '0.85rem' }}>Target Allocations</span>
+            <span style={{ fontWeight: 600, color: 'var(--p-e0e8f0)', fontSize: '0.85rem' }}>Target Allocations</span>
             <span style={{
               fontSize: '0.75rem', fontWeight: 600,
-              color: Math.abs(draftTotal - 100) > 0.5 ? '#ef5350' : '#4caf50',
+              color: Math.abs(draftTotal - 100) > 0.5 ? 'var(--neg-2)' : 'var(--p-4caf50)',
             }}>
               Total: {draftTotal.toFixed(1)}%
             </span>
@@ -774,35 +774,35 @@ function IncomeBenchmarkTab({ pf }) {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.4rem' }}>
             {Object.entries(draftTargets).map(([bucket, pct]) => (
               <div key={bucket} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <span style={{ fontSize: '0.72rem', color: '#b0bec5', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{bucket}</span>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{bucket}</span>
                 <input type="number" min="0" max="100" step="1" value={pct}
                   onChange={e => setDraftTargets(prev => ({ ...prev, [bucket]: parseFloat(e.target.value) || 0 }))}
                   style={{
-                    width: 56, textAlign: 'right', background: '#0f172a', color: '#e0e0e0',
-                    border: '1px solid #475569', borderRadius: 4, padding: '3px 6px', fontSize: '0.78rem',
+                    width: 56, textAlign: 'right', background: 'var(--p-0f172a)', color: 'var(--text)',
+                    border: '1px solid var(--p-475569)', borderRadius: 4, padding: '3px 6px', fontSize: '0.78rem',
                   }}
                 />
-                <span style={{ fontSize: '0.72rem', color: '#667' }}>%</span>
+                <span style={{ fontSize: '0.72rem', color: 'var(--p-667)' }}>%</span>
               </div>
             ))}
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem' }}>
             <button onClick={handleSaveTargets} disabled={targetSaving || Math.abs(draftTotal - 100) > 0.5}
               style={{
-                background: '#2e7d32', color: '#fff', border: 'none', borderRadius: 6,
+                background: 'var(--success-solid)', color: 'var(--white)', border: 'none', borderRadius: 6,
                 padding: '0.35rem 0.75rem', fontSize: '0.75rem', cursor: 'pointer',
                 opacity: (targetSaving || Math.abs(draftTotal - 100) > 0.5) ? 0.5 : 1,
               }}>
               {targetSaving ? 'Saving...' : 'Save'}
             </button>
             <button onClick={() => { setEditingTargets(false); load() }}
-              style={{ background: '#455a64', color: '#ccc', border: 'none', borderRadius: 6,
+              style={{ background: 'var(--secondary-solid)', color: 'var(--p-ccc)', border: 'none', borderRadius: 6,
                 padding: '0.35rem 0.75rem', fontSize: '0.75rem', cursor: 'pointer' }}>
               Cancel
             </button>
             {isCustom && (
               <button onClick={handleResetTargets} disabled={targetSaving}
-                style={{ background: 'transparent', color: '#ef5350', border: '1px solid #ef5350', borderRadius: 6,
+                style={{ background: 'transparent', color: 'var(--neg-2)', border: '1px solid var(--neg-2)', borderRadius: 6,
                   padding: '0.35rem 0.75rem', fontSize: '0.75rem', cursor: 'pointer',
                   opacity: targetSaving ? 0.5 : 1 }}>
                 Reset to Defaults
@@ -859,7 +859,7 @@ function IncomeBenchmarkTab({ pf }) {
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
-            <tr style={{ borderBottom: '2px solid #334155' }}>
+            <tr style={{ borderBottom: '2px solid var(--p-334155)' }}>
               {[
                 { key: 'bucket', label: 'Income Bucket', align: 'left', width: '20%' },
                 { key: 'target_pct', label: 'Target %', align: 'right' },
@@ -896,13 +896,13 @@ function IncomeBenchmarkTab({ pf }) {
                 <React.Fragment key={i}>
                   <tr
                     ref={isExpanded ? expandedRowRef : null}
-                    style={{ borderBottom: '1px solid #1a2233', cursor: bucketHoldings.length > 0 ? 'pointer' : 'default' }}
+                    style={{ borderBottom: '1px solid var(--grid-line)', cursor: bucketHoldings.length > 0 ? 'pointer' : 'default' }}
                     onClick={() => bucketHoldings.length > 0 && setExpandedBucket(isExpanded ? null : c.bucket)}
                   >
                     <td style={{ ...ibTd, fontWeight: 600, color: barColors[i % barColors.length] }}>
                       {bucketHoldings.length > 0 && <span style={{ fontSize: '0.7rem', marginRight: 4 }}>{isExpanded ? 'v' : '>'}</span>}
                       {c.bucket}
-                      <span style={{ color: '#666', fontSize: '0.7rem', marginLeft: 4 }}>({c.tickers?.length || 0})</span>
+                      <span style={{ color: 'var(--p-666)', fontSize: '0.7rem', marginLeft: 4 }}>({c.tickers?.length || 0})</span>
                     </td>
                     <td style={{ ...ibTd, textAlign: 'right' }}>{c.target_pct}%</td>
                     <td style={{ ...ibTd, textAlign: 'right' }}>{fmtPct(c.actual_pct)}</td>
@@ -913,20 +913,20 @@ function IncomeBenchmarkTab({ pf }) {
                     <td style={{ ...ibTd, textAlign: 'right' }}>{fmt$(c.actual_value)}</td>
                     <td style={{ ...ibTd, textAlign: 'right' }}>{fmt$(c.monthly_income)}</td>
                     <td style={{ ...ibTd, textAlign: 'right' }}>{fmtPct(c.bucket_yield)}</td>
-                    <td style={{ ...ibTd, textAlign: 'right', color: (c.gap_dollars || 0) > 0 ? '#ef5350' : '#4caf50', fontWeight: 600 }}>
+                    <td style={{ ...ibTd, textAlign: 'right', color: (c.gap_dollars || 0) > 0 ? 'var(--neg-2)' : 'var(--p-4caf50)', fontWeight: 600 }}>
                       {(c.gap_dollars || 0) > 0 ? '-' : '+'}{fmt$(Math.abs(c.gap_dollars || 0))}
                     </td>
                   </tr>
                   {isExpanded && bucketHoldings
                     .sort((a, b) => (b.current_value || 0) - (a.current_value || 0))
                     .map((h, hi) => (
-                    <tr key={`${i}-${hi}`} style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid #111' }}>
+                    <tr key={`${i}-${hi}`} style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid var(--p-111)' }}>
                       <td style={{ ...ibTd, paddingLeft: 28, fontSize: '0.78rem' }}>
-                        <span style={{ color: '#90caf9', fontWeight: 600 }}>{h.ticker}</span>
-                        <span style={{ color: '#667', marginLeft: 6, fontSize: '0.72rem' }}>{h.description?.substring(0, 30)}</span>
-                        {h.is_overridden && <span style={{ color: '#64b5f6', marginLeft: 6, fontSize: '0.65rem', fontWeight: 600 }}>OVERRIDE</span>}
+                        <span style={{ color: 'var(--accent-2)', fontWeight: 600 }}>{h.ticker}</span>
+                        <span style={{ color: 'var(--p-667)', marginLeft: 6, fontSize: '0.72rem' }}>{h.description?.substring(0, 30)}</span>
+                        {h.is_overridden && <span style={{ color: 'var(--accent)', marginLeft: 6, fontSize: '0.65rem', fontWeight: 600 }}>OVERRIDE</span>}
                       </td>
-                      <td style={{ ...ibTd, textAlign: 'right', color: '#667' }}></td>
+                      <td style={{ ...ibTd, textAlign: 'right', color: 'var(--p-667)' }}></td>
                       <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmtPct(h.pct_of_portfolio)}</td>
                       <td style={{ ...ibTd, textAlign: 'right' }}></td>
                       <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{h.quantity != null ? h.quantity.toLocaleString(undefined, { maximumFractionDigits: 2 }) : ''}</td>
@@ -940,7 +940,7 @@ function IncomeBenchmarkTab({ pf }) {
                           onClick={e => e.stopPropagation()}
                           onChange={e => handleBucketChange(h.ticker, e.target.value)}
                           style={{
-                            background: '#0f172a', color: '#e0e0e0', border: '1px solid #334155',
+                            background: 'var(--p-0f172a)', color: 'var(--text)', border: '1px solid var(--p-334155)',
                             borderRadius: 4, padding: '2px 4px', fontSize: '0.7rem', cursor: 'pointer',
                             opacity: saving[h.ticker] ? 0.5 : 1,
                           }}
@@ -966,19 +966,19 @@ function IncomeBenchmarkTab({ pf }) {
         if (!excluded.length) return null
         return (
           <div style={{
-            background: 'rgba(97,97,97,0.08)', border: '1px solid #424242',
+            background: 'rgba(97,97,97,0.08)', border: '1px solid var(--p-424242)',
             borderRadius: 8, padding: '0.75rem 1rem', marginTop: '1rem',
           }}>
-            <div style={{ color: '#90a4ae', fontWeight: 600, marginBottom: 8 }}>
+            <div style={{ color: 'var(--text-dim-2)', fontWeight: 600, marginBottom: 8 }}>
               Excluded Holdings ({excluded.length})
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <tbody>
                 {excluded.map((h, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid #263238' }}>
+                  <tr key={i} style={{ borderBottom: '1px solid var(--p-263238)' }}>
                     <td style={{ ...ibTd, fontSize: '0.78rem' }}>
-                      <span style={{ color: '#90caf9', fontWeight: 600 }}>{h.ticker}</span>
-                      <span style={{ color: '#667', marginLeft: 6, fontSize: '0.72rem' }}>{h.description?.substring(0, 30)}</span>
+                      <span style={{ color: 'var(--accent-2)', fontWeight: 600 }}>{h.ticker}</span>
+                      <span style={{ color: 'var(--p-667)', marginLeft: 6, fontSize: '0.72rem' }}>{h.description?.substring(0, 30)}</span>
                     </td>
                     <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmt$(h.current_value)}</td>
                     <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmt$(h.monthly_income)}</td>
@@ -988,7 +988,7 @@ function IncomeBenchmarkTab({ pf }) {
                         disabled={saving[h.ticker]}
                         onChange={e => handleBucketChange(h.ticker, e.target.value)}
                         style={{
-                          background: '#0f172a', color: '#e0e0e0', border: '1px solid #334155',
+                          background: 'var(--p-0f172a)', color: 'var(--text)', border: '1px solid var(--p-334155)',
                           borderRadius: 4, padding: '2px 4px', fontSize: '0.7rem', cursor: 'pointer',
                           opacity: saving[h.ticker] ? 0.5 : 1,
                         }}
@@ -1010,13 +1010,13 @@ function IncomeBenchmarkTab({ pf }) {
       {/* Unclassified warning */}
       {(data.unclassified_pct || 0) > 0 && (
         <div style={{
-          background: 'rgba(255,202,40,0.08)', border: '1px solid #f9a825',
+          background: 'rgba(255,202,40,0.08)', border: '1px solid var(--warning)',
           borderRadius: 8, padding: '0.75rem 1rem', marginTop: '1rem',
         }}>
-          <div style={{ color: '#ffca28', fontWeight: 600, marginBottom: 4 }}>
+          <div style={{ color: 'var(--p-ffca28)', fontWeight: 600, marginBottom: 4 }}>
             {fmtPct(data.unclassified_pct)} Unclassified
           </div>
-          <div style={{ color: '#b0bec5', fontSize: '0.8rem' }}>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
             These holdings couldn't be auto-classified: {(data.unclassified_tickers || []).join(', ')}.
             Use the bucket dropdown when expanding a row to reclassify, or assign pillar types in Manage Holdings.
           </div>
@@ -1113,9 +1113,9 @@ function ClassificationsTab({ pf }) {
       .finally(() => setSaving(s => ({ ...s, [ticker]: false })))
   }, [pf, editTicker])
 
-  if (loading) return <p style={{ color: '#90caf9' }}>Loading classifications...</p>
-  if (error) return <p style={{ color: '#ef5350' }}>{error}</p>
-  if (!holdings.length) return <p style={{ color: '#90a4ae' }}>No holdings found.</p>
+  if (loading) return <p style={{ color: 'var(--accent-2)' }}>Loading classifications...</p>
+  if (error) return <p style={{ color: 'var(--neg-2)' }}>{error}</p>
+  if (!holdings.length) return <p style={{ color: 'var(--text-dim-2)' }}>No holdings found.</p>
 
   const tagKeys = Object.keys(sensOpts).filter(k => k !== 'excluded').sort()
 
@@ -1140,17 +1140,17 @@ function ClassificationsTab({ pf }) {
     <div>
       {/* Summary */}
       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-        <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '0.6rem 1rem', textAlign: 'center' }}>
-          <div style={{ fontSize: '0.7rem', color: '#90a4ae' }}>Total Holdings</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#e0e8f0' }}>{holdings.length}</div>
+        <div style={{ background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: 8, padding: '0.6rem 1rem', textAlign: 'center' }}>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)' }}>Total Holdings</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--p-e0e8f0)' }}>{holdings.length}</div>
         </div>
-        <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '0.6rem 1rem', textAlign: 'center' }}>
-          <div style={{ fontSize: '0.7rem', color: '#90a4ae' }}>Overridden</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#64b5f6' }}>{overrideCount}</div>
+        <div style={{ background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: 8, padding: '0.6rem 1rem', textAlign: 'center' }}>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)' }}>Overridden</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--accent)' }}>{overrideCount}</div>
         </div>
-        <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '0.6rem 1rem', textAlign: 'center' }}>
-          <div style={{ fontSize: '0.7rem', color: '#90a4ae' }}>Excluded</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#616161' }}>{excludedCount}</div>
+        <div style={{ background: 'var(--p-1e293b)', border: '1px solid var(--p-334155)', borderRadius: 8, padding: '0.6rem 1rem', textAlign: 'center' }}>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)' }}>Excluded</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--p-616161)' }}>{excludedCount}</div>
         </div>
       </div>
 
@@ -1160,16 +1160,16 @@ function ClassificationsTab({ pf }) {
           <button key={val}
             onClick={() => setFilter(val)}
             style={{
-              background: filter === val ? '#1a237e' : '#1e293b',
-              color: filter === val ? '#90caf9' : '#90a4ae',
-              border: `1px solid ${filter === val ? '#3949ab' : '#334155'}`,
+              background: filter === val ? 'var(--p-1a237e)' : 'var(--p-1e293b)',
+              color: filter === val ? 'var(--accent-2)' : 'var(--text-dim-2)',
+              border: `1px solid ${filter === val ? 'var(--p-3949ab)' : 'var(--p-334155)'}`,
               borderRadius: 4, padding: '4px 12px', cursor: 'pointer', fontSize: '0.78rem',
             }}
           >{lbl}</button>
         ))}
       </div>
 
-      <p style={{ color: '#8899aa', fontSize: '0.78rem', marginBottom: '0.75rem' }}>
+      <p style={{ color: 'var(--text-dim)', fontSize: '0.78rem', marginBottom: '0.75rem' }}>
         Override the auto-detected sensitivity classification for any holding, or exclude it from macro analysis entirely.
       </p>
 
@@ -1177,7 +1177,7 @@ function ClassificationsTab({ pf }) {
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
           <thead>
-            <tr style={{ borderBottom: '2px solid #334155' }}>
+            <tr style={{ borderBottom: '2px solid var(--p-334155)' }}>
               <th style={thStyle}>Ticker</th>
               <th style={thStyle}>Description</th>
               <th style={thStyle}>Source</th>
@@ -1194,18 +1194,18 @@ function ClassificationsTab({ pf }) {
 
               return (
                 <tr key={i} style={{
-                  borderBottom: '1px solid #1e293b',
+                  borderBottom: '1px solid var(--p-1e293b)',
                   background: hasOverride ? 'rgba(100,181,246,0.06)' :
                     h.macro_label === 'Excluded' ? 'rgba(97,97,97,0.08)' : 'transparent',
                 }}>
-                  <td style={{ ...tdStyle, fontWeight: 600, color: '#90caf9' }}>{h.ticker}</td>
+                  <td style={{ ...tdStyle, fontWeight: 600, color: 'var(--accent-2)' }}>{h.ticker}</td>
                   <td style={{ ...tdStyle, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {h.description}
                   </td>
                   <td style={{ ...tdStyle }}>
                     <span style={{
-                      background: hasOverride ? '#1a237e' : h.sensitivity_source === 'Unclassified' ? '#c62828' : '#263238',
-                      color: hasOverride ? '#90caf9' : h.sensitivity_source === 'Unclassified' ? '#ffcdd2' : '#b0bec5',
+                      background: hasOverride ? 'var(--p-1a237e)' : h.sensitivity_source === 'Unclassified' ? 'var(--danger-solid)' : 'var(--p-263238)',
+                      color: hasOverride ? 'var(--accent-2)' : h.sensitivity_source === 'Unclassified' ? 'var(--p-ffcdd2)' : 'var(--text-muted)',
                       borderRadius: 4, padding: '2px 8px', fontSize: '0.72rem', fontWeight: 600,
                     }}>{h.sensitivity_source}</span>
                   </td>
@@ -1213,7 +1213,7 @@ function ClassificationsTab({ pf }) {
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
                       {h.sensitivity_tags?.map((tag, ti) => (
                         <span key={ti} style={{
-                          background: barColors[tag] || '#555', color: '#000',
+                          background: barColors[tag] || 'var(--p-555)', color: 'var(--black)',
                           borderRadius: 4, padding: '1px 6px', fontSize: '0.7rem', fontWeight: 600,
                         }}>{(sensOpts[tag] || tag.replace(/_/g, ' '))}</span>
                       ))}
@@ -1222,11 +1222,11 @@ function ClassificationsTab({ pf }) {
                   <td style={{ ...tdStyle, textAlign: 'center' }}>
                     {h.macro_score != null ? (
                       <span style={{
-                        background: scoreBadgeColor(h.macro_score), color: '#fff',
+                        background: scoreBadgeColor(h.macro_score), color: 'var(--white)',
                         borderRadius: 4, padding: '2px 8px', fontWeight: 700, fontSize: '0.8rem',
                       }}>{fmtNum(h.macro_score)}</span>
                     ) : (
-                      <span style={{ color: '#616161', fontSize: '0.8rem' }}>--</span>
+                      <span style={{ color: 'var(--p-616161)', fontSize: '0.8rem' }}>--</span>
                     )}
                   </td>
                   <td style={{ ...tdStyle, textAlign: 'center' }}>
@@ -1237,7 +1237,7 @@ function ClassificationsTab({ pf }) {
                           value={editTags}
                           onChange={e => setEditTags(Array.from(e.target.selectedOptions, o => o.value))}
                           style={{
-                            background: '#0f172a', color: '#e0e0e0', border: '1px solid #334155',
+                            background: 'var(--p-0f172a)', color: 'var(--text)', border: '1px solid var(--p-334155)',
                             borderRadius: 4, padding: '2px 4px', fontSize: '0.75rem', minWidth: 140, minHeight: 60,
                           }}
                         >
@@ -1250,7 +1250,7 @@ function ClassificationsTab({ pf }) {
                             disabled={!editTags.length || isSaving}
                             onClick={() => handleSave(h.ticker, editTags)}
                             style={{
-                              background: '#2e7d32', color: '#fff', border: 'none', borderRadius: 4,
+                              background: 'var(--success-solid)', color: 'var(--white)', border: 'none', borderRadius: 4,
                               padding: '3px 10px', cursor: 'pointer', fontSize: '0.72rem',
                               opacity: (!editTags.length || isSaving) ? 0.5 : 1,
                             }}
@@ -1259,7 +1259,7 @@ function ClassificationsTab({ pf }) {
                             onClick={() => handleSave(h.ticker, ['excluded'])}
                             disabled={isSaving}
                             style={{
-                              background: '#424242', color: '#bbb', border: 'none', borderRadius: 4,
+                              background: 'var(--p-424242)', color: 'var(--p-bbb)', border: 'none', borderRadius: 4,
                               padding: '3px 10px', cursor: 'pointer', fontSize: '0.72rem',
                               opacity: isSaving ? 0.5 : 1,
                             }}
@@ -1267,7 +1267,7 @@ function ClassificationsTab({ pf }) {
                           <button
                             onClick={() => { setEditTicker(null); setEditTags([]) }}
                             style={{
-                              background: 'transparent', color: '#90a4ae', border: '1px solid #334155',
+                              background: 'transparent', color: 'var(--text-dim-2)', border: '1px solid var(--p-334155)',
                               borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: '0.72rem',
                             }}
                           >Cancel</button>
@@ -1278,7 +1278,7 @@ function ClassificationsTab({ pf }) {
                         <button
                           onClick={() => { setEditTicker(h.ticker); setEditTags(h.sensitivity_tags || []) }}
                           style={{
-                            background: '#1a237e', color: '#90caf9', border: '1px solid #3949ab',
+                            background: 'var(--p-1a237e)', color: 'var(--accent-2)', border: '1px solid var(--p-3949ab)',
                             borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: '0.72rem',
                           }}
                         >Edit</button>
@@ -1287,7 +1287,7 @@ function ClassificationsTab({ pf }) {
                             disabled={isSaving}
                             onClick={() => handleRevert(h.ticker)}
                             style={{
-                              background: '#4a1c1c', color: '#ef9a9a', border: '1px solid #6d2c2c',
+                              background: 'var(--p-4a1c1c)', color: 'var(--p-ef9a9a)', border: '1px solid var(--p-6d2c2c)',
                               borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: '0.72rem',
                               opacity: isSaving ? 0.5 : 1,
                             }}
@@ -1307,21 +1307,21 @@ function ClassificationsTab({ pf }) {
 }
 
 const ibTh = {
-  textAlign: 'left', padding: '8px 10px', color: '#90a4ae',
+  textAlign: 'left', padding: '8px 10px', color: 'var(--text-dim-2)',
   fontSize: '0.75rem', fontWeight: 600, whiteSpace: 'nowrap',
 }
 const ibTd = {
-  padding: '8px 10px', color: '#e0e0e0', fontSize: '0.82rem',
+  padding: '8px 10px', color: 'var(--text)', fontSize: '0.82rem',
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const thStyle = {
-  textAlign: 'left', padding: '6px 8px', color: '#90a4ae',
+  textAlign: 'left', padding: '6px 8px', color: 'var(--text-dim-2)',
   fontSize: '0.75rem', fontWeight: 600, whiteSpace: 'nowrap',
 }
 const tdStyle = {
-  padding: '6px 8px', color: '#e0e0e0', fontSize: '0.82rem',
+  padding: '6px 8px', color: 'var(--text)', fontSize: '0.82rem',
 }
 
 // ─── Tab 6: Regime Quadrants (Markov Chain) ─────────────────────────────────
@@ -1526,8 +1526,8 @@ function QuadrantTab({ pf }) {
     ? `Transition engine is anchored to Q${transitionAnchorQuadrant} ${getQuadrantShortName(transitionAnchorQuadrant)} using market-proxy history.`
     : `FRED classifies the current macro state as Q${currentQuadrant} ${getQuadrantShortName(currentQuadrant)}, while the transition engine is anchored to market-proxy Q${transitionAnchorQuadrant} ${getQuadrantShortName(transitionAnchorQuadrant)} for consistency with the Markov training data.`
 
-  if (loading) return <p style={{ color: '#90caf9' }}>Loading quadrant analysis (fetching 5 years of data)...</p>
-  if (error) return <p style={{ color: '#ef5350' }}>{error}</p>
+  if (loading) return <p style={{ color: 'var(--accent-2)' }}>Loading quadrant analysis (fetching 5 years of data)...</p>
+  if (error) return <p style={{ color: 'var(--neg-2)' }}>{error}</p>
   if (!data) return null
 
   return (
@@ -1539,55 +1539,55 @@ function QuadrantTab({ pf }) {
           border: `2px solid ${QUAD_COLORS[data.current_quadrant]}`,
           borderRadius: 10, padding: '0.75rem 1.5rem', textAlign: 'center',
         }}>
-          <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Current Quadrant</div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Current Quadrant</div>
           <div style={{ fontSize: '1.4rem', fontWeight: 700, color: QUAD_COLORS[data.current_quadrant] }}>
             Q{data.current_quadrant} - {data.current_quadrant_name}
           </div>
         </div>
-        <div style={{ background: '#16213e', border: '1px solid #0f3460', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
-          <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>Confidence (Self-Transition)</div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: data.confidence_pct >= 50 ? '#4caf50' : data.confidence_pct >= 30 ? '#ff9800' : '#ef5350' }}>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)', marginBottom: 4 }}>Confidence (Self-Transition)</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 700, color: data.confidence_pct >= 50 ? 'var(--p-4caf50)' : data.confidence_pct >= 30 ? 'var(--p-ff9800)' : 'var(--neg-2)' }}>
             {data.confidence_pct}%
           </div>
         </div>
-        <div style={{ background: '#16213e', border: '1px solid #0f3460', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
-          <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)', marginBottom: 4 }}>
             Growth {data.classification_source === 'FRED' ? 'Z-Score' : 'Momentum'}
           </div>
-          <div style={{ fontSize: '1.1rem', fontWeight: 600, color: data.growth_score > 0 ? '#4caf50' : '#ef5350' }}>
+          <div style={{ fontSize: '1.1rem', fontWeight: 600, color: data.growth_score > 0 ? 'var(--p-4caf50)' : 'var(--neg-2)' }}>
             {data.growth_score > 0 ? 'Up' : 'Down'} {data.growth_score.toFixed(2)}{data.classification_source !== 'FRED' ? '%' : ''}
           </div>
         </div>
-        <div style={{ background: '#16213e', border: '1px solid #0f3460', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
-          <div style={{ fontSize: '0.7rem', color: '#90a4ae', marginBottom: 4 }}>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)', marginBottom: 4 }}>
             Inflation {data.classification_source === 'FRED' ? 'Z-Score' : 'Momentum'}
           </div>
-          <div style={{ fontSize: '1.1rem', fontWeight: 600, color: data.inflation_score > 0 ? '#ef5350' : '#4caf50' }}>
+          <div style={{ fontSize: '1.1rem', fontWeight: 600, color: data.inflation_score > 0 ? 'var(--neg-2)' : 'var(--p-4caf50)' }}>
             {data.inflation_score > 0 ? 'Up' : 'Down'} {data.inflation_score.toFixed(2)}{data.classification_source !== 'FRED' ? '%' : ''}
           </div>
         </div>
-        <div style={{ flex: 1, minWidth: 200, background: '#16213e', border: '1px solid #0f3460', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
-          <div style={{ fontSize: '0.8rem', color: '#b0bec5' }}>{data.current_quadrant_description}</div>
+        <div style={{ flex: 1, minWidth: 200, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '0.75rem 1.25rem' }}>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{data.current_quadrant_description}</div>
         </div>
       </div>
 
-      <div className="card" style={{ padding: '0.7rem 1rem', marginBottom: '1rem', background: '#10192b', border: '1px solid #1d3357' }}>
+      <div className="card" style={{ padding: '0.7rem 1rem', marginBottom: '1rem', background: 'var(--p-10192b)', border: '1px solid var(--p-1d3357)' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
           <div>
-            <div style={{ fontSize: '0.68rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Macro Classification</div>
-            <div style={{ fontSize: '0.9rem', color: '#e0e8f5', fontWeight: 600 }}>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Macro Classification</div>
+            <div style={{ fontSize: '0.9rem', color: 'var(--text-strong)', fontWeight: 600 }}>
               Q{currentQuadrant} {data.current_quadrant_name} via {data.classification_source}
             </div>
           </div>
           <div>
-            <div style={{ fontSize: '0.68rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Transition Engine</div>
-            <div style={{ fontSize: '0.9rem', color: '#e0e8f5', fontWeight: 600 }}>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Transition Engine</div>
+            <div style={{ fontSize: '0.9rem', color: 'var(--text-strong)', fontWeight: 600 }}>
               Q{transitionAnchorQuadrant} {getQuadrantShortName(transitionAnchorQuadrant)} market anchor
             </div>
           </div>
           <div>
-            <div style={{ fontSize: '0.68rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>State Alignment</div>
-            <div style={{ fontSize: '0.9rem', color: statesAligned ? '#4caf50' : '#ff9800', fontWeight: 600 }}>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>State Alignment</div>
+            <div style={{ fontSize: '0.9rem', color: statesAligned ? 'var(--p-4caf50)' : 'var(--p-ff9800)', fontWeight: 600 }}>
               {statesAligned ? 'Aligned' : 'Mixed Signal'}
             </div>
           </div>
@@ -1599,18 +1599,18 @@ function QuadrantTab({ pf }) {
         return (
           <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-              <h3 style={{ color: '#90caf9', margin: 0, fontSize: '1rem' }}>FRED Economic Indicators (Z-Scores)</h3>
-              <span style={{ fontSize: '0.7rem', color: '#666', background: '#0e1525', padding: '2px 8px', borderRadius: 4 }}>
+              <h3 style={{ color: 'var(--accent-2)', margin: 0, fontSize: '1rem' }}>FRED Economic Indicators (Z-Scores)</h3>
+              <span style={{ fontSize: '0.7rem', color: 'var(--p-666)', background: 'var(--p-0e1525)', padding: '2px 8px', borderRadius: 4 }}>
                 Source: {data.classification_source || 'FRED'} | {entries.length} indicators via FRED API
               </span>
             </div>
-            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.6rem', padding: '0.4rem 0.6rem', background: '#0e1525', borderRadius: 6, fontSize: '0.65rem', color: '#90a4ae', alignItems: 'center' }}>
-              <span style={{ fontWeight: 600, color: '#e0e8f5' }}>Z-Score Guide:</span>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.6rem', padding: '0.4rem 0.6rem', background: 'var(--p-0e1525)', borderRadius: 6, fontSize: '0.65rem', color: 'var(--text-dim-2)', alignItems: 'center' }}>
+              <span style={{ fontWeight: 600, color: 'var(--text-strong)' }}>Z-Score Guide:</span>
               <span>A Z-score measures how far a value is from its historical average in standard deviations.</span>
-              <span style={{ color: '#4caf50' }}>* Normal (&lt;1.0)</span>
-              <span style={{ color: '#ff9800' }}>* Elevated (1.0-2.0)</span>
-              <span style={{ color: '#ef5350' }}>* Extreme (&gt;2.0)</span>
-              <span style={{ color: '#90a4ae' }}>| + positive = above avg | - negative = below avg</span>
+              <span style={{ color: 'var(--p-4caf50)' }}>* Normal (&lt;1.0)</span>
+              <span style={{ color: 'var(--p-ff9800)' }}>* Elevated (1.0-2.0)</span>
+              <span style={{ color: 'var(--neg-2)' }}>* Extreme (&gt;2.0)</span>
+              <span style={{ color: 'var(--text-dim-2)' }}>| + positive = above avg | - negative = below avg</span>
             </div>
             {categories.map(cat => {
               const catEntries = entries.filter(([, v]) => v.category === cat.key)
@@ -1628,20 +1628,20 @@ function QuadrantTab({ pf }) {
                       const zChgColor = zChg > 0.01 ? '#4caf50' : zChg < -0.01 ? '#ef5350' : '#666'
                       return (
                         <div key={name} style={{
-                          flex: '1 1 210px', background: '#0e1525', borderRadius: 8, padding: '0.55rem 0.75rem',
+                          flex: '1 1 210px', background: 'var(--p-0e1525)', borderRadius: 8, padding: '0.55rem 0.75rem',
                           border: `1px solid ${extColor}33`,
                         }}>
-                          <div style={{ fontSize: '0.72rem', color: '#90a4ae', marginBottom: 3 }}>{name}</div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', marginBottom: 3 }}>{name}</div>
                           <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', flexWrap: 'wrap' }}>
                             {info.previous_value != null && (
-                              <span style={{ fontSize: '0.72rem', color: '#666', textDecoration: 'line-through' }}>
+                              <span style={{ fontSize: '0.72rem', color: 'var(--p-666)', textDecoration: 'line-through' }}>
                                 {info.previous_value}
                               </span>
                             )}
                             {info.previous_value != null && (
-                              <span style={{ fontSize: '0.72rem', color: '#666' }}>-&gt;</span>
+                              <span style={{ fontSize: '0.72rem', color: 'var(--p-666)' }}>-&gt;</span>
                             )}
-                            <span style={{ fontSize: '1rem', fontWeight: 700, color: '#e0e8f5' }}>
+                            <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-strong)' }}>
                               {info.current_value}
                             </span>
                             <span style={{
@@ -1651,7 +1651,7 @@ function QuadrantTab({ pf }) {
                               Z: {info.z_score?.toFixed(2)}
                             </span>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.65rem', color: '#666', marginTop: 2 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.65rem', color: 'var(--p-666)', marginTop: 2 }}>
                             <span>{info.direction} | {info.extremity}</span>
                             {info.previous_z != null && (
                               <span style={{ color: zChgColor, fontWeight: 600 }}>
@@ -1668,31 +1668,31 @@ function QuadrantTab({ pf }) {
               )
             })}
             {/* Composite Z-scores */}
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem', borderTop: '1px solid #1a2233', paddingTop: '0.5rem' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem', borderTop: '1px solid var(--grid-line)', paddingTop: '0.5rem' }}>
               {data.fred_growth_z != null && (
                 <div style={{
-                  flex: '1 1 200px', background: '#0e1525', borderRadius: 8, padding: '0.55rem 0.75rem',
+                  flex: '1 1 200px', background: 'var(--p-0e1525)', borderRadius: 8, padding: '0.55rem 0.75rem',
                   border: '1px solid #4caf5033',
                 }}>
-                  <div style={{ fontSize: '0.72rem', color: '#90a4ae', marginBottom: 3 }}>Composite Growth Z</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: data.fred_growth_z > 0 ? '#4caf50' : '#ef5350' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', marginBottom: 3 }}>Composite Growth Z</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: data.fred_growth_z > 0 ? 'var(--p-4caf50)' : 'var(--neg-2)' }}>
                     {data.fred_growth_z.toFixed(2)}
                   </div>
-                  <div style={{ fontSize: '0.65rem', color: '#666', marginTop: 2 }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--p-666)', marginTop: 2 }}>
                     Average of {growthCount} growth indicators
                   </div>
                 </div>
               )}
               {data.fred_inflation_z != null && (
                 <div style={{
-                  flex: '1 1 200px', background: '#0e1525', borderRadius: 8, padding: '0.55rem 0.75rem',
+                  flex: '1 1 200px', background: 'var(--p-0e1525)', borderRadius: 8, padding: '0.55rem 0.75rem',
                   border: '1px solid #ff980033',
                 }}>
-                  <div style={{ fontSize: '0.72rem', color: '#90a4ae', marginBottom: 3 }}>Composite Inflation Z</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: data.fred_inflation_z > 0 ? '#ef5350' : '#4caf50' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', marginBottom: 3 }}>Composite Inflation Z</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: data.fred_inflation_z > 0 ? 'var(--neg-2)' : 'var(--p-4caf50)' }}>
                     {data.fred_inflation_z.toFixed(2)}
                   </div>
-                  <div style={{ fontSize: '0.65rem', color: '#666', marginTop: 2 }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--p-666)', marginTop: 2 }}>
                     Average of {inflationCount} inflation indicators
                   </div>
                 </div>
@@ -1717,26 +1717,26 @@ function QuadrantTab({ pf }) {
               }}>
                 {interp.regime_flag === 'GREEN' ? 'OK' : interp.regime_flag === 'YELLOW' ? 'WATCH' : 'ALERT'} Regime Change: {interp.regime_flag}
               </div>
-              <span style={{ color: '#b0bec5', fontSize: '0.82rem' }}>{interp.regime_flag_text}</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{interp.regime_flag_text}</span>
             </div>
 
             <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-              <div style={{ background: '#0e1525', borderRadius: 6, padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
-                <span style={{ color: '#90a4ae' }}>Growth Trend: </span>
-                <span style={{ color: interp.growth_trend === 'accelerating' ? '#4caf50' : interp.growth_trend === 'decelerating' ? '#ef5350' : '#ff9800', fontWeight: 600 }}>
+              <div style={{ background: 'var(--p-0e1525)', borderRadius: 6, padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
+                <span style={{ color: 'var(--text-dim-2)' }}>Growth Trend: </span>
+                <span style={{ color: interp.growth_trend === 'accelerating' ? 'var(--p-4caf50)' : interp.growth_trend === 'decelerating' ? 'var(--neg-2)' : 'var(--p-ff9800)', fontWeight: 600 }}>
                   {interp.growth_trend.charAt(0).toUpperCase() + interp.growth_trend.slice(1)}
                 </span>
-                <span style={{ color: '#666', marginLeft: 6 }}>({interp.growth_delta_4w >= 0 ? '+' : ''}{interp.growth_delta_4w.toFixed(2)}% / 4wk)</span>
+                <span style={{ color: 'var(--p-666)', marginLeft: 6 }}>({interp.growth_delta_4w >= 0 ? '+' : ''}{interp.growth_delta_4w.toFixed(2)}% / 4wk)</span>
               </div>
-              <div style={{ background: '#0e1525', borderRadius: 6, padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
-                <span style={{ color: '#90a4ae' }}>Inflation Trend: </span>
-                <span style={{ color: interp.inflation_trend === 'accelerating' ? '#ef5350' : interp.inflation_trend === 'decelerating' ? '#4caf50' : '#ff9800', fontWeight: 600 }}>
+              <div style={{ background: 'var(--p-0e1525)', borderRadius: 6, padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
+                <span style={{ color: 'var(--text-dim-2)' }}>Inflation Trend: </span>
+                <span style={{ color: interp.inflation_trend === 'accelerating' ? 'var(--neg-2)' : interp.inflation_trend === 'decelerating' ? 'var(--p-4caf50)' : 'var(--p-ff9800)', fontWeight: 600 }}>
                   {interp.inflation_trend.charAt(0).toUpperCase() + interp.inflation_trend.slice(1)}
                 </span>
-                <span style={{ color: '#666', marginLeft: 6 }}>({interp.inflation_delta_4w >= 0 ? '+' : ''}{interp.inflation_delta_4w.toFixed(2)}% / 4wk)</span>
+                <span style={{ color: 'var(--p-666)', marginLeft: 6 }}>({interp.inflation_delta_4w >= 0 ? '+' : ''}{interp.inflation_delta_4w.toFixed(2)}% / 4wk)</span>
               </div>
-              <div style={{ background: '#0e1525', borderRadius: 6, padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
-                <span style={{ color: '#90a4ae' }}>Primary Risk: </span>
+              <div style={{ background: 'var(--p-0e1525)', borderRadius: 6, padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
+                <span style={{ color: 'var(--text-dim-2)' }}>Primary Risk: </span>
                 <span style={{ color: QUAD_COLORS[interp.primary_risk_quad], fontWeight: 600 }}>
                   Q{interp.primary_risk_quad} {interp.primary_risk_name} ({interp.primary_risk_pct}%)
                 </span>
@@ -1744,8 +1744,8 @@ function QuadrantTab({ pf }) {
             </div>
 
             <div style={{ marginTop: '0.5rem' }}>
-              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#90caf9', marginBottom: '0.35rem' }}>Likely Direction of Change</div>
-              <p style={{ color: '#cfd8dc', fontSize: '0.85rem', lineHeight: 1.6, margin: 0 }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--accent-2)', marginBottom: '0.35rem' }}>Likely Direction of Change</div>
+              <p style={{ color: 'var(--p-cfd8dc)', fontSize: '0.85rem', lineHeight: 1.6, margin: 0 }}>
                 {interp.direction_narrative}
               </p>
             </div>
@@ -1755,8 +1755,8 @@ function QuadrantTab({ pf }) {
 
       {/* 2x2 Quadrant Scatter Chart */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-        <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>Regime Quadrant Map (5-Year History)</h3>
-        <p style={{ color: '#8899aa', fontSize: '0.75rem', margin: '0 0 0.75rem' }}>
+        <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.5rem', fontSize: '1rem' }}>Regime Quadrant Map (5-Year History)</h3>
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.75rem', margin: '0 0 0.75rem' }}>
           {marketHistoryNote}
         </p>
         <Plot
@@ -1784,13 +1784,13 @@ function QuadrantTab({ pf }) {
 
       {/* This Week's Outlook - current-week-specific probabilities */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-        <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
+        <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.5rem', fontSize: '1rem' }}>
           This Week's Outlook - Next Week Probabilities
         </h3>
-        <p style={{ color: '#8899aa', fontSize: '0.75rem', marginBottom: '0.75rem' }}>
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '0.75rem' }}>
           {transitionEngineNote}
         </p>
-        <p style={{ color: '#8899aa', fontSize: '0.75rem', marginBottom: '0.75rem' }}>
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '0.75rem' }}>
           Adjusted for current momentum, FRED Z-scores, and conditional matching
           {data.conditional_observations != null && ` (${data.conditional_observations} similar historical weeks, weight ${(safeData.conditional_weight || 0).toFixed(2)})`}
         </p>
@@ -1799,34 +1799,34 @@ function QuadrantTab({ pf }) {
             return (
               <div key={q} style={{
                 flex: '1 1 180px', padding: '0.75rem 1rem', borderRadius: 8,
-                background: isMax ? `${QUAD_COLORS[q]}20` : '#0e1525',
-                border: isMax ? `2px solid ${QUAD_COLORS[q]}` : '1px solid #1a2233',
+                background: isMax ? `${QUAD_COLORS[q]}20` : 'var(--p-0e1525)',
+                border: isMax ? `2px solid ${QUAD_COLORS[q]}` : '1px solid var(--grid-line)',
                 textAlign: 'center', position: 'relative',
               }}>
                 {isSelf && (
-                  <div style={{ position: 'absolute', top: 4, right: 8, fontSize: '0.6rem', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: 1 }}>
+                  <div style={{ position: 'absolute', top: 4, right: 8, fontSize: '0.6rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: 1 }}>
                     Stay
                   </div>
                 )}
                 <div style={{ fontSize: '0.8rem', color: QUAD_COLORS[q], fontWeight: 600, marginBottom: 4 }}>
                   {isSelf ? `Stay Q${q}` : `-> Q${q}`} {QUAD_LABELS[q]?.split(' ').slice(1).join(' ')}
                 </div>
-                <div style={{ fontSize: '1.8rem', fontWeight: 700, color: isMax ? '#fff' : '#b0bec5' }}>
+                <div style={{ fontSize: '1.8rem', fontWeight: 700, color: isMax ? 'var(--white)' : 'var(--text-muted)' }}>
                   {adjProb.toFixed(1)}%
                 </div>
-                 <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginTop: 4 }}>
+                 <div style={{ fontSize: '0.75rem', color: 'var(--text-dim-2)', marginTop: 4 }}>
                    Baseline: {histProb.toFixed(1)}%
                  </div>
                 {Math.abs(delta) >= 0.1 && (
                   <div style={{
                     fontSize: '0.75rem', fontWeight: 600, marginTop: 2,
-                    color: delta > 0 ? (isSelf ? '#4caf50' : '#ff9800') : (isSelf ? '#ef5350' : '#4caf50'),
+                    color: delta > 0 ? (isSelf ? 'var(--p-4caf50)' : 'var(--p-ff9800)') : (isSelf ? 'var(--neg-2)' : 'var(--p-4caf50)'),
                   }}>
                     {delta > 0 ? '^' : 'v'} {Math.abs(delta).toFixed(1)}pp
                   </div>
                 )}
                 {/* Mini bar */}
-                <div style={{ marginTop: 6, height: 6, background: '#16213e', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{ marginTop: 6, height: 6, background: 'var(--surface)', borderRadius: 3, overflow: 'hidden' }}>
                   <div style={{
                     width: `${adjProb}%`, height: '100%', background: QUAD_COLORS[q],
                     borderRadius: 3, opacity: 0.8,
@@ -1842,10 +1842,10 @@ function QuadrantTab({ pf }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
         {/* Transition Matrix (Historical Baseline) */}
         <div className="card" style={{ padding: '0.75rem 1rem' }}>
-          <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
+          <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.5rem', fontSize: '1rem' }}>
             Historical Transition Matrix (Weekly Probabilities)
           </h3>
-          <p style={{ color: '#8899aa', fontSize: '0.75rem', marginBottom: '0.5rem' }}>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: '0.5rem' }}>
             Based on {data.total_observations} weekly observations - {'>'} indicates the transition anchor state
           </p>
           <Plot
@@ -1875,13 +1875,13 @@ function QuadrantTab({ pf }) {
 
         {/* Forward Projections */}
         <div className="card" style={{ padding: '0.75rem 1rem' }}>
-          <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
+          <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.5rem', fontSize: '1rem' }}>
             Forward Projections (from Q{transitionAnchorQuadrant})
           </h3>
           {/* 2-Month Forecast Hero */}
           {proj['8_week'] && (
             <div style={{ marginBottom: '0.75rem' }}>
-              <div style={{ fontSize: '0.75rem', color: '#b0bec5', fontWeight: 600, marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: 1 }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: 1 }}>
                 2-Month Forecast (8 Weeks)
               </div>
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -1893,17 +1893,17 @@ function QuadrantTab({ pf }) {
                   return (
                     <div key={q} style={{
                       flex: 1, minWidth: 140, padding: '0.6rem 0.75rem', borderRadius: 8,
-                      background: isMax ? `${QUAD_COLORS[q]}30` : '#0e1525',
-                      border: isMax ? `2px solid ${QUAD_COLORS[q]}` : '1px solid #1a2233',
+                      background: isMax ? `${QUAD_COLORS[q]}30` : 'var(--p-0e1525)',
+                      border: isMax ? `2px solid ${QUAD_COLORS[q]}` : '1px solid var(--grid-line)',
                       textAlign: 'center',
                     }}>
                       <div style={{ fontSize: '0.72rem', color: QUAD_COLORS[q], fontWeight: 600, marginBottom: 4 }}>
                         Q{q} {getQuadrantShortName(q)}
                       </div>
-                      <div style={{ fontSize: '1.5rem', fontWeight: 700, color: isMax ? '#fff' : '#90a4ae' }}>
+                      <div style={{ fontSize: '1.5rem', fontWeight: 700, color: isMax ? 'var(--white)' : 'var(--text-dim-2)' }}>
                         {pct8.toFixed(0)}%
                       </div>
-                      <div style={{ fontSize: '0.65rem', color: delta > 0.5 ? '#ff9800' : delta < -0.5 ? '#4caf50' : '#666', marginTop: 2 }}>
+                      <div style={{ fontSize: '0.65rem', color: delta > 0.5 ? 'var(--p-ff9800)' : delta < -0.5 ? 'var(--p-4caf50)' : 'var(--p-666)', marginTop: 2 }}>
                         {delta > 0.5 ? `^ ${delta.toFixed(1)}pp from 1wk` : delta < -0.5 ? `v ${Math.abs(delta).toFixed(1)}pp from 1wk` : `-> stable vs 1wk`}
                       </div>
                     </div>
@@ -1915,10 +1915,10 @@ function QuadrantTab({ pf }) {
                 const maxPct = ((proj['8_week']?.[`Q${maxQ}`] || 0) * 100).toFixed(0)
                 const stagPct = ((proj['8_week']?.Q3 || 0) * 100).toFixed(0)
                 return (
-                  <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#b0bec5', background: '#0e1525', padding: '0.4rem 0.75rem', borderRadius: 6 }}>
+                  <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--text-muted)', background: 'var(--p-0e1525)', padding: '0.4rem 0.75rem', borderRadius: 6 }}>
                     Most likely regime in 2 months: <strong style={{ color: QUAD_COLORS[maxQ] }}>Q{maxQ} {getQuadrantShortName(maxQ)}</strong> at {maxPct}%
                     {maxQ !== 3 && Number(stagPct) >= 20 && (
-                      <span> | <span style={{ color: '#ef5350' }}>Stagflation risk: {stagPct}%</span></span>
+                      <span> | <span style={{ color: 'var(--neg-2)' }}>Stagflation risk: {stagPct}%</span></span>
                     )}
                   </div>
                 )
@@ -1928,7 +1928,7 @@ function QuadrantTab({ pf }) {
           {/* 4-Week Outlook Summary */}
           {proj['4_week'] && (
             <div style={{ marginBottom: '0.75rem' }}>
-              <div style={{ fontSize: '0.7rem', color: '#90a4ae', fontWeight: 600, marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: 1 }}>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)', fontWeight: 600, marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: 1 }}>
                 1-Month Outlook (4 Weeks)
               </div>
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -1938,14 +1938,14 @@ function QuadrantTab({ pf }) {
                   return (
                     <div key={q} style={{
                       flex: 1, minWidth: 90, padding: '0.4rem 0.5rem', borderRadius: 6,
-                      background: isMax ? `${QUAD_COLORS[q]}30` : '#0e1525',
-                      border: isMax ? `2px solid ${QUAD_COLORS[q]}` : '1px solid #1a2233',
+                      background: isMax ? `${QUAD_COLORS[q]}30` : 'var(--p-0e1525)',
+                      border: isMax ? `2px solid ${QUAD_COLORS[q]}` : '1px solid var(--grid-line)',
                       textAlign: 'center',
                     }}>
                       <div style={{ fontSize: '0.7rem', color: QUAD_COLORS[q], fontWeight: 600, marginBottom: 2 }}>
                         Q{q} {getQuadrantShortName(q)}
                       </div>
-                      <div style={{ fontSize: '1.1rem', fontWeight: 700, color: isMax ? '#fff' : '#90a4ae' }}>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 700, color: isMax ? 'var(--white)' : 'var(--text-dim-2)' }}>
                         {pct}%
                       </div>
                     </div>
@@ -1976,7 +1976,7 @@ function QuadrantTab({ pf }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
         {/* Where We're Headed */}
         <div className="card" style={{ padding: '0.75rem 1rem' }}>
-          <h3 style={{ color: '#90caf9', margin: '0 0 0.75rem', fontSize: '1rem' }}>
+          <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.75rem', fontSize: '1rem' }}>
             Markov Chain Transition (from Q{transitionAnchorQuadrant} {transitionAnchorName})
           </h3>
           {QUAD_IDS.map(q => {
@@ -1996,21 +1996,21 @@ function QuadrantTab({ pf }) {
                   {isSelf ? `Stay in Q${q}` : `-> Q${q} ${QUAD_LABELS[q].split(' ').slice(1).join(' ')}`}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ background: '#0e1525', borderRadius: 4, height: 20, position: 'relative', overflow: 'hidden' }}>
+                  <div style={{ background: 'var(--p-0e1525)', borderRadius: 4, height: 20, position: 'relative', overflow: 'hidden' }}>
                     <div style={{
                       width: `${prob}%`, height: '100%', background: QUAD_COLORS[q],
                       opacity: 0.7, borderRadius: 4, transition: 'width 0.3s',
                     }} />
                   </div>
                 </div>
-                <div style={{ width: 60, textAlign: 'right', fontWeight: 700, color: isMax && !isSelf ? '#ff9800' : '#e0e0e0', fontSize: '0.95rem' }}>
+                <div style={{ width: 60, textAlign: 'right', fontWeight: 700, color: isMax && !isSelf ? 'var(--p-ff9800)' : 'var(--text)', fontSize: '0.95rem' }}>
                   {prob.toFixed(1)}%
                 </div>
-                <div style={{ width: 50, textAlign: 'right', color: '#666', fontSize: '0.75rem' }}>
+                <div style={{ width: 50, textAlign: 'right', color: 'var(--p-666)', fontSize: '0.75rem' }}>
                   ({count})
                 </div>
                 {isMax && !isSelf && prob > 25 && (
-                  <span style={{ fontSize: '0.7rem', background: '#ff980033', color: '#ff9800', padding: '2px 6px', borderRadius: 4 }}>
+                  <span style={{ fontSize: '0.7rem', background: '#ff980033', color: 'var(--p-ff9800)', padding: '2px 6px', borderRadius: 4 }}>
                     Primary Risk
                   </span>
                 )}
@@ -2021,15 +2021,15 @@ function QuadrantTab({ pf }) {
 
         {/* Asset Class Tilts - All Quadrants */}
         <div className="card" style={{ padding: '0.75rem 1rem' }}>
-          <h3 style={{ color: '#90caf9', margin: '0 0 0.75rem', fontSize: '1rem' }}>Asset Class Performance by Quadrant</h3>
+          <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.75rem', fontSize: '1rem' }}>Asset Class Performance by Quadrant</h3>
           <table style={{ width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid #1a2233' }}>
+              <tr style={{ borderBottom: '1px solid var(--grid-line)' }}>
                 <th style={{ ...thStyle, textAlign: 'left' }}>Asset Class</th>
                 {[1, 2, 3, 4].map(q => (
                   <th key={q} style={{
                     ...thStyle, textAlign: 'center',
-                    color: q === currentQuadrant ? QUAD_COLORS[q] : '#90a4ae',
+                    color: q === currentQuadrant ? QUAD_COLORS[q] : 'var(--text-dim-2)',
                     fontWeight: q === currentQuadrant ? 700 : 600,
                   }}>
                     Q{q}{q === data.current_quadrant ? ' *' : ''}
@@ -2039,7 +2039,7 @@ function QuadrantTab({ pf }) {
             </thead>
             <tbody>
               {Object.keys(data.all_asset_tilts?.[1] || {}).map(asset => (
-                <tr key={asset} style={{ borderBottom: '1px solid #0a1628' }}>
+                <tr key={asset} style={{ borderBottom: '1px solid var(--p-0a1628)' }}>
                   <td style={{ ...tdStyle, fontWeight: 600 }}>{asset}</td>
                   {[1, 2, 3, 4].map(q => {
                     const rating = data.all_asset_tilts?.[q]?.[asset] || '--'
@@ -2047,7 +2047,7 @@ function QuadrantTab({ pf }) {
                     return (
                       <td key={q} style={{
                         ...tdStyle, textAlign: 'center',
-                        color: TILT_COLORS[rating] || '#90a4ae',
+                        color: TILT_COLORS[rating] || 'var(--text-dim-2)',
                         fontWeight: isCurrentQ ? 700 : 400,
                         background: isCurrentQ ? `${QUAD_COLORS[q]}10` : 'transparent',
                       }}>
@@ -2064,7 +2064,7 @@ function QuadrantTab({ pf }) {
 
       {/* Regime Distribution */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-        <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>Historical Regime Distribution</h3>
+        <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.5rem', fontSize: '1rem' }}>Historical Regime Distribution</h3>
         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
           {QUAD_IDS.map(q => {
             const d = data.regime_distribution?.[`Q${q}`] || {}
@@ -2074,9 +2074,9 @@ function QuadrantTab({ pf }) {
                 border: `1px solid ${QUAD_COLORS[q]}44`, borderRadius: 8, padding: '0.75rem',
                 textAlign: 'center',
               }}>
-                <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>{QUAD_LABELS[q]}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-dim-2)', marginBottom: 4 }}>{QUAD_LABELS[q]}</div>
                 <div style={{ fontSize: '1.3rem', fontWeight: 700, color: QUAD_COLORS[q] }}>{d.pct || 0}%</div>
-                <div style={{ fontSize: '0.75rem', color: '#666' }}>{d.count || 0} weeks</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--p-666)' }}>{d.count || 0} weeks</div>
               </div>
             )
           })}
@@ -2085,25 +2085,25 @@ function QuadrantTab({ pf }) {
 
       {/* Brier Score - Model Accuracy Tracker */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-        <h3 style={{ color: '#90caf9', margin: '0 0 0.5rem', fontSize: '1rem' }}>
+        <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.5rem', fontSize: '1rem' }}>
           Model Accuracy - Brier Score
         </h3>
-        <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: '0.75rem', lineHeight: 1.5, background: '#0e1525', padding: '0.5rem 0.75rem', borderRadius: 6 }}>
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-dim-2)', marginBottom: '0.75rem', lineHeight: 1.5, background: 'var(--p-0e1525)', padding: '0.5rem 0.75rem', borderRadius: 6 }}>
           <p style={{ margin: '0 0 0.4rem' }}>
-            The <strong style={{ color: '#e0e8f5' }}>Brier Score</strong> measures how accurate the model's probability forecasts are over time.
+            The <strong style={{ color: 'var(--text-strong)' }}>Brier Score</strong> measures how accurate the model's probability forecasts are over time.
             Each week, the model predicts the probability of landing in each of the 4 quadrants. When the target date arrives,
             we compare the prediction to what actually happened.
           </p>
           <p style={{ margin: '0 0 0.4rem' }}>
-            <strong style={{ color: '#e0e8f5' }}>How it works:</strong> For each prediction, we compute (predicted probability - actual outcome)^2
-            across all 4 quadrants, then average over all predictions. A perfect forecast scores <strong style={{ color: '#4caf50' }}>0.0</strong>,
-            and a completely wrong forecast scores close to <strong style={{ color: '#ef5350' }}>2.0</strong>.
+            <strong style={{ color: 'var(--text-strong)' }}>How it works:</strong> For each prediction, we compute (predicted probability - actual outcome)^2
+            across all 4 quadrants, then average over all predictions. A perfect forecast scores <strong style={{ color: 'var(--p-4caf50)' }}>0.0</strong>,
+            and a completely wrong forecast scores close to <strong style={{ color: 'var(--neg-2)' }}>2.0</strong>.
           </p>
           <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginTop: '0.3rem' }}>
-            <span><span style={{ color: '#4caf50', fontWeight: 600 }}>* Excellent (&lt;0.10)</span> - Very well calibrated</span>
-            <span><span style={{ color: '#66bb6a', fontWeight: 600 }}>* Good (&lt;0.25)</span> - Useful predictions</span>
-            <span><span style={{ color: '#ff9800', fontWeight: 600 }}>* Fair (&lt;0.50)</span> - Some predictive value</span>
-            <span><span style={{ color: '#ef5350', fontWeight: 600 }}>* Poor (&gt;=0.50)</span> - No better than random</span>
+            <span><span style={{ color: 'var(--p-4caf50)', fontWeight: 600 }}>* Excellent (&lt;0.10)</span> - Very well calibrated</span>
+            <span><span style={{ color: 'var(--pos-muted)', fontWeight: 600 }}>* Good (&lt;0.25)</span> - Useful predictions</span>
+            <span><span style={{ color: 'var(--p-ff9800)', fontWeight: 600 }}>* Fair (&lt;0.50)</span> - Some predictive value</span>
+            <span><span style={{ color: 'var(--neg-2)', fontWeight: 600 }}>* Poor (&gt;=0.50)</span> - No better than random</span>
           </div>
         </div>
         {data.brier_scores ? (
@@ -2112,30 +2112,30 @@ function QuadrantTab({ pf }) {
               const bs = data.brier_scores[key]
               if (!bs) return (
                 <div key={key} style={{
-                  flex: 1, minWidth: 180, background: '#0e1525', borderRadius: 8,
-                  padding: '0.75rem', border: '1px solid #1a2233', textAlign: 'center',
+                  flex: 1, minWidth: 180, background: 'var(--p-0e1525)', borderRadius: 8,
+                  padding: '0.75rem', border: '1px solid var(--grid-line)', textAlign: 'center',
                 }}>
-                  <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>{label}</div>
-                  <div style={{ fontSize: '1rem', color: '#666' }}>Collecting data...</div>
-                  <div style={{ fontSize: '0.65rem', color: '#555', marginTop: 4 }}>Needs {'>='}2 resolved predictions</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-dim-2)', marginBottom: 4 }}>{label}</div>
+                  <div style={{ fontSize: '1rem', color: 'var(--p-666)' }}>Collecting data...</div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--p-555)', marginTop: 4 }}>Needs {'>='}2 resolved predictions</div>
                 </div>
               )
               const scoreColor = bs.rating === 'Excellent' ? '#4caf50' : bs.rating === 'Good' ? '#66bb6a' : bs.rating === 'Fair' ? '#ff9800' : '#ef5350'
               return (
                 <div key={key} style={{
-                  flex: 1, minWidth: 180, background: '#0e1525', borderRadius: 8,
+                  flex: 1, minWidth: 180, background: 'var(--p-0e1525)', borderRadius: 8,
                   padding: '0.75rem', border: `1px solid ${scoreColor}44`, textAlign: 'center',
                 }}>
-                  <div style={{ fontSize: '0.75rem', color: '#90a4ae', marginBottom: 4 }}>{label}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-dim-2)', marginBottom: 4 }}>{label}</div>
                   <div style={{ fontSize: '1.5rem', fontWeight: 700, color: scoreColor }}>{bs.score.toFixed(3)}</div>
                   <div style={{ fontSize: '0.72rem', color: scoreColor, fontWeight: 600, marginTop: 2 }}>{bs.rating}</div>
-                  <div style={{ fontSize: '0.65rem', color: '#666', marginTop: 4 }}>{bs.n_predictions} predictions scored</div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--p-666)', marginTop: 4 }}>{bs.n_predictions} predictions scored</div>
                 </div>
               )
             })}
           </div>
         ) : (
-          <div style={{ textAlign: 'center', padding: '1rem', color: '#666' }}>
+          <div style={{ textAlign: 'center', padding: '1rem', color: 'var(--p-666)' }}>
             <div style={{ fontSize: '1rem', marginBottom: '0.3rem' }}>Tracking started - collecting predictions</div>
             <div style={{ fontSize: '0.75rem' }}>
               Brier scores will appear once enough time has passed for predictions to be verified against actual outcomes.
@@ -2158,7 +2158,7 @@ export default function MacroRegimeDashboard() {
   return (
     <div className="page">
       <h1 style={{ marginBottom: '0.3rem' }}>Macro Regime Dashboard</h1>
-      <p style={{ color: '#8899aa', fontSize: '0.85rem', marginBottom: '1rem' }}>
+      <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem' }}>
         Current macro conditions, portfolio exposure analysis, and rebalancing tilt suggestions.
       </p>
 
@@ -2198,3 +2198,4 @@ export default function MacroRegimeDashboard() {
     </div>
   )
 }
+

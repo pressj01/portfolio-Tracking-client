@@ -69,22 +69,6 @@ function saveThresholds(t) {
   try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(t)) } catch {}
 }
 
-const badgeStyle = (badge) => {
-  const base = {
-    display: 'inline-block',
-    padding: '0.2rem 0.55rem',
-    borderRadius: 4,
-    fontSize: '0.78rem',
-    fontWeight: 700,
-    letterSpacing: '0.05em',
-    textTransform: 'uppercase',
-  }
-  if (badge === 'pass') return { ...base, background: '#0f4e2e', color: '#7be5a8', border: '1px solid #1d8a52' }
-  if (badge === 'warn') return { ...base, background: '#5a4a14', color: '#ffd76a', border: '1px solid #a3812a' }
-  if (badge === 'fail') return { ...base, background: '#5a1a1a', color: '#ff8a8a', border: '1px solid #a83232' }
-  return { ...base, background: '#1f2e52', color: '#8aa0c8', border: '1px solid #2a3e6b' }
-}
-
 const fmtPct = (n) => (n === null || n === undefined || !Number.isFinite(Number(n)) ? '-' : `${Number(n).toFixed(2)}%`)
 const fmtMoney = (n) => (n === null || n === undefined || !Number.isFinite(Number(n)) ? '-' : `$${Number(n).toFixed(2)}`)
 
@@ -97,10 +81,10 @@ function ThresholdEditor({ criterion, thresholds, onChange }) {
     onChange(next)
   }
 
-  const labelStyle = { color: '#90a4ae', fontSize: '0.78rem', display: 'block', marginBottom: 2 }
+  const labelStyle = { color: 'var(--text-dim)', fontSize: '0.78rem', display: 'block', marginBottom: 2 }
   const inputStyle = {
-    background: '#0d1b33', border: '1px solid #1a3a5c', borderRadius: 4,
-    color: '#e0e8f5', padding: '0.3rem 0.5rem', fontSize: '0.85rem', width: 90,
+    background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 4,
+    color: 'var(--text-strong)', padding: '0.3rem 0.5rem', fontSize: '0.85rem', width: 90,
   }
 
   let controls = null
@@ -195,11 +179,11 @@ function ThresholdEditor({ criterion, thresholds, onChange }) {
     <div style={{
       display: 'flex', flexWrap: 'wrap', gap: '0.9rem', alignItems: 'flex-end',
       marginTop: '0.75rem', padding: '0.75rem 0.9rem',
-      background: '#0f1e3b', border: '1px solid #1c2e52', borderRadius: 6,
+      background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6,
     }}>
       {controls}
-      <div style={{ flex: 1, minWidth: 220, color: '#8aa0c8', fontSize: '0.82rem', lineHeight: 1.5 }}>
-        <strong style={{ color: '#58c4d8' }}>Best practice:</strong> {criterion.threshold.bestPractice}
+      <div style={{ flex: 1, minWidth: 220, color: 'var(--p-8aa0c8)', fontSize: '0.82rem', lineHeight: 1.5 }}>
+        <strong style={{ color: 'var(--teal-2)' }}>Best practice:</strong> {criterion.threshold.bestPractice}
       </div>
     </div>
   )
@@ -208,30 +192,30 @@ function ThresholdEditor({ criterion, thresholds, onChange }) {
 function CriterionCard({ criterion, thresholds, onChangeThresholds }) {
   const c = criterion
   return (
-    <div className="cef-guide-card" style={{ background: '#1a2744', border: '1px solid #243356', borderRadius: 8 }}>
+    <div className="cef-guide-card" style={{ background: 'var(--p-1a2744)', border: '1px solid var(--p-243356)', borderRadius: 8 }}>
       <div style={{ padding: '1rem 1.2rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <span className="cef-guide-number">{c.id}</span>
           <span className="cef-guide-question" style={{ flex: 1 }}>{c.question}</span>
-          <span style={badgeStyle(c.badge)}>{c.badge}</span>
+          <span className={`stock-check-badge tone-${c.badge}`}>{c.badge}</span>
         </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem 1.2rem', paddingLeft: 42, color: '#b8c8e0' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem 1.2rem', paddingLeft: 42, color: 'var(--p-b8c8e0)' }}>
           {c.metrics.map((m, i) => (
             <div key={i} style={{ fontSize: '0.88rem' }}>
-              <span style={{ color: '#90a4ae' }}>{m.label}: </span>
-              <strong style={{ color: '#e6edf7' }}>{m.value}</strong>
+              <span style={{ color: 'var(--text-dim-2)' }}>{m.label}: </span>
+              <strong style={{ color: 'var(--p-e6edf7)' }}>{m.value}</strong>
             </div>
           ))}
         </div>
 
-        <div style={{ paddingLeft: 42, color: '#cfd8e3', fontSize: '0.9rem', lineHeight: 1.5 }}>
+        <div style={{ paddingLeft: 42, color: 'var(--p-cfd8e3)', fontSize: '0.9rem', lineHeight: 1.5 }}>
           {c.rationale}
         </div>
 
         {(QUESTION_DETAILS[c.id] || []).length > 0 && (
-          <details style={{ paddingLeft: 42, color: '#90a4ae', fontSize: '0.85rem' }}>
-            <summary style={{ cursor: 'pointer', color: '#58c4d8' }}>What to check</summary>
+          <details style={{ paddingLeft: 42, color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
+            <summary style={{ cursor: 'pointer', color: 'var(--teal-2)' }}>What to check</summary>
             <ul style={{ margin: '0.4rem 0 0.2rem 1rem' }}>
               {QUESTION_DETAILS[c.id].map((d, i) => <li key={i} style={{ margin: '0.2rem 0' }}>{d}</li>)}
             </ul>
@@ -249,23 +233,23 @@ function CriterionCard({ criterion, thresholds, onChangeThresholds }) {
 function HeaderCard({ fund }) {
   return (
     <div style={{
-      background: '#1a2744', border: '1px solid #243356', borderRadius: 8,
+      background: 'var(--p-1a2744)', border: '1px solid var(--p-243356)', borderRadius: 8,
       padding: '1rem 1.2rem', marginBottom: '1rem',
     }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem 1.5rem', alignItems: 'baseline' }}>
-        <h2 style={{ margin: 0, color: '#e6edf7' }}>{fund.ticker}</h2>
-        <span style={{ color: '#b8c8e0', fontSize: '1rem' }}>{fund.name}</span>
+        <h2 style={{ margin: 0, color: 'var(--p-e6edf7)' }}>{fund.ticker}</h2>
+        <span style={{ color: 'var(--p-b8c8e0)', fontSize: '1rem' }}>{fund.name}</span>
         <Link to={`/closed-cef-info/${fund.ticker}`} style={{ marginLeft: 'auto', fontSize: '0.85rem' }}>
           View full CEF detail →
         </Link>
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem 1.5rem', marginTop: '0.6rem', color: '#b8c8e0', fontSize: '0.9rem' }}>
-        <span><span style={{ color: '#90a4ae' }}>Category: </span><strong style={{ color: '#e6edf7' }}>{fund.category || 'n/a'}</strong></span>
-        <span><span style={{ color: '#90a4ae' }}>Strategy: </span><strong style={{ color: '#e6edf7' }}>{fund.strategy || 'n/a'}</strong></span>
-        <span><span style={{ color: '#90a4ae' }}>Sponsor: </span><strong style={{ color: '#e6edf7' }}>{fund.sponsor || 'n/a'}</strong></span>
-        <span><span style={{ color: '#90a4ae' }}>Price: </span><strong style={{ color: '#e6edf7' }}>{fmtMoney(fund.price)}</strong></span>
-        <span><span style={{ color: '#90a4ae' }}>NAV: </span><strong style={{ color: '#e6edf7' }}>{fmtMoney(fund.nav)}</strong></span>
-        <span><span style={{ color: '#90a4ae' }}>Prem/Disc: </span><strong style={{ color: '#e6edf7' }}>{fmtPct(fund.premium_discount)}</strong></span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem 1.5rem', marginTop: '0.6rem', color: 'var(--p-b8c8e0)', fontSize: '0.9rem' }}>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>Category: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.category || 'n/a'}</strong></span>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>Strategy: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.strategy || 'n/a'}</strong></span>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>Sponsor: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.sponsor || 'n/a'}</strong></span>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>Price: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fmtMoney(fund.price)}</strong></span>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>NAV: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fmtMoney(fund.nav)}</strong></span>
+        <span><span style={{ color: 'var(--text-dim-2)' }}>Prem/Disc: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fmtPct(fund.premium_discount)}</strong></span>
       </div>
     </div>
   )
@@ -284,34 +268,34 @@ function AlternativesList({ alternatives, peerCount, groupLabel, themed }) {
     : 'No higher-scoring alternatives found in this category.'
   return (
     <div style={{ marginTop: '1.5rem' }}>
-      <h2 style={{ color: '#e6edf7', fontSize: '1.1rem', margin: '0 0 0.4rem' }}>
+      <h2 style={{ color: 'var(--p-e6edf7)', fontSize: '1.1rem', margin: '0 0 0.4rem' }}>
         {heading}
       </h2>
-      <p style={{ color: '#90a4ae', fontSize: '0.86rem', margin: '0 0 0.8rem' }}>
+      <p style={{ color: 'var(--text-dim-2)', fontSize: '0.86rem', margin: '0 0 0.8rem' }}>
         {blurb}
       </p>
       {alternatives.length === 0 ? (
-        <div style={{ background: '#0f1e3b', border: '1px solid #1c2e52', borderRadius: 6, padding: '1rem', color: '#b8c8e0' }}>
+        <div style={{ background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6, padding: '1rem', color: 'var(--p-b8c8e0)' }}>
           {emptyMsg}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {alternatives.map(alt => (
             <div key={alt.fund.ticker} style={{
-              background: '#1a2744', border: '1px solid #243356', borderRadius: 8,
+              background: 'var(--p-1a2744)', border: '1px solid var(--p-243356)', borderRadius: 8,
               padding: '0.8rem 1rem',
             }}>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem 1rem', alignItems: 'baseline' }}>
-                <Link to={`/closed-cef-info/${alt.fund.ticker}`} style={{ fontWeight: 700, color: '#58c4d8', textDecoration: 'none' }}>
+                <Link to={`/closed-cef-info/${alt.fund.ticker}`} style={{ fontWeight: 700, color: 'var(--teal-2)', textDecoration: 'none' }}>
                   {alt.fund.ticker}
                 </Link>
-                <span style={{ color: '#b8c8e0', flex: 1 }}>{alt.fund.name}</span>
-                <span style={{ color: '#90a4ae', fontSize: '0.85rem' }}>
-                  Composite <strong style={{ color: '#e6edf7' }}>{alt.composite.toFixed(1)}</strong>
+                <span style={{ color: 'var(--p-b8c8e0)', flex: 1 }}>{alt.fund.name}</span>
+                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
+                  Composite <strong style={{ color: 'var(--p-e6edf7)' }}>{alt.composite.toFixed(1)}</strong>
                 </span>
               </div>
-              <div style={{ color: '#cfd8e3', fontSize: '0.88rem', marginTop: '0.35rem' }}>
-                <span style={{ color: '#90a4ae' }}>Why listed: </span>
+              <div style={{ color: 'var(--p-cfd8e3)', fontSize: '0.88rem', marginTop: '0.35rem' }}>
+                <span style={{ color: 'var(--text-dim-2)' }}>Why listed: </span>
                 {alt.reasons.join('; ')}.
               </div>
             </div>
@@ -335,11 +319,7 @@ export default function CEFBuyingChecklistEvaluator() {
     <button
       type="button"
       onClick={() => setTab(key)}
-      style={{
-        background: tab === key ? '#1d3a6b' : 'transparent',
-        border: '1px solid #2a3e6b', borderRadius: 4, color: tab === key ? '#e6edf7' : '#8aa0c8',
-        padding: '0.4rem 0.9rem', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 600,
-      }}
+      className={`stock-check-tab${tab === key ? ' is-active' : ''}`}
     >{label}</button>
   )
 
@@ -409,15 +389,15 @@ export default function CEFBuyingChecklistEvaluator() {
   }, [result])
 
   return (
-    <div className="page cef-page">
-      <div className="cef-title-row">
+    <div className="page cef-page stock-check-page">
+      <div className="cef-title-row stock-check-title-row">
         <div>
           <h1>CEF Buying Checklist Evaluator</h1>
           <p>Enter a CEF ticker. The 7 questions from the buying guide are scored against editable thresholds, and alternatives in the same category are surfaced.</p>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.1rem' }}>
+      <div className="stock-check-tabs" role="tablist" aria-label="CEF checklist mode">
         {tabBtn('deep', 'Deep Dive')}
         {tabBtn('scan', 'Scan a List')}
       </div>
@@ -436,19 +416,12 @@ export default function CEFBuyingChecklistEvaluator() {
         />
       ) : (
       <>
-      <form onSubmit={submit} style={{
-        display: 'flex', gap: '0.5rem', alignItems: 'center',
-        margin: '0 0 1rem', maxWidth: 520,
-      }}>
+      <form onSubmit={submit} className="stock-check-search">
         <input
           value={inputTicker}
           onChange={e => setInputTicker(e.target.value.toUpperCase())}
           placeholder="e.g. PDI, UTG, JEPI..."
-          style={{
-            flex: 1, background: '#0d1b33', border: '1px solid #1a3a5c', borderRadius: 4,
-            color: '#e0e8f5', padding: '0.5rem 0.7rem', fontSize: '0.95rem',
-            textTransform: 'uppercase',
-          }}
+          className="stock-check-input stock-check-ticker-input"
           autoFocus
         />
         <button type="submit" className="btn btn-primary" disabled={loading}>Evaluate</button>
@@ -472,17 +445,17 @@ export default function CEFBuyingChecklistEvaluator() {
           <HeaderCard fund={fund} />
 
           <div style={{
-            background: '#0f1e3b', border: '1px solid #1c2e52', borderRadius: 6,
+            background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6,
             padding: '0.7rem 1rem', marginBottom: '1rem',
             display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.6rem',
           }}>
-            <div style={{ color: '#b8c8e0', fontSize: '0.9rem' }}>
-              <strong style={{ color: '#58c4d8' }}>Composite score:</strong>{' '}
-              <span style={{ color: '#e6edf7', fontSize: '1.1rem', fontWeight: 700 }}>
+            <div style={{ color: 'var(--p-b8c8e0)', fontSize: '0.9rem' }}>
+              <strong style={{ color: 'var(--teal-2)' }}>Composite score:</strong>{' '}
+              <span style={{ color: 'var(--p-e6edf7)', fontSize: '1.1rem', fontWeight: 700 }}>
                 {result.composite === null ? 'n/a' : result.composite.toFixed(1)}
               </span>
-              <span style={{ color: '#90a4ae' }}> / 100</span>
-              <span style={{ color: '#90a4ae', marginLeft: '0.7rem', fontSize: '0.85rem' }}>
+              <span style={{ color: 'var(--text-dim-2)' }}> / 100</span>
+              <span style={{ color: 'var(--text-dim-2)', marginLeft: '0.7rem', fontSize: '0.85rem' }}>
                 (average of scored criteria 2–7)
               </span>
             </div>
@@ -490,8 +463,8 @@ export default function CEFBuyingChecklistEvaluator() {
               type="button"
               onClick={() => setThresholds(DEFAULT_THRESHOLDS)}
               style={{
-                background: 'transparent', border: '1px solid #2a3e6b', borderRadius: 4,
-                color: '#8aa0c8', padding: '0.3rem 0.7rem', cursor: 'pointer', fontSize: '0.82rem',
+                background: 'transparent', border: '1px solid var(--p-2a3e6b)', borderRadius: 4,
+                color: 'var(--p-8aa0c8)', padding: '0.3rem 0.7rem', cursor: 'pointer', fontSize: '0.82rem',
               }}
             >
               Reset thresholds to defaults
@@ -516,22 +489,22 @@ export default function CEFBuyingChecklistEvaluator() {
               borderRadius: 8,
               display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.6rem 1rem',
               ...(verdict.tone === 'pass'
-                ? { background: '#0f4e2e', border: '1px solid #1d8a52' }
+                ? { background: 'var(--p-0f4e2e)', border: '1px solid var(--p-1d8a52)' }
                 : verdict.tone === 'warn'
-                ? { background: '#5a4a14', border: '1px solid #a3812a' }
+                ? { background: 'var(--p-5a4a14)', border: '1px solid var(--p-a3812a)' }
                 : verdict.tone === 'fail'
-                ? { background: '#5a1a1a', border: '1px solid #a83232' }
-                : { background: '#1f2e52', border: '1px solid #2a3e6b' }),
+                ? { background: 'var(--p-5a1a1a)', border: '1px solid var(--p-a83232)' }
+                : { background: 'var(--p-1f2e52)', border: '1px solid var(--p-2a3e6b)' }),
             }}>
               <span style={{
                 fontSize: '1.25rem', fontWeight: 800, letterSpacing: '0.02em',
-                color: verdict.tone === 'pass' ? '#7be5a8'
-                  : verdict.tone === 'warn' ? '#ffd76a'
-                  : verdict.tone === 'fail' ? '#ff8a8a' : '#8aa0c8',
+                color: verdict.tone === 'pass' ? 'var(--p-7be5a8)'
+                  : verdict.tone === 'warn' ? 'var(--p-ffd76a)'
+                  : verdict.tone === 'fail' ? 'var(--neg-soft)' : 'var(--p-8aa0c8)',
               }}>
                 Verdict: {verdict.label}
               </span>
-              <span style={{ color: '#e6edf7', fontSize: '0.92rem', flex: 1, minWidth: 260 }}>
+              <span style={{ color: 'var(--p-e6edf7)', fontSize: '0.92rem', flex: 1, minWidth: 260 }}>
                 {verdict.detail}
               </span>
             </div>
@@ -546,10 +519,10 @@ export default function CEFBuyingChecklistEvaluator() {
 
           <div style={{
             marginTop: '1.5rem', padding: '0.8rem 1rem',
-            background: '#0f1e3b', border: '1px solid #1c2e52', borderRadius: 6,
-            color: '#90a4ae', fontSize: '0.84rem', lineHeight: 1.55,
+            background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6,
+            color: 'var(--text-dim-2)', fontSize: '0.84rem', lineHeight: 1.55,
           }}>
-            <strong style={{ color: '#58c4d8' }}>Notes:</strong> Sustainability scoring uses distribution rate vs. long-term
+            <strong style={{ color: 'var(--teal-2)' }}>Notes:</strong> Sustainability scoring uses distribution rate vs. long-term
             NAV return as the primary proxy, enhanced by UNII per share and earnings-based coverage when CEF Connect
             reports them (many funds return null for UNII). Custom thresholds you set persist in this browser.
           </div>

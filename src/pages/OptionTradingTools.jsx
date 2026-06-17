@@ -136,7 +136,7 @@ export default function OptionTradingTools() {
           <button type="submit" className="btn btn-primary">Load</button>
         </form>
 
-        {quoteErr && <div style={{ color: '#ef5350' }}>Quote error: {quoteErr}</div>}
+        {quoteErr && <div style={{ color: 'var(--neg-2)' }}>Quote error: {quoteErr}</div>}
 
         {quote && (
           <div className="otp-quote-row">
@@ -152,7 +152,7 @@ export default function OptionTradingTools() {
               <div className="otp-quote-label">Change</div>
               <div
                 className="otp-quote-val"
-                style={{ color: (quote.change ?? 0) >= 0 ? '#66bb6a' : '#ef5350' }}
+                style={{ color: (quote.change ?? 0) >= 0 ? 'var(--pos-muted)' : 'var(--neg-2)' }}
               >
                 {quote.change != null ? (quote.change >= 0 ? '+' : '') + fmt(quote.change) : '—'}
                 {quote.change_pct != null && (
@@ -223,8 +223,8 @@ export default function OptionTradingTools() {
             </select>
           </label>
 
-          {loadingChain && <span style={{ color: '#90caf9' }}>Loading chain…</span>}
-          {chainErr && <span style={{ color: '#ef5350' }}>{chainErr}</span>}
+          {loadingChain && <span style={{ color: 'var(--accent-2)' }}>Loading chain…</span>}
+          {chainErr && <span style={{ color: 'var(--neg-2)' }}>{chainErr}</span>}
         </div>
 
         {/* Chain table */}
@@ -267,7 +267,7 @@ export default function OptionTradingTools() {
                   )
                 })}
                 {rows.length === 0 && (
-                  <tr><td colSpan={13} style={{ textAlign: 'center', padding: '1.5rem', color: '#888' }}>
+                  <tr><td colSpan={13} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--p-888)' }}>
                     No strikes in the selected range.
                   </td></tr>
                 )}

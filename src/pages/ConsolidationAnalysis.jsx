@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import Plot from 'react-plotly.js'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
+import Plot from '../components/ThemedPlot'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useLocation, Link } from 'react-router-dom'
 
@@ -76,12 +78,12 @@ function OverlapTab({ pf, holdings, onSimulate }) {
             style={{ padding: '0.4rem 1.2rem', fontWeight: 600 }}>
             {loading ? 'Analyzing...' : 'Analyze Overlap'}
           </button>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#aab4be', fontSize: '0.85rem' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--p-aab4be)', fontSize: '0.85rem' }}>
             Correlation Threshold:
             <input type="range" min="0.50" max="0.95" step="0.05" value={threshold}
               onChange={e => setThreshold(parseFloat(e.target.value))}
               style={{ width: 120 }} />
-            <span style={{ color: '#7ecfff', fontWeight: 600, minWidth: '2.5rem' }}>{threshold.toFixed(2)}</span>
+            <span style={{ color: 'var(--accent-bright)', fontWeight: 600, minWidth: '2.5rem' }}>{threshold.toFixed(2)}</span>
           </label>
         </div>
       </div>
@@ -96,7 +98,7 @@ function OverlapTab({ pf, holdings, onSimulate }) {
 
       {result && !loading && (
         <>
-          <p style={{ color: '#8899aa', fontSize: '0.8rem', margin: '0 0 0.5rem' }}>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', margin: '0 0 0.5rem' }}>
             Holdings grouped by price correlation. Tickers in the same cluster move together and may represent
             overlapping exposure. Lower the threshold to catch weaker overlaps. Click a ticker to simulate consolidation.
           </p>
@@ -105,13 +107,13 @@ function OverlapTab({ pf, holdings, onSimulate }) {
             padding: '0.6rem 1rem', marginBottom: '1rem',
             display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap',
           }}>
-            <span style={{ color: '#64b5f6', fontWeight: 600 }}>
+            <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
               {result.clusters?.length || 0} cluster{(result.clusters?.length || 0) !== 1 ? 's' : ''} found
             </span>
-            <span style={{ color: '#f9a825', fontWeight: 600 }}>
+            <span style={{ color: 'var(--warning)', fontWeight: 600 }}>
               {result.clusters?.reduce((s, c) => s + (c.tickers?.length || 0), 0) || 0} tickers in clusters
             </span>
-            <span style={{ color: '#4caf50', fontWeight: 600 }}>
+            <span style={{ color: 'var(--p-4caf50)', fontWeight: 600 }}>
               {result.unclustered?.length || 0} tickers unique
             </span>
           </div>
@@ -120,13 +122,13 @@ function OverlapTab({ pf, holdings, onSimulate }) {
           {result.clusters?.map((cluster, ci) => (
             <div key={ci} className="card" style={{ padding: '0', marginBottom: '1rem', overflow: 'hidden' }}>
               <div style={{
-                padding: '0.6rem 1rem', background: '#0f3460',
-                borderBottom: '1px solid #1a4a8a',
+                padding: '0.6rem 1rem', background: 'var(--border)',
+                borderBottom: '1px solid var(--p-1a4a8a)',
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               }}>
-                <span style={{ color: '#90caf9', fontWeight: 600 }}>
+                <span style={{ color: 'var(--accent-2)', fontWeight: 600 }}>
                   {cluster.underlying || `Cluster ${ci + 1}`}
-                  <span style={{ color: '#8899aa', fontWeight: 400, marginLeft: '0.5rem', fontSize: '0.85rem' }}>
+                  <span style={{ color: 'var(--text-dim)', fontWeight: 400, marginLeft: '0.5rem', fontSize: '0.85rem' }}>
                     — {cluster.tickers?.length || 0} tickers
                   </span>
                 </span>
@@ -134,7 +136,7 @@ function OverlapTab({ pf, holdings, onSimulate }) {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                   <thead>
-                    <tr style={{ borderBottom: '1px solid #2a3a4e' }}>
+                    <tr style={{ borderBottom: '1px solid var(--p-2a3a4e)' }}>
                       <th style={thStyle}>Ticker</th>
                       <th style={thStyle}>Description</th>
                       <th style={{ ...thStyle, textAlign: 'right' }}>Value</th>
@@ -145,8 +147,8 @@ function OverlapTab({ pf, holdings, onSimulate }) {
                   </thead>
                   <tbody>
                     {cluster.tickers?.map((m, mi) => (
-                      <tr key={mi} style={{ borderBottom: '1px solid #1a2a3e' }}>
-                        <td style={{ ...tdStyle, fontWeight: 600, color: '#7ecfff' }}>
+                      <tr key={mi} style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
+                        <td style={{ ...tdStyle, fontWeight: 600, color: 'var(--accent-bright)' }}>
                           <span
                             style={{ cursor: 'pointer', textDecoration: 'underline dotted' }}
                             title="Simulate selling this ticker"
@@ -162,7 +164,7 @@ function OverlapTab({ pf, holdings, onSimulate }) {
                         <td style={{ ...tdStyle, textAlign: 'center' }}>
                           <span style={{
                             display: 'inline-block', padding: '0.15rem 0.5rem', borderRadius: 4,
-                            background: corrBadgeColor(m.correlation_to_group), color: '#fff',
+                            background: corrBadgeColor(m.correlation_to_group), color: 'var(--white)',
                             fontWeight: 600, fontSize: '0.82rem',
                           }}>
                             {m.correlation_to_group != null ? fmtNum(m.correlation_to_group) : '—'}
@@ -172,16 +174,16 @@ function OverlapTab({ pf, holdings, onSimulate }) {
                     ))}
                   </tbody>
                   <tfoot>
-                    <tr style={{ borderTop: '2px solid #2a3a4e' }}>
-                      <td style={{ ...tdStyle, fontWeight: 600, color: '#90caf9' }} colSpan={2}>Totals</td>
-                      <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600, color: '#90caf9' }}>
+                    <tr style={{ borderTop: '2px solid var(--p-2a3a4e)' }}>
+                      <td style={{ ...tdStyle, fontWeight: 600, color: 'var(--accent-2)' }} colSpan={2}>Totals</td>
+                      <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600, color: 'var(--accent-2)' }}>
                         {fmt$(cluster.total_value)}
                       </td>
-                      <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600, color: '#90caf9' }}>
+                      <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600, color: 'var(--accent-2)' }}>
                         {fmt$(cluster.total_monthly_income)}
                       </td>
                       <td style={tdStyle}></td>
-                      <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 600, color: '#90caf9' }}>
+                      <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 600, color: 'var(--accent-2)' }}>
                         avg {fmtNum(cluster.avg_correlation)}
                       </td>
                     </tr>
@@ -195,10 +197,10 @@ function OverlapTab({ pf, holdings, onSimulate }) {
           {result.unclustered?.length > 0 && (
             <div className="card" style={{ padding: '0', marginBottom: '1rem', overflow: 'hidden' }}>
               <div style={{
-                padding: '0.6rem 1rem', background: '#2a2a3e',
-                borderBottom: '1px solid #3a3a5c',
+                padding: '0.6rem 1rem', background: 'var(--p-2a2a3e)',
+                borderBottom: '1px solid var(--p-3a3a5c)',
               }}>
-                <span style={{ color: '#aaa', fontWeight: 600 }}>
+                <span style={{ color: 'var(--p-aaa)', fontWeight: 600 }}>
                   Unclustered Tickers
                   <span style={{ fontWeight: 400, marginLeft: '0.5rem', fontSize: '0.85rem' }}>
                     — {result.unclustered.length} tickers
@@ -208,7 +210,7 @@ function OverlapTab({ pf, holdings, onSimulate }) {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                   <thead>
-                    <tr style={{ borderBottom: '1px solid #2a3a4e' }}>
+                    <tr style={{ borderBottom: '1px solid var(--p-2a3a4e)' }}>
                       <th style={thStyle}>Ticker</th>
                       <th style={thStyle}>Description</th>
                       <th style={{ ...thStyle, textAlign: 'right' }}>Value</th>
@@ -220,18 +222,18 @@ function OverlapTab({ pf, holdings, onSimulate }) {
                   </thead>
                   <tbody>
                     {result.unclustered.map((m, mi) => (
-                      <tr key={mi} style={{ borderBottom: '1px solid #1a2a3e' }}>
-                        <td style={{ ...tdStyle, fontWeight: 600, color: '#7ecfff' }}>{m.ticker}</td>
+                      <tr key={mi} style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
+                        <td style={{ ...tdStyle, fontWeight: 600, color: 'var(--accent-bright)' }}>{m.ticker}</td>
                         <td style={tdStyle}>{m.description || '—'}</td>
                         <td style={{ ...tdStyle, textAlign: 'right' }}>{fmt$(m.current_value)}</td>
                         <td style={{ ...tdStyle, textAlign: 'right' }}>{fmt$(m.monthly_income)}</td>
                         <td style={{ ...tdStyle, textAlign: 'right' }}>{m.current_yield != null ? fmtPct(m.current_yield) : '—'}</td>
-                        <td style={{ ...tdStyle, color: '#90caf9' }}>{m.nearest_cluster || '—'}</td>
+                        <td style={{ ...tdStyle, color: 'var(--accent-2)' }}>{m.nearest_cluster || '—'}</td>
                         <td style={{ ...tdStyle, textAlign: 'center' }}>
                           {m.nearest_correlation != null ? (
                             <span style={{
                               display: 'inline-block', padding: '0.15rem 0.5rem', borderRadius: 4,
-                              background: corrBadgeColor(m.nearest_correlation), color: '#fff',
+                              background: corrBadgeColor(m.nearest_correlation), color: 'var(--white)',
                               fontWeight: 600, fontSize: '0.82rem',
                             }}>
                               {fmtNum(m.nearest_correlation)}
@@ -300,7 +302,7 @@ function SimulatorTab({ pf, holdings, preselectedSell }) {
       mode: 'lines',
     }))
 
-    window.Plotly.newPlot(el, traces, {
+    window.Plotly.newPlot(el, traces, themedPlotlyLayout({
       template: 'plotly_dark',
       paper_bgcolor: '#0e1117',
       plot_bgcolor: '#0e1117',
@@ -313,10 +315,10 @@ function SimulatorTab({ pf, holdings, preselectedSell }) {
       legend: { orientation: 'h', y: -0.2 },
       height: 380,
       margin: { l: 60, r: 30, t: 50, b: 60 },
-    }, { responsive: true })
+    }, isDark), { responsive: true })
 
     return () => { if (el) window.Plotly.purge(el) }
-  }, [result])
+  }, [result, isDark])
 
   const tickers = holdings.map(h => h.ticker).sort()
 
@@ -324,36 +326,36 @@ function SimulatorTab({ pf, holdings, preselectedSell }) {
     <>
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ color: '#8899aa', fontSize: '0.85rem' }}>Sell:</label>
+          <label style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>Sell:</label>
           <select value={sellTicker} onChange={e => setSellTicker(e.target.value)} style={selectStyle}>
             <option value="">— Select —</option>
             {tickers.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
 
-          <label style={{ color: '#8899aa', fontSize: '0.85rem' }}>Buy Into:</label>
+          <label style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>Buy Into:</label>
           <select value={buyTicker} onChange={e => setBuyTicker(e.target.value)} style={selectStyle}>
             <option value="">— Select —</option>
             {tickers.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
 
-          <span style={{ color: '#556677', margin: '0 0.2rem' }}>|</span>
+          <span style={{ color: 'var(--p-556677)', margin: '0 0.2rem' }}>|</span>
 
-          <span style={{ color: '#8899aa', fontSize: '0.82rem' }}>Period:</span>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Period:</span>
           {SIM_PERIODS.map(p => (
             <button
               key={p.value}
               onClick={() => setPeriod(p.value)}
               style={{
                 padding: '0.25rem 0.6rem', borderRadius: 4, cursor: 'pointer',
-                border: period === p.value ? '1px solid #64b5f6' : '1px solid #3a3a5c',
-                background: period === p.value ? '#1a3a5c' : '#1a1a2e',
-                color: period === p.value ? '#64b5f6' : '#8899aa',
+                border: period === p.value ? '1px solid var(--accent)' : '1px solid var(--p-3a3a5c)',
+                background: period === p.value ? 'var(--p-1a3a5c)' : 'var(--bg)',
+                color: period === p.value ? 'var(--accent)' : 'var(--text-dim)',
                 fontSize: '0.82rem', fontWeight: period === p.value ? 600 : 400,
               }}
             >{p.label}</button>
           ))}
 
-          <span style={{ color: '#556677', margin: '0 0.2rem' }}>|</span>
+          <span style={{ color: 'var(--p-556677)', margin: '0 0.2rem' }}>|</span>
 
           <button className="btn btn-success" onClick={simulate} disabled={loading || !sellTicker || !buyTicker}
             style={{ padding: '0.4rem 1.2rem', fontWeight: 600 }}>
@@ -362,9 +364,9 @@ function SimulatorTab({ pf, holdings, preselectedSell }) {
         </div>
       </div>
 
-      <div style={{ background: '#0d1b2a', border: '1px solid #1a3a5c', borderRadius: 6, padding: '0.5rem 1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <span style={{ color: '#90a4ae', fontSize: '0.8rem' }}>Check how macro conditions affect this trade:</span>
-        <Link to="/macro-dashboard" style={{ color: '#64b5f6', fontSize: '0.8rem', textDecoration: 'none', fontWeight: 600 }}>Macro Regime Dashboard →</Link>
+      <div style={{ background: 'var(--p-0d1b2a)', border: '1px solid var(--p-1a3a5c)', borderRadius: 6, padding: '0.5rem 1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <span style={{ color: 'var(--text-dim-2)', fontSize: '0.8rem' }}>Check how macro conditions affect this trade:</span>
+        <Link to="/macro-dashboard" style={{ color: 'var(--accent)', fontSize: '0.8rem', textDecoration: 'none', fontWeight: 600 }}>Macro Regime Dashboard →</Link>
       </div>
 
       {error && <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{error}</div>}
@@ -377,7 +379,7 @@ function SimulatorTab({ pf, holdings, preselectedSell }) {
 
       {result && !loading && (
         <>
-          <p style={{ color: '#8899aa', fontSize: '0.8rem', margin: '0 0 0.5rem' }}>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', margin: '0 0 0.5rem' }}>
             What happens if you sell one holding and move the proceeds into another.
             Before = current combined position. After = consolidated into the Buy ticker.
           </p>
@@ -401,7 +403,7 @@ function SimulatorTab({ pf, holdings, preselectedSell }) {
           {result.after_consolidation?.income_change != null && (
             <div className="card" style={{
               padding: '0.6rem 1rem', marginBottom: '1rem', textAlign: 'center',
-              border: `1px solid ${result.after_consolidation.income_change >= 0 ? '#2e7d32' : '#c62828'}`,
+              border: `1px solid ${result.after_consolidation.income_change >= 0 ? 'var(--success-solid)' : 'var(--danger-solid)'}`,
             }}>
               <span style={{ fontSize: '1.1rem', fontWeight: 700, color: pctColor(result.after_consolidation.income_change) }}>
                 Income Change: {result.after_consolidation.income_change >= 0 ? '+' : ''}{fmt$(result.after_consolidation.income_change)}
@@ -415,13 +417,13 @@ function SimulatorTab({ pf, holdings, preselectedSell }) {
           {/* Performance comparison table */}
           {result.performance_comparison && (
             <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem', overflowX: 'auto' }}>
-              <h3 style={{ color: '#90caf9', margin: '0 0 0.2rem', fontSize: '0.95rem' }}>Historical Performance Comparison</h3>
-              <p style={{ color: '#8899aa', fontSize: '0.78rem', margin: '0 0 0.5rem' }}>
+              <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.2rem', fontSize: '0.95rem' }}>Historical Performance Comparison</h3>
+              <p style={{ color: 'var(--text-dim)', fontSize: '0.78rem', margin: '0 0 0.5rem' }}>
                 How each ticker performed over the selected period. Lower volatility and higher Sharpe ratio = more consistent returns.
               </p>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                 <thead>
-                  <tr style={{ borderBottom: '1px solid #2a3a4e' }}>
+                  <tr style={{ borderBottom: '1px solid var(--p-2a3a4e)' }}>
                     <th style={thStyle}>Metric</th>
                     <th style={{ ...thStyle, textAlign: 'right' }}>{sellTicker} (Sell)</th>
                     <th style={{ ...thStyle, textAlign: 'right' }}>{buyTicker} (Buy Into)</th>
@@ -435,8 +437,8 @@ function SimulatorTab({ pf, holdings, preselectedSell }) {
                     { key: 'max_drawdown', label: 'Max Drawdown' },
                     { key: 'sharpe', label: 'Sharpe Ratio' },
                   ].map(({ key, label }) => (
-                    <tr key={key} style={{ borderBottom: '1px solid #1a2a3e' }}>
-                      <td style={{ ...tdStyle, color: '#aaa' }}>{label}</td>
+                    <tr key={key} style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
+                      <td style={{ ...tdStyle, color: 'var(--p-aaa)' }}>{label}</td>
                       <td style={{ ...tdStyle, textAlign: 'right', color: pctColor(result.performance_comparison.sell_ticker?.[key]) }}>
                         {key === 'sharpe' ? fmtNum(result.performance_comparison.sell_ticker?.[key]) : fmtPct(result.performance_comparison.sell_ticker?.[key])}
                       </td>
@@ -497,18 +499,18 @@ function CompareCard({ label, before, after, format }) {
 
   return (
     <div className="card" style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>
-      <div style={{ color: '#8899aa', fontSize: '0.78rem', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+      <div style={{ color: 'var(--text-dim)', fontSize: '0.78rem', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
         {label}
       </div>
       <div style={{ display: 'flex', justifyContent: 'center', gap: '1.5rem', alignItems: 'baseline' }}>
         <div>
-          <div style={{ color: '#aaa', fontSize: '0.72rem' }}>Before</div>
-          <div style={{ fontSize: '1.1rem', fontWeight: 600, color: '#e0e0e0' }}>{display(before)}</div>
+          <div style={{ color: 'var(--p-aaa)', fontSize: '0.72rem' }}>Before</div>
+          <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)' }}>{display(before)}</div>
         </div>
-        <div style={{ color: '#556677', fontSize: '1.2rem' }}>&rarr;</div>
+        <div style={{ color: 'var(--p-556677)', fontSize: '1.2rem' }}>&rarr;</div>
         <div>
-          <div style={{ color: '#aaa', fontSize: '0.72rem' }}>After</div>
-          <div style={{ fontSize: '1.1rem', fontWeight: 600, color: '#e0e0e0' }}>{display(after)}</div>
+          <div style={{ color: 'var(--p-aaa)', fontSize: '0.72rem' }}>After</div>
+          <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)' }}>{display(after)}</div>
         </div>
       </div>
       {diff != null && (
@@ -626,7 +628,7 @@ function RegimeTab({ pf, holdings }) {
       showlegend: true,
     }))
 
-    window.Plotly.newPlot(el, traces, {
+    window.Plotly.newPlot(el, traces, themedPlotlyLayout({
       template: 'plotly_dark',
       paper_bgcolor: '#0e1117',
       plot_bgcolor: '#0e1117',
@@ -637,10 +639,10 @@ function RegimeTab({ pf, holdings }) {
       height: 180,
       margin: { l: 40, r: 30, t: 50, b: 50 },
       legend: { orientation: 'h', y: 1.15 },
-    }, { responsive: true })
+    }, isDark), { responsive: true })
 
     return () => { if (el) window.Plotly.purge(el) }
-  }, [result])
+  }, [result, isDark])
 
   // Plotly grouped bar chart
   useEffect(() => {
@@ -659,7 +661,7 @@ function RegimeTab({ pf, holdings }) {
       },
     }))
 
-    window.Plotly.newPlot(el, traces, {
+    window.Plotly.newPlot(el, traces, themedPlotlyLayout({
       template: 'plotly_dark',
       paper_bgcolor: '#0e1117',
       plot_bgcolor: '#0e1117',
@@ -670,10 +672,10 @@ function RegimeTab({ pf, holdings }) {
       height: 400,
       margin: { l: 60, r: 30, t: 50, b: 60 },
       legend: { orientation: 'h', y: -0.2 },
-    }, { responsive: true })
+    }, isDark), { responsive: true })
 
     return () => { if (el) window.Plotly.purge(el) }
-  }, [result])
+  }, [result, isDark])
 
   const allTickers = holdings.map(h => h.ticker).sort()
 
@@ -685,31 +687,31 @@ function RegimeTab({ pf, holdings }) {
             style={{ padding: '0.35rem 0.8rem' }}>
             {showPicker ? 'Hide Picker' : 'Select Tickers'} ({selected.length})
           </button>
-          <button className="btn" onClick={selectAll} style={{ padding: '0.35rem 0.6rem', color: '#8899aa', fontSize: '0.82rem' }}>
+          <button className="btn" onClick={selectAll} style={{ padding: '0.35rem 0.6rem', color: 'var(--text-dim)', fontSize: '0.82rem' }}>
             Select All
           </button>
-          <button className="btn" onClick={clearAll} style={{ padding: '0.35rem 0.6rem', color: '#8899aa', fontSize: '0.82rem' }}>
+          <button className="btn" onClick={clearAll} style={{ padding: '0.35rem 0.6rem', color: 'var(--text-dim)', fontSize: '0.82rem' }}>
             Clear
           </button>
 
-          <span style={{ color: '#556677', margin: '0 0.2rem' }}>|</span>
+          <span style={{ color: 'var(--p-556677)', margin: '0 0.2rem' }}>|</span>
 
-          <span style={{ color: '#8899aa', fontSize: '0.82rem' }}>Period:</span>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Period:</span>
           {REGIME_PERIODS.map(p => (
             <button
               key={p.value}
               onClick={() => setPeriod(p.value)}
               style={{
                 padding: '0.25rem 0.6rem', borderRadius: 4, cursor: 'pointer',
-                border: period === p.value ? '1px solid #64b5f6' : '1px solid #3a3a5c',
-                background: period === p.value ? '#1a3a5c' : '#1a1a2e',
-                color: period === p.value ? '#64b5f6' : '#8899aa',
+                border: period === p.value ? '1px solid var(--accent)' : '1px solid var(--p-3a3a5c)',
+                background: period === p.value ? 'var(--p-1a3a5c)' : 'var(--bg)',
+                color: period === p.value ? 'var(--accent)' : 'var(--text-dim)',
                 fontSize: '0.82rem', fontWeight: period === p.value ? 600 : 400,
               }}
             >{p.label}</button>
           ))}
 
-          <span style={{ color: '#556677', margin: '0 0.2rem' }}>|</span>
+          <span style={{ color: 'var(--p-556677)', margin: '0 0.2rem' }}>|</span>
 
           <button className="btn btn-success" onClick={analyze} disabled={loading || selected.length < 1}
             style={{ padding: '0.4rem 1.2rem', fontWeight: 600 }}>
@@ -721,15 +723,15 @@ function RegimeTab({ pf, holdings }) {
         {showPicker && (
           <div style={{
             display: 'flex', gap: '0.3rem', flexWrap: 'wrap',
-            padding: '0.5rem 0', borderTop: '1px solid #2a3a4e', marginTop: '0.3rem',
+            padding: '0.5rem 0', borderTop: '1px solid var(--p-2a3a4e)', marginTop: '0.3rem',
           }}>
             {allTickers.map(t => (
               <label key={t} style={{
                 display: 'inline-flex', alignItems: 'center', gap: 4,
                 padding: '0.2rem 0.5rem', borderRadius: 4, cursor: 'pointer',
-                background: selected.includes(t) ? '#1a3a5c' : '#1a1a2e',
-                border: `1px solid ${selected.includes(t) ? '#64b5f6' : '#3a3a5c'}`,
-                fontSize: '0.82rem', color: selected.includes(t) ? '#7ecfff' : '#8899aa',
+                background: selected.includes(t) ? 'var(--p-1a3a5c)' : 'var(--bg)',
+                border: `1px solid ${selected.includes(t) ? 'var(--accent)' : 'var(--p-3a3a5c)'}`,
+                fontSize: '0.82rem', color: selected.includes(t) ? 'var(--accent-bright)' : 'var(--text-dim)',
               }}>
                 <input
                   type="checkbox"
@@ -749,12 +751,12 @@ function RegimeTab({ pf, holdings }) {
             {selected.map(t => (
               <span key={t} style={{
                 display: 'inline-flex', alignItems: 'center', gap: 4,
-                padding: '0.2rem 0.5rem', background: '#1a2a3e', border: '1px solid #2a4a6e',
-                borderRadius: 4, fontSize: '0.82rem', color: '#7ecfff', fontWeight: 600,
+                padding: '0.2rem 0.5rem', background: 'var(--p-1a2a3e)', border: '1px solid var(--p-2a4a6e)',
+                borderRadius: 4, fontSize: '0.82rem', color: 'var(--accent-bright)', fontWeight: 600,
               }}>
                 {t}
                 <button onClick={() => toggleTicker(t)} style={{
-                  background: 'none', border: 'none', color: '#ff6b6b', cursor: 'pointer',
+                  background: 'none', border: 'none', color: 'var(--neg)', cursor: 'pointer',
                   fontWeight: 700, fontSize: '0.9rem', padding: '0 2px', lineHeight: 1,
                 }}>&times;</button>
               </span>
@@ -771,9 +773,9 @@ function RegimeTab({ pf, holdings }) {
         </div>
       )}
 
-      <div style={{ background: '#0d1b2a', border: '1px solid #1a3a5c', borderRadius: 6, padding: '0.5rem 1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <span style={{ color: '#90a4ae', fontSize: '0.8rem' }}>See how macro conditions affect your portfolio:</span>
-        <Link to="/macro-dashboard" style={{ color: '#64b5f6', fontSize: '0.8rem', textDecoration: 'none', fontWeight: 600 }}>Macro Regime Dashboard →</Link>
+      <div style={{ background: 'var(--p-0d1b2a)', border: '1px solid var(--p-1a3a5c)', borderRadius: 6, padding: '0.5rem 1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <span style={{ color: 'var(--text-dim-2)', fontSize: '0.8rem' }}>See how macro conditions affect your portfolio:</span>
+        <Link to="/macro-dashboard" style={{ color: 'var(--accent)', fontSize: '0.8rem', textDecoration: 'none', fontWeight: 600 }}>Macro Regime Dashboard →</Link>
       </div>
 
       {result && !loading && (
@@ -781,11 +783,11 @@ function RegimeTab({ pf, holdings }) {
           {/* Regime timeline */}
           {result.timeline && (
             <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-              <p style={{ color: '#8899aa', fontSize: '0.8rem', margin: '0 0 0.3rem' }}>
+              <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', margin: '0 0 0.3rem' }}>
                 Market conditions based on SPY's rolling 3-month return.
-                <span style={{ color: '#4caf50', fontWeight: 600 }}> Green</span> = Bull (&gt;5%),
-                <span style={{ color: '#ef5350', fontWeight: 600 }}> Red</span> = Bear (&lt;-5%),
-                <span style={{ color: '#9e9e9e', fontWeight: 600 }}> Gray</span> = Sideways.
+                <span style={{ color: 'var(--p-4caf50)', fontWeight: 600 }}> Green</span> = Bull (&gt;5%),
+                <span style={{ color: 'var(--neg-2)', fontWeight: 600 }}> Red</span> = Bear (&lt;-5%),
+                <span style={{ color: 'var(--p-9e9e9e)', fontWeight: 600 }}> Gray</span> = Sideways.
               </p>
               <div id="regime-timeline" />
             </div>
@@ -794,29 +796,29 @@ function RegimeTab({ pf, holdings }) {
           {/* Performance table */}
           {result.table && (
             <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem', overflowX: 'auto' }}>
-              <h3 style={{ color: '#90caf9', margin: '0 0 0.2rem', fontSize: '0.95rem' }}>Performance by Regime</h3>
-              <p style={{ color: '#8899aa', fontSize: '0.8rem', margin: '0 0 0.5rem' }}>
+              <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.2rem', fontSize: '0.95rem' }}>Performance by Regime</h3>
+              <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', margin: '0 0 0.5rem' }}>
                 How each ticker performed during each market condition.
-                <strong style={{ color: '#aab' }}> Price</strong> = NAV change,
-                <strong style={{ color: '#aab' }}> Income</strong> = dividend return,
-                <strong style={{ color: '#aab' }}> Total</strong> = combined,
-                <strong style={{ color: '#aab' }}> Max DD</strong> = worst drawdown.
-                <span style={{ marginLeft: '0.3rem', padding: '0.1rem 0.4rem', borderRadius: 4, background: '#f9a825', color: '#000', fontSize: '0.7rem', fontWeight: 700 }}>!</span> = limited history.
+                <strong style={{ color: 'var(--p-aab)' }}> Price</strong> = NAV change,
+                <strong style={{ color: 'var(--p-aab)' }}> Income</strong> = dividend return,
+                <strong style={{ color: 'var(--p-aab)' }}> Total</strong> = combined,
+                <strong style={{ color: 'var(--p-aab)' }}> Max DD</strong> = worst drawdown.
+                <span style={{ marginLeft: '0.3rem', padding: '0.1rem 0.4rem', borderRadius: 4, background: 'var(--warning)', color: 'var(--black)', fontSize: '0.7rem', fontWeight: 700 }}>!</span> = limited history.
               </p>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
                 <thead>
-                  <tr style={{ borderBottom: '2px solid #2a3a4e' }}>
+                  <tr style={{ borderBottom: '2px solid var(--p-2a3a4e)' }}>
                     <th style={thStyle} rowSpan={2}>Ticker</th>
                     {['Bull', 'Bear', 'Sideways', 'High Vol'].map(regime => (
-                      <th key={regime} style={{ ...thStyle, textAlign: 'center', borderBottom: '1px solid #2a3a4e' }} colSpan={4}>
+                      <th key={regime} style={{ ...thStyle, textAlign: 'center', borderBottom: '1px solid var(--p-2a3a4e)' }} colSpan={4}>
                         <span style={{
-                          color: regime === 'Bull' ? '#4caf50' : regime === 'Bear' ? '#ef5350'
-                            : regime === 'High Vol' ? '#ff9800' : '#9e9e9e'
+                          color: regime === 'Bull' ? 'var(--p-4caf50)' : regime === 'Bear' ? 'var(--neg-2)'
+                            : regime === 'High Vol' ? 'var(--p-ff9800)' : 'var(--p-9e9e9e)'
                         }}>{regime}</span>
                       </th>
                     ))}
                   </tr>
-                  <tr style={{ borderBottom: '1px solid #2a3a4e' }}>
+                  <tr style={{ borderBottom: '1px solid var(--p-2a3a4e)' }}>
                     {['Bull', 'Bear', 'Sideways', 'High Vol'].map(regime => (
                       <React.Fragment key={regime}>
                         <th style={{ ...thStyle, textAlign: 'right', fontSize: '0.75rem' }}>Price</th>
@@ -829,13 +831,13 @@ function RegimeTab({ pf, holdings }) {
                 </thead>
                 <tbody>
                   {result.table.map((row, ri) => (
-                    <tr key={ri} style={{ borderBottom: '1px solid #1a2a3e' }}>
-                      <td style={{ ...tdStyle, fontWeight: 600, color: '#7ecfff', whiteSpace: 'nowrap' }}>
+                    <tr key={ri} style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
+                      <td style={{ ...tdStyle, fontWeight: 600, color: 'var(--accent-bright)', whiteSpace: 'nowrap' }}>
                         {row.ticker}
                         {row.warning && (
                           <span style={{
                             marginLeft: '0.4rem', padding: '0.1rem 0.4rem', borderRadius: 4,
-                            background: '#f9a825', color: '#000', fontSize: '0.7rem', fontWeight: 700,
+                            background: 'var(--warning)', color: 'var(--black)', fontSize: '0.7rem', fontWeight: 700,
                           }} title={row.warning}>!</span>
                         )}
                       </td>
@@ -865,7 +867,7 @@ function RegimeTab({ pf, holdings }) {
           {/* Grouped bar chart */}
           {result.bar_chart && (
             <div className="card" style={{ padding: '0.75rem 1rem' }}>
-              <p style={{ color: '#8899aa', fontSize: '0.8rem', margin: '0 0 0.3rem' }}>
+              <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', margin: '0 0 0.3rem' }}>
                 Visual comparison of total return (price + income) by ticker across market conditions.
                 Taller bars = stronger performance in that regime.
               </p>
@@ -882,7 +884,7 @@ function RegimeTab({ pf, holdings }) {
 
 const thStyle = {
   padding: '0.4rem 0.6rem',
-  color: '#8899aa',
+  color: 'var(--text-dim)',
   fontWeight: 600,
   textAlign: 'left',
   whiteSpace: 'nowrap',
@@ -890,15 +892,15 @@ const thStyle = {
 
 const tdStyle = {
   padding: '0.4rem 0.6rem',
-  color: '#e0e0e0',
+  color: 'var(--text)',
 }
 
 const selectStyle = {
   padding: '0.35rem 0.6rem',
-  background: '#1a1a2e',
-  border: '1px solid #3a3a5c',
+  background: 'var(--bg)',
+  border: '1px solid var(--p-3a3a5c)',
   borderRadius: 4,
-  color: '#e0e0e0',
+  color: 'var(--text)',
   fontSize: '0.85rem',
   minWidth: 120,
 }
@@ -906,6 +908,7 @@ const selectStyle = {
 // ─── Main Component ────────────────────────────────────────────────────────────
 
 export default function ConsolidationAnalysis() {
+  const { isDark } = useTheme()
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const location = useLocation()
@@ -944,7 +947,7 @@ export default function ConsolidationAnalysis() {
   return (
     <div className="page">
       <h1 style={{ marginBottom: '0.3rem' }}>Consolidation Analysis</h1>
-      <p style={{ color: '#8899aa', fontSize: '0.85rem', marginBottom: '1rem' }}>
+      <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem' }}>
         Identify overlapping holdings, simulate consolidation trades, and analyze performance across market regimes.
       </p>
 
@@ -976,3 +979,4 @@ export default function ConsolidationAnalysis() {
     </div>
   )
 }
+

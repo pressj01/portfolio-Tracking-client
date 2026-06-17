@@ -1,4 +1,4 @@
-const CACHE_PREFIX = 'portfolio_dashboard_v13_'
+const CACHE_PREFIX = 'portfolio_dashboard_v16_'
 
 const DASHBOARD_CACHE_TTL_MS = 60 * 60 * 1000
 

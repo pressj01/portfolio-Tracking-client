@@ -3,6 +3,8 @@ import { HashRouter as Router, Routes, Route, NavLink, useLocation } from 'react
 import './index.css'
 import DialogProvider from './components/DialogProvider'
 import ProfileProvider, { useProfile } from './context/ProfileContext'
+import ThemeProvider, { useTheme } from './context/ThemeContext'
+import { chartTheme, themedPlotlyLayout } from './utils/chartTheme'
 import MarketRefreshProvider from './context/MarketRefreshContext'
 import Dashboard from './pages/Dashboard'
 import Import from './pages/Import'
@@ -62,6 +64,42 @@ import StockBuyingChecklist from './pages/StockBuyingChecklist'
 // import OptionTradingTools from './pages/OptionTradingTools'
 // import OptionEducation from './pages/OptionEducation'
 
+function PlotlyThemeBridge() {
+  const { isDark } = useTheme()
+
+  useEffect(() => {
+    if (!window.Plotly || window.Plotly.__portfolioThemePatched) return
+    const originalNewPlot = window.Plotly.newPlot?.bind(window.Plotly)
+    const originalReact = window.Plotly.react?.bind(window.Plotly)
+    if (originalNewPlot) {
+      window.Plotly.newPlot = (el, data, layout, config) => originalNewPlot(el, data, themedPlotlyLayout(layout, document.documentElement.dataset.theme !== 'light'), config)
+    }
+    if (originalReact) {
+      window.Plotly.react = (el, data, layout, config) => originalReact(el, data, themedPlotlyLayout(layout, document.documentElement.dataset.theme !== 'light'), config)
+    }
+    window.Plotly.__portfolioThemePatched = true
+  }, [])
+
+  useEffect(() => {
+    if (!window.Plotly?.relayout) return
+    const ct = chartTheme(isDark)
+    document.querySelectorAll('.js-plotly-plot').forEach(el => {
+      window.Plotly.relayout(el, {
+        template: ct.template,
+        paper_bgcolor: ct.paper,
+        plot_bgcolor: ct.plot,
+        'font.color': ct.font,
+        'xaxis.gridcolor': ct.grid,
+        'xaxis.zerolinecolor': ct.zeroline,
+        'yaxis.gridcolor': ct.grid,
+        'yaxis.zerolinecolor': ct.zeroline,
+      }).catch(() => {})
+    })
+  }, [isDark])
+
+  return null
+}
+
 function NavDropdown({ label, children }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
@@ -77,9 +115,13 @@ function NavDropdown({ label, children }) {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const isActive = React.Children.toArray(children).some(
-    child => child.props?.to && location.pathname === child.props.to
-  )
+  const childHasActiveRoute = (child) => {
+    if (!React.isValidElement(child)) return false
+    if (child.props?.to && location.pathname === child.props.to) return true
+    return React.Children.toArray(child.props?.children).some(childHasActiveRoute)
+  }
+
+  const isActive = React.Children.toArray(children).some(childHasActiveRoute)
 
   return (
     <div className="nav-dropdown" ref={ref}>
@@ -94,11 +136,22 @@ function NavDropdown({ label, children }) {
   )
 }
 
+function NavMenuGroup({ title, children }) {
+  return (
+    <div className="nav-dropdown-group">
+      <div className="nav-dropdown-group-title">{title}</div>
+      {children}
+    </div>
+  )
+}
+
 function App() {
   return (
     <DialogProvider>
+    <ThemeProvider>
     <ProfileProvider>
     <MarketRefreshProvider>
+    <PlotlyThemeBridge />
     <Router>
       <Nav />
       <Routes>
@@ -161,6 +214,7 @@ function App() {
     </Router>
     </MarketRefreshProvider>
     </ProfileProvider>
+    </ThemeProvider>
     </DialogProvider>
   )
 }
@@ -234,31 +288,41 @@ function Nav() {
         <NavLink to="/dividend-calculator">Dividend Calculator</NavLink>
         <NavLink to="/watchlist">Watchlist</NavLink>
       </NavDropdown>
-      <NavDropdown label="ETF's">
+      <NavDropdown label="Checklists">
         <NavLink to="/stock-buying-checklist">Stock Buying Checklist</NavLink>
         <NavLink to="/etf-buying-checklist-evaluator">ETF Buying Checklist Evaluator</NavLink>
         <NavLink to="/option-income-etf-evaluator">Option-Income ETF Evaluator</NavLink>
-        <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>
-        <NavLink to="/etf-comparer">ETF Comparer</NavLink>
-        <NavLink to="/stock-comparer">Stock Comparer</NavLink>
       </NavDropdown>
       <NavDropdown label="Analysis">
-        <NavLink to="/security-research">Security Research</NavLink>
-        <NavLink to="/buy-sell-signals">Buy / Sell Signals</NavLink>
-        <NavLink to="/nav-erosion">NAV Erosion</NavLink>
-        <NavLink to="/nav-erosion-portfolio">NAV Erosion Screener</NavLink>
-        <NavLink to="/income-sim">Income Simulator</NavLink>
-        <NavLink to="/income-growth">Income Growth</NavLink>
-        <NavLink to="/correlation">Correlation Matrix</NavLink>
-        <NavLink to="/analytics">Portfolio Analytics</NavLink>
-        <NavLink to="/portfolio-builder">Portfolio Builder</NavLink>
-        <NavLink to="/rebalance-wizard">Rebalance Wizard</NavLink>
-        <NavLink to="/portfolio-tester">Portfolio Tester</NavLink>
-        <NavLink to="/dist-compare">Distribution Compare</NavLink>
-        <NavLink to="/consolidation">Consolidation Analysis</NavLink>
-        <NavLink to="/macro-dashboard">Macro Regime Dashboard</NavLink>
-        <NavLink to="/scanner">Single Strategy Scanner</NavLink>
-        <NavLink to="/general-scanner">General Scanner</NavLink>
+        <NavMenuGroup title="Research & Compare">
+          <NavLink to="/security-research">Security Research</NavLink>
+          <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>
+          <NavLink to="/etf-comparer">ETF Comparer</NavLink>
+          <NavLink to="/stock-comparer">Stock Comparer</NavLink>
+          <NavLink to="/dist-compare">Distribution Compare</NavLink>
+        </NavMenuGroup>
+        <NavMenuGroup title="Screeners & Signals">
+          <NavLink to="/general-scanner">General Scanner</NavLink>
+          <NavLink to="/scanner">Single Strategy Scanner</NavLink>
+          <NavLink to="/buy-sell-signals">Buy / Sell Signals</NavLink>
+        </NavMenuGroup>
+        <NavMenuGroup title="Income & NAV Risk">
+          <NavLink to="/nav-erosion">NAV Erosion</NavLink>
+          <NavLink to="/nav-erosion-portfolio">NAV Erosion Screener</NavLink>
+          <NavLink to="/income-sim">Income Simulator</NavLink>
+          <NavLink to="/income-growth">Income Growth</NavLink>
+        </NavMenuGroup>
+        <NavMenuGroup title="Portfolio Diagnostics">
+          <NavLink to="/analytics">Portfolio Analytics</NavLink>
+          <NavLink to="/correlation">Correlation Matrix</NavLink>
+          <NavLink to="/consolidation">Consolidation Analysis</NavLink>
+          <NavLink to="/macro-dashboard">Macro Regime Dashboard</NavLink>
+        </NavMenuGroup>
+        <NavMenuGroup title="Planning & Optimization">
+          <NavLink to="/portfolio-builder">Portfolio Builder</NavLink>
+          <NavLink to="/portfolio-tester">Portfolio Tester</NavLink>
+          <NavLink to="/rebalance-wizard">Rebalance Wizard</NavLink>
+        </NavMenuGroup>
       </NavDropdown>
       <NavDropdown label="CEF's">
         <NavLink to="/closed-cef-info">Closed CEF Information</NavLink>

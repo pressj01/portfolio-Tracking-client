@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
-import Plot from 'react-plotly.js'
+import Plot from '../components/ThemedPlot'
 
 function Sig({ signal }) {
   if (!signal) return <span>{'\u2014'}</span>
@@ -169,9 +169,9 @@ export default function BuySellSignals() {
         {timestamp && <span className="bss-timestamp">Updated: {timestamp}</span>}
       </div>
       <p className="bss-legend">
-        <span style={{ color: '#00c853', fontWeight: 600 }}>&#9632; BUY</span>&nbsp;
-        <span style={{ color: '#d50000', fontWeight: 600 }}>&#9632; SELL</span>&nbsp;
-        <span style={{ color: '#f9a825', fontWeight: 600 }}>&#9632; NEUTRAL</span>
+        <span style={{ color: 'var(--pos-strong)', fontWeight: 600 }}>&#9632; BUY</span>&nbsp;
+        <span style={{ color: 'var(--neg-strong)', fontWeight: 600 }}>&#9632; SELL</span>&nbsp;
+        <span style={{ color: 'var(--warning)', fontWeight: 600 }}>&#9632; NEUTRAL</span>
         &nbsp;&middot;&nbsp; Overall signal = majority vote across AO, RSI, MACD, SMA50, SMA200, plus NAV Signal when applicable
       </p>
 
@@ -208,7 +208,7 @@ export default function BuySellSignals() {
             <div className="wl-count-lbl">NEUTRAL</div>
           </div>
           <div className="bss-count-total">
-            <div className="wl-count-num" style={{ color: '#ccc' }}>{rows.length}</div>
+            <div className="wl-count-num" style={{ color: 'var(--p-ccc)' }}>{rows.length}</div>
             <div className="wl-count-lbl">TOTAL</div>
           </div>
         </div>
@@ -242,7 +242,7 @@ export default function BuySellSignals() {
         <>
           <h2 className="bss-table-title">
             Signal Detail Table
-            <span style={{ fontWeight: 400, fontSize: '0.75rem', color: '#666' }}>&nbsp;&mdash; click any column header to sort</span>
+            <span style={{ fontWeight: 400, fontSize: '0.75rem', color: 'var(--p-666)' }}>&nbsp;&mdash; click any column header to sort</span>
           </h2>
           <div className="sst-wrap" style={{ maxHeight: 560 }}>
             <table className="sst" id="bss-tbl">
@@ -289,7 +289,7 @@ export default function BuySellSignals() {
                     <td className="grp-left">{r.cov_ratio}</td>
                     <td><Sig signal={r.cov_sig} /></td>
                     <td style={{
-                      color: r.nav_erosion === 'Low' ? '#00c853' : r.nav_erosion === 'High' ? '#d50000' : r.nav_erosion === 'Medium' ? '#f9a825' : '#888',
+                      color: r.nav_erosion === 'Low' ? 'var(--pos-strong)' : r.nav_erosion === 'High' ? 'var(--neg-strong)' : r.nav_erosion === 'Medium' ? 'var(--warning)' : 'var(--p-888)',
                       fontWeight: 600,
                       backgroundColor: r.nav_erosion === 'Low' ? 'rgba(0,200,83,0.12)' : r.nav_erosion === 'High' ? 'rgba(213,0,0,0.12)' : r.nav_erosion === 'Medium' ? 'rgba(249,168,37,0.12)' : 'transparent',
                     }}>{r.nav_erosion}</td>
@@ -312,3 +312,4 @@ export default function BuySellSignals() {
     </div>
   )
 }
+

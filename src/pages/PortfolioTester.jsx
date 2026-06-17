@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../components/ThemedPlot'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 
 const PRESETS = [
   { label: '6M',  years: 0.5 },
@@ -120,13 +122,13 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
   return (
     <div className="card" style={{ padding: '0.75rem', flex: 1, minWidth: 360 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-        <span style={{ color: '#8899aa', fontSize: '0.82rem' }}>{label}</span>
+        <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>{label}</span>
         <input
           value={portfolio.name}
           onChange={e => onChange({ ...portfolio, name: e.target.value })}
           style={{
-            flex: 1, padding: '0.3rem 0.5rem', background: '#1a1a2e',
-            border: '1px solid #3a3a5c', borderRadius: 4, color: '#e0e0e0', fontSize: '0.9rem',
+            flex: 1, padding: '0.3rem 0.5rem', background: 'var(--bg)',
+            border: '1px solid var(--p-3a3a5c)', borderRadius: 4, color: 'var(--text)', fontSize: '0.9rem',
           }}
         />
       </div>
@@ -140,7 +142,7 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
           maxLength={10}
           style={{
             width: 90, textTransform: 'uppercase', padding: '0.3rem 0.5rem',
-            background: '#1a1a2e', border: '1px solid #3a3a5c', borderRadius: 4, color: '#e0e0e0', fontSize: '0.85rem',
+            background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 4, color: 'var(--text)', fontSize: '0.85rem',
           }}
         />
         <input
@@ -150,19 +152,19 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
           placeholder="Wt %"
           style={{
             width: 70, padding: '0.3rem 0.5rem',
-            background: '#1a1a2e', border: '1px solid #3a3a5c', borderRadius: 4, color: '#e0e0e0', fontSize: '0.85rem',
+            background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 4, color: 'var(--text)', fontSize: '0.85rem',
           }}
         />
         <button className="btn btn-primary" style={{ padding: '0.3rem 0.75rem' }} onClick={addRow}>Add</button>
         <button className="btn" style={{ padding: '0.3rem 0.7rem' }} onClick={equalWeight} title="Set every row to equal weight">Equal</button>
         <button className="btn" style={{ padding: '0.3rem 0.7rem' }} onClick={normalize} title="Scale weights to sum 100%">Normalize</button>
-        <button className="btn" style={{ padding: '0.3rem 0.7rem', color: '#ff9090' }} onClick={clearAll}>Clear</button>
+        <button className="btn" style={{ padding: '0.3rem 0.7rem', color: 'var(--p-ff9090)' }} onClick={clearAll}>Clear</button>
       </div>
 
       <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
         <button
           className="btn"
-          style={{ padding: '0.3rem 0.7rem', color: '#90caf9' }}
+          style={{ padding: '0.3rem 0.7rem', color: 'var(--accent-2)' }}
           disabled={!currentAvailable}
           onClick={() => onLoadCurrent('')}
           title="Replace with your current holdings, weighted by current value"
@@ -171,7 +173,7 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
         </button>
         <button
           className="btn"
-          style={{ padding: '0.3rem 0.7rem', color: '#90caf9' }}
+          style={{ padding: '0.3rem 0.7rem', color: 'var(--accent-2)' }}
           disabled={!currentAvailable}
           onClick={() => setPickerOpen(o => !o)}
           title="Cherry-pick individual tickers from your current holdings"
@@ -184,8 +186,8 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
           disabled={categories.length === 0}
           title={categories.length === 0 ? 'Define categories on the Categories page to enable filtered loading' : ''}
           style={{
-            padding: '0.3rem 0.5rem', background: '#1a1a2e', border: '1px solid #3a3a5c',
-            borderRadius: 4, color: categories.length === 0 ? '#556677' : '#e0e0e0', fontSize: '0.82rem',
+            padding: '0.3rem 0.5rem', background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)',
+            borderRadius: 4, color: categories.length === 0 ? 'var(--p-556677)' : 'var(--text)', fontSize: '0.82rem',
             cursor: categories.length === 0 ? 'not-allowed' : 'pointer',
           }}
         >
@@ -206,11 +208,11 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
 
       {pickerOpen && (
         <div style={{
-          border: '1px solid #3a3a5c', borderRadius: 4, marginBottom: '0.5rem',
-          background: '#0f0f1e', padding: '0.5rem',
+          border: '1px solid var(--p-3a3a5c)', borderRadius: 4, marginBottom: '0.5rem',
+          background: 'var(--p-0f0f1e)', padding: '0.5rem',
         }}>
           <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginBottom: '0.4rem', flexWrap: 'wrap' }}>
-            <span style={{ color: '#8899aa', fontSize: '0.78rem' }}>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>
               Pick tickers from your current holdings ({currentHoldings?.length || 0} total):
             </span>
             <div style={{ flex: 1 }} />
@@ -219,8 +221,8 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
               onChange={e => setPickerSearch(e.target.value)}
               placeholder="Search ticker…"
               style={{
-                width: 120, padding: '0.2rem 0.4rem', background: '#1a1a2e',
-                border: '1px solid #3a3a5c', borderRadius: 3, color: '#e0e0e0', fontSize: '0.78rem',
+                width: 120, padding: '0.2rem 0.4rem', background: 'var(--bg)',
+                border: '1px solid var(--p-3a3a5c)', borderRadius: 3, color: 'var(--text)', fontSize: '0.78rem',
               }}
             />
             <button className="btn" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={pickAll}>
@@ -230,10 +232,10 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
               Select None
             </button>
           </div>
-          <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid #2a2a44', borderRadius: 3 }}>
+          <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--p-2a2a44)', borderRadius: 3 }}>
             <table style={{ width: '100%', fontSize: '0.78rem', borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ background: '#1a1a2e', color: '#8899aa' }}>
+                <tr style={{ background: 'var(--bg)', color: 'var(--text-dim)' }}>
                   <th style={{ padding: '0.25rem 0.5rem', width: 28 }}></th>
                   <th style={{ padding: '0.25rem 0.5rem', textAlign: 'left' }}>Ticker</th>
                   <th style={{ padding: '0.25rem 0.5rem', textAlign: 'right' }}>Current Wt %</th>
@@ -242,14 +244,14 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
               </thead>
               <tbody>
                 {visiblePicker.length === 0 && (
-                  <tr><td colSpan={4} style={{ padding: '0.5rem', color: '#556677', textAlign: 'center' }}>
+                  <tr><td colSpan={4} style={{ padding: '0.5rem', color: 'var(--p-556677)', textAlign: 'center' }}>
                     {currentHoldings?.length ? 'No tickers match your search' : 'No current holdings available'}
                   </td></tr>
                 )}
                 {visiblePicker.map(h => (
                   <tr
                     key={h.ticker}
-                    style={{ borderTop: '1px solid #2a2a44', cursor: 'pointer' }}
+                    style={{ borderTop: '1px solid var(--p-2a2a44)', cursor: 'pointer' }}
                     onClick={() => togglePick(h.ticker)}
                   >
                     <td style={{ padding: '0.25rem 0.5rem', textAlign: 'center' }}>
@@ -259,7 +261,7 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
                     <td style={{ padding: '0.25rem 0.5rem', textAlign: 'right' }}>
                       {h.weight != null ? (h.weight * 100).toFixed(2) + '%' : '—'}
                     </td>
-                    <td style={{ padding: '0.25rem 0.5rem', textAlign: 'right', color: '#8899aa' }}>
+                    <td style={{ padding: '0.25rem 0.5rem', textAlign: 'right', color: 'var(--text-dim)' }}>
                       {h.current_value != null ? '$' + Number(h.current_value).toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}
                     </td>
                   </tr>
@@ -268,7 +270,7 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
             </table>
           </div>
           <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginTop: '0.4rem', flexWrap: 'wrap' }}>
-            <span style={{ color: '#8899aa', fontSize: '0.78rem' }}>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>
               {picked.size} selected
             </span>
             <div style={{ flex: 1 }} />
@@ -297,10 +299,10 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
         </div>
       )}
 
-      <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid #2a2a44', borderRadius: 4 }}>
+      <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--p-2a2a44)', borderRadius: 4 }}>
         <table style={{ width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse' }}>
           <thead>
-            <tr style={{ background: '#1a1a2e', color: '#8899aa' }}>
+            <tr style={{ background: 'var(--bg)', color: 'var(--text-dim)' }}>
               <th style={{ padding: '0.3rem 0.5rem', textAlign: 'left' }}>Ticker</th>
               <th style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>Weight %</th>
               <th style={{ padding: '0.3rem 0.5rem' }}></th>
@@ -308,10 +310,10 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
           </thead>
           <tbody>
             {portfolio.holdings.length === 0 && (
-              <tr><td colSpan={3} style={{ padding: '0.75rem', color: '#556677', textAlign: 'center' }}>No tickers yet</td></tr>
+              <tr><td colSpan={3} style={{ padding: '0.75rem', color: 'var(--p-556677)', textAlign: 'center' }}>No tickers yet</td></tr>
             )}
             {portfolio.holdings.map(h => (
-              <tr key={h.ticker} style={{ borderTop: '1px solid #2a2a44' }}>
+              <tr key={h.ticker} style={{ borderTop: '1px solid var(--p-2a2a44)' }}>
                 <td style={{ padding: '0.3rem 0.5rem' }}>{h.ticker}</td>
                 <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>
                   <input
@@ -320,7 +322,7 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
                     onChange={e => updateWeight(h.ticker, e.target.value)}
                     style={{
                       width: 70, textAlign: 'right', padding: '0.2rem 0.35rem',
-                      background: '#1a1a2e', border: '1px solid #3a3a5c', borderRadius: 3, color: '#e0e0e0',
+                      background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 3, color: 'var(--text)',
                     }}
                   />
                 </td>
@@ -328,7 +330,7 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
                   <button
                     onClick={() => removeRow(h.ticker)}
                     style={{
-                      background: 'transparent', border: 'none', color: '#ff6b6b',
+                      background: 'transparent', border: 'none', color: 'var(--neg)',
                       cursor: 'pointer', fontSize: '0.95rem',
                     }}
                     title="Remove"
@@ -340,7 +342,7 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
         </table>
       </div>
 
-      <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: wtOK ? '#4dff91' : '#ffb74d' }}>
+      <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: wtOK ? 'var(--pos)' : 'var(--p-ffb74d)' }}>
         {portfolio.holdings.length} ticker{portfolio.holdings.length === 1 ? '' : 's'} · Total weight {(totalWeight * 100).toFixed(2)}%
         {!wtOK && portfolio.holdings.length > 0 && ' — click Normalize to scale to 100%'}
       </div>
@@ -395,14 +397,14 @@ function ScoreCards({ portfolios, colors, includeDiv }) {
         {b && (
           <div style={{ fontSize: '0.85rem' }}>
             {overall === 'tie' ? (
-              <span style={{ color: '#e0c060' }}>Tied — {aWins} / {bWins} metric wins</span>
+              <span style={{ color: 'var(--p-e0c060)' }}>Tied — {aWins} / {bWins} metric wins</span>
             ) : (
               <>
-                <span style={{ color: '#8899aa' }}>Overall winner: </span>
+                <span style={{ color: 'var(--text-dim)' }}>Overall winner: </span>
                 <span style={{
                   display: 'inline-block', padding: '0.15rem 0.55rem',
-                  background: '#1a3a1a', border: '1px solid #4dff91', borderRadius: 3,
-                  color: '#4dff91', fontWeight: 600,
+                  background: 'var(--p-1a3a1a)', border: '1px solid var(--pos)', borderRadius: 3,
+                  color: 'var(--pos)', fontWeight: 600,
                 }}>
                   <span style={{
                     display: 'inline-block', width: 10, height: 10, borderRadius: 2,
@@ -426,10 +428,10 @@ function ScoreCards({ portfolios, colors, includeDiv }) {
           const bWon = win === 'b'
           return (
             <div key={m.key} style={{
-              background: '#0f0f1e', border: '1px solid #2a2a44', borderRadius: 4,
+              background: 'var(--p-0f0f1e)', border: '1px solid var(--p-2a2a44)', borderRadius: 4,
               padding: '0.5rem 0.6rem',
             }}>
-              <div style={{ color: '#8899aa', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>
+              <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>
                 {m.label}
               </div>
               {portfolios.map((p, i) => {
@@ -439,13 +441,13 @@ function ScoreCards({ portfolios, colors, includeDiv }) {
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                     padding: '0.15rem 0',
                   }}>
-                    <span style={{ fontSize: '0.78rem', color: '#aab', display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--p-aab)', display: 'flex', alignItems: 'center', gap: 5 }}>
                       <span style={{ display: 'inline-block', width: 8, height: 8, background: colors[i], borderRadius: 2 }} />
                       {p.name}
                     </span>
                     <span style={{
                       fontSize: '0.9rem', fontWeight: isWinner ? 700 : 500,
-                      color: isWinner ? '#4dff91' : '#e0e0e0',
+                      color: isWinner ? 'var(--pos)' : 'var(--text)',
                     }}>
                       {m.fmt(p.metrics?.[m.key])}
                       {isWinner && <span style={{ marginLeft: 4, fontSize: '0.75rem' }}>✓</span>}
@@ -463,7 +465,7 @@ function ScoreCards({ portfolios, colors, includeDiv }) {
 
 function MetricsRow({ name, color, m }) {
   return (
-    <tr style={{ borderTop: '1px solid #2a2a44' }}>
+    <tr style={{ borderTop: '1px solid var(--p-2a2a44)' }}>
       <td style={{ padding: '0.4rem 0.6rem', fontWeight: 600 }}>
         <span style={{ display: 'inline-block', width: 10, height: 10, background: color, borderRadius: 2, marginRight: 6 }} />
         {name}
@@ -471,8 +473,8 @@ function MetricsRow({ name, color, m }) {
       <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right' }}>{fmtPct(m.cagr)}</td>
       <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right' }}>{fmtPct(m.total_return)}</td>
       <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right' }}>{fmtPct(m.std_dev)}</td>
-      <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', color: '#ff6b6b' }}>{fmtPct(m.peak_monthly_dd)}</td>
-      <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', color: '#ff6b6b' }}>{fmtPct(m.max_drawdown)}</td>
+      <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', color: 'var(--neg)' }}>{fmtPct(m.peak_monthly_dd)}</td>
+      <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', color: 'var(--neg)' }}>{fmtPct(m.max_drawdown)}</td>
       <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right' }}>{fmtInt(m.recovery_months)}</td>
       <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right' }}>{fmtNum(m.sharpe)}</td>
       <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right' }}>{fmtNum(m.sortino)}</td>
@@ -483,11 +485,11 @@ function MetricsRow({ name, color, m }) {
       <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right' }}>{fmtNum(m.up_capture, 1)}</td>
       <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right' }}>{fmtNum(m.down_capture, 1)}</td>
       <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right' }}>{fmtNum(m.correlation)}</td>
-      <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', color: '#4dff91' }}>{fmtPct(m.best_year)}</td>
-      <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', color: '#ff6b6b' }}>{fmtPct(m.worst_year)}</td>
+      <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', color: 'var(--pos)' }}>{fmtPct(m.best_year)}</td>
+      <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', color: 'var(--neg)' }}>{fmtPct(m.worst_year)}</td>
       <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right' }}>{fmtPct(m.positive_months_pct)}</td>
       <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', fontWeight: 600 }}>{fmtMoney(m.final_value)}</td>
-      <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', color: '#90caf9' }}>{fmtMoney(m.total_income)}</td>
+      <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', color: 'var(--accent-2)' }}>{fmtMoney(m.total_income)}</td>
     </tr>
   )
 }
@@ -495,6 +497,7 @@ function MetricsRow({ name, color, m }) {
 export default function PortfolioTester() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
+  const { isDark } = useTheme()
   const dialog = useDialog()
 
   const [portfolioA, setPortfolioA] = useState({ name: 'Portfolio A', holdings: [] })
@@ -823,7 +826,7 @@ export default function PortfolioTester() {
   return (
     <div className="page">
       <h1 style={{ marginBottom: '0.3rem' }}>Portfolio Tester</h1>
-      <p style={{ color: '#8899aa', fontSize: '0.85rem', marginBottom: '1rem' }}>
+      <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem' }}>
         Backtest two portfolios head-to-head (up to 75 tickers each) against a benchmark.
         6 months to 25 years of Yahoo Finance history. Optional dividend reinvestment and rebalancing.
       </p>
@@ -857,11 +860,11 @@ export default function PortfolioTester() {
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <span style={{ color: '#8899aa', fontSize: '0.82rem' }}>Start</span>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Start</span>
             <input type="date" value={start} onChange={e => { setStart(e.target.value); setError(null); setInvalidTickers([]) }} style={dateStyle} />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <span style={{ color: '#8899aa', fontSize: '0.82rem' }}>End</span>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>End</span>
             <input type="date" value={end} onChange={e => { setEnd(e.target.value); setError(null); setInvalidTickers([]) }} style={dateStyle} />
           </div>
           <div style={{ display: 'flex', gap: '0.25rem' }}>
@@ -872,15 +875,15 @@ export default function PortfolioTester() {
             ))}
           </div>
 
-          <span style={{ color: '#556677' }}>|</span>
+          <span style={{ color: 'var(--p-556677)' }}>|</span>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <span style={{ color: '#8899aa', fontSize: '0.82rem' }}>Initial</span>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Initial</span>
             <input type="number" value={initial} onChange={e => setInitial(e.target.value)} style={{ ...dateStyle, width: 90 }} />
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.82rem', color: '#8899aa' }}
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.82rem', color: 'var(--text-dim)' }}
               title="Uncheck to compare Portfolio A vs Portfolio B only, without a benchmark line">
               <input
                 type="checkbox"
@@ -904,7 +907,7 @@ export default function PortfolioTester() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <span style={{ color: '#8899aa', fontSize: '0.82rem' }}>Rebalance</span>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Rebalance</span>
             <select value={rebalance} onChange={e => setRebalance(e.target.value)} style={dateStyle}>
               <option value="none">None</option>
               <option value="monthly">Monthly</option>
@@ -936,18 +939,18 @@ export default function PortfolioTester() {
       </div>
 
       {error && (
-        <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem', background: '#3a1a1a', border: '1px solid #ff6b6b' }}>
-          <div style={{ color: '#ff9090', fontSize: '0.88rem' }}>{error}</div>
+        <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem', background: 'var(--p-3a1a1a)', border: '1px solid var(--neg)' }}>
+          <div style={{ color: 'var(--p-ff9090)', fontSize: '0.88rem' }}>{error}</div>
           {invalidTickers.length > 0 && (
             <>
               <div style={{ marginTop: '0.6rem', display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
                 {invalidTickers.map(t => (
                   <span key={t.ticker} style={{
-                    background: '#2a1414', border: '1px solid #ff6b6b', borderRadius: 3,
-                    padding: '0.2rem 0.5rem', fontSize: '0.78rem', color: '#ffb4b4',
+                    background: 'var(--p-2a1414)', border: '1px solid var(--neg)', borderRadius: 3,
+                    padding: '0.2rem 0.5rem', fontSize: '0.78rem', color: 'var(--p-ffb4b4)',
                   }} title={t.reason}>
                     <strong>{t.ticker}</strong>
-                    {t.earliest && <span style={{ color: '#ff9090', marginLeft: 6 }}>first: {t.earliest}</span>}
+                    {t.earliest && <span style={{ color: 'var(--p-ff9090)', marginLeft: 6 }}>first: {t.earliest}</span>}
                   </span>
                 ))}
               </div>
@@ -970,7 +973,7 @@ export default function PortfolioTester() {
                 >
                   Remove {invalidInB} from {portfolioB.name || 'Portfolio B'}
                 </button>
-                <span style={{ color: '#8899aa', fontSize: '0.78rem' }}>
+                <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>
                   Weights will be renormalized to 100%.
                 </span>
               </div>
@@ -1000,30 +1003,30 @@ export default function PortfolioTester() {
                 const isPositive = tr == null ? null : tr >= 0
                 return (
                   <div key={p.name + i} style={{
-                    background: '#0f0f1e',
+                    background: 'var(--p-0f0f1e)',
                     border: `1px solid ${colors[i]}`,
                     borderRadius: 4,
                     padding: '0.65rem 0.75rem',
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: '0.4rem' }}>
                       <span style={{ display: 'inline-block', width: 10, height: 10, background: colors[i], borderRadius: 2 }} />
-                      <span style={{ color: '#e0e0e0', fontWeight: 600 }}>{p.name}</span>
+                      <span style={{ color: 'var(--text)', fontWeight: 600 }}>{p.name}</span>
                     </div>
                     <div style={{
                       fontSize: '1.5rem',
                       lineHeight: 1.15,
                       fontWeight: 700,
-                      color: isPositive == null ? '#e0e0e0' : isPositive ? '#4dff91' : '#ff9090',
+                      color: isPositive == null ? 'var(--text)' : isPositive ? 'var(--pos)' : 'var(--p-ff9090)',
                     }}>
                       {fmtPct(tr)}
                     </div>
-                    <div style={{ marginTop: '0.35rem', color: '#8899aa', fontSize: '0.8rem' }}>
-                      <strong style={{ color: isPositive == null ? '#e0e0e0' : isPositive ? '#4dff91' : '#ff9090' }}>
+                    <div style={{ marginTop: '0.35rem', color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+                      <strong style={{ color: isPositive == null ? 'var(--text)' : isPositive ? 'var(--pos)' : 'var(--p-ff9090)' }}>
                         {fmtSignedMoney(gain)}
                       </strong>
                       {' '}on {fmtMoney(result.initial)} initial investment
                     </div>
-                    <div style={{ marginTop: '0.2rem', color: '#8899aa', fontSize: '0.78rem' }}>
+                    <div style={{ marginTop: '0.2rem', color: 'var(--text-dim)', fontSize: '0.78rem' }}>
                       Final value {fmtMoney(p.metrics?.final_value)}
                     </div>
                   </div>
@@ -1037,7 +1040,7 @@ export default function PortfolioTester() {
             <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem' }}>Performance Summary</h3>
             <table style={{ width: '100%', fontSize: '0.78rem', borderCollapse: 'collapse', whiteSpace: 'nowrap' }}>
               <thead>
-                <tr style={{ background: '#1a1a2e', color: '#8899aa' }}>
+                <tr style={{ background: 'var(--bg)', color: 'var(--text-dim)' }}>
                   <th style={thL}>Name</th>
                   <th style={thR}>CAGR</th>
                   <th style={thR}>Total Return</th>
@@ -1070,7 +1073,7 @@ export default function PortfolioTester() {
                 )}
               </tbody>
             </table>
-            <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#556677' }}>
+            <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--p-556677)' }}>
               Backtest: {result.start} → {result.end} · Initial {fmtMoney(result.initial)} ·
               Dividends {result.include_div ? (result.reinvest_div ? 'reinvested' : 'paid as cash') : 'excluded'} ·
               Rebalance {result.rebalance}
@@ -1082,13 +1085,13 @@ export default function PortfolioTester() {
             <h3 style={{ margin: '0 0 0.2rem 0', fontSize: '1rem' }}>
               Growth &amp; Drawdown
             </h3>
-            <div style={{ color: '#8899aa', fontSize: '0.8rem', marginBottom: '0.4rem' }}>
-              <strong style={{ color: '#e0e0e0' }}>Top:</strong> portfolio value over time, starting at {fmtMoney(result.initial)}.{' '}
-              <strong style={{ color: '#ffb74d' }}>Bottom:</strong> drawdown — the % below the running peak.
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: '0.4rem' }}>
+              <strong style={{ color: 'var(--text)' }}>Top:</strong> portfolio value over time, starting at {fmtMoney(result.initial)}.{' '}
+              <strong style={{ color: 'var(--p-ffb74d)' }}>Bottom:</strong> drawdown — the % below the running peak.
               0% means the portfolio is at a new high; −20% means it has lost 20% from its prior peak and has not yet recovered.
             </div>
             {growthFigure && (
-              <Plot data={growthFigure.data} layout={growthFigure.layout} style={{ width: '100%' }} config={{ displayModeBar: false, responsive: true }} />
+              <Plot data={growthFigure.data} layout={themedPlotlyLayout(growthFigure.layout, isDark)} style={{ width: '100%' }} config={{ displayModeBar: false, responsive: true }} />
             )}
           </div>
 
@@ -1096,10 +1099,10 @@ export default function PortfolioTester() {
           <div className="card" style={{ padding: '0.75rem', marginBottom: '1rem' }}>
             <h3 style={{ margin: '0 0 0.3rem 0', fontSize: '1rem' }}>Annual Returns</h3>
             {annualFigure && !annualFigure.empty && (
-              <Plot data={annualFigure.data} layout={annualFigure.layout} style={{ width: '100%' }} config={{ displayModeBar: false, responsive: true }} />
+              <Plot data={annualFigure.data} layout={themedPlotlyLayout(annualFigure.layout, isDark)} style={{ width: '100%' }} config={{ displayModeBar: false, responsive: true }} />
             )}
             {annualFigure?.empty && (
-              <div style={{ padding: '1rem', color: '#8899aa', fontSize: '0.85rem', textAlign: 'center' }}>
+              <div style={{ padding: '1rem', color: 'var(--text-dim)', fontSize: '0.85rem', textAlign: 'center' }}>
                 No complete calendar years in this backtest range — extend the range across a full Jan–Dec to see annual returns.
               </div>
             )}
@@ -1109,7 +1112,7 @@ export default function PortfolioTester() {
           <div className="card" style={{ padding: '0.75rem', marginBottom: '1rem' }}>
             <h3 style={{ margin: '0 0 0.3rem 0', fontSize: '1rem' }}>Rolling 1-Year CAGR</h3>
             {rollingFigure && (
-              <Plot data={rollingFigure.data} layout={rollingFigure.layout} style={{ width: '100%' }} config={{ displayModeBar: false, responsive: true }} />
+              <Plot data={rollingFigure.data} layout={themedPlotlyLayout(rollingFigure.layout, isDark)} style={{ width: '100%' }} config={{ displayModeBar: false, responsive: true }} />
             )}
           </div>
 
@@ -1117,12 +1120,12 @@ export default function PortfolioTester() {
           {result.include_div && incomeFigure && (
             <div className="card" style={{ padding: '0.75rem', marginBottom: '1rem' }}>
               <h3 style={{ margin: '0 0 0.3rem 0', fontSize: '1rem' }}>Monthly Dividend Income</h3>
-              <Plot data={incomeFigure.data} layout={incomeFigure.layout} style={{ width: '100%' }} config={{ displayModeBar: false, responsive: true }} />
-              <div style={{ marginTop: '0.4rem', fontSize: '0.82rem', color: '#8899aa' }}>
+              <Plot data={incomeFigure.data} layout={themedPlotlyLayout(incomeFigure.layout, isDark)} style={{ width: '100%' }} config={{ displayModeBar: false, responsive: true }} />
+              <div style={{ marginTop: '0.4rem', fontSize: '0.82rem', color: 'var(--text-dim)' }}>
                 {result.portfolios.map((p, i) => (
                   <span key={i} style={{ marginRight: '1rem' }}>
                     <span style={{ display: 'inline-block', width: 10, height: 10, background: colors[i], borderRadius: 2, marginRight: 4 }} />
-                    {p.name}: <strong style={{ color: '#90caf9' }}>{fmtMoney(p.metrics.total_income)}</strong> total distributions
+                    {p.name}: <strong style={{ color: 'var(--accent-2)' }}>{fmtMoney(p.metrics.total_income)}</strong> total distributions
                   </span>
                 ))}
               </div>
@@ -1130,8 +1133,8 @@ export default function PortfolioTester() {
           )}
 
           {/* Coverage info */}
-          <div className="card" style={{ padding: '0.75rem', marginBottom: '1rem', fontSize: '0.78rem', color: '#8899aa' }}>
-            <strong style={{ color: '#e0e0e0' }}>Data coverage:</strong>{' '}
+          <div className="card" style={{ padding: '0.75rem', marginBottom: '1rem', fontSize: '0.78rem', color: 'var(--text-dim)' }}>
+            <strong style={{ color: 'var(--text)' }}>Data coverage:</strong>{' '}
             {result.coverage && result.coverage.length > 0
               ? result.coverage.map(c => `${c.ticker} (since ${c.earliest})`).join(', ')
               : '—'}
@@ -1144,12 +1147,13 @@ export default function PortfolioTester() {
 
 const dateStyle = {
   padding: '0.3rem 0.5rem',
-  background: '#1a1a2e',
-  border: '1px solid #3a3a5c',
+  background: 'var(--bg)',
+  border: '1px solid var(--p-3a3a5c)',
   borderRadius: 4,
-  color: '#e0e0e0',
+  color: 'var(--text)',
   fontSize: '0.85rem',
 }
 
 const thL = { padding: '0.4rem 0.6rem', textAlign: 'left' }
 const thR = { padding: '0.4rem 0.6rem', textAlign: 'right' }
+

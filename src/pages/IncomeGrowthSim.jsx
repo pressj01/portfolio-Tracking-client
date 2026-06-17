@@ -1,6 +1,8 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useProfileFetch, useProfile } from '../context/ProfileContext'
-import Plot from 'react-plotly.js'
+import Plot from '../components/ThemedPlot'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 
 function fmt$(v) {
   if (v == null) return '—'
@@ -29,6 +31,7 @@ const YEAR_PRESETS = [
 export default function IncomeGrowthSim() {
   const pf = useProfileFetch()
   const { selection, currentProfileName, isAggregate } = useProfile()
+  const { isDark } = useTheme()
 
   const [years, setYears] = useState(5)
   const [marketType, setMarketType] = useState('neutral')
@@ -248,22 +251,22 @@ export default function IncomeGrowthSim() {
   return (
     <div className="page">
       <h1 style={{ marginBottom: '0.25rem' }}>Income Growth Simulator</h1>
-      <p style={{ color: '#90a4ae', fontSize: '0.82rem', marginBottom: '1rem' }}>
+      <p style={{ color: 'var(--text-dim-2)', fontSize: '0.82rem', marginBottom: '1rem' }}>
         Project how your portfolio income changes over time with scenario-based growth rates.
       </p>
       <div style={{
-        background: '#111124',
-        border: '1px solid #2a2a3e',
+        background: 'var(--p-111124)',
+        border: '1px solid var(--p-2a2a3e)',
         borderRadius: 8,
         padding: '0.75rem 1rem',
         marginBottom: '1rem',
-        color: '#b0bec5',
+        color: 'var(--text-muted)',
         fontSize: '0.82rem',
         lineHeight: 1.55,
       }}>
-        <strong style={{ color: '#7ecfff' }}>Portfolio source:</strong>{' '}
+        <strong style={{ color: 'var(--accent-bright)' }}>Portfolio source:</strong>{' '}
         This screen starts from the portfolio you are currently viewing:{' '}
-        <strong style={{ color: '#e0e8f5' }}>{currentProfileName}</strong>
+        <strong style={{ color: 'var(--text-strong)' }}>{currentProfileName}</strong>
         {isAggregate ? ' (aggregate view).' : '.'} The holdings list below is the working set for the simulation.
         If you edit shares, toggle DRIP, disable holdings, or add a custom ticker, the next run uses those on-screen
         assumptions until you click Reset.
@@ -271,11 +274,11 @@ export default function IncomeGrowthSim() {
 
       {/* Controls */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center', marginBottom: '1rem',
-        background: '#111124', border: '1px solid #2a2a3e', borderRadius: 8, padding: '0.75rem 1rem' }}>
+        background: 'var(--p-111124)', border: '1px solid var(--p-2a2a3e)', borderRadius: 8, padding: '0.75rem 1rem' }}>
 
         {/* Scenario */}
         <div>
-          <div style={{ fontSize: '0.68rem', color: '#888', marginBottom: 4 }}>Scenario</div>
+          <div style={{ fontSize: '0.68rem', color: 'var(--p-888)', marginBottom: 4 }}>Scenario</div>
           <div style={{ display: 'flex', gap: 4 }}>
             {['bullish', 'neutral', 'bearish'].map(k => {
               const color = k === 'bullish' ? '#00c853' : k === 'bearish' ? '#e05555' : '#f9a825'
@@ -292,7 +295,7 @@ export default function IncomeGrowthSim() {
 
         {/* Timeframe */}
         <div>
-          <div style={{ fontSize: '0.68rem', color: '#888', marginBottom: 4 }}>Timeframe</div>
+          <div style={{ fontSize: '0.68rem', color: 'var(--p-888)', marginBottom: 4 }}>Timeframe</div>
           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
             {YEAR_PRESETS.map(p => (
               <button key={p.v}
@@ -302,7 +305,7 @@ export default function IncomeGrowthSim() {
             ))}
             <input type="number" min="1" max="20" value={years}
               onChange={e => setYears(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-              style={{ width: 50, background: '#1a1a2e', border: '1px solid #3a3a5c', color: '#ccc',
+              style={{ width: 50, background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', color: 'var(--p-ccc)',
                 borderRadius: 4, padding: '0.3rem 0.4rem', fontSize: '0.82rem', textAlign: 'center' }}
             />
           </div>
@@ -310,12 +313,12 @@ export default function IncomeGrowthSim() {
 
         {/* Monthly Contribution */}
         <div>
-          <div style={{ fontSize: '0.68rem', color: '#888', marginBottom: 4 }}>Monthly Investment</div>
+          <div style={{ fontSize: '0.68rem', color: 'var(--p-888)', marginBottom: 4 }}>Monthly Investment</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span style={{ color: '#888', fontSize: '0.85rem' }}>$</span>
+            <span style={{ color: 'var(--p-888)', fontSize: '0.85rem' }}>$</span>
             <input type="number" min="0" step="100" value={monthlyContribution}
               onChange={e => setMonthlyContribution(Math.max(0, parseFloat(e.target.value) || 0))}
-              style={{ width: 90, background: '#1a1a2e', border: '1px solid #3a3a5c', color: '#ccc',
+              style={{ width: 90, background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', color: 'var(--p-ccc)',
                 borderRadius: 4, padding: '0.3rem 0.4rem', fontSize: '0.82rem', textAlign: 'right' }}
             />
           </div>
@@ -323,7 +326,7 @@ export default function IncomeGrowthSim() {
 
         {/* DRIP Reinvest All */}
         <div>
-          <div style={{ fontSize: '0.68rem', color: '#888', marginBottom: 4 }}>Reinvest All</div>
+          <div style={{ fontSize: '0.68rem', color: 'var(--p-888)', marginBottom: 4 }}>Reinvest All</div>
           <button
             className={`pis-dur-btn ${simHoldings.every(h => h.reinvest) ? 'active' : ''}`}
             onClick={() => {
@@ -331,7 +334,7 @@ export default function IncomeGrowthSim() {
               setSimHoldings(prev => prev.map(h => ({ ...h, reinvest: !allOn })))
               setHoldingsModified(true)
             }}
-            style={simHoldings.every(h => h.reinvest) ? { borderColor: '#4caf50', color: '#4caf50', background: '#0f3460' } : {}}
+            style={simHoldings.every(h => h.reinvest) ? { borderColor: 'var(--p-4caf50)', color: 'var(--p-4caf50)', background: 'var(--border)' } : {}}
           >
             {simHoldings.every(h => h.reinvest) ? 'DRIP All On' : simHoldings.some(h => h.reinvest) ? 'DRIP Mixed' : 'DRIP All Off'}
           </button>
@@ -339,11 +342,11 @@ export default function IncomeGrowthSim() {
 
         {/* Monte Carlo toggle */}
         <div>
-          <div style={{ fontSize: '0.68rem', color: '#888', marginBottom: 4 }}>Simulation</div>
+          <div style={{ fontSize: '0.68rem', color: 'var(--p-888)', marginBottom: 4 }}>Simulation</div>
           <button
             className={`pis-dur-btn ${monteCarlo ? 'active' : ''}`}
             onClick={() => setMonteCarlo(v => !v)}
-            style={monteCarlo ? { borderColor: '#7ecfff', color: '#7ecfff', background: '#0f3460' } : {}}
+            style={monteCarlo ? { borderColor: 'var(--accent-bright)', color: 'var(--accent-bright)', background: 'var(--border)' } : {}}
           >
             {monteCarlo ? 'Monte Carlo (300 paths)' : 'Deterministic'}
           </button>
@@ -352,7 +355,7 @@ export default function IncomeGrowthSim() {
         {/* Run */}
         <div style={{ marginLeft: 'auto' }}>
           <button onClick={run} disabled={loading}
-            style={{ background: '#1565c0', color: '#fff', border: 'none', borderRadius: 6,
+            style={{ background: 'var(--primary-hover)', color: 'var(--white)', border: 'none', borderRadius: 6,
               padding: '0.5rem 1.5rem', fontWeight: 600, cursor: loading ? 'wait' : 'pointer',
               opacity: loading ? 0.6 : 1 }}>
             {loading ? 'Running...' : 'Run Simulation'}
@@ -366,20 +369,20 @@ export default function IncomeGrowthSim() {
         gap: '0.75rem',
         marginBottom: '1rem',
       }}>
-        <div style={{ background: '#111124', border: '1px solid #2a2a3e', borderRadius: 8, padding: '0.75rem 1rem' }}>
-          <div style={{ color: '#f9a825', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem' }}>
+        <div style={{ background: 'var(--p-111124)', border: '1px solid var(--p-2a2a3e)', borderRadius: 8, padding: '0.75rem 1rem' }}>
+          <div style={{ color: 'var(--warning)', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem' }}>
             Deterministic
           </div>
-          <div style={{ color: '#aaa', fontSize: '0.78rem', lineHeight: 1.5 }}>
+          <div style={{ color: 'var(--p-aaa)', fontSize: '0.78rem', lineHeight: 1.5 }}>
             Runs one fixed projection using the selected scenario's dividend growth and price drift. Same inputs
             produce the same output, which makes it best for a clean base case.
           </div>
         </div>
-        <div style={{ background: '#111124', border: '1px solid #2a2a3e', borderRadius: 8, padding: '0.75rem 1rem' }}>
-          <div style={{ color: '#7ecfff', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem' }}>
+        <div style={{ background: 'var(--p-111124)', border: '1px solid var(--p-2a2a3e)', borderRadius: 8, padding: '0.75rem 1rem' }}>
+          <div style={{ color: 'var(--accent-bright)', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem' }}>
             Monte Carlo (300 paths)
           </div>
-          <div style={{ color: '#aaa', fontSize: '0.78rem', lineHeight: 1.5 }}>
+          <div style={{ color: 'var(--p-aaa)', fontSize: '0.78rem', lineHeight: 1.5 }}>
             Runs 300 randomized paths around the same scenario. The chart uses the median path and shows a
             10th-90th percentile band; P10/P90 columns show the lower and upper range from those paths.
           </div>
@@ -387,12 +390,12 @@ export default function IncomeGrowthSim() {
       </div>
 
       {/* Holdings Editor */}
-      <div style={{ marginBottom: '1rem', background: '#111124', border: '1px solid #2a2a3e', borderRadius: 8 }}>
+      <div style={{ marginBottom: '1rem', background: 'var(--p-111124)', border: '1px solid var(--p-2a2a3e)', borderRadius: 8 }}>
         <button onClick={() => setHoldingsOpen(o => !o)}
-          style={{ width: '100%', background: 'none', border: 'none', color: '#7ecfff', padding: '0.6rem 1rem',
+          style={{ width: '100%', background: 'none', border: 'none', color: 'var(--accent-bright)', padding: '0.6rem 1rem',
             cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>Holdings ({enabledHoldings.length} of {simHoldings.length} selected)
-            {holdingsModified && <span style={{ color: '#f9a825', fontSize: '0.72rem', marginLeft: 8 }}>modified</span>}
+            {holdingsModified && <span style={{ color: 'var(--warning)', fontSize: '0.72rem', marginLeft: 8 }}>modified</span>}
           </span>
           <span>{holdingsOpen ? '▴' : '▾'}</span>
         </button>
@@ -404,7 +407,7 @@ export default function IncomeGrowthSim() {
               <button className="nep-btn" onClick={selectNone} style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}>None</button>
               {holdingsModified && (
                 <button className="nep-btn" onClick={resetHoldings}
-                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', background: '#6b2020' }}>Reset</button>
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', background: 'var(--p-6b2020)' }}>Reset</button>
               )}
               <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
                 <input className="ne-input" style={{ width: 90, fontSize: '0.8rem', textTransform: 'uppercase' }}
@@ -418,10 +421,10 @@ export default function IncomeGrowthSim() {
               </div>
             </div>
             {/* Holdings list */}
-            <div style={{ maxHeight: 300, overflowY: 'auto', border: '1px solid #1a2233', borderRadius: 4 }}>
+            <div style={{ maxHeight: 300, overflowY: 'auto', border: '1px solid var(--grid-line)', borderRadius: 4 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
                 <thead>
-                  <tr style={{ borderBottom: '1px solid #334155', position: 'sticky', top: 0, background: '#111124' }}>
+                  <tr style={{ borderBottom: '1px solid var(--p-334155)', position: 'sticky', top: 0, background: 'var(--p-111124)' }}>
                     <th style={{ ...thStyle, width: 30 }}></th>
                     <th style={{ ...thStyle }}>Ticker</th>
                     <th style={{ ...thStyle }}>Description</th>
@@ -438,34 +441,34 @@ export default function IncomeGrowthSim() {
                   {simHoldings.map(h => {
                     const annInc = h.div_per_share * h.shares * ({ M: 12, Monthly: 12, W: 52, Weekly: 52, BW: 26, Q: 4, Quarterly: 4, SA: 2, A: 1 }[h.freq_str] || 4)
                     return (
-                      <tr key={h.ticker} style={{ borderBottom: '1px solid #1a2233', opacity: h.enabled ? 1 : 0.4 }}>
+                      <tr key={h.ticker} style={{ borderBottom: '1px solid var(--grid-line)', opacity: h.enabled ? 1 : 0.4 }}>
                         <td style={tdStyle}>
                           <input type="checkbox" checked={h.enabled} onChange={() => toggleHolding(h.ticker)}
-                            style={{ accentColor: '#64b5f6' }} />
+                            style={{ accentColor: 'var(--accent)' }} />
                         </td>
-                        <td style={{ ...tdStyle, color: h.isCustom ? '#ffb74d' : '#90caf9', fontWeight: 600 }}>{h.ticker}</td>
-                        <td style={{ ...tdStyle, color: '#aaa', fontSize: '0.72rem', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <td style={{ ...tdStyle, color: h.isCustom ? 'var(--p-ffb74d)' : 'var(--accent-2)', fontWeight: 600 }}>{h.ticker}</td>
+                        <td style={{ ...tdStyle, color: 'var(--p-aaa)', fontSize: '0.72rem', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {h.description}
                         </td>
                         <td style={{ ...tdStyle, textAlign: 'right' }}>
                           <input type="number" min="0" step="1" value={h.shares}
                             onChange={e => updateShares(h.ticker, e.target.value)}
-                            style={{ width: 75, background: '#1a1a2e', border: '1px solid #3a3a5c', color: '#ccc',
+                            style={{ width: 75, background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', color: 'var(--p-ccc)',
                               borderRadius: 3, padding: '0.15rem 0.3rem', fontSize: '0.78rem', textAlign: 'right' }} />
                         </td>
-                        <td style={{ ...tdStyle, textAlign: 'right', color: '#aaa' }}>${h.price.toFixed(2)}</td>
-                        <td style={{ ...tdStyle, textAlign: 'right', color: '#aaa' }}>${h.div_per_share.toFixed(4)}</td>
-                        <td style={{ ...tdStyle, textAlign: 'center', color: '#888' }}>{h.freq_str}</td>
-                        <td style={{ ...tdStyle, textAlign: 'right', color: '#66bb6a' }}>{fmt$(annInc)}</td>
+                        <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-aaa)' }}>${h.price.toFixed(2)}</td>
+                        <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-aaa)' }}>${h.div_per_share.toFixed(4)}</td>
+                        <td style={{ ...tdStyle, textAlign: 'center', color: 'var(--p-888)' }}>{h.freq_str}</td>
+                        <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--pos-muted)' }}>{fmt$(annInc)}</td>
                         <td style={{ ...tdStyle, textAlign: 'center' }}>
                           <input type="checkbox" checked={h.reinvest} onChange={() => toggleReinvest(h.ticker)}
-                            style={{ accentColor: '#4caf50' }} />
+                            style={{ accentColor: 'var(--p-4caf50)' }} />
                         </td>
                         {simHoldings.some(hh => hh.isCustom) && (
                           <td style={tdStyle}>
                             {h.isCustom && (
                               <button onClick={() => removeCustom(h.ticker)}
-                                style={{ background: 'none', border: 'none', color: '#ef5350', cursor: 'pointer', fontSize: '0.85rem', padding: 0 }}>✕</button>
+                                style={{ background: 'none', border: 'none', color: 'var(--neg-2)', cursor: 'pointer', fontSize: '0.85rem', padding: 0 }}>✕</button>
                             )}
                           </td>
                         )}
@@ -479,8 +482,8 @@ export default function IncomeGrowthSim() {
         )}
       </div>
 
-      {error && <p style={{ color: '#ef5350', marginBottom: '1rem' }}>{error}</p>}
-      {loading && <p style={{ color: '#90caf9' }}>Running income growth simulation...</p>}
+      {error && <p style={{ color: 'var(--neg-2)', marginBottom: '1rem' }}>{error}</p>}
+      {loading && <p style={{ color: 'var(--accent-2)' }}>Running income growth simulation...</p>}
 
       {data && !loading && (
         <>
@@ -505,7 +508,7 @@ export default function IncomeGrowthSim() {
           {chartTraces.length > 0 && (
             <Plot
               data={chartTraces}
-              layout={{
+              layout={themedPlotlyLayout({
                 template: 'plotly_dark',
                 height: 380, autosize: true,
                 margin: { t: 40, b: 60, l: 80, r: 30 },
@@ -518,7 +521,7 @@ export default function IncomeGrowthSim() {
                 legend: { orientation: 'h', y: 1.12, x: 0.5, xanchor: 'center', font: { color: '#ccc' } },
                 hoverlabel: { bgcolor: '#111124', bordercolor: '#3a3a5c', font: { color: '#e0e0e0', size: 13 } },
                 hovermode: 'x unified',
-              }}
+              }, isDark)}
               useResizeHandler
               style={{ width: '100%', height: 380 }}
               config={{ responsive: true, displayModeBar: false }}
@@ -526,17 +529,17 @@ export default function IncomeGrowthSim() {
           )}
 
           {/* Income Timeline Table */}
-          <h3 style={{ color: '#7ecfff', marginTop: '1.5rem', marginBottom: '0.5rem', fontSize: '0.95rem' }}>
+          <h3 style={{ color: 'var(--accent-bright)', marginTop: '1.5rem', marginBottom: '0.5rem', fontSize: '0.95rem' }}>
             {showMonthly ? 'Monthly Income Timeline' : 'Annual Income Timeline'}
           </h3>
           <div style={{ overflowX: 'auto', marginBottom: '1.5rem' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
               <thead>
-                <tr style={{ borderBottom: '2px solid #334155' }}>
+                <tr style={{ borderBottom: '2px solid var(--p-334155)' }}>
                   <th style={thStyle}>{showMonthly ? 'Month' : 'Year'}</th>
                   <th style={{ ...thStyle, textAlign: 'right' }}>{showMonthly ? 'Monthly Income' : 'Annual Income'}</th>
-                  {monteCarlo && <th style={{ ...thStyle, textAlign: 'right', color: '#ef5350' }}>P10</th>}
-                  {monteCarlo && <th style={{ ...thStyle, textAlign: 'right', color: '#4caf50' }}>P90</th>}
+                  {monteCarlo && <th style={{ ...thStyle, textAlign: 'right', color: 'var(--neg-2)' }}>P10</th>}
+                  {monteCarlo && <th style={{ ...thStyle, textAlign: 'right', color: 'var(--p-4caf50)' }}>P90</th>}
                   <th style={{ ...thStyle, textAlign: 'right' }}>From Existing</th>
                   {monthlyContribution > 0 && <th style={{ ...thStyle, textAlign: 'right' }}>From New Investment</th>}
                   <th style={{ ...thStyle, textAlign: 'right' }}>Change ($)</th>
@@ -548,22 +551,22 @@ export default function IncomeGrowthSim() {
                   const isYearBoundary = showMonthly && row.month % 12 === 0
                   return (
                     <React.Fragment key={i}>
-                      <tr style={{ borderBottom: '1px solid #1a2233',
+                      <tr style={{ borderBottom: '1px solid var(--grid-line)',
                         background: isYearBoundary ? 'rgba(126,207,255,0.05)' : 'transparent' }}>
                         <td style={tdStyle}>{row.label}</td>
                         <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600 }}>{fmt$(row.total_income)}</td>
-                        {monteCarlo && <td style={{ ...tdStyle, textAlign: 'right', color: '#ef5350', fontSize: '0.75rem' }}>{fmt$(row.p10)}</td>}
-                        {monteCarlo && <td style={{ ...tdStyle, textAlign: 'right', color: '#4caf50', fontSize: '0.75rem' }}>{fmt$(row.p90)}</td>}
-                        <td style={{ ...tdStyle, textAlign: 'right', color: '#aaa' }}>{fmt$(row.income_from_existing)}</td>
+                        {monteCarlo && <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--neg-2)', fontSize: '0.75rem' }}>{fmt$(row.p10)}</td>}
+                        {monteCarlo && <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-4caf50)', fontSize: '0.75rem' }}>{fmt$(row.p90)}</td>}
+                        <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-aaa)' }}>{fmt$(row.income_from_existing)}</td>
                         {monthlyContribution > 0 && (
-                          <td style={{ ...tdStyle, textAlign: 'right', color: '#90caf9' }}>{fmt$(row.income_from_contributions)}</td>
+                          <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--accent-2)' }}>{fmt$(row.income_from_contributions)}</td>
                         )}
                         <td style={{ ...tdStyle, textAlign: 'right',
-                          color: (row.change_dollar || 0) >= 0 ? '#4caf50' : '#ef5350', fontWeight: 600 }}>
+                          color: (row.change_dollar || 0) >= 0 ? 'var(--p-4caf50)' : 'var(--neg-2)', fontWeight: 600 }}>
                           {row.change_dollar != null ? ((row.change_dollar >= 0 ? '+' : '') + fmt$(row.change_dollar)) : '—'}
                         </td>
                         <td style={{ ...tdStyle, textAlign: 'right',
-                          color: (row.change_pct || 0) >= 0 ? '#4caf50' : '#ef5350' }}>
+                          color: (row.change_pct || 0) >= 0 ? 'var(--p-4caf50)' : 'var(--neg-2)' }}>
                           {fmtPct(row.change_pct)}
                         </td>
                       </tr>
@@ -576,14 +579,14 @@ export default function IncomeGrowthSim() {
                         const yearExisting = yearSlice.reduce((s, m) => s + (m.income_from_existing || 0), 0)
                         const yearContrib = yearSlice.reduce((s, m) => s + (m.income_from_contributions || 0), 0)
                         return (
-                          <tr style={{ background: 'rgba(126,207,255,0.08)', borderBottom: '2px solid #334155' }}>
-                            <td style={{ ...tdStyle, fontWeight: 700, color: '#7ecfff' }}>Year {yearNum} Total</td>
-                            <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 700, color: '#7ecfff' }}>{fmt$(yearTotal)}</td>
+                          <tr style={{ background: 'rgba(126,207,255,0.08)', borderBottom: '2px solid var(--p-334155)' }}>
+                            <td style={{ ...tdStyle, fontWeight: 700, color: 'var(--accent-bright)' }}>Year {yearNum} Total</td>
+                            <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 700, color: 'var(--accent-bright)' }}>{fmt$(yearTotal)}</td>
                             {monteCarlo && <td style={tdStyle}></td>}
                             {monteCarlo && <td style={tdStyle}></td>}
-                            <td style={{ ...tdStyle, textAlign: 'right', color: '#8ab4cc' }}>{fmt$(yearExisting)}</td>
+                            <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-8ab4cc)' }}>{fmt$(yearExisting)}</td>
                             {monthlyContribution > 0 && (
-                              <td style={{ ...tdStyle, textAlign: 'right', color: '#8ab4cc' }}>{fmt$(yearContrib)}</td>
+                              <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--p-8ab4cc)' }}>{fmt$(yearContrib)}</td>
                             )}
                             <td style={tdStyle}></td>
                             <td style={tdStyle}></td>
@@ -598,11 +601,11 @@ export default function IncomeGrowthSim() {
           </div>
 
           {/* Holdings Breakdown */}
-          <h3 style={{ color: '#7ecfff', marginBottom: '0.5rem', fontSize: '0.95rem' }}>Holdings Breakdown</h3>
+          <h3 style={{ color: 'var(--accent-bright)', marginBottom: '0.5rem', fontSize: '0.95rem' }}>Holdings Breakdown</h3>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
               <thead>
-                <tr style={{ borderBottom: '2px solid #334155' }}>
+                <tr style={{ borderBottom: '2px solid var(--p-334155)' }}>
                   {[
                     { key: 'ticker', label: 'Ticker', align: 'left' },
                     { key: 'description', label: 'Description', align: 'left' },
@@ -629,7 +632,7 @@ export default function IncomeGrowthSim() {
                           setSimHoldings(prev => prev.map(h => h.enabled ? { ...h, reinvest: !allOn } : h))
                           setHoldingsModified(true)
                         }}
-                        style={{ accentColor: '#4caf50', cursor: 'pointer' }}
+                        style={{ accentColor: 'var(--p-4caf50)', cursor: 'pointer' }}
                         title={simHoldings.filter(h => h.enabled).every(h => h.reinvest) ? 'Turn off DRIP for all' : 'Turn on DRIP for all'}
                       />
                     </div>
@@ -640,37 +643,37 @@ export default function IncomeGrowthSim() {
                 {sortedHoldings.map((h, i) => {
                   const simH = simHoldings.find(s => s.ticker === h.ticker)
                   return (
-                    <tr key={i} style={{ borderBottom: '1px solid #1a2233' }}>
-                      <td style={{ ...tdStyle, color: '#90caf9', fontWeight: 600 }}>{h.ticker}</td>
-                      <td style={{ ...tdStyle, color: '#aaa', fontSize: '0.75rem', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <tr key={i} style={{ borderBottom: '1px solid var(--grid-line)' }}>
+                      <td style={{ ...tdStyle, color: 'var(--accent-2)', fontWeight: 600 }}>{h.ticker}</td>
+                      <td style={{ ...tdStyle, color: 'var(--p-aaa)', fontSize: '0.75rem', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {h.description?.substring(0, 35)}
                       </td>
                       <td style={{ ...tdStyle, textAlign: 'right' }}>
                         {h.shares_start?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                       </td>
-                      <td style={{ ...tdStyle, textAlign: 'right', color: h.shares_end > h.shares_start ? '#4caf50' : '#e0e0e0' }}>
+                      <td style={{ ...tdStyle, textAlign: 'right', color: h.shares_end > h.shares_start ? 'var(--p-4caf50)' : 'var(--text)' }}>
                         {h.shares_end?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                         {h.shares_added > 0 && (
-                          <span style={{ color: '#90caf9', fontSize: '0.7rem', marginLeft: 4 }}>
+                          <span style={{ color: 'var(--accent-2)', fontSize: '0.7rem', marginLeft: 4 }}>
                             (+{h.shares_added?.toLocaleString(undefined, { maximumFractionDigits: 2 })})
                           </span>
                         )}
                       </td>
-                      <td style={{ ...tdStyle, textAlign: 'center', color: '#888' }}>{h.frequency}</td>
+                      <td style={{ ...tdStyle, textAlign: 'center', color: 'var(--p-888)' }}>{h.frequency}</td>
                       <td style={{ ...tdStyle, textAlign: 'right' }}>{fmt$(h.current_annual_income)}</td>
                       <td style={{ ...tdStyle, textAlign: 'right',
-                        color: h.projected_annual_income >= h.current_annual_income ? '#4caf50' : '#ef5350', fontWeight: 600 }}>
+                        color: h.projected_annual_income >= h.current_annual_income ? 'var(--p-4caf50)' : 'var(--neg-2)', fontWeight: 600 }}>
                         {fmt$(h.projected_annual_income)}
                       </td>
                       <td style={{ ...tdStyle, textAlign: 'right',
-                        color: (h.growth_pct || 0) >= 0 ? '#4caf50' : '#ef5350' }}>
+                        color: (h.growth_pct || 0) >= 0 ? 'var(--p-4caf50)' : 'var(--neg-2)' }}>
                         {fmtPct(h.growth_pct)}
                       </td>
                       <td style={{ ...tdStyle, textAlign: 'center' }}>
                         <input type="checkbox"
                           checked={simH?.reinvest ?? false}
                           onChange={() => toggleReinvest(h.ticker)}
-                          style={{ accentColor: '#4caf50', cursor: 'pointer' }}
+                          style={{ accentColor: 'var(--p-4caf50)', cursor: 'pointer' }}
                         />
                       </td>
                     </tr>
@@ -686,9 +689,10 @@ export default function IncomeGrowthSim() {
 }
 
 const thStyle = {
-  padding: '0.5rem 0.6rem', color: '#7ecfff', fontWeight: 600, fontSize: '0.75rem',
+  padding: '0.5rem 0.6rem', color: 'var(--accent-bright)', fontWeight: 600, fontSize: '0.75rem',
   textAlign: 'left', whiteSpace: 'nowrap',
 }
 const tdStyle = {
-  padding: '0.4rem 0.6rem', color: '#e0e0e0', whiteSpace: 'nowrap',
+  padding: '0.4rem 0.6rem', color: 'var(--text)', whiteSpace: 'nowrap',
 }
+

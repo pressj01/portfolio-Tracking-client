@@ -31,12 +31,12 @@ function CategoryModal({ category, onSave, onCancel, targetBaseTotal = 0 }) {
           <div className="form-group">
             <label>Target Allocation %</label>
             <input type="number" step="0.1" min="0" max="100" value={target} onChange={e => setTarget(e.target.value)} placeholder="Optional" style={{ width: '100%' }} />
-            <div style={{ marginTop: '0.55rem', border: '1px solid #0f3460', background: '#1a1a2e', borderRadius: 6, padding: '0.6rem 0.7rem' }}>
+            <div style={{ marginTop: '0.55rem', border: '1px solid var(--border)', background: 'var(--bg)', borderRadius: 6, padding: '0.6rem 0.7rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center' }}>
-                <span style={{ color: '#90a4ae', fontSize: '0.8rem' }}>Total after save</span>
+                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.8rem' }}>Total after save</span>
                 <strong style={{ color: totalColor }}>{projectedTotal.toFixed(1)}% / 100%</strong>
               </div>
-              <div style={{ marginTop: '0.25rem', color: remaining < 0 ? '#ffb3b3' : '#b0bec5', fontSize: '0.78rem' }}>
+              <div style={{ marginTop: '0.25rem', color: remaining < 0 ? 'var(--p-ffb3b3)' : 'var(--text-muted)', fontSize: '0.78rem' }}>
                 {remaining < 0
                   ? `${Math.abs(remaining).toFixed(1)}% over target`
                   : `${remaining.toFixed(1)}% remaining`}
@@ -71,10 +71,10 @@ function TickerTable({ tickers, categoryValue, onUnassign, fmt, moveTargets = nu
       <tbody>
         {tickers.map(t => (
           <tr key={t.ticker}>
-            <td style={{ fontWeight: 600, color: '#64b5f6' }}>{t.ticker}</td>
+            <td style={{ fontWeight: 600, color: 'var(--accent)' }}>{t.ticker}</td>
             <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.description || '-'}</td>
             <td style={{ textAlign: 'right' }}>{fmt(t.current_value)}</td>
-            <td style={{ textAlign: 'right', color: t.weekly ? '#00e89a' : '#90a4ae' }}>{t.weekly ? 'Weekly' : (t.div_frequency || '-')}</td>
+            <td style={{ textAlign: 'right', color: t.weekly ? 'var(--pos-bright)' : 'var(--text-dim-2)' }}>{t.weekly ? 'Weekly' : (t.div_frequency || '-')}</td>
             <td style={{ textAlign: 'right' }}>{categoryValue ? (t.current_value / categoryValue * 100).toFixed(1) + '%' : '-'}</td>
             {showMove && (
               <td style={{ textAlign: 'right' }}>
@@ -82,7 +82,7 @@ function TickerTable({ tickers, categoryValue, onUnassign, fmt, moveTargets = nu
                   value={t.subcategory_id ?? ''}
                   onClick={(e) => e.stopPropagation()}
                   onChange={(e) => { e.stopPropagation(); onMove(t.ticker, e.target.value === '' ? null : Number(e.target.value)) }}
-                  style={{ fontSize: '0.78rem', padding: '0.15rem 0.3rem', background: '#1a1a2e', color: '#cfd8dc', border: '1px solid #0f3460', borderRadius: 4 }}
+                  style={{ fontSize: '0.78rem', padding: '0.15rem 0.3rem', background: 'var(--bg)', color: 'var(--p-cfd8dc)', border: '1px solid var(--border)', borderRadius: 4 }}
                 >
                   <option value="">— no sub-category —</option>
                   {moveTargets.map(s => (
@@ -93,7 +93,7 @@ function TickerTable({ tickers, categoryValue, onUnassign, fmt, moveTargets = nu
             )}
             <td style={{ textAlign: 'right' }}>
               <button
-                style={{ background: 'none', border: 'none', color: '#ef9a9a', cursor: 'pointer', fontSize: '1rem', padding: '0 0.3rem' }}
+                style={{ background: 'none', border: 'none', color: 'var(--p-ef9a9a)', cursor: 'pointer', fontSize: '1rem', padding: '0 0.3rem' }}
                 title="Remove from category"
                 onClick={(e) => { e.stopPropagation(); onUnassign([t.ticker]) }}
               >&times;</button>
@@ -117,8 +117,8 @@ function SubcategoryModal({ subModal, onSave, onCancel }) {
       <div className="modal-content" style={{ maxWidth: 400 }} onClick={e => e.stopPropagation()}>
         <button className="modal-close" onClick={onCancel}>&times;</button>
         <h2>{subModal?.sub ? 'Rename Sub-category' : 'New Sub-category'}</h2>
-        <p style={{ color: '#90a4ae', marginTop: '-0.4rem', marginBottom: '0.9rem', fontSize: '0.85rem' }}>
-          Within <strong style={{ color: '#7ecfff' }}>{subModal?.categoryName}</strong>
+        <p style={{ color: 'var(--text-dim-2)', marginTop: '-0.4rem', marginBottom: '0.9rem', fontSize: '0.85rem' }}>
+          Within <strong style={{ color: 'var(--accent-bright)' }}>{subModal?.categoryName}</strong>
         </p>
         <form onSubmit={handleSubmit}>
           <div className="form-group">
@@ -143,21 +143,21 @@ function QualityDetailsModal({ row, onClose, fmt, fmtPct }) {
       <div className="modal-content" style={{ maxWidth: 820 }} onClick={e => e.stopPropagation()}>
         <button className="modal-close" onClick={onClose}>&times;</button>
         <h2 style={{ marginBottom: '0.35rem' }}>{row.name} Quality Details</h2>
-        <p style={{ color: '#90a4ae', marginBottom: '1rem' }}>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
           Score {row.quality.score} {row.quality.label} based on the suggested {fmtPct(row.suggested_pct)} allocation.
         </p>
-        <p style={{ color: '#b0bec5', marginBottom: '1rem', fontSize: '0.86rem' }}>
+        <p style={{ color: 'var(--text-muted)', marginBottom: '1rem', fontSize: '0.86rem' }}>
           Confirmed NAV risk means the ticker has a high benchmark-adjusted NAV ratio. NAV-monitor tickers are products the app keeps an eye on for NAV erosion, but they are not scored as high NAV risk unless that ratio is above the high-risk threshold.
         </p>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '1rem' }}>
           {(row.quality.reasons || []).map(reason => (
-            <span key={reason} style={{ border: '1px solid #0f3460', background: '#1a1a2e', color: '#b0bec5', borderRadius: 4, padding: '0.25rem 0.45rem', fontSize: '0.78rem', fontWeight: 700 }}>
+            <span key={reason} style={{ border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text-muted)', borderRadius: 4, padding: '0.25rem 0.45rem', fontSize: '0.78rem', fontWeight: 700 }}>
               {reason}
             </span>
           ))}
         </div>
         {tickers.length === 0 ? (
-          <p style={{ color: '#b0bec5' }}>No individual ticker is driving a quality flag at this suggested allocation.</p>
+          <p style={{ color: 'var(--text-muted)' }}>No individual ticker is driving a quality flag at this suggested allocation.</p>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="pb-table">
@@ -176,13 +176,13 @@ function QualityDetailsModal({ row, onClose, fmt, fmtPct }) {
               <tbody>
                 {tickers.map(ticker => (
                   <tr key={ticker.ticker}>
-                    <td style={{ textAlign: 'left', fontWeight: 700, color: '#7ecfff' }}>{ticker.ticker}</td>
-                    <td style={{ textAlign: 'left', color: '#b0bec5' }}>{ticker.drivers.join('; ')}</td>
+                    <td style={{ textAlign: 'left', fontWeight: 700, color: 'var(--accent-bright)' }}>{ticker.ticker}</td>
+                    <td style={{ textAlign: 'left', color: 'var(--text-muted)' }}>{ticker.drivers.join('; ')}</td>
                     <td>{fmtPct(ticker.portfolio_pct)}</td>
                     <td>{fmtPct(ticker.category_pct)}</td>
                     <td>{fmtPct(ticker.income_share_pct)}</td>
                     <td>{fmtPct(ticker.yield_pct)}</td>
-                    <td style={{ color: ticker.gain_loss_pct < -10 ? '#ff6b6b' : '#b0bec5' }}>{fmtPct(ticker.gain_loss_pct)}</td>
+                    <td style={{ color: ticker.gain_loss_pct < -10 ? 'var(--neg)' : 'var(--text-muted)' }}>{fmtPct(ticker.gain_loss_pct)}</td>
                     <td>{fmt(ticker.current_value)}</td>
                   </tr>
                 ))}
@@ -201,7 +201,7 @@ function AllocationBar({ categories, totalValue }) {
   const allocated = categories.reduce((s, c) => s + c.actual_value, 0)
   const unPct = ((totalValue - allocated) / totalValue * 100)
   return (
-    <div style={{ display: 'flex', height: 24, borderRadius: 6, overflow: 'hidden', background: '#1a1a2e', border: '1px solid #0f3460', marginBottom: '1rem' }}>
+    <div style={{ display: 'flex', height: 24, borderRadius: 6, overflow: 'hidden', background: 'var(--bg)', border: '1px solid var(--border)', marginBottom: '1rem' }}>
       {categories.map((c, i) => {
         const pct = c.actual_pct
         if (pct <= 0) return null
@@ -209,7 +209,7 @@ function AllocationBar({ categories, totalValue }) {
           <div key={c.id} title={`${c.name}: ${pct.toFixed(1)}%`} style={{
             width: `${pct}%`, background: colors[i % colors.length],
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '0.65rem', fontWeight: 700, color: '#1a1a2e', overflow: 'hidden', whiteSpace: 'nowrap',
+            fontSize: '0.65rem', fontWeight: 700, color: 'var(--bg)', overflow: 'hidden', whiteSpace: 'nowrap',
           }}>
             {pct > 5 ? `${c.name} ${pct.toFixed(1)}%` : ''}
           </div>
@@ -217,9 +217,9 @@ function AllocationBar({ categories, totalValue }) {
       })}
       {unPct > 0 && (
         <div title={`Unallocated: ${unPct.toFixed(1)}%`} style={{
-          width: `${unPct}%`, background: '#455a64',
+          width: `${unPct}%`, background: 'var(--secondary-solid)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '0.65rem', color: '#ccc', overflow: 'hidden',
+          fontSize: '0.65rem', color: 'var(--p-ccc)', overflow: 'hidden',
         }}>
           {unPct > 5 ? `Unallocated ${unPct.toFixed(1)}%` : ''}
         </div>
@@ -1022,34 +1022,34 @@ export default function Categories() {
       <div className="card" style={{ padding: '1rem' }}>
         <div style={{ display: 'flex', gap: '2rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
           <div>
-            <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Allocated</span>
-            <div style={{ fontWeight: 700, color: '#7ecfff' }}>{allocatedCount} / {totalCount} holdings</div>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Allocated</span>
+            <div style={{ fontWeight: 700, color: 'var(--accent-bright)' }}>{allocatedCount} / {totalCount} holdings</div>
           </div>
           <div>
-            <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Allocated Value</span>
-            <div style={{ fontWeight: 700, color: '#7ecfff' }}>{fmt(allocatedValue)} ({allocatedPct.toFixed(1)}%)</div>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Allocated Value</span>
+            <div style={{ fontWeight: 700, color: 'var(--accent-bright)' }}>{fmt(allocatedValue)} ({allocatedPct.toFixed(1)}%)</div>
           </div>
           <div>
-            <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Total Value</span>
-            <div style={{ fontWeight: 700, color: '#7ecfff' }}>{fmt(data.total_value)}</div>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Total Value</span>
+            <div style={{ fontWeight: 700, color: 'var(--accent-bright)' }}>{fmt(data.total_value)}</div>
           </div>
           <div>
-            <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Monthly Income</span>
-            <div style={{ fontWeight: 700, color: '#7ecfff' }}>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Monthly Income</span>
+            <div style={{ fontWeight: 700, color: 'var(--accent-bright)' }}>
               {data.monthly_income == null ? 'Unavailable' : fmt(data.monthly_income)}
               {' '}
               ({data.portfolio_yield == null ? 'yield unavailable' : `${fmtPct(data.portfolio_yield)} yield`})
             </div>
           </div>
           <div>
-            <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Weekly Exposure</span>
-            <div style={{ fontWeight: 700, color: '#7ecfff' }}>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Weekly Exposure</span>
+            <div style={{ fontWeight: 700, color: 'var(--accent-bright)' }}>
               {data.weekly_value_pct == null ? 'Unavailable' : `${fmtPct(data.weekly_value_pct)} value`}
             </div>
           </div>
           <div>
-            <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Target Allocation</span>
-            <div style={{ fontWeight: 700, color: totalTargetPct > 100 ? '#ff6b6b' : totalTargetPct === 100 ? '#00e89a' : '#ffc107' }}>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Target Allocation</span>
+            <div style={{ fontWeight: 700, color: totalTargetPct > 100 ? 'var(--neg)' : totalTargetPct === 100 ? 'var(--pos-bright)' : 'var(--amber)' }}>
               {totalTargetPct.toFixed(1)}% / 100%
             </div>
           </div>
@@ -1068,7 +1068,7 @@ export default function Categories() {
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
             <div>
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Target Assistant</h2>
-              <p style={{ color: '#90a4ae', margin: '0.25rem 0 0', fontSize: '0.85rem' }}>
+              <p style={{ color: 'var(--text-dim-2)', margin: '0.25rem 0 0', fontSize: '0.85rem' }}>
                 Use this to set target weights before rebalancing. Suggestions start with your current allocation, then adjust for income, concentration, weekly-payer exposure, NAV-risk flags, and the limits you set.
               </p>
             </div>
@@ -1092,13 +1092,13 @@ export default function Categories() {
                 style={{ textAlign: 'left', padding: '0.7rem 0.8rem', height: 'auto' }}
               >
                 <div style={{ fontWeight: 800, marginBottom: 4 }}>{mix.label}</div>
-                <div style={{ color: '#cfd8dc', fontSize: '0.78rem' }}>
+                <div style={{ color: 'var(--p-cfd8dc)', fontSize: '0.78rem' }}>
                   Income: {mix.projectedMonthly == null ? 'Unavailable' : fmt(mix.projectedMonthly)}
                 </div>
-                <div style={{ color: mix.incomeFloorBreached ? '#ffb74d' : '#cfd8dc', fontSize: '0.78rem' }}>
+                <div style={{ color: mix.incomeFloorBreached ? 'var(--p-ffb74d)' : 'var(--p-cfd8dc)', fontSize: '0.78rem' }}>
                   Income floor: {mix.incomeFloorBreached ? `Short ${fmt(mix.incomeShortfall)}` : 'Met'}
                 </div>
-                <div style={{ color: '#cfd8dc', fontSize: '0.78rem' }}>
+                <div style={{ color: 'var(--p-cfd8dc)', fontSize: '0.78rem' }}>
                   Quality: {mix.avgQuality.toFixed(0)} | Moves: {fmt(mix.totalMove)}
                 </div>
               </button>
@@ -1113,7 +1113,7 @@ export default function Categories() {
                   <div key={row.id} className="cat-suggestion-row">
                     <div className="cat-suggestion-main">
                       <strong>{row.name}: {fmtPct(row.target_pct ?? row.actual_pct)} {'->'} {fmtPct(row.suggested_pct)}</strong>
-                      <span style={{ color: row.suggested_pct >= Number(row.target_pct ?? row.actual_pct ?? 0) ? '#00e89a' : '#ff6b6b' }}>
+                      <span style={{ color: row.suggested_pct >= Number(row.target_pct ?? row.actual_pct ?? 0) ? 'var(--pos-bright)' : 'var(--neg)' }}>
                         {row.suggested_pct >= Number(row.target_pct ?? row.actual_pct ?? 0) ? '+' : ''}{(row.suggested_pct - Number(row.target_pct ?? row.actual_pct ?? 0)).toFixed(1)} pts
                       </span>
                     </div>
@@ -1182,28 +1182,28 @@ export default function Categories() {
 
           <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
             <div>
-              <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Projected Income</span>
-              <div style={{ fontWeight: 700, color: targetAssistant.projectedMonthly == null ? '#ffc107' : targetAssistant.incomeDelta >= -0.01 ? '#00e89a' : '#ff6b6b' }}>
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Projected Income</span>
+              <div style={{ fontWeight: 700, color: targetAssistant.projectedMonthly == null ? 'var(--amber)' : targetAssistant.incomeDelta >= -0.01 ? 'var(--pos-bright)' : 'var(--neg)' }}>
                 {targetAssistant.projectedMonthly == null
                   ? 'Unavailable'
                   : `${fmt(targetAssistant.projectedMonthly)} / mo (${targetAssistant.incomeDelta == null ? 'current income unavailable' : `${targetAssistant.incomeDelta >= 0 ? '+' : '-'}${fmt(Math.abs(targetAssistant.incomeDelta))}`})`}
               </div>
             </div>
             <div>
-              <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Minimum Income Target</span>
-              <div style={{ fontWeight: 700, color: targetAssistant.incomeFloorBreached ? '#ff6b6b' : '#00e89a' }}>
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Minimum Income Target</span>
+              <div style={{ fontWeight: 700, color: targetAssistant.incomeFloorBreached ? 'var(--neg)' : 'var(--pos-bright)' }}>
                 {fmt(targetAssistant.incomeFloor)} / mo
               </div>
             </div>
             <div>
-              <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Projected Yield</span>
-              <div style={{ fontWeight: 700, color: '#7ecfff' }}>
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Projected Yield</span>
+              <div style={{ fontWeight: 700, color: 'var(--accent-bright)' }}>
                 {targetAssistant.currentYield == null ? 'Unavailable' : fmtPct(targetAssistant.currentYield)} {'->'} {targetAssistant.projectedYield == null ? 'Unavailable' : fmtPct(targetAssistant.projectedYield)}
               </div>
             </div>
             <div>
-              <span style={{ color: '#8899aa', fontSize: '0.75rem' }}>Weekly Exposure</span>
-              <div style={{ fontWeight: 700, color: '#7ecfff' }}>
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Weekly Exposure</span>
+              <div style={{ fontWeight: 700, color: 'var(--accent-bright)' }}>
                 {targetAssistant.currentWeeklyPct == null ? 'Unavailable' : fmtPct(targetAssistant.currentWeeklyPct)}
                 {' -> '}
                 {targetAssistant.projectedWeeklyPct == null ? 'Unavailable' : fmtPct(targetAssistant.projectedWeeklyPct)}
@@ -1252,10 +1252,10 @@ export default function Categories() {
                     <td style={{ textAlign: 'left', fontWeight: 700 }}>{row.name}</td>
                     <td>{fmtPct(row.actual_pct)}</td>
                     <td>{row.target_pct == null ? '-' : fmtPct(row.target_pct)}</td>
-                    <td style={{ color: '#00e89a', fontWeight: 700 }}>{fmtPct(row.suggested_pct)}</td>
+                    <td style={{ color: 'var(--pos-bright)', fontWeight: 700 }}>{fmtPct(row.suggested_pct)}</td>
                     <td>{fmtPct(row.current_yield)}</td>
                     <td>{fmtPct(row.weekly_value_pct)}</td>
-                    <td title={row.quality.reasons.join(', ')} style={{ color: row.quality.score >= 78 ? '#00e89a' : row.quality.score >= 60 ? '#ffc107' : '#ff6b6b', fontWeight: 700, textAlign: 'center', verticalAlign: 'middle', minWidth: 340, maxWidth: 380 }}>
+                    <td title={row.quality.reasons.join(', ')} style={{ color: row.quality.score >= 78 ? 'var(--pos-bright)' : row.quality.score >= 60 ? 'var(--amber)' : 'var(--neg)', fontWeight: 700, textAlign: 'center', verticalAlign: 'middle', minWidth: 340, maxWidth: 380 }}>
                       <button
                         type="button"
                         onClick={() => setQualityDetail(row)}
@@ -1272,15 +1272,15 @@ export default function Categories() {
                         }}
                       >
                         <div>{row.quality.score} {row.quality.label}</div>
-                        <div style={{ color: '#8899aa', fontSize: '0.68rem', fontWeight: 600, marginTop: 2, lineHeight: 1.3, whiteSpace: 'normal' }}>
+                        <div style={{ color: 'var(--text-dim)', fontSize: '0.68rem', fontWeight: 600, marginTop: 2, lineHeight: 1.3, whiteSpace: 'normal' }}>
                           {row.quality.reasons.slice(0, 2).join('; ')}
                         </div>
                       </button>
                     </td>
-                    <td style={{ color: row.drift_dollars >= 0 ? '#00e89a' : '#ff6b6b', fontWeight: 700 }}>
+                    <td style={{ color: row.drift_dollars >= 0 ? 'var(--pos-bright)' : 'var(--neg)', fontWeight: 700 }}>
                       {row.drift_dollars >= 0 ? '+' : '-'}{fmt(Math.abs(row.drift_dollars))}
                     </td>
-                    <td style={{ textAlign: 'left', color: '#b0bec5', whiteSpace: 'normal', minWidth: 240 }}>{row.rationale}</td>
+                    <td style={{ textAlign: 'left', color: 'var(--text-muted)', whiteSpace: 'normal', minWidth: 240 }}>{row.rationale}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1295,13 +1295,13 @@ export default function Categories() {
         {/* Left: Category cards */}
         <div style={{ flex: '1 1 70%', minWidth: 0 }}>
           {data.categories.length === 0 && (
-            <div className="card"><p style={{ color: '#90a4ae' }}>No categories yet. Create one or import holdings to auto-generate.</p></div>
+            <div className="card"><p style={{ color: 'var(--text-dim-2)' }}>No categories yet. Create one or import holdings to auto-generate.</p></div>
           )}
           {data.categories.map(cat => {
             const expanded = expandedId === cat.id
             const assistantRow = assistantRowsById[cat.id]
             return (
-              <div key={cat.id} className="card" style={{ marginBottom: '0.75rem', border: expanded ? '1px solid #1976d2' : undefined }}>
+              <div key={cat.id} className="card" style={{ marginBottom: '0.75rem', border: expanded ? '1px solid var(--primary)' : undefined }}>
                 {/* Header */}
                 <div
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
@@ -1310,18 +1310,18 @@ export default function Categories() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1 }}>
                     <span style={{ fontSize: '0.8rem', opacity: 0.5 }}>{expanded ? '\u25BC' : '\u25B6'}</span>
                     <h2 style={{ margin: 0, fontSize: '1.1rem' }}>{cat.name}</h2>
-                    <span style={{ background: '#0f3460', padding: '0.15rem 0.5rem', borderRadius: 10, fontSize: '0.75rem', color: '#7ecfff' }}>
+                    <span style={{ background: 'var(--border)', padding: '0.15rem 0.5rem', borderRadius: 10, fontSize: '0.75rem', color: 'var(--accent-bright)' }}>
                       {cat.tickers.length}
                     </span>
                     {(cat.subcategories || []).length > 0 && (
-                      <span style={{ background: '#1a2c4e', padding: '0.15rem 0.5rem', borderRadius: 10, fontSize: '0.72rem', color: '#bb86fc' }}>
+                      <span style={{ background: 'var(--p-1a2c4e)', padding: '0.15rem 0.5rem', borderRadius: 10, fontSize: '0.72rem', color: 'var(--p-bb86fc)' }}>
                         {cat.subcategories.length} sub
                       </span>
                     )}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
                     {cat.target_pct != null && (
-                      <span style={{ fontSize: '0.8rem', color: '#8899aa' }}>Target: {cat.target_pct.toFixed(1)}%</span>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>Target: {cat.target_pct.toFixed(1)}%</span>
                     )}
                     {assistantRow?.quality && (
                       <button
@@ -1333,7 +1333,7 @@ export default function Categories() {
                           border: 'none',
                           padding: 0,
                           fontSize: '0.8rem',
-                          color: assistantRow.quality.score >= 78 ? '#00e89a' : assistantRow.quality.score >= 60 ? '#ffc107' : '#ff6b6b',
+                          color: assistantRow.quality.score >= 78 ? 'var(--pos-bright)' : assistantRow.quality.score >= 60 ? 'var(--amber)' : 'var(--neg)',
                           fontWeight: 700,
                           cursor: 'pointer',
                         }}
@@ -1344,12 +1344,12 @@ export default function Categories() {
                     <span style={{ fontWeight: 700, color: barColor(cat), fontSize: '0.95rem' }}>
                       {cat.actual_pct.toFixed(1)}%
                     </span>
-                    <span style={{ fontSize: '0.85rem', color: '#90a4ae' }}>{fmt(cat.actual_value)}</span>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-dim-2)' }}>{fmt(cat.actual_value)}</span>
                   </div>
                 </div>
 
                 {/* Allocation bar */}
-                <div style={{ height: 6, borderRadius: 3, background: '#1a1a2e', marginTop: '0.5rem', overflow: 'hidden' }}>
+                <div style={{ height: 6, borderRadius: 3, background: 'var(--bg)', marginTop: '0.5rem', overflow: 'hidden' }}>
                   <div style={{ height: '100%', width: `${Math.min(cat.actual_pct, 100)}%`, background: barColor(cat), borderRadius: 3, transition: 'width 0.3s' }} />
                 </div>
 
@@ -1376,28 +1376,28 @@ export default function Categories() {
                           {subs.map(sub => {
                             const subExpanded = expandedSubId === sub.id
                             return (
-                              <div key={sub.id} style={{ border: subExpanded ? '1px solid #1976d2' : '1px solid #0f3460', borderRadius: 6, background: '#161b2e' }}>
+                              <div key={sub.id} style={{ border: subExpanded ? '1px solid var(--primary)' : '1px solid var(--border)', borderRadius: 6, background: 'var(--p-161b2e)' }}>
                                 <div
                                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', padding: '0.5rem 0.65rem' }}
                                   onClick={() => setExpandedSubId(subExpanded ? null : sub.id)}
                                 >
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                                     <span style={{ fontSize: '0.72rem', opacity: 0.5 }}>{subExpanded ? '▼' : '▶'}</span>
-                                    <strong style={{ fontSize: '0.92rem', color: '#cfd8dc' }}>{sub.name}</strong>
-                                    <span style={{ background: '#0f3460', padding: '0.1rem 0.45rem', borderRadius: 10, fontSize: '0.7rem', color: '#7ecfff' }}>{sub.tickers.length}</span>
+                                    <strong style={{ fontSize: '0.92rem', color: 'var(--p-cfd8dc)' }}>{sub.name}</strong>
+                                    <span style={{ background: 'var(--border)', padding: '0.1rem 0.45rem', borderRadius: 10, fontSize: '0.7rem', color: 'var(--accent-bright)' }}>{sub.tickers.length}</span>
                                   </div>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                                    <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#bb86fc' }}>{sub.actual_pct.toFixed(1)}%</span>
-                                    <span style={{ fontSize: '0.78rem', color: '#90a4ae' }}>{sub.category_pct.toFixed(1)}% of {cat.name}</span>
-                                    <span style={{ fontSize: '0.82rem', color: '#90a4ae' }}>{fmt(sub.actual_value)}</span>
+                                    <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--p-bb86fc)' }}>{sub.actual_pct.toFixed(1)}%</span>
+                                    <span style={{ fontSize: '0.78rem', color: 'var(--text-dim-2)' }}>{sub.category_pct.toFixed(1)}% of {cat.name}</span>
+                                    <span style={{ fontSize: '0.82rem', color: 'var(--text-dim-2)' }}>{fmt(sub.actual_value)}</span>
                                     <button className="btn btn-secondary" style={{ padding: '0.1rem 0.4rem', fontSize: '0.7rem' }} onClick={(e) => { e.stopPropagation(); setSubModal({ categoryId: cat.id, categoryName: cat.name, sub }) }}>Rename</button>
-                                    <button style={{ background: 'none', border: 'none', color: '#ef9a9a', cursor: 'pointer', fontSize: '1rem', padding: '0 0.25rem' }} title="Delete sub-category" onClick={(e) => { e.stopPropagation(); handleDeleteSub(sub) }}>&times;</button>
+                                    <button style={{ background: 'none', border: 'none', color: 'var(--p-ef9a9a)', cursor: 'pointer', fontSize: '1rem', padding: '0 0.25rem' }} title="Delete sub-category" onClick={(e) => { e.stopPropagation(); handleDeleteSub(sub) }}>&times;</button>
                                   </div>
                                 </div>
                                 {subExpanded && (
                                   <div style={{ padding: '0 0.65rem 0.6rem' }}>
                                     {sub.tickers.length === 0 ? (
-                                      <p style={{ color: '#00e89a', fontSize: '0.8rem', fontStyle: 'italic', margin: '0.25rem 0' }}>
+                                      <p style={{ color: 'var(--pos-bright)', fontSize: '0.8rem', fontStyle: 'italic', margin: '0.25rem 0' }}>
                                         Click a ticker on the right to assign it here
                                       </p>
                                     ) : (
@@ -1409,8 +1409,8 @@ export default function Categories() {
                             )
                           })}
                           {cat.unclassified_tickers.length > 0 && (
-                            <div style={{ border: '1px dashed #455a64', borderRadius: 6, padding: '0.5rem 0.65rem', background: 'rgba(69,90,100,0.08)' }}>
-                              <div style={{ fontSize: '0.8rem', color: '#90a4ae', marginBottom: '0.35rem', fontWeight: 700 }}>
+                            <div style={{ border: '1px dashed var(--secondary-solid)', borderRadius: 6, padding: '0.5rem 0.65rem', background: 'rgba(69,90,100,0.08)' }}>
+                              <div style={{ fontSize: '0.8rem', color: 'var(--text-dim-2)', marginBottom: '0.35rem', fontWeight: 700 }}>
                                 Not in a sub-category ({cat.unclassified_tickers.length}) — use the dropdown to choose one
                               </div>
                               <TickerTable tickers={cat.unclassified_tickers} categoryValue={cat.actual_value} onUnassign={handleUnassign} fmt={fmt} moveTargets={subs} onMove={(ticker, subId) => handleAssign([ticker], cat.id, subId)} />
@@ -1419,7 +1419,7 @@ export default function Categories() {
                         </div>
                       ) : (
                         cat.tickers.length === 0 ? (
-                          <p style={{ color: '#8899aa', fontSize: '0.85rem', fontStyle: 'italic' }}>
+                          <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', fontStyle: 'italic' }}>
                             Click a ticker on the right to assign it here, or add a sub-category to organize holdings.
                           </p>
                         ) : (
@@ -1441,32 +1441,32 @@ export default function Categories() {
               <h2 style={{ fontSize: '1rem', margin: 0 }}>Target Allocation</h2>
               <strong style={{ color: targetTotalColor, fontSize: '1rem' }}>{totalTargetPct.toFixed(1)}%</strong>
             </div>
-            <div style={{ height: 8, borderRadius: 4, background: '#1a1a2e', overflow: 'hidden', border: '1px solid #0f3460', marginBottom: '0.45rem' }}>
+            <div style={{ height: 8, borderRadius: 4, background: 'var(--bg)', overflow: 'hidden', border: '1px solid var(--border)', marginBottom: '0.45rem' }}>
               <div style={{ height: '100%', width: `${Math.min(totalTargetPct, 100)}%`, background: targetTotalColor, transition: 'width 0.2s' }} />
             </div>
-            <div style={{ color: targetRemainingPct < 0 ? '#ffb3b3' : '#b0bec5', fontSize: '0.8rem', fontWeight: 700 }}>
+            <div style={{ color: targetRemainingPct < 0 ? 'var(--p-ffb3b3)' : 'var(--text-muted)', fontSize: '0.8rem', fontWeight: 700 }}>
               {targetRemainingPct < 0
                 ? `${Math.abs(targetRemainingPct).toFixed(1)}% over target`
                 : `${targetRemainingPct.toFixed(1)}% remaining`}
             </div>
-            <div style={{ borderTop: '1px solid #0f3460', marginTop: '0.75rem', paddingTop: '0.65rem' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 3.4rem 3.4rem 3.5rem', gap: '0.35rem', color: '#78909c', fontSize: '0.68rem', fontWeight: 800, textTransform: 'uppercase', marginBottom: '0.35rem' }}>
+            <div style={{ borderTop: '1px solid var(--border)', marginTop: '0.75rem', paddingTop: '0.65rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 3.4rem 3.4rem 3.5rem', gap: '0.35rem', color: 'var(--p-78909c)', fontSize: '0.68rem', fontWeight: 800, textTransform: 'uppercase', marginBottom: '0.35rem' }}>
                 <span>Category</span>
                 <span style={{ textAlign: 'right' }}>Actual</span>
                 <span style={{ textAlign: 'right' }}>Target</span>
                 <span style={{ textAlign: 'right' }}>Drift</span>
               </div>
               {targetComparisonRows.length === 0 ? (
-                <div style={{ color: '#90a4ae', fontSize: '0.78rem' }}>No targets set yet.</div>
+                <div style={{ color: 'var(--text-dim-2)', fontSize: '0.78rem' }}>No targets set yet.</div>
               ) : (
                 <div style={{ display: 'grid', gap: '0.28rem' }}>
                   {targetComparisonRows.map(row => {
                     const driftColor = Math.abs(row.drift) <= 3 ? '#00e89a' : Math.abs(row.drift) <= 8 ? '#ffc107' : '#ff6b6b'
                     return (
                       <div key={row.id} style={{ display: 'grid', gridTemplateColumns: '1fr 3.4rem 3.4rem 3.5rem', gap: '0.35rem', alignItems: 'center', fontSize: '0.76rem' }}>
-                        <span title={row.name} style={{ color: '#d8e6f3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 700 }}>{row.name}</span>
-                        <span style={{ color: '#b0bec5', textAlign: 'right' }}>{row.actual.toFixed(1)}%</span>
-                        <span style={{ color: '#90caf9', textAlign: 'right' }}>{row.target.toFixed(1)}%</span>
+                        <span title={row.name} style={{ color: 'var(--p-d8e6f3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 700 }}>{row.name}</span>
+                        <span style={{ color: 'var(--text-muted)', textAlign: 'right' }}>{row.actual.toFixed(1)}%</span>
+                        <span style={{ color: 'var(--accent-2)', textAlign: 'right' }}>{row.target.toFixed(1)}%</span>
                         <span style={{ color: driftColor, textAlign: 'right', fontWeight: 800 }}>
                           {row.drift >= 0 ? '+' : ''}{row.drift.toFixed(1)}
                         </span>
@@ -1480,27 +1480,27 @@ export default function Categories() {
           <div className="card">
             <h2 style={{ fontSize: '1rem', marginBottom: '0.75rem' }}>
               Unallocated Assets
-              <span style={{ fontSize: '0.8rem', color: '#8899aa', marginLeft: '0.5rem' }}>({data.unallocated.length})</span>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginLeft: '0.5rem' }}>({data.unallocated.length})</span>
             </h2>
 
             {assignTarget ? (
-              <p style={{ fontSize: '0.78rem', color: '#00e89a', marginBottom: '0.5rem' }}>
+              <p style={{ fontSize: '0.78rem', color: 'var(--pos-bright)', marginBottom: '0.5rem' }}>
                 Click a ticker to assign to <strong>{assignTarget.label}</strong>
               </p>
             ) : null}
 
             {data.unallocated.length === 0 ? (
-              <p style={{ color: '#8899aa', fontSize: '0.85rem' }}>All tickers are allocated!</p>
+              <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>All tickers are allocated!</p>
             ) : (
               <>
                 <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.5rem' }}>
                   <button
-                    style={{ background: 'none', border: 'none', color: '#64b5f6', fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}
+                    style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}
                     onClick={() => setSelectedUnalloc(new Set(data.unallocated.map(t => t.ticker)))}
                   >Select all</button>
-                  <span style={{ color: '#455a64' }}>|</span>
+                  <span style={{ color: 'var(--secondary-solid)' }}>|</span>
                   <button
-                    style={{ background: 'none', border: 'none', color: '#64b5f6', fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}
+                    style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}
                     onClick={() => setSelectedUnalloc(new Set())}
                   >Deselect</button>
                 </div>
@@ -1516,9 +1516,9 @@ export default function Categories() {
                         style={{
                           padding: '0.25rem 0.6rem',
                           borderRadius: 14,
-                          border: selected ? '1px solid #1976d2' : '1px solid #0f3460',
-                          background: selected ? 'rgba(25, 118, 210, 0.2)' : '#1a1a2e',
-                          color: selected ? '#90caf9' : '#7ecfff',
+                          border: selected ? '1px solid var(--primary)' : '1px solid var(--border)',
+                          background: selected ? 'rgba(25, 118, 210, 0.2)' : 'var(--bg)',
+                          color: selected ? 'var(--accent-2)' : 'var(--accent-bright)',
                           fontSize: '0.78rem',
                           cursor: 'pointer',
                           fontWeight: 600,
@@ -1533,7 +1533,7 @@ export default function Categories() {
 
                 {!assignTarget && selectedUnalloc.size > 0 && assignmentTargets.length > 0 && (
                   <div style={{ marginTop: '0.75rem' }}>
-                    <label style={{ fontSize: '0.8rem', color: '#90a4ae', display: 'block', marginBottom: '0.3rem' }}>
+                    <label style={{ fontSize: '0.8rem', color: 'var(--text-dim-2)', display: 'block', marginBottom: '0.3rem' }}>
                       Assign {selectedUnalloc.size} selected to:
                     </label>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>

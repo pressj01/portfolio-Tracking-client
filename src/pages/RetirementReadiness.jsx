@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '../components/ThemedPlot'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { useTheme } from '../context/ThemeContext'
+import { chartTheme } from '../utils/chartTheme'
 
 const fmtMoney = (v, digits = 2) => {
   const n = Number(v)
@@ -17,10 +19,10 @@ const fmtPct = (v, digits = 1) => {
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v))
 const num = v => Number.isFinite(Number(v)) ? Number(v) : 0
 
-function StatTile({ label, value, sub, color = '#e0e8f5' }) {
+function StatTile({ label, value, sub, tone = 'default' }) {
   return (
-    <div className="nep-stat-tile">
-      <div className="nep-stat-val" style={{ color }}>{value}</div>
+    <div className={`nep-stat-tile rr-stat-${tone}`}>
+      <div className="nep-stat-val">{value}</div>
       <div className="nep-stat-lbl">{label}</div>
       {sub && <div className="nep-stat-sub">{sub}</div>}
     </div>
@@ -28,40 +30,17 @@ function StatTile({ label, value, sub, color = '#e0e8f5' }) {
 }
 
 function MetricLine({ label, value, tone }) {
-  const color = tone === 'good' ? '#00e89a' : tone === 'bad' ? '#ff6b6b' : tone === 'warn' ? '#f9d66d' : '#e0e8f5'
   return (
-    <div style={metricLineStyle}>
+    <div className="rr-line">
       <span>{label}</span>
-      <strong style={{ color }}>{value}</strong>
+      <strong className={tone ? `rr-tone-${tone}` : undefined}>{value}</strong>
     </div>
   )
 }
 
 function ReadinessBadge({ status }) {
-  const palette = {
-    Covered: { color: '#00e89a', bg: 'rgba(0,232,154,0.10)', border: '#167a58' },
-    Ready: { color: '#00e89a', bg: 'rgba(0,232,154,0.10)', border: '#167a58' },
-    Close: { color: '#f9d66d', bg: 'rgba(249,214,109,0.12)', border: '#8a7023' },
-    Building: { color: '#7ecfff', bg: 'rgba(126,207,255,0.10)', border: '#2d6f9f' },
-    Risky: { color: '#ff6b6b', bg: 'rgba(255,107,107,0.10)', border: '#8a3333' },
-  }
-  const p = palette[status] || palette.Building
-  return (
-    <span style={{
-      display: 'inline-flex',
-      alignItems: 'center',
-      minHeight: 32,
-      padding: '0.25rem 0.7rem',
-      borderRadius: 6,
-      border: `1px solid ${p.border}`,
-      background: p.bg,
-      color: p.color,
-      fontWeight: 700,
-      fontSize: '0.9rem',
-    }}>
-      {status}
-    </span>
-  )
+  const key = String(status || 'Building').toLowerCase()
+  return <span className={`rr-status rr-status-${key}`}>{status}</span>
 }
 
 const INPUT_HELP = {
@@ -90,10 +69,10 @@ const INPUT_HELP = {
 
 function InputField({ label, help, children }) {
   return (
-    <label style={fieldStyle} title={help}>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+    <label className="rr-field" title={help}>
+      <span className="rr-field-label">
         {label}
-        <span style={{ color: '#7ecfff', fontSize: '0.78rem', textTransform: 'none' }}>?</span>
+        <span className="rr-help">?</span>
       </span>
       {children}
     </label>
@@ -102,9 +81,9 @@ function InputField({ label, help, children }) {
 
 function InputSection({ title, children }) {
   return (
-    <div style={sectionStyle}>
-      <h3 style={sectionTitleStyle}>{title}</h3>
-      <div style={inputGridStyle}>{children}</div>
+    <div className="rr-section">
+      <h3 className="rr-section-title">{title}</h3>
+      <div className="rr-input-grid">{children}</div>
     </div>
   )
 }
@@ -130,6 +109,8 @@ function buildHolding(row) {
 export default function RetirementReadiness() {
   const pf = useProfileFetch()
   const { selection, currentProfileName, isAggregate } = useProfile()
+  const { isDark } = useTheme()
+  const ct = chartTheme(isDark)
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -536,122 +517,117 @@ export default function RetirementReadiness() {
   }
 
   return (
-    <div className="page">
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.9rem' }}>
+    <div className="page rr-page">
+      <div className="rr-header">
         <div>
-          <h1 style={{ marginBottom: '0.25rem' }}>Retirement Readiness</h1>
-          <p style={{ color: '#90a4ae', fontSize: '0.84rem' }}>
+          <h1>Retirement Readiness</h1>
+          <p className="rr-subtitle">
             {currentProfileName}{isAggregate ? ' aggregate' : ''} income measured against monthly expenses and a monthly expense protection buffer.
           </p>
         </div>
         <ReadinessBadge status={model.status} />
       </div>
 
-      {loading && <p style={{ color: '#90caf9' }}>Loading holdings...</p>}
-      {error && <p style={{ color: '#ef5350' }}>{error}</p>}
+      {loading && <p className="rr-loading">Loading holdings...</p>}
+      {error && <p className="rr-error">{error}</p>}
 
       {!loading && !error && (
         <>
           <InputSection title="Critical Monthly Inputs">
             <InputField label="Monthly Expenses" help={INPUT_HELP.monthlyExpenses}>
-              <input title={INPUT_HELP.monthlyExpenses} style={inputStyle} type="number" min="0" step="100" value={monthlyExpenses} onChange={e => setMonthlyExpenses(num(e.target.value))} />
+              <input title={INPUT_HELP.monthlyExpenses} className="rr-input" type="number" min="0" step="100" value={monthlyExpenses} onChange={e => setMonthlyExpenses(num(e.target.value))} />
             </InputField>
             <InputField label="Cash Reserve Months" help={INPUT_HELP.targetCashMonths}>
-              <input title={INPUT_HELP.targetCashMonths} style={inputStyle} type="number" min="0" max="60" step="1" value={targetCashMonths} onChange={e => setTargetCashMonths(clamp(num(e.target.value), 0, 60))} />
+              <input title={INPUT_HELP.targetCashMonths} className="rr-input" type="number" min="0" max="60" step="1" value={targetCashMonths} onChange={e => setTargetCashMonths(clamp(num(e.target.value), 0, 60))} />
             </InputField>
             <InputField label="MEPB Ratio" help={INPUT_HELP.bufferRatio}>
-              <input title={INPUT_HELP.bufferRatio} style={inputStyle} type="number" min="1" max="10" step="0.25" value={bufferRatio} onChange={e => setBufferRatio(clamp(num(e.target.value), 1, 10))} />
+              <input title={INPUT_HELP.bufferRatio} className="rr-input" type="number" min="1" max="10" step="0.25" value={bufferRatio} onChange={e => setBufferRatio(clamp(num(e.target.value), 1, 10))} />
             </InputField>
             <InputField label="Excess Withdrawn %" help={INPUT_HELP.surplusWithdrawPct}>
-              <input title={INPUT_HELP.surplusWithdrawPct} style={inputStyle} type="number" min="0" max="100" step="5" value={surplusWithdrawPct} onChange={e => setSurplusWithdrawPct(clamp(num(e.target.value), 0, 100))} />
+              <input title={INPUT_HELP.surplusWithdrawPct} className="rr-input" type="number" min="0" max="100" step="5" value={surplusWithdrawPct} onChange={e => setSurplusWithdrawPct(clamp(num(e.target.value), 0, 100))} />
             </InputField>
             <InputField label="Excess Reinvested %" help={INPUT_HELP.surplusReinvestPct}>
-              <input title={INPUT_HELP.surplusReinvestPct} style={inputStyle} type="number" min="0" max="100" step="5" value={surplusReinvestPct} onChange={e => setSurplusReinvestPct(clamp(num(e.target.value), 0, 100))} />
+              <input title={INPUT_HELP.surplusReinvestPct} className="rr-input" type="number" min="0" max="100" step="5" value={surplusReinvestPct} onChange={e => setSurplusReinvestPct(clamp(num(e.target.value), 0, 100))} />
             </InputField>
             <InputField label="Expense Inflation %" help={INPUT_HELP.inflationPct}>
-              <input title={INPUT_HELP.inflationPct} style={inputStyle} type="number" step="0.25" value={inflationPct} onChange={e => setInflationPct(num(e.target.value))} />
+              <input title={INPUT_HELP.inflationPct} className="rr-input" type="number" step="0.25" value={inflationPct} onChange={e => setInflationPct(num(e.target.value))} />
             </InputField>
             <InputField label="Cash Reserve $" help={INPUT_HELP.startingCash}>
-              <input title={INPUT_HELP.startingCash} style={inputStyle} type="number" min="0" step="500" value={startingCash} onChange={e => setStartingCash(num(e.target.value))} />
+              <input title={INPUT_HELP.startingCash} className="rr-input" type="number" min="0" step="500" value={startingCash} onChange={e => setStartingCash(num(e.target.value))} />
             </InputField>
             <InputField label="Years" help={INPUT_HELP.years}>
-              <input title={INPUT_HELP.years} style={inputStyle} type="number" min="1" max="50" step="1" value={years} onChange={e => setYears(clamp(num(e.target.value), 1, 50))} />
+              <input title={INPUT_HELP.years} className="rr-input" type="number" min="1" max="50" step="1" value={years} onChange={e => setYears(clamp(num(e.target.value), 1, 50))} />
             </InputField>
           </InputSection>
 
           <InputSection title="Non-Investment Monthly Inflows">
             <InputField label="Employment Income" help={INPUT_HELP.nonInvestmentIncome}>
-              <input title={INPUT_HELP.nonInvestmentIncome} style={inputStyle} type="number" min="0" step="100" value={employmentIncome} onChange={e => setEmploymentIncome(num(e.target.value))} />
+              <input title={INPUT_HELP.nonInvestmentIncome} className="rr-input" type="number" min="0" step="100" value={employmentIncome} onChange={e => setEmploymentIncome(num(e.target.value))} />
             </InputField>
             <InputField label="Company Pension" help={INPUT_HELP.nonInvestmentIncome}>
-              <input title={INPUT_HELP.nonInvestmentIncome} style={inputStyle} type="number" min="0" step="100" value={companyPension} onChange={e => setCompanyPension(num(e.target.value))} />
+              <input title={INPUT_HELP.nonInvestmentIncome} className="rr-input" type="number" min="0" step="100" value={companyPension} onChange={e => setCompanyPension(num(e.target.value))} />
             </InputField>
             <InputField label="Gov. Pension" help={INPUT_HELP.nonInvestmentIncome}>
-              <input title={INPUT_HELP.nonInvestmentIncome} style={inputStyle} type="number" min="0" step="100" value={govPension} onChange={e => setGovPension(num(e.target.value))} />
+              <input title={INPUT_HELP.nonInvestmentIncome} className="rr-input" type="number" min="0" step="100" value={govPension} onChange={e => setGovPension(num(e.target.value))} />
             </InputField>
             <InputField label="Annuities" help={INPUT_HELP.nonInvestmentIncome}>
-              <input title={INPUT_HELP.nonInvestmentIncome} style={inputStyle} type="number" min="0" step="100" value={annuities} onChange={e => setAnnuities(num(e.target.value))} />
+              <input title={INPUT_HELP.nonInvestmentIncome} className="rr-input" type="number" min="0" step="100" value={annuities} onChange={e => setAnnuities(num(e.target.value))} />
             </InputField>
             <InputField label="Other Recurring" help={INPUT_HELP.nonInvestmentIncome}>
-              <input title={INPUT_HELP.nonInvestmentIncome} style={inputStyle} type="number" min="0" step="100" value={otherRecurringIncome} onChange={e => setOtherRecurringIncome(num(e.target.value))} />
+              <input title={INPUT_HELP.nonInvestmentIncome} className="rr-input" type="number" min="0" step="100" value={otherRecurringIncome} onChange={e => setOtherRecurringIncome(num(e.target.value))} />
             </InputField>
             <InputField label="Indexing Factor %" help={INPUT_HELP.incomeIndexPct}>
-              <input title={INPUT_HELP.incomeIndexPct} style={inputStyle} type="number" step="0.25" value={incomeIndexPct} onChange={e => setIncomeIndexPct(num(e.target.value))} />
+              <input title={INPUT_HELP.incomeIndexPct} className="rr-input" type="number" step="0.25" value={incomeIndexPct} onChange={e => setIncomeIndexPct(num(e.target.value))} />
             </InputField>
             <InputField label="Inflows Tax Rate %" help={INPUT_HELP.nonInvestmentTaxPct}>
-              <input title={INPUT_HELP.nonInvestmentTaxPct} style={inputStyle} type="number" min="0" max="95" step="1" value={nonInvestmentTaxPct} onChange={e => setNonInvestmentTaxPct(clamp(num(e.target.value), 0, 95))} />
+              <input title={INPUT_HELP.nonInvestmentTaxPct} className="rr-input" type="number" min="0" max="95" step="1" value={nonInvestmentTaxPct} onChange={e => setNonInvestmentTaxPct(clamp(num(e.target.value), 0, 95))} />
             </InputField>
           </InputSection>
 
           <InputSection title="Passive Income Assumptions">
             <InputField label="Portfolio Book NAV" help={INPUT_HELP.portfolioBookNav}>
-              <input title={INPUT_HELP.portfolioBookNav} style={inputStyle} type="number" min="0" step="1000" value={portfolioBookNav} onChange={e => setPortfolioBookNav(num(e.target.value))} />
+              <input title={INPUT_HELP.portfolioBookNav} className="rr-input" type="number" min="0" step="1000" value={portfolioBookNav} onChange={e => setPortfolioBookNav(num(e.target.value))} />
             </InputField>
             <InputField label="Target Yield Good %" help={INPUT_HELP.targetYieldPct}>
-              <input title={INPUT_HELP.targetYieldPct} style={inputStyle} type="number" min="0" max="100" step="0.25" value={targetYieldPct} onChange={e => setTargetYieldPct(clamp(num(e.target.value), 0, 100))} />
+              <input title={INPUT_HELP.targetYieldPct} className="rr-input" type="number" min="0" max="100" step="0.25" value={targetYieldPct} onChange={e => setTargetYieldPct(clamp(num(e.target.value), 0, 100))} />
             </InputField>
             <InputField label="NAV Erosion %" help={INPUT_HELP.navErosionPct}>
-              <input title={INPUT_HELP.navErosionPct} style={inputStyle} type="number" min="0" max="100" step="0.25" value={navErosionPct} onChange={e => setNavErosionPct(clamp(num(e.target.value), 0, 100))} />
+              <input title={INPUT_HELP.navErosionPct} className="rr-input" type="number" min="0" max="100" step="0.25" value={navErosionPct} onChange={e => setNavErosionPct(clamp(num(e.target.value), 0, 100))} />
             </InputField>
             <InputField label="Bear Decline %" help={INPUT_HELP.bearDeclinePct}>
-              <input title={INPUT_HELP.bearDeclinePct} style={inputStyle} type="number" min="0" max="95" step="5" value={bearDeclinePct} onChange={e => setBearDeclinePct(clamp(num(e.target.value), 0, 95))} />
+              <input title={INPUT_HELP.bearDeclinePct} className="rr-input" type="number" min="0" max="95" step="5" value={bearDeclinePct} onChange={e => setBearDeclinePct(clamp(num(e.target.value), 0, 95))} />
             </InputField>
             <InputField label="Bear Yield %" help={INPUT_HELP.bearYieldPct}>
-              <input title={INPUT_HELP.bearYieldPct} style={inputStyle} type="number" min="0" max="100" step="0.25" value={bearYieldPct} onChange={e => setBearYieldPct(clamp(num(e.target.value), 0, 100))} />
+              <input title={INPUT_HELP.bearYieldPct} className="rr-input" type="number" min="0" max="100" step="0.25" value={bearYieldPct} onChange={e => setBearYieldPct(clamp(num(e.target.value), 0, 100))} />
             </InputField>
             <InputField label="Investment Tax %" help={INPUT_HELP.investmentTaxPct}>
-              <input title={INPUT_HELP.investmentTaxPct} style={inputStyle} type="number" min="0" max="95" step="1" value={investmentTaxPct} onChange={e => setInvestmentTaxPct(clamp(num(e.target.value), 0, 95))} />
+              <input title={INPUT_HELP.investmentTaxPct} className="rr-input" type="number" min="0" max="95" step="1" value={investmentTaxPct} onChange={e => setInvestmentTaxPct(clamp(num(e.target.value), 0, 95))} />
             </InputField>
             <InputField label="Income Haircut %" help={INPUT_HELP.incomeHaircutPct}>
-              <input title={INPUT_HELP.incomeHaircutPct} style={inputStyle} type="number" min="0" max="95" step="5" value={incomeHaircutPct} onChange={e => setIncomeHaircutPct(clamp(num(e.target.value), 0, 95))} />
+              <input title={INPUT_HELP.incomeHaircutPct} className="rr-input" type="number" min="0" max="95" step="5" value={incomeHaircutPct} onChange={e => setIncomeHaircutPct(clamp(num(e.target.value), 0, 95))} />
             </InputField>
             <InputField label="Direct Contribution" help={INPUT_HELP.directContribution}>
-              <input title={INPUT_HELP.directContribution} style={inputStyle} type="number" min="0" step="100" value={directContribution} onChange={e => setDirectContribution(num(e.target.value))} />
+              <input title={INPUT_HELP.directContribution} className="rr-input" type="number" min="0" step="100" value={directContribution} onChange={e => setDirectContribution(num(e.target.value))} />
             </InputField>
           </InputSection>
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', marginBottom: '1rem' }}>
+          <div className="rr-stat-grid">
             <StatTile label="Current Monthly Income" value={fmtMoney(model.currentMonthlyIncome)} />
-            <StatTile label="Good Market After Tax" value={fmtMoney(model.targetIncomeAfterTax)} color="#00e89a" />
-            <StatTile label="Bear Market After Tax" value={fmtMoney(model.bearIncomeProtected)} color={model.bearIncomeProtected >= model.expensesPortfolioMustPay ? '#f9d66d' : '#ff6b6b'} />
+            <StatTile label="Good Market After Tax" value={fmtMoney(model.targetIncomeAfterTax)} tone="good" />
+            <StatTile label="Bear Market After Tax" value={fmtMoney(model.bearIncomeProtected)} tone={model.bearIncomeProtected >= model.expensesPortfolioMustPay ? 'warn' : 'bad'} />
             <StatTile label="Non-Investment Inflows" value={fmtMoney(model.nonInvestmentAfterTax)} sub="after tax" />
             <StatTile label="Monthly Expenses" value={fmtMoney(monthlyExpenses)} />
             <StatTile label="Portfolio Must Pay" value={fmtMoney(model.expensesPortfolioMustPay)} />
-            <StatTile label="MEPB Target" value={fmtMoney(model.bufferTargetNow)} sub={`${bufferRatio.toFixed(2)}x portfolio-paid expenses`} color="#7ecfff" />
-            <StatTile label="Bear Buffer Ratio" value={Number.isFinite(model.bearBufferRatio) ? `${model.bearBufferRatio.toFixed(2)}x` : 'Covered'} color={model.bearBufferRatio >= bufferRatio ? '#00e89a' : model.bearBufferRatio >= 1 ? '#f9d66d' : '#ff6b6b'} />
-            <StatTile label="Buffer Gap" value={fmtMoney(model.bufferGap)} color={model.bufferGap <= 0 ? '#00e89a' : '#ffb74d'} />
+            <StatTile label="MEPB Target" value={fmtMoney(model.bufferTargetNow)} sub={`${bufferRatio.toFixed(2)}x portfolio-paid expenses`} tone="info" />
+            <StatTile label="Bear Buffer Ratio" value={Number.isFinite(model.bearBufferRatio) ? `${model.bearBufferRatio.toFixed(2)}x` : 'Covered'} tone={model.bearBufferRatio >= bufferRatio ? 'good' : model.bearBufferRatio >= 1 ? 'warn' : 'bad'} />
+            <StatTile label="Buffer Gap" value={fmtMoney(model.bufferGap)} tone={model.bufferGap <= 0 ? 'good' : 'warn'} />
             <StatTile label="Cash Target" value={fmtMoney(model.targetCash)} sub={`${targetCashMonths} months`} />
-            <StatTile label="Cash Runway" value={Number.isFinite(model.cashRunwayMonths) ? `${model.cashRunwayMonths.toFixed(1)} mo` : 'Covered'} color={model.cashRunwayMonths < 12 ? '#ff6b6b' : '#00e89a'} />
+            <StatTile label="Cash Runway" value={Number.isFinite(model.cashRunwayMonths) ? `${model.cashRunwayMonths.toFixed(1)} mo` : 'Covered'} tone={model.cashRunwayMonths < 12 ? 'bad' : 'good'} />
           </div>
 
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-            gap: '1rem',
-            marginBottom: '1rem',
-          }}>
-            <div style={panelStyle}>
-              <h3 style={panelTitleStyle}>Passive Income Calculations</h3>
+          <div className="rr-panel-grid">
+            <div className="rr-panel">
+              <h3 className="rr-panel-title">Passive Income Calculations</h3>
               <MetricLine label="Book NAV Used" value={fmtMoney(model.navBase)} />
               <MetricLine label="Target Yield Income Before Tax" value={fmtMoney(model.targetIncomeBeforeTax)} />
               <MetricLine label="Target Yield Income After Tax" value={fmtMoney(model.targetIncomeAfterTax)} />
@@ -662,8 +638,8 @@ export default function RetirementReadiness() {
               <MetricLine label="Bear-Market Income After Tax" value={fmtMoney(model.bearIncomeProtected)} tone={model.bearIncomeProtected >= model.expensesPortfolioMustPay ? 'good' : 'bad'} />
             </div>
 
-            <div style={panelStyle}>
-              <h3 style={panelTitleStyle}>Important Monthly Metrics</h3>
+            <div className="rr-panel">
+              <h3 className="rr-panel-title">Important Monthly Metrics</h3>
               <MetricLine label="Income Needed to Hit MEPB" value={fmtMoney(model.bufferTargetNow)} />
               <MetricLine label="Income Over / Under MEPB" value={fmtMoney(model.incomeOverUnderTarget)} tone={model.incomeOverUnderTarget >= 0 ? 'good' : 'bad'} />
               <MetricLine label="Good-Market Buffer Ratio" value={Number.isFinite(model.goodBufferRatio) ? `${model.goodBufferRatio.toFixed(2)}x` : 'Covered'} tone={model.goodBufferRatio >= bufferRatio ? 'good' : 'warn'} />
@@ -679,113 +655,109 @@ export default function RetirementReadiness() {
             </div>
           </div>
 
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-            gap: '1rem',
-            marginBottom: '1rem',
-          }}>
-            <div style={panelStyle}>
-              <h3 style={panelTitleStyle}>Passive Income - MEPB Trend Lines</h3>
+          <div className="rr-panel-grid">
+            <div className="rr-panel">
+              <h3 className="rr-panel-title">Passive Income - MEPB Trend Lines</h3>
               <Plot
                 data={chartData}
                 layout={{
-                  template: 'plotly_dark',
+                  template: ct.template,
                   height: 420,
                   autosize: true,
                   margin: { t: 86, b: 55, l: 75, r: 35 },
-                  xaxis: { title: 'Month' },
-                  yaxis: { title: 'Monthly income & expenses', tickprefix: '$' },
+                  font: { color: ct.font },
+                  xaxis: { title: 'Month', gridcolor: ct.grid, zerolinecolor: ct.zeroline },
+                  yaxis: { title: 'Monthly income & expenses', tickprefix: '$', gridcolor: ct.grid, zerolinecolor: ct.zeroline },
                   legend: {
                     orientation: 'h',
                     y: 1.2,
                     x: 0.5,
                     xanchor: 'center',
                     yanchor: 'bottom',
-                    font: { color: '#ccc' },
+                    font: { color: ct.font },
                   },
                   hovermode: 'x unified',
-                  paper_bgcolor: '#111124',
-                  plot_bgcolor: '#111124',
+                  paper_bgcolor: ct.paper,
+                  plot_bgcolor: ct.plot,
                 }}
                 useResizeHandler
-                style={{ width: '100%', height: 420 }}
+                className="rr-chart"
                 config={{ responsive: true, displayModeBar: false }}
               />
             </div>
 
-            <div style={panelStyle}>
-              <h3 style={panelTitleStyle}>Milestones</h3>
-              <div style={milestoneStyle}>
+            <div className="rr-panel">
+              <h3 className="rr-panel-title">Milestones</h3>
+              <div className="rr-milestone">
                 <span>Income covers expenses</span>
                 <strong>{monthLabel(model.firstExpenseMonth)}</strong>
               </div>
-              <div style={milestoneStyle}>
+              <div className="rr-milestone">
                 <span>Income reaches MEPB target</span>
                 <strong>{monthLabel(model.firstBufferMonth)}</strong>
               </div>
-              <div style={milestoneStyle}>
+              <div className="rr-milestone">
                 <span>Cash reserve depletion</span>
                 <strong>{model.depletedMonth == null ? 'Not in horizon' : monthLabel(model.depletedMonth)}</strong>
               </div>
-              <div style={milestoneStyle}>
+              <div className="rr-milestone">
                 <span>Final monthly income</span>
                 <strong>{fmtMoney(model.finalIncome)}</strong>
               </div>
-              <div style={milestoneStyle}>
+              <div className="rr-milestone">
                 <span>Final monthly expenses</span>
                 <strong>{fmtMoney(model.finalExpenses)}</strong>
               </div>
-              <div style={milestoneStyle}>
+              <div className="rr-milestone">
                 <span>Final cash reserve</span>
                 <strong>{fmtMoney(model.finalCash)}</strong>
               </div>
             </div>
           </div>
 
-          <div style={panelStyle}>
-            <h3 style={panelTitleStyle}>Yearly Projection</h3>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ fontSize: '0.8rem' }}>
+          <div className="rr-panel">
+            <h3 className="rr-panel-title">Yearly Projection</h3>
+            <div className="rr-scroll">
+              <table className="rr-table rr-table-compact">
                 <thead>
                   <tr>
                     <th>Year</th>
-                    <th style={{ textAlign: 'right' }}>Book NAV</th>
-                    <th style={{ textAlign: 'right' }}>Current NAV</th>
-                    <th style={{ textAlign: 'right' }}>Good Income</th>
-                    <th style={{ textAlign: 'right' }}>Bear Income</th>
-                    <th style={{ textAlign: 'right' }}>Monthly Expenses</th>
-                    <th style={{ textAlign: 'right' }}>Non-Inv Inflows</th>
-                    <th style={{ textAlign: 'right' }}>Portfolio Pays</th>
-                    <th style={{ textAlign: 'right' }}>MEPB Target</th>
-                    <th style={{ textAlign: 'right' }}>Good Ratio</th>
-                    <th style={{ textAlign: 'right' }}>Bear Ratio</th>
-                    <th style={{ textAlign: 'right' }}>Annual Surplus</th>
-                    <th style={{ textAlign: 'right' }}>Min Reinvest</th>
-                    <th style={{ textAlign: 'right' }}>Reinvested</th>
-                    <th style={{ textAlign: 'right' }}>To Cash</th>
-                    <th style={{ textAlign: 'right' }}>Cash Reserve</th>
+                    <th className="rr-num">Book NAV</th>
+                    <th className="rr-num">Current NAV</th>
+                    <th className="rr-num">Good Income</th>
+                    <th className="rr-num">Bear Income</th>
+                    <th className="rr-num">Monthly Expenses</th>
+                    <th className="rr-num">Non-Inv Inflows</th>
+                    <th className="rr-num">Portfolio Pays</th>
+                    <th className="rr-num">MEPB Target</th>
+                    <th className="rr-num">Good Ratio</th>
+                    <th className="rr-num">Bear Ratio</th>
+                    <th className="rr-num">Annual Surplus</th>
+                    <th className="rr-num">Min Reinvest</th>
+                    <th className="rr-num">Reinvested</th>
+                    <th className="rr-num">To Cash</th>
+                    <th className="rr-num">Cash Reserve</th>
                   </tr>
                 </thead>
                 <tbody>
                   {yearlyRows.map(r => (
                     <tr key={r.year}>
                       <td>Year {r.year}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(r.bookNav)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(r.currentNav)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(r.income)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(r.bearIncome)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(r.expenses)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(r.nonInvestment)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(r.netExpenses)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(r.target)}</td>
-                      <td style={{ textAlign: 'right', color: r.coverage >= bufferRatio ? '#00e89a' : r.coverage >= 1 ? '#f9d66d' : '#ff6b6b' }}>{r.coverage.toFixed(2)}x</td>
-                      <td style={{ textAlign: 'right', color: r.bearCoverage >= bufferRatio ? '#00e89a' : r.bearCoverage >= 1 ? '#f9d66d' : '#ff6b6b' }}>{r.bearCoverage.toFixed(2)}x</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(r.surplus)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(r.minimumReinvest)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(r.reinvested)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(r.withdrawnToCash)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(r.cash)}</td>
+                      <td className="rr-num">{fmtMoney(r.bookNav)}</td>
+                      <td className="rr-num">{fmtMoney(r.currentNav)}</td>
+                      <td className="rr-num">{fmtMoney(r.income)}</td>
+                      <td className="rr-num">{fmtMoney(r.bearIncome)}</td>
+                      <td className="rr-num">{fmtMoney(r.expenses)}</td>
+                      <td className="rr-num">{fmtMoney(r.nonInvestment)}</td>
+                      <td className="rr-num">{fmtMoney(r.netExpenses)}</td>
+                      <td className="rr-num">{fmtMoney(r.target)}</td>
+                      <td className={`rr-num rr-tone-${r.coverage >= bufferRatio ? 'good' : r.coverage >= 1 ? 'warn' : 'bad'}`}>{r.coverage.toFixed(2)}x</td>
+                      <td className={`rr-num rr-tone-${r.bearCoverage >= bufferRatio ? 'good' : r.bearCoverage >= 1 ? 'warn' : 'bad'}`}>{r.bearCoverage.toFixed(2)}x</td>
+                      <td className="rr-num">{fmtMoney(r.surplus)}</td>
+                      <td className="rr-num">{fmtMoney(r.minimumReinvest)}</td>
+                      <td className="rr-num">{fmtMoney(r.reinvested)}</td>
+                      <td className="rr-num">{fmtMoney(r.withdrawnToCash)}</td>
+                      <td className="rr-num">{fmtMoney(r.cash)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -793,76 +765,75 @@ export default function RetirementReadiness() {
             </div>
           </div>
 
-          <div style={{ ...panelStyle, marginTop: '1rem' }}>
-            <h3 style={panelTitleStyle}>Monthly MEPB Projection Table</h3>
-            <div style={{ overflowX: 'auto', maxHeight: 720 }}>
-              <table style={{ fontSize: '0.74rem', minWidth: 1780 }}>
+          <div className="rr-panel">
+            <h3 className="rr-panel-title">Monthly MEPB Projection Table</h3>
+            <div className="rr-projection-scroll">
+              <table className="rr-table rr-table-projection">
                 <thead>
                   <tr>
-                    <th colSpan="2" style={stickyHeadStyle}>Calendar</th>
-                    <th colSpan="3" style={{ ...stickyHeadStyle, background: '#2a2232' }}>Expenses & Inflows</th>
-                    <th colSpan="11" style={{ ...stickyHeadStyle, background: '#173348' }}>With Good Markets Allowing Target Yield</th>
-                    <th colSpan="9" style={{ ...stickyHeadStyle, background: '#40243f' }}>During Major Bear Markets</th>
+                    <th colSpan="2" className="rr-sticky-head">Calendar</th>
+                    <th colSpan="3" className="rr-sticky-head rr-head-expenses">Expenses & Inflows</th>
+                    <th colSpan="11" className="rr-sticky-head rr-head-good">With Good Markets Allowing Target Yield</th>
+                    <th colSpan="9" className="rr-sticky-head rr-head-bear">During Major Bear Markets</th>
                   </tr>
                   <tr>
-                    <th style={stickyHeadStyle}>Year</th>
-                    <th style={stickyHeadStyle}>Month</th>
-                    <th style={stickyHeadStyle}>Avg Monthly Expenses</th>
-                    <th style={stickyHeadStyle}>Non-Inv Inflows</th>
-                    <th style={stickyHeadStyle}>Net Exp. After Inflows</th>
-                    <th style={stickyHeadStyle}>Book NAV</th>
-                    <th style={stickyHeadStyle}>Curr NAV</th>
-                    <th style={stickyHeadStyle}>Dist. Before Tax</th>
-                    <th style={stickyHeadStyle}>Dist. After Tax</th>
-                    <th style={stickyHeadStyle}>MEPB Target</th>
-                    <th style={stickyHeadStyle}>MEPB Ratio</th>
-                    <th style={stickyHeadStyle}>Excess After Exp</th>
-                    <th style={stickyHeadStyle}>Minimum Reinvest</th>
-                    <th style={stickyHeadStyle}>Actual Reinvested</th>
-                    <th style={stickyHeadStyle}>To Cash Reserve</th>
-                    <th style={stickyHeadStyle}>Direct Contrib.</th>
-                    <th style={stickyHeadStyle}>Book NAV</th>
-                    <th style={stickyHeadStyle}>Curr NAV</th>
-                    <th style={stickyHeadStyle}>Dist. Before Tax</th>
-                    <th style={stickyHeadStyle}>Dist. After Tax</th>
-                    <th style={stickyHeadStyle}>MEPB Ratio</th>
-                    <th style={stickyHeadStyle}>Excess After Exp</th>
-                    <th style={stickyHeadStyle}>Minimum Reinvest</th>
-                    <th style={stickyHeadStyle}>Amt Reinvested</th>
-                    <th style={stickyHeadStyle}>To Cash Reserve</th>
+                    <th className="rr-sticky-head">Year</th>
+                    <th className="rr-sticky-head">Month</th>
+                    <th className="rr-sticky-head">Avg Monthly Expenses</th>
+                    <th className="rr-sticky-head">Non-Inv Inflows</th>
+                    <th className="rr-sticky-head">Net Exp. After Inflows</th>
+                    <th className="rr-sticky-head">Book NAV</th>
+                    <th className="rr-sticky-head">Curr NAV</th>
+                    <th className="rr-sticky-head">Dist. Before Tax</th>
+                    <th className="rr-sticky-head">Dist. After Tax</th>
+                    <th className="rr-sticky-head">MEPB Target</th>
+                    <th className="rr-sticky-head">MEPB Ratio</th>
+                    <th className="rr-sticky-head">Excess After Exp</th>
+                    <th className="rr-sticky-head">Minimum Reinvest</th>
+                    <th className="rr-sticky-head">Actual Reinvested</th>
+                    <th className="rr-sticky-head">To Cash Reserve</th>
+                    <th className="rr-sticky-head">Direct Contrib.</th>
+                    <th className="rr-sticky-head">Book NAV</th>
+                    <th className="rr-sticky-head">Curr NAV</th>
+                    <th className="rr-sticky-head">Dist. Before Tax</th>
+                    <th className="rr-sticky-head">Dist. After Tax</th>
+                    <th className="rr-sticky-head">MEPB Ratio</th>
+                    <th className="rr-sticky-head">Excess After Exp</th>
+                    <th className="rr-sticky-head">Minimum Reinvest</th>
+                    <th className="rr-sticky-head">Amt Reinvested</th>
+                    <th className="rr-sticky-head">To Cash Reserve</th>
                   </tr>
                 </thead>
                 <tbody>
                   {projectionRows.map(r => {
                     const total = r.type === 'total'
-                    const rowStyle = total ? totalRowStyle : undefined
                     return (
-                      <tr key={r.key} style={rowStyle}>
+                      <tr key={r.key} className={total ? 'rr-total-row' : undefined}>
                         <td>{r.year}</td>
                         <td>{r.monthLabel}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.expenses, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.nonInvestment, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.netExpenses, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.bookNav, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.currentNav, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.incomeBeforeTax, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.income, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.target, 0)}</td>
-                        <td style={{ ...numCellStyle, color: r.coverage >= bufferRatio ? '#00e89a' : r.coverage >= 1 ? '#f9d66d' : '#ff6b6b' }}>{Number.isFinite(r.coverage) ? r.coverage.toFixed(1) : '-'}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.excessAfterExpensesGood, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.minReinvest, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.reinvested, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.withdrawnToCash, 0)}</td>
-                        <td style={numCellStyle}>{total ? '-' : fmtMoney(directContribution, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.bearBookNav, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.bearCurrentNav, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.bearIncomeBeforeTax, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.bearIncome, 0)}</td>
-                        <td style={{ ...numCellStyle, color: r.bearCoverage >= bufferRatio ? '#00e89a' : r.bearCoverage >= 1 ? '#f9d66d' : '#ff6b6b' }}>{Number.isFinite(r.bearCoverage) ? r.bearCoverage.toFixed(1) : '-'}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.excessAfterExpensesBear, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.minReinvest, 0)}</td>
-                        <td style={numCellStyle}>{fmtMoney(r.bearReinvested, 0)}</td>
-                        <td style={numCellStyle}>-</td>
+                        <td className="rr-num">{fmtMoney(r.expenses, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.nonInvestment, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.netExpenses, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.bookNav, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.currentNav, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.incomeBeforeTax, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.income, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.target, 0)}</td>
+                        <td className={`rr-num rr-tone-${r.coverage >= bufferRatio ? 'good' : r.coverage >= 1 ? 'warn' : 'bad'}`}>{Number.isFinite(r.coverage) ? r.coverage.toFixed(1) : '-'}</td>
+                        <td className="rr-num">{fmtMoney(r.excessAfterExpensesGood, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.minReinvest, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.reinvested, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.withdrawnToCash, 0)}</td>
+                        <td className="rr-num">{total ? '-' : fmtMoney(directContribution, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.bearBookNav, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.bearCurrentNav, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.bearIncomeBeforeTax, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.bearIncome, 0)}</td>
+                        <td className={`rr-num rr-tone-${r.bearCoverage >= bufferRatio ? 'good' : r.bearCoverage >= 1 ? 'warn' : 'bad'}`}>{Number.isFinite(r.bearCoverage) ? r.bearCoverage.toFixed(1) : '-'}</td>
+                        <td className="rr-num">{fmtMoney(r.excessAfterExpensesBear, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.minReinvest, 0)}</td>
+                        <td className="rr-num">{fmtMoney(r.bearReinvested, 0)}</td>
+                        <td className="rr-num">-</td>
                       </tr>
                     )
                   })}
@@ -871,31 +842,31 @@ export default function RetirementReadiness() {
             </div>
           </div>
 
-          <div style={{ ...panelStyle, marginTop: '1rem' }}>
-            <h3 style={panelTitleStyle}>Top Income Sources</h3>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ fontSize: '0.8rem' }}>
+          <div className="rr-panel">
+            <h3 className="rr-panel-title">Top Income Sources</h3>
+            <div className="rr-scroll">
+              <table className="rr-table rr-table-compact">
                 <thead>
                   <tr>
                     <th>Ticker</th>
                     <th>Description</th>
-                    <th style={{ textAlign: 'right' }}>Value</th>
-                    <th style={{ textAlign: 'right' }}>Monthly Income</th>
-                    <th style={{ textAlign: 'right' }}>Stress Income</th>
-                    <th style={{ textAlign: 'right' }}>Yield</th>
-                    <th style={{ textAlign: 'right' }}>Income Share</th>
+                    <th className="rr-num">Value</th>
+                    <th className="rr-num">Monthly Income</th>
+                    <th className="rr-num">Stress Income</th>
+                    <th className="rr-num">Yield</th>
+                    <th className="rr-num">Income Share</th>
                   </tr>
                 </thead>
                 <tbody>
                   {topHoldings.map(h => (
                     <tr key={h.ticker}>
-                      <td style={{ color: '#90caf9', fontWeight: 700 }}>{h.ticker}</td>
-                      <td style={{ color: '#aab7c4', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.description}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(h.currentValue)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(h.monthlyIncome)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtMoney(h.stressMonthlyIncome)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtPct(h.yieldPct)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtPct(h.incomeShare)}</td>
+                      <td className="rr-ticker">{h.ticker}</td>
+                      <td className="rr-description">{h.description}</td>
+                      <td className="rr-num">{fmtMoney(h.currentValue)}</td>
+                      <td className="rr-num">{fmtMoney(h.monthlyIncome)}</td>
+                      <td className="rr-num">{fmtMoney(h.stressMonthlyIncome)}</td>
+                      <td className="rr-num">{fmtPct(h.yieldPct)}</td>
+                      <td className="rr-num">{fmtPct(h.incomeShare)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -908,99 +879,5 @@ export default function RetirementReadiness() {
   )
 }
 
-const fieldStyle = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 6,
-  color: '#9fb0c0',
-  fontSize: '0.72rem',
-  fontWeight: 700,
-  textTransform: 'uppercase',
-}
 
-const sectionStyle = {
-  background: '#111124',
-  border: '1px solid #2a2a3e',
-  borderRadius: 8,
-  padding: '0.85rem',
-  marginBottom: '1rem',
-}
 
-const sectionTitleStyle = {
-  color: '#7ecfff',
-  fontSize: '0.92rem',
-  margin: '0 0 0.75rem',
-}
-
-const inputGridStyle = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
-  gap: '0.75rem',
-}
-
-const inputStyle = {
-  width: '100%',
-  minHeight: 34,
-  background: '#1a1a2e',
-  border: '1px solid #3a3a5c',
-  borderRadius: 5,
-  color: '#e0e8f5',
-  padding: '0.35rem 0.5rem',
-  fontSize: '0.86rem',
-}
-
-const metricLineStyle = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'baseline',
-  gap: '1rem',
-  borderBottom: '1px solid #222a40',
-  padding: '0.48rem 0',
-  color: '#aab7c4',
-  fontSize: '0.82rem',
-}
-
-const stickyHeadStyle = {
-  position: 'sticky',
-  top: 0,
-  zIndex: 1,
-  background: '#172035',
-  color: '#d5e8f6',
-  whiteSpace: 'nowrap',
-  textAlign: 'center',
-}
-
-const numCellStyle = {
-  textAlign: 'right',
-  whiteSpace: 'nowrap',
-  fontVariantNumeric: 'tabular-nums',
-}
-
-const totalRowStyle = {
-  background: 'rgba(0, 232, 154, 0.12)',
-  color: '#a8f0d0',
-  fontWeight: 700,
-}
-
-const panelStyle = {
-  background: '#111124',
-  border: '1px solid #2a2a3e',
-  borderRadius: 8,
-  padding: '0.85rem',
-}
-
-const panelTitleStyle = {
-  margin: '0 0 0.75rem',
-  color: '#7ecfff',
-  fontSize: '0.98rem',
-}
-
-const milestoneStyle = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: '1rem',
-  borderBottom: '1px solid #222a40',
-  padding: '0.55rem 0',
-  color: '#aab7c4',
-  fontSize: '0.82rem',
-}

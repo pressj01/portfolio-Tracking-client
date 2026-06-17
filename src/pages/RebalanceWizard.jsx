@@ -21,9 +21,9 @@ function StatCard({ label, value, sub, tone }) {
   const color = tone === 'good' ? '#4dff91' : tone === 'bad' ? '#ff6b6b' : '#7ecfff'
   return (
     <div className="card" style={{ padding: '0.9rem 1rem', minWidth: 170 }}>
-      <div style={{ color: '#8899aa', fontSize: '0.75rem', marginBottom: 4 }}>{label}</div>
+      <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginBottom: 4 }}>{label}</div>
       <div style={{ color, fontSize: '1.25rem', fontWeight: 700 }}>{value}</div>
-      {sub && <div style={{ color: '#90a4ae', fontSize: '0.78rem', marginTop: 3 }}>{sub}</div>}
+      {sub && <div style={{ color: 'var(--text-dim-2)', fontSize: '0.78rem', marginTop: 3 }}>{sub}</div>}
     </div>
   )
 }
@@ -631,7 +631,7 @@ export default function RebalanceWizard() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
         <div>
           <h1>Rebalance Wizard</h1>
-          <p style={{ color: '#90a4ae', marginTop: 4 }}>
+          <p style={{ color: 'var(--text-dim-2)', marginTop: 4 }}>
             Build a buy/sell list from category target drift while keeping the monthly income target visible and enforced.
           </p>
         </div>
@@ -643,40 +643,40 @@ export default function RebalanceWizard() {
       <div className="card" style={{ marginBottom: '1rem' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '0.9rem', alignItems: 'end' }}>
           <div>
-            <label style={{ color: '#8899aa', fontSize: '0.8rem' }}>Income Mode</label>
+            <label style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Income Mode</label>
             <select value={incomeMode} onChange={e => setIncomeMode(e.target.value)} style={{ width: '100%', marginTop: 4 }}>
               <option value="preserve_current">Preserve current monthly income</option>
               <option value="custom">Use only the custom income floor</option>
             </select>
           </div>
           <div>
-            <label style={{ color: '#8899aa', fontSize: '0.8rem' }}>Rebalance Priority</label>
+            <label style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Rebalance Priority</label>
             <select value={rebalanceStrategy} onChange={e => setRebalanceStrategy(e.target.value)} style={{ width: '100%', marginTop: 4 }}>
               <option value="match_targets_preserve_income">Close the largest target gaps first</option>
               <option value="maximize_income_reduce_drift">Prioritize income while reducing drift</option>
             </select>
           </div>
           <div>
-            <label style={{ color: '#8899aa', fontSize: '0.8rem' }}>Minimum Portfolio Yield %</label>
+            <label style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Minimum Portfolio Yield %</label>
             <input type="number" step="0.1" value={minYield} onChange={e => setMinYield(e.target.value)} placeholder="Optional" style={{ width: '100%', marginTop: 4 }} />
           </div>
           <div>
-            <label style={{ color: '#8899aa', fontSize: '0.8rem' }}>Minimum Monthly Income</label>
+            <label style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Minimum Monthly Income</label>
             <input type="number" step="1" value={minMonthlyIncome} onChange={e => setMinMonthlyIncome(e.target.value)} placeholder="Optional" style={{ width: '100%', marginTop: 4 }} />
           </div>
           <div>
-            <label style={{ color: '#8899aa', fontSize: '0.8rem' }}>New Cash To Invest</label>
+            <label style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>New Cash To Invest</label>
             <input type="number" step="1" value={newCash} onChange={e => setNewCash(e.target.value)} style={{ width: '100%', marginTop: 4 }} />
           </div>
           <div>
-            <label style={{ color: '#8899aa', fontSize: '0.8rem' }}>Minimum Trade Size</label>
+            <label style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Minimum Trade Size</label>
             <input type="number" step="1" value={minTradeAmount} onChange={e => setMinTradeAmount(e.target.value)} style={{ width: '100%', marginTop: 4 }} />
           </div>
           <div>
-            <label style={{ color: '#8899aa', fontSize: '0.8rem' }}>Do Not Trade These Tickers</label>
+            <label style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Do Not Trade These Tickers</label>
             <input value={lockedTickers} onChange={e => setLockedTickers(e.target.value)} placeholder="JEPI, MAIN" style={{ width: '100%', marginTop: 4 }} />
           </div>
-          <label style={{ display: 'flex', gap: 8, alignItems: 'center', color: '#ddd', paddingBottom: 8 }}>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', color: 'var(--p-ddd)', paddingBottom: 8 }}>
             <input type="checkbox" checked={allowSells} onChange={e => setAllowSells(e.target.checked)} />
             Allow sells to fund underweight categories
           </label>
@@ -686,7 +686,7 @@ export default function RebalanceWizard() {
       <div className="card" style={{ marginBottom: '1rem' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '0.75rem', alignItems: 'end' }}>
           <div>
-            <label style={{ color: '#8899aa', fontSize: '0.8rem' }}>Scenario Name</label>
+            <label style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Scenario Name</label>
             <input
               value={planName}
               onChange={e => {
@@ -698,7 +698,7 @@ export default function RebalanceWizard() {
             />
           </div>
           <div>
-            <label style={{ color: '#8899aa', fontSize: '0.8rem' }}>Saved Scenarios</label>
+            <label style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Saved Scenarios</label>
             <select
               value={selectedSavedPlanId}
               onChange={e => setSelectedSavedPlanId(e.target.value)}
@@ -746,17 +746,17 @@ export default function RebalanceWizard() {
                   const active = String(plan.id) === String(selectedSavedPlanId)
                   return (
                     <tr key={plan.id}>
-                      <td style={{ textAlign: 'left', fontWeight: 700, color: active ? '#7ecfff' : undefined }}>
+                      <td style={{ textAlign: 'left', fontWeight: 700, color: active ? 'var(--accent-bright)' : undefined }}>
                         {plan.name}
                       </td>
                       <td>{fmt$(summary.projected_monthly_income)}</td>
-                      <td style={{ color: incomeDelta >= 0 ? '#4dff91' : '#ff6b6b', fontWeight: 700 }}>
+                      <td style={{ color: incomeDelta >= 0 ? 'var(--pos)' : 'var(--neg)', fontWeight: 700 }}>
                         {incomeDelta >= 0 ? '+' : '-'}{fmt$(Math.abs(incomeDelta))}
                       </td>
                       <td>{fmtPct(summary.projected_yield)}</td>
                       <td>{fmt$(summary.remaining_drift)}</td>
                       <td>{Number(summary.trade_count || 0)}</td>
-                      <td style={{ color: floorMet ? '#4dff91' : '#ff6b6b', fontWeight: 700 }}>
+                      <td style={{ color: floorMet ? 'var(--pos)' : 'var(--neg)', fontWeight: 700 }}>
                         {floorMet ? 'Met' : 'Blocked'}
                       </td>
                       <td>{fmtDate(plan.updated_at)}</td>
@@ -869,20 +869,20 @@ export default function RebalanceWizard() {
                         <td style={{ textAlign: 'left', fontWeight: 600 }}>{b.category}</td>
                         <td>{fmtPct(b.target_pct)}</td>
                         <td>{fmtPct(b.actual_pct)}</td>
-                        <td style={{ color: Math.abs(drift) <= 2 ? '#4dff91' : Math.abs(drift) <= 5 ? '#ffb74d' : '#ff6b6b', fontWeight: 700 }}>
+                        <td style={{ color: Math.abs(drift) <= 2 ? 'var(--pos)' : Math.abs(drift) <= 5 ? 'var(--p-ffb74d)' : 'var(--neg)', fontWeight: 700 }}>
                           {drift > 0 ? '+' : ''}{fmtPct(drift)}
                         </td>
                         <td>{fmt$(b.current_value)}</td>
                         <td>{fmt$(b.target_value)}</td>
-                        <td style={{ color: gap >= 0 ? '#4dff91' : '#ff6b6b', fontWeight: 700 }}>
+                        <td style={{ color: gap >= 0 ? 'var(--pos)' : 'var(--neg)', fontWeight: 700 }}>
                           {gap >= 0 ? '+' : '-'}{fmt$(Math.abs(gap))}
                         </td>
-                        <td style={{ color: Math.abs(remaining) <= 100 ? '#4dff91' : remaining > 0 ? '#ffb74d' : '#ff6b6b', fontWeight: 700 }}>
+                        <td style={{ color: Math.abs(remaining) <= 100 ? 'var(--pos)' : remaining > 0 ? 'var(--p-ffb74d)' : 'var(--neg)', fontWeight: 700 }}>
                           {remaining >= 0 ? '+' : '-'}{fmt$(Math.abs(remaining))}
                         </td>
                         <td>{fmt$(incomeBefore)}</td>
                         <td>{fmt$(incomeAfter)}</td>
-                        <td style={{ color: incomeDelta >= 0 ? '#4dff91' : '#ff6b6b', fontWeight: 700 }}>
+                        <td style={{ color: incomeDelta >= 0 ? 'var(--pos)' : 'var(--neg)', fontWeight: 700 }}>
                           {incomeDelta >= 0 ? '+' : '-'}{fmt$(Math.abs(incomeDelta))}
                         </td>
                       </tr>
@@ -910,7 +910,7 @@ export default function RebalanceWizard() {
               </div>
             </div>
             {activeCandidates.length === 0 ? (
-              <p style={{ color: '#90a4ae' }}>No buy candidates are available for this category yet. Assign more tickers to the category or add preferred candidates after lookup.</p>
+              <p style={{ color: 'var(--text-dim-2)' }}>No buy candidates are available for this category yet. Assign more tickers to the category or add preferred candidates after lookup.</p>
             ) : (
               <div style={{ overflowX: 'auto' }}>
                 <table className="pb-table">
@@ -952,13 +952,13 @@ export default function RebalanceWizard() {
                             ) : '-'}
                           </td>
                           <td style={{ fontWeight: 700 }}>{c.ticker}</td>
-                          <td style={{ textAlign: 'left', color: '#90a4ae' }}>{c.description || '-'}</td>
+                          <td style={{ textAlign: 'left', color: 'var(--text-dim-2)' }}>{c.description || '-'}</td>
                           <td>{c.price != null ? fmt$(c.price) : 'Lookup on select'}</td>
-                          <td style={{ color: c.suspicious_yield ? '#ffb74d' : undefined, fontWeight: c.suspicious_yield ? 700 : undefined }}>
+                          <td style={{ color: c.suspicious_yield ? 'var(--p-ffb74d)' : undefined, fontWeight: c.suspicious_yield ? 700 : undefined }}>
                             {c.yield != null ? fmtPct(c.yield) : '-'} {c.suspicious_yield ? 'Review' : ''}
                           </td>
                           <td>{c.sample_monthly_income != null ? `+${fmt$(c.sample_monthly_income)}/mo` : '-'}</td>
-                          <td style={{ color: c.nav_risk === 'Candidate' || c.nav_risk === 'Test' ? '#ffb74d' : '#90a4ae' }}>{c.nav_risk || '-'}</td>
+                          <td style={{ color: c.nav_risk === 'Candidate' || c.nav_risk === 'Test' ? 'var(--p-ffb74d)' : 'var(--text-dim-2)' }}>{c.nav_risk || '-'}</td>
                           <td>{c.source}</td>
                         </tr>
                       )
@@ -982,7 +982,7 @@ export default function RebalanceWizard() {
               </div>
             </div>
             {effectiveTrades.length === 0 ? (
-              <p style={{ color: '#90a4ae' }}>No trades meet the current rules. Try adding cash, allowing sells, lowering the minimum trade size, or adjusting category targets.</p>
+              <p style={{ color: 'var(--text-dim-2)' }}>No trades meet the current rules. Try adding cash, allowing sells, lowering the minimum trade size, or adjusting category targets.</p>
             ) : (
               <div style={{ overflowX: 'auto' }}>
                 <table className="pb-table">
@@ -1008,7 +1008,7 @@ export default function RebalanceWizard() {
                       const execution = tradeExecution[t._key] || { status: 'pending', note: '' }
                       return (
                       <tr key={t._key}>
-                        <td style={{ color: t.action === 'buy' ? '#4dff91' : '#ff6b6b', fontWeight: 700 }}>
+                        <td style={{ color: t.action === 'buy' ? 'var(--pos)' : 'var(--neg)', fontWeight: 700 }}>
                           {String(t._key).startsWith('m-') ? (
                             <select
                               value={t.action}
@@ -1043,7 +1043,7 @@ export default function RebalanceWizard() {
                               style={{ width: 95, fontWeight: 700, textAlign: 'center' }}
                             />
                           ) : t.ticker}
-                          {t.loading && <span style={{ color: '#8899aa', marginLeft: 6, fontSize: '0.75rem' }}>...</span>}
+                          {t.loading && <span style={{ color: 'var(--text-dim)', marginLeft: 6, fontSize: '0.75rem' }}>...</span>}
                         </td>
                         <td style={{ textAlign: 'left' }}>
                           {String(t._key).startsWith('m-') ? (
@@ -1063,7 +1063,7 @@ export default function RebalanceWizard() {
                             style={{ width: 105, textAlign: 'right' }}
                           />
                         </td>
-                        <td style={{ color: t.suspicious_yield ? '#ffb74d' : undefined, fontWeight: t.suspicious_yield ? 700 : undefined }}>
+                        <td style={{ color: t.suspicious_yield ? 'var(--p-ffb74d)' : undefined, fontWeight: t.suspicious_yield ? 700 : undefined }}>
                           {String(t._key).startsWith('m-') ? (
                             <input
                               type="number"
@@ -1086,12 +1086,12 @@ export default function RebalanceWizard() {
                               style={{ width: 72, textAlign: 'right' }}
                             />
                           ) : fmtPct(t.yield)}
-                          {t.suspicious_yield && <div style={{ color: '#ffb74d', fontSize: '0.7rem', marginTop: 2 }}>Review</div>}
+                          {t.suspicious_yield && <div style={{ color: 'var(--p-ffb74d)', fontSize: '0.7rem', marginTop: 2 }}>Review</div>}
                         </td>
-                        <td style={{ color: t.monthly_income_delta >= 0 ? '#4dff91' : '#ff6b6b', fontWeight: 700 }}>
+                        <td style={{ color: t.monthly_income_delta >= 0 ? 'var(--pos)' : 'var(--neg)', fontWeight: 700 }}>
                           {t.monthly_income_delta >= 0 ? '+' : '-'}{fmt$(Math.abs(t.monthly_income_delta))}
                         </td>
-                        <td style={{ color: cumulativeTradeYields[t._key] + 0.0001 >= Number(result.required.yield || 0) ? '#4dff91' : '#ff6b6b', fontWeight: 700 }}>
+                        <td style={{ color: cumulativeTradeYields[t._key] + 0.0001 >= Number(result.required.yield || 0) ? 'var(--pos)' : 'var(--neg)', fontWeight: 700 }}>
                           {fmtPct(cumulativeTradeYields[t._key])}
                         </td>
                         <td>
@@ -1115,7 +1115,7 @@ export default function RebalanceWizard() {
                             style={{ width: 160 }}
                           />
                         </td>
-                        <td style={{ textAlign: 'left', color: '#90a4ae', fontSize: '0.82rem' }}>{t.reason}</td>
+                        <td style={{ textAlign: 'left', color: 'var(--text-dim-2)', fontSize: '0.82rem' }}>{t.reason}</td>
                         <td>
                           <button
                             className="btn btn-danger"

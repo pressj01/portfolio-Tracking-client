@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 
@@ -72,8 +74,8 @@ function TickerCombo({ value, onChange, onLookup, info, portfolioTickers }) {
                   setTimeout(() => onLookup(), 50)
                 }}>
                   <strong>{t.ticker}</strong>
-                  <span style={{ color: '#6b7b8d', marginLeft: 8 }}>{t.description || ''}</span>
-                  {t.current_yield > 0 && <span style={{ color: '#00e89a', marginLeft: 8 }}>{t.current_yield.toFixed(2)}%</span>}
+                  <span style={{ color: 'var(--p-6b7b8d)', marginLeft: 8 }}>{t.description || ''}</span>
+                  {t.current_yield > 0 && <span style={{ color: 'var(--pos-bright)', marginLeft: 8 }}>{t.current_yield.toFixed(2)}%</span>}
                 </div>
               ))}
             </div>
@@ -98,9 +100,9 @@ function DistEstimate({ lookupData, investment, yieldOverride }) {
   return (
     <div className="dc-dist-estimate">
       <span>Est. Annual Distribution: <strong>${Math.round(annualDist).toLocaleString()}</strong></span>
-      <span style={{ color: '#6b7b8d' }}> ({fmt$(monthlyDist)}/mo</span>
-      <span style={{ color: '#6b7b8d' }}> &middot; {shares.toFixed(2)} shares @ ${distPerShare.toFixed(4)}/sh/mo)</span>
-      {yieldOverride && <span style={{ color: '#ffc107', marginLeft: 6, fontSize: '0.75rem' }}>using override</span>}
+      <span style={{ color: 'var(--p-6b7b8d)' }}> ({fmt$(monthlyDist)}/mo</span>
+      <span style={{ color: 'var(--p-6b7b8d)' }}> &middot; {shares.toFixed(2)} shares @ ${distPerShare.toFixed(4)}/sh/mo)</span>
+      {yieldOverride && <span style={{ color: 'var(--amber)', marginLeft: 6, fontSize: '0.75rem' }}>using override</span>}
     </div>
   )
 }
@@ -178,6 +180,7 @@ function MonthlyTable({ fund, months, which }) {
 
 /* ── Main Component ─────────────────────────────────────────────── */
 export default function DistributionCompare() {
+  const { isDark } = useTheme()
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const dialog = useDialog()
@@ -500,14 +503,14 @@ export default function DistributionCompare() {
         layout.annotations = [{
           x: crossover.month, y: fa.total_values[crossover.idx],
           text: `${crossover.leader} overtakes`, showarrow: true,
-          arrowhead: 2, arrowcolor: '#ffc107', font: { color: '#ffc107', size: 11 },
-          bgcolor: 'rgba(26,26,46,0.8)', bordercolor: '#ffc107',
+          arrowhead: 2, arrowcolor: '#ffc107', font: { color: isDark ? '#ffc107' : '#b8860b', size: 11 },
+          bgcolor: isDark ? 'rgba(26,26,46,0.8)' : 'rgba(255,255,255,0.9)', bordercolor: '#ffc107',
         }]
       }
 
-      Plotly.newPlot(el, traces, layout, cfg)
+      Plotly.newPlot(el, traces, themedPlotlyLayout(layout, isDark), cfg)
     })
-  }, [results, savedScenarios, crossover])
+  }, [results, savedScenarios, crossover, isDark])
 
   // ── Grade panel + summary cards ──────────────────────────────────
   let gradePanel = null
@@ -603,8 +606,8 @@ export default function DistributionCompare() {
               {fc && <>&nbsp;|&nbsp; {fc.ticker}: <strong>{cGrade}</strong></>}
               &nbsp;(based on 5 withdrawal metrics)
             </div>
-            {crossoverText && <div style={{ color: '#ffc107', fontSize: '0.85rem', marginTop: 4 }}>{crossoverText}</div>}
-            {results.data_start && <div style={{ color: '#6b7b8d', fontSize: '0.82rem', marginTop: 4 }}>Historical data from {results.data_start}</div>}
+            {crossoverText && <div style={{ color: 'var(--amber)', fontSize: '0.85rem', marginTop: 4 }}>{crossoverText}</div>}
+            {results.data_start && <div style={{ color: 'var(--p-6b7b8d)', fontSize: '0.82rem', marginTop: 4 }}>Historical data from {results.data_start}</div>}
           </div>
         </div>
         <table className="dc-comp-tbl">
@@ -620,13 +623,13 @@ export default function DistributionCompare() {
             ))}
             <tr>
               <td>Depleted?</td>
-              <td style={{ color: fa.depleted ? '#ff6b6b' : '#00e89a' }}>
+              <td style={{ color: fa.depleted ? 'var(--neg)' : 'var(--pos-bright)' }}>
                 {fa.depleted ? (fa.depletion_month != null ? `Month ${fa.depletion_month + 1}` : 'YES') : 'No'}
               </td>
-              <td style={{ color: fb.depleted ? '#ff6b6b' : '#00e89a' }}>
+              <td style={{ color: fb.depleted ? 'var(--neg)' : 'var(--pos-bright)' }}>
                 {fb.depleted ? (fb.depletion_month != null ? `Month ${fb.depletion_month + 1}` : 'YES') : 'No'}
               </td>
-              {hasFc && <td style={{ color: fc.depleted ? '#ff6b6b' : '#00e89a' }}>
+              {hasFc && <td style={{ color: fc.depleted ? 'var(--neg)' : 'var(--pos-bright)' }}>
                 {fc.depleted ? (fc.depletion_month != null ? `Month ${fc.depletion_month + 1}` : 'YES') : 'No'}
               </td>}
             </tr>
@@ -676,11 +679,11 @@ export default function DistributionCompare() {
       {/* Saved Setups */}
       {savedSetups.length > 0 && (
         <div className="dc-saved-strip">
-          <span style={{ color: '#8899aa', fontSize: '0.82rem', marginRight: 8 }}>Saved:</span>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem', marginRight: 8 }}>Saved:</span>
           {savedSetups.map((s, i) => (
             <span key={i} className="dc-scenario-chip">
               <span style={{ cursor: 'pointer' }} onClick={() => loadSetup(s)}>{s.name}</span>
-              <span style={{ cursor: 'pointer', marginLeft: 6, color: '#ff6b6b' }} onClick={() => setSavedSetups(prev => prev.filter((_, j) => j !== i))}>&times;</span>
+              <span style={{ cursor: 'pointer', marginLeft: 6, color: 'var(--neg)' }} onClick={() => setSavedSetups(prev => prev.filter((_, j) => j !== i))}>&times;</span>
             </span>
           ))}
         </div>
@@ -690,14 +693,14 @@ export default function DistributionCompare() {
       <div className="dc-controls">
         {/* Mode */}
         <div className="dc-mode-row">
-          <strong style={{ color: '#e0e0e0', marginRight: 8 }}>Mode:</strong>
+          <strong style={{ color: 'var(--text)', marginRight: 8 }}>Mode:</strong>
           <label><input type="radio" name="dc-mode" value="historical" checked={mode === 'historical'} onChange={() => setMode('historical')} /> Historical</label>
           <label><input type="radio" name="dc-mode" value="simulate" checked={mode === 'simulate'} onChange={() => setMode('simulate')} /> Simulation</label>
         </div>
 
         {/* Compare Type */}
         <div className="dc-mode-row">
-          <strong style={{ color: '#e0e0e0', marginRight: 8 }}>Compare:</strong>
+          <strong style={{ color: 'var(--text)', marginRight: 8 }}>Compare:</strong>
           <label><input type="radio" name="dc-compare" value="income_vs_growth" checked={compareType === 'income_vs_growth'} onChange={() => setCompareType('income_vs_growth')} /> Income vs Growth</label>
           <label><input type="radio" name="dc-compare" value="income_vs_income" checked={compareType === 'income_vs_income'} onChange={() => setCompareType('income_vs_income')} /> Income vs Income</label>
           <label><input type="radio" name="dc-compare" value="growth_vs_growth" checked={compareType === 'growth_vs_growth'} onChange={() => setCompareType('growth_vs_growth')} /> Growth vs Growth</label>
@@ -706,7 +709,7 @@ export default function DistributionCompare() {
         {/* Market (sim only) */}
         {mode === 'simulate' && (
           <div className="dc-market-row" style={{ width: '100%' }}>
-            <strong style={{ color: '#e0e0e0', marginRight: 8 }}>Market:</strong>
+            <strong style={{ color: 'var(--text)', marginRight: 8 }}>Market:</strong>
             <label><input type="radio" name="dc-market" value="neutral" checked={market === 'neutral'} onChange={() => setMarket('neutral')} /> Neutral</label>
             <label><input type="radio" name="dc-market" value="bullish" checked={market === 'bullish'} onChange={() => setMarket('bullish')} /> Bullish</label>
             <label><input type="radio" name="dc-market" value="bearish" checked={market === 'bearish'} onChange={() => setMarket('bearish')} /> Bearish</label>
@@ -723,11 +726,11 @@ export default function DistributionCompare() {
               <input type="number" value={investA} onChange={e => setInvestA(parseFloat(e.target.value) || 0)} min="1" step="1000" />
             </div>
             <div className="dc-field">
-              <label>Yield Override (%) <span style={{ color: '#6b7b8d' }}>\u2014 leave blank to use detected</span></label>
+              <label>Yield Override (%) <span style={{ color: 'var(--p-6b7b8d)' }}>\u2014 leave blank to use detected</span></label>
               <input type="number" value={yieldA} onChange={e => setYieldA(e.target.value)} placeholder="Auto" step="0.01" min="0" />
             </div>
-            <label style={{ color: '#8899aa', fontSize: '0.82rem', cursor: 'pointer' }}>
-              <input type="checkbox" checked={dripA} onChange={e => setDripA(e.target.checked)} style={{ marginRight: 4, accentColor: '#7ecfff' }} />
+            <label style={{ color: 'var(--text-dim)', fontSize: '0.82rem', cursor: 'pointer' }}>
+              <input type="checkbox" checked={dripA} onChange={e => setDripA(e.target.checked)} style={{ marginRight: 4, accentColor: 'var(--accent-bright)' }} />
               Reinvest excess dividends (DRIP)
             </label>
             <DistEstimate lookupData={lookupA} investment={investA} yieldOverride={yieldA} />
@@ -741,11 +744,11 @@ export default function DistributionCompare() {
               <input type="number" value={investB} onChange={e => setInvestB(parseFloat(e.target.value) || 0)} min="1" step="1000" />
             </div>
             <div className="dc-field">
-              <label>Yield Override (%) <span style={{ color: '#6b7b8d' }}>\u2014 leave blank to use detected</span></label>
+              <label>Yield Override (%) <span style={{ color: 'var(--p-6b7b8d)' }}>\u2014 leave blank to use detected</span></label>
               <input type="number" value={yieldB} onChange={e => setYieldB(e.target.value)} placeholder="Auto" step="0.01" min="0" />
             </div>
-            <label style={{ color: '#8899aa', fontSize: '0.82rem', cursor: 'pointer' }}>
-              <input type="checkbox" checked={dripB} onChange={e => setDripB(e.target.checked)} style={{ marginRight: 4, accentColor: '#7ecfff' }} />
+            <label style={{ color: 'var(--text-dim)', fontSize: '0.82rem', cursor: 'pointer' }}>
+              <input type="checkbox" checked={dripB} onChange={e => setDripB(e.target.checked)} style={{ marginRight: 4, accentColor: 'var(--accent-bright)' }} />
               Reinvest excess dividends (DRIP)
             </label>
             <DistEstimate lookupData={lookupB} investment={investB} yieldOverride={yieldB} />
@@ -754,7 +757,7 @@ export default function DistributionCompare() {
           {showFundC && (
             <div className="dc-fund-card" style={{ borderColor: '#ff6b6b33' }}>
               <div className="dc-fund-title" style={{ color: FUND_COLORS.c }}>Fund C \u2014 Benchmark
-                <span style={{ cursor: 'pointer', float: 'right', color: '#ff6b6b', fontSize: '0.85rem' }} onClick={() => setShowFundC(false)}>&times; Remove</span>
+                <span style={{ cursor: 'pointer', float: 'right', color: 'var(--neg)', fontSize: '0.85rem' }} onClick={() => setShowFundC(false)}>&times; Remove</span>
               </div>
               <TickerCombo value={tickerC} onChange={setTickerC} onLookup={() => lookup('c')} info={infoC} portfolioTickers={portfolioTickers} />
               <div className="dc-field">
@@ -765,8 +768,8 @@ export default function DistributionCompare() {
                 <label>Yield Override (%)</label>
                 <input type="number" value={yieldC} onChange={e => setYieldC(e.target.value)} placeholder="Auto" step="0.01" min="0" />
               </div>
-              <label style={{ color: '#8899aa', fontSize: '0.82rem', cursor: 'pointer' }}>
-                <input type="checkbox" checked={dripC} onChange={e => setDripC(e.target.checked)} style={{ marginRight: 4, accentColor: '#7ecfff' }} />
+              <label style={{ color: 'var(--text-dim)', fontSize: '0.82rem', cursor: 'pointer' }}>
+                <input type="checkbox" checked={dripC} onChange={e => setDripC(e.target.checked)} style={{ marginRight: 4, accentColor: 'var(--accent-bright)' }} />
                 Reinvest excess dividends (DRIP)
               </label>
               <DistEstimate lookupData={lookupC} investment={investC} yieldOverride={yieldC} />
@@ -831,8 +834,8 @@ export default function DistributionCompare() {
           )}
           <div className="dc-field" style={{ minWidth: 'auto' }}>
             <label style={{ visibility: 'hidden' }}>_</label>
-            <label style={{ color: '#8899aa', fontSize: '0.82rem', cursor: 'pointer' }}>
-              <input type="checkbox" checked={inflationAdj} onChange={e => setInflationAdj(e.target.checked)} style={{ marginRight: 4, accentColor: '#7ecfff' }} />
+            <label style={{ color: 'var(--text-dim)', fontSize: '0.82rem', cursor: 'pointer' }}>
+              <input type="checkbox" checked={inflationAdj} onChange={e => setInflationAdj(e.target.checked)} style={{ marginRight: 4, accentColor: 'var(--accent-bright)' }} />
               Inflation adjust
             </label>
           </div>
@@ -850,18 +853,18 @@ export default function DistributionCompare() {
           <button className="dc-lookup-btn" onClick={saveSetup}>Save Setup</button>
           {results && <button className="dc-lookup-btn" onClick={saveScenario} disabled={savedScenarios.length >= 3}>Save Scenario ({savedScenarios.length}/3)</button>}
           {results && <button className="dc-lookup-btn" onClick={exportExcel}>Export to Excel</button>}
-          {savedScenarios.length > 0 && <button className="dc-lookup-btn" style={{ borderColor: '#ff6b6b44', color: '#ff6b6b' }} onClick={() => setSavedScenarios([])}>Clear Scenarios</button>}
+          {savedScenarios.length > 0 && <button className="dc-lookup-btn" style={{ borderColor: '#ff6b6b44', color: 'var(--neg)' }} onClick={() => setSavedScenarios([])}>Clear Scenarios</button>}
         </div>
       </div>
 
       {/* Saved Scenarios Strip */}
       {savedScenarios.length > 0 && (
         <div className="dc-saved-strip" style={{ marginTop: 8 }}>
-          <span style={{ color: '#8899aa', fontSize: '0.82rem', marginRight: 8 }}>Scenarios:</span>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem', marginRight: 8 }}>Scenarios:</span>
           {savedScenarios.map((s, i) => (
             <span key={i} className="dc-scenario-chip">
               <span style={{ borderBottom: `2px ${['dashed', 'dotted', 'dashed'][i]} ${FUND_COLORS.a}` }}>{s.label} (S{i + 1})</span>
-              <span style={{ cursor: 'pointer', marginLeft: 6, color: '#ff6b6b' }} onClick={() => setSavedScenarios(prev => prev.filter((_, j) => j !== i))}>&times;</span>
+              <span style={{ cursor: 'pointer', marginLeft: 6, color: 'var(--neg)' }} onClick={() => setSavedScenarios(prev => prev.filter((_, j) => j !== i))}>&times;</span>
             </span>
           ))}
         </div>
@@ -871,7 +874,7 @@ export default function DistributionCompare() {
       {loading && (
         <div className="dc-spinner show">
           <div className="dc-spin-icon"></div>
-          <div style={{ color: '#7ecfff', marginTop: 10 }}>Running comparison&hellip;</div>
+          <div style={{ color: 'var(--accent-bright)', marginTop: 10 }}>Running comparison&hellip;</div>
         </div>
       )}
 

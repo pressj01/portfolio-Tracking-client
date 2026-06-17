@@ -542,7 +542,7 @@ export default function DividendCalendar() {
     return null
   }
 
-  if (loading) return <div style={{ padding: '2rem', color: '#8899aa' }}>Loading dividend calendar...</div>
+  if (loading) return <div style={{ padding: '2rem', color: 'var(--text-dim)' }}>Loading dividend calendar...</div>
 
   return (
     <div className="dc-page">
@@ -583,13 +583,13 @@ export default function DividendCalendar() {
       </div>
 
       {filtered.length === 0 && events.length > 0 && (
-        <p style={{ color: '#8899aa', padding: '1rem 0' }}>
+        <p style={{ color: 'var(--text-dim)', padding: '1rem 0' }}>
           No events match this filter.
         </p>
       )}
 
       {events.length === 0 && (
-        <p style={{ color: '#8899aa' }}>No ex-dividend date data found. Import data first.</p>
+        <p style={{ color: 'var(--text-dim)' }}>No ex-dividend date data found. Import data first.</p>
       )}
 
       <div className="dc-grid">
@@ -631,17 +631,17 @@ export default function DividendCalendar() {
                   </div>
                 </div>
                 <div className="dc-dates-row">
-                  <div className="dc-date-chip dc-exdiv-chip" style={{ borderTopColor: isPaid ? '#334455' : ev.color }}>
+                  <div className="dc-date-chip dc-exdiv-chip" style={{ borderTopColor: isPaid ? 'var(--p-334455)' : ev.color }}>
                     <span className="dc-chip-label">Ex-Div</span>
-                    <span className="dc-chip-val" style={{ color: isPaid ? '#b0c0d0' : ev.color }}>
+                    <span className="dc-chip-val" style={{ color: isPaid ? 'var(--p-b0c0d0)' : ev.color }}>
                       {ev.month} {ev.day}
                     </span>
                   </div>
-                  <div className="dc-date-chip dc-pay-chip" style={{ borderTopColor: isPaid ? '#2a6655' : ev.color }}>
+                  <div className="dc-date-chip dc-pay-chip" style={{ borderTopColor: isPaid ? 'var(--p-2a6655)' : ev.color }}>
                     <span className="dc-chip-label">Pay Date</span>
                     <span
                       className="dc-chip-val"
-                      style={{ color: isPaid ? '#00e89a' : ev.color, fontWeight: isPaid ? 700 : 600 }}
+                      style={{ color: isPaid ? 'var(--pos-bright)' : ev.color, fontWeight: isPaid ? 700 : 600 }}
                     >
                       {ev.pay_month} {ev.pay_day}{ev.pay_estimated ? ' *' : ''}
                     </span>

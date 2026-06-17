@@ -1,10 +1,12 @@
 import React, { useMemo } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from './ThemedPlot'
 import { distributionYieldPeriodLabel } from '../utils/distributionPeriod'
+import { useTheme } from '../context/ThemeContext'
+import { chartTheme } from '../utils/chartTheme'
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-export function buildDistributionChart(history, ticker, price, pctMode = false, annual = false, emptyLabel = 'this symbol') {
+export function buildDistributionChart(history, ticker, price, pctMode = false, annual = false, emptyLabel = 'this symbol', theme = chartTheme(true)) {
   const byMonth = new Map()
 
   ;(Array.isArray(history) ? history : []).forEach(item => {
@@ -42,22 +44,22 @@ export function buildDistributionChart(history, ticker, price, pctMode = false, 
     hasData: values.length > 0,
     canShowPct: priceNum > 0,
     layout: {
-      template: 'plotly_dark',
-      paper_bgcolor: '#16213e',
-      plot_bgcolor: '#16213e',
-      font: { color: '#e0e8f5', size: 12 },
-      title: { text: `${ticker || emptyLabel} - Distribution History${titleSuffix}`, x: 0.5, font: { size: 18, color: '#e0e8f5' } },
+      template: theme.template,
+      paper_bgcolor: theme.surface,
+      plot_bgcolor: theme.surface,
+      font: { color: theme.font, size: 12 },
+      title: { text: `${ticker || emptyLabel} - Distribution History${titleSuffix}`, x: 0.5, font: { size: 18, color: theme.title } },
       height: 360,
       margin: { l: 58, r: 36, t: 58, b: 72 },
       bargap: 0.18,
       yaxis: {
         ...(showPct ? { ticksuffix: '%', tickformat: '.2f' } : { tickprefix: '$' }),
-        gridcolor: '#293a5f',
-        zerolinecolor: '#6a7892',
+        gridcolor: theme.grid,
+        zerolinecolor: theme.zeroline,
         fixedrange: true,
       },
       xaxis: {
-        gridcolor: '#1c2a4b',
+        gridcolor: theme.grid,
         tickangle: -45,
         fixedrange: true,
       },
@@ -92,9 +94,11 @@ export default function DistributionHistoryChart({
   sourceClassName = 'etfc-distribution-source',
   toolbarStart = null,
 }) {
+  const { isDark } = useTheme()
+  const theme = chartTheme(isDark)
   const chart = useMemo(
-    () => buildDistributionChart(history, ticker, price, pctMode, annual, emptyLabel),
-    [history, ticker, price, pctMode, annual, emptyLabel],
+    () => buildDistributionChart(history, ticker, price, pctMode, annual, emptyLabel, theme),
+    [history, ticker, price, pctMode, annual, emptyLabel, theme],
   )
   const hasToolbar = toolbarStart || chart.canShowPct || source
 
@@ -138,3 +142,4 @@ export default function DistributionHistoryChart({
     </>
   )
 }
+

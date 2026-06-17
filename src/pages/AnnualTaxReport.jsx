@@ -7,7 +7,7 @@ const fmt = v => v != null
 const fmtInt = v => v != null
   ? `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
   : '—'
-const glColor = v => (v || 0) >= 0 ? '#4dff91' : '#ff6b6b'
+const glColor = v => (v || 0) >= 0 ? 'var(--pos)' : 'var(--neg)'
 
 const TREATMENT_LABEL = {
   qualified: 'Qualified',
@@ -197,35 +197,35 @@ function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
   const amountStyle = {
     ...inputStyle,
     width: 76,
-    background: '#101b36',
-    borderColor: '#315078',
+    background: 'var(--p-101b36)',
+    borderColor: 'var(--p-315078)',
   }
   const totalStyle = {
     ...amountStyle,
     width: 86,
-    background: totalEditable ? '#101b36' : '#2d3442',
-    borderColor: totalEditable ? '#5b78a8' : '#515967',
-    color: totalEditable ? '#e6f4ff' : '#c1c7d0',
+    background: totalEditable ? 'var(--p-101b36)' : 'var(--p-2d3442)',
+    borderColor: totalEditable ? 'var(--p-5b78a8)' : 'var(--p-515967)',
+    color: totalEditable ? 'var(--p-e6f4ff)' : 'var(--p-c1c7d0)',
     opacity: totalEditable ? 1 : 0.78,
   }
   const percentStyle = {
     ...inputStyle,
     width: 66,
-    background: percentEditable ? '#15264a' : '#2d3442',
-    borderColor: percentEditable ? '#4b75a6' : '#515967',
-    color: percentEditable ? '#e6f4ff' : '#c1c7d0',
+    background: percentEditable ? 'var(--surface)' : 'var(--surface-sunken)',
+    borderColor: percentEditable ? 'var(--primary)' : 'var(--border)',
+    color: percentEditable ? 'var(--text-strong)' : 'var(--text-muted)',
     opacity: percentEditable ? 1 : 0.78,
   }
   const fieldLabel = {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 3,
-    color: '#90a4ae',
+    color: 'var(--text-dim)',
     fontSize: '0.74rem',
   }
   const percentSuffix = {
     marginLeft: 3,
-    color: '#9fb0c4',
+    color: 'var(--text-dim)',
     fontSize: '0.74rem',
   }
 
@@ -269,7 +269,7 @@ function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
           onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit() }} style={percentStyle} title="ROC percent" />
         <span style={percentSuffix}>%</span>
       </label>
-      <label style={{ ...fieldLabel, color: '#c0cdd8' }} title="Allow manual percent edits">
+      <label style={{ ...fieldLabel, color: 'var(--p-c0cdd8)' }} title="Allow manual percent edits">
         <input type="checkbox" checked={percentEditable} disabled={disabled}
           onChange={e => setPercentEditable(e.target.checked)} />
       </label>
@@ -283,7 +283,7 @@ function SplitOverrideEditor({ row, disabled, onSave, onDefault }) {
         style={{ padding: '0.2rem 0.45rem', fontSize: '0.72rem' }}>
         Default
       </button>
-      {localError && <span style={{ color: '#ffb300', fontSize: '0.72rem' }}>{localError}</span>}
+      {localError && <span style={{ color: 'var(--warning-money)', fontSize: '0.72rem' }}>{localError}</span>}
     </div>
   )
 }
@@ -450,7 +450,7 @@ export default function AnnualTaxReport() {
 
       <div className="alert" style={{
         background: 'rgba(255,184,108,0.1)', border: '1px solid rgba(255,184,108,0.4)',
-        color: '#ffb86c', padding: '0.6rem 0.9rem', borderRadius: 4, marginBottom: '1rem',
+        color: 'var(--p-ffb86c)', padding: '0.6rem 0.9rem', borderRadius: 4, marginBottom: '1rem',
         fontSize: '0.85rem',
       }}>
         <strong>Estimates only.</strong> Verify against your 1099-DIV and brokerage statements before
@@ -462,7 +462,7 @@ export default function AnnualTaxReport() {
       {/* Year + actions row */}
       <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '1rem' }}>
         <div>
-          <label style={{ marginRight: '0.5rem', color: '#c0cdd8' }}>Tax year</label>
+          <label style={{ marginRight: '0.5rem', color: 'var(--p-c0cdd8)' }}>Tax year</label>
           <select value={year || ''} onChange={e => setYear(Number(e.target.value))}
                   disabled={!years.length}
                   style={{ padding: '0.35rem 0.6rem', minWidth: '110px' }}>
@@ -495,7 +495,7 @@ export default function AnnualTaxReport() {
       {loading && <div style={{ textAlign: 'center', padding: '2rem' }}><span className="spinner" /></div>}
       {error && <div className="alert alert-error">{error}</div>}
       {!loading && !error && taxAdvantaged && (
-        <div className="card" style={{ padding: '1.5rem', textAlign: 'center', color: '#c0cdd8' }}>
+        <div className="card" style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--p-c0cdd8)' }}>
           <h3 style={{ marginTop: 0 }}>Tax-advantaged account</h3>
           <p style={{ marginBottom: 0 }}>
             <strong>{taxAdvantaged}</strong> is excluded from the Annual Tax Report. Dividends and
@@ -506,7 +506,7 @@ export default function AnnualTaxReport() {
         </div>
       )}
       {!loading && !error && !taxAdvantaged && !years.length && (
-        <p style={{ color: '#556677', fontStyle: 'italic', padding: '2rem 0', textAlign: 'center' }}>
+        <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', padding: '2rem 0', textAlign: 'center' }}>
           No taxable activity recorded yet. Add SELL transactions or import dividend payments to begin.
         </p>
       )}
@@ -559,7 +559,7 @@ export default function AnnualTaxReport() {
                         <td style={{ textAlign: 'right' }}>{fmt(f1099.box_3_nondividend_distributions)}</td></tr>
                   </tbody>
                 </table>
-                <p style={{ fontSize: '0.78rem', color: '#8899aa', marginTop: '0.5rem' }}>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginTop: '0.5rem' }}>
                   Box 1a includes both qualified and ordinary; Box 1b is the qualified subset.
                 </p>
               </div>
@@ -594,7 +594,7 @@ export default function AnnualTaxReport() {
                     </tr>
                   </tbody>
                 </table>
-                <p style={{ fontSize: '0.78rem', color: '#8899aa', marginTop: '0.5rem' }}>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginTop: '0.5rem' }}>
                   Long-term = held more than 365 days. Cost basis comes from explicit lot
                   allocations on each sell, falling back to FIFO.
                 </p>
@@ -621,7 +621,7 @@ export default function AnnualTaxReport() {
                                    textAlign: c.num ? 'right' : undefined }}>
                         {c.l}
                         <span style={{ fontSize: '0.7em', marginLeft: 4,
-                                       color: divSort.col === c.k ? '#7ecfff' : '#8899aa' }}>
+                                       color: divSort.col === c.k ? 'var(--accent-bright)' : 'var(--text-dim)' }}>
                           {sortIcon(divSort, c.k)}
                         </span>
                       </th>
@@ -638,7 +638,7 @@ export default function AnnualTaxReport() {
                           display: 'inline-block', padding: '0.1rem 0.5rem', borderRadius: 3,
                           fontSize: '0.78rem',
                           background: row.is_override ? 'rgba(126,207,255,0.15)' : 'rgba(255,255,255,0.05)',
-                          color: row.is_override ? '#7ecfff' : '#c0cdd8',
+                          color: row.is_override ? 'var(--accent-bright)' : 'var(--p-c0cdd8)',
                         }} title={row.is_override ? 'Manual override applied' : 'Default by classification'}>
                           {TREATMENT_LABEL[row.treatment] || row.treatment}
                           {row.is_override ? ' ★' : ''}
@@ -648,7 +648,7 @@ export default function AnnualTaxReport() {
                       <td style={{ textAlign: 'right' }}>{fmt(row.qualified)}</td>
                       <td style={{ textAlign: 'right' }}>{fmt(row.ordinary)}</td>
                       <td style={{ textAlign: 'right' }}>{fmt(row.roc)}</td>
-                      <td style={{ textAlign: 'right', color: '#8899aa' }}>{row.count}</td>
+                      <td style={{ textAlign: 'right', color: 'var(--text-dim)' }}>{row.count}</td>
                       <td>
                         <SplitOverrideEditor
                           row={row}
@@ -660,7 +660,7 @@ export default function AnnualTaxReport() {
                     </tr>
                   ))}
                   {!sortedDivs.length && (
-                    <tr><td colSpan={8} style={{ color: '#556677', fontStyle: 'italic',
+                    <tr><td colSpan={8} style={{ color: 'var(--p-556677)', fontStyle: 'italic',
                       padding: '2rem 0', textAlign: 'center' }}>
                       No dividends recorded for {year}.
                     </td></tr>
@@ -668,7 +668,7 @@ export default function AnnualTaxReport() {
                 </tbody>
                 {sortedDivs.length > 0 && (
                   <tfoot>
-                    <tr style={{ borderTop: '2px solid #0f3460', background: '#16213e' }}>
+                    <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
                       <td colSpan={2}><strong>Totals</strong></td>
                       <td style={{ textAlign: 'right' }}><strong>{fmt(dt.total)}</strong></td>
                       <td style={{ textAlign: 'right' }}><strong>{fmt(dt.qualified)}</strong></td>
@@ -705,7 +705,7 @@ export default function AnnualTaxReport() {
                                    textAlign: c.num ? 'right' : undefined }}>
                         {c.l}
                         <span style={{ fontSize: '0.7em', marginLeft: 4,
-                                       color: lotSort.col === c.k ? '#7ecfff' : '#8899aa' }}>
+                                       color: lotSort.col === c.k ? 'var(--accent-bright)' : 'var(--text-dim)' }}>
                           {sortIcon(lotSort, c.k)}
                         </span>
                       </th>
@@ -717,7 +717,7 @@ export default function AnnualTaxReport() {
                     <tr key={i}>
                       <td><strong>{row.ticker}</strong></td>
                       <td>{row.sell_date || '—'}</td>
-                      <td>{row.buy_date || <span style={{ color: '#ff6b6b' }}>unmatched</span>}</td>
+                      <td>{row.buy_date || <span style={{ color: 'var(--neg)' }}>unmatched</span>}</td>
                       <td style={{ textAlign: 'right' }}>{Number(row.shares).toFixed(3)}</td>
                       <td style={{ textAlign: 'right' }}>{fmt(row.buy_price)}</td>
                       <td style={{ textAlign: 'right' }}>{fmt(row.sell_price)}</td>
@@ -726,7 +726,7 @@ export default function AnnualTaxReport() {
                       <td style={{ textAlign: 'right', color: glColor(row.gain) }}>
                         <strong>{fmt(row.gain)}</strong>
                       </td>
-                      <td style={{ textAlign: 'right', color: '#8899aa' }}>
+                      <td style={{ textAlign: 'right', color: 'var(--text-dim)' }}>
                         {row.holding_days != null ? row.holding_days : '—'}
                       </td>
                       <td>
@@ -734,7 +734,7 @@ export default function AnnualTaxReport() {
                           display: 'inline-block', padding: '0.1rem 0.5rem', borderRadius: 3,
                           fontSize: '0.78rem',
                           background: row.term === 'LT' ? 'rgba(46,253,181,0.15)' : 'rgba(255,184,108,0.15)',
-                          color: row.term === 'LT' ? '#2EFDB5' : '#FFB86C',
+                          color: row.term === 'LT' ? 'var(--p-2efdb5)' : 'var(--p-ffb86c)',
                         }}>
                           {row.term === 'LT' ? 'Long-Term' : 'Short-Term'}
                         </span>
@@ -742,7 +742,7 @@ export default function AnnualTaxReport() {
                     </tr>
                   ))}
                   {!sortedLots.length && (
-                    <tr><td colSpan={11} style={{ color: '#556677', fontStyle: 'italic',
+                    <tr><td colSpan={11} style={{ color: 'var(--p-556677)', fontStyle: 'italic',
                       padding: '2rem 0', textAlign: 'center' }}>
                       No realized sales for {year}. Record sells in the Manage Holdings page.
                     </td></tr>
@@ -750,7 +750,7 @@ export default function AnnualTaxReport() {
                 </tbody>
                 {sortedLots.length > 0 && (
                   <tfoot>
-                    <tr style={{ borderTop: '2px solid #0f3460', background: '#16213e' }}>
+                    <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
                       <td colSpan={6}><strong>Totals</strong></td>
                       <td style={{ textAlign: 'right' }}>
                         <strong>{fmt(rt.st_cost + rt.lt_cost)}</strong>

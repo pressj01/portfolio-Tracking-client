@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { returnVsYield } from '../utils/returnVsYield'
+import { useTheme } from '../context/ThemeContext'
+import { themedPlotlyLayout } from '../utils/chartTheme'
 
 const PALETTE = [
   '#7B8CFF','#FF6F61','#2EFDB5','#C98FFF','#FFB86C','#4DE8FF','#FF80A8','#D4FF9A',
@@ -24,6 +26,7 @@ function MetricCard({ label, value, className }) {
 export default function GainsLosses() {
   const pf = useProfileFetch()
   const { selection, basisMode } = useProfile()
+  const { isDark } = useTheme()
   const [categories, setCategories] = useState([])
   const [subcategories, setSubcategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
@@ -130,7 +133,7 @@ export default function GainsLosses() {
         legend: { orientation: 'h', y: -0.12, font: { color: '#d0dde8' } },
         margin: { t: 50, b: 60, l: 80, r: 20 },
       }
-      Plotly.newPlot(timeEl, traces, layout, cfg)
+      Plotly.newPlot(timeEl, traces, themedPlotlyLayout(layout, isDark), cfg)
     }
 
     // Chart 2: Grouped bar - Price G/L vs Total G/L by ticker
@@ -164,7 +167,7 @@ export default function GainsLosses() {
         legend: { orientation: 'h', y: -0.08, font: { color: '#d0dde8' } },
         margin: { t: 50, b: 50, l: 80, r: 20 },
       }
-      Plotly.newPlot(barEl, barTraces, barLayout, cfg)
+      Plotly.newPlot(barEl, barTraces, themedPlotlyLayout(barLayout, isDark), cfg)
     }
 
     // Chart 3: Winners vs Losers waterfall
@@ -190,7 +193,7 @@ export default function GainsLosses() {
         height: 400,
         margin: { t: 50, b: 100, l: 80, r: 20 },
       }
-      Plotly.newPlot(watEl, watTraces, watLayout, cfg)
+      Plotly.newPlot(watEl, watTraces, themedPlotlyLayout(watLayout, isDark), cfg)
     }
 
     // Chart 4: Realized gains timeline
@@ -216,7 +219,7 @@ export default function GainsLosses() {
         height: 380,
         margin: { t: 50, b: 60, l: 80, r: 20 },
       }
-      Plotly.newPlot(realEl, realTraces, realLayout, cfg)
+      Plotly.newPlot(realEl, realTraces, themedPlotlyLayout(realLayout, isDark), cfg)
     }
 
     return () => {
@@ -225,7 +228,7 @@ export default function GainsLosses() {
         if (el) Plotly.purge(el)
       })
     }
-  }, [chartData])
+  }, [chartData, isDark])
 
   // Table sorting
   const handleSort = (col) => {
@@ -320,7 +323,7 @@ export default function GainsLosses() {
 
   const renderTable = () => {
     if (!activeRows.length) {
-      return <p style={{ color: '#556677', fontStyle: 'italic', padding: '2rem 0', textAlign: 'center' }}>
+      return <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', padding: '2rem 0', textAlign: 'center' }}>
         {tab === 'realized' ? 'No sold positions recorded. Add sales in the Watchlist page.' : 'No data available.'}
       </p>
     }
@@ -340,7 +343,7 @@ export default function GainsLosses() {
                       <span
                         onClick={() => setRvyMode(m => m === 'yoc' ? 'cur' : 'yoc')}
                         title={rvyMode === 'yoc' ? 'Using Yield on Cost — click to switch to Current Yield' : 'Using Current Yield — click to switch to Yield on Cost'}
-                        style={{ fontSize: '0.65rem', background: rvyMode === 'yoc' ? '#1a3a5c' : '#1a3a2a', color: rvyMode === 'yoc' ? '#7ecfff' : '#4dff91', border: `1px solid ${rvyMode === 'yoc' ? '#294b73' : '#2a5c3a'}`, borderRadius: 3, padding: '1px 4px', cursor: 'pointer', fontWeight: 600 }}
+                        style={{ fontSize: '0.65rem', background: rvyMode === 'yoc' ? 'var(--p-1a3a5c)' : 'var(--p-1a3a2a)', color: rvyMode === 'yoc' ? 'var(--accent-bright)' : 'var(--pos)', border: `1px solid ${rvyMode === 'yoc' ? 'var(--p-294b73)' : 'var(--p-2a5c3a)'}`, borderRadius: 3, padding: '1px 4px', cursor: 'pointer', fontWeight: 600 }}
                       >
                         {rvyMode === 'yoc' ? 'YOC' : 'CYld'}
                       </span>
@@ -350,7 +353,7 @@ export default function GainsLosses() {
                 return (
                   <th key={col.key} title={col.tip} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: (col.numeric || col.gl) ? 'right' : undefined }} onClick={() => handleSort(sk)}>
                     {col.label}
-                    <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === sk ? '#7ecfff' : '#8899aa' }}>
+                    <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === sk ? 'var(--accent-bright)' : 'var(--text-dim)' }}>
                       {sortIcon(sk)}
                     </span>
                   </th>
@@ -379,7 +382,7 @@ export default function GainsLosses() {
           </tbody>
           {tab === 'unrealized' && (
             <tfoot>
-              <tr style={{ borderTop: '2px solid #0f3460', background: '#16213e' }}>
+              <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
                 <td colSpan={5}><strong>Portfolio Total</strong></td>
                 <td style={{ textAlign: 'right' }}><strong>{fmt(t.unrealized_invested)}</strong></td>
                 <td style={{ textAlign: 'right' }}><strong>{fmt(t.unrealized_value)}</strong></td>
@@ -394,7 +397,7 @@ export default function GainsLosses() {
           )}
           {tab === 'realized' && (
             <tfoot>
-              <tr style={{ borderTop: '2px solid #0f3460', background: '#16213e' }}>
+              <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
                 <td colSpan={5}><strong>Total</strong></td>
                 <td style={{ textAlign: 'right' }}><strong>{fmt(t.realized_cost)}</strong></td>
                 <td style={{ textAlign: 'right' }}><strong>{fmt(t.realized_proceeds)}</strong></td>
@@ -429,7 +432,7 @@ export default function GainsLosses() {
             </button>
             {catOpen && (
               <div className="growth-cat-dropdown">
-                <label className="growth-cat-option" style={{ borderBottom: '1px solid #0f3460', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
+                <label className="growth-cat-option" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
                   <input type="checkbox" checked={categories.length === 0 && subcategories.length === 0}
                     onChange={() => { setCategories([]); setSubcategories([]) }} />
                   <span>All Holdings</span>
@@ -532,7 +535,7 @@ export default function GainsLosses() {
         ))}
       </div>
 
-      {chartLoading && <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', color: '#8899aa', padding: '0.6rem 0' }}><span className="spinner" /> Fetching data from Yahoo Finance...</div>}
+      {chartLoading && <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', color: 'var(--text-dim)', padding: '0.6rem 0' }}><span className="spinner" /> Fetching data from Yahoo Finance...</div>}
       {chartError && <div className="alert alert-error">{chartError}</div>}
 
       <div id="gl-chart-time" style={{ minHeight: chartData?.dates ? '450px' : '0', marginBottom: '2rem' }} />
@@ -542,7 +545,7 @@ export default function GainsLosses() {
         <div id="gl-chart-realized" style={{ minHeight: '380px', marginBottom: '2rem' }} />
       )}
       {chartData && !chartLoading && !chartData.realized_events?.length && (
-        <p style={{ color: '#556677', fontStyle: 'italic', textAlign: 'center', marginBottom: '2rem' }}>No realized sales to chart. Record sales in the Watchlist page.</p>
+        <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', textAlign: 'center', marginBottom: '2rem' }}>No realized sales to chart. Record sales in the Watchlist page.</p>
       )}
     </div>
   )
