@@ -211,6 +211,17 @@ function PortfolioOverview({ groups, categories, totalValue }) {
   const totalTarget = atTopLevel ? displayGroups.reduce((s, g) => s + (Number(g.target_pct) || 0), 0) : 0
   const showTargetRing = hasTargets && totalTarget > 0
 
+  // When drilled into a category (or sub-category), each row's Allocation also
+  // shows its share of the parent group, alongside its share of the whole
+  // portfolio. The displayed groups sum to the parent's value in every
+  // drill-down case (sub-categories of a category, or holdings of either).
+  const parentValue = atTopLevel ? 0 : displayGroups.reduce((s, g) => s + (Number(g.value) || 0), 0)
+  const parentName = !selectedCat
+    ? null
+    : (subId != null
+        ? (selectedCat.subcategories?.find(s => s.id === subId)?.name || selectedCat.name)
+        : selectedCat.name)
+
   useEffect(() => {
     if (!displayGroups.length || !window.Plotly || !chartRef.current) return
     const labels = displayGroups.map(g => g.name)
@@ -369,6 +380,11 @@ function PortfolioOverview({ groups, categories, totalValue }) {
                     )}
                     <td style={{ textAlign: 'right', padding: '0.5rem' }}>
                       <div style={{ color: 'var(--text-strong)' }}>{alloc.toFixed(2)}%</div>
+                      {!atTopLevel && parentValue > 0 && (
+                        <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+                          {((g.value / parentValue) * 100).toFixed(1)}% of {parentName}
+                        </div>
+                      )}
                     </td>
                     {showTargetRing && (
                       <td style={{ textAlign: 'right', padding: '0.5rem' }}>

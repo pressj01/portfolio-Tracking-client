@@ -147,6 +147,31 @@ _FX_RATE_TTL_SEC = 6 * 60 * 60
 _REINVEST_HISTORY_CACHE = {}
 _REINVEST_HISTORY_TTL_SEC = 6 * 60 * 60
 
+# ETF/Stock comparer chart data. Each request makes several slow yfinance calls
+# (price + dividend downloads, benchmark download, .info), so cache the rendered
+# response, the shared benchmark frame, and per-ticker .info dicts. The Refresh
+# button bumps a nonce in the query string, which busts the response cache.
+_ETF_SCREEN_DATA_CACHE = {}
+_ETF_SCREEN_DATA_TTL_SEC = 10 * 60
+_ETF_SCREEN_BENCH_CACHE = {}
+_ETF_SCREEN_BENCH_TTL_SEC = 10 * 60
+_YF_INFO_CACHE = {}
+_YF_INFO_TTL_SEC = 30 * 60
+
+
+def _cached_yf_info(yf_ticker_obj, symbol):
+    """Return yfinance .info for a symbol, cached for a while (it's a slow call)."""
+    cached = _cache_get(_YF_INFO_CACHE, symbol, _YF_INFO_TTL_SEC)
+    if cached is not None:
+        return cached
+    try:
+        info = yf_ticker_obj.info or {}
+    except Exception:
+        info = {}
+    if info:
+        _cache_set(_YF_INFO_CACHE, symbol, info)
+    return info
+
 
 def _cache_value(value):
     if value is None:
@@ -453,8 +478,15 @@ def _basis_mode():
 def _basis_total_expr(alias="a"):
     prefix = f"{alias}." if alias else ""
     if _basis_mode() == "broker_adjusted":
-        return f"COALESCE({prefix}broker_purchase_value, {prefix}purchase_value, {prefix}original_purchase_value)"
-    return f"COALESCE({prefix}original_purchase_value, {prefix}purchase_value, {prefix}broker_purchase_value)"
+        price = f"COALESCE({prefix}broker_price_paid, {prefix}price_paid, {prefix}original_price_paid)"
+        stored = f"COALESCE({prefix}broker_purchase_value, {prefix}purchase_value, {prefix}original_purchase_value)"
+    else:
+        price = f"COALESCE({prefix}original_price_paid, {prefix}price_paid, {prefix}broker_price_paid)"
+        stored = f"COALESCE({prefix}original_purchase_value, {prefix}purchase_value, {prefix}broker_purchase_value)"
+    # Prefer quantity x per-share basis: the stored *_purchase_value total is
+    # frozen at first import and goes stale when the share count later changes.
+    return (f"CASE WHEN {price} IS NOT NULL AND {prefix}quantity IS NOT NULL "
+            f"THEN ROUND({prefix}quantity * {price}, 2) ELSE {stored} END")
 
 
 def _first_not_none(*values):
@@ -466,6 +498,18 @@ def _first_not_none(*values):
 
 def _basis_fallback_total(row, mode=None):
     mode = mode or _basis_mode()
+    # The per-share basis price is refreshed to track the current position, but
+    # the stored *_purchase_value total is frozen at first import and goes stale
+    # when the share count later changes (e.g. partial sells), producing a wrong
+    # gain/loss. Derive the total from quantity x per-share price when possible,
+    # falling back to the stored total only when the price is unavailable.
+    price = _basis_fallback_price(row, mode)
+    qty = row.get("quantity")
+    if price is not None and qty is not None:
+        try:
+            return round(float(qty) * float(price), 2)
+        except (TypeError, ValueError):
+            pass
     if mode == "broker_adjusted":
         return _first_not_none(row.get("broker_purchase_value"), row.get("purchase_value"), row.get("original_purchase_value"))
     return _first_not_none(row.get("original_purchase_value"), row.get("purchase_value"), row.get("broker_purchase_value"))
@@ -8504,10 +8548,10 @@ def list_holdings():
                    CASE WHEN SUM(a.quantity) > 0 THEN SUM({basis_total}) / SUM(a.quantity) ELSE 0 END as price_paid,
                    MAX(a.current_price) as current_price,
                    SUM({basis_total}) as purchase_value,
-                   CASE WHEN SUM(a.quantity) > 0 THEN SUM(COALESCE(a.original_purchase_value, a.purchase_value)) / SUM(a.quantity) ELSE 0 END as original_price_paid,
-                   SUM(COALESCE(a.original_purchase_value, a.purchase_value)) as original_purchase_value,
-                   CASE WHEN SUM(a.quantity) > 0 THEN SUM(COALESCE(a.broker_purchase_value, a.purchase_value)) / SUM(a.quantity) ELSE 0 END as broker_price_paid,
-                   SUM(COALESCE(a.broker_purchase_value, a.purchase_value)) as broker_purchase_value,
+                   CASE WHEN SUM(a.quantity) > 0 THEN SUM(a.quantity * COALESCE(a.original_price_paid, a.price_paid)) / SUM(a.quantity) ELSE 0 END as original_price_paid,
+                   SUM(a.quantity * COALESCE(a.original_price_paid, a.price_paid)) as original_purchase_value,
+                   CASE WHEN SUM(a.quantity) > 0 THEN SUM(a.quantity * COALESCE(a.broker_price_paid, a.price_paid)) / SUM(a.quantity) ELSE 0 END as broker_price_paid,
+                   SUM(a.quantity * COALESCE(a.broker_price_paid, a.price_paid)) as broker_purchase_value,
                    SUM(a.current_value) as current_value,
                    SUM(a.current_value) - SUM({basis_total}) as gain_or_loss,
                    CASE WHEN SUM({basis_total}) > 0 THEN (SUM(a.current_value) - SUM({basis_total})) / SUM({basis_total}) ELSE 0 END as gain_or_loss_percentage,
@@ -18288,6 +18332,14 @@ def etf_screen_data():
     if not ticker:
         return jsonify(error="ticker is required"), 400
 
+    # Serve a recent identical request straight from cache. The query string
+    # (including the Refresh button's nonce) is the key, so a manual refresh
+    # naturally misses and re-fetches.
+    _resp_cache_key = request.full_path
+    _cached_resp = _cache_get(_ETF_SCREEN_DATA_CACHE, _resp_cache_key, _ETF_SCREEN_DATA_TTL_SEC)
+    if _cached_resp is not None:
+        return jsonify(_cached_resp)
+
     def _end_exclusive(end_str):
         """yfinance `end` is exclusive — bump by one day to include the end date."""
         try:
@@ -18355,7 +18407,7 @@ def etf_screen_data():
                     "volume": int(row["Volume"]),
                 })
 
-            info = tk.info or {}
+            info = _cached_yf_info(tk, dl_ticker)
 
             # Fetch ATM implied volatility from nearest options expiration
             iv_data = None
@@ -18393,35 +18445,48 @@ def etf_screen_data():
             except Exception:
                 pass  # Options data not available for all tickers
 
-            return jsonify(
-                ticker=dl_ticker,
-                requested_ticker=ticker,
-                name=info.get("longName") or info.get("shortName") or ticker,
-                records=records,
-                iv=iv_data,
-            )
+            _ohlcv_payload = {
+                "ticker": dl_ticker,
+                "requested_ticker": ticker,
+                "name": info.get("longName") or info.get("shortName") or ticker,
+                "records": records,
+                "iv": iv_data,
+            }
+            _cache_set(_ETF_SCREEN_DATA_CACHE, _resp_cache_key, _ohlcv_payload)
+            return jsonify(_ohlcv_payload)
         except Exception as e:
             return jsonify(error=str(e)), 500
 
     # ---------- Return modes ----------
     frac = reinvest_pct / 100.0
     try:
-        # Download price data (unadjusted)
-        price_df = _chunked_yf_download(yahoo_symbols, interval=interval, auto_adjust=False, progress=False, **_range_kwargs())
+        # Download daily data with dividends for return calcs.
+        div_df = _chunked_yf_download(yahoo_symbols, interval="1d", auto_adjust=False, actions=True, progress=False, **_range_kwargs())
+
+        # Unadjusted price frame. For daily intervals it's the same download as
+        # div_df (which already carries OHLCV alongside Dividends), so reuse it
+        # instead of fetching the same data twice.
+        if interval == "1d":
+            price_df = div_df
+        else:
+            price_df = _chunked_yf_download(yahoo_symbols, interval=interval, auto_adjust=False, progress=False, **_range_kwargs())
         if price_df.empty:
             return jsonify(error="No price data found"), 404
 
-        # Download daily data with dividends for return calcs
-        div_df = _chunked_yf_download(yahoo_symbols, interval="1d", auto_adjust=False, actions=True, progress=False, **_range_kwargs())
-
         # Benchmark daily closes for computing beta when Yahoo lacks it. We pull
         # both SPY and QQQ and let each fund regress against whichever it tracks
-        # most closely (Nasdaq-like funds -> QQQ, broad funds -> SPY).
+        # most closely (Nasdaq-like funds -> QQQ, broad funds -> SPY). The
+        # benchmark frame is identical across all requests for a given window,
+        # so cache it rather than re-downloading per ticker/request.
         BETA_BENCHMARKS = ["SPY", "QQQ"]
-        try:
-            bench_df = _chunked_yf_download(BETA_BENCHMARKS, interval="1d", auto_adjust=False, progress=False, **_range_kwargs())
-        except Exception:
-            bench_df = pd.DataFrame()
+        _bench_key = tuple(sorted(_range_kwargs().items()))
+        bench_df = _cache_get(_ETF_SCREEN_BENCH_CACHE, _bench_key, _ETF_SCREEN_BENCH_TTL_SEC)
+        if bench_df is None:
+            try:
+                bench_df = _chunked_yf_download(BETA_BENCHMARKS, interval="1d", auto_adjust=False, progress=False, **_range_kwargs())
+            except Exception:
+                bench_df = pd.DataFrame()
+            _cache_set(_ETF_SCREEN_BENCH_CACHE, _bench_key, bench_df)
 
         result = {
             "mode": mode,
@@ -18630,7 +18695,7 @@ def etf_screen_data():
 
             try:
                 tk_obj = yf.Ticker(dl_sym)
-                info = tk_obj.info or {}
+                info = _cached_yf_info(tk_obj, dl_sym)
             except Exception:
                 tk_obj = None
                 info = {}
@@ -18814,6 +18879,7 @@ def etf_screen_data():
                 "sortino": sortino,
             }
 
+        _cache_set(_ETF_SCREEN_DATA_CACHE, _resp_cache_key, result)
         return jsonify(result)
     except Exception as e:
         return jsonify(error=str(e)), 500

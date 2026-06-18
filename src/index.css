@@ -3724,7 +3724,7 @@ label {
 }
 
 /* ── Watchlist ──────────────────────────────────────────────────────────────── */
-.wl-page { padding: 1.5rem 2rem; display: flex; flex-direction: column; min-height: 100vh; }
+.wl-page { padding: 1.5rem 2rem; display: flex; flex-direction: column; height: 100vh; min-height: 0; overflow: hidden; }
 .wl-form-row { display: flex; gap: 0.5rem; align-items: flex-end; margin-bottom: 1rem; flex-wrap: wrap; }
 .wl-label { font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 2px; }
 .wl-input {
