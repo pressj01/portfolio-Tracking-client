@@ -3354,6 +3354,16 @@ label {
   font-size: 0.82rem;
   font-weight: 700;
 }
+.etfc-est-yield {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.etfc-est-yield strong {
+  color: var(--text);
+  font-weight: 800;
+}
 .etfc-distribution-empty {
   min-height: 150px;
   margin: 0.5rem 1rem 1rem;

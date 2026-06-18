@@ -18275,6 +18275,16 @@ def etf_screen_data():
     end = request.args.get("end", "").strip()
     use_range = bool(start and end)
 
+    # yfinance's `period` only accepts a fixed set of strings (1mo/3mo/6mo/ytd/
+    # 1y/2y/5y/10y/max). 3Y and 4Y aren't supported, so translate them into an
+    # explicit date window and let the existing range machinery handle them.
+    if not use_range and period in ("3y", "4y"):
+        years = int(period[0])
+        today = datetime.date.today()
+        start = (today - datetime.timedelta(days=365 * years)).strftime("%Y-%m-%d")
+        end = today.strftime("%Y-%m-%d")
+        use_range = True
+
     if not ticker:
         return jsonify(error="ticker is required"), 400
 

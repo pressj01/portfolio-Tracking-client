@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Plot from '../components/ThemedPlot'
 import { useProfileFetch } from '../context/ProfileContext'
 import DistributionHistoryChart from '../components/DistributionHistoryChart'
+import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
@@ -13,6 +14,8 @@ const PERIODS = [
   { value: 'ytd', label: 'YTD' },
   { value: '1y', label: '1Y' },
   { value: '2y', label: '2Y' },
+  { value: '3y', label: '3Y' },
+  { value: '4y', label: '4Y' },
   { value: '5y', label: '5Y' },
   { value: '10y', label: '10Y' },
   { value: 'max', label: 'MAX' },
@@ -596,9 +599,16 @@ export default function StockComparer() {
     return symbols.map(sym => {
       const profile = profiles[sym] || {}
       const research = stockData[sym] || {}
+      // Prefer the fund-site expected yield, then the distribution-derived
+      // approx yield, before Yahoo's reported dividend_yield (unreliable for
+      // option-income funds — e.g. SPYI shows 0.50% vs a real ~12%).
+      const bestYield = profile.expected_dividend_yield
+        ?? approxYieldFromCurrentDistributions(profile)
+        ?? profile.dividend_yield
       return {
         symbol: sym,
         ...profile,
+        dividend_yield: bestYield,
         market_cap: research.market_cap || profile.assets,
         forward_pe: research.forward_pe,
         peg_ratio: research.peg_ratio,
@@ -902,6 +912,7 @@ export default function StockComparer() {
             onTogglePctMode={() => { setDistPctMode(v => !v); setDistAnnual(false) }}
             onToggleAnnual={() => setDistAnnual(v => !v)}
             emptyLabel="this stock"
+            showEstimatedYield
             toolbarStart={
               <div className="etfc-distribution-tabs" aria-label="Distribution history ticker">
                 {symbols.map((sym, idx) => (

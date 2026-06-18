@@ -3,6 +3,7 @@ import Plot from '../components/ThemedPlot'
 import { useProfileFetch } from '../context/ProfileContext'
 import DistributionHistoryChart from '../components/DistributionHistoryChart'
 import { returnVsYield } from '../utils/returnVsYield'
+import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
@@ -14,6 +15,8 @@ const PERIODS = [
   { value: 'ytd', label: 'YTD' },
   { value: '1y', label: '1Y' },
   { value: '2y', label: '2Y' },
+  { value: '3y', label: '3Y' },
+  { value: '4y', label: '4Y' },
   { value: '5y', label: '5Y' },
   { value: '10y', label: '10Y' },
   { value: 'max', label: 'MAX' },
@@ -111,50 +114,6 @@ function yieldPct(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return '-'
   return `${n.toFixed(2)}%`
-}
-
-function annualDistributionMultiplier(frequency, history) {
-  const freq = String(frequency || '').trim().toLowerCase()
-  if (['w', 'weekly', '52'].includes(freq)) return 52
-  if (['m', 'monthly', '12'].includes(freq)) return 12
-  if (['q', 'quarterly', '4'].includes(freq)) return 4
-  if (['sa', 'semi-annually', 'semiannually', 'semiannual', 'semi-annual', '2'].includes(freq)) return 2
-  if (['a', 'annual', 'annually', 'yearly', '1'].includes(freq)) return 1
-
-  const dated = (Array.isArray(history) ? history : [])
-    .map(item => ({ ...item, dateValue: new Date(item?.date).getTime() }))
-    .filter(item => Number.isFinite(item.dateValue))
-    .sort((a, b) => b.dateValue - a.dateValue)
-  if (dated.length < 2) return 4
-  const gapDays = Math.abs(dated[0].dateValue - dated[1].dateValue) / (24 * 60 * 60 * 1000)
-  if (gapDays <= 10) return 52
-  if (gapDays <= 45) return 12
-  if (gapDays <= 115) return 4
-  if (gapDays <= 240) return 2
-  return 1
-}
-
-function approxYieldFromCurrentDistributions(profile) {
-  const price = Number(profile?.price)
-  if (!Number.isFinite(price) || price <= 0) return null
-
-  const latest = (Array.isArray(profile?.distribution_history) ? profile.distribution_history : [])
-    .map(item => ({
-      amount: Number(item?.amount),
-      dateValue: new Date(item?.date).getTime(),
-    }))
-    .filter(item => Number.isFinite(item.amount) && item.amount > 0)
-    .sort((a, b) => {
-      const aDate = Number.isFinite(a.dateValue) ? a.dateValue : 0
-      const bDate = Number.isFinite(b.dateValue) ? b.dateValue : 0
-      return bDate - aDate
-    })
-    .slice(0, 10)
-
-  if (!latest.length) return null
-  const avgDistribution = latest.reduce((sum, item) => sum + item.amount, 0) / latest.length
-  const multiplier = annualDistributionMultiplier(profile?.distribution_frequency, profile?.distribution_history)
-  return (avgDistribution * multiplier / price) * 100
 }
 
 function normalize(value) {
@@ -573,12 +532,19 @@ export default function ETFComparer() {
       const yldRaw = profiles[sym]?.expected_dividend_yield ?? profiles[sym]?.dividend_yield
       const yldPct = yldRaw != null ? (Math.abs(yldRaw) <= 1 ? yldRaw * 100 : yldRaw) : null
       const rvy = returnVsYield(rtn1y, yldPct)
+      // Yahoo's reported dividend_yield is unreliable for option-income ETFs
+      // (e.g. SPYI shows 0.50% vs a real ~12%). Prefer the fund-site expected
+      // yield, then the distribution-derived approx yield, before falling back.
+      const bestYield = profiles[sym]?.expected_dividend_yield
+        ?? approxYieldFromCurrentDistributions(profiles[sym])
+        ?? profiles[sym]?.dividend_yield
       return {
         symbol: sym,
         ...(profiles[sym] || {}),
         return_1y: rtn1y,
         max_drawdown: profiles[sym]?.max_drawdown ?? stats[sym]?.max_drawdown,
         ret_vs_yld: rvy,
+        dividend_yield: bestYield,
       }
     })
   }, [data, symbols])
@@ -816,6 +782,7 @@ export default function ETFComparer() {
             onTogglePctMode={() => { setDistPctMode(v => !v); setDistAnnual(false) }}
             onToggleAnnual={() => setDistAnnual(v => !v)}
             emptyLabel="this ETF"
+            showEstimatedYield
             toolbarStart={
               <div className="etfc-distribution-tabs" aria-label="Distribution history ticker">
                 {symbols.map((sym, idx) => (
