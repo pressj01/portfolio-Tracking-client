@@ -248,6 +248,7 @@ export default function StockComparer() {
   const loadSeqRef = useRef(0)
   const reinvestRef = useRef(reinvest)
   const [stockData, setStockData] = useState({})
+  const stockDataLoadedRef = useRef({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
@@ -346,16 +347,23 @@ export default function StockComparer() {
 
   useEffect(() => {
     const symbols = tickers.map(normalize).filter(Boolean)
+    // Track in-flight/loaded symbols in a ref (not `stockData` state) so this
+    // effect does NOT re-run every time a sibling symbol resolves. Depending on
+    // `stockData` here would re-fire a duplicate request for every symbol still
+    // in flight each time another one lands. The ref is cleared on failure so a
+    // later ticker change can retry.
     symbols.forEach(sym => {
-      if (stockData[sym]) return
+      if (stockDataLoadedRef.current[sym]) return
+      stockDataLoadedRef.current[sym] = true
       pf(`/api/security-research/stock/${encodeURIComponent(sym)}`)
         .then(r => r.json())
         .then(d => {
           if (!d.error) setStockData(prev => ({ ...prev, [sym]: d }))
+          else delete stockDataLoadedRef.current[sym]
         })
-        .catch(() => {})
+        .catch(() => { delete stockDataLoadedRef.current[sym] })
     })
-  }, [tickers, stockData, pf])
+  }, [tickers, pf])
 
   useEffect(() => {
     const requestedSymbols = tickers.map(normalize).filter(Boolean)

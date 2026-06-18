@@ -180,7 +180,7 @@ export default function ETFComparer() {
   const loadSeqRef = useRef(0)
   const reinvestRef = useRef(reinvest)
   const [holdings, setHoldings] = useState({})
-  const [holdingsLoadedNonce, setHoldingsLoadedNonce] = useState({})
+  const holdingsLoadedRef = useRef({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
@@ -280,23 +280,30 @@ export default function ETFComparer() {
 
   useEffect(() => {
     const symbols = tickers.map(normalize).filter(Boolean)
-    let cancelled = false
+    // `active` is only flipped off when the inputs below genuinely change
+    // (new tickers / manual refresh). It must NOT depend on per-symbol load
+    // state — otherwise a fast sibling (e.g. SGOV) completing would cancel a
+    // slower in-flight fetch (e.g. CSHI's ~2.6s NEOS scrape) and drop its
+    // successful result, leaving "No holdings data available".
+    let active = true
     symbols.forEach(sym => {
-      if (holdingsLoadedNonce[sym] === refreshNonce) return
+      if (holdingsLoadedRef.current[sym] === refreshNonce) return
       pf(`/api/security-research/etf/${encodeURIComponent(sym)}?refresh=${refreshNonce}`)
         .then(r => r.json())
         .then(d => {
-          if (cancelled || d.error) return
+          if (!active || d.error) return
           const topHoldings = d.top_holdings || []
-          setHoldings(prev => ({ ...prev, [sym]: topHoldings }))
           if (topHoldings.length) {
-            setHoldingsLoadedNonce(prev => ({ ...prev, [sym]: refreshNonce }))
+            holdingsLoadedRef.current[sym] = refreshNonce
+            setHoldings(prev => ({ ...prev, [sym]: topHoldings }))
+          } else {
+            setHoldings(prev => ({ ...prev, [sym]: [] }))
           }
         })
         .catch(() => {})
     })
-    return () => { cancelled = true }
-  }, [tickers, holdingsLoadedNonce, pf, refreshNonce])
+    return () => { active = false }
+  }, [tickers, pf, refreshNonce])
 
   useEffect(() => {
     const requestedSymbols = tickers.map(normalize).filter(Boolean)
