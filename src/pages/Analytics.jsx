@@ -585,6 +585,55 @@ export default function Analytics() {
                 </div>
               </details>
 
+              {/* Hidden explanation: NAV Erosion Ratio */}
+              <details style={{ marginBottom: '0.75rem', borderLeft: '3px solid var(--p-ffb74d)', background: 'var(--p-0a1628)', borderRadius: '4px', padding: '0.5rem 0.75rem' }}>
+                <summary style={{ cursor: 'pointer', color: 'var(--p-ffb74d)', fontWeight: 600, fontSize: '0.85rem' }}>
+                  What is the NAV Erosion Ratio? {'ⓘ'}
+                </summary>
+                <div style={{ marginTop: '0.6rem', fontSize: '0.8rem', color: 'var(--text-dim)', lineHeight: 1.55 }}>
+                  <p style={{ margin: '0 0 0.6rem' }}>
+                    <strong style={{ color: 'var(--text-strong)' }}>What it is.</strong> For high-distribution funds, it answers one
+                    question: <em>how much of the yield was paid by eroding the fund's own price (NAV) rather than by real returns?</em>
+                    It is the share of trailing-12-month distributions that was effectively funded by price decay. Lower is better —
+                    <strong> 0</strong> means the price held up (the distribution was genuine), while <strong>1.0</strong> means the
+                    price fell by an amount equal to the entire year's distributions (the "yield" was largely return of capital).
+                  </p>
+
+                  <p style={{ margin: '0 0 0.4rem' }}>
+                    <strong style={{ color: 'var(--text-strong)' }}>How it's computed.</strong>
+                  </p>
+                  <div style={{ margin: '0 0 0.6rem', padding: '0.4rem 0.6rem', background: 'var(--p-0b0b1c)', borderRadius: 4, border: '1px solid var(--p-2a3a4e)', fontFamily: 'monospace', fontSize: '0.78rem', color: 'var(--text-strong)' }}>
+                    NAV Erosion Ratio = benchmark-adjusted price decline ÷ TTM distribution yield
+                  </div>
+                  <ol style={{ margin: '0 0 0.6rem', paddingLeft: '1.1rem' }}>
+                    <li><strong>Price decline</strong> — the fund's 1-year price (NAV) change, using unadjusted close (so distributions are not added back).</li>
+                    <li><strong>Benchmark gate</strong> — each fund is matched to a benchmark (e.g. an option-income ETF vs its underlying index). If the price <em>rose</em>, or the <em>benchmark also fell</em> over the same window, erosion counts as <strong>0</strong> — a broad market drop isn't treated as structural NAV erosion. Only a fund-specific decline (price down while the benchmark held up) is counted.</li>
+                    <li><strong>TTM distribution yield</strong> — trailing-12-month distributions per share ÷ current price.</li>
+                    <li><strong>Ratio</strong> — the fund-specific decline divided by that yield.</li>
+                  </ol>
+                  <p style={{ margin: '0 0 0.6rem' }}>
+                    The <strong>portfolio</strong> value is the dollar-weighted aggregate: total erosion dollars ÷ total distribution
+                    dollars across holdings.
+                  </p>
+
+                  <p style={{ margin: '0 0 0.4rem' }}>
+                    <strong style={{ color: 'var(--text-strong)' }}>Severity bands.</strong> {'≤'}0.25 ={' '}
+                    <span style={{ color: '#4dff91', fontWeight: 600 }}>Low</span>, {'≤'}0.75 ={' '}
+                    <span style={{ color: '#ffb300', fontWeight: 600 }}>Medium</span>, {'>'}0.75 ={' '}
+                    <span style={{ color: '#ff6b6b', fontWeight: 600 }}>High</span>. Severity is forced to{' '}
+                    <span style={{ color: '#ff6b6b', fontWeight: 600 }}>High</span> for a 50%+ price collapse or a 5%+ ending share deficit.
+                  </p>
+
+                  <p style={{ margin: 0 }}>
+                    <strong style={{ color: 'var(--text-strong)' }}>Significance.</strong> A fund can post an eye-catching yield while
+                    quietly returning your own capital — the NAV bleeds down a little with each payout. This ratio flags that:
+                    a high reading means the distribution is being substantially financed by NAV erosion, so the headline yield
+                    overstates the real, sustainable income. It is benchmark-adjusted, so a fund isn't penalised for falling alongside
+                    a down market — only for losing value its peers didn't.
+                  </p>
+                </div>
+              </details>
+
               <div style={{ maxHeight: '600px', overflow: 'auto', borderRadius: '4px' }}>
               <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem', width: '100%' }}>
                 <thead>
