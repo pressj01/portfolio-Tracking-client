@@ -4241,6 +4241,31 @@ _DIV_CALC_FREQ_MAP = {
 def _div_calc_infer_frequency(divs):
     if divs is None or divs.empty:
         return "Q"
+
+    # Prefer the cadence of the latest payments over the count observed during
+    # the trailing year. Funds can change distribution schedules mid-year (OVL
+    # moved from quarterly to monthly in January 2026), which makes a simple
+    # annual count keep reporting the old frequency until nearly a year later.
+    # Three recent gaps are enough to establish the new cadence, while their
+    # median keeps a single delayed/early payment from changing the result.
+    positive = divs[divs > 0].dropna().sort_index()
+    recent_dates = list(dict.fromkeys(positive.index))[-4:]
+    if len(recent_dates) >= 4:
+        gaps = sorted(
+            abs((recent_dates[i] - recent_dates[i - 1]).total_seconds()) / 86400.0
+            for i in range(1, len(recent_dates))
+        )
+        median_gap = gaps[len(gaps) // 2]
+        if median_gap <= 10:
+            return "W"
+        if median_gap <= 45:
+            return "M"
+        if median_gap <= 115:
+            return "Q"
+        if median_gap <= 240:
+            return "SA"
+        return "A"
+
     if divs.index.tz is not None:
         cutoff = pd.Timestamp.now(tz=divs.index.tz) - pd.Timedelta(days=365)
     else:
@@ -4287,6 +4312,22 @@ def _div_calc_annual_dividend(divs, freq_code):
             return ttm_div, ttm_div, "trailing_12_month"
 
         if len(pos) >= 2:
+            # A newly weekly/monthly fund may still contain years of payments
+            # from its former cadence. Average only the uninterrupted recent
+            # run that matches the inferred schedule; otherwise the old dates
+            # dilute both the payment frequency and the projected yield.
+            min_gap, max_gap = {"W": (3, 14), "M": (15, 45)}[freq_code]
+            run_start = len(pos) - 1
+            while run_start > 0:
+                gap_days = abs((pos.index[run_start] - pos.index[run_start - 1]).total_seconds()) / 86400.0
+                if not (min_gap <= gap_days <= max_gap):
+                    break
+                run_start -= 1
+            recent_run = pos.iloc[run_start:].tail(10)
+            if len(recent_run) >= 2:
+                annualized_avg = float(recent_run.mean()) * per_year
+                return annualized_avg, ttm_div, "annualized_recent_distributions"
+
             span_days = max(1, (pos.index[-1] - pos.index[0]).days)
             observed_payments_per_year = min(per_year, 365.0 / (span_days / (len(pos) - 1)))
             annualized_avg = float(pos.mean()) * observed_payments_per_year
