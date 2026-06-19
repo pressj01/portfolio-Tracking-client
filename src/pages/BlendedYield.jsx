@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import { API_BASE } from '../config'
+import { useProfileFetch } from '../context/ProfileContext'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
 
 // ── Default 2025 Federal Income Tax Brackets ──────────────────────
@@ -393,6 +394,30 @@ function inferLookupTaxType(ticker, name) {
   return 'TAXABLE'
 }
 
+// Resolve a ticker's name, distribution yield, and tax classification via the
+// live lookup endpoint, falling back to the built-in fund database.
+async function resolveFundData(sym, stateCode) {
+  const db = FUND_DB[sym]
+  let taxType = 'TAXABLE', name = '', yieldPct = 0
+  try {
+    const r = await fetch(`${API_BASE}/api/dividend-calc/lookup/${encodeURIComponent(sym)}`)
+    const d = await r.json()
+    if (!r.ok || d.error) throw new Error(d.error || 'Lookup failed')
+    name = d.name || db?.name || ''
+    yieldPct = Number(d.yield_pct || 0) || db?.yield || 0
+    taxType = db?.taxType || inferLookupTaxType(d.ticker || sym, name)
+  } catch {
+    if (db) {
+      name = db.name
+      yieldPct = db.yield
+      taxType = db.taxType
+    }
+  }
+  taxType = (taxType === 'MUNI_STATE' && db?.muniState && db.muniState !== stateCode)
+    ? 'MUNI_NAT' : taxType
+  return { name, yieldPct, taxType }
+}
+
 // ── Bracket Table Editor ──────────────────────────────────────────
 
 function BracketTable({ brackets, onChange }) {
@@ -453,12 +478,14 @@ function BracketTable({ brackets, onChange }) {
 let nextFundId = 1
 
 export default function BlendedYield() {
+  const pf = useProfileFetch()
   const [stateCode, setStateCode] = useState('CA')
   const [filing, setFiling] = useState('mfj')
   const [income, setIncome] = useState(150000)
   const [totalInvestment, setTotalInvestment] = useState(100000)
   const [funds, setFunds] = useState([])
   const [tickerInput, setTickerInput] = useState('')
+  const [loadingPortfolio, setLoadingPortfolio] = useState(false)
 
   // Bracket data (loaded from localStorage or defaults)
   const [bracketData, setBracketData] = useState(() => loadSavedBrackets() || defaultBracketData())
@@ -523,32 +550,52 @@ export default function BlendedYield() {
     const sym = (ticker || '').trim().toUpperCase()
     if (!sym) return
     if (funds.some(f => f.ticker === sym)) return
-    const db = FUND_DB[sym]
-    let taxType = 'TAXABLE', name = '', yieldPct = 0
-
-    try {
-      const r = await fetch(`${API_BASE}/api/dividend-calc/lookup/${encodeURIComponent(sym)}`)
-      const d = await r.json()
-      if (!r.ok || d.error) throw new Error(d.error || 'Lookup failed')
-      name = d.name || db?.name || ''
-      yieldPct = Number(d.yield_pct || 0) || db?.yield || 0
-      taxType = db?.taxType || inferLookupTaxType(d.ticker || sym, name)
-    } catch {
-      if (db) {
-        name = db.name
-        yieldPct = db.yield
-        taxType = db.taxType
-      }
-    }
-
-    taxType = (taxType === 'MUNI_STATE' && db?.muniState && db.muniState !== stateCode)
-      ? 'MUNI_NAT' : taxType
+    const { name, yieldPct, taxType } = await resolveFundData(sym, stateCode)
     setFunds(prev => [...prev, {
       id: nextFundId++, ticker: sym, name, yieldPct, taxType,
       allocPct: 0, allocDollar: 0,
       color: ALLOC_COLORS[prev.length % ALLOC_COLORS.length],
     }])
   }, [funds, stateCode])
+
+  // Seed the calculator with the user's actual current holdings (respects the
+  // selected profile/aggregate) so they can add/remove funds from there.
+  const loadCurrentPortfolio = useCallback(async () => {
+    if (funds.length > 0 && !window.confirm('Replace the current funds with your live portfolio holdings?')) return
+    setLoadingPortfolio(true)
+    try {
+      const res = await pf('/api/portfolio-tester/holdings')
+      const data = await res.json()
+      const rows = (data.holdings || []).filter(h => (h.current_value || 0) > 0)
+      if (!rows.length) {
+        window.alert('No current holdings found for the selected portfolio.')
+        return
+      }
+      const total = rows.reduce((s, h) => s + (h.current_value || 0), 0)
+      const resolved = await Promise.all(
+        rows.map(h => resolveFundData((h.ticker || '').toUpperCase(), stateCode))
+      )
+      const newFunds = rows.map((h, i) => {
+        const dollars = Math.round(h.current_value || 0)
+        return {
+          id: nextFundId++,
+          ticker: (h.ticker || '').toUpperCase(),
+          name: resolved[i].name,
+          yieldPct: resolved[i].yieldPct,
+          taxType: resolved[i].taxType,
+          allocDollar: dollars,
+          allocPct: total > 0 ? Number((dollars / total * 100).toFixed(2)) : 0,
+          color: ALLOC_COLORS[i % ALLOC_COLORS.length],
+        }
+      })
+      setTotalInvestment(Math.round(total))
+      setFunds(newFunds)
+    } catch (e) {
+      console.error(e)
+      window.alert('Failed to load current portfolio.')
+    }
+    setLoadingPortfolio(false)
+  }, [funds.length, pf, stateCode])
 
   const removeFund = useCallback((id) => {
     setFunds(prev => prev.filter(f => f.id !== id))
@@ -744,6 +791,9 @@ export default function BlendedYield() {
           onChange={e => setTickerInput(e.target.value.toUpperCase())}
           placeholder="Enter ticker (e.g. SGOV, JEPI, MUB)" />
         <button type="submit" className="btn btn-secondary">Add Fund</button>
+        <button type="button" className="btn btn-primary" onClick={loadCurrentPortfolio} disabled={loadingPortfolio}>
+          {loadingPortfolio ? 'Loading…' : 'Load My Portfolio'}
+        </button>
         {funds.length > 1 && (
           <button type="button" className="btn btn-secondary" onClick={splitEqually}>Split Equally</button>
         )}
