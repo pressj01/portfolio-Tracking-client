@@ -4469,14 +4469,35 @@ def _div_calc_yield_options(ticker, name, info, divs, freq_code, price, annual_d
 
 
 def _div_calc_recommended_yield_basis(ticker, name, options, fallback_source):
-    keys = {o.get("key") for o in options}
+    by_key = {o.get("key"): o for o in options}
+    keys = set(by_key)
     is_supported_income_family = _match_fund_family(ticker, name or "") is not None
     high_yield = any((o.get("yield_pct") or 0) >= 20 for o in options)
 
+    def yld(key):
+        o = by_key.get(key)
+        return (o.get("yield_pct") or 0) if o else 0
+
+    # A provider run-rate that is wildly below the fund's actual run-rate /
+    # trailing payouts is almost always stale provider data (e.g. FEPI once
+    # reported ~5.8% while its current run-rate and TTM paid were both ~25%).
+    # Don't let such a figure win the recommendation.
+    def provider_is_reliable(key):
+        prov = yld(key)
+        if prov <= 0:
+            return False
+        reference = max(yld("current_run_rate"), yld("ttm_paid"))
+        if reference <= 0:
+            return True
+        return prov >= 0.6 * reference
+
     if is_supported_income_family or high_yield:
         for key in ("provider_run_rate", "provider_rate", "current_run_rate", "ttm_paid", "yahoo_quote"):
-            if key in keys:
-                return key
+            if key not in keys:
+                continue
+            if key in ("provider_run_rate", "provider_rate") and not provider_is_reliable(key):
+                continue
+            return key
 
     for key in (fallback_source, "ttm_paid", "current_run_rate", "yahoo_quote", "provider_run_rate", "provider_rate"):
         if key in keys:

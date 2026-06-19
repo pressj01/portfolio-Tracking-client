@@ -371,6 +371,7 @@ function computeFundTax(yieldPct, taxType, fedRate, ltcgRate, stateRate, allMuni
 const fmtMoney = v => formatMoneyWhole(v)
 const fmtMoney2 = v => formatMoney(v)
 const fmtPct = (v, d = 2) => (v == null || isNaN(v)) ? '—' : Number(v).toFixed(d) + '%'
+const fmtShares = v => (v == null || isNaN(v) || v === 0) ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })
 const fmtRate = v => fmtPct(v * 100, 1)
 const fmtThreshold = v => formatMoneyWhole(v)
 
@@ -398,13 +399,14 @@ function inferLookupTaxType(ticker, name) {
 // live lookup endpoint, falling back to the built-in fund database.
 async function resolveFundData(sym, stateCode) {
   const db = FUND_DB[sym]
-  let taxType = 'TAXABLE', name = '', yieldPct = 0
+  let taxType = 'TAXABLE', name = '', yieldPct = 0, price = 0
   try {
     const r = await fetch(`${API_BASE}/api/dividend-calc/lookup/${encodeURIComponent(sym)}`)
     const d = await r.json()
     if (!r.ok || d.error) throw new Error(d.error || 'Lookup failed')
     name = d.name || db?.name || ''
     yieldPct = Number(d.yield_pct || 0) || db?.yield || 0
+    price = Number(d.price || 0) || 0
     taxType = db?.taxType || inferLookupTaxType(d.ticker || sym, name)
   } catch {
     if (db) {
@@ -415,7 +417,7 @@ async function resolveFundData(sym, stateCode) {
   }
   taxType = (taxType === 'MUNI_STATE' && db?.muniState && db.muniState !== stateCode)
     ? 'MUNI_NAT' : taxType
-  return { name, yieldPct, taxType }
+  return { name, yieldPct, taxType, price }
 }
 
 // ── Bracket Table Editor ──────────────────────────────────────────
@@ -550,9 +552,9 @@ export default function BlendedYield() {
     const sym = (ticker || '').trim().toUpperCase()
     if (!sym) return
     if (funds.some(f => f.ticker === sym)) return
-    const { name, yieldPct, taxType } = await resolveFundData(sym, stateCode)
+    const { name, yieldPct, taxType, price } = await resolveFundData(sym, stateCode)
     setFunds(prev => [...prev, {
-      id: nextFundId++, ticker: sym, name, yieldPct, taxType,
+      id: nextFundId++, ticker: sym, name, yieldPct, taxType, price,
       allocPct: 0, allocDollar: 0,
       color: ALLOC_COLORS[prev.length % ALLOC_COLORS.length],
     }])
@@ -583,6 +585,7 @@ export default function BlendedYield() {
           name: resolved[i].name,
           yieldPct: resolved[i].yieldPct,
           taxType: resolved[i].taxType,
+          price: resolved[i].price,
           allocDollar: dollars,
           allocPct: total > 0 ? Number((dollars / total * 100).toFixed(2)) : 0,
           color: ALLOC_COLORS[i % ALLOC_COLORS.length],
@@ -635,20 +638,22 @@ export default function BlendedYield() {
     const m = computeFundTax(f.yieldPct, f.taxType, fedRate, ltcgRate, stateRate, state.allMuniExempt)
     const grossIncome = (f.allocDollar || 0) * (f.yieldPct || 0) / 100
     const netIncome = (f.allocDollar || 0) * (m.aty || 0) / 100
-    return { ...f, ...m, grossIncome, netIncome }
+    const shares = f.price > 0 ? (f.allocDollar || 0) / f.price : 0
+    return { ...f, ...m, grossIncome, netIncome, shares }
   }), [funds, fedRate, ltcgRate, stateRate, state.allMuniExempt])
 
   const portfolio = useMemo(() => {
     const totalAllocPct = fundMetrics.reduce((s, f) => s + (Number(f.allocPct) || 0), 0)
     const totalGrossIncome = fundMetrics.reduce((s, f) => s + f.grossIncome, 0)
     const totalNetIncome = fundMetrics.reduce((s, f) => s + f.netIncome, 0)
+    const totalShares = fundMetrics.reduce((s, f) => s + (f.shares || 0), 0)
     let blendedTEY = 0, blendedATY = 0, blendedGross = 0
     if (totalAllocPct > 0) {
       blendedTEY = fundMetrics.reduce((s, f) => s + f.tey * (f.allocPct || 0), 0) / totalAllocPct
       blendedATY = fundMetrics.reduce((s, f) => s + f.aty * (f.allocPct || 0), 0) / totalAllocPct
       blendedGross = fundMetrics.reduce((s, f) => s + f.yieldPct * (f.allocPct || 0), 0) / totalAllocPct
     }
-    return { totalAllocPct, totalGrossIncome, totalNetIncome, blendedTEY, blendedATY, blendedGross }
+    return { totalAllocPct, totalGrossIncome, totalNetIncome, totalShares, blendedTEY, blendedATY, blendedGross }
   }, [fundMetrics])
 
   const handleAdd = async (e) => { e?.preventDefault(); const sym = tickerInput; setTickerInput(''); await addFund(sym) }
@@ -944,16 +949,17 @@ export default function BlendedYield() {
             <table className="by-table">
               <thead>
                 <tr>
-                  <th>Fund</th>
-                  <th>Yield</th>
-                  <th>Tax Type</th>
-                  <th>Tax Rate</th>
-                  <th>ATY</th>
-                  <th>TEY</th>
-                  <th>Alloc %</th>
-                  <th>Allocation</th>
-                  <th>Annual Income</th>
-                  <th>After-Tax</th>
+                  <th title="Fund ticker symbol and name">Fund</th>
+                  <th title="Stated distribution (gross) yield, before any taxes">Yield</th>
+                  <th title="How this fund's distributions are taxed (e.g. fully taxable, treasury, municipal, return of capital, qualified/LTCG)">Tax Type</th>
+                  <th title="Effective tax rate applied to this fund's distributions, based on your tax profile">Tax Rate</th>
+                  <th title="After-Tax Yield — the yield you actually keep after taxes on this fund's distributions">ATY</th>
+                  <th title="Tax-Equivalent Yield — the gross yield a fully-taxable fund would need to match this fund's after-tax yield">TEY</th>
+                  <th title="This fund's share of the total portfolio, as a percent">Alloc %</th>
+                  <th title="Dollar amount allocated to this fund">Allocation</th>
+                  <th title="Estimated number of shares (allocation ÷ latest share price)">Shares</th>
+                  <th title="Estimated gross annual income (allocation × yield), before taxes">Annual Income</th>
+                  <th title="Estimated annual income from this fund after taxes">After-Tax</th>
                 </tr>
               </thead>
               <tbody>
@@ -970,6 +976,7 @@ export default function BlendedYield() {
                     <td className="by-tey-cell">{fmtPct(f.tey)}</td>
                     <td>{fmtPct(f.allocPct, 1)}</td>
                     <td>{fmtMoney(f.allocDollar)}</td>
+                    <td>{fmtShares(f.shares)}</td>
                     <td>{fmtMoney2(f.grossIncome)}</td>
                     <td style={{ color: 'var(--pos)' }}>{fmtMoney2(f.netIncome)}</td>
                   </tr>
@@ -982,6 +989,7 @@ export default function BlendedYield() {
                   <td className="by-tey-cell"><strong>{fmtPct(portfolio.blendedTEY)}</strong></td>
                   <td><strong>{fmtPct(portfolio.totalAllocPct, 1)}</strong></td>
                   <td><strong>{fmtMoney(totalInvestment)}</strong></td>
+                  <td><strong>{fmtShares(portfolio.totalShares)}</strong></td>
                   <td><strong>{fmtMoney2(portfolio.totalGrossIncome)}</strong></td>
                   <td style={{ color: 'var(--pos)' }}><strong>{fmtMoney2(portfolio.totalNetIncome)}</strong></td>
                 </tr>
