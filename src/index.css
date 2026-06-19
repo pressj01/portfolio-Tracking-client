@@ -5137,13 +5137,14 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 
 .by-table-card {
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  padding: 1rem; overflow-x: auto; margin-bottom: 1rem;
+  padding: 0 1rem 1rem; overflow: auto; max-height: 70vh; margin-bottom: 1rem;
 }
 .by-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; white-space: nowrap; }
 .by-table th {
   text-align: left; padding: 8px 10px; color: var(--text-faint-2);
   font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
   border-bottom: 2px solid var(--border);
+  position: sticky; top: 0; z-index: 2; background: var(--surface);
 }
 .by-table td {
   padding: 8px 10px; color: var(--text-soft); border-bottom: 1px solid rgba(42,42,78,0.4);
