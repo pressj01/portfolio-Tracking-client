@@ -22864,11 +22864,17 @@ def _optimize_balanced(returns_df, yields, balance=0.5, current_weights=None, mi
 def _before_after_comparison(returns_df, opt_weights, bench_ret,
                               port_metrics_before, curr_income, opt_income,
                               current_weights=None, coverage_map=None,
-                              available_tickers=None):
+                              available_tickers=None,
+                              grade_returns_df=None, grade_tickers=None):
     """Compute before/after grade, income, coverage, and key metrics.
     Uses already-computed port_metrics and income values from the optimization branch
     so numbers match exactly what's shown in the optimization summary.
-    If weights are essentially unchanged, reuses before metrics to avoid grading noise."""
+    If weights are essentially unchanged, reuses before metrics to avoid grading noise.
+
+    When grade_returns_df / grade_tickers are supplied, the "after" grade is computed
+    on the SAME shared window and ticker universe as the "before" grade (port_metrics),
+    so the score delta reflects the weight change alone rather than a different
+    measurement window. Optimization still runs on the full ticker set."""
     import numpy as np
     from grading import grade_portfolio
     pm = port_metrics_before or {}
@@ -22909,7 +22915,16 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
         max_change = float(np.max(np.abs(np.array(opt_weights) - np.array(current_weights)))) * 100
         if max_change < 0.5:
             return {"before": before, "after": dict(before)}
-    pm_after = grade_portfolio(returns_df, opt_weights, bench_ret)
+    # Grade "after" on the same shared window / ticker universe as "before" when
+    # available, restricting & renormalizing the optimal weights to that universe.
+    if grade_returns_df is not None and grade_tickers and available_tickers is not None:
+        idx = {t: i for i, t in enumerate(available_tickers)}
+        sub_w = np.array([opt_weights[idx[t]] for t in grade_tickers if t in idx], dtype=float)
+        s = sub_w.sum()
+        sub_w = sub_w / s if s > 0 else np.ones(len(grade_tickers)) / max(len(grade_tickers), 1)
+        pm_after = grade_portfolio(grade_returns_df[grade_tickers], sub_w, bench_ret)
+    else:
+        pm_after = grade_portfolio(returns_df, opt_weights, bench_ret)
     return {
         "before": before,
         "after": {
@@ -23179,16 +23194,26 @@ def analytics_data():
 
     db_df = pd.DataFrame([dict(r) for r in db_rows]) if db_rows else pd.DataFrame(columns=["ticker", "current_value", "estim_payment_per_year"])
     total_val = float(db_df["current_value"].sum()) if not db_df.empty else 1
-    weight_map = {}
-    yield_map = {}
+    # A ticker can appear in several accounts/lots. Aggregate those rows before
+    # calculating analytics weights; assigning directly here used to keep only
+    # the final row for a ticker, which understated its weight and income.
+    value_map = {}
     income_map = {}
     for _, r in db_df.iterrows():
         t = r["ticker"]
-        weight_map[t] = float(r["current_value"]) / total_val if total_val > 0 else 0
-        cv = float(r["current_value"]) if r["current_value"] and float(r["current_value"]) > 0 else 1
+        cv = float(r["current_value"]) if pd.notna(r.get("current_value")) else 0
         ep = float(r["estim_payment_per_year"]) if pd.notna(r.get("estim_payment_per_year")) else 0
-        yield_map[t] = ep / cv
-        income_map[t] = ep
+        value_map[t] = value_map.get(t, 0) + cv
+        income_map[t] = income_map.get(t, 0) + ep
+
+    weight_map = {
+        t: value / total_val if total_val > 0 else 0
+        for t, value in value_map.items()
+    }
+    yield_map = {
+        t: income_map.get(t, 0) / value if value > 0 else 0
+        for t, value in value_map.items()
+    }
 
     coverage_info = _ticker_info_from_holding_rows(db_rows)
     for t in tickers:
@@ -23264,14 +23289,37 @@ def analytics_data():
     result_corr = None
     result_dd = None
     if len(available_tickers) >= 2:
-        returns_df = close[available_tickers].pct_change().fillna(0)
-        weights_arr = np.array([weight_map.get(t, 0) for t in available_tickers])
+        # Daily returns WITHOUT fabricating data. Previously this used
+        # .fillna(0), which turned every pre-inception day of a young ticker
+        # into a fake 0% return — deflating volatility, inflating Sharpe/Sortino
+        # and distorting the portfolio grade & correlations on longer windows.
+        ret_full = close[available_tickers].pct_change()
+
+        # Grade the portfolio on the clean common-overlap window (every held
+        # ticker has real data). One brand-new holding would otherwise shrink
+        # that overlap to a few days, so we drop the youngest tickers from the
+        # AGGREGATE (not the per-ticker table) until the window is usable.
+        MIN_GRADE_DAYS = 60
+        grade_tickers = list(available_tickers)
+        grade_excluded = []
+        graded_returns = ret_full[grade_tickers].dropna()
+        while len(graded_returns) < MIN_GRADE_DAYS and len(grade_tickers) > 2:
+            youngest = max(
+                grade_tickers,
+                key=lambda t: ret_full[t].first_valid_index() or ret_full.index[0],
+            )
+            grade_tickers.remove(youngest)
+            grade_excluded.append(youngest)
+            graded_returns = ret_full[grade_tickers].dropna()
+
+        returns_df = graded_returns
+        weights_arr = np.array([weight_map.get(t, 0) for t in grade_tickers])
         w_sum = weights_arr.sum()
         if w_sum > 0:
             weights_arr = weights_arr / w_sum
         else:
             # No DB weights available — use equal weight
-            weights_arr = np.ones(len(available_tickers)) / len(available_tickers)
+            weights_arr = np.ones(len(grade_tickers)) / len(grade_tickers)
 
         pm = grade_portfolio(returns_df, weights_arr, bench_ret)
         port_metrics = {
@@ -23286,16 +23334,26 @@ def analytics_data():
             "top_weight": pm.get("top_weight"),
             "effective_n": pm.get("effective_n"),
             "n_holdings": len(available_tickers),
+            "n_holdings_graded": len(grade_tickers),
+            "grade_excluded": grade_excluded,
+            "grade_window_days": int(len(returns_df)),
             "grade": pm.get("grade"),
             "total_value": round(total_val, 2),
             "est_annual_income": round(sum(income_map.values()), 2),
         }
 
-        # Correlation matrix
-        corr = returns_df.corr()
+        # Correlation matrix — pairwise complete observations (min 30 shared
+        # days), so each pair uses its real overlap instead of fabricated zeros.
+        corr = ret_full.corr(min_periods=30)
+        def _corr_cell(a, b):
+            try:
+                v = float(corr.loc[a, b])
+                return round(v, 3) if v == v else None  # v != v → NaN
+            except Exception:
+                return None
         result_corr = {
             "labels": available_tickers,
-            "matrix": [[round(float(corr.loc[a, b]), 3) for b in available_tickers]
+            "matrix": [[_corr_cell(a, b) for b in available_tickers]
                        for a in available_tickers],
         }
 
@@ -23311,6 +23369,10 @@ def analytics_data():
             "values": [round(float(v) * 100, 2) for v in dd_sampled.values],
         }
 
+        # Portfolio risk/return point (for the Risk vs Return scatter)
+        port_metrics["annual_ret"] = round(float(port_daily.mean() * 252) * 100, 2)
+        port_metrics["annual_vol"] = round(float(port_daily.std() * np.sqrt(252)) * 100, 2)
+
     coverage_by_ticker = {r.get("ticker"): r for r in coverage_payload.get("results", [])}
     cov_results = [coverage_by_ticker.get(t, {"ticker": t, "coverage_ratio": None}) for t in available_tickers]
 
@@ -23320,6 +23382,31 @@ def analytics_data():
                   "aggregate_coverage": coverage_payload.get("aggregate_coverage"),
                   "aggregate_severity": coverage_payload.get("aggregate_severity"),
               }}
+
+    # Benchmark risk/return point (for the Risk vs Return scatter)
+    if bench_ret is not None and len(bench_ret) >= 30:
+        result["benchmark_point"] = {
+            "ticker": benchmark,
+            "annual_vol": round(float(bench_ret.std() * np.sqrt(252)) * 100, 2),
+            "annual_ret": round(float(bench_ret.mean() * 252) * 100, 2),
+        }
+
+    # Data window — makes the analysis reproducible/interpretable. Scores are a
+    # deterministic function of the price series in this window; they shift only
+    # when the trailing window slides (new day) or the live intraday bar updates.
+    try:
+        used_index = close[available_tickers].dropna(how="all").index if available_tickers else close.index
+        if len(used_index) > 0:
+            result["data_window"] = {
+                "period": period,
+                "benchmark": benchmark,
+                "start": used_index.min().strftime("%Y-%m-%d"),
+                "end": used_index.max().strftime("%Y-%m-%d"),
+                "trading_days": int(len(used_index)),
+            }
+    except Exception:
+        pass
+
     if result_corr:
         result["correlation"] = result_corr
         result["drawdown_series"] = result_dd
@@ -23432,7 +23519,9 @@ def analytics_data():
                                                                    port_metrics, ret_curr_income, ret_opt_income,
                                                                    current_weights=current_weights,
                                                                    coverage_map=coverage_map,
-                                                                   available_tickers=available_tickers)
+                                                                   available_tickers=available_tickers,
+                                                                   grade_returns_df=graded_returns,
+                                                                   grade_tickers=grade_tickers)
             result["optimization"] = opt_dict
 
         elif mode == "optimize_income":
@@ -23483,7 +23572,9 @@ def analytics_data():
                                                                    port_metrics, curr_income, opt_income,
                                                                    current_weights=current_weights,
                                                                    coverage_map=coverage_map,
-                                                                   available_tickers=available_tickers)
+                                                                   available_tickers=available_tickers,
+                                                                   grade_returns_df=graded_returns,
+                                                                   grade_tickers=grade_tickers)
             result["optimization"] = opt_dict
 
         elif mode == "optimize_balanced":
@@ -23558,7 +23649,9 @@ def analytics_data():
                                                                    port_metrics, curr_income, opt_income,
                                                                    current_weights=current_weights,
                                                                    coverage_map=coverage_map,
-                                                                   available_tickers=available_tickers)
+                                                                   available_tickers=available_tickers,
+                                                                   grade_returns_df=graded_returns,
+                                                                   grade_tickers=grade_tickers)
             result["optimization"] = opt_dict
 
     return jsonify(result)
@@ -23710,16 +23803,19 @@ def analytics_backtest():
     data = request.get_json() or {}
     req_tickers = [t.upper() for t in data.get("tickers", [])]
     period = data.get("period", "1y")
+    benchmark = str(data.get("benchmark", "") or "").strip().upper()
     if not req_tickers:
         return jsonify({"dates": [], "series": []})
 
+    # Download the benchmark alongside the tickers so its line shares the window.
+    dl_tickers = list(dict.fromkeys(req_tickers + ([benchmark] if benchmark else [])))
     try:
-        close = _chunked_yf_download(req_tickers, period=period, auto_adjust=True, progress=False)
+        close = _chunked_yf_download(dl_tickers, period=period, auto_adjust=True, progress=False)
         if hasattr(close, "columns") and isinstance(close.columns, pd.MultiIndex):
             close = close["Close"]
         elif "Close" in close.columns:
             close = close[["Close"]]
-            close.columns = req_tickers[:1]
+            close.columns = dl_tickers[:1]
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -23727,23 +23823,34 @@ def analytics_backtest():
         return jsonify({"dates": [], "series": []})
 
     valid_tickers = [t for t in req_tickers if t in close.columns and close[t].dropna().size >= 2]
-    if not valid_tickers:
+    bench_valid = bool(benchmark) and benchmark in close.columns and close[benchmark].dropna().size >= 2
+    if not valid_tickers and not bench_valid:
         return jsonify({"dates": [], "series": []})
 
-    aligned = close[valid_tickers].dropna(how="all").ffill()
+    align_cols = valid_tickers + ([benchmark] if bench_valid and benchmark not in valid_tickers else [])
+    aligned = close[align_cols].dropna(how="all").ffill()
     step = max(1, len(aligned) // 200)
     sampled = aligned.iloc[::step]
     dates = [d.strftime("%Y-%m-%d") for d in sampled.index]
 
-    series = []
-    for t in valid_tickers:
-        col = sampled[t]
+    def _normalize_series(col):
         first_valid = col.first_valid_index()
         if first_valid is None:
-            continue
+            return None
         base = col.loc[first_valid]
         normalized = (col / base) * 10000
-        series.append({"ticker": t, "values": [round(float(v), 2) if pd.notna(v) else None for v in normalized.values]})
+        return [round(float(v), 2) if pd.notna(v) else None for v in normalized.values]
+
+    series = []
+    for t in valid_tickers:
+        vals = _normalize_series(sampled[t])
+        if vals is not None:
+            series.append({"ticker": t, "values": vals})
+
+    if bench_valid:
+        vals = _normalize_series(sampled[benchmark])
+        if vals is not None:
+            series.append({"ticker": benchmark, "values": vals, "is_benchmark": True})
 
     return jsonify({"dates": dates, "series": series})
 

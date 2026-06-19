@@ -3,6 +3,11 @@ import { useTheme } from '../../context/ThemeContext'
 import { themedPlotlyLayout } from '../../utils/chartTheme'
 import { useProfileFetch } from '../../context/ProfileContext'
 
+const BT_PERIODS = [
+  { label: '3M', value: '3mo' }, { label: '6M', value: '6mo' }, { label: 'YTD', value: 'ytd' },
+  { label: '1Y', value: '1y' }, { label: '2Y', value: '2y' }, { label: '5Y', value: '5y' }, { label: 'Max', value: 'max' },
+]
+
 export default function BacktestCharts({ tickers, result, period }) {
   const { isDark } = useTheme()
   const pf = useProfileFetch()
@@ -11,6 +16,12 @@ export default function BacktestCharts({ tickers, result, period }) {
   const [backtestLoading, setBacktestLoading] = useState(false)
   const [rollingLoading, setRollingLoading] = useState(false)
   const [rollingWindow, setRollingWindow] = useState(126)
+  // Backtest-local controls (independent of the main Analyze period)
+  const [btPeriod, setBtPeriod] = useState(period || '1y')
+  const [btBenchmark, setBtBenchmark] = useState('SPY')
+
+  // Keep backtest period in sync if the user changes the main period
+  useEffect(() => { if (period) setBtPeriod(period) }, [period])
 
   // Fetch backtest
   useEffect(() => {
@@ -18,9 +29,9 @@ export default function BacktestCharts({ tickers, result, period }) {
     setBacktestLoading(true)
     pf('/api/analytics/backtest', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tickers, period }),
+      body: JSON.stringify({ tickers, period: btPeriod, benchmark: btBenchmark }),
     }).then(r => r.json()).then(setBacktestData).catch(() => {}).finally(() => setBacktestLoading(false))
-  }, [tickers, period])
+  }, [tickers, btPeriod, btBenchmark])
 
   // Fetch rolling metrics
   useEffect(() => {
@@ -40,11 +51,19 @@ export default function BacktestCharts({ tickers, result, period }) {
     if (!backtestData?.series?.length || !window.Plotly) return
     const el = document.getElementById('backtest-growth')
     if (!el) return
-    const traces = backtestData.series.map((s, i) => ({
-      x: backtestData.dates, y: s.values, name: s.ticker, type: 'scatter', mode: 'lines',
-      line: { color: colors[i % colors.length], width: 2 },
-      hovertemplate: `${s.ticker}: $%{y:,.0f}<extra></extra>`,
-    }))
+    const traces = backtestData.series.map((s, i) => (
+      s.is_benchmark
+        ? {
+            x: backtestData.dates, y: s.values, name: `${s.ticker} (benchmark)`, type: 'scatter', mode: 'lines',
+            line: { color: '#e0e8f5', width: 2.5, dash: 'dash' },
+            hovertemplate: `${s.ticker} (benchmark): $%{y:,.0f}<extra></extra>`,
+          }
+        : {
+            x: backtestData.dates, y: s.values, name: s.ticker, type: 'scatter', mode: 'lines',
+            line: { color: colors[i % colors.length], width: 2 },
+            hovertemplate: `${s.ticker}: $%{y:,.0f}<extra></extra>`,
+          }
+    ))
     window.Plotly.newPlot(el, traces, themedPlotlyLayout({
       ...base,
       title: { text: 'Growth of $10,000', font: { size: 14, color: '#e0e8f5' } },
@@ -131,6 +150,28 @@ export default function BacktestCharts({ tickers, result, period }) {
     <>
       {/* Growth of $10K */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
+          <span style={{ color: 'var(--text-strong)', fontWeight: 600, fontSize: '0.85rem' }}>Backtest</span>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem', marginLeft: '0.3rem' }}>Period:</span>
+          {BT_PERIODS.map(p => (
+            <button key={p.value} onClick={() => setBtPeriod(p.value)} style={{
+              padding: '0.2rem 0.55rem', borderRadius: 4, cursor: 'pointer', fontSize: '0.76rem',
+              border: btPeriod === p.value ? '1px solid var(--accent)' : '1px solid var(--p-3a3a5c)',
+              background: btPeriod === p.value ? 'var(--p-1a3a5c)' : 'var(--bg)',
+              color: btPeriod === p.value ? 'var(--accent)' : 'var(--text-dim)',
+              fontWeight: btPeriod === p.value ? 600 : 400,
+            }}>{p.label}</button>
+          ))}
+          <span style={{ color: 'var(--p-556677)', margin: '0 0.2rem' }}>|</span>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>Benchmark:</span>
+          <input
+            value={btBenchmark}
+            onChange={e => setBtBenchmark(e.target.value.toUpperCase())}
+            maxLength={6} placeholder="(none)"
+            style={{ width: 64, textTransform: 'uppercase', padding: '0.25rem 0.4rem', textAlign: 'center',
+              background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 4, color: 'var(--text)', fontSize: '0.78rem' }}
+          />
+        </div>
         {backtestLoading ? (
           <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}><span className="spinner" /> Loading backtest...</div>
         ) : backtestData?.series?.length ? (

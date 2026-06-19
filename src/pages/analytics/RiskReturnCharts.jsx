@@ -18,7 +18,8 @@ export default function RiskReturnCharts({ result }) {
     const scatterEl = document.getElementById('analytics-scatter')
     if (scatterEl && result.metrics?.length > 0) {
       const m = result.metrics
-      Plotly.newPlot(scatterEl, [{
+      const scatterTraces = [{
+        name: 'Holdings',
         x: m.map(d => d.annual_vol), y: m.map(d => d.annual_ret),
         text: m.map(d => d.ticker), mode: 'markers',
         marker: {
@@ -28,12 +29,38 @@ export default function RiskReturnCharts({ result }) {
         },
         hovertemplate: '%{text}<br>Vol: %{x:.1f}%<br>Return: %{y:.1f}%<extra></extra>',
         type: 'scatter',
-      }], themedPlotlyLayout({
+      }]
+      // Whole-portfolio point
+      const pm = result.portfolio_metrics
+      if (pm && pm.annual_vol != null && pm.annual_ret != null) {
+        scatterTraces.push({
+          name: 'Portfolio',
+          x: [pm.annual_vol], y: [pm.annual_ret], mode: 'markers+text',
+          text: ['Portfolio'], textposition: 'top center', textfont: { color: '#ffd54f', size: 11 },
+          marker: { size: 18, color: '#ffd54f', symbol: 'star', line: { color: '#1a1a2e', width: 1.5 } },
+          hovertemplate: 'Portfolio<br>Vol: %{x:.1f}%<br>Return: %{y:.1f}%<extra></extra>',
+          type: 'scatter',
+        })
+      }
+      // Benchmark point
+      const bp = result.benchmark_point
+      if (bp && bp.annual_vol != null && bp.annual_ret != null) {
+        scatterTraces.push({
+          name: bp.ticker || 'Benchmark',
+          x: [bp.annual_vol], y: [bp.annual_ret], mode: 'markers+text',
+          text: [bp.ticker || 'Benchmark'], textposition: 'top center', textfont: { color: '#64b5f6', size: 11 },
+          marker: { size: 15, color: '#64b5f6', symbol: 'diamond', line: { color: '#1a1a2e', width: 1.5 } },
+          hovertemplate: `${bp.ticker || 'Benchmark'}<br>Vol: %{x:.1f}%<br>Return: %{y:.1f}%<extra></extra>`,
+          type: 'scatter',
+        })
+      }
+      Plotly.newPlot(scatterEl, scatterTraces, themedPlotlyLayout({
         ...base,
         title: { text: 'Risk vs Return', font: { size: 14, color: '#e0e8f5' } },
         xaxis: { title: { text: 'Risk — Annualized Volatility (%)', font: axFont, standoff: 15 }, gridcolor: grid },
         yaxis: { title: { text: 'Return — Annualized Return (%)', font: axFont, standoff: 15 }, gridcolor: grid },
         height: 420, margin: { l: 80, r: 30, t: 50, b: 60 },
+        showlegend: true, legend: { font: { color: '#b8c7d9', size: 11 }, bgcolor: 'rgba(0,0,0,0)', x: 1, xanchor: 'right', y: 1 },
       }, isDark), { responsive: true })
     }
 
@@ -43,20 +70,31 @@ export default function RiskReturnCharts({ result }) {
       const { labels, matrix } = result.correlation
       const reversed = [...labels].reverse()
       const rMatrix = [...matrix].reverse()
+      // zmin/zmax = -1..1, so corr 0.75 sits at colorscale position (0.75+1)/2 = 0.875.
+      // A hard step there makes any correlation > 0.75 jump to a vivid third color
+      // (magenta) so highly-correlated pairs — concentration risk — stand out.
+      const HI_POS = 0.875
+      const many = labels.length > 18
       Plotly.newPlot(heatEl, [{
         z: rMatrix, x: labels, y: reversed, type: 'heatmap',
-        colorscale: [[0, '#c62828'], [0.25, '#e05555'], [0.5, '#f9a825'], [0.75, '#4caf50'], [1, '#2e7d32']],
+        colorscale: [
+          [0, '#c62828'], [0.25, '#e05555'], [0.5, '#f9a825'], [0.75, '#4caf50'],
+          [HI_POS - 0.001, '#4caf50'], [HI_POS, '#d500f9'], [1, '#aa00cc'],
+        ],
         zmin: -1, zmax: 1,
         text: rMatrix.map(row => row.map(v => v != null ? v.toFixed(2) : '')),
-        texttemplate: '%{text}',
+        texttemplate: many ? '' : '%{text}',
+        textfont: { size: 9 },
         hovertemplate: '%{x} vs %{y}: %{z:.3f}<extra></extra>',
-        colorbar: { title: 'Corr', tickvals: [-1, -0.5, 0, 0.5, 1] },
+        colorbar: { title: 'Corr', tickvals: [-1, -0.5, 0, 0.5, 0.75, 1], thickness: 14 },
       }], themedPlotlyLayout({
         ...base,
-        title: { text: 'Correlation Heatmap', font: { size: 14, color: '#e0e8f5' } },
-        xaxis: { side: 'bottom', tickangle: -45 },
-        height: Math.max(350, labels.length * 40 + 100),
-        margin: { l: 80, r: 60, t: 50, b: 80 },
+        title: { text: 'Correlation Heatmap (>0.75 in magenta)', font: { size: 14, color: '#e0e8f5' } },
+        xaxis: { side: 'bottom', tickangle: -45, tickfont: { size: many ? 8 : 10 }, automargin: true },
+        yaxis: { tickfont: { size: many ? 8 : 10 }, automargin: true },
+        // Squashed vertically: ~18px/row (was 40) so large portfolios stay compact.
+        height: Math.min(720, Math.max(280, labels.length * 18 + 90)),
+        margin: { l: 70, r: 60, t: 50, b: 70 },
       }, isDark), { responsive: true })
     }
 

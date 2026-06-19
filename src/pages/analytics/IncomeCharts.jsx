@@ -59,12 +59,16 @@ export default function IncomeCharts({ tickers, result, period }) {
       window.Plotly.newPlot(sectorEl, [{
         labels: d.map(s => s.label), values: d.map(s => s.value),
         type: 'pie', hole: 0.45, marker: { colors },
-        textinfo: 'label+percent', textfont: { size: 11, color: '#e0e8f5' },
+        // Keep labels INSIDE the slices (percent only) — outside labels overflow
+        // the card when there are many sectors. Names live in the legend.
+        textinfo: 'percent', textposition: 'inside', insidetextorientation: 'horizontal',
+        textfont: { size: 10, color: '#fff' }, sort: true,
         hovertemplate: '%{label}: %{value:.1f}%<extra></extra>',
       }], themedPlotlyLayout({
         ...base, title: { text: 'By Sector', font: { size: 14, color: '#e0e8f5' } },
-        height: 380, margin: { t: 50, b: 20, l: 20, r: 20 },
-        showlegend: true, legend: { font: { color: '#8899aa', size: 10 }, orientation: 'h', y: -0.05 },
+        height: 400, margin: { t: 50, b: 70, l: 20, r: 20 },
+        showlegend: true,
+        legend: { font: { color: '#8899aa', size: 9 }, orientation: 'h', x: 0.5, xanchor: 'center', y: -0.08 },
       }, isDark), { responsive: true })
     }
 
@@ -74,12 +78,14 @@ export default function IncomeCharts({ tickers, result, period }) {
       window.Plotly.newPlot(typeEl, [{
         labels: d.map(s => s.label), values: d.map(s => s.value),
         type: 'pie', hole: 0.45, marker: { colors: colors.slice(3) },
-        textinfo: 'label+percent', textfont: { size: 11, color: '#e0e8f5' },
+        textinfo: 'percent', textposition: 'inside', insidetextorientation: 'horizontal',
+        textfont: { size: 10, color: '#fff' }, sort: true,
         hovertemplate: '%{label}: %{value:.1f}%<extra></extra>',
       }], themedPlotlyLayout({
         ...base, title: { text: 'By Asset Type', font: { size: 14, color: '#e0e8f5' } },
-        height: 380, margin: { t: 50, b: 20, l: 20, r: 20 },
-        showlegend: true, legend: { font: { color: '#8899aa', size: 10 }, orientation: 'h', y: -0.05 },
+        height: 400, margin: { t: 50, b: 70, l: 20, r: 20 },
+        showlegend: true,
+        legend: { font: { color: '#8899aa', size: 9 }, orientation: 'h', x: 0.5, xanchor: 'center', y: -0.08 },
       }, isDark), { responsive: true })
     }
 
@@ -101,13 +107,16 @@ export default function IncomeCharts({ tickers, result, period }) {
       marker: { color: colors[i % colors.length] },
       hovertemplate: `${t.ticker}: $%{y:,.0f}<extra></extra>`,
     }))
+    // A legend with dozens of tickers overwhelms the chart — only show it for
+    // small baskets; otherwise rely on hover (which names each ticker).
+    const showCalLegend = traces.length <= 12
     window.Plotly.newPlot(el, traces, themedPlotlyLayout({
       paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117',
       barmode: 'stack',
       title: { text: 'Income Calendar — Monthly Distribution', font: { size: 14, color: '#e0e8f5' } },
       xaxis: { color: '#8899aa' }, yaxis: { title: { text: 'Monthly Income ($)', font: { size: 12, color: '#e0e8f5' } }, gridcolor: '#1a2a3e', color: '#8899aa' },
-      height: 400, margin: { l: 70, r: 30, t: 50, b: 40 },
-      showlegend: true, legend: { font: { color: '#8899aa', size: 10 }, orientation: 'h', y: -0.15 },
+      height: 400, margin: { l: 70, r: 30, t: 50, b: showCalLegend ? 70 : 40 },
+      showlegend: showCalLegend, legend: { font: { color: '#8899aa', size: 10 }, orientation: 'h', x: 0.5, xanchor: 'center', y: -0.12 },
     }, isDark), { responsive: true })
     return () => window.Plotly.purge(el)
   }, [calendarData, isDark])

@@ -386,14 +386,19 @@ export default function Analytics() {
                       textposition: 'outside',
                       textfont: { color: '#4dff91', size: 10 },
                       customdata: rawVals,
+                      showlegend: false,
                       hovertemplate: '<b>%{x}</b><br>NAV Erosion Ratio: %{customdata:.4f}<extra></extra>',
                     },
                     {
                       x: [tks[0], tks[tks.length - 1]], y: [0.75, 0.75],
                       type: 'scatter', mode: 'lines',
                       line: { color: '#ffffff', width: 2, dash: 'dash' },
-                      hoverinfo: 'skip', name: 'High Threshold (0.75)',
+                      hoverinfo: 'skip', name: 'High threshold (0.75)',
                     },
+                    // Color key: legend-only swatches explaining the bar colors.
+                    { x: [null], y: [null], type: 'bar', name: 'Low erosion', marker: { color: '#4dff91' } },
+                    { x: [null], y: [null], type: 'bar', name: 'Medium erosion', marker: { color: '#ffb300' } },
+                    { x: [null], y: [null], type: 'bar', name: 'High erosion', marker: { color: '#ff6b6b' } },
                   ]}
                   layout={themedPlotlyLayout({
                     title: { text: 'Per-Ticker NAV Erosion Ratio', font: { color: '#e0e8f5', size: 14 } },
@@ -401,10 +406,12 @@ export default function Analytics() {
                     paper_bgcolor: '#111124',
                     plot_bgcolor: '#111124',
                     font: { color: '#e0e8f5' },
-                    margin: { t: 40, l: 50, r: 20, b: 60 },
+                    margin: { t: 40, l: 50, r: 20, b: 70 },
                     height: 300, autosize: true,
-                    showlegend: false,
+                    showlegend: true,
+                    legend: { orientation: 'h', x: 0.5, xanchor: 'center', y: 1.12, font: { color: '#b8c7d9', size: 10 } },
                     xaxis: {
+                      title: { text: 'Ticker', font: { color: '#e0e8f5' }, standoff: 10 },
                       color: '#b8c7d9',
                       gridcolor: '#1a2a3e',
                       zerolinecolor: '#2a3a4e',
@@ -436,6 +443,148 @@ export default function Analytics() {
                   ({PERIODS.find(p => p.value === period)?.label || period})
                 </span>
               </h3>
+
+              {/* Data window — scores are a deterministic function of this window,
+                  so the same window always reproduces the same scores. */}
+              {result.data_window && (
+                <div style={{ fontSize: '0.74rem', color: 'var(--text-dim)', marginBottom: '0.5rem' }}>
+                  Data window: <span style={{ color: 'var(--text-strong)' }}>{result.data_window.start} → {result.data_window.end}</span>
+                  {' '}({result.data_window.trading_days} trading days, benchmark {result.data_window.benchmark}).
+                  <span title="Scores are deterministic for a given window. They shift only as the trailing window moves to a new day or the latest intraday bar updates."> Re-running on the same window reproduces identical scores. {'ⓘ'}</span>
+                  {pm.grade_window_days != null && pm.grade_window_days !== result.data_window.trading_days && (
+                    <span> Portfolio grade computed on the {pm.grade_window_days}-day window all holdings share.</span>
+                  )}
+                  {pm.grade_excluded?.length > 0 && (
+                    <span style={{ color: 'var(--p-ffb74d)' }}> Excluded from the portfolio grade for insufficient history: {pm.grade_excluded.join(', ')}.</span>
+                  )}
+                </div>
+              )}
+
+              {/* Hidden explanation: what the Score means, how it's computed, why it matters */}
+              <details style={{ marginBottom: '0.75rem', borderLeft: '3px solid var(--accent-2)', background: 'var(--p-0a1628)', borderRadius: '4px', padding: '0.5rem 0.75rem' }}>
+                <summary style={{ cursor: 'pointer', color: 'var(--accent-2)', fontWeight: 600, fontSize: '0.85rem' }}>
+                  How is the Score computed? {'ⓘ'}
+                </summary>
+                <div style={{ marginTop: '0.6rem', fontSize: '0.8rem', color: 'var(--text-dim)', lineHeight: 1.55 }}>
+                  <p style={{ margin: '0 0 0.6rem' }}>
+                    <strong style={{ color: 'var(--text-strong)' }}>What it is.</strong> A single <strong>risk-adjusted quality score from 0 to 100</strong> (higher is better),
+                    mapped to a letter grade. It is computed over the selected lookback period from daily returns and is purely
+                    backward-looking — it rewards consistent risk-adjusted returns and penalizes deep, prolonged drawdowns.
+                    It is <em>not</em> a return forecast or a buy/sell signal.
+                  </p>
+
+                  <p style={{ margin: '0 0 0.4rem' }}>
+                    <strong style={{ color: 'var(--text-strong)' }}>How it's computed.</strong> Each component metric is scored 0–100 against
+                    fixed thresholds, then combined as a <strong>weighted average</strong> (only metrics with enough data — ≥30 days — are
+                    included, and the weights renormalize over whatever is available). Higher-is-better metrics score 100 at/above their
+                    "excellent" threshold; lower-is-better metrics score 100 at/below it; values in between are linearly interpolated.
+                  </p>
+
+                  <div style={{ overflowX: 'auto', margin: '0.5rem 0' }}>
+                    <table style={{ borderCollapse: 'collapse', fontSize: '0.76rem', width: '100%' }}>
+                      <thead>
+                        <tr style={{ color: 'var(--text-dim)', textAlign: 'left' }}>
+                          <th style={{ padding: '0.25rem 0.5rem', borderBottom: '1px solid var(--p-2a3a4e)' }}>Metric</th>
+                          <th style={{ padding: '0.25rem 0.5rem', borderBottom: '1px solid var(--p-2a3a4e)', textAlign: 'right' }}>Ticker wt</th>
+                          <th style={{ padding: '0.25rem 0.5rem', borderBottom: '1px solid var(--p-2a3a4e)', textAlign: 'right' }}>Portfolio wt</th>
+                          <th style={{ padding: '0.25rem 0.5rem', borderBottom: '1px solid var(--p-2a3a4e)' }}>Direction</th>
+                          <th style={{ padding: '0.25rem 0.5rem', borderBottom: '1px solid var(--p-2a3a4e)' }}>Thresholds (exc / good / fair / poor)</th>
+                        </tr>
+                      </thead>
+                      <tbody style={{ color: 'var(--text-strong)' }}>
+                        {[
+                          ['Ulcer Index', '25%', '20%', 'lower', '3 / 7 / 12 / 20'],
+                          ['Calmar Ratio', '20%', '20%', 'higher', '1.5 / 1.0 / 0.5 / 0.2'],
+                          ['Omega Ratio', '15%', '15%', 'higher', '2.0 / 1.5 / 1.2 / 1.0'],
+                          ['Sortino Ratio', '15%', '12%', 'higher', '2.0 / 1.5 / 1.0 / 0.5'],
+                          ['Sharpe Ratio', '10%', '8%', 'higher', '1.5 / 1.0 / 0.5 / 0.0'],
+                          ['Max Drawdown %', '10%', '10%', 'lower', '10 / 20 / 30 / 40'],
+                          ['Downside Capture', '5%', '5%', 'lower', '80 / 90 / 100 / 120'],
+                          ['Diversification (eff. N)', '—', '10%', 'higher', '20 / 12 / 6 / 3'],
+                        ].map(([metric, tw, pw, dir, thr]) => (
+                          <tr key={metric} style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
+                            <td style={{ padding: '0.25rem 0.5rem' }}>{metric}</td>
+                            <td style={{ padding: '0.25rem 0.5rem', textAlign: 'right' }}>{tw}</td>
+                            <td style={{ padding: '0.25rem 0.5rem', textAlign: 'right' }}>{pw}</td>
+                            <td style={{ padding: '0.25rem 0.5rem', color: 'var(--text-dim)' }}>{dir} is better</td>
+                            <td style={{ padding: '0.25rem 0.5rem', color: 'var(--text-dim)' }}>{thr}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p style={{ margin: '0 0 0.6rem', fontSize: '0.74rem' }}>
+                    The portfolio row uses the same metrics on the blended portfolio return stream and adds a
+                    <strong> Diversification</strong> term (based on the effective number of holdings). Stale, delisted, or
+                    flat-lined price series are treated as un-gradeable and score 0 rather than being rewarded for zero volatility.
+                  </p>
+
+                  {/* Worked example using ULTY */}
+                  <div style={{ margin: '0.5rem 0 0.75rem', padding: '0.5rem 0.75rem', background: 'var(--p-0b0b1c)', borderRadius: '4px', border: '1px solid var(--p-2a3a4e)' }}>
+                    <p style={{ margin: '0 0 0.4rem' }}>
+                      <strong style={{ color: 'var(--text-strong)' }}>Worked example — ULTY (per-ticker).</strong> Each raw metric is
+                      first mapped to a 0–100 sub-score, then multiplied by its weight. For example, ULTY's Ulcer Index of 12.56 lands
+                      in the fair-to-poor band (12–20), so it scores <code>40 + 20 × (20 − 12.56) / (20 − 12) = 58.6</code>; its Sortino
+                      of 0.10 is below the "poor" floor of 0.5, so it scores <code>40 × 0.10 / 0.5 = 8.0</code>.
+                    </p>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ borderCollapse: 'collapse', fontSize: '0.76rem', width: '100%' }}>
+                        <thead>
+                          <tr style={{ color: 'var(--text-dim)', textAlign: 'left' }}>
+                            <th style={{ padding: '0.25rem 0.5rem', borderBottom: '1px solid var(--p-2a3a4e)' }}>Metric</th>
+                            <th style={{ padding: '0.25rem 0.5rem', borderBottom: '1px solid var(--p-2a3a4e)', textAlign: 'right' }}>ULTY value</th>
+                            <th style={{ padding: '0.25rem 0.5rem', borderBottom: '1px solid var(--p-2a3a4e)', textAlign: 'right' }}>Sub-score</th>
+                            <th style={{ padding: '0.25rem 0.5rem', borderBottom: '1px solid var(--p-2a3a4e)', textAlign: 'right' }}>Weight</th>
+                            <th style={{ padding: '0.25rem 0.5rem', borderBottom: '1px solid var(--p-2a3a4e)', textAlign: 'right' }}>Contribution</th>
+                          </tr>
+                        </thead>
+                        <tbody style={{ color: 'var(--text-strong)' }}>
+                          {[
+                            ['Ulcer Index', '12.56', '58.6', '25%', '14.65'],
+                            ['Calmar Ratio', '0.18', '36.0', '20%', '7.20'],
+                            ['Omega Ratio', '1.05', '45.0', '15%', '6.75'],
+                            ['Sortino Ratio', '0.10', '8.0', '15%', '1.20'],
+                            ['Sharpe Ratio', '0.07', '42.8', '10%', '4.28'],
+                            ['Max Drawdown', '24.2%', '71.6', '10%', '7.16'],
+                            ['Downside Capture', '161', '26.3', '5%', '1.32'],
+                          ].map(([metric, val, sub, wt, contrib]) => (
+                            <tr key={metric} style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
+                              <td style={{ padding: '0.25rem 0.5rem' }}>{metric}</td>
+                              <td style={{ padding: '0.25rem 0.5rem', textAlign: 'right', color: 'var(--text-dim)' }}>{val}</td>
+                              <td style={{ padding: '0.25rem 0.5rem', textAlign: 'right' }}>{sub}</td>
+                              <td style={{ padding: '0.25rem 0.5rem', textAlign: 'right', color: 'var(--text-dim)' }}>{wt}</td>
+                              <td style={{ padding: '0.25rem 0.5rem', textAlign: 'right' }}>{contrib}</td>
+                            </tr>
+                          ))}
+                          <tr style={{ fontWeight: 700 }}>
+                            <td style={{ padding: '0.3rem 0.5rem' }} colSpan={4}>Total = weighted average (weights sum to 100%)</td>
+                            <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: 'var(--neg-2)' }}>42.5 → F</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <p style={{ margin: '0.4rem 0 0', fontSize: '0.72rem', color: 'var(--p-556677)' }}>
+                      Summing the contributions gives 42.56, which rounds to the <strong>42.5</strong> shown in the table — a grade of
+                      <strong> F</strong>. (Minor differences from a hand calculation come from the engine using full-precision metric
+                      values rather than the 2-decimal figures displayed.)
+                    </p>
+                  </div>
+
+                  <p style={{ margin: '0 0 0.4rem' }}>
+                    <strong style={{ color: 'var(--text-strong)' }}>Letter grades.</strong> A+ ≥97 · A ≥93 · A- ≥90 · B+ ≥87 · B ≥83 ·
+                    B- ≥80 · C+ ≥77 · C ≥73 · C- ≥70 · D+ ≥67 · D ≥63 · D- ≥60 · F &lt;60.
+                  </p>
+
+                  <p style={{ margin: 0 }}>
+                    <strong style={{ color: 'var(--text-strong)' }}>Significance.</strong> Because Ulcer Index + Calmar together
+                    carry ~45% of the weight, the score is deliberately <strong>drawdown-focused</strong> — it favours capital
+                    preservation and steady income over raw upside. A high-yield fund can still grade poorly if it gets there with
+                    severe drawdowns or high downside capture (see ULTY above). Use it to compare holdings on risk-adjusted terms,
+                    not to predict future returns.
+                  </p>
+                </div>
+              </details>
+
               <div style={{ maxHeight: '600px', overflow: 'auto', borderRadius: '4px' }}>
               <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem', width: '100%' }}>
                 <thead>

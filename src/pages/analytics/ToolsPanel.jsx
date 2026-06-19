@@ -39,28 +39,48 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
     const m = metrics.find(x => x.ticker === whatIfTicker)
     if (!m) return null
 
-    // Current weights
-    const totalWeight = metrics.reduce((s, x) => s + (x.weight || 0), 0)
-    if (totalWeight === 0) return null
+    // Risk is modeled over the tickers with usable return/correlation data.
+    // Normalize that modeled sleeve so missing-history holdings do not make the
+    // covariance weights sum to less than 100%.
+    const modeledWeight = metrics.reduce((s, x) => s + (Number(x.weight) || 0), 0)
+    if (modeledWeight <= 0) return null
 
-    const currentWeights = metrics.map(x => (x.weight || 0) / totalWeight)
+    const currentWeights = metrics.map(x => (Number(x.weight) || 0) / modeledWeight)
     const idx = metrics.findIndex(x => x.ticker === whatIfTicker)
     const newTarget = whatIfWeight / 100
-    const oldWeight = currentWeights[idx]
-    const remaining = 1 - oldWeight
+    const oldPortfolioWeight = (Number(m.weight) || 0) / 100
+
+    // Convert the whole-portfolio target to a weight within the modeled sleeve.
+    // All other holdings are scaled proportionally, then the available risk
+    // rows are renormalized for the covariance calculation.
+    const otherScale = oldPortfolioWeight < 1
+      ? (1 - newTarget) / (1 - oldPortfolioWeight)
+      : 0
+    const rawNewWeights = currentWeights.map((w, i) => (
+      i === idx ? newTarget : w * otherScale
+    ))
+    const rawNewTotal = rawNewWeights.reduce((s, w) => s + w, 0)
 
     // Build new weights
-    const newWeights = currentWeights.map((w, i) => {
-      if (i === idx) return newTarget
-      return remaining > 0 ? w * (1 - newTarget) / remaining : 0
-    })
+    const newWeights = rawNewTotal > 0
+      ? rawNewWeights.map(w => w / rawNewTotal)
+      : currentWeights
 
-    // Estimate income
-    const currentIncome = metrics.reduce((s, x, i) => s + (x.annual_income || 0) * currentWeights[i] / (x.weight / totalWeight || 1), 0)
-    const newIncome = metrics.reduce((s, x, i) => {
-      const incPerUnit = (x.annual_income || 0) / (x.weight / totalWeight || 1)
-      return s + incPerUnit * newWeights[i]
-    }, 0)
+    // Estimate income from the whole-portfolio baseline. The selected holding
+    // keeps its current yield; every other holding is resized proportionally.
+    // This avoids comparing whole-portfolio current income with an analyzed-
+    // tickers-only projection when one holding lacks enough price history.
+    const currentIncome = Number(result.portfolio_metrics?.est_annual_income) || 0
+    const selectedIncome = Number(m.annual_income) || 0
+    let newIncome = currentIncome
+    if (oldPortfolioWeight > 0) {
+      const selectedAtTarget = selectedIncome * newTarget / oldPortfolioWeight
+      const otherCurrentIncome = Math.max(0, currentIncome - selectedIncome)
+      newIncome = selectedAtTarget + otherCurrentIncome * otherScale
+    } else if (newTarget > 0) {
+      // There is no holding value from which to infer this ticker's yield.
+      newIncome = null
+    }
 
     // Estimate portfolio vol from correlation matrix
     const { labels, matrix } = result.correlation
@@ -82,10 +102,10 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
 
     return {
       currentIncome: result.portfolio_metrics?.est_annual_income || 0,
-      newIncome: Math.round(newIncome),
+      newIncome: newIncome == null ? null : Math.round(newIncome),
       currentVol: Math.sqrt(Math.max(currentVar, 0)) * 100,
       newVol: Math.sqrt(Math.max(newVar, 0)) * 100,
-      currentWeight: (oldWeight * 100).toFixed(1),
+      currentWeight: (oldPortfolioWeight * 100).toFixed(1),
       newWeight: whatIfWeight.toFixed(1),
     }
   }, [result, whatIfTicker, whatIfWeight])
@@ -173,6 +193,7 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
               <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem', width: 30 }}>0%</span>
               <input type="range" min="0" max="50" value={whatIfWeight}
+                aria-label={`${whatIfTicker} target portfolio weight`}
                 onChange={e => setWhatIfWeight(Number(e.target.value))}
                 style={{ flex: 1 }} />
               <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem', width: 35 }}>50%</span>
@@ -184,8 +205,8 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
                 <div className="card" style={{ padding: '0.6rem', background: 'var(--p-0a1628)' }}>
                   <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginBottom: '0.2rem' }}>Est. Annual Income</div>
                   <div style={{ fontSize: '0.82rem', color: 'var(--text-dim)' }}>Current: <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{formatMoneyWhole(whatIfResult.currentIncome)}</span></div>
-                  <div style={{ fontSize: '0.82rem', color: whatIfResult.newIncome >= whatIfResult.currentIncome ? 'var(--pos)' : 'var(--neg)' }}>
-                    Projected: <span style={{ fontWeight: 600 }}>{formatMoneyWhole(whatIfResult.newIncome)}</span>
+                  <div style={{ fontSize: '0.82rem', color: whatIfResult.newIncome == null ? 'var(--text-dim)' : whatIfResult.newIncome >= whatIfResult.currentIncome ? 'var(--pos)' : 'var(--neg)' }}>
+                    Projected: <span style={{ fontWeight: 600 }}>{whatIfResult.newIncome == null ? 'Unavailable' : formatMoneyWhole(whatIfResult.newIncome)}</span>
                   </div>
                 </div>
                 <div className="card" style={{ padding: '0.6rem', background: 'var(--p-0a1628)' }}>
@@ -204,6 +225,33 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
                 </div>
               </div>
             )}
+
+            <details style={{ marginTop: '0.75rem', borderTop: '1px solid var(--p-2a3a4e)', paddingTop: '0.6rem' }}>
+              <summary style={{ cursor: 'pointer', color: 'var(--accent-2)', fontSize: '0.8rem', fontWeight: 600 }}>
+                How does this What-If analysis work? {'ⓘ'}
+              </summary>
+              <div style={{ marginTop: '0.55rem', color: 'var(--text-dim)', fontSize: '0.78rem', lineHeight: 1.55 }}>
+                <p style={{ margin: '0 0 0.45rem' }}>
+                  Choose a holding and move the slider to a target share of the <strong style={{ color: 'var(--text-strong)' }}>entire portfolio</strong>.
+                  The model holds the portfolio's total value constant and increases or reduces every other holding proportionally.
+                </p>
+                <ul style={{ margin: '0 0 0.45rem', paddingLeft: '1.1rem' }}>
+                  <li><strong style={{ color: 'var(--text-strong)' }}>Annual income</strong> assumes each holding keeps its current income yield. It is an estimate, not a dividend forecast.</li>
+                  <li><strong style={{ color: 'var(--text-strong)' }}>Volatility</strong> uses annualized historical volatility and the displayed correlation matrix. Holdings without enough shared price history cannot be included, so this is a modeled estimate.</li>
+                  <li><strong style={{ color: 'var(--text-strong)' }}>Weight change</strong> compares the holding's actual current portfolio weight with your slider target.</li>
+                </ul>
+                <div style={{ margin: '0.55rem 0', padding: '0.55rem 0.7rem', background: 'var(--p-0b0b1c)', border: '1px solid var(--p-2a3a4e)', borderRadius: 4 }}>
+                  <strong style={{ color: 'var(--text-strong)' }}>Concrete example.</strong>{' '}
+                  Suppose AIPI is 5% of a $100,000 portfolio and you move the slider to 10%. The model raises AIPI from $5,000 to $10,000
+                  and reduces the combined value of every other holding from $95,000 to $90,000. Each other position is multiplied by
+                  90/95, or about 94.7%—so a $9,500 holding becomes about $9,000. It then recalculates annual income using the holdings'
+                  current yields and recalculates volatility using their historical risk and correlations. No cash is added and no trade is placed.
+                </div>
+                <p style={{ margin: 0 }}>
+                  This does not place trades or change saved holdings. A target above 0% cannot estimate income for a ticker that is not currently held because there is no portfolio income yield to carry forward.
+                </p>
+              </div>
+            </details>
           </>
         ) : (
           <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>
