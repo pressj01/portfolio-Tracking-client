@@ -22,9 +22,13 @@ dist-electron/
 .env
 .env.local
 tmp_*.log
+tmp_*.png
 
 # Debug API response dumps
 *_resp.json
+
+# Runtime user uploads
+backend/uploads/
 
 # IDE
 .vscode/
