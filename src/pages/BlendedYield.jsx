@@ -945,6 +945,16 @@ export default function BlendedYield() {
             ))}
           </div>
 
+          <div className="by-alloc-legend">
+            {fundMetrics.filter(f => f.allocPct > 0).map(f => (
+              <span key={f.id} className="by-alloc-legend-item" title={`${f.ticker}: ${fmtPct(f.allocPct, 1)}`}>
+                <span className="by-alloc-swatch" style={{ backgroundColor: f.color }} />
+                <span className="by-alloc-legend-ticker">{f.ticker}</span>
+                <span className="by-alloc-legend-pct">{fmtPct(f.allocPct, 1)}</span>
+              </span>
+            ))}
+          </div>
+
           <div className="by-table-card">
             <table className="by-table">
               <thead>

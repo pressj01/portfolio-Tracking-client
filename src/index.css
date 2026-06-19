@@ -5127,13 +5127,24 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 
 .by-alloc-bar {
   display: flex; height: 32px; border-radius: 6px;
-  overflow: hidden; margin-bottom: 1.25rem; background: var(--p-0d1b33);
+  overflow: hidden; margin-bottom: 0.75rem; background: var(--p-0d1b33);
 }
 .by-alloc-seg {
   display: flex; align-items: center; justify-content: center;
   font-size: 0.72rem; font-weight: 700; color: var(--p-0a0f1e);
   min-width: 0; transition: width 0.3s;
 }
+.by-alloc-legend {
+  display: flex; flex-wrap: wrap; gap: 0.3rem 0.85rem; margin-bottom: 1.25rem;
+}
+.by-alloc-legend-item {
+  display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.72rem;
+}
+.by-alloc-swatch {
+  width: 10px; height: 10px; border-radius: 2px; flex: none;
+}
+.by-alloc-legend-ticker { font-weight: 600; color: var(--text-strong); }
+.by-alloc-legend-pct { color: var(--text-faint-2); }
 
 .by-table-card {
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
