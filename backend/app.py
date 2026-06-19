@@ -483,10 +483,14 @@ def _basis_total_expr(alias="a"):
     else:
         price = f"COALESCE({prefix}original_price_paid, {prefix}price_paid, {prefix}broker_price_paid)"
         stored = f"COALESCE({prefix}original_purchase_value, {prefix}purchase_value, {prefix}broker_purchase_value)"
-    # Prefer quantity x per-share basis: the stored *_purchase_value total is
-    # frozen at first import and goes stale when the share count later changes.
-    return (f"CASE WHEN {price} IS NOT NULL AND {prefix}quantity IS NOT NULL "
-            f"THEN ROUND({prefix}quantity * {price}, 2) ELSE {stored} END")
+    # The explicit total is authoritative. It can legitimately differ from
+    # quantity x average price when the displayed share count includes DRIP
+    # shares or when a broker supplies an adjusted total with more precision.
+    # Import and transaction rollups refresh the stored total after position
+    # changes; derive it only for legacy/incomplete rows where no total exists.
+    return (f"COALESCE({stored}, "
+            f"CASE WHEN {price} IS NOT NULL AND {prefix}quantity IS NOT NULL "
+            f"THEN ROUND({prefix}quantity * {price}, 2) END)")
 
 
 def _first_not_none(*values):
@@ -498,11 +502,15 @@ def _first_not_none(*values):
 
 def _basis_fallback_total(row, mode=None):
     mode = mode or _basis_mode()
-    # The per-share basis price is refreshed to track the current position, but
-    # the stored *_purchase_value total is frozen at first import and goes stale
-    # when the share count later changes (e.g. partial sells), producing a wrong
-    # gain/loss. Derive the total from quantity x per-share price when possible,
-    # falling back to the stored total only when the price is unavailable.
+    if mode == "broker_adjusted":
+        stored = _first_not_none(row.get("broker_purchase_value"), row.get("purchase_value"), row.get("original_purchase_value"))
+    else:
+        stored = _first_not_none(row.get("original_purchase_value"), row.get("purchase_value"), row.get("broker_purchase_value"))
+    if stored is not None:
+        return stored
+
+    # Legacy/incomplete row fallback: reconstruct a total only when no explicit
+    # cost-basis total is available in any basis field.
     price = _basis_fallback_price(row, mode)
     qty = row.get("quantity")
     if price is not None and qty is not None:
@@ -510,9 +518,7 @@ def _basis_fallback_total(row, mode=None):
             return round(float(qty) * float(price), 2)
         except (TypeError, ValueError):
             pass
-    if mode == "broker_adjusted":
-        return _first_not_none(row.get("broker_purchase_value"), row.get("purchase_value"), row.get("original_purchase_value"))
-    return _first_not_none(row.get("original_purchase_value"), row.get("purchase_value"), row.get("broker_purchase_value"))
+    return None
 
 
 def _basis_fallback_price(row, mode=None):
@@ -1208,6 +1214,7 @@ def _optional_float(value):
 def _prepare_manual_holding_payload(data, existing=None):
     """Recalculate direct holding value fields from the final edited inputs."""
     payload = dict(data or {})
+    basis_mode = _basis_mode()
 
     def final_value(field):
         if field in payload:
@@ -1253,13 +1260,17 @@ def _prepare_manual_holding_payload(data, existing=None):
         payload["paid_for_itself"] = round(total_divs / purchase_value, 6) if purchase_value > 0 else 0
 
     if "price_paid" in payload:
-        payload["original_price_paid"] = payload.get("price_paid")
-        if existing is None or final_value("broker_price_paid") is None:
-            payload["broker_price_paid"] = payload.get("price_paid")
+        selected_price_field = "broker_price_paid" if basis_mode == "broker_adjusted" else "original_price_paid"
+        fallback_price_field = "original_price_paid" if basis_mode == "broker_adjusted" else "broker_price_paid"
+        payload[selected_price_field] = payload.get("price_paid")
+        if existing is None or final_value(fallback_price_field) is None:
+            payload[fallback_price_field] = payload.get("price_paid")
     if "purchase_value" in payload:
-        payload["original_purchase_value"] = payload.get("purchase_value")
-        if existing is None or final_value("broker_purchase_value") is None:
-            payload["broker_purchase_value"] = payload.get("purchase_value")
+        selected_total_field = "broker_purchase_value" if basis_mode == "broker_adjusted" else "original_purchase_value"
+        fallback_total_field = "original_purchase_value" if basis_mode == "broker_adjusted" else "broker_purchase_value"
+        payload[selected_total_field] = payload.get("purchase_value")
+        if existing is None or final_value(fallback_total_field) is None:
+            payload[fallback_total_field] = payload.get("purchase_value")
 
     return payload
 
@@ -8929,7 +8940,7 @@ def update_holding(ticker):
     existing = conn.execute(
         "SELECT quantity, price_paid, current_price, purchase_value, current_value, "
         "       total_divs_received, estim_payment_per_year, broker_price_paid, "
-        "       broker_purchase_value "
+        "       broker_purchase_value, original_price_paid, original_purchase_value "
         "FROM all_account_info WHERE ticker = ? AND profile_id = ?",
         (ticker, profile_id),
     ).fetchone()
