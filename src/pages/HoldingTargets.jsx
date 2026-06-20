@@ -41,6 +41,33 @@ function coverageLabel(coverage) {
   return `${pct(coverage)} · ${pct(Math.abs(difference))} ${difference > 0 ? 'over' : 'under'}`
 }
 
+// Number inputs whose displayed value is recomputed from stored state (the
+// percent ↔ dollar conversions) snap back on every keystroke, which erases a
+// decimal point before the user can type the fraction (e.g. "3000." becomes
+// "3000"). Buffer the raw text locally while the field is focused so typing —
+// including "." and trailing digits — is never reformatted mid-entry, then
+// resync to the canonical value on blur. Uses type="text"+inputMode="decimal"
+// so the intermediate "3000." string is never rejected by a number input.
+function DraftNumberInput({ value, onValueChange, ...rest }) {
+  const [draft, setDraft] = useState(null)
+  const display = draft == null ? (value ?? '') : draft
+  return (
+    <input
+      {...rest}
+      type="text"
+      inputMode="decimal"
+      value={display}
+      onChange={e => {
+        const next = e.target.value
+        if (next !== '' && !/^\d*\.?\d*$/.test(next)) return
+        setDraft(next)
+        onValueChange(next)
+      }}
+      onBlur={e => { setDraft(null); rest.onBlur && rest.onBlur(e) }}
+    />
+  )
+}
+
 export default function HoldingTargets() {
   const pf = useProfileFetch()
   const { selection, currentProfileName, isAggregate } = useProfile()
@@ -357,11 +384,11 @@ export default function HoldingTargets() {
             const pctUsed = availableSaleCash > 0 ? rawAmount / availableSaleCash * 100 : 0
             const allocGain = rawAmount * Number(row.current_yield || 0) / 100 / 12
             const isRecipient = selectedRecipients.has(row.ticker)
-            const reqDollarsDisplay = Number((row.requestedTargetPct / 100 * Number(data.total_value || 0) * displayRate).toFixed(0))
+            const reqDollarsDisplay = Number((row.requestedTargetPct / 100 * Number(data.total_value || 0) * displayRate).toFixed(2))
             const equalLocked = category.mode === 'equal'
             const pctReadOnly = allocInputMode === 'dollars'
             const dollarReadOnly = allocInputMode === 'percent'
-            return <tr key={row.ticker}><td><strong>{row.ticker}</strong><small>{row.description}</small></td><td>{row.subcategoryName}</td><td>{shares(row.quantity)}</td><td>{money(row.price)}</td><td>{pct(Number(row.current_yield || 0))}</td><td>{pct(category.actual_value > 0 ? row.current_value / category.actual_value * 100 : 0)}</td><td>{pct(row.currentPortfolioPct)}</td><td><div className="target-input-dual"><div className="target-input"><input className={pctReadOnly && !equalLocked ? 'mode-readonly' : ''} aria-label={`${row.ticker} target percentage`} type="number" min="0" max="100" step="0.1" value={Number(row.requestedTargetPct.toFixed(4))} disabled={equalLocked} readOnly={pctReadOnly} onChange={e => updateTarget(row.ticker, e.target.value)} /><span>%</span></div><div className="target-input"><span>$</span><input className={`target-dollar ${dollarReadOnly && !equalLocked ? 'mode-readonly' : ''}`} aria-label={`${row.ticker} target dollars`} type="number" min="0" step="1" value={reqDollarsDisplay} disabled={equalLocked} readOnly={dollarReadOnly} onChange={e => updateTargetDollars(row.ticker, e.target.value)} /></div><button type="button" className="target-reset-btn" aria-label={`Reset ${row.ticker} target to current`} title={`Reset only ${row.ticker} to its current ${pct(row.currentPortfolioPct)} allocation`} onClick={() => revertTickerToCurrent(category, row)}>Current</button></div></td><td>{pct(row.adjustedTargetPct)}</td><td className={row.tradeValue > .5 ? 'trade-buy' : row.tradeValue < -.5 ? 'trade-sell' : ''}>{Math.abs(row.tradeValue) < .5 ? 'Balanced' : `${row.tradeValue > 0 ? 'Buy ' : 'Sell '}${money(Math.abs(row.tradeValue))}`}</td><td className={row.tradeShares > .001 ? 'trade-buy' : row.tradeShares < -.001 ? 'trade-sell' : ''}>{row.tradeShares >= 0 ? '+' : ''}{shares(row.tradeShares)}</td><td>{money(row.monthly_income)}</td><td className={row.monthlyDelta >= 0 ? 'trade-buy' : 'trade-sell'}>{row.monthlyDelta >= 0 ? '+' : ''}{money(row.monthlyDelta)}</td><td><div className="reinvest-inline-cell"><input aria-label={`Reinvest in ${row.ticker}`} type="checkbox" checked={isRecipient} disabled={row.rawTradeValue < -.5} onChange={() => toggleRecipient(row.ticker)} />{isRecipient && <div className="reinvest-inline-entry">{allocInputMode === 'dollars' ? <div className="reinvest-amount-field"><span>$</span><input type="number" min="0" step="1" placeholder="0" value={manualAllocations[row.ticker] === '' ? '' : rawAmount > 0 ? Number(displayAmount.toFixed(2)) : ''} onChange={e => setManualAllocationDollars(row.ticker, e.target.value)} /></div> : <div className="reinvest-amount-field"><input type="number" min="0" step="0.1" placeholder="0" value={manualAllocations[row.ticker] === '' ? '' : pctUsed > 0 ? Number(pctUsed.toFixed(1)) : ''} onChange={e => setManualAllocationPercent(row.ticker, e.target.value)} /><span>%</span></div>}{rawAmount > 0.5 && <small className="trade-buy reinvest-gain">+{money(allocGain)}/mo</small>}</div>}</div></td></tr>
+            return <tr key={row.ticker}><td><strong>{row.ticker}</strong><small>{row.description}</small></td><td>{row.subcategoryName}</td><td>{shares(row.quantity)}</td><td>{money(row.price)}</td><td>{pct(Number(row.current_yield || 0))}</td><td>{pct(category.actual_value > 0 ? row.current_value / category.actual_value * 100 : 0)}</td><td>{pct(row.currentPortfolioPct)}</td><td><div className="target-input-dual"><div className="target-input"><DraftNumberInput className={pctReadOnly && !equalLocked ? 'mode-readonly' : ''} aria-label={`${row.ticker} target percentage`} value={Number(row.requestedTargetPct.toFixed(4))} disabled={equalLocked} readOnly={pctReadOnly} onValueChange={v => updateTarget(row.ticker, v)} /><span>%</span></div><div className="target-input"><span>$</span><DraftNumberInput className={`target-dollar ${dollarReadOnly && !equalLocked ? 'mode-readonly' : ''}`} aria-label={`${row.ticker} target dollars`} value={reqDollarsDisplay} disabled={equalLocked} readOnly={dollarReadOnly} onValueChange={v => updateTargetDollars(row.ticker, v)} /></div><button type="button" className="target-reset-btn" aria-label={`Reset ${row.ticker} target to current`} title={`Reset only ${row.ticker} to its current ${pct(row.currentPortfolioPct)} allocation`} onClick={() => revertTickerToCurrent(category, row)}>Current</button></div></td><td>{pct(row.adjustedTargetPct)}</td><td className={row.tradeValue > .5 ? 'trade-buy' : row.tradeValue < -.5 ? 'trade-sell' : ''}>{Math.abs(row.tradeValue) < .5 ? 'Balanced' : `${row.tradeValue > 0 ? 'Buy ' : 'Sell '}${money(Math.abs(row.tradeValue))}`}</td><td className={row.tradeShares > .001 ? 'trade-buy' : row.tradeShares < -.001 ? 'trade-sell' : ''}>{row.tradeShares >= 0 ? '+' : ''}{shares(row.tradeShares)}</td><td>{money(row.monthly_income)}</td><td className={row.monthlyDelta >= 0 ? 'trade-buy' : 'trade-sell'}>{row.monthlyDelta >= 0 ? '+' : ''}{money(row.monthlyDelta)}</td><td><div className="reinvest-inline-cell"><input aria-label={`Reinvest in ${row.ticker}`} type="checkbox" checked={isRecipient} disabled={row.rawTradeValue < -.5} onChange={() => toggleRecipient(row.ticker)} />{isRecipient && <div className="reinvest-inline-entry">{allocInputMode === 'dollars' ? <div className="reinvest-amount-field"><span>$</span><DraftNumberInput placeholder="0" value={manualAllocations[row.ticker] === '' ? '' : rawAmount > 0 ? Number(displayAmount.toFixed(2)) : ''} onValueChange={v => setManualAllocationDollars(row.ticker, v)} /></div> : <div className="reinvest-amount-field"><DraftNumberInput placeholder="0" value={manualAllocations[row.ticker] === '' ? '' : pctUsed > 0 ? Number(pctUsed.toFixed(1)) : ''} onValueChange={v => setManualAllocationPercent(row.ticker, v)} /><span>%</span></div>}{rawAmount > 0.5 && <small className="trade-buy reinvest-gain">+{money(allocGain)}/mo</small>}</div>}</div></td></tr>
           })}</tbody>
         </table></div>}
       </section>
