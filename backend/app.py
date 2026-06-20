@@ -14178,7 +14178,8 @@ def categories_data():
 
     # Fetch active holdings only
     all_holdings = conn.execute(
-        """SELECT ticker, description, classification_type, current_value, approx_monthly_income,
+        """SELECT ticker, description, classification_type, quantity, current_price,
+                  current_value, approx_monthly_income,
                   current_annual_yield, div_frequency, nav_erosion_scope, gain_or_loss_percentage
            FROM all_account_info
            WHERE profile_id = ? AND quantity > 0""",
@@ -14204,7 +14205,7 @@ def categories_data():
     ).fetchall()
     # Fetch subcategories (second tier within a category)
     subcat_rows = conn.execute(
-        "SELECT id, category_id, name, sort_order FROM subcategories WHERE profile_id = ? ORDER BY sort_order, name",
+        "SELECT id, category_id, name, target_pct, sort_order FROM subcategories WHERE profile_id = ? ORDER BY sort_order, name",
         (profile_id,),
     ).fetchall()
     subcats_by_category = {}
@@ -14212,6 +14213,7 @@ def categories_data():
         subcats_by_category.setdefault(s["category_id"], []).append({
             "id": s["id"],
             "name": s["name"],
+            "target_pct": s["target_pct"],
             "sort_order": s["sort_order"],
         })
     # Build response
@@ -14237,6 +14239,8 @@ def categories_data():
                         "ticker": t,
                         "description": h["description"],
                         "classification_type": h["classification_type"],
+                        "quantity": float(h["quantity"] or 0),
+                        "current_price": float(h["current_price"] or 0),
                         "current_value": h_value,
                         "monthly_income": h_monthly_income,
                         "current_yield": (h_monthly_income * 12 / h_value * 100) if h_value > 0 else 0,
@@ -14301,6 +14305,8 @@ def categories_data():
                 "ticker": h["ticker"],
                 "description": h["description"],
                 "classification_type": h["classification_type"],
+                "quantity": float(h["quantity"] or 0),
+                "current_price": float(h["current_price"] or 0),
                 "current_value": h_value,
                 "monthly_income": h_monthly_income,
                 "current_yield": (h_monthly_income * 12 / h_value * 100) if h_value > 0 else 0,
@@ -14589,6 +14595,7 @@ def create_subcategory(cat_id):
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "Name is required"}), 400
+    target_pct = data.get("target_pct")
     conn = get_connection()
     # Ensure the parent category exists for this profile
     parent = conn.execute(
@@ -14604,8 +14611,8 @@ def create_subcategory(cat_id):
     ).fetchone()["n"]
     try:
         conn.execute(
-            "INSERT INTO subcategories (category_id, name, profile_id, sort_order) VALUES (?, ?, ?, ?)",
-            (cat_id, name, profile_id, max_order),
+            "INSERT INTO subcategories (category_id, name, target_pct, profile_id, sort_order) VALUES (?, ?, ?, ?, ?)",
+            (cat_id, name, target_pct, profile_id, max_order),
         )
         conn.commit()
     except Exception:
@@ -14619,19 +14626,31 @@ def create_subcategory(cat_id):
 def update_subcategory(sub_id):
     profile_id = get_profile_id()
     data = request.get_json()
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "Name is required"}), 400
     conn = get_connection()
+    sets, vals = [], []
+    if "name" in data:
+        name = (data.get("name") or "").strip()
+        if not name:
+            conn.close()
+            return jsonify({"error": "Name is required"}), 400
+        sets.append("name = ?")
+        vals.append(name)
+    if "target_pct" in data:
+        sets.append("target_pct = ?")
+        vals.append(data["target_pct"])
+    if not sets:
+        conn.close()
+        return jsonify({"error": "Nothing to update"}), 400
+    vals.extend([sub_id, profile_id])
     try:
         conn.execute(
-            "UPDATE subcategories SET name = ? WHERE id = ? AND profile_id = ?",
-            (name, sub_id, profile_id),
+            f"UPDATE subcategories SET {', '.join(sets)} WHERE id = ? AND profile_id = ?",
+            vals,
         )
         conn.commit()
     except Exception:
         conn.close()
-        return jsonify({"error": f"Sub-category '{name}' already exists in this category"}), 409
+        return jsonify({"error": "Sub-category already exists in this category"}), 409
     conn.close()
     return jsonify({"message": "Sub-category updated"})
 
@@ -14652,6 +14671,109 @@ def delete_subcategory(sub_id):
     conn.commit()
     conn.close()
     return jsonify({"message": "Sub-category deleted"})
+
+
+@app.route("/api/categories/push-to-subaccounts", methods=["POST"])
+def push_categories_to_subaccounts():
+    """Owner-only: copy the Owner's categories + sub-categories (incl. targets)
+    down to every included sub-account. Same-named categories are overwritten:
+    their target is reset to the Owner's and their sub-categories are rebuilt to
+    match the Owner's, so any ticker assigned to a removed sub-category falls back
+    to unclassified within its parent category. Ticker→category assignments and
+    categories the Owner does not define are left untouched."""
+    if _request_aggregate_id() is not None or get_profile_id() != 1:
+        return jsonify({"error": "Only the Owner profile can push categories to sub-accounts"}), 403
+
+    conn = get_connection()
+    source_ids = _get_owner_source_profile_ids(conn)
+    if not source_ids:
+        conn.close()
+        return jsonify({"error": "No included sub-accounts to push to"}), 400
+
+    owner_cats = conn.execute(
+        "SELECT id, name, target_pct, sort_order FROM categories WHERE profile_id = 1 ORDER BY sort_order, name"
+    ).fetchall()
+    owner_subs_by_cat = {}
+    for s in conn.execute(
+        "SELECT category_id, name, target_pct, sort_order FROM subcategories WHERE profile_id = 1 ORDER BY sort_order, name"
+    ).fetchall():
+        owner_subs_by_cat.setdefault(s["category_id"], []).append(s)
+
+    cats_created = 0
+    cats_overwritten = 0
+    subs_pushed = 0
+    for pid in source_ids:
+        for oc in owner_cats:
+            name = (oc["name"] or "").strip()
+            if not name:
+                continue
+            owner_subs = [s for s in owner_subs_by_cat.get(oc["id"], []) if (s["name"] or "").strip()]
+            owner_sub_names = {(s["name"] or "").strip() for s in owner_subs}
+            existing = conn.execute(
+                "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
+                (name, pid),
+            ).fetchone()
+            if existing:
+                cat_id = existing["id"]
+                conn.execute(
+                    "UPDATE categories SET target_pct = ?, sort_order = ? WHERE id = ? AND profile_id = ?",
+                    (oc["target_pct"], oc["sort_order"], cat_id, pid),
+                )
+                cats_overwritten += 1
+                # Existing sub-categories in this sub-account, keyed by name.
+                existing_subs = {
+                    (r["name"] or "").strip(): r["id"]
+                    for r in conn.execute(
+                        "SELECT id, name FROM subcategories WHERE category_id = ? AND profile_id = ?",
+                        (cat_id, pid),
+                    ).fetchall()
+                }
+                # Overwrite: remove only the sub-categories the Owner no longer has.
+                # Their tickers fall back to unclassified within the parent category.
+                stale_ids = [sid for sname, sid in existing_subs.items() if sname not in owner_sub_names]
+                if stale_ids:
+                    sph = ",".join("?" * len(stale_ids))
+                    conn.execute(
+                        f"UPDATE ticker_categories SET subcategory_id = NULL WHERE profile_id = ? AND subcategory_id IN ({sph})",
+                        [pid, *stale_ids],
+                    )
+                    conn.execute(
+                        f"DELETE FROM subcategories WHERE profile_id = ? AND id IN ({sph})",
+                        [pid, *stale_ids],
+                    )
+            else:
+                cur = conn.execute(
+                    "INSERT INTO categories (name, target_pct, profile_id, sort_order) VALUES (?, ?, ?, ?)",
+                    (name, oc["target_pct"], pid, oc["sort_order"]),
+                )
+                cat_id = cur.lastrowid
+                cats_created += 1
+                existing_subs = {}
+            # Upsert the Owner's sub-categories BY NAME. Matching same-named
+            # sub-categories keep their id, so existing ticker -> sub-category
+            # assignments in the sub-account are preserved (only the target is synced).
+            for os in owner_subs:
+                sub_name = (os["name"] or "").strip()
+                if sub_name in existing_subs:
+                    conn.execute(
+                        "UPDATE subcategories SET target_pct = ?, sort_order = ? WHERE id = ? AND profile_id = ?",
+                        (os["target_pct"], os["sort_order"], existing_subs[sub_name], pid),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO subcategories (category_id, name, target_pct, profile_id, sort_order) VALUES (?, ?, ?, ?, ?)",
+                        (cat_id, sub_name, os["target_pct"], pid, os["sort_order"]),
+                    )
+                subs_pushed += 1
+    conn.commit()
+    conn.close()
+    return jsonify({
+        "message": f"Pushed {len(owner_cats)} categories to {len(source_ids)} sub-account(s)",
+        "subaccounts": len(source_ids),
+        "categories_created": cats_created,
+        "categories_overwritten": cats_overwritten,
+        "subcategories_pushed": subs_pushed,
+    })
 
 
 # ── Dividend Analysis ──────────────────────────────────────────────────────────
@@ -30531,24 +30653,31 @@ def sp500_performance():
         if hist.empty:
             return jsonify({"error": "No S&P 500 data available"}), 502
 
-        # YTD: compare latest close to last close of prior year
-        first_of_year = hist.loc[hist.index >= str(year_start)]
+        # Yahoo can occasionally return rows whose Close is NaN. Treat those
+        # as unavailable instead of returning HTTP 200 with JSON null values.
+        closes = hist["Close"].dropna()
+        closes = closes[closes.map(lambda value: math.isfinite(float(value)))]
+        if closes.empty:
+            return jsonify({"error": "No valid S&P 500 closing prices available"}), 502
+
+        # YTD: compare latest valid close to last valid close of prior year
+        first_of_year = closes.loc[closes.index >= str(year_start)]
         if first_of_year.empty:
             return jsonify({"error": "No YTD data"}), 502
 
         # Use the close before Jan 1 as the baseline
-        prior = hist.loc[hist.index < str(year_start)]
+        prior = closes.loc[closes.index < str(year_start)]
         if not prior.empty:
-            baseline = float(prior["Close"].iloc[-1])
+            baseline = float(prior.iloc[-1])
         else:
-            baseline = float(first_of_year["Close"].iloc[0])
+            baseline = float(first_of_year.iloc[0])
 
-        latest = float(hist["Close"].iloc[-1])
+        latest = float(closes.iloc[-1])
         ytd_pct = ((latest - baseline) / baseline) * 100
 
         # 1-day change
-        if len(hist) >= 2:
-            prev_close = float(hist["Close"].iloc[-2])
+        if len(closes) >= 2:
+            prev_close = float(closes.iloc[-2])
             day_pct = ((latest - prev_close) / prev_close) * 100
         else:
             day_pct = 0.0

@@ -36,6 +36,7 @@ const GROUPS = [
       { id: 'holdings', label: 'Holdings' },
       { id: 'reinvestment-impact', label: 'Reinvestment Impact' },
       { id: 'categories', label: 'Categories' },
+      { id: 'holding-targets', label: 'Holding Targets' },
       { id: 'growth', label: 'Growth' },
       { id: 'growth-2', label: 'Portfolio Growth 2' },
       { id: 'dividends', label: 'Dividends' },
@@ -6390,6 +6391,129 @@ function CEFBuyingChecklistHelp() {
   )
 }
 
+function HoldingTargetsHelp() {
+  return (
+    <div>
+      <h2>Holding Targets</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Holding Targets</strong> is the ticker-level planning layer that sits between Categories and the Rebalance Wizard.
+        Set a target weight for each holding, preview how trades would change your income and allocation, and distribute
+        reallocation cash without leaving the page. Changes are what-if only — nothing executes until you act in your broker.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/holding-targets/holding-targets-overview.png"
+          alt="Holding Targets page showing summary cards, Reallocation Cash Pool, and Category / Pillar Breakdown table"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Quick-Set Controls</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Set every holding to X% of portfolio</strong> — type a percentage and click <strong>Apply</strong> to bulk-assign that weight to every holding at once. Use this as a starting point, then fine-tune individual rows in the table below.</li>
+        <li><strong>Enter amounts as % / $</strong> — a global toggle that switches every <em>Requested</em> and <em>Reinvest</em> box between percent and dollar entry. In <strong>%</strong> mode (the default) the percent box is editable and the matching dollar box is shown read-only; in <strong>$</strong> mode they swap. The other unit always stays visible so you can see both at once — type whichever is more natural for the holding you're working on.</li>
+        <li><strong>Adjust all categories to a 100% portfolio</strong> — when checked, the adjusted scenario rescales all requested targets proportionally so they sum to exactly 100%, regardless of what you entered. Uncheck to keep your raw requested weights as-is.</li>
+        <li><strong>Save adjusted targets</strong> — persists the current adjusted scenario weights to the database so they become the new baseline when you return.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Portfolio / # holdings</strong> — active portfolio name and how many holdings are covered by this scenario.</li>
+        <li><strong>Requested Total</strong> — sum of all your requested target weights. Shown in amber when over 100%, red when significantly over.</li>
+        <li><strong>Adjusted Scenario</strong> — what the targets become after the auto-adjust rescaling (if enabled). "Every requested target × X.XXXX" shows the scaling factor applied.</li>
+        <li><strong>Net Trade</strong> — estimated net cash flow if all proposed trades executed. Positive = net buy (requires new cash); zero = cash-neutral rebalance.</li>
+        <li><strong>Monthly Income After</strong> — projected monthly income after all proposed trades, with the monthly and annual change vs. today.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Reallocation Cash Pool</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The cash pool lets you plan how to deploy proceeds from proposed sales into holdings you want to grow.
+        It activates when a proposed sale generates proceeds and you check <strong>Reinvest</strong> beside a recipient holding in the table below.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Manual Pool Cash Available</strong> — total proceeds available to distribute after covering planned buys.</li>
+        <li><strong>Allocation Entered / Cash Remaining</strong> — how much of the pool you've assigned so far and what's left.</li>
+        <li><strong>Selected Recipients</strong> — count of holdings marked Reinvest that will receive distributed cash.</li>
+        <li><strong>Projected Monthly / Annual Income Gain</strong> — estimated additional income from the planned cash distribution.</li>
+        <li><strong>Enter the amount on each row</strong> — once a holding is checked as a recipient, an inline box appears right on that row in the table below. Type the amount you want to send it directly there — in dollars or percent depending on the global <strong>Enter amounts as</strong> toggle. A small <em>+$X/mo</em> hint shows the income that allocation would add.</li>
+        <li><strong>Auto-fill</strong> — three shortcuts that populate the per-row amounts for you, so you don't have to type each one:
+          <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginTop: '0.4rem' }}>
+            <li><em>Equal</em> — splits the available pool evenly across all selected recipients.</li>
+            <li><em>By Gap</em> — sends more to categories furthest below their target %.</li>
+            <li><em>By Yield</em> — weights by distribution yield to maximize added monthly income.</li>
+          </ul>
+          You can fine-tune any individual row by hand after running an auto-fill.
+        </li>
+        <li><strong>Apply Allocation</strong> — commits the entered per-row amounts to the requested targets and refreshes the income projections.</li>
+        <li><strong>Clear Selections</strong> — removes all Reinvest checkmarks and resets allocations.</li>
+        <li><strong>Cash Pool ↑ / ↓</strong> — collapses or expands the cash pool panel.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Category / Pillar Breakdown Table</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The main table groups all holdings by category (and subcategory). Each category row shows a summary,
+        and each holding row lets you enter a target weight.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Category Plan</strong> — the category's target % from the Categories page.</li>
+        <li><strong>Requested</strong> — the sum of all requested ticker weights within that category.</li>
+        <li><strong>Coverage</strong> — how the requested sum compares to the Category Plan. Shown in amber/red when significantly over.</li>
+        <li><strong>Adjusted</strong> — the ticker weights after the auto-adjust scaling factor is applied.</li>
+        <li><strong>Current</strong> — actual current allocation % in the live portfolio.</li>
+        <li><strong>Monthly Income Now / After</strong> — current monthly income and projected monthly income after proposed trades.</li>
+        <li><strong>Current Value / Target Value / To Target</strong> — dollar value today, dollar value at the target weight, and the difference (red = need to sell, green = need to buy).</li>
+        <li><strong>Reinvest checkbox</strong> — marks a holding as a recipient for cash-pool distribution.</li>
+        <li><strong>Equal weight / Keep current buttons</strong> (category footer) — shortcuts to split the category plan equally among its holdings, or reset all holdings in the category to their current actual weights.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Per-Holding Tables</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Below the breakdown, each category (Anchors, Boosters, Growth, etc.) expands into its own table where you set targets ticker by ticker.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/holding-targets/holding-targets-ticker-tables.png"
+          alt="Per-holding tables for Anchors and Boosters categories showing Yield column and dual percent/dollar Requested boxes"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
+
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Shares / Price</strong> — current shares held and the latest price per share.</li>
+        <li><strong>Yield</strong> — the holding's projected forward yield (annualized distribution ÷ price). Use it as a quick reference when deciding which holdings to reallocate <em>toward</em> — higher-yield names add more monthly income per dollar moved.</li>
+        <li><strong>% of category / Current %</strong> — the holding's share of its category today, and its share of the whole portfolio today.</li>
+        <li><strong>Requested (% ⟂ $)</strong> — your target for the holding, shown as a side-by-side percent box and dollar box. The unit selected by the <strong>Enter amounts as</strong> toggle is editable; the other is read-only and updates automatically as you type. The <strong>Current</strong> button beside them resets just that one holding to its present weight.</li>
+        <li><strong>Adjusted %</strong> — the target after the auto-adjust scaling factor is applied.</li>
+        <li><strong>Buy / Sell &amp; Shares +/-</strong> — the trade implied by the gap between current and target, in dollars and in shares.</li>
+        <li><strong>Monthly Income Now / +/-</strong> — current monthly income from the holding and how it would change under the proposed target.</li>
+        <li><strong>Reinvest / Alloc</strong> — check to make the holding a cash-pool recipient; an inline amount box then appears for you to type its share of the pool.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Uncategorized Holdings</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Any holding that hasn't been assigned to a category on the <strong>Categories</strong> page appears in an
+        <strong> Uncategorized</strong> group at the bottom. You can still set targets and use the cash pool for
+        uncategorized holdings — assign them to categories later on the Categories page to track them within a pillar.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Workflow Tips</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Use <strong>Set every holding to X%</strong> to seed all weights, then adjust individual rows to reflect your actual conviction level per holding.</li>
+        <li>Enable <strong>Adjust all categories to 100%</strong> so the scaled scenario always sums cleanly — watch the Coverage column to see where you're over or under within each category.</li>
+        <li>When a category is over its plan, use the <strong>Equal weight</strong> shortcut in that category's footer to redistribute evenly among its members.</li>
+        <li>To redeploy sale proceeds, lower a holding's target below its current weight, then check <strong>Reinvest</strong> on the destination holdings and either type each amount inline or use an <strong>Auto-fill</strong> shortcut (Equal, By Gap, By Yield) before clicking <strong>Apply Allocation</strong>. The <strong>Yield</strong> column helps you pick destinations that add the most income.</li>
+        <li>Click <strong>Save adjusted targets</strong> when you're happy — the saved weights become the starting point next time you open the page and feed into the Rebalance Wizard.</li>
+      </ol>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
+        <strong>No trades execute here.</strong> Holding Targets is a planning and preview tool. To generate actual broker trade instructions, use the <strong>Rebalance Wizard</strong> (button in the top-right corner or the Analysis → Planning menu).
+      </div>
+    </div>
+  )
+}
+
 const CONTENT_MAP = {
   overview: Overview,
   'action-center': ActionCenterHelp,
@@ -6405,6 +6529,7 @@ const CONTENT_MAP = {
   holdings: HoldingsHelp,
   'reinvestment-impact': ReinvestmentImpactHelp,
   categories: CategoriesHelp,
+  'holding-targets': HoldingTargetsHelp,
   growth: GrowthHelp,
   'growth-2': PortfolioGrowth2Help,
   dividends: DividendsHelp,

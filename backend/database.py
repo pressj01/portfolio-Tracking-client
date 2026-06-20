@@ -722,12 +722,21 @@ def ensure_tables_exist(conn=None):
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             category_id INTEGER NOT NULL,
             name        TEXT NOT NULL,
+            target_pct  REAL,
             profile_id  INTEGER NOT NULL DEFAULT 1,
             sort_order  INTEGER NOT NULL DEFAULT 0,
             UNIQUE (category_id, name, profile_id),
             FOREIGN KEY (category_id) REFERENCES categories(id)
         )
     """)
+
+    # Add target_pct to subcategories if missing (sub-category target = % of parent category)
+    _subcat_cols = {r[1] for r in cur.execute("PRAGMA table_info(subcategories)").fetchall()}
+    if "target_pct" not in _subcat_cols:
+        try:
+            cur.execute("ALTER TABLE subcategories ADD COLUMN target_pct REAL")
+        except Exception:
+            pass
 
     # Add subcategory_id to ticker_categories if missing
     _tc_cols = {r[1] for r in cur.execute("PRAGMA table_info(ticker_categories)").fetchall()}

@@ -52,6 +52,7 @@ import ETFProviderUpdate from './pages/ETFProviderUpdate'
 import ETFComparer from './pages/ETFComparer'
 import StockComparer from './pages/StockComparer'
 import RebalanceWizard from './pages/RebalanceWizard'
+import HoldingTargets from './pages/HoldingTargets'
 import ActionCenter from './pages/ActionCenter'
 import ClosedCEFInformation from './pages/ClosedCEFInformation'
 import CEFBuyingGuide from './pages/CEFBuyingGuide'
@@ -204,6 +205,7 @@ function App() {
         <Route path="/etf-comparer" element={<ETFComparer />} />
         <Route path="/stock-comparer" element={<StockComparer />} />
         <Route path="/rebalance-wizard" element={<RebalanceWizard />} />
+        <Route path="/holding-targets" element={<HoldingTargets />} />
         <Route path="/tax-report" element={<AnnualTaxReport />} />
         <Route path="/tax-loss" element={<TaxLossHarvest />} />
         <Route path="/blended-yield" element={<BlendedYield />} />
@@ -280,6 +282,7 @@ function Nav() {
       <NavDropdown label="Portfolio">
         <NavLink to="/holdings">Holdings</NavLink>
         <NavLink to="/categories">Categories</NavLink>
+        <NavLink to="/holding-targets">Holding Targets</NavLink>
         <NavLink to="/growth">Growth</NavLink>
         <NavLink to="/growth-2">Portfolio Growth 2</NavLink>
         <NavLink to="/retirement-readiness">Retirement Readiness</NavLink>

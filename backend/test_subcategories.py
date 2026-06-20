@@ -206,6 +206,112 @@ class SubcategoryApiTest(unittest.TestCase):
         self.assertIsNone(self._row("SELECT id FROM subcategories WHERE category_id = 1"))
         self.assertIsNone(self._row("SELECT id FROM categories WHERE id = 1"))
 
+    # ── sub-category target (% of parent category) ───────────────────────────────
+    def test_create_subcategory_with_target(self):
+        res = self.client.post(
+            "/api/categories/1/subcategories?profile_id=1",
+            json={"name": "Gold", "target_pct": 60},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(self._row("SELECT target_pct FROM subcategories WHERE name = 'Gold'")["target_pct"], 60)
+
+    def test_data_endpoint_exposes_subcategory_target(self):
+        self.client.post("/api/categories/1/subcategories?profile_id=1", json={"name": "Gold", "target_pct": 60})
+        data = self.client.get("/api/categories/data?profile_id=1").get_json()
+        gold = self._category(data)["subcategories"][0]
+        self.assertEqual(gold["target_pct"], 60)
+
+    def test_update_subcategory_target_only(self):
+        self._create_sub("Gold")
+        gold_id = self._row("SELECT id FROM subcategories WHERE name = 'Gold'")["id"]
+        res = self.client.put(f"/api/subcategories/{gold_id}?profile_id=1", json={"target_pct": 40})
+        self.assertEqual(res.status_code, 200)
+        row = self._row("SELECT name, target_pct FROM subcategories WHERE id = ?", (gold_id,))
+        self.assertEqual(row["name"], "Gold")  # name preserved
+        self.assertEqual(row["target_pct"], 40)
+
+    # ── push to sub-accounts ─────────────────────────────────────────────────────
+    def _seed_subaccount(self, pid=2, name="Sub"):
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO profiles (id, name, include_in_owner) VALUES (?, ?, 1)",
+                (pid, name),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_push_creates_categories_and_subcategories_in_subaccount(self):
+        self.client.post("/api/categories/1/subcategories?profile_id=1", json={"name": "Gold", "target_pct": 60})
+        self.client.post("/api/categories/1/subcategories?profile_id=1", json={"name": "Silver", "target_pct": 40})
+        self._seed_subaccount(pid=2)
+        res = self.client.post("/api/categories/push-to-subaccounts?profile_id=1")
+        self.assertEqual(res.status_code, 200)
+        cat = self._row("SELECT id, target_pct FROM categories WHERE name = 'Metals' AND profile_id = 2")
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat["target_pct"], 10)
+        conn = self._get_connection()
+        try:
+            subs = conn.execute(
+                "SELECT name, target_pct FROM subcategories WHERE profile_id = 2 ORDER BY name"
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([(s["name"], s["target_pct"]) for s in subs], [("Gold", 60), ("Silver", 40)])
+
+    def test_push_overwrites_existing_subaccount_category(self):
+        self.client.post("/api/categories/1/subcategories?profile_id=1", json={"name": "Gold", "target_pct": 60})
+        self._seed_subaccount(pid=2)
+        # Pre-existing differing category + sub-category in the sub-account.
+        conn = self._get_connection()
+        try:
+            conn.execute("INSERT INTO categories (name, target_pct, profile_id, sort_order) VALUES ('Metals', 99, 2, 5)")
+            cat2 = conn.execute("SELECT id FROM categories WHERE name='Metals' AND profile_id=2").fetchone()["id"]
+            conn.execute("INSERT INTO subcategories (category_id, name, profile_id) VALUES (?, 'Platinum', 2)", (cat2,))
+            conn.commit()
+        finally:
+            conn.close()
+        self.client.post("/api/categories/push-to-subaccounts?profile_id=1")
+        # Target overwritten to owner's, old sub-category gone, owner's sub-category present.
+        self.assertEqual(self._row("SELECT target_pct FROM categories WHERE name='Metals' AND profile_id=2")["target_pct"], 10)
+        self.assertIsNone(self._row("SELECT id FROM subcategories WHERE name='Platinum' AND profile_id=2"))
+        self.assertIsNotNone(self._row("SELECT id FROM subcategories WHERE name='Gold' AND profile_id=2"))
+
+    def test_push_preserves_existing_subaccount_assignments(self):
+        # Owner has Metals -> Gold. Sub-account already has Metals -> Gold with a
+        # ticker assigned to it. Pushing must keep that ticker in Gold (no id churn).
+        self.client.post("/api/categories/1/subcategories?profile_id=1", json={"name": "Gold", "target_pct": 70})
+        self._seed_subaccount(pid=2)
+        conn = self._get_connection()
+        try:
+            conn.execute("INSERT INTO categories (name, target_pct, profile_id, sort_order) VALUES ('Metals', 5, 2, 0)")
+            cat2 = conn.execute("SELECT id FROM categories WHERE name='Metals' AND profile_id=2").fetchone()["id"]
+            conn.execute("INSERT INTO subcategories (category_id, name, profile_id) VALUES (?, 'Gold', 2)", (cat2,))
+            gold2 = conn.execute("SELECT id FROM subcategories WHERE name='Gold' AND profile_id=2").fetchone()["id"]
+            conn.execute(
+                "INSERT INTO all_account_info (ticker, profile_id, description, classification_type, quantity, current_value, approx_monthly_income, div_frequency, nav_erosion_scope, gain_or_loss_percentage) "
+                "VALUES ('IAU', 2, 'IAU fund', 'ETF', 100, 1000, 0, 'M', 'auto', 0)"
+            )
+            conn.execute(
+                "INSERT INTO ticker_categories (ticker, category_id, subcategory_id, profile_id) VALUES ('IAU', ?, ?, 2)",
+                (cat2, gold2),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self.client.post("/api/categories/push-to-subaccounts?profile_id=1")
+        # Same Gold sub-category id kept, IAU still assigned to it, target synced to owner's.
+        row = self._row("SELECT id, target_pct FROM subcategories WHERE name='Gold' AND profile_id=2")
+        self.assertEqual(row["id"], gold2)
+        self.assertEqual(row["target_pct"], 70)
+        self.assertEqual(self._row("SELECT subcategory_id FROM ticker_categories WHERE ticker='IAU'")["subcategory_id"], gold2)
+
+    def test_push_rejected_for_non_owner(self):
+        self._seed_subaccount(pid=2)
+        res = self.client.post("/api/categories/push-to-subaccounts?profile_id=2")
+        self.assertEqual(res.status_code, 403)
+
 
 if __name__ == "__main__":
     unittest.main()

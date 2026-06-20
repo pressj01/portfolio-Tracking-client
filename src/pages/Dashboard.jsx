@@ -11,6 +11,7 @@ import { formatMoney } from '../utils/money'
 
 const DASHBOARD_CACHE_TTL_MS = 60 * 60 * 1000
 const SP500_CACHE_KEY = 'portfolio_dashboard_sp500'
+const validSp500 = value => value?.price != null && Number.isFinite(Number(value.price))
 
 const fmt = (v, d = 2) => formatMoney(v, { digits: d, zeroIfInvalid: true })
 const fmtShares = (v) => Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 })
@@ -569,11 +570,12 @@ export default function Dashboard() {
 
   useEffect(() => {
     const cached = readDashboardCache(SP500_CACHE_KEY)
-    if (cached) setSp500(cached)
+    if (validSp500(cached)) setSp500(cached)
     const fetchSp500 = () =>
       fetch(`${API_BASE}/api/sp500-performance`)
         .then(safeJson)
         .then(d => {
+          if (!validSp500(d)) throw new Error('S&P 500 quote was incomplete')
           setSp500(d)
           writeDashboardCache(SP500_CACHE_KEY, d)
         })
@@ -1261,15 +1263,21 @@ export default function Dashboard() {
         {sp500 && (
           <SummaryCard
             label="S&P 500"
-            value={sp500.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            value={sp500.price != null && Number.isFinite(Number(sp500.price))
+              ? Number(sp500.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+              : 'Unavailable'}
             sub={
               <span>
-                <span style={{ color: sp500.day_pct >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
-                  Day: {sp500.day_pct >= 0 ? '+' : ''}{sp500.day_pct.toFixed(2)}%
+                <span style={{ color: sp500.day_pct == null ? 'var(--text-dim)' : sp500.day_pct >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
+                  Day: {sp500.day_pct != null && Number.isFinite(Number(sp500.day_pct))
+                    ? `${Number(sp500.day_pct) >= 0 ? '+' : ''}${Number(sp500.day_pct).toFixed(2)}%`
+                    : 'Unavailable'}
                 </span>
                 {' · '}
-                <span style={{ color: sp500.ytd_pct >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
-                  YTD: {sp500.ytd_pct >= 0 ? '+' : ''}{sp500.ytd_pct.toFixed(2)}%
+                <span style={{ color: sp500.ytd_pct == null ? 'var(--text-dim)' : sp500.ytd_pct >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
+                  YTD: {sp500.ytd_pct != null && Number.isFinite(Number(sp500.ytd_pct))
+                    ? `${Number(sp500.ytd_pct) >= 0 ? '+' : ''}${Number(sp500.ytd_pct).toFixed(2)}%`
+                    : 'Unavailable'}
                 </span>
               </span>
             }
