@@ -432,8 +432,24 @@ export function gradeRiskRatios(fund, id = 8) {
 
 // Translate a composite (0-100) plus any hard fails into a buy / pass verdict.
 export function verdictFromComposite(composite, criteria) {
-  if (composite === null || composite === undefined) {
-    return { label: 'Insufficient Data', tone: 'info', detail: 'Not enough data to score this fund — too few criteria could be evaluated.' }
+  const scoredCount = (criteria || []).filter(c => typeof c.score === 'number').length
+  const keys = new Set((criteria || []).map(c => c.key))
+  const isEtfChecklist = keys.has('categoryFit') || keys.has('strategyFit')
+  const hasPerformanceEvidence = (criteria || []).some(c => (
+    ['performance', 'navErosion', 'yieldSustainability', 'risk', 'riskRatios'].includes(c.key)
+    && typeof c.score === 'number'
+  ))
+  if (
+    composite === null
+    || composite === undefined
+    || scoredCount < 3
+    || (isEtfChecklist && !hasPerformanceEvidence)
+  ) {
+    return {
+      label: 'Not Enough Information to Evaluate',
+      tone: 'info',
+      detail: 'A verdict requires at least three scored criteria, including total return, NAV erosion, yield sustainability, or risk.',
+    }
   }
   const fails = (criteria || []).filter(c => c.badge === 'fail').length
   const failPhrase = fails === 1 ? '1 failing criterion' : `${fails} failing criteria`
@@ -458,7 +474,7 @@ export function gradeFund(fund, peers, thresholds) {
     gradeRiskRatios(fund, 8),
   ]
   const scored = criteria.filter(c => typeof c.score === 'number')
-  const composite = scored.length
+  const composite = scored.length >= 3
     ? scored.reduce((s, c) => s + c.score, 0) / scored.length
     : null
   return { fund, criteria, composite }

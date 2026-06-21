@@ -1436,7 +1436,6 @@ export default function Dashboard() {
               <SortHeader col="price_paid" align="right" tip="Price paid per share">Paid</SortHeader>
               <SortHeader col="current_price" align="right" tip="Current market price per share">Price</SortHeader>
               <SortHeader col="pct_of_account" align="right" tip="Percent of total account value">%Acct</SortHeader>
-              <SortHeader col="gain_or_loss_percentage" align="right" tip="Unrealized gain or loss percentage">G/L%</SortHeader>
               <SortHeader col="price_return_pct" align="right" tip="Price-only return (excludes dividends)">PrRtn</SortHeader>
               <SortHeader col="total_return_pct" align="right" tip="Total return including dividends">TotRtn</SortHeader>
               <SortHeader col="_beta_sort" align="right" tip="Price-return beta versus the ticker's best-fitting benchmark, usually SPY or QQQ">Beta</SortHeader>
@@ -1515,7 +1514,6 @@ export default function Dashboard() {
                   <td style={{ textAlign: 'right' }}>{fmt(h.price_paid, 4)}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(h.current_price)}</td>
                   <td style={{ textAlign: 'right' }}>{pct(h.pct_of_account)}</td>
-                  <td style={{ textAlign: 'right', color: gradeColor(h.gain_or_loss_percentage) }}>{pct(h.gain_or_loss_percentage)}</td>
                   <td style={{ textAlign: 'right', color: gradeColor(h.price_return_pct) }}>{pct(h.price_return_pct)}</td>
                   <td style={{ textAlign: 'right', color: gradeColor(h.total_return_pct) }}>{pct(h.total_return_pct)}</td>
                   <td
@@ -1624,7 +1622,7 @@ export default function Dashboard() {
           </tbody>
           <tfoot>
             <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
-              <td colSpan={10} style={{ textAlign: 'right' }}>Totals</td>
+              <td colSpan={9} style={{ textAlign: 'right' }}>Totals</td>
               <td style={{ textAlign: 'right', color: gradeColor(totals.priceReturn) }}>{pct(totals.priceReturn)}</td>
               <td style={{ textAlign: 'right', color: gradeColor(totals.totalReturn) }}>{pct(totals.totalReturn)}</td>
               <td colSpan={7} />

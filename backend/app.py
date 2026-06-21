@@ -11900,8 +11900,13 @@ def portfolio_summary_data():
     is_agg, pids = get_profile_filter()
     conn = get_connection()
     placeholders = ",".join("?" * len(pids))
+    # Gate on actually-held market value, NOT cost basis. Grades/beta/deltas are
+    # derived purely from market price history, so a real position with a missing
+    # cost basis (e.g. a broker import that left purchase_value = 0, like QQQI /
+    # BTCI in some IRA accounts) must still be graded — keying on purchase_value
+    # would silently drop it from the ticker set and blank its risk columns.
     rows = conn.execute(
-        f"SELECT ticker, SUM(current_value) as current_value FROM all_account_info WHERE profile_id IN ({placeholders}) AND purchase_value > 0 AND quantity > 0 GROUP BY ticker",
+        f"SELECT ticker, SUM(current_value) as current_value FROM all_account_info WHERE profile_id IN ({placeholders}) AND quantity > 0 AND current_value > 0 GROUP BY ticker",
         pids,
     ).fetchall()
     conn.close()
@@ -11980,16 +11985,21 @@ def portfolio_summary_data():
     ticker_grades = {}
     ticker_risk = {}
     available = []
-    for t in tickers:
-        if t not in close.columns:
+
+    def _blank_risk():
+        return {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
+
+    def _compute_ticker_metrics(t, tc):
+        """Grade + best-fit beta/deltas for one ticker's close series.
+
+        Returns True when the ticker priced well enough to grade (so it can join
+        the portfolio-level regression), False otherwise. Always populates
+        ticker_grades[t] and ticker_risk[t].
+        """
+        if tc is None or len(tc) < 30:
             ticker_grades[t] = {"grade": "N/A", "score": None}
-            ticker_risk[t] = {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
-            continue
-        tc = close[t].dropna()
-        if len(tc) < 30:
-            ticker_grades[t] = {"grade": "N/A", "score": None}
-            ticker_risk[t] = {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
-            continue
+            ticker_risk[t] = _blank_risk()
+            return False
         try:
             tr = tc.pct_change().dropna()
             score, *_ = ticker_score(tc, tr, bench_ret)
@@ -12006,10 +12016,54 @@ def portfolio_summary_data():
                 "delta_up": delta_up,
                 "delta_down": delta_down,
             }
-            available.append(t)
+            return True
         except Exception:
             ticker_grades[t] = {"grade": "N/A", "score": None}
-            ticker_risk[t] = {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
+            ticker_risk[t] = _blank_risk()
+            return False
+
+    for t in tickers:
+        tc = close[t].dropna() if t in close.columns else None
+        if _compute_ticker_metrics(t, tc):
+            available.append(t)
+
+    # Recovery pass: yfinance silently drops the occasional single symbol from a
+    # batch download, leaving that ticker with no price column and a blank
+    # beta/delta row — which then gets cached for the full TTL even though the
+    # rest of the portfolio graded fine. Re-fetch just the missing symbols
+    # individually (rare, so cheap) and recompute before we build the response.
+    missing = [t for t in tickers if t not in close.columns]
+    for t in missing:
+        try:
+            r = _chunked_yf_download(t, period="1y", auto_adjust=True, progress=False, threads=False)
+            if r is None or r.empty:
+                continue
+            if isinstance(r.columns, pd.MultiIndex):
+                series = r["Close"].iloc[:, 0] if "Close" in r.columns.get_level_values(0) else None
+            else:
+                series = r["Close"] if "Close" in r.columns else None
+            if series is None:
+                continue
+            series = pd.to_numeric(series, errors="coerce").dropna()
+            if series.empty:
+                continue
+            close[t] = series
+            if _compute_ticker_metrics(t, close[t].dropna()) and t not in available:
+                available.append(t)
+        except Exception:
+            continue
+
+    # Safety net: if a ticker still came back blank (re-fetch also failed, or it
+    # genuinely lacks enough history right now), reuse the last cached good beta
+    # row rather than reverting a previously-computed value to "—". Market betas
+    # move slowly, so a slightly stale row beats a blank one.
+    if cached:
+        cached_risk = cached.get("ticker_risk", {}) or {}
+        for t in tickers:
+            if ticker_risk.get(t, {}).get("beta") is None:
+                prev = cached_risk.get(t)
+                if prev and prev.get("beta") is not None:
+                    ticker_risk[t] = prev
 
     import numpy as np
     portfolio_grade_info = {}
@@ -31149,6 +31203,22 @@ _options_income_tickers = set([
     "YMAX", "YMAG", "ULTY", "LFGY", "SLTY", "BIGY", "FIVY",
 ]) | set(_get_single_stock_etfs())
 
+_OPTION_INCOME_TEXT_KEYWORDS = (
+    "option income",
+    "covered call",
+    "buy write",
+    "monthly option",
+    "option premium",
+)
+
+
+def _has_option_income_text(info, name=""):
+    """Detect option-income funds from their Yahoo name or description."""
+    summary = _research_info_value(info, "longBusinessSummary") or ""
+    fund_name = name or info.get("longName") or info.get("shortName") or ""
+    text = f"{fund_name} {summary}".lower().replace("-", " ")
+    return any(keyword in text for keyword in _OPTION_INCOME_TEXT_KEYWORDS)
+
 _TICKER_STRATEGY_OVERRIDES = {
     # Options / Covered Call Income
     **{t: "Options Income" for t in sorted(_options_income_tickers)},
@@ -32202,7 +32272,11 @@ def etf_evaluate(ticker):
 
     etf_cat = info.get("category", "")
     etf_category, etf_strategy, etf_cap_size = _classify_etf(etf_cat, ticker)
-    is_option_income = etf_strategy == "Options Income" or ticker in _options_income_tickers
+    is_option_income = (
+        etf_strategy == "Options Income"
+        or ticker in _options_income_tickers
+        or _has_option_income_text(info)
+    )
 
     inception_ts = info.get("fundInceptionDate")
     inception_date = None
@@ -32493,7 +32567,7 @@ _FUND_KIND_LABEL = {
 _FUND_SCAN_SUGGESTION = {
     "cef": "CEF Buying Checklist",
     "option_income": "Option-Income ETF Evaluator",
-    "etf": "ETF Screen",
+    "etf": "Non Income ETF Checklist Evaluator",
     "other": "Stock Buying Checklist",
 }
 
@@ -32538,7 +32612,11 @@ def _classify_fund_kind(ticker, info, name=None, cef_universe=None):
     if fund_kind == "Closed-End Fund":
         return "cef"
     _, strategy, _ = _classify_etf(info.get("category", ""), ticker)
-    if strategy == "Options Income" or ticker in _options_income_tickers:
+    if (
+        strategy == "Options Income"
+        or ticker in _options_income_tickers
+        or _has_option_income_text(info, name)
+    ):
         return "option_income"
     if fund_kind == "ETF":
         return "etf"

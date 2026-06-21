@@ -560,7 +560,7 @@ export default function OptionIncomeETFEvaluator() {
         }}>
           <strong>{fund.ticker}</strong> is not classified as an option-income ETF.
           You may get more relevant results from the{' '}
-          <Link to="/etf-buying-checklist-evaluator" style={{ color: 'var(--teal-2)' }}>general ETF Evaluator</Link>.
+          <Link to="/etf-buying-checklist-evaluator" style={{ color: 'var(--teal-2)' }}>Non Income ETF Checklist Evaluator</Link>.
           The option-income evaluation below still runs, but peer comparisons use option-income funds.
         </div>
       )}

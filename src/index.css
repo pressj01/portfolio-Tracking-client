@@ -5813,6 +5813,18 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   border: 1px solid var(--p-2a3e6b);
   color: var(--p-8aa0c8);
 }
+.fund-scan-verdict-cell {
+  width: 180px;
+  min-width: 180px;
+}
+.fund-scan-verdict-badge {
+  justify-content: center;
+  max-width: 180px;
+  box-sizing: border-box;
+  line-height: 1.2;
+  text-align: center;
+  white-space: normal;
+}
 .stock-check-metrics {
   display: flex;
   flex-wrap: wrap;

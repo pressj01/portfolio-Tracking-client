@@ -300,7 +300,7 @@ function Nav() {
       </NavDropdown>
       <NavDropdown label="Checklists">
         <NavLink to="/stock-buying-checklist">Stock Buying Checklist</NavLink>
-        <NavLink to="/etf-buying-checklist-evaluator">ETF Buying Checklist Evaluator</NavLink>
+        <NavLink to="/etf-buying-checklist-evaluator">Non Income ETF Checklist Evaluator</NavLink>
         <NavLink to="/option-income-etf-evaluator">Option-Income ETF Evaluator</NavLink>
       </NavDropdown>
       <NavDropdown label="Analysis">

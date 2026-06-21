@@ -56,7 +56,7 @@ const GROUPS = [
     label: 'Checklists',
     sections: [
       { id: 'stock-buying-checklist', label: 'Stock Buying Checklist' },
-      { id: 'etf-buying-checklist-evaluator', label: 'ETF Checklist Evaluator' },
+      { id: 'etf-buying-checklist-evaluator', label: 'Non Income ETF Checklist Evaluator' },
       { id: 'option-income-etf-evaluator', label: 'Option-Income ETF Evaluator' },
     ],
   },
@@ -5876,7 +5876,7 @@ function StockBuyingChecklistHelp() {
         can be graded as stocks.
       </p>
       <p style={{ marginBottom: '0.75rem', color: 'var(--p-9aa7b8)', fontSize: '0.9rem' }}>
-        For skipped tickers, use the dedicated evaluators: <strong>ETF Buying Checklist</strong> for broad
+        For skipped tickers, use the dedicated evaluators: <strong>Non Income ETF Checklist Evaluator</strong> for broad
         ETFs, <strong>Option-Income ETF Evaluator</strong> for covered-call/put-write funds, and
         <strong>CEF Buying Checklist</strong> for closed-end funds and BDCs.
       </p>
@@ -5914,9 +5914,9 @@ function StockBuyingChecklistHelp() {
 function ETFBuyingChecklistHelp() {
   return (
     <div>
-      <h2>ETF Buying Checklist Evaluator</h2>
+      <h2>Non Income ETF Checklist Evaluator</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The ETF Buying Checklist Evaluator grades any broad-market, sector, dividend, or specialty ETF across
+        The Non Income ETF Checklist Evaluator grades any broad-market, sector, dividend, or specialty ETF across
         seven structured criteria. It fetches live data for the ticker, scores each criterion Pass / Warn / Fail,
         rolls them up into a composite verdict, and suggests smarter alternatives when the fund falls short.
         It is designed for standard (non-option-income) ETFs — use the Option-Income ETF Evaluator for
@@ -5939,7 +5939,7 @@ function ETFBuyingChecklistHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf_checklist_top.jpg" alt="ETF Buying Checklist Evaluator top — ticker lookup, verdict card, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf_checklist_top.jpg" alt="Non Income ETF Checklist Evaluator top — ticker lookup, verdict card, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Seven Criteria</h3>
@@ -6021,7 +6021,7 @@ function ETFBuyingChecklistHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf-buy-checklist-bottom.jpg" alt="ETF Buying Checklist Evaluator bottom — smart alternatives and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf-buy-checklist-bottom.jpg" alt="Non Income ETF Checklist Evaluator bottom — smart alternatives and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Smart Alternatives</h3>
@@ -6214,7 +6214,7 @@ function OptionIncomeETFHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When to Use It</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>Use this evaluator for any ETF that primarily generates income from selling options (covered calls, puts, collars).</li>
-        <li>Use the <strong>ETF Buying Checklist Evaluator</strong> for standard index, sector, or dividend ETFs without an option-overlay strategy.</li>
+        <li>Use the <strong>Non Income ETF Checklist Evaluator</strong> for standard index, sector, or dividend ETFs without an option-overlay strategy.</li>
         <li>Use the <strong>CEF Buying Checklist Evaluator</strong> (CEF's menu) for closed-end funds, which add discount/premium and leverage dimensions.</li>
       </ul>
     </div>
