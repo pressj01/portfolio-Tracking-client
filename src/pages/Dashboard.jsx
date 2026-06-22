@@ -858,7 +858,7 @@ export default function Dashboard() {
     const totalReturn = purchaseValue ? ((gainLoss + totalDivs) / purchaseValue) : 0
     const reinvestPct = monthlyIncome ? (monthlyReinvested / monthlyIncome) : 0
 
-    return { ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, reinvestPct, annualIncome, dripSharesMonthly, dripSharesYearly, currentValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, currentMonthIncome, currentMonthReinvested, currentMonthNotReinvested, currentMonthReinvestPct }
+    return { lifetimeIncome: totalDivs, ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, reinvestPct, annualIncome, dripSharesMonthly, dripSharesYearly, currentValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, currentMonthIncome, currentMonthReinvested, currentMonthNotReinvested, currentMonthReinvestPct }
   }, [holdings, incomeSummary])
 
   const marketExposure = useMemo(() => {
@@ -1215,6 +1215,7 @@ export default function Dashboard() {
         <SummaryCard label="Omega Ratio" value={portfolioGrade.omega ?? '—'} />
         <SummaryCard label="Sortino Ratio" value={portfolioGrade.sortino ?? '—'} />
         <SummaryCard label="Sharpe Ratio" value={portfolioGrade.sharpe ?? '—'} />
+        <SummaryCard label="Lifetime Income" value={fmt(totals.lifetimeIncome)} color="var(--pos)" />
         <SummaryCard label="YTD Dividends" value={fmt(totals.ytdDivs)} color="var(--pos)" />
         <SummaryCard label={`${currentMonth} Income`} value={fmt(totals.currentMonthIncome)} color="var(--pos)" sub={currentMonthSub} />
         <SummaryCard label="Est. Monthly Income" value={fmt(totals.monthlyIncome)} color="var(--pos)" sub="Annual estimate / 12" />

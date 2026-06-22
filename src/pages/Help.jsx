@@ -625,6 +625,7 @@ function DashboardHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li><strong>Portfolio Grade</strong> — composite grade based on yield, growth, and risk metrics.</li>
         <li><strong>Ulcer / Calmar / Omega / Sortino / Sharpe</strong> — risk-adjusted performance ratios.</li>
+        <li><strong>Lifetime Income</strong> — total dividend income received by the selected account across all years.</li>
         <li><strong>YTD Dividends</strong> — total dividends received year-to-date.</li>
         <li><strong>[Month] Income</strong> (e.g. "May Income") — dividends actually received this calendar month from recorded payments, with a subtitle showing the number of recorded payments through today. Estimated only when no payment history exists.</li>
         <li><strong>Est. Monthly Income</strong> — estimated monthly dividend income across all holdings (annual estimate ÷ 12).</li>
