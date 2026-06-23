@@ -8,6 +8,26 @@ const pct = value => `${Number(value || 0).toFixed(2)}%`
 const shares = value => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 3 })
 const money = value => formatMoney(value, { zeroIfInvalid: true })
 const readSettings = key => { try { return JSON.parse(localStorage.getItem(key) || '{}') } catch { return {} } }
+// Record when each target was last set, so the screen can show "set 3 days ago"
+// on a plan holding. Returns an updated targetUpdatedAt map (does not mutate).
+const stampTargets = (prev, tickers) => {
+  const at = { ...(prev.targetUpdatedAt || {}) }
+  const now = Date.now()
+  tickers.forEach(ticker => { at[ticker] = now })
+  return at
+}
+const formatWhen = ms => {
+  if (!ms) return null
+  const absolute = new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+  const diff = Date.now() - ms
+  const day = 86400000
+  let relative
+  if (diff < 60000) relative = 'just now'
+  else if (diff < 3600000) relative = `${Math.floor(diff / 60000)} min ago`
+  else if (diff < day) relative = `${Math.floor(diff / 3600000)} hr ago`
+  else relative = `${Math.floor(diff / day)} day${Math.floor(diff / day) === 1 ? '' : 's'} ago`
+  return `${absolute} (${relative})`
+}
 
 function equalTargets(category, categoryBudget) {
   const result = {}
@@ -82,10 +102,19 @@ export default function HoldingTargets() {
   const cashPoolRef = useRef(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // Inline "add a comparison ETF" form state. Only one category's form is open
+  // at a time, keyed by categoryId.
+  const [addPanel, setAddPanel] = useState({ categoryId: null, ticker: '', subcategoryId: '', loading: false, error: '' })
+  // Saved plans (per-ticker targets / equal-weight modes) persist in localStorage
+  // but are NOT auto-applied. The screen opens showing live current weights —
+  // no recommended trades — until the plan is explicitly loaded or the user
+  // starts editing. planActive is session-only (resets on remount / portfolio
+  // switch) so every visit starts from a clean current-weight baseline.
+  const [planActive, setPlanActive] = useState(false)
   const autoBalance = settings.autoBalance !== false
 
   useEffect(() => {
-    setSettings(readSettings(storageKey)); setLoading(true); setError('')
+    setSettings(readSettings(storageKey)); setLoading(true); setError(''); setPlanActive(false)
     pf('/api/categories/data')
       .then(r => r.ok ? r.json() : Promise.reject(new Error('Could not load holdings.')))
       .then(result => { setData(result); setLoading(false) })
@@ -94,7 +123,28 @@ export default function HoldingTargets() {
   useEffect(() => { localStorage.setItem(storageKey, JSON.stringify(settings)) }, [settings, storageKey])
 
   const scenario = useMemo(() => {
-    const baseCategories = data?.categories || []
+    // Comparison ("hypothetical") holdings aren't owned, so they live only in
+    // local settings. Inject them into their chosen category as zero-share /
+    // zero-value rows shaped exactly like a real holding; the rest of the
+    // scenario math, cash pool, and tables then treat them identically. Their
+    // current_value is 0, so category actuals and portfolio totals are unchanged.
+    const hypotheticals = settings.hypotheticals || []
+    const baseCategories = (data?.categories || []).map(cat => {
+      const extras = hypotheticals.filter(h => h.categoryId === cat.id).map(h => ({
+        ticker: h.ticker,
+        description: h.description,
+        classification_type: 'HYPOTHETICAL',
+        quantity: 0,
+        current_price: Number(h.price) || 0,
+        current_value: 0,
+        monthly_income: 0,
+        current_yield: Number(h.current_yield) || 0,
+        div_frequency: h.div_frequency,
+        subcategory_id: h.subcategoryId ?? null,
+        hypothetical: true,
+      }))
+      return extras.length ? { ...cat, tickers: [...(cat.tickers || []), ...extras] } : cat
+    })
     const unassigned = data?.unallocated || []
     // Fallback: surface every unassigned holding in a synthetic "Uncategorized"
     // group so users can set targets and use the cash pool without configuring
@@ -115,13 +165,15 @@ export default function HoldingTargets() {
       current_yield: uncategorizedValue > 0 ? uncategorizedIncome * 12 / uncategorizedValue * 100 : 0,
     }] : []
     const drafts = [...baseCategories, ...uncategorized].filter(category => category.tickers?.length).map(category => {
-      const mode = settings.modes?.[category.id] || 'custom'
+      // When no plan is loaded, ignore saved modes/targets so every holding
+      // resolves to its current weight (a clean, trade-free baseline).
+      const mode = (planActive && settings.modes?.[category.id]) || 'custom'
       const categoryBudget = Number(category.target_pct ?? category.actual_pct ?? 0)
       const equal = equalTargets(category, categoryBudget)
       const subName = new Map((category.subcategories || []).map(sub => [sub.id, sub.name]))
       const rows = category.tickers.map(holding => {
         const currentPortfolioPct = data.total_value > 0 ? holding.current_value / data.total_value * 100 : 0
-        const saved = settings.targets?.[holding.ticker]
+        const saved = planActive ? settings.targets?.[holding.ticker] : undefined
         const requestedTargetPct = mode === 'equal'
           ? Number(equal[holding.ticker] || 0)
           : (saved == null ? currentPortfolioPct : Number(saved))
@@ -167,10 +219,37 @@ export default function HoldingTargets() {
       return { ...category, rows, subRows, coverage, ...totals }
     })
     return { categories, requestedTotal, balanceFactor }
-  }, [data, settings, autoBalance])
+  }, [data, settings, autoBalance, planActive])
 
   const categories = scenario.categories
   const allRows = categories.flatMap(category => category.rows)
+  const hypoCount = allRows.filter(row => row.hypothetical).length
+  const ownedCount = allRows.length - hypoCount
+  // Detect whether a saved plan exists and which holdings it actually moves off
+  // their current weight. currentPortfolioPct is independent of planActive, so
+  // this is a stable comparison regardless of whether the plan is applied.
+  const currentPctByTicker = useMemo(() => {
+    const map = {}
+    allRows.forEach(row => { map[row.ticker] = row.currentPortfolioPct })
+    return map
+  }, [allRows])
+  const planTickers = useMemo(() => {
+    const targets = settings.targets || {}
+    return Object.keys(targets).filter(ticker => {
+      const value = targets[ticker]
+      if (value === '' || value == null) return false
+      const current = currentPctByTicker[ticker]
+      if (current == null) return false
+      return Math.abs(Number(value) - current) > 0.01
+    }).sort()
+  }, [settings.targets, currentPctByTicker])
+  const equalModeCount = useMemo(() => Object.values(settings.modes || {}).filter(mode => mode === 'equal').length, [settings.modes])
+  const hasSavedPlan = planTickers.length > 0 || equalModeCount > 0
+  const planLastUpdated = useMemo(() => {
+    const stamps = settings.targetUpdatedAt || {}
+    const times = planTickers.map(ticker => stamps[ticker]).filter(Boolean)
+    return times.length ? Math.max(...times) : null
+  }, [planTickers, settings.targetUpdatedAt])
   const adjustedTotal = allRows.reduce((sum, row) => sum + row.adjustedTargetPct, 0)
   const tradeTotal = allRows.reduce((sum, row) => sum + row.tradeValue, 0)
   const incomeDelta = allRows.reduce((sum, row) => sum + row.monthlyDelta, 0)
@@ -201,7 +280,8 @@ export default function HoldingTargets() {
 
   const updateTarget = (ticker, value) => {
     if (value === '' || (Number(value) >= 0 && Number(value) <= 100)) {
-      setSettings(prev => ({ ...prev, targets: { ...(prev.targets || {}), [ticker]: value } }))
+      setPlanActive(true)
+      setSettings(prev => ({ ...prev, targets: { ...(prev.targets || {}), [ticker]: value }, targetUpdatedAt: stampTargets(prev, [ticker]) }))
     }
   }
   // Dollar-mode entry for the Requested target column. The stored target is
@@ -213,7 +293,7 @@ export default function HoldingTargets() {
     const pctVal = Number(data?.total_value) > 0 ? usd / Number(data.total_value) * 100 : 0
     updateTarget(ticker, pctVal)
   }
-  const revertTickerToCurrent = (category, row) => setSettings(prev => {
+  const revertTickerToCurrent = (category, row) => { setPlanActive(true); setSettings(prev => {
     const targets = { ...(prev.targets || {}) }
     // Preserve the category's currently displayed targets when leaving Equal
     // Weight mode, then reset only the requested ticker.
@@ -222,28 +302,45 @@ export default function HoldingTargets() {
     return {
       ...prev,
       targets,
+      targetUpdatedAt: stampTargets(prev, category.rows.map(candidate => candidate.ticker)),
       modes: { ...(prev.modes || {}), [category.id]: 'custom' },
     }
-  })
-  const setCategoryMode = (category, mode) => setSettings(prev => {
+  }) }
+  const setCategoryMode = (category, mode) => { setPlanActive(true); setSettings(prev => {
     const next = { ...prev, modes: { ...(prev.modes || {}), [category.id]: mode } }
     if (mode === 'current') {
       next.modes[category.id] = 'custom'; next.targets = { ...(prev.targets || {}) }
       category.rows.forEach(row => { next.targets[row.ticker] = row.currentPortfolioPct })
+      next.targetUpdatedAt = stampTargets(prev, category.rows.map(row => row.ticker))
     }
     return next
-  })
+  }) }
   const applyGlobal = () => {
     const value = Math.max(0, Math.min(100, Number(globalTarget) || 0))
     const targets = { ...(settings.targets || {}) }; const modes = { ...(settings.modes || {}) }
     allRows.forEach(row => { targets[row.ticker] = value }); categories.forEach(category => { modes[category.id] = 'custom' })
-    setSettings(prev => ({ ...prev, targets, modes }))
+    setPlanActive(true)
+    setSettings(prev => ({ ...prev, targets, modes, targetUpdatedAt: stampTargets(prev, allRows.map(row => row.ticker)) }))
   }
   const normalize = () => {
     if (scenario.requestedTotal <= 0) return
     const targets = {}; allRows.forEach(row => { targets[row.ticker] = row.adjustedTargetPct })
     const modes = {}; categories.forEach(category => { modes[category.id] = 'custom' })
-    setSettings(prev => ({ ...prev, targets, modes }))
+    setPlanActive(true)
+    setSettings(prev => ({ ...prev, targets, modes, targetUpdatedAt: stampTargets(prev, allRows.map(row => row.ticker)) }))
+  }
+  // Plan controls. A saved plan persists in localStorage but is only applied
+  // while planActive is true.
+  //  • loadSavedPlan   — apply the saved targets/modes (shows recommended trades).
+  //  • showCurrentWeights — stop applying the plan (non-destructive: the plan is
+  //    kept, the screen returns to a clean current-weight view, cash pool zeroes).
+  //  • discardSavedPlan — permanently delete the saved targets/modes.
+  const loadSavedPlan = () => setPlanActive(true)
+  const showCurrentWeights = () => { setPlanActive(false); setSettings(prev => ({ ...prev, reallocationTickers: [], manualAllocations: {} })) }
+  const discardSavedPlan = () => {
+    if (!window.confirm('Discard the saved plan and return every holding to its current weight? This cannot be undone.')) return
+    setPlanActive(false)
+    setSettings(prev => ({ ...prev, targets: {}, modes: {}, targetUpdatedAt: {}, reallocationTickers: [], manualAllocations: {} }))
   }
   const toggleRecipient = ticker => setSettings(prev => {
     const selected = new Set(prev.reallocationTickers || [])
@@ -288,8 +385,55 @@ export default function HoldingTargets() {
       const category = categories.find(item => item.rows.some(candidate => candidate.ticker === row.ticker))
       if (category) modes[category.id] = 'custom'
     })
-    setSettings(prev => ({ ...prev, targets, modes, manualAllocations: {} }))
+    setPlanActive(true)
+    setSettings(prev => ({ ...prev, targets, modes, targetUpdatedAt: stampTargets(prev, recipientRows.map(row => row.ticker)), manualAllocations: {} }))
   }
+
+  // Tickers already owned anywhere in the portfolio (or already added as a
+  // comparison) can't be added again — comparison holdings are for tickers NOT
+  // currently held.
+  const ownedTickers = useMemo(() => new Set([
+    ...(data?.categories || []).flatMap(c => (c.tickers || []).map(t => t.ticker)),
+    ...(data?.unallocated || []).map(h => h.ticker),
+  ]), [data])
+  const hypoTickers = useMemo(() => new Set((settings.hypotheticals || []).map(h => h.ticker)), [settings.hypotheticals])
+
+  const openAddPanel = categoryId => setAddPanel({ categoryId, ticker: '', subcategoryId: '', loading: false, error: '' })
+  const closeAddPanel = () => setAddPanel({ categoryId: null, ticker: '', subcategoryId: '', loading: false, error: '' })
+  const addHypothetical = async category => {
+    const ticker = (addPanel.ticker || '').trim().toUpperCase()
+    if (!ticker) { setAddPanel(p => ({ ...p, error: 'Enter a ticker.' })); return }
+    if (ownedTickers.has(ticker)) { setAddPanel(p => ({ ...p, error: `${ticker} is already in your portfolio.` })); return }
+    if (hypoTickers.has(ticker)) { setAddPanel(p => ({ ...p, error: `${ticker} is already added as a comparison.` })); return }
+    setAddPanel(p => ({ ...p, loading: true, error: '' }))
+    try {
+      const r = await pf(`/api/dividend-calc/lookup/${encodeURIComponent(ticker)}`)
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j.error || `Could not look up ${ticker}.`)
+      const subId = addPanel.subcategoryId ? Number(addPanel.subcategoryId) : null
+      const hypo = {
+        ticker: j.ticker || ticker,
+        description: j.name || ticker,
+        price: Number(j.price) || 0,
+        current_yield: Number(j.yield_pct) || 0,
+        div_frequency: j.frequency_code || null,
+        categoryId: category.id,
+        subcategoryId: subId,
+      }
+      setSettings(prev => ({ ...prev, hypotheticals: [...(prev.hypotheticals || []), hypo] }))
+      setExpanded(prev => ({ ...prev, [category.id]: true }))
+      closeAddPanel()
+    } catch (e) {
+      setAddPanel(p => ({ ...p, loading: false, error: e.message }))
+    }
+  }
+  const removeHypothetical = ticker => setSettings(prev => {
+    const next = { ...prev, hypotheticals: (prev.hypotheticals || []).filter(h => h.ticker !== ticker) }
+    if (next.targets) { next.targets = { ...next.targets }; delete next.targets[ticker] }
+    if (next.manualAllocations) { next.manualAllocations = { ...next.manualAllocations }; delete next.manualAllocations[ticker] }
+    if (next.reallocationTickers) next.reallocationTickers = next.reallocationTickers.filter(t => t !== ticker)
+    return next
+  })
 
   if (loading) return <div className="page"><p>Loading holding targets...</p></div>
   if (error) return <div className="page"><div className="error">{error}</div></div>
@@ -303,10 +447,36 @@ export default function HoldingTargets() {
       <div><label>Set every holding to</label><div className="holding-target-inline"><input type="number" min="0" max="100" step="0.1" value={globalTarget} onChange={e => setGlobalTarget(e.target.value)} /><span>% of portfolio</span><button className="btn btn-primary" onClick={applyGlobal}>Apply</button></div></div>
       <div className="holding-target-entrymode"><label>Enter amounts as</label><div className="entrymode-btns"><button className={`btn btn-small ${allocInputMode === 'percent' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setAllocInputMode('percent')}>%</button><button className={`btn btn-small ${allocInputMode === 'dollars' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setAllocInputMode('dollars')}>$</button></div><small>Switches every Requested &amp; Reinvest box between percent and dollar entry. The other unit stays visible, read-only.</small></div>
       <label className="holding-target-balance-toggle"><input type="checkbox" checked={autoBalance} onChange={e => setSettings(prev => ({ ...prev, autoBalance: e.target.checked }))} /><span><strong>Adjust all categories to a 100% portfolio</strong><small>Requested targets remain visible; the adjusted scenario proportionally changes every category.</small></span></label>
-      <button className="btn btn-secondary" onClick={normalize} disabled={!scenario.requestedTotal}>Save adjusted targets</button>
+      <div className="holding-target-control-actions">
+        {planActive && <button className="btn btn-secondary" onClick={showCurrentWeights} title="Stop applying the plan and show live current weights. Your saved plan is kept.">Show current weights</button>}
+        <button className="btn btn-secondary" onClick={normalize} disabled={!planActive || !scenario.requestedTotal}>Save adjusted targets</button>
+      </div>
+    </div>
+    <div className={`holding-target-plan-banner ${planActive ? 'plan-on' : hasSavedPlan ? 'plan-available' : 'plan-clean'}`}>
+      {planActive ? <>
+        <div className="plan-banner-text"><strong>Plan loaded.</strong>{' '}
+          {planTickers.length > 0
+            ? <>Showing your saved targets — {planTickers.length} holding{planTickers.length === 1 ? '' : 's'} differ from current weight: {planTickers.slice(0, 10).join(', ')}{planTickers.length > 10 ? ` +${planTickers.length - 10} more` : ''}.</>
+            : <>Showing your saved plan ({equalModeCount} equal-weight categor{equalModeCount === 1 ? 'y' : 'ies'}).</>}
+          {planLastUpdated && <span className="plan-banner-when"> Last edited {formatWhen(planLastUpdated)}.</span>}
+        </div>
+        <div className="plan-banner-actions">
+          <button className="btn btn-small btn-secondary" onClick={showCurrentWeights}>Show current weights</button>
+          <button className="btn btn-small btn-secondary" onClick={discardSavedPlan}>Discard plan</button>
+        </div>
+      </> : hasSavedPlan ? <>
+        <div className="plan-banner-text"><strong>Showing current weights — no trades recommended.</strong>{' '}
+          A saved plan exists ({planTickers.length} custom target{planTickers.length === 1 ? '' : 's'}{equalModeCount ? ` + ${equalModeCount} equal-weight categor${equalModeCount === 1 ? 'y' : 'ies'}` : ''}{planTickers.length > 0 ? `: ${planTickers.slice(0, 10).join(', ')}${planTickers.length > 10 ? ` +${planTickers.length - 10} more` : ''}` : ''}). Load it to preview those trades.
+          {planLastUpdated && <span className="plan-banner-when"> Last edited {formatWhen(planLastUpdated)}.</span>}
+        </div>
+        <div className="plan-banner-actions">
+          <button className="btn btn-small btn-primary" onClick={loadSavedPlan}>Load plan</button>
+          <button className="btn btn-small btn-secondary" onClick={discardSavedPlan}>Discard plan</button>
+        </div>
+      </> : <div className="plan-banner-text"><strong>Showing current weights.</strong> No saved plan yet — type any Requested target (or use Apply / Equal weight) to start planning.</div>}
     </div>
     <div className="summary-strip">
-      <div className="summary-card"><div className="summary-label">Portfolio</div><div className="summary-value">{currentProfileName}</div><div className="summary-sub">{allRows.length} allocated holdings</div></div>
+      <div className="summary-card"><div className="summary-label">Portfolio</div><div className="summary-value">{currentProfileName}</div><div className="summary-sub">{ownedCount} allocated holdings{hypoCount ? ` · ${hypoCount} comparison` : ''}</div></div>
       <div className="summary-card"><div className="summary-label">Requested total</div><div className="summary-value" style={{ color: Math.abs(scenario.requestedTotal - 100) < .01 ? 'var(--pos)' : 'var(--amber)' }}>{pct(scenario.requestedTotal)}</div><div className="summary-sub">{scenario.requestedTotal > 100 ? `${pct(scenario.requestedTotal - 100)} over` : `${pct(100 - scenario.requestedTotal)} under`}</div></div>
       <div className="summary-card"><div className="summary-label">Adjusted scenario</div><div className="summary-value" style={{ color: Math.abs(adjustedTotal - 100) < .01 ? 'var(--pos)' : 'var(--amber)' }}>{pct(adjustedTotal)}</div><div className="summary-sub">Every requested target × {scenario.balanceFactor.toFixed(4)}</div></div>
       <div className="summary-card"><div className="summary-label">Net trade</div><div className="summary-value" style={{ color: tradeTotal > .5 ? 'var(--pos)' : tradeTotal < -.5 ? 'var(--neg)' : 'var(--accent-bright)' }}>{tradeTotal >= 0 ? '+' : ''}{money(tradeTotal)}</div><div className="summary-sub">{autoBalance ? 'Cash-neutral adjusted scenario' : 'Positive requires new cash'}</div></div>
@@ -374,8 +544,18 @@ export default function HoldingTargets() {
         <div className="holding-target-category-head">
           <button className="holding-target-disclosure" onClick={() => setExpanded(prev => ({ ...prev, [category.id]: !open }))}>{open ? '▾' : '▸'} {category.name}</button>
           <div className="holding-target-category-stats"><span>Plan {pct(category.categoryBudget)}</span><span>Requested {pct(category.requestedTargetPct)}</span><span className={category.coverage != null && category.coverage > 100.01 ? 'trade-sell' : category.coverage != null && category.coverage < 99.99 ? 'trade-buy' : ''}>{coverageLabel(category.coverage)}</span><span>Adjusted {pct(category.adjustedTargetPct)}</span><span style={{ color: category.incomeDelta >= 0 ? 'var(--pos)' : 'var(--neg)' }}>Monthly income change {category.incomeDelta >= 0 ? '+' : ''}{money(category.incomeDelta)}</span></div>
-          <div className="holding-target-mode"><button className={`btn btn-small ${category.mode === 'equal' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setCategoryMode(category, 'equal')}>Equal weight</button><button className="btn btn-small btn-secondary" onClick={() => setCategoryMode(category, 'current')}>Keep current</button></div>
+          <div className="holding-target-mode"><button className={`btn btn-small ${category.mode === 'equal' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setCategoryMode(category, 'equal')}>Equal weight</button><button className="btn btn-small btn-secondary" onClick={() => setCategoryMode(category, 'current')}>Keep current</button><button className="btn btn-small btn-secondary" onClick={() => addPanel.categoryId === category.id ? closeAddPanel() : openAddPanel(category.id)}>{addPanel.categoryId === category.id ? '✕ Cancel' : '+ Add ETF to compare'}</button></div>
         </div>
+        {addPanel.categoryId === category.id && <div className="hypo-add-form">
+          <span className="hypo-add-label">Add a holding you don't own to <strong>{category.name}</strong> (display only):</span>
+          <input className="hypo-add-ticker" placeholder="Ticker (e.g. SCHD)" value={addPanel.ticker} autoFocus disabled={addPanel.loading} onChange={e => setAddPanel(p => ({ ...p, ticker: e.target.value, error: '' }))} onKeyDown={e => { if (e.key === 'Enter') addHypothetical(category) }} />
+          {(category.subcategories || []).length > 0 && <select className="hypo-add-sub" value={addPanel.subcategoryId} disabled={addPanel.loading} onChange={e => setAddPanel(p => ({ ...p, subcategoryId: e.target.value }))}>
+            <option value="">No subcategory</option>
+            {(category.subcategories || []).map(sub => <option key={sub.id} value={sub.id}>{sub.name}</option>)}
+          </select>}
+          <button className="btn btn-small btn-primary" onClick={() => addHypothetical(category)} disabled={addPanel.loading || !addPanel.ticker.trim()}>{addPanel.loading ? 'Looking up…' : 'Add'}</button>
+          {addPanel.error && <span className="hypo-add-error">{addPanel.error}</span>}
+        </div>}
         {open && <div className="holding-target-table-wrap"><table className="holding-target-table">
           <thead><tr><th>Ticker</th><th>Subcategory</th><th>Shares</th><th>Price</th><th>Yield</th><th>% of category</th><th>Current %</th><th>Requested ({allocInputMode === 'dollars' ? '$ ⟂ %' : '% ⟂ $'})</th><th>Adjusted %</th><th>Buy / Sell</th><th>Shares +/-</th><th>Monthly Income Now</th><th>Monthly Income +/-</th><th>Reinvest / Alloc</th></tr></thead>
           <tbody>{category.rows.map(row => {
@@ -388,7 +568,7 @@ export default function HoldingTargets() {
             const equalLocked = category.mode === 'equal'
             const pctReadOnly = allocInputMode === 'dollars'
             const dollarReadOnly = allocInputMode === 'percent'
-            return <tr key={row.ticker}><td><strong>{row.ticker}</strong><small>{row.description}</small></td><td>{row.subcategoryName}</td><td>{shares(row.quantity)}</td><td>{money(row.price)}</td><td>{pct(Number(row.current_yield || 0))}</td><td>{pct(category.actual_value > 0 ? row.current_value / category.actual_value * 100 : 0)}</td><td>{pct(row.currentPortfolioPct)}</td><td><div className="target-input-dual"><div className="target-input"><DraftNumberInput className={pctReadOnly && !equalLocked ? 'mode-readonly' : ''} aria-label={`${row.ticker} target percentage`} value={Number(row.requestedTargetPct.toFixed(4))} disabled={equalLocked} readOnly={pctReadOnly} onValueChange={v => updateTarget(row.ticker, v)} /><span>%</span></div><div className="target-input"><span>$</span><DraftNumberInput className={`target-dollar ${dollarReadOnly && !equalLocked ? 'mode-readonly' : ''}`} aria-label={`${row.ticker} target dollars`} value={reqDollarsDisplay} disabled={equalLocked} readOnly={dollarReadOnly} onValueChange={v => updateTargetDollars(row.ticker, v)} /></div><button type="button" className="target-reset-btn" aria-label={`Reset ${row.ticker} target to current`} title={`Reset only ${row.ticker} to its current ${pct(row.currentPortfolioPct)} allocation`} onClick={() => revertTickerToCurrent(category, row)}>Current</button></div></td><td>{pct(row.adjustedTargetPct)}</td><td className={row.tradeValue > .5 ? 'trade-buy' : row.tradeValue < -.5 ? 'trade-sell' : ''}>{Math.abs(row.tradeValue) < .5 ? 'Balanced' : `${row.tradeValue > 0 ? 'Buy ' : 'Sell '}${money(Math.abs(row.tradeValue))}`}</td><td className={row.tradeShares > .001 ? 'trade-buy' : row.tradeShares < -.001 ? 'trade-sell' : ''}>{row.tradeShares >= 0 ? '+' : ''}{shares(row.tradeShares)}</td><td>{money(row.monthly_income)}</td><td className={row.monthlyDelta >= 0 ? 'trade-buy' : 'trade-sell'}>{row.monthlyDelta >= 0 ? '+' : ''}{money(row.monthlyDelta)}</td><td><div className="reinvest-inline-cell"><input aria-label={`Reinvest in ${row.ticker}`} type="checkbox" checked={isRecipient} disabled={row.rawTradeValue < -.5} onChange={() => toggleRecipient(row.ticker)} />{isRecipient && <div className="reinvest-inline-entry">{allocInputMode === 'dollars' ? <div className="reinvest-amount-field"><span>$</span><DraftNumberInput placeholder="0" value={manualAllocations[row.ticker] === '' ? '' : rawAmount > 0 ? Number(displayAmount.toFixed(2)) : ''} onValueChange={v => setManualAllocationDollars(row.ticker, v)} /></div> : <div className="reinvest-amount-field"><DraftNumberInput placeholder="0" value={manualAllocations[row.ticker] === '' ? '' : pctUsed > 0 ? Number(pctUsed.toFixed(1)) : ''} onValueChange={v => setManualAllocationPercent(row.ticker, v)} /><span>%</span></div>}{rawAmount > 0.5 && <small className="trade-buy reinvest-gain">+{money(allocGain)}/mo</small>}</div>}</div></td></tr>
+            return <tr key={row.ticker} className={row.hypothetical ? 'hypo-row' : ''}><td><div className="hypo-ticker-cell"><strong>{row.ticker}</strong>{row.hypothetical && <span className="hypo-badge">compare</span>}{planActive && !row.hypothetical && Math.abs(row.requestedTargetPct - row.currentPortfolioPct) > 0.01 && <span className="plan-badge" title={`Custom plan target ${pct(row.requestedTargetPct)} vs current ${pct(row.currentPortfolioPct)}${settings.targetUpdatedAt?.[row.ticker] ? ` · set ${formatWhen(settings.targetUpdatedAt[row.ticker])}` : ''}`}>plan</span>}{row.hypothetical && <button type="button" className="hypo-remove" title={`Remove ${row.ticker} from comparison`} aria-label={`Remove ${row.ticker} from comparison`} onClick={() => removeHypothetical(row.ticker)}>✕</button>}</div><small>{row.description}</small></td><td>{row.subcategoryName}</td><td>{shares(row.quantity)}</td><td>{money(row.price)}</td><td>{pct(Number(row.current_yield || 0))}</td><td>{pct(category.actual_value > 0 ? row.current_value / category.actual_value * 100 : 0)}</td><td>{pct(row.currentPortfolioPct)}</td><td><div className="target-input-dual"><div className="target-input"><DraftNumberInput className={pctReadOnly && !equalLocked ? 'mode-readonly' : ''} aria-label={`${row.ticker} target percentage`} value={Number(row.requestedTargetPct.toFixed(4))} disabled={equalLocked} readOnly={pctReadOnly} onValueChange={v => updateTarget(row.ticker, v)} /><span>%</span></div><div className="target-input"><span>$</span><DraftNumberInput className={`target-dollar ${dollarReadOnly && !equalLocked ? 'mode-readonly' : ''}`} aria-label={`${row.ticker} target dollars`} value={reqDollarsDisplay} disabled={equalLocked} readOnly={dollarReadOnly} onValueChange={v => updateTargetDollars(row.ticker, v)} /></div><button type="button" className="target-reset-btn" aria-label={`Reset ${row.ticker} target to current`} title={`Reset only ${row.ticker} to its current ${pct(row.currentPortfolioPct)} allocation`} onClick={() => revertTickerToCurrent(category, row)}>Current</button></div></td><td>{pct(row.adjustedTargetPct)}</td><td className={row.tradeValue > .5 ? 'trade-buy' : row.tradeValue < -.5 ? 'trade-sell' : ''}>{Math.abs(row.tradeValue) < .5 ? 'Balanced' : `${row.tradeValue > 0 ? 'Buy ' : 'Sell '}${money(Math.abs(row.tradeValue))}`}</td><td className={row.tradeShares > .001 ? 'trade-buy' : row.tradeShares < -.001 ? 'trade-sell' : ''}>{row.tradeShares >= 0 ? '+' : ''}{shares(row.tradeShares)}</td><td>{money(row.monthly_income)}</td><td className={row.monthlyDelta >= 0 ? 'trade-buy' : 'trade-sell'}>{row.monthlyDelta >= 0 ? '+' : ''}{money(row.monthlyDelta)}</td><td><div className="reinvest-inline-cell"><input aria-label={`Reinvest in ${row.ticker}`} type="checkbox" checked={isRecipient} disabled={row.rawTradeValue < -.5} onChange={() => toggleRecipient(row.ticker)} />{isRecipient && <div className="reinvest-inline-entry">{allocInputMode === 'dollars' ? <div className="reinvest-amount-field"><span>$</span><DraftNumberInput placeholder="0" value={manualAllocations[row.ticker] === '' ? '' : rawAmount > 0 ? Number(displayAmount.toFixed(2)) : ''} onValueChange={v => setManualAllocationDollars(row.ticker, v)} /></div> : <div className="reinvest-amount-field"><DraftNumberInput placeholder="0" value={manualAllocations[row.ticker] === '' ? '' : pctUsed > 0 ? Number(pctUsed.toFixed(1)) : ''} onValueChange={v => setManualAllocationPercent(row.ticker, v)} /><span>%</span></div>}{rawAmount > 0.5 && <small className="trade-buy reinvest-gain">+{money(allocGain)}/mo</small>}</div>}</div></td></tr>
           })}</tbody>
         </table></div>}
       </section>
