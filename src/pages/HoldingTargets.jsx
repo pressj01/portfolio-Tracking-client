@@ -299,11 +299,18 @@ export default function HoldingTargets() {
     // Weight mode, then reset only the requested ticker.
     category.rows.forEach(candidate => { targets[candidate.ticker] = candidate.requestedTargetPct })
     targets[row.ticker] = row.currentPortfolioPct
+    // Resetting a holding to its current weight means no money should flow into
+    // it, so release any pending reinvest allocation back to the cash pool and
+    // drop it as a recipient.
+    const manualAllocations = { ...(prev.manualAllocations || {}) }
+    delete manualAllocations[row.ticker]
     return {
       ...prev,
       targets,
       targetUpdatedAt: stampTargets(prev, category.rows.map(candidate => candidate.ticker)),
       modes: { ...(prev.modes || {}), [category.id]: 'custom' },
+      manualAllocations,
+      reallocationTickers: (prev.reallocationTickers || []).filter(ticker => ticker !== row.ticker),
     }
   }) }
   const setCategoryMode = (category, mode) => { setPlanActive(true); setSettings(prev => {
@@ -312,6 +319,11 @@ export default function HoldingTargets() {
       next.modes[category.id] = 'custom'; next.targets = { ...(prev.targets || {}) }
       category.rows.forEach(row => { next.targets[row.ticker] = row.currentPortfolioPct })
       next.targetUpdatedAt = stampTargets(prev, category.rows.map(row => row.ticker))
+      // Keeping the whole category at current weight frees any pending reinvest
+      // allocations on its holdings back to the cash pool.
+      const catTickers = new Set(category.rows.map(row => row.ticker))
+      next.manualAllocations = Object.fromEntries(Object.entries(prev.manualAllocations || {}).filter(([ticker]) => !catTickers.has(ticker)))
+      next.reallocationTickers = (prev.reallocationTickers || []).filter(ticker => !catTickers.has(ticker))
     }
     return next
   }) }
