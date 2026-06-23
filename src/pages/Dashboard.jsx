@@ -222,6 +222,9 @@ function PortfolioOverview({ groups, categories, totalValue }) {
     : (subId != null
         ? (selectedCat.subcategories?.find(s => s.id === subId)?.name || selectedCat.name)
         : selectedCat.name)
+  const parentAccountPct = (!atTopLevel && totalValue > 0 && parentValue > 0)
+    ? (parentValue / totalValue) * 100
+    : null
 
   useEffect(() => {
     if (!displayGroups.length || !window.Plotly || !chartRef.current) return
@@ -320,6 +323,11 @@ function PortfolioOverview({ groups, categories, totalValue }) {
                 {selectedCat.subcategories.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </>
+          )}
+          {subId != null && parentAccountPct != null && (
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem', fontWeight: 600 }}>
+              {parentName}: {parentAccountPct.toFixed(2)}% of account
+            </span>
           )}
           {catId != null && (
             <button
