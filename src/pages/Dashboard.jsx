@@ -324,7 +324,7 @@ function PortfolioOverview({ groups, categories, totalValue }) {
               </select>
             </>
           )}
-          {subId != null && parentAccountPct != null && (
+          {parentAccountPct != null && (
             <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem', fontWeight: 600 }}>
               {parentName}: {parentAccountPct.toFixed(2)}% of account
             </span>
@@ -1204,6 +1204,35 @@ export default function Dashboard() {
         </div>
       )}
 
+      {portfolioCoverage != null && (
+        <div className="nav-erosion-summary-row">
+          <div
+            className="summary-card nav-erosion-severity-card"
+            style={{
+              borderColor: portfolioNavColor,
+              background: navSeverityBg(portfolioNavSeverity),
+            }}
+          >
+            <div
+              className="summary-value"
+              style={{
+                color: portfolioNavColor,
+                fontSize: '0.82rem',
+                lineHeight: 1.3,
+                textAlign: 'center',
+              }}
+            >
+              {navSeverityText(portfolioNavSeverity)}
+            </div>
+          </div>
+          <SummaryCard
+            label="NAV Erosion Score"
+            value={portfolioCoverage.toFixed(4)}
+            color={portfolioNavColor}
+          />
+        </div>
+      )}
+
       {/* Summary Cards Strip */}
       <div className="summary-strip">
         <SummaryCard
@@ -1242,28 +1271,6 @@ export default function Dashboard() {
           value={pct(totals.priceReturn)}
           color={gradeColor(totals.priceReturn)}
         />
-        <SummaryCard
-          label="NAV Erosion Ratio"
-          value={portfolioCoverage != null ? portfolioCoverage.toFixed(4) : '—'}
-          color={portfolioCoverage == null ? undefined : portfolioNavColor}
-        />
-        {portfolioCoverage != null && (
-          <div className={`summary-card`} style={{
-            border: `2px solid ${portfolioNavColor}`,
-            borderRadius: '8px',
-            background: navSeverityBg(portfolioNavSeverity),
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <div className="summary-value" style={{
-              color: portfolioNavColor,
-              fontSize: '0.82rem',
-              lineHeight: 1.3,
-              textAlign: 'center',
-            }}>
-              {navSeverityText(portfolioNavSeverity)}
-            </div>
-          </div>
-        )}
         <SummaryCard
           label="Total Return"
           value={pct(totals.totalReturn)}
