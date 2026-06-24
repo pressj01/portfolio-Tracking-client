@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
@@ -500,7 +500,7 @@ function enrichCategoryData(categoryData, holdings = [], navCoverage = null) {
 
 export default function Categories() {
   const pf = useProfileFetch()
-  const { selection, profileId, isAggregate } = useProfile()
+  const { selection, profileId, isAggregate, currentProfileName } = useProfile()
   const dialog = useDialog()
   const navigate = useNavigate()
   const [data, setData] = useState({ categories: [], unallocated: [], total_value: 0 })
@@ -524,12 +524,21 @@ export default function Categories() {
   })
   const [constraintsSeeded, setConstraintsSeeded] = useState(false)
   const [incomeFloorTouched, setIncomeFloorTouched] = useState(false)
+  const reloadSeq = useRef(0)
   const isOwnerProfile = !isAggregate && Number(profileId) === 1
   // Only show "Push to Sub-accounts" when there are actually included sub-accounts
   // to push to (owner-target-reference.profiles == include_in_owner accounts).
   const hasSubaccounts = (data.owner_target_reference?.profiles?.length || 0) > 0
 
   const reload = useCallback(async () => {
+    const seq = reloadSeq.current + 1
+    reloadSeq.current = seq
+    if (isAggregate) {
+      setData({ categories: [], unallocated: [], total_value: 0, _selection: selection })
+      setError(null)
+      setLoading(false)
+      return
+    }
     try {
       const [catRes, holdingsRes, navCoverageRes, ownerTargetRefRes] = await Promise.all([
         pf('/api/categories/data'),
@@ -541,6 +550,7 @@ export default function Categories() {
       const holdings = holdingsRes ? await holdingsRes.json() : []
       const navCoverage = navCoverageRes ? await navCoverageRes.json() : null
       const ownerTargetReference = ownerTargetRefRes ? await ownerTargetRefRes.json() : null
+      if (seq !== reloadSeq.current) return
       setData({
         ...enrichCategoryData(d, Array.isArray(holdings) ? holdings : [], navCoverage),
         owner_target_reference: ownerTargetReference,
@@ -548,11 +558,11 @@ export default function Categories() {
       })
       setError(null)
     } catch (e) {
-      setError('Failed to load categories')
+      if (seq === reloadSeq.current) setError('Failed to load categories')
     } finally {
-      setLoading(false)
+      if (seq === reloadSeq.current) setLoading(false)
     }
-  }, [pf, selection, isOwnerProfile])
+  }, [pf, selection, isOwnerProfile, isAggregate])
 
   useEffect(() => { reload() }, [reload, selection])
 
@@ -589,6 +599,10 @@ export default function Categories() {
   const handleEdit = (cat) => { setEditCat(cat); setShowModal(true) }
 
   const handleSave = async ({ name, target_pct }) => {
+    if (isAggregate) {
+      setError('Select an individual account before editing categories.')
+      return
+    }
     setError(null)
     if (target_pct != null) {
       const otherTotal = data.categories
@@ -612,27 +626,39 @@ export default function Categories() {
         })
       }
       setShowModal(false)
-      reload()
+      await reload()
     } catch (e) { setError(e.message) }
   }
 
   const handleDelete = async (cat) => {
+    if (isAggregate) {
+      setError('Select an individual account before editing categories.')
+      return
+    }
     if (!await dialog.confirm(`Delete category "${cat.name}"? Tickers will become unallocated.`)) return
     await pf(`/api/categories/${cat.id}`, { method: 'DELETE' })
     if (expandedId === cat.id) setExpandedId(null)
-    reload()
+    await reload()
   }
 
   const handleAssign = async (tickers, categoryId, subcategoryId = null) => {
+    if (isAggregate) {
+      setError('Select an individual account before assigning categories.')
+      return
+    }
     await pf('/api/categories/assign', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ category_id: categoryId, subcategory_id: subcategoryId, tickers }),
     })
     setSelectedUnalloc(new Set())
-    reload()
+    await reload()
   }
 
   const handleSaveSub = async ({ name, target_pct }) => {
+    if (isAggregate) {
+      setError('Select an individual account before editing sub-categories.')
+      return
+    }
     if (!subModal) return
     setError(null)
     if (target_pct != null) {
@@ -657,7 +683,7 @@ export default function Categories() {
         })
       }
       setSubModal(null)
-      reload()
+      await reload()
     } catch (e) { setError(e.message) }
   }
 
@@ -682,18 +708,26 @@ export default function Categories() {
   }
 
   const handleDeleteSub = async (sub) => {
+    if (isAggregate) {
+      setError('Select an individual account before editing sub-categories.')
+      return
+    }
     if (!await dialog.confirm(`Delete sub-category "${sub.name}"? Its tickers stay in the parent category but become unclassified.`)) return
     await pf(`/api/subcategories/${sub.id}`, { method: 'DELETE' })
     if (expandedSubId === sub.id) setExpandedSubId(null)
-    reload()
+    await reload()
   }
 
   const handleUnassign = async (tickers) => {
+    if (isAggregate) {
+      setError('Select an individual account before assigning categories.')
+      return
+    }
     await pf('/api/categories/unassign', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers }),
     })
-    reload()
+    await reload()
   }
 
   const toggleUnalloc = (ticker) => {
@@ -1069,6 +1103,20 @@ export default function Categories() {
   }
 
   if (loading) return <div className="page" style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
+
+  if (isAggregate) {
+    return (
+      <div className="page">
+        <h1>Categories</h1>
+        <div className="card" style={{ padding: '1rem', maxWidth: 760 }}>
+          <h2 style={{ marginTop: 0 }}>Select an individual account</h2>
+          <p style={{ color: 'var(--text-muted)', marginBottom: 0 }}>
+            Categories and sub-categories are edited per account. You are viewing {currentProfileName || 'an aggregate portfolio'}, so assignments are locked here to avoid writing changes to the wrong account.
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="page">

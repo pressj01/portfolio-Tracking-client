@@ -177,7 +177,51 @@ class SubcategoryApiTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["subcategory_id"], silver_id)
 
-    # ── rename ───────────────────────────────────────────────────────────────────
+    # Assignment safety
+    def test_reassigning_ticker_to_different_category_replaces_row(self):
+        self.client.post("/api/categories?profile_id=1", json={"name": "Equity"})
+        equity_id = self._row("SELECT id FROM categories WHERE name = 'Equity'")["id"]
+        res = self.client.post(
+            "/api/categories/assign?profile_id=1",
+            json={"category_id": equity_id, "tickers": ["GLD"]},
+        )
+        self.assertEqual(res.status_code, 200)
+        conn = self._get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT category_id, subcategory_id FROM ticker_categories WHERE ticker = 'GLD' AND profile_id = 1"
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["category_id"], equity_id)
+        self.assertIsNone(rows[0]["subcategory_id"])
+
+    def test_assign_rejects_aggregate_context(self):
+        res = self.client.post(
+            "/api/categories/assign?aggregate_id=1",
+            json={"category_id": 1, "tickers": ["GLD"]},
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_data_endpoint_does_not_delete_inactive_assignment(self):
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                "UPDATE all_account_info SET quantity = 0 WHERE ticker = 'GLD' AND profile_id = 1"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        data = self.client.get("/api/categories/data?profile_id=1").get_json()
+        metals = self._category(data)
+        self.assertNotIn("GLD", [t["ticker"] for t in metals["tickers"]])
+        row = self._row(
+            "SELECT category_id FROM ticker_categories WHERE ticker = 'GLD' AND profile_id = 1"
+        )
+        self.assertIsNotNone(row)
+
+    # Rename
     def test_rename_subcategory(self):
         self._create_sub("Gold")
         gold_id = self._row("SELECT id FROM subcategories WHERE name = 'Gold'")["id"]
@@ -311,6 +355,59 @@ class SubcategoryApiTest(unittest.TestCase):
         self._seed_subaccount(pid=2)
         res = self.client.post("/api/categories/push-to-subaccounts?profile_id=2")
         self.assertEqual(res.status_code, 403)
+
+
+class TickerCategorySchemaMigrationTest(unittest.TestCase):
+    def test_migration_collapses_duplicate_ticker_assignments(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        db_path = tmp.name
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute(
+                "CREATE TABLE profiles (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)"
+            )
+            conn.execute(
+                "CREATE TABLE categories ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "name TEXT NOT NULL, target_pct REAL, profile_id INTEGER NOT NULL DEFAULT 1, "
+                "sort_order INTEGER NOT NULL DEFAULT 0, UNIQUE (name, profile_id))"
+            )
+            conn.execute(
+                "CREATE TABLE ticker_categories ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, "
+                "category_id INTEGER NOT NULL, profile_id INTEGER NOT NULL DEFAULT 1, "
+                "subcategory_id INTEGER, UNIQUE (ticker, category_id, profile_id))"
+            )
+            conn.execute("INSERT INTO profiles (id, name) VALUES (1, 'Owner')")
+            conn.execute(
+                "INSERT INTO categories (id, name, profile_id, sort_order) VALUES (1, 'Metals', 1, 0)"
+            )
+            conn.execute(
+                "INSERT INTO categories (id, name, profile_id, sort_order) VALUES (2, 'Equity', 1, 1)"
+            )
+            conn.execute(
+                "INSERT INTO ticker_categories (id, ticker, category_id, profile_id) VALUES (1, 'GLD', 1, 1)"
+            )
+            conn.execute(
+                "INSERT INTO ticker_categories (id, ticker, category_id, profile_id) VALUES (2, 'GLD', 2, 1)"
+            )
+            conn.commit()
+
+            database.ensure_tables_exist(conn)
+
+            rows = conn.execute(
+                "SELECT ticker, category_id FROM ticker_categories WHERE ticker = 'GLD' AND profile_id = 1"
+            ).fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["category_id"], 2)
+        finally:
+            conn.close()
+            try:
+                Path(db_path).unlink(missing_ok=True)
+            except PermissionError:
+                pass
 
 
 if __name__ == "__main__":

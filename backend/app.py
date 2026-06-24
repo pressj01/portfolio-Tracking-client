@@ -264,6 +264,14 @@ def _request_aggregate_id():
         return None
 
 
+def _reject_aggregate_category_write():
+    if _request_aggregate_id() is None:
+        return None
+    return jsonify({
+        "error": "Categories can only be edited on an individual account, not an aggregate portfolio."
+    }), 400
+
+
 def get_profile_filter():
     """Return (is_aggregate, profile_ids_list) for read operations.
 
@@ -1399,13 +1407,20 @@ def _assign_position_category(conn, profile_id, ticker, category_name):
         )
         category_id = cur.lastrowid
 
+    _replace_ticker_category(conn, profile_id, ticker, category_id)
+
+
+def _replace_ticker_category(conn, profile_id, ticker, category_id, subcategory_id=None):
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return
     conn.execute(
         "DELETE FROM ticker_categories WHERE ticker = ? AND profile_id = ?",
         (ticker, profile_id),
     )
     conn.execute(
-        "INSERT INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
-        (ticker, category_id, profile_id),
+        "INSERT INTO ticker_categories (ticker, category_id, subcategory_id, profile_id) VALUES (?, ?, ?, ?)",
+        (ticker, category_id, subcategory_id, profile_id),
     )
 
 
@@ -8908,10 +8923,7 @@ def add_holding():
             (cat_name, profile_id),
         ).fetchone()
         if cat_row:
-            conn.execute(
-                "INSERT OR IGNORE INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
-                (ticker, cat_row["id"], profile_id),
-            )
+            _replace_ticker_category(conn, profile_id, ticker, cat_row["id"])
 
     _recompute_position_income_fields(conn, profile_id, ticker)
     conn.commit()
@@ -9000,10 +9012,7 @@ def update_holding(ticker):
                 (cat_name, profile_id),
             ).fetchone()
             if cat_row:
-                conn.execute(
-                    "INSERT INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
-                    (ticker, cat_row["id"], profile_id),
-                )
+                _replace_ticker_category(conn, profile_id, ticker, cat_row["id"])
 
     previous_quantity = existing["quantity"] if isinstance(existing, dict) else existing[0]
     previous_annual_income = existing["estim_payment_per_year"] if isinstance(existing, dict) else existing[6]
@@ -10012,10 +10021,7 @@ def add_transaction(ticker):
             ).fetchone()
             if cat_row:
                 cat_id = cat_row["id"] if isinstance(cat_row, dict) else cat_row[0]
-                conn.execute(
-                    "INSERT OR IGNORE INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
-                    (ticker, cat_id, profile_id),
-                )
+                _replace_ticker_category(conn, profile_id, ticker, cat_id)
         conn.commit()
     else:
         # Auto-seed existing holding's current data as the first transaction
@@ -14211,19 +14217,6 @@ def categories_data():
                 )
         conn.commit()
 
-    # Keep category data aligned to active holdings only.
-    conn.execute(
-        """DELETE FROM ticker_categories
-           WHERE profile_id = ?
-             AND ticker NOT IN (
-                 SELECT ticker
-                 FROM all_account_info
-                 WHERE profile_id = ? AND quantity > 0
-             )""",
-        (profile_id, profile_id),
-    )
-    conn.commit()
-
     # Fetch categories
     cats = conn.execute(
         "SELECT id, name, target_pct, sort_order FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
@@ -14506,6 +14499,9 @@ def owner_target_reference():
 
 @app.route("/api/categories", methods=["POST"])
 def create_category():
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     data = request.get_json()
     name = (data.get("name") or "").strip()
@@ -14532,6 +14528,9 @@ def create_category():
 
 @app.route("/api/categories/<int:cat_id>", methods=["PUT"])
 def update_category(cat_id):
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     data = request.get_json()
     conn = get_connection()
@@ -14556,6 +14555,9 @@ def update_category(cat_id):
 
 @app.route("/api/categories/<int:cat_id>", methods=["DELETE"])
 def delete_category(cat_id):
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     conn = get_connection()
     conn.execute(
@@ -14577,14 +14579,34 @@ def delete_category(cat_id):
 
 @app.route("/api/categories/assign", methods=["POST"])
 def assign_tickers():
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
-    data = request.get_json()
+    data = request.get_json() or {}
     category_id = data.get("category_id")
     subcategory_id = data.get("subcategory_id")
-    tickers = data.get("tickers", [])
+    tickers = [
+        str(t).strip().upper()
+        for t in data.get("tickers", [])
+        if str(t or "").strip()
+    ]
+    try:
+        category_id = int(category_id)
+        if subcategory_id is not None:
+            subcategory_id = int(subcategory_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "category_id and subcategory_id must be numeric"}), 400
     if not category_id or not tickers:
         return jsonify({"error": "category_id and tickers required"}), 400
     conn = get_connection()
+    category = conn.execute(
+        "SELECT id FROM categories WHERE id = ? AND profile_id = ?",
+        (category_id, profile_id),
+    ).fetchone()
+    if not category:
+        conn.close()
+        return jsonify({"error": "Category not found"}), 404
     # Validate the subcategory belongs to this category, if provided
     if subcategory_id is not None:
         owner = conn.execute(
@@ -14595,14 +14617,7 @@ def assign_tickers():
             conn.close()
             return jsonify({"error": "Sub-category does not belong to that category"}), 400
     for t in tickers:
-        conn.execute(
-            "DELETE FROM ticker_categories WHERE ticker = ? AND profile_id = ?",
-            (t, profile_id),
-        )
-        conn.execute(
-            "INSERT INTO ticker_categories (ticker, category_id, subcategory_id, profile_id) VALUES (?, ?, ?, ?)",
-            (t, category_id, subcategory_id, profile_id),
-        )
+        _replace_ticker_category(conn, profile_id, t, category_id, subcategory_id)
     conn.commit()
     conn.close()
     return jsonify({"message": f"Assigned {len(tickers)} ticker(s)"})
@@ -14610,9 +14625,16 @@ def assign_tickers():
 
 @app.route("/api/categories/unassign", methods=["POST"])
 def unassign_tickers():
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
-    data = request.get_json()
-    tickers = data.get("tickers", [])
+    data = request.get_json() or {}
+    tickers = [
+        str(t).strip().upper()
+        for t in data.get("tickers", [])
+        if str(t or "").strip()
+    ]
     if not tickers:
         return jsonify({"error": "tickers required"}), 400
     conn = get_connection()
@@ -14628,6 +14650,9 @@ def unassign_tickers():
 
 @app.route("/api/categories/reorder", methods=["POST"])
 def reorder_categories():
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     data = request.get_json()
     order = data.get("order", [])  # list of category IDs in desired order
@@ -14644,6 +14669,9 @@ def reorder_categories():
 
 @app.route("/api/categories/<int:cat_id>/subcategories", methods=["POST"])
 def create_subcategory(cat_id):
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     data = request.get_json()
     name = (data.get("name") or "").strip()
@@ -14678,6 +14706,9 @@ def create_subcategory(cat_id):
 
 @app.route("/api/subcategories/<int:sub_id>", methods=["PUT"])
 def update_subcategory(sub_id):
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     data = request.get_json()
     conn = get_connection()
@@ -14711,6 +14742,9 @@ def update_subcategory(sub_id):
 
 @app.route("/api/subcategories/<int:sub_id>", methods=["DELETE"])
 def delete_subcategory(sub_id):
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     conn = get_connection()
     # Tickers in this sub-category fall back to their parent category (unclassified within it)

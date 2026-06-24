@@ -683,34 +683,99 @@ def ensure_tables_exist(conn=None):
             ticker      TEXT NOT NULL,
             category_id INTEGER NOT NULL,
             profile_id  INTEGER NOT NULL DEFAULT 1,
-            UNIQUE (ticker, category_id, profile_id),
+            subcategory_id INTEGER,
+            UNIQUE (ticker, profile_id),
             FOREIGN KEY (category_id) REFERENCES categories(id)
         )
     """)
 
-    # Migrate: widen unique constraint from (ticker, profile_id) to (ticker, category_id, profile_id)
-    _needs_tc_migrate = False
+    # A ticker belongs to exactly one top-level category per profile. Older
+    # builds allowed multiple rows as long as category_id differed, which made
+    # category/sub-category displays ambiguous after edits.
+    _tc_cols_before = {r[1] for r in cur.execute("PRAGMA table_info(ticker_categories)").fetchall()}
+    _has_id = "id" in _tc_cols_before
+    _has_subcategory_id = "subcategory_id" in _tc_cols_before
+    _has_ticker_profile_unique = False
     for idx in cur.execute("PRAGMA index_list(ticker_categories)").fetchall():
         if idx[2] == 1:  # unique index
             cols = [r[2] for r in cur.execute(f"PRAGMA index_info('{idx[1]}')").fetchall()]
-            if len(cols) == 2 and "category_id" not in cols:
-                _needs_tc_migrate = True
+            if cols == ["ticker", "profile_id"]:
+                _has_ticker_profile_unique = True
                 break
-    if _needs_tc_migrate:
-        cur.executescript("""
-            CREATE TABLE IF NOT EXISTS ticker_categories_new (
+    if not _has_ticker_profile_unique or not _has_subcategory_id:
+        cur.execute("""
+            CREATE TABLE ticker_categories_new (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 ticker      TEXT NOT NULL,
                 category_id INTEGER NOT NULL,
                 profile_id  INTEGER NOT NULL DEFAULT 1,
-                UNIQUE (ticker, category_id, profile_id),
+                subcategory_id INTEGER,
+                UNIQUE (ticker, profile_id),
                 FOREIGN KEY (category_id) REFERENCES categories(id)
-            );
-            INSERT OR IGNORE INTO ticker_categories_new (id, ticker, category_id, profile_id)
-                SELECT id, ticker, category_id, profile_id FROM ticker_categories;
-            DROP TABLE ticker_categories;
-            ALTER TABLE ticker_categories_new RENAME TO ticker_categories;
+            )
         """)
+        if _has_id and _has_subcategory_id:
+            cur.execute("""
+                INSERT OR IGNORE INTO ticker_categories_new
+                    (id, ticker, category_id, profile_id, subcategory_id)
+                SELECT tc.id, tc.ticker, tc.category_id, tc.profile_id, tc.subcategory_id
+                  FROM ticker_categories tc
+                  JOIN (
+                    SELECT ticker, profile_id, MAX(id) AS keep_id
+                      FROM ticker_categories
+                     GROUP BY ticker, profile_id
+                  ) keep
+                    ON keep.ticker = tc.ticker
+                   AND keep.profile_id = tc.profile_id
+                   AND keep.keep_id = tc.id
+            """)
+        elif _has_id:
+            cur.execute("""
+                INSERT OR IGNORE INTO ticker_categories_new
+                    (id, ticker, category_id, profile_id)
+                SELECT tc.id, tc.ticker, tc.category_id, tc.profile_id
+                  FROM ticker_categories tc
+                  JOIN (
+                    SELECT ticker, profile_id, MAX(id) AS keep_id
+                      FROM ticker_categories
+                     GROUP BY ticker, profile_id
+                  ) keep
+                    ON keep.ticker = tc.ticker
+                   AND keep.profile_id = tc.profile_id
+                   AND keep.keep_id = tc.id
+            """)
+        elif _has_subcategory_id:
+            cur.execute("""
+                INSERT OR IGNORE INTO ticker_categories_new
+                    (ticker, category_id, profile_id, subcategory_id)
+                SELECT tc.ticker, tc.category_id, tc.profile_id, tc.subcategory_id
+                  FROM ticker_categories tc
+                  JOIN (
+                    SELECT ticker, profile_id, MAX(rowid) AS keep_rowid
+                      FROM ticker_categories
+                     GROUP BY ticker, profile_id
+                  ) keep
+                    ON keep.ticker = tc.ticker
+                   AND keep.profile_id = tc.profile_id
+                   AND keep.keep_rowid = tc.rowid
+            """)
+        else:
+            cur.execute("""
+                INSERT OR IGNORE INTO ticker_categories_new
+                    (ticker, category_id, profile_id)
+                SELECT tc.ticker, tc.category_id, tc.profile_id
+                  FROM ticker_categories tc
+                  JOIN (
+                    SELECT ticker, profile_id, MAX(rowid) AS keep_rowid
+                      FROM ticker_categories
+                     GROUP BY ticker, profile_id
+                  ) keep
+                    ON keep.ticker = tc.ticker
+                   AND keep.profile_id = tc.profile_id
+                   AND keep.keep_rowid = tc.rowid
+            """)
+        cur.execute("DROP TABLE ticker_categories")
+        cur.execute("ALTER TABLE ticker_categories_new RENAME TO ticker_categories")
 
     # ── subcategories ───────────────────────────────────────────────────────────
     # Optional second tier within a category (e.g. Metals → Gold / Silver / Copper).
