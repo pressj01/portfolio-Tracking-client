@@ -1348,7 +1348,7 @@ function ReinvestmentImpactHelp() {
         The <strong>Reinvestment Impact</strong> page shows how dividend reinvestment (DRIP) is reshaping your
         portfolio over time — decomposing payout growth into share accumulation, distribution-rate changes,
         and price effects — and projects how reinvestment compounds income forward under different market
-        scenarios. It has two modes: <strong>Historical</strong> and <strong>Projection</strong>.
+        scenarios. It has three modes: <strong>Historical</strong>, <strong>Projection</strong>, and <strong>Price Impact</strong>.
       </p>
 
       <p style={{ marginBottom: '1rem' }}>
@@ -1546,6 +1546,133 @@ function ReinvestmentImpactHelp() {
         distributions are largely sustainable (funded by options premiums, not return-of-capital erosion).
         The scenario growth rates (±1–4% / yr) still apply, so projections reflect modestly growing or
         declining distributions rather than holding them flat forever.
+      </div>
+
+      {/* ── Price Impact ───────────────────────────────────────── */}
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Price Impact Tab</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Price Impact</strong> tab answers a different question than Projection:
+        <em> if portfolio prices fell or rose today, how would current income and reinvested future income change?</em>
+        It is a price-shock model, not a market-scenario model. Projection asks how income grows under Bullish,
+        Neutral, or Bearish paths over time; Price Impact holds the selected price change constant and shows how
+        cheaper or more expensive shares affect income, reinvestment, and monthly additions.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/reinvestment-impact/price-impact-top.png" alt="Reinvestment Impact Price Impact tab top section showing controls, summary tiles, math help, break-even panel, and current income by price change chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>Price Impact tab top section: Fund, Horizon, Price Change slider, Reinvest %, Monthly Add, summary tiles, Math help, Break-Even panel, and the Current Income by Portfolio Price Change chart.</p>
+      </div>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Controls</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Fund</strong> — choose a single ticker or leave it on Whole Portfolio. Selecting one fund clears category filters and reveals the Break-Even panel for that holding.</li>
+        <li><strong>Categories</strong> — when viewing the whole portfolio, restrict the model to one or more categories or sub-categories. This lets you test how a price shock affects only one sleeve of the portfolio.</li>
+        <li><strong>Horizon</strong> — 1, 3, 5, 10, or 20 years. This controls the forward reinvestment projection, not the current-income snapshot.</li>
+        <li><strong>Price Change</strong> — the main what-if input. The slider and quick buttons model a portfolio price drop as low as <strong>-60%</strong> or a price rise as high as <strong>+100%</strong>. The number box lets you type an exact percentage.</li>
+        <li><strong>Reinvest %</strong> — how much of each modeled distribution is reinvested in the forward projection. The <strong>Est</strong> and <strong>Actual 3mo</strong> shortcuts work the same way they do on Projection.</li>
+        <li><strong>Monthly Add</strong> — a fixed monthly contribution included in the forward projection. It buys shares at the adjusted price, so lower modeled prices buy more shares and higher modeled prices buy fewer.</li>
+      </ul>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Summary Tiles</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Price Change</strong> — the selected shock and the portfolio value before and after the shock. Example: $552,182 to $607,400 at +10%.</li>
+        <li><strong>Current Monthly</strong> — the modeled current monthly income after applying the price shock and payout-sensitivity model. The small "base" value underneath is today's unshocked monthly income.</li>
+        <li><strong>Current Annual</strong> — the modeled current annual income after the same price shock. The small "base" value underneath is today's unshocked annual income.</li>
+        <li><strong>Monthly in N yr</strong> — the final projected monthly income at the selected horizon after reinvestment and monthly additions are compounded at the adjusted price.</li>
+        <li><strong>Annual in N yr</strong> — the final projected annual income at the selected horizon after reinvestment and monthly additions.</li>
+        <li><strong>Projected Change</strong> — the difference between projected annual income at the selected horizon and the price-adjusted current annual income. This is intentionally compared to the adjusted current income, not the original baseline, so the percentage reflects compounding after the shock.</li>
+      </ul>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Math Help Panel</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Math help</strong> disclosure explains the assumptions used by this tab. The most important point is that
+        income does <strong>not</strong> move one-for-one with price. Each holding gets an <strong>income beta</strong> based on its
+        income strategy, and the model applies only that fraction of the price move to the payout.
+      </p>
+      <p style={{ marginBottom: '0.5rem' }}>The payout formula is:</p>
+      <pre style={{ whiteSpace: 'pre-wrap', background: 'var(--p-0f141c)', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.75rem', marginBottom: '1rem' }}>
+{`adjusted distribution per share =
+latest distribution per share × (1 + price change × income beta)`}
+      </pre>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Covered-call / option-income funds</strong> — use a lower payout beta because their income comes from option premium, volatility, strategy rules, and distribution policy as much as NAV. A price drop does not automatically mean the payout drops by the same percentage.</li>
+        <li><strong>BDCs, CEFs, preferreds, bonds, loans, and fixed-income style holdings</strong> — also use dampened payout betas because income is tied more to portfolio holdings, credit, and distribution policy than to market price alone.</li>
+        <li><strong>Declared-dividend holdings</strong> — use the default lower sensitivity because a stock price move does not automatically change the declared dividend immediately.</li>
+      </ul>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Break-Even Panel in Price Impact</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        When a single fund is selected, the Break-Even panel appears above the charts. It uses the same single-ticker logic as the other tabs:
+        Cost Basis compares current position value to what you paid, while Total Return includes dividends already collected. This helps you
+        interpret the Price Impact model alongside your actual recovery position. For example, a BDC may still be below cost basis on price,
+        but above break-even on total return after years of distributions.
+      </p>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Current Income by Portfolio Price Change</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This chart is the cleanest view of the immediate payout model. It shows how current monthly and current annual income change across
+        the full -60% to +100% price range. The orange dotted vertical line marks the selected price change. The chart is read-only, so dragging
+        on it cannot change the model or reshape the axes.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Current monthly</strong> — modeled monthly income after the price shock and payout beta.</li>
+        <li><strong>Current annual</strong> — modeled annual income after the price shock and payout beta.</li>
+        <li><strong>Selected price</strong> — the vertical reference line showing the price-change setting currently selected in the controls.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        If this line slopes gently instead of sharply, that is expected: the model is intentionally not assuming payout moves one-for-one with price.
+        Covered-call funds, BDCs, CEFs, and similar income funds should generally show dampened current-income movement.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/reinvestment-impact/price-impact-bottom.png" alt="Price Impact bottom section showing projected income after reinvestment chart, chart-specific help, projected monthly income chart, and top contributors table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>Price Impact bottom section: Projected Income After Reinvestment chart, chart-specific help, Projected Monthly Income chart, and Top Income Contributors table.</p>
+      </div>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Projected Income After Reinvestment by Price Change</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This chart is easy to misunderstand because it is <strong>not</strong> only showing the immediate payout change. It shows the projected result
+        after the selected horizon, reinvestment rate, and monthly additions have compounded. That means lower prices can sometimes produce higher
+        projected income even though current payout is modeled lower.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Projected annual after reinvestment</strong> — the final annual income at the selected horizon after reinvested distributions and monthly additions buy shares at each price-change level.</li>
+        <li><strong>Projected monthly after reinvestment</strong> — the same final-period income expressed monthly.</li>
+        <li><strong>Current annual payout</strong> — dashed reference line showing the modeled current annual payout after the price shock, before compounding. Compare this to the projected line to separate payout pressure from future share accumulation.</li>
+        <li><strong>Selected price</strong> — orange dotted vertical line marking the current price-change setting.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The chart-specific help below the graph explains the key interpretation: if the dashed payout line falls while the projected line rises,
+        the model is saying income is lower today, but reinvestment at cheaper prices may buy enough extra shares to produce more future income
+        by the selected horizon.
+      </p>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Projected Monthly Income at Selected Price Change</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This chart switches from the full price range to the single selected price change. It shows the month-by-month income path through the selected horizon.
+        It is useful for seeing whether the projected income improvement is immediate, gradual, or mostly back-loaded from compounding. A flatter line means
+        the payout and share count are changing slowly; a steeper line means reinvestment and additions are meaningfully increasing shares.
+      </p>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Top Income Contributors at Adjusted Price</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The table explains which holdings drive the projected income number. It ranks holdings by projected annual income at the adjusted price and shows:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Ticker / Description</strong> — the holding being modeled.</li>
+        <li><strong>Price</strong> — today's price.</li>
+        <li><strong>Adjusted</strong> — the price after applying the selected price change.</li>
+        <li><strong>Income Model</strong> — the strategy bucket and beta used for the holding, such as Income fund (10%) or Option income (20%). This makes the math auditable.</li>
+        <li><strong>End Shares</strong> — simulated shares after reinvestment and monthly additions.</li>
+        <li><strong>Projected Annual</strong> — final annual income for the holding at the selected horizon.</li>
+        <li><strong>Growth</strong> — percentage growth from adjusted current annual income to projected annual income for that holding.</li>
+      </ul>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.5rem' }}>
+        <strong>How to read this tab:</strong> Use <strong>Current Income by Portfolio Price Change</strong> to understand
+        immediate payout sensitivity. Use <strong>Projected Income After Reinvestment</strong> to understand what compounding
+        might do after reinvestment and monthly additions. If those two charts point in different directions, the model is
+        separating today's payout pressure from future share accumulation at cheaper or more expensive prices.
       </div>
     </div>
   )
