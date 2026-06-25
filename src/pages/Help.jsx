@@ -5877,7 +5877,27 @@ function BlendedYieldHelp() {
         If not found, you'll be prompted to enter the yield manually (saves to your browser).
       </p>
 
-      <h4 style={{ marginBottom: '0.5rem' }}>Step 3: Configure Each Fund</h4>
+      <h4 style={{ marginBottom: '0.5rem' }}>Step 3: Load Tickers From Your Portfolio</h4>
+      <p style={{ marginBottom: '1rem' }}>
+        Click <strong>From Portfolio</strong> to open a picker with your current holdings. Use search to narrow the list,
+        check any combination of tickers, or use <strong>Select All</strong> and <strong>Deselect All</strong> to quickly
+        choose the full portfolio or clear the selection. Click <strong>Add Tickers</strong> to add the selected holdings
+        with their current values as allocations.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        You can still add tickers that are not in your portfolio with the manual ticker box. Portfolio-loaded tickers and
+        manually added tickers can be mixed in the same blended-yield scenario.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img
+          src="./help-screenshots/blended-yield/04-portfolio-picker.png"
+          alt="Blended Yield Calculator portfolio picker with search, Select All, Deselect All, and Add Tickers controls"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
+
+      <h4 style={{ marginBottom: '0.5rem' }}>Step 4: Configure Each Fund</h4>
       <p style={{ marginBottom: '1rem' }}>
         For each fund card, enter:
       </p>
@@ -5898,7 +5918,7 @@ function BlendedYieldHelp() {
         />
       </div>
 
-      <h4 style={{ marginBottom: '0.5rem' }}>Step 4: Review Portfolio Summary</h4>
+      <h4 style={{ marginBottom: '0.5rem' }}>Step 5: Review Portfolio Summary</h4>
       <p style={{ marginBottom: '1rem' }}>
         The <strong>Portfolio Summary</strong> shows your blended yield (TEY), after-tax yield, annual and monthly income.
         A color-coded allocation bar shows fund weights. A detailed breakdown table lists every fund with yields,
@@ -5957,6 +5977,7 @@ function BlendedYieldHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Compare Allocations:</strong> Adjust allocation % or $ in any card to test different portfolio mixes. Find the best after-tax income for your goals.</li>
         <li><strong>Verify Tax Classifications:</strong> Wrong tax type = wrong after-tax yield. Double-check corporate bonds (Fully Taxable), Treasuries (State Exempt), national munis (Fed Exempt), and option funds (ROC).</li>
+        <li><strong>Load a Partial Portfolio:</strong> Use From Portfolio to select only the holdings you want to compare, or Select All to model the whole portfolio.</li>
         <li><strong>Save Custom Brackets Once:</strong> If rates change, edit and save custom brackets once. They persist until you click Restore 2025 Defaults.</li>
         <li><strong>Manual Fund Lookup:</strong> If a ticker doesn't auto-populate, search your broker for the current yield and enter it manually. It saves with a blue ★ badge for next time.</li>
       </ul>
