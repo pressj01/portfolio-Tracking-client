@@ -26,6 +26,13 @@ const sharesFromDrip = (income, h) => {
   const price = dripSharePrice(h)
   return price > 0 ? Number(income || 0) / price : 0
 }
+const normalizeDashboardHolding = (holding) => ({
+  ...holding,
+  div_frequency: holding?.div_frequency || 'M',
+})
+const normalizeDashboardHoldings = (rows) => Array.isArray(rows)
+  ? rows.map(normalizeDashboardHolding)
+  : []
 const shortDate = (value) => {
   if (!value) return ''
   const d = new Date(`${value}T00:00:00`)
@@ -597,7 +604,7 @@ export default function Dashboard() {
     let stale = false
     const cached = readDashboardCache(dashboardCacheKey)
     if (cached) {
-      setHoldings(cached.holdings || [])
+      setHoldings(normalizeDashboardHoldings(cached.holdings))
       setIncomeSummary(cached.incomeSummary || null)
       setUpcomingDivs(cached.upcomingDivs || [])
       setTickerGrades(cached.tickerGrades || {})
@@ -633,9 +640,10 @@ export default function Dashboard() {
       .then(safeJson)
       .then(data => {
         if (stale) return
-        setHoldings(data)
+        const normalized = normalizeDashboardHoldings(data)
+        setHoldings(normalized)
         setLoading(false)
-        if (data.length > 0) {
+        if (normalized.length > 0) {
           // Fetch upcoming dividends and portfolio coverage immediately (no refresh needed)
           pf('/api/upcoming-dividends')
             .then(safeJson)
@@ -766,7 +774,7 @@ export default function Dashboard() {
               if (stale || !result) return
               const [updated, summary] = result
               if (!updated) return
-              setHoldings(updated)
+              setHoldings(normalizeDashboardHoldings(updated))
               if (summary) setIncomeSummary(summary)
               setGradeStatus('Loading risk grades...')
               setTickerRiskLoading(true)

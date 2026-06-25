@@ -5099,6 +5099,87 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 .by-ticker-input { width: 280px; flex-shrink: 0; }
 .by-reset-btn { background: var(--p-2c3e6b); color: var(--p-cfe5ff); }
 
+.by-portfolio-picker {
+  background: var(--surface);
+  border: 1px solid var(--p-1a3a5c);
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  margin: -0.35rem 0 1rem;
+}
+.by-portfolio-picker-head,
+.by-portfolio-picker-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.by-portfolio-picker-head { margin-bottom: 0.65rem; }
+.by-portfolio-picker-foot { margin-top: 0.75rem; }
+.by-portfolio-picker-tools,
+.by-portfolio-picker-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.by-portfolio-search {
+  width: 220px;
+  min-height: 34px;
+  padding-top: 0.35rem;
+  padding-bottom: 0.35rem;
+}
+.by-portfolio-table-wrap {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid rgba(42,42,78,0.55);
+  border-radius: 6px;
+  background: var(--p-0d1b33);
+}
+.by-portfolio-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+.by-portfolio-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.55rem 0.7rem;
+  background: var(--p-163a66);
+  color: var(--accent-bright);
+  text-align: left;
+}
+.by-portfolio-table td {
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid rgba(42,42,78,0.55);
+  color: var(--text-soft);
+}
+.by-portfolio-table th:last-child,
+.by-portfolio-table td:last-child {
+  text-align: right;
+}
+.by-portfolio-table tbody tr {
+  cursor: pointer;
+}
+.by-portfolio-table tbody tr:hover {
+  background: rgba(126,207,255,0.06);
+}
+.by-portfolio-check-col {
+  width: 34px;
+  text-align: center !important;
+}
+.by-portfolio-check-col input {
+  cursor: pointer;
+}
+.by-portfolio-description {
+  color: var(--text-faint-2);
+}
+.by-portfolio-empty {
+  padding: 1rem !important;
+  text-align: center !important;
+  color: var(--text-faint-2) !important;
+}
+
 .by-fund-card {
   background: var(--surface);
   border: 1px solid var(--border);

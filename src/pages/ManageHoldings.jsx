@@ -18,6 +18,13 @@ const EMPTY_HOLDING = {
   shares_bought_from_dividend: '',
 }
 
+function normalizeHoldingRow(row) {
+  return {
+    ...row,
+    div_frequency: row?.div_frequency || EMPTY_HOLDING.div_frequency,
+  }
+}
+
 function invalidateDashboardCache() {
   try {
     clearDashboardCacheForSelection(localStorage.getItem('portfolio_selectedProfileId') || 'p:1')
@@ -86,6 +93,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
     for (const key of Object.keys(EMPTY_HOLDING)) {
       f[key] = holding[key] != null ? holding[key] : ''
     }
+    f.div_frequency = f.div_frequency || EMPTY_HOLDING.div_frequency
     return f
   })
   const [looking, setLooking] = useState(false)
@@ -164,6 +172,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
     if (!form.ticker.trim()) return
 
     const payload = { ...form }
+    payload.div_frequency = payload.div_frequency || EMPTY_HOLDING.div_frequency
     const numericFields = [
       'quantity', 'price_paid', 'current_price', 'div',
       'dividend_paid', 'ytd_divs', 'total_divs_received', 'paid_for_itself',
@@ -1205,7 +1214,7 @@ export default function ManageHoldings() {
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Failed to load holdings')
       if (requestId !== holdingsRequestRef.current) return
-      setHoldings(Array.isArray(data) ? data : [])
+      setHoldings(Array.isArray(data) ? data.map(normalizeHoldingRow) : [])
       setError(null)
     } catch (e) {
       if (requestId !== holdingsRequestRef.current) return
