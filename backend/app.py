@@ -12474,6 +12474,155 @@ def _fetch_neos_top_holdings(ticker, limit=25):
     return rows
 
 
+_TUTTLE_INCOME_BLAST_TICKERS = {"DRMP", "SPCI", "MEMY", "MAGO", "BITK"}
+
+
+def _is_tuttle_capital_fund(ticker, description=""):
+    """Identify Tuttle Capital / Income Blast funds with official holdings pages."""
+    ticker = (ticker or "").strip().upper()
+    description_l = (description or "").lower()
+    return (
+        ticker in _TUTTLE_INCOME_BLAST_TICKERS
+        or "tuttle capital" in description_l
+        or "income blast" in description_l
+    )
+
+
+def _income_blast_number(value):
+    text = str(value or "").strip()
+    if not text or text.lower() in {"null", "nan", "n/a", "--", "-"}:
+        return None
+    text = re.sub(r"[^0-9.\-]", "", text)
+    if not text:
+        return None
+    try:
+        return float(text)
+    except Exception:
+        return None
+
+
+def _income_blast_page(ticker):
+    import requests
+
+    ticker = (ticker or "").strip().lower()
+    if not ticker:
+        return "", None
+
+    url = f"https://www.incomeblastetfs.com/etf/{ticker}"
+    try:
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0 PortfolioTrackingClient/1.0"})
+        if resp.status_code == 404:
+            return "", url
+        resp.raise_for_status()
+        return resp.text or "", url
+    except Exception:
+        return "", url
+
+
+def _income_blast_csv_url(html_text):
+    import html as html_lib
+
+    if not html_text:
+        return None
+    match = re.search(
+        r"https://docs\.google\.com/spreadsheets/export\?[^\"'<> ]*exportFormat=csv[^\"'<> ]*",
+        html_text,
+        flags=re.I,
+    )
+    if match:
+        return html_lib.unescape(match.group(0))
+    match = re.search(r'href=["\']([^"\']*docs\.google\.com/spreadsheets/export[^"\']*)["\']', html_text, flags=re.I)
+    return html_lib.unescape(match.group(1)) if match else None
+
+
+def _fetch_income_blast_csv_holdings(csv_url, limit=25):
+    import csv
+    import requests
+    from io import StringIO
+
+    if not csv_url:
+        return []
+    try:
+        resp = requests.get(csv_url, timeout=20, headers={"User-Agent": "Mozilla/5.0 PortfolioTrackingClient/1.0"})
+        resp.raise_for_status()
+    except Exception:
+        return []
+
+    try:
+        reader = csv.DictReader(StringIO(resp.text or ""))
+    except Exception:
+        return []
+
+    rows = []
+    for row in reader:
+        symbol = (row.get("Stock Ticker") or row.get("Ticker") or row.get("CUSIP") or "").strip()
+        name = (row.get("Security Name") or row.get("Security Description") or "").strip()
+        if not symbol and not name:
+            continue
+        weight = _income_blast_number(row.get("Weightings") or row.get("% of Funds") or row.get("Weight"))
+        rows.append({
+            "symbol": symbol or name,
+            "name": name or symbol,
+            "weight_pct": round(weight, 2) if weight is not None else None,
+        })
+
+    rows.sort(key=lambda r: (r["weight_pct"] is not None, r["weight_pct"] or -999999), reverse=True)
+    return rows[:limit]
+
+
+def _income_blast_text_from_html(html_text):
+    import html as html_lib
+
+    text = re.sub(r"(?is)<(script|style).*?</\1>", " ", html_text or "")
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</(p|div|li|tr|td|th|h[1-6]|section|a)>", "\n", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = html_lib.unescape(text)
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
+def _fetch_income_blast_table_holdings(html_text, limit=25):
+    text = _income_blast_text_from_html(html_text)
+    section = _vistashares_section(
+        text,
+        r"Holdings\s+As of:.*?Ticker\s+Security Description\s+CUSIP / ISIN\s+% of Funds\s+Shares\s+Market Value\s+(.*?)\s+Fund holdings and allocations",
+    )
+    if not section:
+        return []
+
+    lines = [line.strip() for line in section.splitlines() if line.strip()]
+    rows = []
+    i = 0
+    while i + 5 < len(lines):
+        symbol, name, _cusip, weight_text, _shares, _market_value = lines[i:i + 6]
+        weight = _income_blast_number(weight_text)
+        if symbol and name and weight is not None:
+            rows.append({
+                "symbol": symbol,
+                "name": name,
+                "weight_pct": round(weight, 2),
+            })
+            i += 6
+        else:
+            i += 1
+
+    rows.sort(key=lambda r: (r["weight_pct"] is not None, r["weight_pct"] or -999999), reverse=True)
+    return rows[:limit]
+
+
+def _fetch_income_blast_top_holdings(ticker, limit=25):
+    """Fetch Tuttle Capital Income Blast holdings from the official fund page."""
+    html_text, _url = _income_blast_page(ticker)
+    if not html_text:
+        return []
+
+    rows = _fetch_income_blast_csv_holdings(_income_blast_csv_url(html_text), limit=limit)
+    if rows:
+        return rows
+    return _fetch_income_blast_table_holdings(html_text, limit=limit)
+
+
 def _strip_html_text(value):
     import html
     import re
@@ -12537,6 +12686,11 @@ def _fetch_stockanalysis_top_holdings(ticker, limit=25):
 
 
 def _research_top_holdings(fund_data, limit=25, ticker=None, description=""):
+    if _is_tuttle_capital_fund(ticker, description):
+        income_blast_rows = _fetch_income_blast_top_holdings(ticker, limit=limit)
+        if income_blast_rows:
+            return income_blast_rows
+
     if _is_neos_fund(ticker, description):
         neos_rows = _fetch_neos_top_holdings(ticker, limit=limit)
         if neos_rows:
@@ -13004,6 +13158,49 @@ def _fetch_vistashares_etf_profile(ticker):
     }
 
 
+def _fetch_income_blast_etf_profile(ticker):
+    html_text, url = _income_blast_page(ticker)
+    if not html_text or "Tuttle Capital" not in html_text:
+        return None
+
+    text = _income_blast_text_from_html(html_text)
+    if not _is_tuttle_capital_fund(ticker, text):
+        return None
+
+    title = _vistashares_match(text, rf"#\s*{re.escape((ticker or '').strip().upper())}\s+(.*?)\s+Prospectus")
+    objective = _vistashares_match(text, r"Investment Objective:\s+(.*?)\s+NAV Price")
+    holdings = _fetch_income_blast_top_holdings(ticker, limit=25)
+
+    dist_rate = _vistashares_match(text, r"Distribution Rate\s+([0-9.]+)\s+X\.XX%")
+    sec_yield = _vistashares_match(text, r"30 Day SEC\s*Yield\s+(-?[0-9.]+)\s+X\.XX%")
+    expense_ratio = _vistashares_match(text, r"Expense Ratio\s+([0-9.]+)\s+X\.XX%")
+    net_assets = _vistashares_match(text, r"Net Assets\s+([0-9.,]+)\s+\$XXX")
+    nav_price = _vistashares_match(text, r"NAV Price\s+([0-9.]+)\s+\$XX")
+    inception = _vistashares_match(text, r"inception date\s+([A-Za-z]{3}\s+\d{1,2},\s+\d{4})\s+MM/DD/YYYY")
+
+    return {
+        "name": title,
+        "fund_type": "ETF",
+        "description": objective,
+        "objective": objective,
+        "issuer": "Tuttle Capital Management",
+        "legal_type": "Exchange Traded Fund",
+        "expense_ratio_pct": _research_expense_pct(expense_ratio),
+        "total_assets": _vistashares_money(net_assets),
+        "total_assets_label": "Net Assets",
+        "nav_price": _vistashares_money(nav_price),
+        "nav_label": "NAV",
+        "inception_date": inception,
+        "estimated_yield_pct": _research_pct(dist_rate),
+        "distribution_rate_pct": _research_pct(dist_rate),
+        "sec_30_day_yield_pct": _research_pct(sec_yield),
+        "target_yield_label": "Distribution Rate",
+        "top_holdings": holdings,
+        "source_url": url,
+        "data_source": "Income Blast ETFs",
+    }
+
+
 def _research_has_value(value):
     return value not in (None, "", [])
 
@@ -13023,8 +13220,11 @@ def _fetch_provider_etf_profile(ticker, response):
     """Try official issuer/provider pages when the market-data feed is sparse."""
     provider_hints = " ".join(str(response.get(k) or "") for k in ("name", "issuer", "data_source"))
     fetchers = []
+    if _is_tuttle_capital_fund(ticker, provider_hints):
+        fetchers.append(_fetch_income_blast_etf_profile)
     if "vistashares" in provider_hints.lower():
         fetchers.append(_fetch_vistashares_etf_profile)
+    fetchers.append(_fetch_income_blast_etf_profile)
     fetchers.append(_fetch_vistashares_etf_profile)
 
     seen = set()
@@ -20514,6 +20714,288 @@ def stock_evaluate(ticker):
         status = 404 if "not found" in error.lower() else 502
         return jsonify({"error": error}), status
     return jsonify(metrics)
+
+
+def _val_stmt_value(df, *labels):
+    """Best-effort single-cell (most recent period) lookup from a yfinance
+    financial-statement DataFrame, tolerant of label/version differences."""
+    try:
+        if df is None or getattr(df, "empty", True):
+            return None
+        for label in labels:
+            if label in df.index:
+                return _research_money(df.loc[label, df.columns[0]])
+    except Exception:
+        pass
+    return None
+
+
+def _val_fcf_cagr(cashflow):
+    """Compound annual growth of free cash flow across the statement's columns,
+    used only as a last-resort DCF growth default. Returns a fraction or None."""
+    try:
+        if cashflow is None or cashflow.empty:
+            return None
+        op_label = next((l for l in ("Operating Cash Flow", "Total Cash From Operating Activities")
+                         if l in cashflow.index), None)
+        capex_label = next((l for l in ("Capital Expenditure", "Capital Expenditures")
+                            if l in cashflow.index), None)
+        if not op_label:
+            return None
+        op = cashflow.loc[op_label].dropna()
+        capex = cashflow.loc[capex_label].dropna() if capex_label else None
+        fcf = []
+        for col in cashflow.columns:
+            o = _research_clean_value(op.get(col)) if col in op.index else None
+            if o is None:
+                continue
+            c = _research_clean_value(capex.get(col)) if (capex is not None and col in capex.index) else 0.0
+            fcf.append(float(o) + float(c or 0.0))  # capex is reported negative
+        # Columns are most-recent-first; reverse to oldest→newest for the CAGR.
+        fcf = list(reversed(fcf))
+        if len(fcf) < 2 or fcf[0] <= 0 or fcf[-1] <= 0:
+            return None
+        n = len(fcf) - 1
+        return (fcf[-1] / fcf[0]) ** (1 / n) - 1
+    except Exception:
+        return None
+
+
+def _build_stock_valuation(symbol, overrides=None):
+    """Estimate intrinsic value for one ticker via a DCF blended with multiples,
+    plus the full ratio set and a quality/risk scorecard.
+
+    Returns (payload, error). Funds (ETF/CEF/mutual fund/BDC) are rejected with a
+    friendly payload because a company DCF does not apply to them.
+    """
+    import yfinance as yf
+    import valuation as ve
+
+    overrides = overrides or {}
+    symbol = (symbol or "").strip().upper()
+    if not symbol:
+        return None, "ticker is required"
+    lookup = _yahoo_symbol_for_ticker(symbol)
+    try:
+        tk = yf.Ticker(lookup)
+        info = tk.info or {}
+        info_symbol = (info.get("symbol") or "").upper()
+        if info_symbol and info_symbol != lookup:
+            lookup = info_symbol
+            tk = yf.Ticker(lookup)
+            info = tk.info or {}
+    except Exception as exc:
+        return None, f"Could not load {symbol}: {exc}"
+
+    name = _research_info_value(info, "longName", "shortName", "displayName")
+    quote_type = (_research_info_value(info, "quoteType") or "").upper()
+    if not name:
+        return None, f"Ticker {symbol} not found in Yahoo Finance."
+
+    sector = _research_info_value(info, "sector")
+    industry = _research_info_value(info, "industry")
+    currency = _research_info_value(info, "currency") or "USD"
+    price = _research_money(_research_info_value(info, "regularMarketPrice", "currentPrice", "previousClose"))
+    market_cap = _research_money(_research_info_value(info, "marketCap"))
+
+    fund_kind = _stock_checklist_fund_kind(quote_type, info, name)
+    if fund_kind:
+        return {
+            "ticker": lookup, "requested_ticker": symbol, "name": name,
+            "sector": sector, "industry": industry, "price": price, "currency": currency,
+            "is_fund": True, "fund_kind": fund_kind,
+            "message": (
+                f"{lookup} is a {fund_kind}, not an operating company. A discounted-cash-flow "
+                "valuation models company earnings and doesn't apply to funds. Use the ETF, "
+                "Option-Income ETF, or CEF evaluators for funds instead."
+            ),
+        }, None
+
+    # ── raw inputs from the info blob ────────────────────────────────────────
+    shares = _research_clean_value(_research_info_value(info, "sharesOutstanding", "impliedSharesOutstanding"))
+    beta = _research_clean_value(_research_info_value(info, "beta"))
+    forward_eps = _research_clean_value(_research_info_value(info, "forwardEps"))
+    trailing_eps = _research_clean_value(_research_info_value(info, "trailingEps"))
+    book_value_ps = _research_clean_value(_research_info_value(info, "bookValue"))
+    revenue_ps = _research_clean_value(_research_info_value(info, "revenuePerShare"))
+    forward_pe = _research_clean_value(_research_info_value(info, "forwardPE"))
+    price_to_book = _research_clean_value(_research_info_value(info, "priceToBook"))
+    price_to_sales = _research_clean_value(_research_info_value(info, "priceToSalesTrailing12Months"))
+    free_cash_flow = _research_money(_research_info_value(info, "freeCashflow"))
+    total_cash = _research_money(_research_info_value(info, "totalCash"))
+    total_debt = _research_money(_research_info_value(info, "totalDebt"))
+    dividend_rate = _research_clean_value(_research_info_value(info, "dividendRate"))
+    operating_margin = _checklist_frac_pct(_research_info_value(info, "operatingMargins"))
+    profit_margin = _checklist_frac_pct(_research_info_value(info, "profitMargins"))
+    gross_margin = _checklist_frac_pct(_research_info_value(info, "grossMargins"))
+    debt_to_equity = _research_clean_value(_research_info_value(info, "debtToEquity"))
+    current_ratio = _research_clean_value(_research_info_value(info, "currentRatio"))
+    earnings_growth_pct = _checklist_frac_pct(_research_info_value(info, "earningsGrowth"))
+    revenue_growth_pct = _checklist_frac_pct(_research_info_value(info, "revenueGrowth"))
+    info_payout = _checklist_frac_pct(_research_info_value(info, "payoutRatio"))
+    info_peg = _research_clean_value(_research_info_value(info, "pegRatio", "trailingPegRatio"))
+    info_roe = _checklist_frac_pct(_research_info_value(info, "returnOnEquity"))
+    info_roa = _checklist_frac_pct(_research_info_value(info, "returnOnAssets"))
+
+    # ── financial statements (tolerant lookups) ──────────────────────────────
+    try:
+        balance_sheet = tk.balance_sheet
+    except Exception:
+        balance_sheet = None
+    try:
+        income_stmt = tk.financials
+    except Exception:
+        income_stmt = None
+    try:
+        cashflow = tk.cashflow
+    except Exception:
+        cashflow = None
+
+    total_assets = _val_stmt_value(balance_sheet, "Total Assets")
+    equity = _val_stmt_value(balance_sheet, "Stockholders Equity", "Total Stockholder Equity", "Common Stock Equity")
+    ebit = _val_stmt_value(income_stmt, "EBIT", "Operating Income", "Ebit")
+    interest_expense = _val_stmt_value(income_stmt, "Interest Expense", "Interest Expense Non Operating")
+    net_income = _val_stmt_value(income_stmt, "Net Income", "Net Income Common Stockholders")
+
+    # FCF fallback from the cash-flow statement (capex is reported negative).
+    if free_cash_flow is None:
+        op_cf = _val_stmt_value(cashflow, "Operating Cash Flow", "Total Cash From Operating Activities")
+        capex = _val_stmt_value(cashflow, "Capital Expenditure", "Capital Expenditures")
+        if op_cf is not None:
+            free_cash_flow = round(float(op_cf) + float(capex or 0.0), 2)
+
+    # ── derived ratios (compute what yfinance omitted) ───────────────────────
+    fcf_yield = ve.fcf_yield_pct(free_cash_flow, market_cap)
+    dratio = ve.debt_ratio(total_debt, total_assets)
+    int_cov = ve.interest_coverage(ebit, interest_expense)
+    payout = info_payout if info_payout is not None else ve.payout_ratio_pct(dividend_rate, trailing_eps)
+    peg = info_peg if info_peg is not None else ve.peg_ratio(forward_pe, earnings_growth_pct)
+    roe = info_roe if info_roe is not None else ve.roe_pct(net_income, equity)
+    roa = info_roa if info_roa is not None else ve.roa_pct(net_income, total_assets)
+    if revenue_ps is None and shares not in (None, 0):
+        total_revenue = _val_stmt_value(income_stmt, "Total Revenue", "Operating Revenue")
+        revenue_ps = _research_money(_research_clean_value(total_revenue) / float(shares)) if total_revenue else None
+
+    # ── DCF assumptions (auto defaults, query-overridable) ───────────────────
+    def _clamp(v, lo, hi):
+        return max(lo, min(hi, v))
+
+    growth_default = None
+    for cand in (earnings_growth_pct, revenue_growth_pct):
+        if cand is not None and cand > 0:
+            growth_default = cand / 100.0
+            break
+    if growth_default is None:
+        cagr = _val_fcf_cagr(cashflow)
+        growth_default = cagr if (cagr is not None and cagr > 0) else 0.05
+    growth_default = round(_clamp(growth_default, 0.03, 0.20), 4)
+
+    discount_default = ve.capm_cost_of_equity(beta)
+    terminal_default = 0.025
+    years_default = 10
+
+    def _ov(key, fallback):
+        try:
+            return float(overrides[key]) if overrides.get(key) not in (None, "") else fallback
+        except (TypeError, ValueError):
+            return fallback
+
+    growth = round(_clamp(_ov("growth", growth_default), -0.5, 0.6), 4)
+    discount = round(_clamp(_ov("discount", discount_default), 0.03, 0.30), 4)
+    terminal = round(_clamp(_ov("terminal", terminal_default), 0.0, 0.05), 4)
+    try:
+        years = int(_ov("years", years_default))
+    except (TypeError, ValueError):
+        years = years_default
+    years = int(_clamp(years, 3, 20))
+    # Gordon terminal value requires the discount rate to exceed terminal growth.
+    if terminal >= discount:
+        terminal = round(discount - 0.01, 4)
+
+    net_cash = None
+    if total_cash is not None or total_debt is not None:
+        net_cash = (total_cash or 0.0) - (total_debt or 0.0)
+
+    dcf = ve.discounted_cash_flow(
+        base_fcf=free_cash_flow, growth=growth, discount=discount,
+        terminal_growth=terminal, years=years, net_cash=net_cash or 0.0, shares=shares,
+    )
+    dcf_value = dcf["value"] if dcf else None
+
+    # ── multiples-implied fair values + DDM ──────────────────────────────────
+    fair = ve.sector_fair_multiples(sector)
+    pe_fv = ve.fair_value_from_multiple(fair["forward_pe"], forward_eps)
+    pb_fv = ve.fair_value_from_multiple(fair["price_to_book"], book_value_ps)
+    ps_fv = ve.fair_value_from_multiple(fair["price_to_sales"], revenue_ps)
+    # The Gordon DDM explodes as dividend growth approaches the discount rate
+    # (common for low-beta payers where CAPM gives a small discount). Cap growth
+    # so there is always a ≥3% spread, keeping the DDM value realistic.
+    div_growth = round(min(growth, 0.06, discount - 0.03), 4)
+    ddm_fv = ve.dividend_discount_value(dividend_rate, discount, div_growth)
+
+    intrinsic = ve.blend_intrinsic_value([
+        {"name": "Discounted cash flow", "value": dcf_value, "weight": 0.45},
+        {"name": "Fair forward P/E", "value": pe_fv, "weight": 0.25},
+        {"name": "Fair price / book", "value": pb_fv, "weight": 0.15},
+        {"name": "Fair price / sales", "value": ps_fv, "weight": 0.10},
+        {"name": "Dividend discount model", "value": ddm_fv, "weight": 0.15},
+    ])
+    intrinsic["upside_pct"] = None
+    if intrinsic["value"] is not None and price not in (None, 0):
+        intrinsic["upside_pct"] = round((intrinsic["value"] - price) / price * 100, 1)
+
+    verdict = ve.valuation_verdict(price, intrinsic["value"])
+
+    # ── risk-adjusted ratios from ~3y daily history ──────────────────────────
+    try:
+        hist = tk.history(period="3y", auto_adjust=True)
+        close = hist["Close"].dropna() if (hist is not None and not hist.empty and "Close" in hist.columns) else None
+    except Exception:
+        close = None
+    risk = ve.risk_ratios(close)
+
+    sections = [
+        ve.valuation_section(forward_pe, peg, price_to_book, price_to_sales, fcf_yield, payout, sector),
+        ve.quality_section(roe, roa, operating_margin, profit_margin, gross_margin),
+        ve.health_section(debt_to_equity, dratio, int_cov, current_ratio),
+        ve.risk_section(risk["sharpe"], risk["sortino"], risk["calmar"], risk["omega"]),
+    ]
+
+    payload = {
+        "ticker": lookup, "requested_ticker": symbol, "name": name,
+        "sector": sector, "industry": industry, "currency": currency,
+        "price": price, "market_cap": market_cap, "is_fund": False,
+        "intrinsic": intrinsic,
+        "verdict": verdict,
+        "dcf": {
+            "assumptions": {"growth": growth, "discount": discount, "terminal": terminal, "years": years},
+            "defaults": {"growth": growth_default, "discount": discount_default,
+                         "terminal": terminal_default, "years": years_default},
+            "value": dcf_value,
+            "projection": dcf["projection"] if dcf else [],
+            "base_fcf": free_cash_flow,
+            "net_cash": _research_money(net_cash) if net_cash is not None else None,
+            "note": (
+                None if dcf else
+                "DCF unavailable — needs positive free cash flow and a share count. "
+                "The blended value below leans on the multiples instead."
+            ),
+        },
+        "sections": sections,
+        "data_source": "Yahoo Finance",
+    }
+    return payload, None
+
+
+@app.route("/api/stock-valuation/<ticker>")
+def stock_valuation(ticker):
+    """Blended DCF + multiples intrinsic value, ratios, and a quality/risk scorecard."""
+    overrides = {k: request.args.get(k) for k in ("growth", "discount", "terminal", "years")}
+    payload, error = _build_stock_valuation(ticker, overrides)
+    if error:
+        status = 404 if "not found" in error.lower() else 502
+        return jsonify({"error": error}), status
+    return jsonify(payload)
 
 
 @app.route("/api/stock-checklist/scan", methods=["POST"])

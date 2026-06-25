@@ -44,7 +44,7 @@ const TRACE_STYLES = {
 const COLUMNS = [
   { key: 'symbol', label: 'Symbol', locked: true },
   { key: 'name', label: 'Fund Name', locked: true },
-  { key: 'price', label: 'Stock Price' },
+  { key: 'price', label: 'ETF Price' },
   { key: 'change_pct', label: '% Change' },
   { key: 'assets', label: 'Assets' },
   { key: 'expense_ratio', label: 'Exp. Ratio' },

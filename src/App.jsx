@@ -51,6 +51,7 @@ import PortfolioGrowth2 from './pages/PortfolioGrowth2'
 import ETFProviderUpdate from './pages/ETFProviderUpdate'
 import ETFComparer from './pages/ETFComparer'
 import StockComparer from './pages/StockComparer'
+import StockValuation from './pages/StockValuation'
 import RebalanceWizard from './pages/RebalanceWizard'
 import HoldingTargets from './pages/HoldingTargets'
 import ActionCenter from './pages/ActionCenter'
@@ -204,6 +205,7 @@ function App() {
         <Route path="/etf-provider-update" element={<ETFProviderUpdate />} />
         <Route path="/etf-comparer" element={<ETFComparer />} />
         <Route path="/stock-comparer" element={<StockComparer />} />
+        <Route path="/stock-valuation" element={<StockValuation />} />
         <Route path="/rebalance-wizard" element={<RebalanceWizard />} />
         <Route path="/holding-targets" element={<HoldingTargets />} />
         <Route path="/tax-report" element={<AnnualTaxReport />} />
@@ -309,6 +311,7 @@ function Nav() {
           <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>
           <NavLink to="/etf-comparer">ETF Comparer</NavLink>
           <NavLink to="/stock-comparer">Stock Comparer</NavLink>
+          <NavLink to="/stock-valuation">Stock Valuation (DCF)</NavLink>
           <NavLink to="/dist-compare">Distribution Compare</NavLink>
         </NavMenuGroup>
         <NavMenuGroup title="Screeners & Signals">

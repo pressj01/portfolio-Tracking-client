@@ -76,6 +76,7 @@ const GROUPS = [
       { id: 'etf-screen', label: 'Stock & ETF Analysis' },
       { id: 'etf-comparer', label: 'ETF Comparer' },
       { id: 'stock-comparer', label: 'Stock Comparer' },
+      { id: 'stock-valuation', label: 'Stock Valuation (DCF)' },
       { id: 'dist-compare', label: 'Distribution Compare' },
       { type: 'heading', label: 'Screeners & Signals' },
       { id: 'general-scanner', label: 'General Scanner' },
@@ -5985,6 +5986,156 @@ function BlendedYieldHelp() {
   )
 }
 
+function StockValuationHelp() {
+  const imgStyle = { maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }
+  const h3 = { color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }
+  return (
+    <div>
+      <h2>Stock Valuation (DCF)</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Stock Valuation screen estimates what a stock is <strong>worth</strong> and tells you whether
+        today's price is <strong>undervalued, fairly valued, or overvalued</strong>. Type a ticker and it
+        builds an intrinsic value from a discounted cash flow blended with several fair-value models, shows a
+        plain over/under verdict, and lays out a full ratio scorecard. It is built for operating companies;
+        funds (ETFs, CEFs, mutual funds, BDCs) are turned away because a company DCF doesn't apply to them.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/stock-valuation/verdict-and-intrinsic-value.jpg" alt="Stock Valuation verdict banner, intrinsic-value method table, implied-price chart, and editable DCF assumptions" style={imgStyle} />
+      </div>
+
+      <h3 style={h3}>The Verdict Banner</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The banner compares the current price to the blended fair value and reads <strong>Undervalued</strong>{' '}
+        (more than 15% below fair value), <strong>Fairly Valued</strong> (within ±15%), or{' '}
+        <strong>Overvalued</strong>. <strong>Margin of safety</strong> is the discount to fair value — positive
+        is a cushion, negative means you're paying a premium. <strong>Confidence</strong> (high / medium / low)
+        tells you how much to trust the number — see the accuracy section below.
+      </p>
+
+      <h3 style={h3}>How Fair Value Is Estimated</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Up to five methods are computed where the data allows, then blended into one intrinsic value (the
+        surviving low–high range is shown beside it):
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '0.75rem' }}>
+        <li><strong>Discounted cash flow (≈45% weight)</strong> — projects free cash flow forward, with the
+          growth rate <em>fading</em> from the stage-1 rate down to the terminal rate over the horizon, adds a
+          Gordon-growth terminal value, discounts it all to today, and bridges to equity value with net cash.
+          Carries the most weight when free cash flow is positive; for banks and no-cash-flow names it drops
+          out and the multiples carry the estimate.</li>
+        <li><strong>Fair forward P/E, P/B, P/S</strong> — a conservative sector "fair" multiple applied to
+          forward EPS, book value per share, and sales per share.</li>
+        <li><strong>Dividend discount model</strong> — for dividend payers, the present value of the growing
+          future dividend stream (Gordon model).</li>
+      </ul>
+
+      <h3 style={h3}>Editable DCF Assumptions</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The DCF is pre-filled with automatic defaults — growth from analyst/historical figures (capped 3–20%),
+        a discount rate from the CAPM cost of equity (using beta), 2.5% terminal growth, and a 10-year horizon.
+        These are <em>starting points, not gospel</em>. Edit any of the four inputs and press{' '}
+        <strong>Recompute</strong> to run bull/bear scenarios; the blended value and verdict update live. This
+        is the single most useful habit on this screen — see how far the fair value moves when you nudge the
+        growth or discount rate, because that swing <em>is</em> the uncertainty.
+      </p>
+
+      <h3 style={h3}>Outlier Exclusion &amp; Confidence</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The methods don't always agree. A method that lands wildly out of line with the others — e.g. a sector
+        price/sales multiple applied to a very-low-margin company — is flagged <strong>"excluded — outlier"</strong>{' '}
+        and dropped from the blend so one wild estimate can't drag the result. The{' '}
+        <strong>Confidence</strong> label then reflects how tightly the <em>surviving</em> methods agree:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '0.75rem' }}>
+        <li><strong>High</strong> — the methods cluster tightly; the fair value is relatively trustworthy.</li>
+        <li><strong>Medium</strong> — the methods show meaningful spread; sanity-check before acting.</li>
+        <li><strong>Low</strong> — the methods disagree a lot; treat the fair value as a rough signal only and
+          lean on the ratio scorecard and your own judgment.</li>
+      </ul>
+
+      <h3 style={h3}>The Ratio Scorecard</h3>
+      <div style={{ marginBottom: '1rem' }}>
+        <img src="./help-screenshots/stock-valuation/ratio-scorecard.jpg" alt="Stock Valuation ratio scorecard: valuation multiples, profitability, financial health, and risk-adjusted returns with section grades and per-metric badges" style={imgStyle} />
+      </div>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Separate from the valuation verdict (is it <em>cheap</em>?), the scorecard grades whether it's a{' '}
+        <em>good</em> business (and a safe one). Any ratio Yahoo omits but that can be derived from the
+        financial statements is computed (FCF yield, debt ratio, interest coverage, payout/PEG/ROE/ROA
+        fallbacks). Each metric is colour-graded against a sector benchmark or standard threshold, and each
+        section gets its own score:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '0.75rem' }}>
+        <li><strong>Valuation multiples</strong> — forward P/E, PEG, P/B, P/S, FCF yield, dividend payout vs. the sector.</li>
+        <li><strong>Profitability &amp; returns</strong> — ROE, ROA, and operating/net/gross margins.</li>
+        <li><strong>Financial health</strong> — debt/equity, debt ratio, interest coverage, current ratio.</li>
+        <li><strong>Risk-adjusted returns</strong> — Sharpe, Sortino, Calmar, and Omega ratios over ~3 years of daily prices.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each metric has its own <strong>"How to read these"</strong> drop-down on the screen with plain-English
+        explanations.
+      </p>
+
+      <h3 style={h3}>How Accurate Is This? (Please read)</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Be honest with yourself about what this is: a <strong>model</strong>, not a price target. It is only as
+        good as the data it's fed and the assumptions behind it, and small assumption changes move the answer a
+        lot. Specifically:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '0.75rem' }}>
+        <li><strong>Garbage in, garbage out.</strong> Everything comes live from Yahoo Finance. Stale, missing,
+          or quirky figures flow straight through. If a number on the page looks wrong, it probably is.</li>
+        <li><strong>The DCF is assumption-sensitive.</strong> The fair value can swing 30–50% from a couple of
+          points of growth or discount rate. The auto-filled growth (capped at 20%) is often too optimistic for
+          mature companies whose near-term growth is elevated off a depressed base — always Recompute with a
+          rate you actually believe.</li>
+        <li><strong>Accounting quirks break individual methods.</strong> Companies with negative book equity
+          (heavy buybacks/leverage) produce a negative or meaningless Price/Book and ROE; thin-margin firms
+          break Price/Sales. The model excludes gross outliers, but it can't repair distorted inputs.</li>
+        <li><strong>It's a snapshot, not a forecast of the business.</strong> It doesn't know about lawsuits,
+          a pipeline, a turnaround, or a secular decline — only the trailing numbers.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Worked example — Altria (MO), above.</strong> The screen shows a fair value of about $180 vs a
+        $73 price — a tempting "59% undervalued." But notice the warning signs working together: Confidence is
+        only <strong>Medium</strong>, the methods span roughly $18 to $230, Return on Equity reads −198% and
+        Price/Book is negative (Altria has <em>negative shareholder equity</em> from years of buybacks and
+        debt), and the headline is dominated by a DCF running a 20% growth rate — implausible for a company
+        with declining cigarette volumes. Drop the growth to something realistic (say 2–4%) and Recompute, and
+        that $180 falls sharply. The model isn't lying to you — the Medium-confidence flag and the red
+        profitability rows are it telling you <em>not</em> to take the headline at face value.
+      </p>
+
+      <h3 style={h3}>How Confidence Affects Accuracy</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Treat Confidence as the screen's own honesty meter about the fair value:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '0.75rem' }}>
+        <li><strong>High confidence</strong> — independent methods landed close together. The fair value is
+          worth taking seriously, though it's still an estimate.</li>
+        <li><strong>Medium confidence</strong> — the methods spread out. Use the fair value as a ballpark, not a
+          number; cross-check the scorecard and Recompute with your own assumptions.</li>
+        <li><strong>Low confidence</strong> — the methods badly disagree (often with one already excluded as an
+          outlier). The single fair-value figure is close to meaningless on its own — lean on the scorecard, the
+          per-method range, and your own read of the business instead.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A useful rule of thumb: the wider the per-method range and the lower the confidence, the more the
+        verdict is a <em>conversation starter</em> rather than an answer. A confident verdict that lines up with
+        a strong scorecard is the strongest signal this screen produces; a low-confidence verdict that conflicts
+        with the scorecard is a flag to dig deeper, not a green light.
+      </p>
+
+      <p style={{ marginBottom: '0.75rem', color: 'var(--p-9aa7b8)', fontSize: '0.9rem' }}>
+        Data is fetched live from Yahoo Finance. The DCF treats free cash flow as firm-level and the discount
+        rate as a CAPM cost of equity (not a full WACC) — pragmatic simplifications you can override. This is
+        decision support and an educational tool, <strong>not investment advice</strong>. Always do your own
+        research before buying or selling.
+      </p>
+    </div>
+  )
+}
+
 function StockBuyingChecklistHelp() {
   return (
     <div>
@@ -6695,6 +6846,7 @@ const CONTENT_MAP = {
   'etf-screen': ETFScreenHelp,
   'etf-comparer': ETFComparerHelp,
   'stock-comparer': StockComparerHelp,
+  'stock-valuation': StockValuationHelp,
   'stock-buying-checklist': StockBuyingChecklistHelp,
   'etf-buying-checklist-evaluator': ETFBuyingChecklistHelp,
   'option-income-etf-evaluator': OptionIncomeETFHelp,
