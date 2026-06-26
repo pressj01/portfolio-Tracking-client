@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react'
 import { API_BASE } from '../config'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
@@ -38,6 +38,20 @@ const shortDate = (value) => {
   const d = new Date(`${value}T00:00:00`)
   if (Number.isNaN(d.getTime())) return ''
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+// Ex-div / pay dates arrive from the backend as MM/DD/YY strings (some null).
+const exPayDisplay = (value) => value || '—'
+// Sortable key from a MM/DD/YY string → YYYYMMDD integer (missing sorts last).
+const exPaySortKey = (value) => {
+  if (!value) return -1
+  const m = String(value).match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
+  if (!m) {
+    const d = new Date(value)
+    return Number.isNaN(d.getTime()) ? -1 : d.getTime()
+  }
+  let year = parseInt(m[3], 10)
+  if (year < 100) year += 2000
+  return year * 10000 + parseInt(m[1], 10) * 100 + parseInt(m[2], 10)
 }
 const pct = (v) => (v == null ? '—' : (Number(v) * 100).toFixed(2) + '%')
 const navSeverityFromRatio = (v) => v == null ? null : v > 0.75 ? 'High' : v > 0.25 ? 'Medium' : 'Low'
@@ -917,6 +931,8 @@ export default function Dashboard() {
           _beta_sort: tickerRisk[h.ticker]?.beta ?? -999,
           _delta_up_sort: tickerRisk[h.ticker]?.delta_up ?? -999,
           _delta_down_sort: tickerRisk[h.ticker]?.delta_down ?? -999,
+          _ex_div_sort: exPaySortKey(h.ex_div_date),
+          _pay_date_sort: exPaySortKey(h.div_pay_date),
           _grade_sort: ({ 'A+': 13, 'A': 12, 'A-': 11, 'B+': 10, 'B': 9, 'B-': 8, 'C+': 7, 'C': 6, 'C-': 5, 'D+': 4, 'D': 3, 'D-': 2, 'F': 1 })[tickerGrades[h.ticker]?.grade] || 0,
         }
       })
@@ -939,6 +955,83 @@ export default function Dashboard() {
       return sortAsc ? av - bv : bv - av
     })
   }, [enrichedHoldings, sortCol, sortAsc])
+
+  // Freeze the left columns (Ticker … %Acct) when the table overflows so the
+  // analytics + income columns to the right scroll under them. Widths are
+  // auto, so the sticky `left` of each frozen cell is measured at layout time
+  // rather than hard-coded. FROZEN_COUNT counts header cells from the left
+  // through %Acct — a block compact enough (~800px) to leave scroll room on a
+  // standard 1366-wide laptop, not just an ultrawide monitor.
+  const holdingsWrapRef = useRef(null)
+  const holdingsTableRef = useRef(null)
+  const FROZEN_COUNT = 11
+  useLayoutEffect(() => {
+    const wrap = holdingsWrapRef.current
+    const table = holdingsTableRef.current
+    if (!wrap || !table) return
+
+    const allRows = () => {
+      const rows = []
+      if (table.tHead?.rows?.[0]) rows.push(table.tHead.rows[0])
+      for (const r of table.tBodies[0]?.rows || []) rows.push(r)
+      for (const r of table.tFoot?.rows || []) rows.push(r)
+      return rows
+    }
+
+    const clear = () => {
+      for (const row of allRows()) {
+        for (const cell of row.cells) {
+          if (cell.dataset.frozen) {
+            cell.style.position = ''
+            cell.style.left = ''
+            cell.classList.remove('frozen-col', 'frozen-edge')
+            delete cell.dataset.frozen
+          }
+        }
+      }
+    }
+
+    const apply = () => {
+      clear()
+      // Only freeze when there is actually horizontal overflow to scroll.
+      if (wrap.scrollWidth <= wrap.clientWidth + 1) return
+      const headRow = table.tHead?.rows?.[0]
+      const boundaryCell = headRow?.cells?.[FROZEN_COUNT]
+      if (!boundaryCell) return
+      const wrapRect = wrap.getBoundingClientRect()
+      const scrollLeft = wrap.scrollLeft
+      const leftOf = (cell) => cell.getBoundingClientRect().left - wrapRect.left + scrollLeft
+      const boundary = leftOf(boundaryCell)
+      // If the frozen block (Ticker…%Acct) is wider than the viewport can show
+      // while leaving room to scroll the remaining columns, freezing would pin
+      // the edge off-screen and trap the scroll. Fall back to plain scrolling.
+      if (boundary > wrap.clientWidth - 140) return
+      for (const row of allRows()) {
+        let lastFrozen = null
+        for (const cell of row.cells) {
+          if (leftOf(cell) < boundary - 1) {
+            cell.style.position = 'sticky'
+            cell.style.left = `${leftOf(cell)}px`
+            cell.classList.add('frozen-col')
+            cell.dataset.frozen = '1'
+            lastFrozen = cell
+          }
+        }
+        if (lastFrozen) lastFrozen.classList.add('frozen-edge')
+      }
+    }
+
+    apply()
+    const ro = new ResizeObserver(apply)
+    ro.observe(wrap)
+    ro.observe(table)
+    window.addEventListener('resize', apply)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', apply)
+      clear()
+    }
+  }, [sorted, rvyMode, tickerRisk, tickerGrades])
 
   const handleSort = useCallback((col) => {
     setSortAsc(prev => sortCol === col ? !prev : (typeof enrichedHoldings[0]?.[col] === 'string'))
@@ -1447,8 +1540,8 @@ export default function Dashboard() {
       {overviewGroups && <PortfolioOverview groups={overviewGroups} categories={overviewCategories} totalValue={totals.currentValue} />}
 
       {/* Holdings Table */}
-      <div className="holdings-table-wrap">
-        <table className="holdings-table">
+      <div className="holdings-table-wrap" ref={holdingsWrapRef}>
+        <table className="holdings-table" ref={holdingsTableRef}>
           <thead>
             <tr>
               <SortHeader col="ticker">Ticker</SortHeader>
@@ -1456,6 +1549,8 @@ export default function Dashboard() {
               <SortHeader col="category" tip="Investment category">Cat</SortHeader>
               <SortHeader col="div_frequency" align="center" tip="Dividend payment frequency (M=Monthly, Q=Quarterly, W=Weekly)">Freq</SortHeader>
               <SortHeader col="purchase_date">Purchased</SortHeader>
+              <SortHeader col="_ex_div_sort" tip="Ex-dividend date — own the shares before this date to receive the dividend">Ex-Div</SortHeader>
+              <SortHeader col="_pay_date_sort" tip="Dividend payment (pay) date">Pay Date</SortHeader>
               <SortHeader col="quantity" align="right" tip="Number of shares held">Qty</SortHeader>
               <SortHeader col="price_paid" align="right" tip="Price paid per share">Paid</SortHeader>
               <SortHeader col="current_price" align="right" tip="Current market price per share">Price</SortHeader>
@@ -1520,7 +1615,7 @@ export default function Dashboard() {
                     ? `Auto-tested${navBenchmark || navMeta.benchmark ? ` vs ${navBenchmark || navMeta.benchmark}` : ''}`
                     : 'Auto: not tested by current NAV erosion rules'
               return (
-                <tr key={h.ticker} style={covBad ? { background: 'rgba(255,107,107,0.1)' } : undefined}>
+                <tr key={h.ticker} className={covBad ? 'cov-bad' : undefined} style={covBad ? { background: 'rgba(255,107,107,0.1)' } : undefined}>
                   <td>
                     <a
                       href="#"
@@ -1534,6 +1629,8 @@ export default function Dashboard() {
                   <td>{h.category || '—'}</td>
                   <td style={{ textAlign: 'center' }}>{h.div_frequency || '—'}</td>
                   <td>{h.purchase_date ? new Date(h.purchase_date).toLocaleDateString() : '—'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{exPayDisplay(h.ex_div_date)}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{exPayDisplay(h.div_pay_date)}</td>
                   <td style={{ textAlign: 'right' }}>{Number.isInteger(h.quantity) ? h.quantity : parseFloat(h.quantity.toFixed(3))}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(h.price_paid, 4)}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(h.current_price)}</td>
@@ -1646,7 +1743,7 @@ export default function Dashboard() {
           </tbody>
           <tfoot>
             <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
-              <td colSpan={9} style={{ textAlign: 'right' }}>Totals</td>
+              <td colSpan={11} style={{ textAlign: 'right' }}>Totals</td>
               <td style={{ textAlign: 'right', color: gradeColor(totals.priceReturn) }}>{pct(totals.priceReturn)}</td>
               <td style={{ textAlign: 'right', color: gradeColor(totals.totalReturn) }}>{pct(totals.totalReturn)}</td>
               <td colSpan={7} />

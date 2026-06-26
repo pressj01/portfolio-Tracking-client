@@ -1605,7 +1605,7 @@ label {
   padding: 0.25rem 0.35rem;
 }
 .holdings-table th {
-  z-index: 2;
+  z-index: 4;
   position: sticky;
   top: 0;
   background: var(--border);
@@ -1616,8 +1616,35 @@ label {
 .holdings-table tfoot td {
   position: sticky;
   bottom: 0;
+  z-index: 4;
   background: var(--surface);
   border-top: 2px solid var(--border);
+}
+
+/* Frozen left columns (Ticker … %Acct). `left`/`position:sticky` are applied
+   per-cell in JS since column widths are auto; these rules supply the opaque
+   backgrounds, stacking order, and the divider on the last frozen column. */
+.holdings-table tbody td.frozen-col {
+  z-index: 3;
+  background: var(--surface);
+}
+.holdings-table thead th.frozen-col {
+  z-index: 6;
+  background: var(--border);
+}
+.holdings-table tfoot td.frozen-col {
+  z-index: 6;
+  background: var(--surface);
+}
+.holdings-table tbody tr:hover td.frozen-col {
+  background: rgba(126, 207, 255, 0.12);
+}
+.holdings-table tbody tr.cov-bad td.frozen-col {
+  background: color-mix(in srgb, var(--neg) 10%, var(--surface));
+}
+.holdings-table td.frozen-edge,
+.holdings-table th.frozen-edge {
+  box-shadow: 2px 0 5px -2px rgba(0, 0, 0, 0.55);
 }
 
 /* Total Return */
