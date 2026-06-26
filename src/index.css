@@ -3319,9 +3319,14 @@ label {
 .etfc-holdings-card th,
 .etfc-holdings-card td {
   border-bottom: 1px solid var(--p-d7dde7);
-  padding: 0.7rem 0.85rem;
+  padding: 0.5rem 0.6rem;
   color: var(--p-111827);
   white-space: nowrap;
+}
+.etfc-holdings-card td:nth-child(3) {
+  white-space: normal;
+  word-break: break-word;
+  min-width: 100px;
 }
 .etfc-table th,
 .etfc-holdings-card th {
@@ -3411,7 +3416,7 @@ label {
 }
 .etfc-holdings-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 1.6rem;
   padding: 1rem;
 }
@@ -3419,6 +3424,10 @@ label {
   border: 1px solid var(--p-cbd5e1);
   background: var(--white);
   min-width: 0;
+  overflow: hidden;
+}
+.etfc-holdings-card .etfc-holdings-table-wrap {
+  overflow-x: auto;
 }
 .etfc-holdings-card h3 {
   margin: 0;

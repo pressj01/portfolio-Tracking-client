@@ -957,6 +957,7 @@ export default function ETFComparer() {
           {symbols.map(sym => (
             <div key={sym} className="etfc-holdings-card">
               <h3>{sym} - {(rows.find(r => r.symbol === sym)?.name || sym)}</h3>
+              <div className="etfc-holdings-table-wrap">
               <table>
                 <thead>
                   <tr><th>No.</th><th>Symbol</th><th>Name</th><th>Weight</th></tr>
@@ -975,6 +976,7 @@ export default function ETFComparer() {
                   )}
                 </tbody>
               </table>
+              </div>
             </div>
           ))}
         </div>
