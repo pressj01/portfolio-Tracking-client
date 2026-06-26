@@ -1228,6 +1228,15 @@ def ensure_tables_exist(conn=None):
     if "source" not in _nav_cols:
         cur.execute("ALTER TABLE portfolio_nav ADD COLUMN source TEXT")
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS etf_type_overrides (
+            ticker    TEXT PRIMARY KEY,
+            fund_kind TEXT NOT NULL CHECK(fund_kind IN ('option_income','etf','cef')),
+            note      TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     _seed_etf_provider_data(conn)
 
     conn.commit()

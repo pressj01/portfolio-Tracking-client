@@ -557,11 +557,28 @@ export default function OptionIncomeETFEvaluator() {
         <div style={{
           background: 'var(--p-5a4a14)', border: '1px solid var(--p-a3812a)', borderRadius: 6,
           padding: '0.8rem 1rem', marginBottom: '1rem', color: 'var(--p-ffd76a)', fontSize: '0.92rem',
+          display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap',
         }}>
-          <strong>{fund.ticker}</strong> is not classified as an option-income ETF.
-          You may get more relevant results from the{' '}
-          <Link to="/etf-buying-checklist-evaluator" style={{ color: 'var(--teal-2)' }}>Non Income ETF Checklist Evaluator</Link>.
-          The option-income evaluation below still runs, but peer comparisons use option-income funds.
+          <span>
+            <strong>{fund.ticker}</strong> is not classified as an option-income ETF.
+            You may get more relevant results from the{' '}
+            <Link to="/etf-buying-checklist-evaluator" style={{ color: 'var(--teal-2)' }}>Non Income ETF Checklist Evaluator</Link>.
+            The option-income evaluation below still runs, but peer comparisons use option-income funds.
+          </span>
+          <button
+            className="btn btn-sm btn-secondary"
+            style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+            onClick={async () => {
+              await fetch(`${API_BASE}/api/etf-type-overrides/${fund.ticker}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fund_kind: 'option_income', note: 'User override' }),
+              })
+              evaluate(fund.ticker)
+            }}
+          >
+            Mark as option-income ETF
+          </button>
         </div>
       )}
 

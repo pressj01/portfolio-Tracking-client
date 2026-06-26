@@ -12937,7 +12937,45 @@ def _research_multi_return_summary(symbols, rows):
     )
 
 
-def _research_return_summary(ticker, benchmark, rows):
+def _research_approx_yield(ticker):
+    """Estimate annualized yield from the last 3 months of distributions (1 month fallback)."""
+    try:
+        import yfinance as yf
+        import datetime
+        t = yf.Ticker(ticker)
+        divs = t.dividends
+        if divs is None or divs.empty:
+            return None
+        divs = divs[divs > 0].dropna()
+        if divs.empty:
+            return None
+        divs.index = divs.index.tz_localize(None) if divs.index.tz else divs.index
+        cutoff_3m = datetime.datetime.now() - datetime.timedelta(days=92)
+        cutoff_1m = datetime.datetime.now() - datetime.timedelta(days=31)
+        recent_3m = divs[divs.index >= cutoff_3m]
+        recent_1m = divs[divs.index >= cutoff_1m]
+        price = None
+        info = t.fast_info
+        try:
+            price = float(info.last_price)
+        except Exception:
+            pass
+        if not price or price <= 0:
+            return None
+        if not recent_3m.empty:
+            annualized = float(recent_3m.sum()) * 4
+            months_used = 3
+        elif not recent_1m.empty:
+            annualized = float(recent_1m.sum()) * 12
+            months_used = 1
+        else:
+            return None
+        return {"yield_pct": round(annualized / price * 100, 2), "months_used": months_used}
+    except Exception:
+        return None
+
+
+def _research_return_summary(ticker, benchmark, rows, yield_info=None):
     one_year = next((row for row in rows if row["label"] == "1 Year"), None)
     if one_year and one_year["ticker_return"] is not None:
         period_label = "In the past year"
@@ -12950,8 +12988,13 @@ def _research_return_summary(ticker, benchmark, rows):
         period_label = "Since inception"
         t_ret = inception["ticker_return"]
         b_ret = inception.get("benchmark_return")
+
+    yield_suffix = ""
+    if yield_info:
+        yield_suffix = f" with an approximate yield of {yield_info['yield_pct']:.2f}%"
+
     if b_ret is None:
-        return f"{period_label}, {ticker} returned a total of {t_ret:.2f}%."
+        return f"{period_label}, {ticker} returned a total of {t_ret:.2f}%{yield_suffix}."
 
     diff = t_ret - b_ret
     if abs(diff) < 0.25:
@@ -12963,7 +13006,7 @@ def _research_return_summary(ticker, benchmark, rows):
 
     return (
         f"{period_label}, {ticker} returned a total of {t_ret:.2f}%, "
-        f"which is {relation} {benchmark}'s {b_ret:.2f}% return."
+        f"which is {relation} {benchmark}'s {b_ret:.2f}% return{yield_suffix}."
     )
 
 
@@ -13547,7 +13590,8 @@ def security_research_average_return(kind, ticker):
         return jsonify({"error": f"No return data for {ticker}"}), 404
 
     rows = _research_period_return_rows(primary_series, benchmark_series)
-    summary = _research_return_summary(ticker, benchmark, rows)
+    yield_info = _research_approx_yield(ticker)
+    summary = _research_return_summary(ticker, benchmark, rows, yield_info)
 
     return jsonify({
         "kind": kind,
@@ -32712,6 +32756,43 @@ def _etf_peer_history_metrics(tickers):
     return out
 
 
+@app.route("/api/etf-type-overrides", methods=["GET"])
+def get_etf_type_overrides():
+    conn = get_connection()
+    rows = conn.execute("SELECT ticker, fund_kind, note FROM etf_type_overrides ORDER BY ticker").fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/etf-type-overrides/<ticker>", methods=["POST"])
+def set_etf_type_override(ticker):
+    ticker = ticker.upper().strip()
+    data = request.get_json(force=True)
+    fund_kind = data.get("fund_kind", "option_income")
+    note = data.get("note", "")
+    if fund_kind not in ("option_income", "etf", "cef"):
+        return jsonify({"error": "Invalid fund_kind"}), 400
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO etf_type_overrides (ticker, fund_kind, note) VALUES (?,?,?) "
+        "ON CONFLICT(ticker) DO UPDATE SET fund_kind=excluded.fund_kind, note=excluded.note",
+        (ticker, fund_kind, note),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "ticker": ticker, "fund_kind": fund_kind})
+
+
+@app.route("/api/etf-type-overrides/<ticker>", methods=["DELETE"])
+def delete_etf_type_override(ticker):
+    ticker = ticker.upper().strip()
+    conn = get_connection()
+    conn.execute("DELETE FROM etf_type_overrides WHERE ticker=?", (ticker,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/etf-evaluate/<ticker>")
 def etf_evaluate(ticker):
     """Fetch yfinance data for an ETF and return it alongside category peers from the scanner cache."""
@@ -32788,10 +32869,27 @@ def etf_evaluate(ticker):
 
     etf_cat = info.get("category", "")
     etf_category, etf_strategy, etf_cap_size = _classify_etf(etf_cat, ticker)
+
+    try:
+        _ov_conn = get_connection()
+        _ov_row = _ov_conn.execute(
+            "SELECT fund_kind FROM etf_type_overrides WHERE ticker=?", (ticker,)
+        ).fetchone()
+        _ov_conn.close()
+        _override_kind = _ov_row["fund_kind"] if _ov_row else None
+    except Exception:
+        _override_kind = None
+
     is_option_income = (
-        etf_strategy == "Options Income"
-        or ticker in _options_income_tickers
-        or _has_option_income_text(info)
+        _override_kind == "option_income"
+        or (
+            _override_kind is None
+            and (
+                etf_strategy == "Options Income"
+                or ticker in _options_income_tickers
+                or _has_option_income_text(info)
+            )
+        )
     )
 
     inception_ts = info.get("fundInceptionDate")
