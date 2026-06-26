@@ -12645,8 +12645,16 @@ def _fetch_stockanalysis_top_holdings(ticker, limit=25):
     try:
         resp = requests.get(url, timeout=15, headers={"User-Agent": "PortfolioTrackingClient/1.0"})
         if resp.status_code == 404:
-            return []
-        resp.raise_for_status()
+            # CEFs live under /stocks/ on StockAnalysis, not /etf/
+            alt_url = f"https://stockanalysis.com/stocks/{ticker}/holdings/"
+            try:
+                resp = requests.get(alt_url, timeout=15, headers={"User-Agent": "PortfolioTrackingClient/1.0"})
+                if resp.status_code != 200:
+                    return []
+            except Exception:
+                return []
+        else:
+            resp.raise_for_status()
     except Exception:
         return []
 
@@ -12685,6 +12693,37 @@ def _fetch_stockanalysis_top_holdings(ticker, limit=25):
     return rows
 
 
+def _fetch_cefconnect_top_holdings(ticker, limit=25):
+    """Fetch top holdings for a CEF from CEF Connect's fund page HTML."""
+    if not ticker:
+        return []
+    sym = ticker.strip().upper()
+    try:
+        html = _cefconnect_text(f"/fund/{urllib.parse.quote(sym)}", f"fund-html:{sym}")
+    except Exception:
+        return []
+    if not html:
+        return []
+    holding_rows = _cef_extract_table(html, "ucPortChar_TopHoldingsGrid")
+    # First row is often the header
+    if holding_rows and len(holding_rows[0]) >= 3 and not holding_rows[0][2].replace(".", "").replace("%", "").strip().lstrip("-").isdigit():
+        holding_rows = holding_rows[1:]
+    rows = []
+    for row in holding_rows[:limit]:
+        if len(row) < 2:
+            continue
+        name = row[0].strip()
+        pct_text = row[-1].strip().replace("%", "").replace(",", "")
+        try:
+            weight = round(float(pct_text), 2)
+        except Exception:
+            weight = None
+        if not name:
+            continue
+        rows.append({"symbol": "", "name": name, "weight_pct": weight})
+    return rows
+
+
 def _research_top_holdings(fund_data, limit=25, ticker=None, description=""):
     if _is_tuttle_capital_fund(ticker, description):
         income_blast_rows = _fetch_income_blast_top_holdings(ticker, limit=limit)
@@ -12697,8 +12736,12 @@ def _research_top_holdings(fund_data, limit=25, ticker=None, description=""):
             return neos_rows
 
     stockanalysis_rows = _fetch_stockanalysis_top_holdings(ticker, limit=limit)
-    if len(stockanalysis_rows) > 10:
+    if len(stockanalysis_rows) >= 5:
         return stockanalysis_rows
+
+    cefconnect_rows = _fetch_cefconnect_top_holdings(ticker, limit=limit)
+    if len(cefconnect_rows) >= 3:
+        return cefconnect_rows
 
     try:
         holdings = fund_data.top_holdings
@@ -13420,7 +13463,7 @@ def security_research(kind, ticker):
             "ttm_dividend_per_share": ttm_dividend,
             "estimated_yield_pct": _research_pct(_research_info_value(info, "yield", "dividendYield", "trailingAnnualDividendYield")),
             "target_yield_label": "Estimated forward yield",
-            "top_holdings": _research_top_holdings(fund_data, ticker=lookup_symbol, description=f"{name} {summary}") if fund_data is not None else _fetch_neos_top_holdings(lookup_symbol, 25) if _is_neos_fund(lookup_symbol, f"{name} {summary}") else [],
+            "top_holdings": _research_top_holdings(fund_data, ticker=lookup_symbol, description=f"{name} {summary}"),
             "sector_weightings": _research_weight_map(getattr(fund_data, "sector_weightings", None)) if fund_data is not None else [],
             "asset_classes": _research_weight_map(getattr(fund_data, "asset_classes", None)) if fund_data is not None else [],
             "data_source": "Yahoo Finance",
