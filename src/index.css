@@ -1546,6 +1546,141 @@ label {
 .grade-na { background: rgba(136, 153, 170, 0.1); color: var(--text-dim); }
 
 /* Holdings Table Wrapper */
+.holdings-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 0 0.5rem;
+  position: relative;
+  z-index: 12;
+}
+.holdings-toolbar-title {
+  color: var(--text-strong);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+.holdings-toolbar-sub {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  margin-top: 0.1rem;
+}
+.column-picker {
+  position: relative;
+  /* Sit above the holdings table's sticky header/cells (z-index 2) so the
+     dropdown checkboxes are always clickable where the panel overlaps it. */
+  z-index: 20;
+}
+.column-picker summary {
+  align-items: center;
+  background: var(--surface-inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-strong);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 700;
+  gap: 0.45rem;
+  list-style: none;
+  min-height: 32px;
+  padding: 0.35rem 0.65rem;
+  user-select: none;
+}
+.column-picker summary::-webkit-details-marker {
+  display: none;
+}
+.column-picker summary span {
+  background: color-mix(in srgb, var(--accent-bright) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-bright) 32%, var(--border));
+  border-radius: 999px;
+  color: var(--accent-bright);
+  font-size: 0.66rem;
+  line-height: 1;
+  padding: 0.16rem 0.38rem;
+}
+.column-picker-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.34);
+  max-height: 62vh;
+  min-width: min(720px, calc(100vw - 3rem));
+  overflow: auto;
+  padding: 0.8rem;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.45rem);
+}
+.column-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.75rem;
+}
+.column-picker-actions button {
+  background: color-mix(in srgb, var(--accent-bright) 10%, var(--surface-inset));
+  border: 1px solid color-mix(in srgb, var(--accent-bright) 36%, var(--border));
+  border-radius: 5px;
+  color: var(--accent-soft);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.32rem 0.55rem;
+}
+.column-picker-actions button:hover {
+  background: color-mix(in srgb, var(--accent-bright) 18%, var(--surface-inset));
+  color: var(--text-strong);
+}
+.column-picker-group + .column-picker-group {
+  border-top: 1px solid var(--border);
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+}
+.column-picker-group-title {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+}
+.column-picker-options {
+  display: grid;
+  gap: 0.4rem;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.column-picker-option {
+  align-items: flex-start;
+  background: var(--surface-inset);
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  gap: 0.45rem;
+  min-height: 44px;
+  padding: 0.45rem 0.5rem;
+}
+.column-picker-option:hover {
+  border-color: color-mix(in srgb, var(--accent-bright) 45%, var(--border));
+}
+.column-picker-option input {
+  margin-top: 0.12rem;
+}
+.column-picker-option strong,
+.column-picker-option small {
+  display: block;
+}
+.column-picker-option strong {
+  color: var(--text-strong);
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+.column-picker-option small {
+  color: var(--text-dim);
+  font-size: 0.66rem;
+  margin-top: 0.12rem;
+}
 .holdings-table-wrap {
   max-height: 78vh;
   overflow: auto;
@@ -1605,7 +1740,7 @@ label {
   padding: 0.25rem 0.35rem;
 }
 .holdings-table th {
-  z-index: 4;
+  z-index: 2;
   position: sticky;
   top: 0;
   background: var(--border);
@@ -1616,35 +1751,8 @@ label {
 .holdings-table tfoot td {
   position: sticky;
   bottom: 0;
-  z-index: 4;
   background: var(--surface);
   border-top: 2px solid var(--border);
-}
-
-/* Frozen left columns (Ticker … %Acct). `left`/`position:sticky` are applied
-   per-cell in JS since column widths are auto; these rules supply the opaque
-   backgrounds, stacking order, and the divider on the last frozen column. */
-.holdings-table tbody td.frozen-col {
-  z-index: 3;
-  background: var(--surface);
-}
-.holdings-table thead th.frozen-col {
-  z-index: 6;
-  background: var(--border);
-}
-.holdings-table tfoot td.frozen-col {
-  z-index: 6;
-  background: var(--surface);
-}
-.holdings-table tbody tr:hover td.frozen-col {
-  background: rgba(126, 207, 255, 0.12);
-}
-.holdings-table tbody tr.cov-bad td.frozen-col {
-  background: color-mix(in srgb, var(--neg) 10%, var(--surface));
-}
-.holdings-table td.frozen-edge,
-.holdings-table th.frozen-edge {
-  box-shadow: 2px 0 5px -2px rgba(0, 0, 0, 0.55);
 }
 
 /* Total Return */
