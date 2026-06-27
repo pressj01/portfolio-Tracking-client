@@ -20,6 +20,7 @@ const PERIODS = [
   { value: '5y', label: '5Y' },
   { value: '10y', label: '10Y' },
   { value: 'max', label: 'MAX' },
+  { value: 'all', label: 'ALL' },
 ]
 
 const RETURN_MODES = [
@@ -214,10 +215,21 @@ export default function ETFComparer() {
 
   const dataDateBounds = useMemo(() => {
     if (!data?.series) return [null, null]
-    const allDates = Object.values(data.series).flatMap(s => s.dates || [])
+    const dateSeries = Object.values(data.series)
+      .map(s => (s.dates || []).map(dateKey).filter(Boolean))
+      .filter(dates => dates.length)
+    const allDates = dateSeries.flat()
     if (!allDates.length) return [null, null]
-    return [dateKey(allDates.reduce((a, b) => a < b ? a : b)), dateKey(allDates.reduce((a, b) => a > b ? a : b))]
-  }, [data])
+    const earliestDate = allDates.reduce((a, b) => a < b ? a : b)
+    // MAX is most useful as an apples-to-apples comparison: begin at the
+    // newest first observation (the selected ETF with the shortest history)
+    // so every fund is present and rebased over the same window.
+    const commonStart = dateSeries
+      .map(dates => dates.reduce((a, b) => a < b ? a : b))
+      .reduce((a, b) => a > b ? a : b)
+    const startDate = period === 'max' && !fetchRange ? commonStart : earliestDate
+    return [startDate, allDates.reduce((a, b) => a > b ? a : b)]
+  }, [data, period, fetchRange])
 
   const rangeStart = returnXRange[0] || dataDateBounds[0] || ''
   const rangeEnd = returnXRange[1] || dataDateBounds[1] || ''
@@ -255,7 +267,10 @@ export default function ETFComparer() {
     const [primary, ...extra] = symbols
     const fr = normalizeReturnRange(fetchRange)
     const rangeParam = fr ? `&start=${fr[0]}&end=${fr[1]}` : ''
-    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}${rangeParam}`)
+    // MAX and ALL both fetch the complete histories. Their chart windows
+    // differ below: MAX uses common history, while ALL shows every observation.
+    const requestPeriod = period === 'all' ? 'max' : period
+    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${requestPeriod}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}${rangeParam}`)
       .then(r => r.json())
       .then(d => {
         if (loadSeqRef.current !== loadSeq) return
@@ -391,7 +406,7 @@ export default function ETFComparer() {
     const effectiveReturnRange = activeReturnRange || fallbackRange
     // Rebasing, end labels and y-scaling always follow the active window (typed
     // dates or slider) so the chart visually aligns with the date set.
-    const [visibleStart, visibleEnd] = visibleDateRange(data, returnXRange, true)
+    const [visibleStart, visibleEnd] = visibleDateRange(data, effectiveReturnRange, true)
     const titleWindow = activeReturnRange || normalizeReturnRange(fetchRange)
 
     symbols.forEach((sym, idx) => {

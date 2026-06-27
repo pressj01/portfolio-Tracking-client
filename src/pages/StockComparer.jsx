@@ -19,6 +19,7 @@ const PERIODS = [
   { value: '5y', label: '5Y' },
   { value: '10y', label: '10Y' },
   { value: 'max', label: 'MAX' },
+  { value: 'all', label: 'ALL' },
 ]
 
 const RETURN_MODES = [
@@ -76,7 +77,10 @@ const AVERAGE_PERIOD_ORDER = ['1 Month', 'YTD', '1 Year', '5 Years', '10 Years',
 function pct(v) {
   if (v == null || Number.isNaN(Number(v))) return '-'
   const n = Number(v)
-  return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
+  return `${n >= 0 ? '+' : ''}${n.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}%`
 }
 
 function pctColor(v) {
@@ -281,10 +285,18 @@ export default function StockComparer() {
 
   const dataDateBounds = useMemo(() => {
     if (!data?.series) return [null, null]
-    const allDates = Object.values(data.series).flatMap(s => s.dates || [])
+    const dateSeries = Object.values(data.series)
+      .map(s => (s.dates || []).map(dateKey).filter(Boolean))
+      .filter(dates => dates.length)
+    const allDates = dateSeries.flat()
     if (!allDates.length) return [null, null]
-    return [dateKey(allDates.reduce((a, b) => a < b ? a : b)), dateKey(allDates.reduce((a, b) => a > b ? a : b))]
-  }, [data])
+    const earliestDate = allDates.reduce((a, b) => a < b ? a : b)
+    const commonStart = dateSeries
+      .map(dates => dates.reduce((a, b) => a < b ? a : b))
+      .reduce((a, b) => a > b ? a : b)
+    const startDate = period === 'max' && !fetchRange ? commonStart : earliestDate
+    return [startDate, allDates.reduce((a, b) => a > b ? a : b)]
+  }, [data, period, fetchRange])
 
   const rangeStart = returnXRange[0] || dataDateBounds[0] || ''
   const rangeEnd = returnXRange[1] || dataDateBounds[1] || ''
@@ -322,7 +334,8 @@ export default function StockComparer() {
     const [primary, ...extra] = symbols
     const fr = normalizeReturnRange(fetchRange)
     const rangeParam = fr ? `&start=${fr[0]}&end=${fr[1]}` : ''
-    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}${rangeParam}`)
+    const requestPeriod = period === 'all' ? 'max' : period
+    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${requestPeriod}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}${rangeParam}`)
       .then(r => r.json())
       .then(d => {
         if (loadSeqRef.current !== loadSeq) return
@@ -461,7 +474,7 @@ export default function StockComparer() {
     const effectiveReturnRange = activeReturnRange || fallbackRange
     // Rebasing, end labels and y-scaling always follow the active window (typed
     // dates or slider) so the chart visually aligns with the date set.
-    const [visibleStart, visibleEnd] = visibleDateRange(data, returnXRange, true)
+    const [visibleStart, visibleEnd] = visibleDateRange(data, effectiveReturnRange, true)
     const titleWindow = activeReturnRange || normalizeReturnRange(fetchRange)
 
     symbols.forEach((sym, idx) => {
@@ -492,15 +505,32 @@ export default function StockComparer() {
           name,
           line: { color, width: style.width, dash: style.dash },
           hovertemplate: returnPctMode
-            ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:.2f}%<extra></extra>`
-            : `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:.2f}<extra></extra>`,
+            ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:+,.2f}%<extra></extra>`
+            : `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:,.2f}<extra></extra>`,
         })
         if (showReturnLabels && labelIdx >= 0) {
           const last = y[labelIdx]
           if (Number.isFinite(Number(last))) {
+            const visibleBaseIdx = baseIdx >= 0 ? baseIdx : 0
+            const startDate = new Date(`${dateKey(dates[visibleBaseIdx])}T00:00:00Z`)
+            const endDate = new Date(`${dateKey(dates[labelIdx])}T00:00:00Z`)
+            const years = (endDate - startDate) / (365.25 * 24 * 60 * 60 * 1000)
+            const endingValue = Number(values?.[labelIdx])
+            const cagr = (
+              ['max', 'all'].includes(period)
+              && Number.isFinite(years)
+              && years >= 1
+              && Number.isFinite(endingValue)
+              && base > 0
+              && endingValue > 0
+            )
+              ? (Math.pow(endingValue / base, 1 / years) - 1) * 100
+              : null
             labelCandidates.push({
               y: Number(last),
-              text: returnPctMode ? pct(last) : number(last),
+              text: returnPctMode
+                ? `${pct(last)}${cagr == null ? '' : `<br>${pct(cagr)} CAGR`}`
+                : number(last),
               color,
             })
           }
@@ -558,15 +588,20 @@ export default function StockComparer() {
     // all trace data (not just the x-visible portion), so without this the curve
     // stays scaled to the full series and looks misaligned after zooming.
     let yAxisRange = null
+    let visibleAbsMax = 0
     if (visibleYValues.length) {
       const axisBase = returnPctMode ? 0 : 100
       const labelYs = labelCandidates.map(l => l.y)
       const yLo = Math.min(axisBase, ...visibleYValues, ...labelYs)
       const yHi = Math.max(axisBase, ...visibleYValues, ...labelYs)
+      visibleAbsMax = Math.max(Math.abs(yLo), Math.abs(yHi))
       const pad = Math.max((yHi - yLo) * 0.08, 1)
       yAxisRange = [yLo - pad, yHi + pad]
     }
-    const titleText = titleWindow ? `Total Return — ${titleWindow[0]} → ${titleWindow[1]}` : 'Total Return (%)'
+    const titleText = titleWindow
+      ? `Cumulative Total Return — ${titleWindow[0]} → ${titleWindow[1]}`
+      : 'Cumulative Total Return (%)'
+    const largeReturnDisplay = returnPctMode && visibleAbsMax >= 1000
     return {
       data: traces,
       layout: {
@@ -576,12 +611,19 @@ export default function StockComparer() {
         font: { color: '#e0e0e0', size: 12 },
         title: { text: titleText, x: 0.5, font: { size: 20, color: '#e0e0e0' } },
         height: 560,
-        margin: { l: 55, r: 70, t: 70, b: 55 },
+        margin: {
+          l: largeReturnDisplay ? 115 : 55,
+          r: showReturnLabels && ['max', 'all'].includes(period) ? 145 : 70,
+          t: 70,
+          b: 55,
+        },
         hovermode: returnHoverMode,
         legend: { orientation: 'h', x: 0, y: 1.08 },
         yaxis: {
-          title: returnPctMode ? 'Total Return (%)' : 'Normalized Return (100 = start)',
+          title: returnPctMode ? 'Cumulative Total Return (%)' : 'Normalized Return (100 = start)',
           ticksuffix: returnPctMode ? '%' : '',
+          tickformat: returnPctMode ? (largeReturnDisplay ? ',.0f' : ',.2f') : ',.2f',
+          separatethousands: true,
           gridcolor: '#333',
           zerolinecolor: '#555',
           showspikes: true,
@@ -599,7 +641,7 @@ export default function StockComparer() {
         annotations,
       },
     }
-  }, [data, symbols, reinvest, returnPctMode, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange])
+  }, [data, symbols, period, reinvest, returnPctMode, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange])
 
   const rows = useMemo(() => {
     const profiles = data?.profiles || {}

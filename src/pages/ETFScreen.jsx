@@ -1934,6 +1934,7 @@ const PERIODS = [
   { value: '1y', label: '1Y' }, { value: '2y', label: '2Y' },
   { value: '5y', label: '5Y' }, { value: 'max', label: 'Max' },
 ]
+const RETURN_PERIODS = [...PERIODS, { value: 'all', label: 'All' }]
 
 const RETURN_MODES = [
   { value: 'total', label: 'Total Return', desc: 'Full dividend-reinvested total return' },
@@ -2297,6 +2298,7 @@ export default function ETFScreen() {
   const [visibleAnalysisColumns, setVisibleAnalysisColumns] = useState(DEFAULT_ANALYSIS_COLUMNS)
   const returnXRangeRef = useRef([null, null])
   const returnDataDateBoundsRef = useRef([null, null])
+  const returnSliderDataBoundsRef = useRef([null, null])
   const returnRelayoutTimerRef = useRef(null)
   const returnPlotElementRef = useRef(null)
   const returnRangeLoadGuardRef = useRef(null)
@@ -2332,14 +2334,31 @@ export default function ETFScreen() {
     returnXRangeRef.current = returnXRange
   }, [returnXRange])
 
-  const returnDataDateBounds = useMemo(() => {
+  const returnRawDataDateBounds = useMemo(() => {
     if (!returnData?.series) return [null, null]
     const allDates = Object.values(returnData.series).flatMap(s => s.dates || [])
     if (!allDates.length) return [null, null]
     return [dateKey(allDates.reduce((a, b) => a < b ? a : b)), dateKey(allDates.reduce((a, b) => a > b ? a : b))]
   }, [returnData])
 
+  const returnDataDateBounds = useMemo(() => {
+    if (!returnData?.series) return [null, null]
+    const dateSeries = Object.values(returnData.series)
+      .map(s => (s.dates || []).map(dateKey).filter(Boolean))
+      .filter(dates => dates.length)
+    if (!dateSeries.length) return [null, null]
+    const commonStart = dateSeries
+      .map(dates => dates.reduce((a, b) => a < b ? a : b))
+      .reduce((a, b) => a > b ? a : b)
+    const useCommonHistory = period === 'max' && !normalizeReturnRange(fetchRangeRef.current)
+    return [
+      useCommonHistory ? commonStart : returnRawDataDateBounds[0],
+      returnRawDataDateBounds[1],
+    ]
+  }, [returnData, returnRawDataDateBounds, period])
+
   returnDataDateBoundsRef.current = returnDataDateBounds
+  returnSliderDataBoundsRef.current = returnRawDataDateBounds
   const rangeStart = returnXRange[0] || returnDataDateBounds[0] || ''
   const rangeEnd = returnXRange[1] || returnDataDateBounds[1] || ''
 
@@ -2408,7 +2427,8 @@ export default function ETFScreen() {
     // move a range-slider handle without emitting a final relayout event, so
     // React state alone is not always the source of truth here.
     const bounds = returnDataDateBoundsRef.current
-    const sliderRange = returnRangeFromSliderHandles(returnPlotElementRef.current, bounds)
+    const sliderBounds = returnSliderDataBoundsRef.current
+    const sliderRange = returnRangeFromSliderHandles(returnPlotElementRef.current, sliderBounds)
     const plottedRange = normalizeReturnRange(returnPlotElementRef.current?._fullLayout?.xaxis?.range)
     const rememberedRange = normalizeReturnRange(returnXRangeRef.current)
     const plottedRangeIsFull = plottedRange && bounds[0] && bounds[1]
@@ -2460,7 +2480,8 @@ export default function ETFScreen() {
     // Custom date window (from the date inputs) overrides `period` on the server.
     const fr = normalizeReturnRange(fetchRangeRef.current)
     const rangeParam = fr ? `&start=${fr[0]}&end=${fr[1]}` : ''
-    const url = `/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${debouncedReinvest}&extra=${encodeURIComponent(extra)}${rangeParam}`
+    const requestPeriod = period === 'all' ? 'max' : period
+    const url = `/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${requestPeriod}&mode=${returnMode}&reinvest=${debouncedReinvest}&extra=${encodeURIComponent(extra)}${rangeParam}`
     pf(url, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
@@ -2808,7 +2829,7 @@ export default function ETFScreen() {
     const effectiveReturnRange = activeReturnRange || fallbackRange
     // Rebasing, end labels and y-scaling always follow the active date window
     // (typed dates or slider), so the chart visually aligns with the date set.
-    const [visibleStart, visibleEnd] = getVisibleDateRange(returnData, returnXRange, true)
+    const [visibleStart, visibleEnd] = getVisibleDateRange(returnData, effectiveReturnRange, true)
 
     allSymbols.forEach((sym, si) => {
       const { dates, traces: traceMap } = returnData.series[sym]
@@ -2901,7 +2922,7 @@ export default function ETFScreen() {
     const modeInfo = RETURN_MODES.find(m => m.value === returnData.mode) || {}
     const periodLabel = activeReturnRange
       ? `${activeReturnRange[0]} → ${activeReturnRange[1]}`
-      : (PERIODS.find(p => p.value === period)?.label || period)
+      : (RETURN_PERIODS.find(p => p.value === period)?.label || period)
     const titleSymbol = Object.keys(returnData.series)[0] || ticker.toUpperCase()
     let titleText = `${titleSymbol} — ${periodLabel}`
     if (returnData.mode === 'all3') {
@@ -3049,6 +3070,10 @@ export default function ETFScreen() {
   }, [])
 
   const sliderDisabled = !['all3', 'all4'].includes(returnMode)
+  const selectTab = useCallback((nextTab) => {
+    if (nextTab !== 'returns' && period === 'all') setPeriod('max')
+    setTab(nextTab)
+  }, [period])
 
   return (
     <div className="page etf-screen">
@@ -3056,9 +3081,9 @@ export default function ETFScreen() {
 
       {/* Tab bar */}
       <div className="etf-tabs">
-        <button className={`btn btn-sm${tab === 'technical' ? ' btn-active' : ''}`} onClick={() => setTab('technical')}>Technical</button>
+        <button className={`btn btn-sm${tab === 'technical' ? ' btn-active' : ''}`} onClick={() => selectTab('technical')}>Technical</button>
         <button className={`btn btn-sm${tab === 'returns' ? ' btn-active' : ''}`} onClick={() => setTab('returns')}>Returns</button>
-        <button className={`btn btn-sm${tab === 'markov' ? ' btn-active' : ''}`} onClick={() => setTab('markov')}>Markov</button>
+        <button className={`btn btn-sm${tab === 'markov' ? ' btn-active' : ''}`} onClick={() => selectTab('markov')}>Markov</button>
       </div>
 
       {/* Controls bar */}
@@ -3081,12 +3106,19 @@ export default function ETFScreen() {
         </div>
 
         <div className="etf-period-bar">
-          {PERIODS.map(p => {
+          {(tab === 'returns' ? RETURN_PERIODS : PERIODS).map(p => {
             // On the returns tab a custom date window overrides the period, so
             // don't show a period button as selected while one is active.
             const customActive = tab === 'returns' && (returnXRange[0] || returnXRange[1])
             return (
-            <button key={p.value} className={`btn btn-sm${period === p.value && !interval && !customActive ? ' btn-active' : ''}`} onClick={() => { setPeriod(p.value); setInterval_(''); setDrawnShapes([]); setFibSets([]); setFibClicks([]) }}>{p.label}</button>
+            <button key={p.value} className={`btn btn-sm${period === p.value && !interval && !customActive ? ' btn-active' : ''}`} onClick={() => {
+              if (tab === 'returns') resetReturnRange()
+              setPeriod(p.value)
+              setInterval_('')
+              setDrawnShapes([])
+              setFibSets([])
+              setFibClicks([])
+            }}>{p.label}</button>
           )})}
           <span className="etf-draw-sep">|</span>
           {tab === 'returns' && returnDataDateBounds[0] && (
@@ -3442,7 +3474,7 @@ export default function ETFScreen() {
             const customWin = normalizeReturnRange(returnXRange)
             const periodLabel = customWin
               ? formatSpanLabel(customWin[0], customWin[1])
-              : (PERIODS.find(p => p.value === period)?.label || period)
+              : (RETURN_PERIODS.find(p => p.value === period)?.label || period)
             return (
               <div className="return-summary-strip">
                 <div className="return-summary-card">
