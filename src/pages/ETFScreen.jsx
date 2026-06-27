@@ -2022,6 +2022,39 @@ function normalizeReturnRange(range) {
   return start <= end ? [start, end] : [end, start]
 }
 
+function returnRangeFromRelayout(eventData) {
+  return normalizeReturnRange(
+    eventData?.['xaxis.range'] || (
+      eventData?.['xaxis.range[0]'] && eventData?.['xaxis.range[1]']
+        ? [eventData['xaxis.range[0]'], eventData['xaxis.range[1]']]
+        : null
+    ),
+  )
+}
+
+// Returns undefined when no slider is available, null when it spans the full
+// data window, or the displayed date range when either handle is inset.
+function returnRangeFromSliderHandles(graphDiv, bounds) {
+  if (!graphDiv?.querySelector || !bounds?.[0] || !bounds?.[1]) return undefined
+  const bg = graphDiv.querySelector('.rangeslider-bg')?.getBoundingClientRect()
+  const minHandle = graphDiv.querySelector('.rangeslider-handle-min')?.getBoundingClientRect()
+  const maxHandle = graphDiv.querySelector('.rangeslider-handle-max')?.getBoundingClientRect()
+  if (!bg || !minHandle || !maxHandle || bg.width <= 0) return undefined
+
+  const clamp = value => Math.max(0, Math.min(1, value))
+  const minRatio = clamp((minHandle.left + minHandle.width / 2 - bg.left) / bg.width)
+  const maxRatio = clamp((maxHandle.left + maxHandle.width / 2 - bg.left) / bg.width)
+  if (minRatio <= 0.005 && maxRatio >= 0.995) return null
+
+  const minTime = new Date(`${bounds[0]}T00:00:00Z`).getTime()
+  const maxTime = new Date(`${bounds[1]}T00:00:00Z`).getTime()
+  if (!Number.isFinite(minTime) || !Number.isFinite(maxTime) || maxTime <= minTime) return undefined
+  return normalizeReturnRange([
+    new Date(minTime + (maxTime - minTime) * minRatio).toISOString(),
+    new Date(minTime + (maxTime - minTime) * maxRatio).toISOString(),
+  ])
+}
+
 // Concise duration label for a date window, e.g. "12D", "5M", "1.5Y".
 function formatSpanLabel(start, end) {
   if (!start || !end) return ''
@@ -2256,7 +2289,7 @@ export default function ETFScreen() {
   const [returnLoading, setReturnLoading] = useState(false)
   const [showReturnLabels, setShowReturnLabels] = useState(true)
   const [returnHoverMode, setReturnHoverMode] = useState('x unified')
-  const [returnPctMode, setReturnPctMode] = useState(false)
+  const [returnPctMode, setReturnPctMode] = useState(true)
   const [showRangeSlider, setShowRangeSlider] = useState(false)
   const [returnXRange, setReturnXRange] = useState([null, null])
   const [indicatorMenuOpen, setIndicatorMenuOpen] = useState(false)
@@ -2264,6 +2297,10 @@ export default function ETFScreen() {
   const [visibleAnalysisColumns, setVisibleAnalysisColumns] = useState(DEFAULT_ANALYSIS_COLUMNS)
   const returnXRangeRef = useRef([null, null])
   const returnDataDateBoundsRef = useRef([null, null])
+  const returnRelayoutTimerRef = useRef(null)
+  const returnPlotElementRef = useRef(null)
+  const returnRangeLoadGuardRef = useRef(null)
+  const returnRangeGuardTimerRef = useRef(null)
   const returnAbortRef = useRef(null)
   // The window the data is actually fetched for (from the date inputs). Kept
   // separate from returnXRange (the on-chart zoom set by the range slider) so
@@ -2272,9 +2309,23 @@ export default function ETFScreen() {
   const loadReturnsRef = useRef(null)
 
   const resetReturnRange = useCallback(() => {
+    if (returnRelayoutTimerRef.current) {
+      clearTimeout(returnRelayoutTimerRef.current)
+      returnRelayoutTimerRef.current = null
+    }
+    if (returnRangeGuardTimerRef.current) {
+      clearTimeout(returnRangeGuardTimerRef.current)
+      returnRangeGuardTimerRef.current = null
+    }
+    returnRangeLoadGuardRef.current = null
     returnXRangeRef.current = [null, null]
     fetchRangeRef.current = null
     setReturnXRange([null, null])
+  }, [])
+
+  useEffect(() => () => {
+    if (returnRelayoutTimerRef.current) clearTimeout(returnRelayoutTimerRef.current)
+    if (returnRangeGuardTimerRef.current) clearTimeout(returnRangeGuardTimerRef.current)
   }, [])
 
   useEffect(() => {
@@ -2312,9 +2363,12 @@ export default function ETFScreen() {
     }
   }, [returnXRange, returnDataDateBounds, resetReturnRange])
 
+  // Reset the on-chart zoom only when the period changes — NOT when the ticker
+  // changes. Typing a new ticker should keep whatever range-slider window the
+  // user set (matches the ETF Comparer screen).
   useEffect(() => {
     resetReturnRange()
-  }, [ticker, period, resetReturnRange])
+  }, [period, resetReturnRange])
 
   // Debounce the reinvest slider — wait 300ms after user stops dragging
   useEffect(() => {
@@ -2350,10 +2404,56 @@ export default function ETFScreen() {
     // Use primary ticker, or fall back to first comparison ticker
     const primary = ticker.trim().toUpperCase() || (compareTickers.length ? compareTickers[0] : '')
     if (!primary) return
+    // Read the chart's displayed range before replacing its data. Plotly can
+    // move a range-slider handle without emitting a final relayout event, so
+    // React state alone is not always the source of truth here.
+    const bounds = returnDataDateBoundsRef.current
+    const sliderRange = returnRangeFromSliderHandles(returnPlotElementRef.current, bounds)
+    const plottedRange = normalizeReturnRange(returnPlotElementRef.current?._fullLayout?.xaxis?.range)
+    const rememberedRange = normalizeReturnRange(returnXRangeRef.current)
+    const plottedRangeIsFull = plottedRange && bounds[0] && bounds[1]
+      && plottedRange[0] <= bounds[0] && plottedRange[1] >= bounds[1]
+    const displayedRangeIsFull = sliderRange === null
+      || (sliderRange === undefined && plottedRangeIsFull)
+    const visibleRange = sliderRange === null
+      ? null
+      : (
+          rememberedRange
+          || sliderRange
+          || (
+            plottedRangeIsFull
+              ? null
+              : plottedRange
+          )
+        )
+    if (visibleRange) {
+      returnXRangeRef.current = visibleRange
+      setReturnXRange(prev => (
+        prev[0] === visibleRange[0] && prev[1] === visibleRange[1]
+          ? prev
+          : visibleRange
+      ))
+    } else if (displayedRangeIsFull) {
+      returnXRangeRef.current = [null, null]
+      setReturnXRange([null, null])
+    }
     // Abort previous request
     if (returnAbortRef.current) returnAbortRef.current.abort()
     const controller = new AbortController()
     returnAbortRef.current = controller
+    if (returnRangeGuardTimerRef.current) clearTimeout(returnRangeGuardTimerRef.current)
+    returnRangeGuardTimerRef.current = null
+    returnRangeLoadGuardRef.current = visibleRange
+    const releaseRangeLoadGuard = () => {
+      const guardedRange = returnRangeLoadGuardRef.current
+      if (!guardedRange || returnAbortRef.current !== controller) return
+      returnRangeGuardTimerRef.current = setTimeout(() => {
+        if (returnRangeLoadGuardRef.current === guardedRange) {
+          returnRangeLoadGuardRef.current = null
+        }
+        returnRangeGuardTimerRef.current = null
+      }, 750)
+    }
     setReturnLoading(true)
     setError('')
     const extra = compareTickers.filter(t => t !== primary).join(',')
@@ -2364,10 +2464,21 @@ export default function ETFScreen() {
     pf(url, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
-        if (d.error) { setError(d.error); setReturnData(null) }
-        else { setReturnData(d) }
+        if (d.error) {
+          if (returnAbortRef.current === controller) returnRangeLoadGuardRef.current = null
+          setError(d.error)
+          setReturnData(null)
+        } else {
+          setReturnData(d)
+          releaseRangeLoadGuard()
+        }
       })
-      .catch(e => { if (e.name !== 'AbortError') setError(e.message) })
+      .catch(e => {
+        if (e.name !== 'AbortError') {
+          if (returnAbortRef.current === controller) returnRangeLoadGuardRef.current = null
+          setError(e.message)
+        }
+      })
       .finally(() => setReturnLoading(false))
   }, [ticker, period, returnMode, debouncedReinvest, compareTickers])
 
@@ -2396,7 +2507,8 @@ export default function ETFScreen() {
   const setPrimaryTicker = (value) => {
     const next = normalizeTicker(value)
     setTicker(next)
-    resetReturnRange()
+    // Keep the current range-slider window when switching tickers (the period
+    // effect handles resets); preserving the zoom is the desired behavior.
     if (next) setCompareTickers(prev => prev.filter(t => t !== next))
   }
 
@@ -2603,11 +2715,43 @@ export default function ETFScreen() {
       }
     }
 
+    // Daily and intraday market data should advance by trading sessions, not
+    // calendar days. Remove Saturday/Sunday from Plotly's date axis so Friday
+    // candles sit directly beside Monday candles, as they do in thinkorswim.
+    // Leave weekly/monthly series alone; their wider cadence is intentional.
+    const gapDays = dates.slice(1)
+      .map((date, index) => (new Date(date) - new Date(dates[index])) / 86400000)
+      .filter(gap => Number.isFinite(gap) && gap > 0)
+      .sort((a, b) => a - b)
+    const medianGapDays = gapDays.length ? gapDays[Math.floor(gapDays.length / 2)] : null
+    const tradingSessionRangeBreaks = []
+    if (medianGapDays != null && medianGapDays < 4) {
+      tradingSessionRangeBreaks.push({ bounds: ['sat', 'mon'] })
+
+      // Daily bars should also sit together across exchange holidays. Intraday
+      // series have sub-day median gaps, so only generate whole-day breaks when
+      // this is genuinely daily data.
+      if (medianGapDays >= 0.75) {
+        const presentDates = new Set(dates.map(dateKey))
+        const firstDay = new Date(`${dateKey(dates[0])}T00:00:00Z`)
+        const lastDay = new Date(`${dateKey(dates[dates.length - 1])}T00:00:00Z`)
+        const missingWeekdays = []
+        for (const day = new Date(firstDay); day <= lastDay; day.setUTCDate(day.getUTCDate() + 1)) {
+          const weekday = day.getUTCDay()
+          const key = day.toISOString().slice(0, 10)
+          if (weekday !== 0 && weekday !== 6 && !presentDates.has(key)) missingWeekdays.push(key)
+        }
+        if (missingWeekdays.length) {
+          tradingSessionRangeBreaks.push({ values: missingWeekdays, dvalue: 86400000 })
+        }
+      }
+    }
+
     const layout = {
       template: 'plotly_dark', paper_bgcolor: '#1e1e2f', plot_bgcolor: '#1e1e2f',
       font: { color: '#e0e0e0', size: 12 }, margin: { l: 60, r: 30, t: 40, b: 40 },
       height: 500 + lowerCount * 130,
-      xaxis: { rangeslider: { visible: false }, type: 'date', gridcolor: '#333', hoverformat: '%a %b %d, %Y', tickvals: xTickVals, ticktext: xTickTexts, tickfont: { size: 9, color: '#aaa' }, tickangle: 0, showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot', ...(xRange ? { range: xRange } : {}) },
+      xaxis: { rangeslider: { visible: false }, type: 'date', rangebreaks: tradingSessionRangeBreaks, gridcolor: '#333', hoverformat: '%a %b %d, %Y', tickvals: xTickVals, ticktext: xTickTexts, tickfont: { size: 9, color: '#aaa' }, tickangle: 0, showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot', ...(xRange ? { range: xRange } : {}) },
       yaxis: {
         title: isPct ? 'Change (%)' : 'Price',
         domain: domains[0], gridcolor: '#333',
@@ -2823,6 +2967,10 @@ export default function ETFScreen() {
 
     const layout = {
       template: 'plotly_dark', paper_bgcolor: '#1e1e2f', plot_bgcolor: '#1e1e2f',
+      // Preserve Plotly's interactive range across unrelated renders (such as
+      // typing a ticker). Period and range-slider visibility changes are the
+      // intentional reset boundaries.
+      uirevision: `returns-${period}-${showRangeSlider ? 'slider' : 'plain'}`,
       font: { color: '#e0e0e0', size: 12 },
       margin: { l: 60, r: 90, t: 70, b: 40 },
       height: 520,
@@ -2848,28 +2996,56 @@ export default function ETFScreen() {
 
 
   const handleReturnRelayout = useCallback((eventData) => {
+    const guardedRange = normalizeReturnRange(returnRangeLoadGuardRef.current)
     if (eventData?.['xaxis.autorange']) {
+      if (guardedRange) {
+        returnXRangeRef.current = guardedRange
+        setReturnXRange(guardedRange)
+        return
+      }
       returnXRangeRef.current = [null, null]
       setReturnXRange([null, null])
       return
     }
-    // Accept both array form (xaxis.range) and separate keys (xaxis.range[0]/[1])
-    const range = eventData?.['xaxis.range'] || (
-      eventData?.['xaxis.range[0]'] && eventData?.['xaxis.range[1]']
-        ? [eventData['xaxis.range[0]'], eventData['xaxis.range[1]']]
-        : null
-    )
-    const normalized = normalizeReturnRange(range)
+    const normalized = returnRangeFromRelayout(eventData)
     if (normalized) {
       const [s, e] = normalized
-      // Skip if no custom range is set and this matches data bounds (programmatic echo)
+      if (
+        guardedRange
+        && (s !== guardedRange[0] || e !== guardedRange[1])
+      ) return
+      // Ignore the initial full-window echo when no custom range exists. Plotly
+      // can pad that echo slightly outside the data bounds.
       const bounds = returnDataDateBoundsRef.current
-      if (!returnXRangeRef.current[0] && !returnXRangeRef.current[1] && s === bounds[0] && e === bounds[1]) return
+      const hasActiveRange = returnXRangeRef.current[0] || returnXRangeRef.current[1]
+      if (!hasActiveRange && bounds[0] && bounds[1] && s <= bounds[0] && e >= bounds[1]) return
       if (s !== returnXRangeRef.current[0] || e !== returnXRangeRef.current[1]) {
         returnXRangeRef.current = [s, e]
         setReturnXRange([s, e])
       }
     }
+  }, [])
+
+  // Plotly emits this continuously while a range-slider handle moves. Some
+  // handle drags do not emit a final plotly_relayout event, so remember the
+  // live position immediately and commit it after the drag settles.
+  const handleReturnRelayouting = useCallback((eventData) => {
+    const normalized = returnRangeFromRelayout(eventData)
+    if (!normalized) return
+    returnXRangeRef.current = normalized
+    if (returnRelayoutTimerRef.current) clearTimeout(returnRelayoutTimerRef.current)
+    returnRelayoutTimerRef.current = setTimeout(() => {
+      returnRelayoutTimerRef.current = null
+      setReturnXRange(prev => (
+        prev[0] === normalized[0] && prev[1] === normalized[1]
+          ? prev
+          : normalized
+      ))
+    }, 150)
+  }, [])
+
+  const rememberReturnPlotElement = useCallback((_figure, graphDiv) => {
+    returnPlotElementRef.current = graphDiv
   }, [])
 
   const sliderDisabled = !['all3', 'all4'].includes(returnMode)
@@ -3389,7 +3565,7 @@ export default function ETFScreen() {
                     Reinvest is 100% — the Custom and DRIP lines are identical and overlap. Adjust the slider below 100% to see them diverge.
                   </div>
                 )}
-                <Plot data={returnPlotData} layout={themedPlotlyLayout(returnPlotLayout, isDark)} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} onRelayout={handleReturnRelayout} />
+                <Plot data={returnPlotData} layout={themedPlotlyLayout(returnPlotLayout, isDark)} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} onInitialized={rememberReturnPlotElement} onUpdate={rememberReturnPlotElement} onRelayout={handleReturnRelayout} onRelayouting={handleReturnRelayouting} />
               </>
             ) : (
               !returnLoading && <div className="etf-placeholder">Select a return mode and click Load to compare returns.</div>
