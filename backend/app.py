@@ -2731,6 +2731,7 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
                     original_basis_skipped += 1
                     if len(original_basis_mismatches) < 10:
                         original_basis_mismatches.append(basis_result)
+                _sync_preserved_position_purchase_date(ticker, profile_id, conn)
                 _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
 
         current_year = str(datetime.date.today().year)
@@ -3360,6 +3361,7 @@ def api_import_transactions():
                     original_basis_skipped += 1
                     if len(original_basis_mismatches) < 10:
                         original_basis_mismatches.append(basis_result)
+                _sync_preserved_position_purchase_date(ticker, profile_id, conn)
                 # Broker-managed quantities stay put, but surface the reinvested
                 # share/cash totals from the freshly imported [DRIP] buys.
                 _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
@@ -9270,6 +9272,85 @@ def _refresh_transaction_realized_gains(ticker, profile_id, conn):
                 "UPDATE transactions SET realized_gain = ? WHERE id = ?",
                 (round(sell_proceeds - cost_of_sold, 2), txn_id),
             )
+
+
+def _sync_preserved_position_purchase_date(ticker, profile_id, conn):
+    """Sync a broker-managed position to the earliest transaction lot still open.
+
+    Transaction imports can be layered onto a broker position snapshot without
+    changing the broker-reported quantity. When an older lot has been fully
+    sold, the position's purchase date should advance to the earliest remaining
+    BUY lot even though the rest of the holding row is intentionally preserved.
+    """
+    holding = conn.execute(
+        "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    if not holding:
+        return None
+
+    rows = conn.execute(
+        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
+        "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
+        (ticker, profile_id),
+    ).fetchall()
+    if not rows:
+        return None
+
+    def _val(row, key, index):
+        return row[key] if isinstance(row, dict) else row[index]
+
+    sell_ids = [
+        _val(row, "id", 0)
+        for row in rows
+        if (_val(row, "transaction_type", 1) or "BUY").upper() == "SELL"
+    ]
+    alloc_map = _load_lot_alloc_map(conn, sell_ids)
+    lots = []
+    share_deficit = 0.0
+
+    for row in rows:
+        txn_id = _val(row, "id", 0)
+        txn_type = (_val(row, "transaction_type", 1) or "BUY").upper()
+        txn_shares = abs(float(_val(row, "shares", 2) or 0))
+        price = _val(row, "price_per_share", 3) or 0
+        fees = _val(row, "fees", 4) or 0
+        txn_date = _val(row, "transaction_date", 5)
+
+        if txn_type == "BUY":
+            if share_deficit > 1e-9:
+                covered = min(share_deficit, txn_shares)
+                share_deficit -= covered
+                txn_shares -= covered
+            _apply_buy_to_lots(
+                lots,
+                txn_shares,
+                price,
+                fees,
+                txn_id=txn_id,
+                txn_date=txn_date,
+            )
+        else:
+            _, sell_remaining = _consume_sell_lots(
+                lots,
+                txn_shares,
+                alloc_map.get(txn_id),
+            )
+            share_deficit += sell_remaining
+
+    open_dates = [
+        lot.get("date")
+        for lot in lots
+        if float(lot.get("shares") or 0) > 1e-9 and lot.get("date")
+    ]
+    earliest_open_buy = min(open_dates) if open_dates else None
+    if earliest_open_buy:
+        conn.execute(
+            "UPDATE all_account_info SET purchase_date = ? "
+            "WHERE ticker = ? AND profile_id = ?",
+            (earliest_open_buy, ticker, profile_id),
+        )
+    return earliest_open_buy
 
 
 def _basis_share_tolerance(expected_shares):
