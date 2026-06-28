@@ -6732,24 +6732,37 @@ function HoldingTargetsHelp() {
       <h2>Holding Targets</h2>
       <p style={{ marginBottom: '1rem' }}>
         <strong>Holding Targets</strong> is the ticker-level planning layer that sits between Categories and the Rebalance Wizard.
-        Set a target weight for each holding, preview how trades would change your income and allocation, and distribute
+        Plan buys and sales for each holding, preview how trades would change your income and allocation, and distribute
         reallocation cash without leaving the page. Changes are what-if only — nothing executes until you act in your broker.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
+      <figure style={{ margin: '0 0 1.5rem' }}>
         <img
-          src="./help-screenshots/holding-targets/holding-targets-overview.png"
-          alt="Holding Targets page showing summary cards, Reallocation Cash Pool, and Category / Pillar Breakdown table"
+          src="./help-screenshots/holding-targets/holding-targets-overview-plan.png"
+          alt="Holding Targets overview with a loaded plan, summary cards, Reallocation Cash Pool, and Category and Pillar Breakdown"
+          loading="lazy"
+          decoding="async"
           style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
         />
-      </div>
+        <figcaption style={{ color: 'var(--text-dim)', fontSize: '.78rem', lineHeight: 1.5, marginTop: '.4rem' }}>
+          Overview: plan controls and status, scenario totals, the Reallocation Cash Pool, and the Category / Pillar Breakdown.
+        </figcaption>
+      </figure>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Quick-Set Controls</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Set every holding to X% of portfolio</strong> — type a percentage and click <strong>Apply</strong> to bulk-assign that weight to every holding at once. Use this as a starting point, then fine-tune individual rows in the table below.</li>
-        <li><strong>Enter amounts as % / $</strong> — a global toggle that switches every <em>Requested</em> and <em>Reinvest</em> box between percent and dollar entry. In <strong>%</strong> mode (the default) the percent box is editable and the matching dollar box is shown read-only; in <strong>$</strong> mode they swap. The other unit always stays visible so you can see both at once — type whichever is more natural for the holding you're working on.</li>
+        <li><strong>Enter amounts as % / $ / Shares</strong> — sets the default unit for every Buy / Sell box and Reinvest allocation. A trade can be entered as a percentage of the whole portfolio, a dollar amount, or a number of shares. You can switch units inside an individual trade box without changing the global default.</li>
         <li><strong>Adjust all categories to a 100% portfolio</strong> — when checked, the adjusted scenario rescales all requested targets proportionally so they sum to exactly 100%, regardless of what you entered. Uncheck to keep your raw requested weights as-is.</li>
-        <li><strong>Save adjusted targets</strong> — persists the current adjusted scenario weights to the database so they become the new baseline when you return.</li>
+        <li><strong>Save adjusted targets</strong> — copies the currently adjusted weights into the saved plan, making the adjusted scenario the plan you see when it is loaded again.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Saved Plan Status</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Plan loaded</strong> — the tables and totals are showing your saved targets and their proposed trades.</li>
+        <li><strong>Show current weights</strong> — temporarily returns the page to the live, trade-free portfolio without deleting the saved plan.</li>
+        <li><strong>Load plan</strong> — reapplies a saved plan after you have switched back to current weights.</li>
+        <li><strong>Discard plan</strong> — permanently removes the saved ticker targets for this portfolio view.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
@@ -6771,7 +6784,7 @@ function HoldingTargetsHelp() {
         <li><strong>Allocation Entered / Cash Remaining</strong> — how much of the pool you've assigned so far and what's left.</li>
         <li><strong>Selected Recipients</strong> — count of holdings marked Reinvest that will receive distributed cash.</li>
         <li><strong>Projected Monthly / Annual Income Gain</strong> — estimated additional income from the planned cash distribution.</li>
-        <li><strong>Enter the amount on each row</strong> — once a holding is checked as a recipient, an inline box appears right on that row in the table below. Type the amount you want to send it directly there — in dollars or percent depending on the global <strong>Enter amounts as</strong> toggle. A small <em>+$X/mo</em> hint shows the income that allocation would add.</li>
+        <li><strong>Enter the amount on each row</strong> — once a holding is checked as a recipient, an inline box appears right on that row in the table below. Type the amount you want to send it directly there — in portfolio percent, dollars, or shares depending on the global <strong>Enter amounts as</strong> toggle. A small <em>+$X/mo</em> hint shows the income that allocation would add.</li>
         <li><strong>Auto-fill</strong> — three shortcuts that populate the per-row amounts for you, so you don't have to type each one:
           <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginTop: '0.4rem' }}>
             <li><em>Equal</em> — splits the available pool evenly across all selected recipients.</li>
@@ -6788,7 +6801,7 @@ function HoldingTargetsHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Category / Pillar Breakdown Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The main table groups all holdings by category (and subcategory). Each category row shows a summary,
-        and each holding row lets you enter a target weight.
+        and each holding row provides Buy and Sell controls for planning its target.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Category Plan</strong> — the category's target % from the Categories page.</li>
@@ -6804,27 +6817,56 @@ function HoldingTargetsHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Per-Holding Tables</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Below the breakdown, each category (Anchors, Boosters, Growth, etc.) expands into its own table where you set targets ticker by ticker.
+        Below the breakdown, each category (Anchors, Boosters, Growth, etc.) expands into its own table where you review positions and plan trades ticker by ticker.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
+      <figure style={{ margin: '0 0 1.5rem' }}>
         <img
-          src="./help-screenshots/holding-targets/holding-targets-ticker-tables.png"
-          alt="Per-holding tables for Anchors and Boosters categories showing Yield column and dual percent/dollar Requested boxes"
+          src="./help-screenshots/holding-targets/holding-targets-category-holdings.png"
+          alt="Anchors and Boosters holding tables showing shares held, requested targets, Buy and Sell controls, and projected income"
+          loading="lazy"
+          decoding="async"
           style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
         />
-      </div>
+        <figcaption style={{ color: 'var(--text-dim)', fontSize: '.78rem', lineHeight: 1.5, marginTop: '.4rem' }}>
+          Category tables: compare current shares and weights with requested targets, then open Buy or Sell for the holding you want to change.
+        </figcaption>
+      </figure>
 
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Shares / Price</strong> — current shares held and the latest price per share.</li>
+        <li><strong>Shares Held / Price</strong> — current shares held and the latest price per share.</li>
         <li><strong>Yield</strong> — the holding's projected forward yield (annualized distribution ÷ price). Use it as a quick reference when deciding which holdings to reallocate <em>toward</em> — higher-yield names add more monthly income per dollar moved.</li>
         <li><strong>% of category / Current %</strong> — the holding's share of its category today, and its share of the whole portfolio today.</li>
-        <li><strong>Requested (% ⟂ $)</strong> — your target for the holding, shown as a side-by-side percent box and dollar box. The unit selected by the <strong>Enter amounts as</strong> toggle is editable; the other is read-only and updates automatically as you type. The <strong>Current</strong> button beside them resets just that one holding to its present weight.</li>
+        <li><strong>Requested Target</strong> — a read-only summary of the planned position shown in portfolio percent, dollars, and total shares. Use the separate Buy / Sell controls to change it.</li>
+        <li><strong>Plan Trade</strong> — click <strong>Buy</strong> or <strong>Sell</strong> to open the focused trade box beneath that holding.</li>
         <li><strong>Adjusted %</strong> — the target after the auto-adjust scaling factor is applied.</li>
-        <li><strong>Buy / Sell &amp; Shares +/-</strong> — the trade implied by the gap between current and target, in dollars and in shares.</li>
+        <li><strong>Buy / Sell $ &amp; Buy / Sell Shares</strong> — the trade implied by the gap between current and target, shown in both dollars and shares.</li>
         <li><strong>Monthly Income Now / +/-</strong> — current monthly income from the holding and how it would change under the proposed target.</li>
         <li><strong>Reinvest / Alloc</strong> — check to make the holding a cash-pool recipient; an inline amount box then appears for you to type its share of the pool.</li>
       </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Buy / Sell Trade Box</h3>
+      <figure style={{ margin: '0 0 1.25rem' }}>
+        <img
+          src="./help-screenshots/holding-targets/holding-targets-buy-plan-editor.png"
+          alt="Loaded Buy trade box for a comparison holding with the planned share amount restored"
+          loading="lazy"
+          decoding="async"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+        <figcaption style={{ color: 'var(--text-dim)', fontSize: '.78rem', lineHeight: 1.5, marginTop: '.4rem' }}>
+          A loaded Buy plan: the existing amount is restored, the requested target and projected trade remain visible, and the result can be reviewed before applying changes.
+        </figcaption>
+      </figure>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Click <strong>Buy</strong> or <strong>Sell</strong> on the holding row. The action can also be changed inside the box.</li>
+        <li>Choose <strong>Portfolio %</strong>, <strong>Dollars</strong>, or <strong>Shares</strong>, then enter the amount. Switching units converts the current amount rather than clearing it.</li>
+        <li>Review <strong>Planned Buy / Sell</strong> and <strong>Position After Trade</strong>. A sale larger than the position is blocked.</li>
+        <li>Click <strong>Apply Buy to Plan</strong> or <strong>Apply Sale to Plan</strong>. Reopening the same planned trade restores its amount and displays <strong>Current plan loaded</strong>.</li>
+      </ol>
+      <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>Requested vs. adjusted trade:</strong> when automatic 100% adjustment is enabled, the final adjusted dollar and share trade shown on the row can be proportionally different from the amount entered in the trade box.
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Uncategorized Holdings</h3>
       <p style={{ marginBottom: '1rem' }}>
@@ -6835,11 +6877,11 @@ function HoldingTargetsHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Workflow Tips</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Use <strong>Set every holding to X%</strong> to seed all weights, then adjust individual rows to reflect your actual conviction level per holding.</li>
+        <li>Use <strong>Set every holding to X%</strong> to seed all weights, then use each row's <strong>Buy</strong> or <strong>Sell</strong> box to refine individual holdings.</li>
         <li>Enable <strong>Adjust all categories to 100%</strong> so the scaled scenario always sums cleanly — watch the Coverage column to see where you're over or under within each category.</li>
-        <li>When a category is over its plan, use the <strong>Equal weight</strong> shortcut in that category's footer to redistribute evenly among its members.</li>
-        <li>To redeploy sale proceeds, lower a holding's target below its current weight, then check <strong>Reinvest</strong> on the destination holdings and either type each amount inline or use an <strong>Auto-fill</strong> shortcut (Equal, By Gap, By Yield) before clicking <strong>Apply Allocation</strong>. The <strong>Yield</strong> column helps you pick destinations that add the most income.</li>
-        <li>Click <strong>Save adjusted targets</strong> when you're happy — the saved weights become the starting point next time you open the page and feed into the Rebalance Wizard.</li>
+        <li>When a category is over its plan, use the <strong>Equal weight</strong> shortcut in that category's header to redistribute evenly among its members.</li>
+        <li>To redeploy sale proceeds, plan a <strong>Sell</strong>, then check <strong>Reinvest</strong> on destination holdings and either type each allocation inline or use an <strong>Auto-fill</strong> shortcut (Equal, By Gap, By Yield) before clicking <strong>Apply Allocation</strong>.</li>
+        <li>Click <strong>Save adjusted targets</strong> when you want the proportionally adjusted scenario to replace the requested values in your saved plan.</li>
       </ol>
 
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>

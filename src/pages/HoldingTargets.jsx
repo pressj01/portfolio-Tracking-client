@@ -5,7 +5,7 @@ import { useCurrency } from '../context/CurrencyContext'
 import { formatMoney } from '../utils/money'
 
 const pct = value => `${Number(value || 0).toFixed(2)}%`
-const shares = value => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 3 })
+const shares = value => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })
 const money = value => formatMoney(value, { zeroIfInvalid: true })
 const readSettings = key => { try { return JSON.parse(localStorage.getItem(key) || '{}') } catch { return {} } }
 // Record when each target was last set, so the screen can show "set 3 days ago"
@@ -99,6 +99,7 @@ export default function HoldingTargets() {
   const [expanded, setExpanded] = useState({})
   const [cashPoolOpen, setCashPoolOpen] = useState(true)
   const [allocInputMode, setAllocInputMode] = useState('percent')
+  const [tradeEditor, setTradeEditor] = useState(null)
   const cashPoolRef = useRef(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -114,7 +115,7 @@ export default function HoldingTargets() {
   const autoBalance = settings.autoBalance !== false
 
   useEffect(() => {
-    setSettings(readSettings(storageKey)); setLoading(true); setError(''); setPlanActive(false)
+    setSettings(readSettings(storageKey)); setLoading(true); setError(''); setPlanActive(false); setTradeEditor(null)
     pf('/api/categories/data')
       .then(r => r.ok ? r.json() : Promise.reject(new Error('Could not load holdings.')))
       .then(result => { setData(result); setLoading(false) })
@@ -200,13 +201,14 @@ export default function HoldingTargets() {
       const rows = category.rows.map(row => {
         const rawTargetValue = Number(data.total_value || 0) * row.requestedTargetPct / 100
         const rawTradeValue = rawTargetValue - row.current_value
+        const requestedShares = row.price > 0 ? rawTargetValue / row.price : Number(row.quantity || 0)
         const adjustedTargetPct = row.requestedTargetPct * balanceFactor
         const targetValue = Number(data.total_value || 0) * adjustedTargetPct / 100
         const tradeValue = targetValue - row.current_value
         const targetShares = row.price > 0 ? targetValue / row.price : row.quantity
         const tradeShares = targetShares - Number(row.quantity || 0)
         const monthlyDelta = tradeValue * Number(row.current_yield || 0) / 100 / 12
-        return { ...row, rawTargetValue, rawTradeValue, adjustedTargetPct, targetValue, tradeValue, targetShares, tradeShares, monthlyDelta }
+        return { ...row, rawTargetValue, rawTradeValue, requestedShares, adjustedTargetPct, targetValue, tradeValue, targetShares, tradeShares, monthlyDelta }
       })
       const subRows = (category.subcategories || []).map(sub => ({
         id: sub.id, name: sub.name, statedTarget: sub.target_pct,
@@ -278,20 +280,137 @@ export default function HoldingTargets() {
     sum + allocationDollars[index] * Number(row.current_yield || 0) / 100 / 12
   ), 0)
 
-  const updateTarget = (ticker, value) => {
-    if (value === '' || (Number(value) >= 0 && Number(value) <= 100)) {
-      setPlanActive(true)
-      setSettings(prev => ({ ...prev, targets: { ...(prev.targets || {}), [ticker]: value }, targetUpdatedAt: stampTargets(prev, [ticker]) }))
+  const formatTradeEntry = (value, digits = 4) => {
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric) || numeric <= 0) return ''
+    return String(Number(numeric.toFixed(digits)))
+  }
+  const getPlannedTradeAction = row => {
+    const deltaPct = Number(row.requestedTargetPct || 0) - Number(row.currentPortfolioPct || 0)
+    if (deltaPct > 0.000001) return 'buy'
+    if (deltaPct < -0.000001) return 'sell'
+    return null
+  }
+  const getPlannedTradeAmount = (row, action, unit) => {
+    if (getPlannedTradeAction(row) !== action) return ''
+    if (unit === 'shares') {
+      return formatTradeEntry(Math.abs(Number(row.requestedShares || 0) - Number(row.quantity || 0)))
+    }
+    if (unit === 'dollars') {
+      return formatTradeEntry(Math.abs(Number(row.rawTradeValue || 0)) * displayRate, 2)
+    }
+    return formatTradeEntry(Math.abs(Number(row.requestedTargetPct || 0) - Number(row.currentPortfolioPct || 0)))
+  }
+  const openTradeEditor = (category, row, action) => {
+    const unit = allocInputMode === 'shares' && Number(row.price || 0) <= 0 ? 'dollars' : allocInputMode
+    setTradeEditor({
+      categoryId: category.id,
+      ticker: row.ticker,
+      action,
+      unit,
+      amount: getPlannedTradeAmount(row, action, unit),
+    })
+  }
+  const updateTradeEditor = patch => setTradeEditor(prev => prev ? { ...prev, ...patch } : prev)
+  const getTradePreview = row => {
+    const amount = Math.max(0, Number(tradeEditor?.amount) || 0)
+    const action = tradeEditor?.action === 'sell' ? 'sell' : 'buy'
+    const unit = tradeEditor?.unit || 'shares'
+    const direction = action === 'sell' ? -1 : 1
+    const totalValue = Number(data?.total_value || 0)
+    const currentValue = Number(row.current_value || 0)
+    const currentShares = Number(row.quantity || 0)
+    const price = Number(row.price || 0)
+    let tradeValue = 0
+    let tradeShares = 0
+
+    if (unit === 'shares') {
+      tradeShares = amount
+      tradeValue = amount * price
+    } else if (unit === 'dollars') {
+      tradeValue = amount / displayRate
+      tradeShares = price > 0 ? tradeValue / price : 0
+    } else {
+      tradeValue = totalValue * amount / 100
+      tradeShares = price > 0 ? tradeValue / price : 0
+    }
+
+    // Share orders use the actual share count as their source of truth. Dollar
+    // and portfolio-percent orders use the live position value.
+    const afterShares = unit === 'shares'
+      ? currentShares + direction * tradeShares
+      : price > 0 ? (currentValue + direction * tradeValue) / price : currentShares
+    const afterValue = unit === 'shares'
+      ? afterShares * price
+      : currentValue + direction * tradeValue
+    const afterPct = totalValue > 0 ? afterValue / totalValue * 100 : 0
+    let error = ''
+    if (amount <= 0) error = 'Enter an amount greater than zero.'
+    else if (unit === 'shares' && price <= 0) error = 'A current price is required for a share order.'
+    else if (unit === 'percent' && totalValue <= 0) error = 'Portfolio value is unavailable.'
+    else if (action === 'sell' && (afterShares < -0.000001 || afterValue < -0.005)) {
+      error = unit === 'shares'
+        ? `This sale is larger than the ${shares(currentShares)} shares currently held.`
+        : `This sale is larger than the current ${money(currentValue)} position.`
+    }
+    else if (afterPct > 100.000001) error = 'The resulting target would exceed 100% of the portfolio.'
+
+    return {
+      action,
+      unit,
+      amount,
+      tradeValue,
+      tradeShares,
+      afterShares: Math.max(0, afterShares),
+      afterValue: Math.max(0, afterValue),
+      afterPct: Math.max(0, afterPct),
+      error,
+      valid: !error,
     }
   }
-  // Dollar-mode entry for the Requested target column. The stored target is
-  // always a percent of the portfolio, so we convert the typed dollar amount
-  // back to a percent before saving.
-  const updateTargetDollars = (ticker, displayDollars) => {
-    if (displayDollars === '') { updateTarget(ticker, ''); return }
-    const usd = Math.max(0, Number(displayDollars) || 0) / displayRate
-    const pctVal = Number(data?.total_value) > 0 ? usd / Number(data.total_value) * 100 : 0
-    updateTarget(ticker, pctVal)
+  const switchTradeAction = (row, action) => {
+    updateTradeEditor({
+      action,
+      amount: getPlannedTradeAmount(row, action, tradeEditor?.unit || allocInputMode),
+    })
+  }
+  const switchTradeUnit = (row, unit) => {
+    if (unit === 'shares' && Number(row.price || 0) <= 0) return
+    const preview = getTradePreview(row)
+    let amount = ''
+    if (preview.amount > 0) {
+      if (unit === 'shares') amount = formatTradeEntry(preview.tradeShares)
+      else if (unit === 'dollars') amount = formatTradeEntry(preview.tradeValue * displayRate, 2)
+      else amount = formatTradeEntry(Number(data?.total_value || 0) > 0 ? preview.tradeValue / Number(data.total_value) * 100 : 0)
+    } else {
+      amount = getPlannedTradeAmount(row, tradeEditor?.action || 'buy', unit)
+    }
+    updateTradeEditor({ unit, amount })
+  }
+  const applyTradePlan = (category, row, preview) => {
+    if (!preview.valid) return
+    setPlanActive(true)
+    setSettings(prev => {
+      const targets = { ...(prev.targets || {}) }
+      // Leaving Equal Weight preserves the other displayed targets and changes
+      // only the holding whose Buy/Sell box was submitted.
+      category.rows.forEach(candidate => { targets[candidate.ticker] = candidate.requestedTargetPct })
+      targets[row.ticker] = preview.afterPct
+      const manualAllocations = { ...(prev.manualAllocations || {}) }
+      const reallocationTickers = [...(prev.reallocationTickers || [])]
+      if (preview.action === 'sell') delete manualAllocations[row.ticker]
+      return {
+        ...prev,
+        targets,
+        targetUpdatedAt: stampTargets(prev, [row.ticker]),
+        modes: { ...(prev.modes || {}), [category.id]: 'custom' },
+        manualAllocations,
+        reallocationTickers: preview.action === 'sell'
+          ? reallocationTickers.filter(ticker => ticker !== row.ticker)
+          : reallocationTickers,
+      }
+    })
+    setTradeEditor(null)
   }
   const revertTickerToCurrent = (category, row) => { setPlanActive(true); setSettings(prev => {
     const targets = { ...(prev.targets || {}) }
@@ -313,7 +432,7 @@ export default function HoldingTargets() {
       reallocationTickers: (prev.reallocationTickers || []).filter(ticker => ticker !== row.ticker),
     }
   }) }
-  const setCategoryMode = (category, mode) => { setPlanActive(true); setSettings(prev => {
+  const setCategoryMode = (category, mode) => { setTradeEditor(null); setPlanActive(true); setSettings(prev => {
     const next = { ...prev, modes: { ...(prev.modes || {}), [category.id]: mode } }
     if (mode === 'current') {
       next.modes[category.id] = 'custom'; next.targets = { ...(prev.targets || {}) }
@@ -328,6 +447,7 @@ export default function HoldingTargets() {
     return next
   }) }
   const applyGlobal = () => {
+    setTradeEditor(null)
     const value = Math.max(0, Math.min(100, Number(globalTarget) || 0))
     const targets = { ...(settings.targets || {}) }; const modes = { ...(settings.modes || {}) }
     allRows.forEach(row => { targets[row.ticker] = value }); categories.forEach(category => { modes[category.id] = 'custom' })
@@ -348,9 +468,10 @@ export default function HoldingTargets() {
   //    kept, the screen returns to a clean current-weight view, cash pool zeroes).
   //  • discardSavedPlan — permanently delete the saved targets/modes.
   const loadSavedPlan = () => setPlanActive(true)
-  const showCurrentWeights = () => { setPlanActive(false); setSettings(prev => ({ ...prev, reallocationTickers: [], manualAllocations: {} })) }
+  const showCurrentWeights = () => { setTradeEditor(null); setPlanActive(false); setSettings(prev => ({ ...prev, reallocationTickers: [], manualAllocations: {} })) }
   const discardSavedPlan = () => {
     if (!window.confirm('Discard the saved plan and return every holding to its current weight? This cannot be undone.')) return
+    setTradeEditor(null)
     setPlanActive(false)
     setSettings(prev => ({ ...prev, targets: {}, modes: {}, targetUpdatedAt: {}, reallocationTickers: [], manualAllocations: {} }))
   }
@@ -386,6 +507,12 @@ export default function HoldingTargets() {
   }
   const setManualAllocationPercent = (ticker, percent) => {
     const rawAmount = percent === '' ? '' : availableSaleCash * Math.max(0, Number(percent) || 0) / 100
+    setSettings(prev => ({ ...prev, manualAllocations: { ...(prev.manualAllocations || {}), [ticker]: rawAmount } }))
+  }
+  const setManualAllocationShares = (ticker, shareAmount, price) => {
+    const rawAmount = shareAmount === ''
+      ? ''
+      : Math.max(0, Number(shareAmount) || 0) * Math.max(0, Number(price) || 0)
     setSettings(prev => ({ ...prev, manualAllocations: { ...(prev.manualAllocations || {}), [ticker]: rawAmount } }))
   }
   const distributeSaleCash = () => {
@@ -451,13 +578,21 @@ export default function HoldingTargets() {
   if (error) return <div className="page"><div className="error">{error}</div></div>
   return <div className="page holding-targets-page">
     <div className="page-header holding-targets-header">
-      <div><h1>Holding Targets</h1><p>Set ticker weights and preview how category weights, trades, and portfolio income change together.</p></div>
+      <div><h1>Holding Targets</h1><p>Plan ticker-level buys and sales, then preview how allocation and portfolio income change together.</p></div>
       <div className="holding-targets-links"><NavLink className="btn btn-secondary" to="/categories">Category & Subcategory Targets</NavLink><NavLink className="btn btn-secondary" to="/rebalance-wizard">Rebalance Wizard</NavLink></div>
     </div>
     {isAggregate && <div className="info-banner">Targets are saved for this aggregate view. Category assignments come from its primary portfolio.</div>}
     <div className="card holding-target-controls">
       <div><label>Set every holding to</label><div className="holding-target-inline"><input type="number" min="0" max="100" step="0.1" value={globalTarget} onChange={e => setGlobalTarget(e.target.value)} /><span>% of portfolio</span><button className="btn btn-primary" onClick={applyGlobal}>Apply</button></div></div>
-      <div className="holding-target-entrymode"><label>Enter amounts as</label><div className="entrymode-btns"><button className={`btn btn-small ${allocInputMode === 'percent' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setAllocInputMode('percent')}>%</button><button className={`btn btn-small ${allocInputMode === 'dollars' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setAllocInputMode('dollars')}>$</button></div><small>Switches every Requested &amp; Reinvest box between percent and dollar entry. The other unit stays visible, read-only.</small></div>
+      <div className="holding-target-entrymode">
+        <label>Enter amounts as</label>
+        <div className="entrymode-btns">
+          <button className={`btn btn-small ${allocInputMode === 'percent' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setAllocInputMode('percent')}>%</button>
+          <button className={`btn btn-small ${allocInputMode === 'dollars' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setAllocInputMode('dollars')}>$</button>
+          <button className={`btn btn-small ${allocInputMode === 'shares' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setAllocInputMode('shares')}>Shares</button>
+        </div>
+        <small>Sets the default unit for Buy / Sell boxes and Reinvest allocations. Each trade box can change it independently.</small>
+      </div>
       <label className="holding-target-balance-toggle"><input type="checkbox" checked={autoBalance} onChange={e => setSettings(prev => ({ ...prev, autoBalance: e.target.checked }))} /><span><strong>Adjust all categories to a 100% portfolio</strong><small>Requested targets remain visible; the adjusted scenario proportionally changes every category.</small></span></label>
       <div className="holding-target-control-actions">
         {planActive && <button className="btn btn-secondary" onClick={showCurrentWeights} title="Stop applying the plan and show live current weights. Your saved plan is kept.">Show current weights</button>}
@@ -485,7 +620,7 @@ export default function HoldingTargets() {
           <button className="btn btn-small btn-primary" onClick={loadSavedPlan}>Load plan</button>
           <button className="btn btn-small btn-secondary" onClick={discardSavedPlan}>Discard plan</button>
         </div>
-      </> : <div className="plan-banner-text"><strong>Showing current weights.</strong> No saved plan yet — type any Requested target (or use Apply / Equal weight) to start planning.</div>}
+      </> : <div className="plan-banner-text"><strong>Showing current weights.</strong> No saved plan yet — open a Buy or Sell box below (or use Apply / Equal weight) to start planning.</div>}
     </div>
     <div className="summary-strip">
       <div className="summary-card"><div className="summary-label">Portfolio</div><div className="summary-value">{currentProfileName}</div><div className="summary-sub">{ownedCount} allocated holdings{hypoCount ? ` · ${hypoCount} comparison` : ''}</div></div>
@@ -530,13 +665,13 @@ export default function HoldingTargets() {
       </div>}
     </section>
 
-    <div className="reallocation-sticky-summary">
+    {!tradeEditor && <div className="reallocation-sticky-summary">
       <div><small>Total Sale Cash</small><strong>{money(poolActive ? saleProceeds : 0)}</strong></div>
       <div><small>Total Allocated</small><strong>{money(poolActive ? totalCashAllocated : 0)}</strong></div>
       <div><small>Cash Remaining</small><strong className={poolActive && totalCashRemaining < -.005 ? 'trade-sell' : poolActive && totalCashRemaining > .005 ? 'trade-buy' : ''}>{money(poolActive ? totalCashRemaining : 0)}</strong></div>
       <div><small>Used</small><strong>{pct(usedPct)}</strong></div>
       <button className="btn btn-secondary" onClick={() => { setCashPoolOpen(true); cashPoolRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}>Cash Pool ↑</button>
-    </div>
+    </div>}
 
     <section className="card pillar-breakdown">
       <h2>Category / Pillar Breakdown</h2>
@@ -554,7 +689,10 @@ export default function HoldingTargets() {
       const open = expanded[category.id] !== false
       return <section className="card holding-target-category" key={category.id}>
         <div className="holding-target-category-head">
-          <button className="holding-target-disclosure" onClick={() => setExpanded(prev => ({ ...prev, [category.id]: !open }))}>{open ? '▾' : '▸'} {category.name}</button>
+          <button className="holding-target-disclosure" onClick={() => {
+            setExpanded(prev => ({ ...prev, [category.id]: !open }))
+            if (open && tradeEditor?.categoryId === category.id) setTradeEditor(null)
+          }}>{open ? '▾' : '▸'} {category.name}</button>
           <div className="holding-target-category-stats"><span>Plan {pct(category.categoryBudget)}</span><span>Requested {pct(category.requestedTargetPct)}</span><span className={category.coverage != null && category.coverage > 100.01 ? 'trade-sell' : category.coverage != null && category.coverage < 99.99 ? 'trade-buy' : ''}>{coverageLabel(category.coverage)}</span><span>Adjusted {pct(category.adjustedTargetPct)}</span><span style={{ color: category.incomeDelta >= 0 ? 'var(--pos)' : 'var(--neg)' }}>Monthly income change {category.incomeDelta >= 0 ? '+' : ''}{money(category.incomeDelta)}</span></div>
           <div className="holding-target-mode"><button className={`btn btn-small ${category.mode === 'equal' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setCategoryMode(category, 'equal')}>Equal weight</button><button className="btn btn-small btn-secondary" onClick={() => setCategoryMode(category, 'current')}>Keep current</button><button className="btn btn-small btn-secondary" onClick={() => addPanel.categoryId === category.id ? closeAddPanel() : openAddPanel(category.id)}>{addPanel.categoryId === category.id ? '✕ Cancel' : '+ Add ETF to compare'}</button></div>
         </div>
@@ -568,19 +706,159 @@ export default function HoldingTargets() {
           <button className="btn btn-small btn-primary" onClick={() => addHypothetical(category)} disabled={addPanel.loading || !addPanel.ticker.trim()}>{addPanel.loading ? 'Looking up…' : 'Add'}</button>
           {addPanel.error && <span className="hypo-add-error">{addPanel.error}</span>}
         </div>}
-        {open && <div className="holding-target-table-wrap"><table className="holding-target-table">
-          <thead><tr><th>Ticker</th><th>Subcategory</th><th>Shares</th><th>Price</th><th>Yield</th><th>% of category</th><th>Current %</th><th>Requested ({allocInputMode === 'dollars' ? '$ ⟂ %' : '% ⟂ $'})</th><th>Adjusted %</th><th>Buy / Sell</th><th>Shares +/-</th><th>Monthly Income Now</th><th>Monthly Income +/-</th><th>Reinvest / Alloc</th></tr></thead>
+        {open && <div className={`holding-target-table-wrap ${tradeEditor?.categoryId === category.id ? 'trade-editor-open' : ''}`}><table className="holding-target-table">
+          <thead><tr><th>Ticker</th><th>Subcategory</th><th>Shares Held</th><th>Price</th><th>Yield</th><th>% of category</th><th>Current %</th><th>Requested Target</th><th>Plan Trade</th><th>Adjusted %</th><th>Buy / Sell $</th><th>Buy / Sell Shares</th><th>Monthly Income Now</th><th>Monthly Income +/-</th><th>Reinvest / Alloc</th></tr></thead>
           <tbody>{category.rows.map(row => {
             const rawAmount = Number(manualAllocations[row.ticker] || 0)
             const displayAmount = rawAmount * displayRate
             const pctUsed = availableSaleCash > 0 ? rawAmount / availableSaleCash * 100 : 0
             const allocGain = rawAmount * Number(row.current_yield || 0) / 100 / 12
             const isRecipient = selectedRecipients.has(row.ticker)
-            const reqDollarsDisplay = Number((row.requestedTargetPct / 100 * Number(data.total_value || 0) * displayRate).toFixed(2))
-            const equalLocked = category.mode === 'equal'
-            const pctReadOnly = allocInputMode === 'dollars'
-            const dollarReadOnly = allocInputMode === 'percent'
-            return <tr key={row.ticker} className={row.hypothetical ? 'hypo-row' : ''}><td><div className="hypo-ticker-cell"><strong>{row.ticker}</strong>{row.hypothetical && <span className="hypo-badge">compare</span>}{planActive && !row.hypothetical && Math.abs(row.requestedTargetPct - row.currentPortfolioPct) > 0.01 && <span className="plan-badge" title={`Custom plan target ${pct(row.requestedTargetPct)} vs current ${pct(row.currentPortfolioPct)}${settings.targetUpdatedAt?.[row.ticker] ? ` · set ${formatWhen(settings.targetUpdatedAt[row.ticker])}` : ''}`}>plan</span>}{row.hypothetical && <button type="button" className="hypo-remove" title={`Remove ${row.ticker} from comparison`} aria-label={`Remove ${row.ticker} from comparison`} onClick={() => removeHypothetical(row.ticker)}>✕</button>}</div><small>{row.description}</small></td><td>{row.subcategoryName}</td><td>{shares(row.quantity)}</td><td>{money(row.price)}</td><td>{pct(Number(row.current_yield || 0))}</td><td>{pct(category.actual_value > 0 ? row.current_value / category.actual_value * 100 : 0)}</td><td>{pct(row.currentPortfolioPct)}</td><td><div className="target-input-dual"><div className="target-input"><DraftNumberInput className={pctReadOnly && !equalLocked ? 'mode-readonly' : ''} aria-label={`${row.ticker} target percentage`} value={Number(row.requestedTargetPct.toFixed(4))} disabled={equalLocked} readOnly={pctReadOnly} onValueChange={v => updateTarget(row.ticker, v)} /><span>%</span></div><div className="target-input"><span>$</span><DraftNumberInput className={`target-dollar ${dollarReadOnly && !equalLocked ? 'mode-readonly' : ''}`} aria-label={`${row.ticker} target dollars`} value={reqDollarsDisplay} disabled={equalLocked} readOnly={dollarReadOnly} onValueChange={v => updateTargetDollars(row.ticker, v)} /></div><button type="button" className="target-reset-btn" aria-label={`Reset ${row.ticker} target to current`} title={`Reset only ${row.ticker} to its current ${pct(row.currentPortfolioPct)} allocation`} onClick={() => revertTickerToCurrent(category, row)}>Current</button></div></td><td>{pct(row.adjustedTargetPct)}</td><td className={row.tradeValue > .5 ? 'trade-buy' : row.tradeValue < -.5 ? 'trade-sell' : ''}>{Math.abs(row.tradeValue) < .5 ? 'Balanced' : `${row.tradeValue > 0 ? 'Buy ' : 'Sell '}${money(Math.abs(row.tradeValue))}`}</td><td className={row.tradeShares > .001 ? 'trade-buy' : row.tradeShares < -.001 ? 'trade-sell' : ''}>{row.tradeShares >= 0 ? '+' : ''}{shares(row.tradeShares)}</td><td>{money(row.monthly_income)}</td><td className={row.monthlyDelta >= 0 ? 'trade-buy' : 'trade-sell'}>{row.monthlyDelta >= 0 ? '+' : ''}{money(row.monthlyDelta)}</td><td><div className="reinvest-inline-cell"><input aria-label={`Reinvest in ${row.ticker}`} type="checkbox" checked={isRecipient} disabled={row.rawTradeValue < -.5} onChange={() => toggleRecipient(row.ticker)} />{isRecipient && <div className="reinvest-inline-entry">{allocInputMode === 'dollars' ? <div className="reinvest-amount-field"><span>$</span><DraftNumberInput placeholder="0" value={manualAllocations[row.ticker] === '' ? '' : rawAmount > 0 ? Number(displayAmount.toFixed(2)) : ''} onValueChange={v => setManualAllocationDollars(row.ticker, v)} /></div> : <div className="reinvest-amount-field"><DraftNumberInput placeholder="0" value={manualAllocations[row.ticker] === '' ? '' : pctUsed > 0 ? Number(pctUsed.toFixed(1)) : ''} onValueChange={v => setManualAllocationPercent(row.ticker, v)} /><span>%</span></div>}{rawAmount > 0.5 && <small className="trade-buy reinvest-gain">+{money(allocGain)}/mo</small>}</div>}</div></td></tr>
+            const reqSharesDisplay = Number(row.requestedShares.toFixed(4))
+            const editorOpen = tradeEditor?.categoryId === category.id && tradeEditor?.ticker === row.ticker
+            const tradePreview = editorOpen ? getTradePreview(row) : null
+            const plannedAction = getPlannedTradeAction(row)
+            return <React.Fragment key={row.ticker}>
+            <tr className={row.hypothetical ? 'hypo-row' : ''}>
+              <td>
+                <div className="hypo-ticker-cell">
+                  <strong>{row.ticker}</strong>
+                  {row.hypothetical && <span className="hypo-badge">compare</span>}
+                  {planActive && !row.hypothetical && Math.abs(row.requestedTargetPct - row.currentPortfolioPct) > 0.01 && <span className="plan-badge" title={`Custom plan target ${pct(row.requestedTargetPct)} vs current ${pct(row.currentPortfolioPct)}${settings.targetUpdatedAt?.[row.ticker] ? ` · set ${formatWhen(settings.targetUpdatedAt[row.ticker])}` : ''}`}>plan</span>}
+                  {row.hypothetical && <button type="button" className="hypo-remove" title={`Remove ${row.ticker} from comparison`} aria-label={`Remove ${row.ticker} from comparison`} onClick={() => removeHypothetical(row.ticker)}>✕</button>}
+                </div>
+                <small>{row.description}</small>
+              </td>
+              <td>{row.subcategoryName}</td>
+              <td>{shares(row.quantity)}</td>
+              <td>{money(row.price)}</td>
+              <td>{pct(Number(row.current_yield || 0))}</td>
+              <td>{pct(category.actual_value > 0 ? row.current_value / category.actual_value * 100 : 0)}</td>
+              <td>{pct(row.currentPortfolioPct)}</td>
+              <td>
+                <div className="target-summary" aria-label={`${row.ticker} requested target`}>
+                  <strong>{pct(row.requestedTargetPct)}</strong>
+                  <span>{money(row.rawTargetValue)}</span>
+                  <span>{shares(reqSharesDisplay)} shares</span>
+                </div>
+              </td>
+              <td>
+                <div className="trade-plan-actions">
+                  <button type="button" className={`trade-action-btn buy ${editorOpen && tradeEditor.action === 'buy' ? 'active' : ''}`} onClick={() => openTradeEditor(category, row, 'buy')}>Buy</button>
+                  <button type="button" className={`trade-action-btn sell ${editorOpen && tradeEditor.action === 'sell' ? 'active' : ''}`} disabled={Number(row.quantity || 0) <= 0 && Number(row.current_value || 0) <= 0} onClick={() => openTradeEditor(category, row, 'sell')}>Sell</button>
+                  {planActive && Math.abs(row.requestedTargetPct - row.currentPortfolioPct) > 0.01 && <button type="button" className="trade-clear-btn" aria-label={`Clear ${row.ticker} planned trade`} title="Return this holding to its current position" onClick={() => revertTickerToCurrent(category, row)}>Clear</button>}
+                </div>
+              </td>
+              <td>{pct(row.adjustedTargetPct)}</td>
+              <td className={row.tradeValue > .5 ? 'trade-buy' : row.tradeValue < -.5 ? 'trade-sell' : ''}>
+                {Math.abs(row.tradeValue) < .5 ? 'Balanced' : `${row.tradeValue > 0 ? 'Buy ' : 'Sell '}${money(Math.abs(row.tradeValue))}`}
+              </td>
+              <td className={row.tradeShares > .001 ? 'trade-buy' : row.tradeShares < -.001 ? 'trade-sell' : ''}>
+                {Math.abs(row.tradeShares) <= .001 ? 'Balanced' : `${row.tradeShares > 0 ? 'Buy ' : 'Sell '}${shares(Math.abs(row.tradeShares))}`}
+              </td>
+              <td>{money(row.monthly_income)}</td>
+              <td className={row.monthlyDelta >= 0 ? 'trade-buy' : 'trade-sell'}>{row.monthlyDelta >= 0 ? '+' : ''}{money(row.monthlyDelta)}</td>
+              <td>
+                <div className="reinvest-inline-cell">
+                  <input aria-label={`Reinvest in ${row.ticker}`} type="checkbox" checked={isRecipient} disabled={row.rawTradeValue < -.5} onChange={() => toggleRecipient(row.ticker)} />
+                  {isRecipient && <div className="reinvest-inline-entry">
+                    {allocInputMode === 'dollars'
+                      ? <div className="reinvest-amount-field">
+                        <span>$</span>
+                        <DraftNumberInput aria-label={`${row.ticker} reinvest dollars`} placeholder="0" value={manualAllocations[row.ticker] === '' ? '' : rawAmount > 0 ? Number(displayAmount.toFixed(2)) : ''} onValueChange={v => setManualAllocationDollars(row.ticker, v)} />
+                      </div>
+                      : allocInputMode === 'shares'
+                        ? <div className="reinvest-amount-field">
+                          <DraftNumberInput aria-label={`${row.ticker} reinvest shares`} placeholder="0" value={manualAllocations[row.ticker] === '' ? '' : rawAmount > 0 && row.price > 0 ? Number((rawAmount / row.price).toFixed(4)) : ''} disabled={row.price <= 0} onValueChange={v => setManualAllocationShares(row.ticker, v, row.price)} />
+                          <span>sh</span>
+                        </div>
+                        : <div className="reinvest-amount-field">
+                          <DraftNumberInput aria-label={`${row.ticker} reinvest percentage`} placeholder="0" value={manualAllocations[row.ticker] === '' ? '' : pctUsed > 0 ? Number(pctUsed.toFixed(1)) : ''} onValueChange={v => setManualAllocationPercent(row.ticker, v)} />
+                          <span>%</span>
+                        </div>}
+                    {rawAmount > 0.5 && <small className="trade-buy reinvest-gain">+{money(allocGain)}/mo</small>}
+                  </div>}
+                </div>
+              </td>
+            </tr>
+            {editorOpen && <tr className="trade-planner-row">
+              <td colSpan="15">
+                <div className={`trade-planner-box ${tradeEditor.action}`}>
+                  <div className="trade-planner-heading">
+                    <div>
+                      <span className={`trade-side-badge ${tradeEditor.action}`}>{tradeEditor.action.toUpperCase()}</span>
+                      <strong>Plan a {tradeEditor.action} for {row.ticker}</strong>
+                      {plannedAction === tradeEditor.action && <span className="trade-loaded-badge">Current plan loaded</span>}
+                      <small>This updates the what-if target; it does not place a broker order.</small>
+                    </div>
+                    <button type="button" className="trade-planner-close" aria-label="Close trade box" onClick={() => setTradeEditor(null)}>✕</button>
+                  </div>
+
+                  <div className="trade-planner-current">
+                    <span><small>Held now</small><strong>{shares(row.quantity)} shares</strong></span>
+                    <span><small>Position value</small><strong>{money(row.current_value)}</strong></span>
+                    <span><small>Portfolio weight</small><strong>{pct(row.currentPortfolioPct)}</strong></span>
+                  </div>
+
+                  <div className="trade-planner-entry">
+                    <div className="trade-side-toggle" aria-label="Trade side">
+                      <button type="button" className={tradeEditor.action === 'buy' ? 'active buy' : ''} onClick={() => switchTradeAction(row, 'buy')}>Buy</button>
+                      <button type="button" className={tradeEditor.action === 'sell' ? 'active sell' : ''} disabled={Number(row.quantity || 0) <= 0 && Number(row.current_value || 0) <= 0} onClick={() => switchTradeAction(row, 'sell')}>Sell</button>
+                    </div>
+                    <div className="trade-unit-toggle" aria-label="Trade unit">
+                      <button type="button" className={tradeEditor.unit === 'percent' ? 'active' : ''} onClick={() => switchTradeUnit(row, 'percent')}>Portfolio %</button>
+                      <button type="button" className={tradeEditor.unit === 'dollars' ? 'active' : ''} onClick={() => switchTradeUnit(row, 'dollars')}>Dollars</button>
+                      <button type="button" className={tradeEditor.unit === 'shares' ? 'active' : ''} disabled={row.price <= 0} onClick={() => switchTradeUnit(row, 'shares')}>Shares</button>
+                    </div>
+                    <label className="trade-amount-field">
+                      <span>{tradeEditor.action === 'buy' ? 'Buy amount' : 'Sell amount'}</span>
+                      <div>
+                        {tradeEditor.unit === 'dollars' && <span className="trade-input-affix">$</span>}
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          autoFocus
+                          className="trade-amount-input"
+                          aria-label={`${tradeEditor.action} ${row.ticker} by ${tradeEditor.unit}`}
+                          placeholder="Type amount"
+                          value={tradeEditor.amount}
+                          onChange={event => {
+                            const value = event.target.value.replace(/[$,%\s,]/g, '')
+                            if (value === '' || /^\d*\.?\d*$/.test(value)) updateTradeEditor({ amount: value })
+                          }}
+                          onFocus={event => event.target.select()}
+                          onKeyDown={event => { if (event.key === 'Enter' && tradePreview.valid) applyTradePlan(category, row, tradePreview) }}
+                        />
+                        {tradeEditor.unit === 'percent' && <span className="trade-input-affix">% of portfolio</span>}
+                        {tradeEditor.unit === 'shares' && <span className="trade-input-affix">shares</span>}
+                      </div>
+                    </label>
+                  </div>
+
+                  <div className="trade-planner-preview">
+                    <div>
+                      <small>Planned {tradeEditor.action}</small>
+                      <strong className={tradeEditor.action === 'buy' ? 'trade-buy' : 'trade-sell'}>
+                        {shares(tradePreview.tradeShares)} shares · {money(tradePreview.tradeValue)}
+                      </strong>
+                    </div>
+                    <span className="trade-preview-arrow">→</span>
+                    <div>
+                      <small>Position after trade</small>
+                      <strong>{shares(tradePreview.afterShares)} shares · {money(tradePreview.afterValue)} · {pct(tradePreview.afterPct)}</strong>
+                    </div>
+                  </div>
+
+                  {tradeEditor.amount !== '' && tradePreview.error && <div className="trade-planner-error">{tradePreview.error}</div>}
+                  {autoBalance && <div className="trade-planner-note">Automatic 100% adjustment is on, so the final adjusted trade may be proportionally scaled.</div>}
+                  <div className="trade-planner-footer">
+                    <button type="button" className="btn btn-secondary" onClick={() => setTradeEditor(null)}>Cancel</button>
+                    <button type="button" className={`btn ${tradeEditor.action === 'buy' ? 'btn-primary' : 'btn-danger'}`} disabled={!tradePreview.valid} onClick={() => applyTradePlan(category, row, tradePreview)}>Apply {tradeEditor.action === 'buy' ? 'Buy' : 'Sale'} to Plan</button>
+                  </div>
+                </div>
+              </td>
+            </tr>}
+            </React.Fragment>
           })}</tbody>
         </table></div>}
       </section>
