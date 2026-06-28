@@ -24619,6 +24619,18 @@ def analytics_backtest():
 
     align_cols = valid_tickers + ([benchmark] if bench_valid and benchmark not in valid_tickers else [])
     aligned = close[align_cols].dropna(how="all").ffill()
+
+    # For "Max", clip to the common window so every series starts on the same date
+    # (the latest inception among the holdings/benchmark — i.e. the shortest-history
+    # fund). This keeps the growth-of-$10k comparison apples-to-apples instead of
+    # letting a long-history benchmark dwarf a recently-launched fund.
+    if period == "max" and len(align_cols) > 1:
+        starts = [aligned[c].first_valid_index() for c in align_cols]
+        starts = [s for s in starts if s is not None]
+        if starts:
+            common_start = max(starts)
+            aligned = aligned.loc[aligned.index >= common_start]
+
     step = max(1, len(aligned) // 200)
     sampled = aligned.iloc[::step]
     dates = [d.strftime("%Y-%m-%d") for d in sampled.index]
@@ -24954,6 +24966,37 @@ def portfolio_tester_run():
     include_div = bool(data.get("include_div", True))
     reinvest_div = bool(data.get("reinvest_div", True))
     rebalance = (data.get("rebalance") or "none").lower()
+
+    # Income-mode controls. distribution_policy, when supplied, is the canonical
+    # control and overrides include_div/reinvest_div; otherwise the legacy flags
+    # win so existing callers behave identically.
+    spend_income = bool(data.get("spend_income", False))
+    policy = (data.get("distribution_policy") or "").strip().lower()
+    if policy == "exclude":
+        include_div = False
+    elif policy == "reinvest":
+        include_div, reinvest_div, spend_income = True, True, False
+    elif policy in ("spend", "spend_target"):
+        include_div, reinvest_div, spend_income = True, False, True
+
+    def _as_fraction(v):
+        """Accept either a fraction (0.25) or a percentage (25); clamp to [0,1]."""
+        x = float(v or 0)
+        if x > 1:
+            x = x / 100.0
+        return min(max(x, 0.0), 1.0)
+
+    # Blended distribution tax rate.
+    tax_rate = _as_fraction(data.get("tax_rate", 0))
+
+    # Target-income spending: withdraw_rate (fraction of initial per year) with
+    # surplus reinvested / shortfall sold. 0 = spend all distributions. Only the
+    # spend_target policy turns it on.
+    withdraw_rate = _as_fraction(data.get("withdraw_rate", 0)) if policy == "spend_target" else 0.0
+    withdraw_inflation = _as_fraction(data.get("withdraw_inflation", 0))
+
+    equal_withdrawal = bool(data.get("equal_withdrawal", False))
+
     # Respect explicit include_benchmark=false so the user can compare A vs B only.
     # Default to True for backward compatibility.
     include_benchmark = data.get("include_benchmark", True)
@@ -24971,6 +25014,11 @@ def portfolio_tester_run():
             include_div=include_div,
             reinvest_div=reinvest_div,
             rebalance=rebalance,
+            tax_rate=tax_rate,
+            spend_income=spend_income,
+            equal_withdrawal=equal_withdrawal,
+            withdraw_rate=withdraw_rate,
+            withdraw_inflation=withdraw_inflation,
         )
     except ValueError as e:
         return jsonify(error=str(e)), 400

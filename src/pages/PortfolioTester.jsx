@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import Plot from '../components/ThemedPlot'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
@@ -39,6 +39,53 @@ function subYearsISO(iso, yrs) {
   d.setFullYear(d.getFullYear() - Math.floor(yrs))
   if (yrs % 1 !== 0) d.setMonth(d.getMonth() - Math.round((yrs % 1) * 12))
   return d.toISOString().slice(0, 10)
+}
+
+function PortfolioWeightInput({ ticker, weight, onChange }) {
+  const formattedWeight = (Number(weight) * 100).toFixed(2)
+  const [draft, setDraft] = useState(formattedWeight)
+  const inputRef = useRef(null)
+
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) setDraft(formattedWeight)
+  }, [formattedWeight])
+
+  const handleChange = (event) => {
+    const next = event.target.value
+    if (!/^\d*(?:\.\d*)?$/.test(next)) return
+
+    setDraft(next)
+    if (next !== '' && next !== '.') onChange(ticker, next)
+  }
+
+  const finishEditing = () => {
+    const next = Number(draft)
+    onChange(ticker, Number.isFinite(next) ? next : 0)
+    setDraft((Number.isFinite(next) ? next : 0).toFixed(2))
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      inputMode="decimal"
+      aria-label={`${ticker} weight percent`}
+      value={draft}
+      onChange={handleChange}
+      onBlur={finishEditing}
+      onKeyDown={event => {
+        if (event.key === 'Enter') {
+          finishEditing()
+          event.currentTarget.blur()
+        }
+      }}
+      style={{
+        width: 100, boxSizing: 'border-box', textAlign: 'right', padding: '0.3rem 0.5rem',
+        background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 3,
+        color: 'var(--text)', fontSize: '0.9rem',
+      }}
+    />
+  )
 }
 
 function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAvailable, categories, onFilterLoad, currentHoldings, onPickApply }) {
@@ -314,15 +361,7 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
               <tr key={h.ticker} style={{ borderTop: '1px solid var(--p-2a2a44)' }}>
                 <td style={{ padding: '0.3rem 0.5rem' }}>{h.ticker}</td>
                 <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>
-                  <input
-                    type="number"
-                    value={(Number(h.weight) * 100).toFixed(2)}
-                    onChange={e => updateWeight(h.ticker, e.target.value)}
-                    style={{
-                      width: 70, textAlign: 'right', padding: '0.2rem 0.35rem',
-                      background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 3, color: 'var(--text)',
-                    }}
-                  />
+                  <PortfolioWeightInput ticker={h.ticker} weight={h.weight} onChange={updateWeight} />
                 </td>
                 <td style={{ padding: '0.3rem 0.5rem', width: 30 }}>
                   <button
@@ -461,6 +500,102 @@ function ScoreCards({ portfolios, colors, includeDiv }) {
   )
 }
 
+// Income-investor scorecard: cash delivered + principal survived rather than
+// CAGR/Sharpe. Shown in Income (spend) mode, where the equal-withdrawal
+// benchmark delivers the same cash so the comparison reduces to principal.
+function IncomeSummary({ result, colors, inflation }) {
+  // Real Principal restates the (end-date) residual principal into start-date
+  // dollars at an assumed inflation rate, so it can be judged against the
+  // initial investment. Pure client-side transform — updates live.
+  const years = Math.max((new Date(result.end) - new Date(result.start)) / (1000 * 60 * 60 * 24 * 365.25), 1e-9)
+  const inflPct = Number(inflation) || 0
+  const deflator = Math.pow(1 + inflPct / 100, years)
+  const withReal = (im) => im
+    ? { ...im, real_principal: im.residual_principal != null ? im.residual_principal / deflator : null }
+    : null
+
+  const rows = result.portfolios.map((p, i) => ({
+    name: p.name, color: colors[i], vals: withReal(p.income_metrics),
+  }))
+  const b = result.benchmark_series
+  if (b) rows.push({
+    name: b.name + (b.mode === 'equal_withdrawal' ? ' — sell to match' : ' (benchmark)'),
+    color: colors[2], vals: withReal(b.income_metrics), depleted: b.depleted,
+  })
+  const showReinvested = (result.withdraw_rate || 0) > 0
+  const cols = [
+    { key: 'net_income',               label: 'Income Taken',               fmt: fmtMoney },
+    ...(showReinvested ? [{ key: 'reinvested_surplus', label: 'Reinvested Surplus', fmt: fmtMoney }] : []),
+    { key: 'tax_paid',                 label: 'Tax Paid',                   fmt: fmtMoney },
+    { key: 'residual_principal',       label: 'Residual Principal',         fmt: fmtMoney },
+    { key: 'real_principal',           label: `Real Principal (${inflPct}%)`, fmt: fmtMoney },
+    { key: 'total_outcome',            label: 'Total Outcome',              fmt: fmtMoney },
+    { key: 'income_yield_on_cost',     label: 'Yield on Cost',              fmt: (v) => fmtPct(v) },
+    { key: 'worst_rolling_12m_income', label: 'Worst 12-mo Income',         fmt: fmtMoney },
+  ]
+  const erodedKeys = new Set(['residual_principal', 'real_principal'])
+  return (
+    <div className="card" style={{ padding: '0.75rem', marginBottom: '1rem', overflowX: 'auto' }}>
+      <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem' }}>
+        Income Summary
+        {result.equal_withdrawal && (
+          <span style={{ color: 'var(--text-dim)', fontWeight: 400, fontSize: '0.8rem', marginLeft: '0.5rem' }}>
+            · benchmark sells shares to deliver the same net income
+          </span>
+        )}
+      </h3>
+      <table style={{ width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse', whiteSpace: 'nowrap' }}>
+        <thead>
+          <tr style={{ background: 'var(--bg)', color: 'var(--text-dim)' }}>
+            <th style={thL}>Name</th>
+            {cols.map(c => <th key={c.key} style={thR}>{c.label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={r.name + i} style={{ borderTop: '1px solid var(--p-2a2a44)' }}>
+              <td style={{ padding: '0.4rem 0.6rem', fontWeight: 600 }}>
+                <span style={{ display: 'inline-block', width: 10, height: 10, background: r.color, borderRadius: 2, marginRight: 6 }} />
+                {r.name}
+                {(() => {
+                  const dep = (r.vals && r.vals.depleted) || r.depleted
+                  return dep ? (
+                    <span style={{ color: 'var(--p-ff9090)', fontWeight: 400, marginLeft: 6 }} title={`Principal exhausted on ${dep}`}>
+                      ⚠ depleted {dep}
+                    </span>
+                  ) : null
+                })()}
+              </td>
+              {cols.map(c => (
+                <td key={c.key} style={{
+                  padding: '0.4rem 0.6rem', textAlign: 'right',
+                  fontWeight: c.key === 'total_outcome' ? 700 : 500,
+                  fontStyle: c.key === 'real_principal' ? 'italic' : 'normal',
+                  color: erodedKeys.has(c.key) && r.vals && r.vals[c.key] < result.initial ? 'var(--p-ffb74d)' : 'var(--text)',
+                }}>
+                  {r.vals ? c.fmt(r.vals[c.key]) : '—'}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ marginTop: '0.5rem', fontSize: '0.76rem', color: 'var(--p-556677)' }}>
+        <strong style={{ color: 'var(--text-dim)' }}>Total Outcome</strong> = residual principal + income taken (nominal).
+        In spend mode the portfolio value tracks principal only, so NAV erosion is visible.
+        Distributions are taxed at a single blended {((result.tax_rate || 0) * 100).toFixed(0)}% before being spent.
+        {showReinvested && (
+          <> Target spend is {((result.withdraw_rate || 0) * 100).toFixed(1)}%/yr of the initial
+          {(result.withdraw_inflation || 0) > 0 ? `, grown ${((result.withdraw_inflation) * 100).toFixed(1)}%/yr` : ''};
+          distributions above it reinvest (<strong style={{ color: 'var(--text-dim)' }}>Reinvested Surplus</strong>), any shortfall sells shares.</>
+        )}
+        {' '}<strong style={{ color: 'var(--text-dim)' }}>Real Principal</strong> restates residual principal in start-date
+        dollars at {inflPct}%/yr inflation over {years.toFixed(1)} yrs — amber if below the {fmtMoney(result.initial)} initial (purchasing power lost).
+      </div>
+    </div>
+  )
+}
+
 function MetricsRow({ name, color, m }) {
   return (
     <tr style={{ borderTop: '1px solid var(--p-2a2a44)' }}>
@@ -510,6 +645,13 @@ export default function PortfolioTester() {
   const [rebalance, setRebalance] = useState('none')
   const [includeDiv, setIncludeDiv] = useState(true)
   const [reinvestDiv, setReinvestDiv] = useState(true)
+  // Income-mode controls
+  const [mode, setMode] = useState('growth')                    // 'growth' | 'income'
+  const [distributionPolicy, setDistributionPolicy] = useState('spend') // 'spend' | 'spend_target' | 'reinvest' | 'exclude'
+  const [taxRate, setTaxRate] = useState(0)                     // blended distribution tax, percent
+  const [withdrawRate, setWithdrawRate] = useState(4)           // target spend, % of initial per year
+  const [equalWithdrawal, setEqualWithdrawal] = useState(true)  // benchmark sells to match income
+  const [inflation, setInflation] = useState(3)                 // assumed inflation %/yr for real principal
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [invalidTickers, setInvalidTickers] = useState([])
@@ -660,9 +802,21 @@ export default function PortfolioTester() {
           initial: Number(initial) || 10000,
           include_benchmark: includeBenchmark,
           benchmark: includeBenchmark ? (benchmark.trim().toUpperCase() || null) : null,
-          include_div: includeDiv,
-          reinvest_div: includeDiv ? reinvestDiv : false,
           rebalance,
+          ...(mode === 'income'
+            ? {
+                distribution_policy: distributionPolicy,
+                tax_rate: Number(taxRate) || 0,
+                // Target-income spend: surplus above the rate reinvests, shortfall sells.
+                withdraw_rate: distributionPolicy === 'spend_target' ? (Number(withdrawRate) || 0) : 0,
+                withdraw_inflation: Number(inflation) || 0,
+                // Equal-cash-withdrawal benchmark applies whenever income is spent.
+                equal_withdrawal: (distributionPolicy === 'spend' || distributionPolicy === 'spend_target') ? equalWithdrawal : false,
+              }
+            : {
+                include_div: includeDiv,
+                reinvest_div: includeDiv ? reinvestDiv : false,
+              }),
         }),
       })
       const data = await resp.json()
@@ -803,11 +957,17 @@ export default function PortfolioTester() {
 
   const incomeFigure = useMemo(() => {
     if (!result || !result.include_div) return null
-    const traces = result.portfolios.map((s, i) => ({
-      x: s.income_dates, y: s.income_series.map(v => Number(v.toFixed(2))),
-      type: 'bar', name: s.name, marker: { color: colors[i], opacity: 0.75 },
-      hovertemplate: '%{x|%b %Y}<br>$%{y:,.2f}<extra>' + s.name + '</extra>',
-    }))
+    // In spend mode plot the income actually TAKEN (the target you live on);
+    // otherwise plot the distributions received.
+    const spent = !!result.spend_income
+    const traces = result.portfolios.map((s, i) => {
+      const yvals = (spent && s.income_taken_series) ? s.income_taken_series : s.income_series
+      return {
+        x: s.income_dates, y: yvals.map(v => Number(v.toFixed(2))),
+        type: 'bar', name: s.name, marker: { color: colors[i], opacity: 0.75 },
+        hovertemplate: '%{x|%b %Y}<br>$%{y:,.2f}<extra>' + s.name + '</extra>',
+      }
+    })
     return {
       data: traces,
       layout: {
@@ -815,18 +975,49 @@ export default function PortfolioTester() {
         paper_bgcolor: 'transparent', plot_bgcolor: '#0f0f1e',
         font: { color: '#e0e0e0', size: 11 },
         xaxis: { gridcolor: '#2a2a44', tickformat: '%b %Y' },
-        yaxis: { gridcolor: '#2a2a44', title: 'Monthly dividend $ paid', tickprefix: '$', tickformat: ',.2f', hoverformat: ',.2f' },
+        yaxis: { gridcolor: '#2a2a44', title: spent ? 'Monthly income taken $' : 'Monthly net distribution $', tickprefix: '$', tickformat: ',.2f', hoverformat: ',.2f' },
         legend: { orientation: 'h', y: -0.2 },
       },
     }
   }, [result])
+
+  // Income (spend) mode: surviving principal after paying out identical income.
+  const residualFigure = useMemo(() => {
+    if (!result || !result.spend_income) return null
+    const list = result.portfolios.map((p, i) => ({ ...p, color: colors[i] }))
+    if (result.benchmark_series) list.push({ ...result.benchmark_series, color: colors[2] })
+    const traces = list.map(s => ({
+      x: s.value_dates, y: s.value_series.map(v => Number(v.toFixed(2))),
+      type: 'scatter', mode: 'lines',
+      name: s.name + (s.mode === 'equal_withdrawal' ? ' (sell to match)' : ''),
+      line: { color: s.color, width: 2 },
+      hovertemplate: '%{x}<br>$%{y:,.0f}<extra>' + s.name + '</extra>',
+    }))
+    return {
+      data: traces,
+      layout: {
+        height: 360, margin: { l: 80, r: 20, t: 40, b: 50 },
+        paper_bgcolor: 'transparent', plot_bgcolor: '#0f0f1e',
+        font: { color: '#e0e0e0', size: 11 },
+        annotations: [{
+          text: '<b>Residual Principal</b> — what is left after paying out identical net income',
+          xref: 'paper', yref: 'paper', x: 0, xanchor: 'left', y: 1.04, yanchor: 'bottom',
+          showarrow: false, font: { color: '#e0e0e0', size: 12 },
+        }],
+        xaxis: { gridcolor: '#2a2a44' },
+        yaxis: { gridcolor: '#2a2a44', title: 'Principal ($)', tickprefix: '$', tickformat: ',d', hoverformat: ',.0f', automargin: true },
+        legend: { orientation: 'h', y: -0.18 },
+      },
+    }
+  }, [result, seriesList])
 
   return (
     <div className="page">
       <h1 style={{ marginBottom: '0.3rem' }}>Portfolio Tester</h1>
       <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem' }}>
         Backtest two portfolios head-to-head (up to 75 tickers each) against a benchmark.
-        6 months to 25 years of Yahoo Finance history. Optional dividend reinvestment and rebalancing.
+        6 months to 25 years of Yahoo Finance history. <strong>Growth</strong> mode compares total return;
+        <strong>Income</strong> mode adds distribution tax, spend-vs-reinvest, and a sell-the-index comparison.
       </p>
 
       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
@@ -856,6 +1047,27 @@ export default function PortfolioTester() {
 
       {/* Shared settings */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Mode</span>
+          {[['growth', 'Growth'], ['income', 'Income']].map(([v, l]) => (
+            <button
+              key={v}
+              onClick={() => { setMode(v); setError(null) }}
+              style={{
+                padding: '0.25rem 0.7rem', borderRadius: 4, cursor: 'pointer', fontSize: '0.8rem',
+                border: mode === v ? '1px solid var(--accent)' : '1px solid var(--p-3a3a5c)',
+                background: mode === v ? 'var(--p-1a3a5c)' : 'var(--bg)',
+                color: mode === v ? 'var(--accent)' : 'var(--text-dim)',
+                fontWeight: mode === v ? 600 : 400,
+              }}
+            >{l}</button>
+          ))}
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.76rem', marginLeft: '0.3rem' }}>
+            {mode === 'income'
+              ? 'Realistic income view: distribution tax, spend vs reinvest, and a sell-the-index comparison.'
+              : 'Total-return growth comparison (dividends reinvested).'}
+          </span>
+        </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Start</span>
@@ -914,20 +1126,80 @@ export default function PortfolioTester() {
             </select>
           </div>
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.82rem' }}>
-            <input type="checkbox" checked={includeDiv} onChange={e => setIncludeDiv(e.target.checked)} />
-            Include dividends
-          </label>
+          {mode === 'growth' ? (
+            <>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.82rem' }}>
+                <input type="checkbox" checked={includeDiv} onChange={e => setIncludeDiv(e.target.checked)} />
+                Include dividends
+              </label>
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.82rem', opacity: includeDiv ? 1 : 0.4 }}>
-            <input
-              type="checkbox"
-              checked={reinvestDiv}
-              disabled={!includeDiv}
-              onChange={e => setReinvestDiv(e.target.checked)}
-            />
-            Reinvest dividends
-          </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.82rem', opacity: includeDiv ? 1 : 0.4 }}>
+                <input
+                  type="checkbox"
+                  checked={reinvestDiv}
+                  disabled={!includeDiv}
+                  onChange={e => setReinvestDiv(e.target.checked)}
+                />
+                Reinvest dividends
+              </label>
+            </>
+          ) : (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Distributions</span>
+                <select value={distributionPolicy} onChange={e => setDistributionPolicy(e.target.value)} style={dateStyle}
+                  title="Spend all = take every payout as cash. Spend target = take a set withdrawal, reinvest the surplus, sell shares for any shortfall. Reinvest = DRIP. Exclude = ignore distributions.">
+                  <option value="spend">Spend all distributions</option>
+                  <option value="spend_target">Spend target, reinvest surplus</option>
+                  <option value="reinvest">Reinvest (DRIP)</option>
+                  <option value="exclude">Exclude</option>
+                </select>
+              </div>
+
+              {distributionPolicy === 'spend_target' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Withdraw %/yr</span>
+                  <input
+                    type="number" min={0} max={100} step={0.5} value={withdrawRate}
+                    onChange={e => setWithdrawRate(e.target.value)}
+                    title="Spending target as a % of the initial investment per year (grown by the Inflation %). Distributions above this reinvest; any shortfall is funded by selling shares."
+                    style={{ ...dateStyle, width: 64 }}
+                  />
+                </div>
+              )}
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Dist. tax %</span>
+                <input
+                  type="number" min={0} max={100} value={taxRate}
+                  onChange={e => setTaxRate(e.target.value)}
+                  title="Single blended tax rate applied to every distribution before it is reinvested or spent"
+                  style={{ ...dateStyle, width: 64 }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Inflation %</span>
+                <input
+                  type="number" min={0} max={100} step={0.5} value={inflation}
+                  onChange={e => setInflation(e.target.value)}
+                  title="Assumed annual inflation used to restate residual principal in start-date dollars (Real Principal column). Updates the table live — no need to re-run."
+                  style={{ ...dateStyle, width: 64 }}
+                />
+              </div>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.82rem', opacity: (distributionPolicy === 'spend' || distributionPolicy === 'spend_target') ? 1 : 0.4 }}
+                title="Replace the benchmark with one that funds this portfolio's exact withdrawal by selling shares — the 'just sell the index' comparison">
+                <input
+                  type="checkbox"
+                  checked={equalWithdrawal}
+                  disabled={distributionPolicy !== 'spend' && distributionPolicy !== 'spend_target'}
+                  onChange={e => setEqualWithdrawal(e.target.checked)}
+                />
+                Benchmark = sell to match income
+              </label>
+            </>
+          )}
 
           <div style={{ flex: 1 }} />
           <button className="btn btn-primary" onClick={run} disabled={loading} style={{ padding: '0.4rem 1.2rem' }}>
@@ -984,6 +1256,9 @@ export default function PortfolioTester() {
         <>
           {/* Score cards */}
           <ScoreCards portfolios={result.portfolios} colors={colors} includeDiv={result.include_div} />
+
+          {/* Income summary (spend mode) */}
+          {result.spend_income && <IncomeSummary result={result} colors={colors} inflation={inflation} />}
 
           {/* Total return summary */}
           <div className="card" style={{ padding: '0.75rem', marginBottom: '1rem' }}>
@@ -1073,7 +1348,10 @@ export default function PortfolioTester() {
             </table>
             <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--p-556677)' }}>
               Backtest: {result.start} → {result.end} · Initial {fmtMoney(result.initial)} ·
-              Dividends {result.include_div ? (result.reinvest_div ? 'reinvested' : 'paid as cash') : 'excluded'} ·
+              Dividends {result.include_div
+                ? (result.reinvest_div ? 'reinvested' : (result.spend_income ? 'taken as income' : 'paid as cash'))
+                : 'excluded'}
+              {result.tax_rate > 0 && ` · Dist. tax ${(result.tax_rate * 100).toFixed(0)}%`} ·
               Rebalance {result.rebalance}
             </div>
           </div>
@@ -1114,16 +1392,33 @@ export default function PortfolioTester() {
             )}
           </div>
 
-          {/* Dividend income */}
+          {/* Residual principal (spend mode) */}
+          {result.spend_income && residualFigure && (
+            <div className="card" style={{ padding: '0.75rem', marginBottom: '1rem' }}>
+              <h3 style={{ margin: '0 0 0.2rem 0', fontSize: '1rem' }}>Residual Principal</h3>
+              <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: '0.4rem' }}>
+                Every line below delivered the <strong style={{ color: 'var(--text)' }}>same net income</strong>
+                {result.equal_withdrawal && <> (the benchmark sells shares to match)</>}. The gap is how much
+                principal each approach had left over — the apples-to-apples answer to “would I have been better off
+                just selling the index?”
+              </div>
+              <Plot data={residualFigure.data} layout={themedPlotlyLayout(residualFigure.layout, isDark)} style={{ width: '100%' }} config={{ displayModeBar: false, responsive: true }} />
+            </div>
+          )}
+
+          {/* Distribution income */}
           {result.include_div && incomeFigure && (
             <div className="card" style={{ padding: '0.75rem', marginBottom: '1rem' }}>
-              <h3 style={{ margin: '0 0 0.3rem 0', fontSize: '1rem' }}>Monthly Dividend Income</h3>
+              <h3 style={{ margin: '0 0 0.3rem 0', fontSize: '1rem' }}>
+                Monthly {result.spend_income ? 'Net Income' : 'Dividend Income'}
+              </h3>
               <Plot data={incomeFigure.data} layout={themedPlotlyLayout(incomeFigure.layout, isDark)} style={{ width: '100%' }} config={{ displayModeBar: false, responsive: true }} />
               <div style={{ marginTop: '0.4rem', fontSize: '0.82rem', color: 'var(--text-dim)' }}>
                 {result.portfolios.map((p, i) => (
                   <span key={i} style={{ marginRight: '1rem' }}>
                     <span style={{ display: 'inline-block', width: 10, height: 10, background: colors[i], borderRadius: 2, marginRight: 4 }} />
-                    {p.name}: <strong style={{ color: 'var(--accent-2)' }}>{fmtMoney(p.metrics.total_income)}</strong> total distributions
+                    {p.name}: <strong style={{ color: 'var(--accent-2)' }}>{fmtMoney(p.metrics.total_income)}</strong>
+                    {' '}total {result.spend_income ? 'net income' : 'distributions'}
                   </span>
                 ))}
               </div>

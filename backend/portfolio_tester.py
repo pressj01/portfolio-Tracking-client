@@ -134,12 +134,56 @@ def _rebalance_dates(idx: pd.DatetimeIndex, freq: str) -> set:
     return set(pd.to_datetime(marks.values).strftime("%Y-%m-%d").tolist())
 
 
+def _apply_cash_flow(shares: dict, cols, prices: dict, target: dict, amount: float):
+    """Buy (amount>0) or sell (amount<0) ``amount`` dollars of holdings,
+    pro-rata to current market value (falling back to target weights when the
+    book is empty). Mutates ``shares`` in place. A sell is assumed not to exceed
+    current market value, so pro-rata keeps every position non-negative.
+    """
+    pv = sum(shares.get(t, 0.0) * prices[t] for t in cols if prices[t] > 0)
+    for t in cols:
+        p = prices[t]
+        if p <= 0:
+            continue
+        frac = (shares.get(t, 0.0) * p / pv) if pv > 0 else target.get(t, 0.0)
+        shares[t] = shares.get(t, 0.0) + (amount * frac) / p
+
+
 def simulate_portfolio(holdings: List[dict], close: pd.DataFrame,
                        divs: pd.DataFrame, initial: float,
                        reinvest_div: bool, include_div: bool,
-                       rebalance: str
+                       rebalance: str,
+                       tax_rate: float = 0.0,
+                       spend_income: bool = False,
+                       withdraw_rate: float = 0.0,
+                       withdraw_inflation: float = 0.0
                        ) -> Dict[str, pd.Series]:
-    """Run the portfolio simulation and return daily value/drawdown/income."""
+    """Run the portfolio simulation and return daily value/drawdown/income.
+
+    Distribution handling, set by the caller:
+      * reinvest_div=True                         -> DRIP: net distributions buy
+                                                     more shares.
+      * reinvest_div=False, spend_income=True,
+        withdraw_rate=0                            -> spend ALL distributions as
+                                                     cash; ``value`` tracks the
+                                                     surviving principal only.
+      * reinvest_div=False, spend_income=True,
+        withdraw_rate>0                            -> TARGET-INCOME spend: deliver
+                                                     a fixed withdrawal (``withdraw_rate``
+                                                     of the initial per year, grown by
+                                                     ``withdraw_inflation``). Distributions
+                                                     fund it first; any SURPLUS above the
+                                                     target is reinvested into more shares,
+                                                     and any SHORTFALL is covered by selling
+                                                     shares. ``value`` tracks principal.
+      * reinvest_div=False, spend_income=False    -> legacy behaviour:
+                                                     distributions accrue as idle
+                                                     cash inside the account.
+
+    ``tax_rate`` (0..1) is a single blended haircut applied to every
+    distribution before it is reinvested, spent, or accrued. Defaults preserve
+    the original pre-tax, reinvest/accumulate behaviour.
+    """
     tickers = [h["ticker"] for h in holdings]
     weights = np.array([h["weight"] for h in holdings], dtype=float)
     weights = weights / weights.sum()
@@ -161,63 +205,230 @@ def simulate_portfolio(holdings: List[dict], close: pd.DataFrame,
     dv = divs[cols].reindex(px.index).fillna(0.0)
 
     rebal_dates = _rebalance_dates(px.index, rebalance)
+    tax_rate = min(max(float(tax_rate or 0.0), 0.0), 1.0)
+    withdraw_rate = max(float(withdraw_rate or 0.0), 0.0)
+    withdraw_inflation = max(float(withdraw_inflation or 0.0), 0.0)
+    spend_target = bool(spend_income and withdraw_rate > 0)
 
     # Initial allocation
     day0 = px.index[0]
     shares = {t: (initial * target[t]) / float(px.at[day0, t])
               for t in cols if px.at[day0, t] > 0}
-    cash = 0.0  # dividends-as-cash bucket when reinvest=False
-    income_accum = 0.0  # total dividends received (informational)
+    cash = 0.0           # idle-cash bucket (legacy accumulate-as-cash mode)
+    pending = 0.0        # distribution cash awaiting monthly target settlement
+    gross_accum = 0.0    # total distributions received, pre-tax
+    tax_accum = 0.0      # total distribution tax withheld
+    net_accum = 0.0      # total distributions after tax
+    withdrawn = 0.0      # cumulative cash spent out of the account (spend mode)
+    reinvested_surplus = 0.0  # distributions reinvested above the spend target
+    depleted_date = None # first date principal could not cover the target
 
-    values = []
-    income_by_date = []
+    values = []             # end-of-day account value
+    income_by_date = []     # per-day NET distribution received
+    withdrawn_by_date = []  # running cumulative net cash withdrawn (spend mode)
+    withdrawn_daily = []    # per-day cash actually withdrawn/spent
+    target_by_date = []     # per-day INTENDED withdrawal (the user-set target,
+                            # uncapped by depletion) — used to drive the benchmark
     date_index = px.index
+    month_period = date_index.to_period("M")
+    n_days = len(date_index)
 
-    for dt in date_index:
-        # 1) Dividends paid today (using ex-date / post ex-date Dividends column)
-        day_income = 0.0
+    for i, dt in enumerate(date_index):
+        prices = {t: float(px.at[dt, t]) for t in cols}
+
+        # 1) Distributions paid today (ex-date Dividends column), net of tax.
+        #    DRIP buys immediately; otherwise the net flows into a cash pool.
+        day_net = 0.0
+        day_cash = 0.0
         if include_div:
             for t in cols:
                 d = float(dv.at[dt, t]) if t in dv.columns else 0.0
                 if d > 0 and t in shares:
-                    paid = shares[t] * d
-                    day_income += paid
+                    gross = shares[t] * d
+                    tax = gross * tax_rate
+                    net = gross - tax
+                    gross_accum += gross
+                    tax_accum += tax
+                    net_accum += net
+                    day_net += net
                     if reinvest_div:
-                        p = float(px.at[dt, t])
-                        if p > 0:
-                            shares[t] += paid / p
+                        if prices[t] > 0:
+                            shares[t] += net / prices[t]
                     else:
-                        cash += paid
-            income_accum += day_income
+                        day_cash += net
 
-        # 2) Rebalance (after dividends, before EOD value)
+        # 2) Spending settlement.
+        withdrawn_today = 0.0
+        target_today = 0.0   # intended withdrawal (the benchmark must match this)
+        if include_div and not reinvest_div:
+            if spend_target:
+                # Accumulate distributions; settle the spend target monthly so a
+                # monthly payer reinvests the genuine surplus (distribution above
+                # the target) and only sells shares for a genuine shortfall —
+                # rather than churning daily.
+                pending += day_cash
+                is_month_end = (i == n_days - 1) or (month_period[i + 1] != month_period[i])
+                if is_month_end:
+                    elapsed_years = max((dt - day0).days, 0) / 365.25
+                    need_month = (withdraw_rate * initial / 12.0) * ((1.0 + withdraw_inflation) ** elapsed_years)
+                    target_today = need_month  # intended target, before depletion capping
+                    # Deliver the target from distribution cash first.
+                    pay = min(pending, need_month)
+                    withdrawn_today += pay; withdrawn += pay; pending -= pay
+                    shortfall = need_month - pay
+                    # Reinvest any distribution surplus above the target.
+                    if pending > 1e-9:
+                        _apply_cash_flow(shares, cols, prices, target, pending)
+                        reinvested_surplus += pending; pending = 0.0
+                    # Cover any shortfall by selling shares.
+                    if shortfall > 1e-9:
+                        pv = sum(shares[t] * prices[t] for t in cols)
+                        sell = min(shortfall, pv)
+                        if sell > 1e-12:
+                            _apply_cash_flow(shares, cols, prices, target, -sell)
+                            withdrawn_today += sell; withdrawn += sell
+                        if depleted_date is None and (shortfall - sell) > 1e-6:
+                            depleted_date = dt  # principal exhausted; target unmet
+            elif spend_income:
+                # Spend ALL distributions as cash (principal-only value). Here the
+                # "target" simply is whatever was distributed.
+                withdrawn_today += day_cash; withdrawn += day_cash
+                target_today = day_cash; day_cash = 0.0
+            else:
+                cash += day_cash  # legacy idle-cash accumulation
+
+        # 3) Rebalance (after distributions, before EOD value)
         date_key = str(dt.date())
         if date_key in rebal_dates and dt != day0:
-            total = cash + sum(shares[t] * float(px.at[dt, t]) for t in cols)
+            total = cash + sum(shares[t] * prices[t] for t in cols)
             for t in cols:
-                p = float(px.at[dt, t])
-                if p > 0:
-                    shares[t] = (total * target[t]) / p
+                if prices[t] > 0:
+                    shares[t] = (total * target[t]) / prices[t]
             cash = 0.0  # rebalance folds cash back into positions
 
-        # 3) End-of-day total value
-        eod = cash + sum(shares[t] * float(px.at[dt, t]) for t in cols)
+        # 4) End-of-day account value. In spend mode the distribution cash has
+        # left the account, so this is surviving principal (shares) only.
+        eod = cash + sum(shares[t] * prices[t] for t in cols)
         values.append(eod)
-        income_by_date.append(day_income)
+        income_by_date.append(day_net)
+        withdrawn_by_date.append(withdrawn)
+        withdrawn_daily.append(withdrawn_today)
+        target_by_date.append(target_today)
 
     value_series = pd.Series(values, index=date_index, name="value")
     income_series = pd.Series(income_by_date, index=date_index, name="income")
+    withdrawn_series = pd.Series(withdrawn_by_date, index=date_index, name="withdrawn")
+    withdrawn_daily_series = pd.Series(withdrawn_daily, index=date_index, name="withdrawn_daily")
+    target_daily_series = pd.Series(target_by_date, index=date_index, name="target_daily")
 
     running_max = value_series.cummax()
     drawdown = (value_series - running_max) / running_max
+
+    # Wealth = surviving principal + cash already taken out, so spend and
+    # reinvest modes can be compared on a like-for-like total-value basis.
+    wealth_series = value_series + withdrawn_series
 
     return {
         "value": value_series,
         "drawdown": drawdown,
         "income": income_series,
-        "total_income": float(income_accum),
+        "withdrawn": withdrawn_series,
+        "withdrawn_daily": withdrawn_daily_series,
+        "target_daily": target_daily_series,
+        "wealth": wealth_series,
+        "total_income": float(net_accum),          # net distributions (== gross when tax=0)
+        "total_income_gross": float(gross_accum),
+        "total_tax": float(tax_accum),
+        "total_withdrawn": float(withdrawn),       # cash actually spent
+        "reinvested_surplus": float(reinvested_surplus),
         "final_value": float(value_series.iloc[-1]),
         "final_cash": float(cash),
+        "depleted": depleted_date.strftime("%Y-%m-%d") if depleted_date is not None else None,
+    }
+
+
+def simulate_equal_withdrawal_benchmark(benchmark: str, close: pd.DataFrame,
+                                        divs: pd.DataFrame, initial: float,
+                                        target_income: pd.Series,
+                                        tax_rate: float = 0.0
+                                        ) -> Dict[str, pd.Series]:
+    """Fund the primary portfolio's net distributions by selling the benchmark.
+
+    ``target_income`` is the primary portfolio's per-day NET distribution series.
+    On each date the benchmark sells exactly enough shares to deliver that day's
+    target cash; its own dividends are reinvested (after the same blended tax) so
+    it stays a total-return holding. The output is the benchmark's *residual
+    principal* after delivering identical spendable income — i.e. the
+    "would I have been better off just selling the index?" comparison.
+
+    By construction it delivers the same cash as the portfolio (until principal is
+    exhausted), so the meaningful difference is the surviving principal.
+    """
+    if benchmark not in close.columns:
+        raise ValueError(f"Missing price data for benchmark: {benchmark}")
+
+    px = close[[benchmark]].copy().ffill().dropna()
+    if px.empty:
+        raise ValueError("No benchmark price data in range.")
+    dv = divs[[benchmark]].reindex(px.index).fillna(0.0) if benchmark in divs.columns else None
+    tax_rate = min(max(float(tax_rate or 0.0), 0.0), 1.0)
+    tgt = target_income.reindex(px.index).fillna(0.0)
+
+    day0 = px.index[0]
+    p0 = float(px.at[day0, benchmark])
+    shares = (initial / p0) if p0 > 0 else 0.0
+
+    withdrawn = 0.0
+    depleted_date = None
+    values = []
+    income_by_date = []
+    withdrawn_by_date = []
+
+    for dt in px.index:
+        p = float(px.at[dt, benchmark])
+        # Benchmark's own dividends -> DRIP after tax (keeps it total-return)
+        if dv is not None and p > 0 and shares > 0:
+            d = float(dv.at[dt, benchmark])
+            if d > 0:
+                shares += (shares * d * (1.0 - tax_rate)) / p
+
+        # Deliver the portfolio's net income for this date by selling shares
+        want = float(tgt.at[dt])
+        delivered = 0.0
+        if want > 0 and p > 0 and shares > 0:
+            sell = want / p
+            if sell >= shares:
+                sell = shares
+                if depleted_date is None:
+                    depleted_date = dt
+            shares -= sell
+            delivered = sell * p
+        withdrawn += delivered
+
+        values.append(shares * p)
+        income_by_date.append(delivered)
+        withdrawn_by_date.append(withdrawn)
+
+    value_series = pd.Series(values, index=px.index, name="value")
+    income_series = pd.Series(income_by_date, index=px.index, name="income")
+    withdrawn_series = pd.Series(withdrawn_by_date, index=px.index, name="withdrawn")
+    running_max = value_series.cummax()
+    drawdown = (value_series - running_max) / running_max
+    wealth_series = value_series + withdrawn_series
+
+    return {
+        "value": value_series,
+        "drawdown": drawdown,
+        "income": income_series,
+        "withdrawn": withdrawn_series,
+        "wealth": wealth_series,
+        "total_income": float(withdrawn),       # net cash actually delivered
+        "total_income_gross": float(withdrawn),
+        "total_tax": 0.0,
+        "total_withdrawn": float(withdrawn),
+        "final_value": float(value_series.iloc[-1]),
+        "final_cash": 0.0,
+        "depleted": depleted_date.strftime("%Y-%m-%d") if depleted_date is not None else None,
     }
 
 
@@ -225,6 +436,55 @@ def simulate_portfolio(holdings: List[dict], close: pd.DataFrame,
 
 def _years_between(a: pd.Timestamp, b: pd.Timestamp) -> float:
     return max(1e-9, (b - a).days / 365.25)
+
+
+def compute_income_metrics(sim: dict, initial: float) -> dict:
+    """Income-investor scorecard derived from a simulation result.
+
+    Frames the run around cash delivered and principal survived rather than
+    CAGR/Sharpe: net income taken, tax paid, residual principal, the combined
+    total outcome, income yield-on-cost, and the weakest rolling-12-month income.
+    """
+    value = sim["value"]
+    yrs = _years_between(value.index[0], value.index[-1])
+    gross = float(sim.get("total_income_gross", 0.0))
+    tax = float(sim.get("total_tax", 0.0))
+    # "Income taken" is the cash actually spent out of the account. For spend-all
+    # this equals net distributions; for target spending it is the target taken
+    # (the rest reinvested); for the benchmark it is the matched withdrawal.
+    income_taken = float(sim.get("total_withdrawn", 0.0))
+    reinvested = float(sim.get("reinvested_surplus", 0.0))
+    residual_principal = float(value.iloc[-1])
+    total_outcome = residual_principal + income_taken
+    avg_annual_income = (income_taken / yrs) if yrs > 0 else None
+    yoc = (avg_annual_income / initial) if (avg_annual_income is not None and initial) else None
+
+    worst_12m = None
+    try:
+        # Prefer the actually-spent stream; fall back to distributions received.
+        src = sim.get("withdrawn_daily")
+        if src is None:
+            src = sim.get("income")
+        monthly = src.resample("MS").sum()
+        roll = monthly.rolling(12).sum().dropna()
+        if not roll.empty:
+            worst_12m = float(roll.min())
+    except Exception:
+        pass
+
+    return {
+        "net_income": income_taken,
+        "gross_income": gross,
+        "tax_paid": tax,
+        "reinvested_surplus": reinvested,
+        "withdrawn": income_taken,
+        "residual_principal": residual_principal,
+        "total_outcome": total_outcome,
+        "avg_annual_net_income": avg_annual_income,
+        "income_yield_on_cost": yoc,
+        "worst_rolling_12m_income": worst_12m,
+        "depleted": sim.get("depleted"),
+    }
 
 
 def _cagr(value: pd.Series) -> Optional[float]:
@@ -486,10 +746,29 @@ def compute_metrics(value: pd.Series, bench_value: Optional[pd.Series],
 def run_backtest(portfolios: List[dict], benchmark: Optional[str],
                  start: str, end: str, initial: float,
                  include_div: bool, reinvest_div: bool,
-                 rebalance: str) -> dict:
+                 rebalance: str,
+                 tax_rate: float = 0.0,
+                 spend_income: bool = False,
+                 equal_withdrawal: bool = False,
+                 withdraw_rate: float = 0.0,
+                 withdraw_inflation: float = 0.0) -> dict:
     """Run the full head-to-head backtest.
 
     portfolios = [{name, holdings: [{ticker, weight}]}, ...]
+
+    Income-mode extras (all default to the original growth behaviour):
+      * tax_rate (0..1)      blended haircut on every distribution.
+      * spend_income         distributions leave the account as cash instead of
+                             reinvesting; portfolio ``value`` tracks principal.
+      * withdraw_rate (0..1) target spend as a fraction of the initial per year;
+                             surplus distributions reinvest, shortfalls sell
+                             shares. 0 = spend all distributions.
+      * withdraw_inflation   annual growth applied to that spend target.
+      * equal_withdrawal     replace the buy-and-hold benchmark with one that
+                             funds the *first* portfolio's actual withdrawal
+                             stream by selling benchmark shares (the "just sell
+                             the index" comparison). Only meaningful in spend
+                             mode, where both deliver the same cash.
     """
     # Validation
     for p in portfolios:
@@ -540,38 +819,68 @@ def run_backtest(portfolios: List[dict], benchmark: Optional[str],
             reinvest_div=reinvest_div,
             include_div=include_div,
             rebalance=rebalance,
+            tax_rate=tax_rate,
+            spend_income=spend_income,
+            withdraw_rate=withdraw_rate,
+            withdraw_inflation=withdraw_inflation,
         )
         results.append({"name": p["name"], "sim": sim, "holdings": p["holdings"]})
 
     bench_value = None
     bench_sim = None
+    bench_mode = None
     if benchmark:
-        bench_sim = simulate_portfolio(
-            holdings=[{"ticker": benchmark, "weight": 1.0}],
-            close=close, divs=divs,
-            initial=initial,
-            reinvest_div=reinvest_div,
-            include_div=include_div,
-            rebalance="none",
-        )
+        if equal_withdrawal and results:
+            # Fund the FIRST portfolio's net distribution stream by selling the
+            # benchmark — the apples-to-apples "just sell the index" comparison.
+            bench_sim = simulate_equal_withdrawal_benchmark(
+                benchmark=benchmark, close=close, divs=divs,
+                initial=initial,
+                # Match the FIRST portfolio's INTENDED withdrawal target (the
+                # user-set schedule), so the benchmark aims for the same spending
+                # even if the portfolio's own principal was exhausted.
+                target_income=results[0]["sim"]["target_daily"],
+                tax_rate=tax_rate,
+            )
+            bench_mode = "equal_withdrawal"
+        else:
+            bench_sim = simulate_portfolio(
+                holdings=[{"ticker": benchmark, "weight": 1.0}],
+                close=close, divs=divs,
+                initial=initial,
+                reinvest_div=reinvest_div,
+                include_div=include_div,
+                rebalance="none",
+                tax_rate=tax_rate,
+                spend_income=spend_income,
+            )
+            bench_mode = "buy_and_hold"
         bench_value = bench_sim["value"]
 
     series_out = []
     for r in results:
         metrics = compute_metrics(r["sim"]["value"], bench_value, r["sim"]["total_income"])
+        income_metrics = compute_income_metrics(r["sim"], initial)
         monthly_income = r["sim"]["income"].resample("MS").sum()
         monthly_value = r["sim"]["value"].resample("ME").last()
         monthly_dd = r["sim"]["drawdown"].resample("ME").last()
+        monthly_wealth = r["sim"]["wealth"].resample("ME").last()
+        monthly_withdrawn = r["sim"]["withdrawn"].resample("ME").last()
+        monthly_taken = r["sim"]["withdrawn_daily"].resample("MS").sum()
         rolling = _rolling_cagr(r["sim"]["value"], 1.0)
         series_out.append({
             "name": r["name"],
             "holdings": r["holdings"],
             "metrics": metrics,
+            "income_metrics": income_metrics,
             "value_dates": [d.strftime("%Y-%m-%d") for d in monthly_value.index],
             "value_series": [float(x) for x in monthly_value.values],
             "drawdown_series": [float(x) for x in monthly_dd.values],
+            "wealth_series": [float(x) for x in monthly_wealth.values],
+            "withdrawn_series": [float(x) for x in monthly_withdrawn.values],
             "income_dates": [d.strftime("%Y-%m-%d") for d in monthly_income.index],
             "income_series": [float(x) for x in monthly_income.values],
+            "income_taken_series": [float(x) for x in monthly_taken.values],
             "rolling_cagr_dates": [d.strftime("%Y-%m-%d") for d in rolling.index],
             "rolling_cagr_series": [float(x) for x in rolling.values],
         })
@@ -579,14 +888,22 @@ def run_backtest(portfolios: List[dict], benchmark: Optional[str],
     bench_out = None
     if bench_sim is not None:
         bm = compute_metrics(bench_sim["value"], None, bench_sim["total_income"])
+        bm_income = compute_income_metrics(bench_sim, initial)
         mv = bench_sim["value"].resample("ME").last()
         md = bench_sim["drawdown"].resample("ME").last()
+        mw = bench_sim["wealth"].resample("ME").last()
+        mwd = bench_sim["withdrawn"].resample("ME").last()
         bench_out = {
             "name": benchmark,
+            "mode": bench_mode,
             "metrics": bm,
+            "income_metrics": bm_income,
             "value_dates": [d.strftime("%Y-%m-%d") for d in mv.index],
             "value_series": [float(x) for x in mv.values],
             "drawdown_series": [float(x) for x in md.values],
+            "wealth_series": [float(x) for x in mw.values],
+            "withdrawn_series": [float(x) for x in mwd.values],
+            "depleted": bench_sim.get("depleted"),
         }
 
     return {
@@ -597,7 +914,13 @@ def run_backtest(portfolios: List[dict], benchmark: Optional[str],
         "include_div": include_div,
         "reinvest_div": reinvest_div,
         "rebalance": rebalance,
+        "tax_rate": tax_rate,
+        "spend_income": spend_income,
+        "withdraw_rate": withdraw_rate,
+        "withdraw_inflation": withdraw_inflation,
+        "equal_withdrawal": equal_withdrawal,
         "benchmark": benchmark,
+        "benchmark_mode": bench_mode,
         "portfolios": series_out,
         "benchmark_series": bench_out,
         "coverage": ok,

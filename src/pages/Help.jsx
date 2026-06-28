@@ -4407,13 +4407,15 @@ function PortfolioTesterHelp() {
       <p style={{ marginBottom: '1rem' }}>
         Portfolio Tester runs a head-to-head historical backtest between <strong>two portfolios</strong>
         (A and B) — up to <strong>75 tickers each</strong> — with an optional benchmark, over any
-        Yahoo Finance date range from <strong>6 months to 25 years</strong>. It produces a full suite of
-        financial metrics, a head-to-head score card that calls out the winner, and interactive
-        growth, drawdown, annual-return, rolling-CAGR, and monthly-income charts.
+        Yahoo Finance date range from <strong>6 months to 25 years</strong>. <strong>Growth</strong> mode
+        compares total return, while <strong>Income</strong> mode models distribution taxes, spending,
+        reinvestment, inflation, and an optional benchmark that sells shares to match the same income.
+        Results include financial metrics, a head-to-head score card, and interactive growth, drawdown,
+        annual-return, rolling-CAGR, residual-principal, and monthly-income charts.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/portfolio-tester/Screenshot 2026-05-09 123458.jpg" alt="Portfolio Tester backtest results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/portfolio-tester/portfolio-tester-income-summary.png" alt="Portfolio Tester Income mode settings, score card, income summary, total return, and performance summary" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
@@ -4440,7 +4442,8 @@ function PortfolioTesterHelp() {
         Weights must sum to <strong>100%</strong> before you can run. The <strong>Equal</strong> button splits
         weight evenly across all tickers in the portfolio; <strong>Normalize</strong> rescales whatever
         weights you already entered so they sum to 100%. <strong>Clear</strong> empties the portfolio.
-        The row footer shows the running total in green (at 100%) or amber (off).
+        You can edit each row's weight directly with whole numbers or decimals. The row footer shows the
+        running total in green (at 100%) or amber (off).
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Run Settings</h3>
@@ -4449,8 +4452,21 @@ function PortfolioTesterHelp() {
         <li><strong>Initial</strong> — starting investment for the backtest (default $10,000). Applied equally to both portfolios and the benchmark.</li>
         <li><strong>Benchmark checkbox + ticker</strong> — uncheck the <strong>Benchmark</strong> box to run <em>Portfolio A vs Portfolio B only</em> with no benchmark line. Check it to include a reference ticker (default <code>SPY</code>; change to <code>QQQ</code>, <code>VTI</code>, etc. as needed).</li>
         <li><strong>Rebalance</strong> — None, Monthly, Quarterly, or Annually. If set, each portfolio is rebalanced back to its target weights at that frequency.</li>
-        <li><strong>Include dividends</strong> — when off, the backtest runs on pure price-only returns. When on, dividends are paid through the simulation.</li>
-        <li><strong>Reinvest dividends</strong> — only meaningful if Include Dividends is on. When on (DRIP), distributions buy more shares at the pay date; when off, they accumulate as cash drag and are tallied as "total distributions paid."</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Growth and Income Modes</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        The mode buttons change how distributions are handled and which income controls appear:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Growth</strong> — use <strong>Include dividends</strong> to choose total-return or price-only history. When <strong>Reinvest dividends</strong> is on, each distribution buys more shares on its pay date; when off, it remains cash and is reported as distributions paid.</li>
+        <li><strong>Income → Spend all distributions</strong> — takes every after-tax distribution as spendable income instead of reinvesting it.</li>
+        <li><strong>Income → Spend target, reinvest surplus</strong> — targets the annual <strong>Withdraw %/yr</strong> of the initial investment. The target grows by the selected inflation rate; distributions above it are reinvested and any shortfall is funded by selling shares.</li>
+        <li><strong>Income → Reinvest (DRIP)</strong> — reinvests after-tax distributions into the paying holding.</li>
+        <li><strong>Income → Exclude</strong> — runs a price-only comparison without distributions.</li>
+        <li><strong>Dist. tax %</strong> — a blended tax rate applied to every distribution before it is spent or reinvested.</li>
+        <li><strong>Inflation %</strong> — grows a target withdrawal and converts ending principal into start-date purchasing power for the <strong>Real Principal</strong> result.</li>
+        <li><strong>Benchmark = sell to match income</strong> — when income is spent, makes the benchmark deliver the same net cash by selling shares. This turns the ending-principal comparison into an apples-to-apples answer to “would I have been better off just selling the index?”</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Coverage Validation (Hard Stop)</h3>
@@ -4472,7 +4488,7 @@ function PortfolioTesterHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Head-to-Head Score Card</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        At the top of the results, eight key metrics are shown as side-by-side score cards with the
+        At the top of the results, eight core metrics are shown as side-by-side score cards with the
         winning value <strong>bolded in green with a ✓</strong>:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
@@ -4480,11 +4496,23 @@ function PortfolioTesterHelp() {
         <li><strong>Std Dev</strong> — lower (less volatile) wins.</li>
         <li><strong>Max Drawdown</strong> — higher (less negative) wins.</li>
         <li><strong>Sharpe</strong>, <strong>Sortino</strong>, <strong>MAR / Calmar</strong> — higher wins.</li>
+        <li><strong>Total Dividends</strong> — also appears when distributions are included.</li>
       </ul>
       <p style={{ marginBottom: '1rem' }}>
         A header badge calls out the <strong>overall winner</strong> — the portfolio that won the most
         metrics — or "Tied" if they match. The score card is only meaningful when two portfolios are
         present; with one portfolio, it shows its values without a winner concept.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Income Summary</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Income mode adds a table for each portfolio and, when enabled, the sell-to-match benchmark.
+        <strong> Income Taken</strong> is spendable after-tax cash; <strong>Reinvested Surplus</strong> is
+        cash above a spending target that bought more shares; and <strong>Tax Paid</strong> is the modeled
+        distribution tax. <strong>Residual Principal</strong> is the nominal ending balance, while
+        <strong> Real Principal</strong> restates it in start-date dollars. <strong>Total Outcome</strong>
+        combines residual principal and income taken. Yield on Cost and Worst 12-mo Income provide
+        additional income context.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Total Return</h3>
@@ -4514,8 +4542,15 @@ function PortfolioTesterHelp() {
         <li><strong>Growth & Drawdown</strong> — Dual-panel chart. The top panel shows portfolio value over time starting at your Initial amount. The bottom panel shows <strong>drawdown from peak</strong> (% below the running all-time high; 0% = at peak, −20% = 20% below prior peak and not yet recovered). A gray zero-reference line anchors the drawdown panel.</li>
         <li><strong>Annual Returns</strong> — Grouped bar chart by calendar year. <strong>Only complete Jan–Dec years</strong> are shown — partial-year stubs are excluded so short runs don't get misleading bars. If your range doesn't cover a full year, the panel shows a note telling you to extend the range.</li>
         <li><strong>Rolling 1-Year CAGR</strong> — Rolling trailing-12-month return for each portfolio, useful for spotting which regime periods each strategy excelled in.</li>
-        <li><strong>Monthly Dividend Income</strong> — Grouped bars of cash distributions received per month. Only shown when Include Dividends is on. Bars are anchored to the month-start so labels line up cleanly with the calendar. A caption under the chart totals the distributions for each portfolio.</li>
+        <li><strong>Residual Principal</strong> — shown when Income mode spends distributions. Every line delivered the same net income; the remaining balance shows which approach preserved more principal.</li>
+        <li><strong>Monthly Dividend / Net Income</strong> — grouped monthly bars. Growth mode shows distributions received; spend-oriented Income mode shows the cash actually taken. A caption totals the distributions or net income for each portfolio.</li>
       </ul>
+      <div style={{ marginBottom: '1rem' }}>
+        <img src="./help-screenshots/portfolio-tester/portfolio-tester-growth-drawdown.png" alt="Portfolio Tester growth, drawdown, and annual returns charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+      </div>
+      <div style={{ marginBottom: '1rem' }}>
+        <img src="./help-screenshots/portfolio-tester/portfolio-tester-income-charts.png" alt="Portfolio Tester rolling CAGR, residual principal, and monthly net income charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+      </div>
       <p style={{ marginBottom: '1rem', color: 'var(--text-dim)', fontSize: '0.88rem' }}>
         All chart values are formatted to two decimal places on both hover tooltips and axis ticks.
       </p>
