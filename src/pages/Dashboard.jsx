@@ -92,6 +92,14 @@ const shortDate = (value) => {
   if (Number.isNaN(d.getTime())) return ''
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
+// Date-only strings (YYYY-MM-DD) parse as UTC midnight, which can render a day
+// early in negative-UTC timezones. Pin to local midnight so dates match the editor.
+const localDateString = (value) => {
+  if (!value) return ''
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString()
+}
 // Ex-div / pay dates arrive from the backend as MM/DD/YY strings (some null).
 const exPayDisplay = (value) => value || '—'
 // Sortable key from a MM/DD/YY string → YYYYMMDD integer (missing sorts last).
@@ -584,7 +592,7 @@ function TickerModal({ ticker, onClose }) {
           <>
             <h2 style={{ color: 'var(--accent-bright)', marginBottom: '0.25rem' }}>{data.ticker} — {data.description}</h2>
             <p style={{ color: 'var(--text-dim)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-              Purchased {new Date(data.purchase_date).toLocaleDateString()} at {fmt(data.price_paid)}
+              Purchased {localDateString(data.purchase_date) || '—'} at {fmt(data.price_paid)}
             </p>
             {data.note && (
               <p style={{ color: 'var(--p-ffcc80)', margin: '-0.5rem 0 1rem', fontSize: '0.85rem' }}>{data.note}</p>
@@ -1124,8 +1132,7 @@ export default function Dashboard() {
   const textOrDash = (value) => (value == null || value === '' ? '—' : value)
   const dateOrDash = (value) => {
     if (!value) return '—'
-    const d = new Date(value)
-    return Number.isNaN(d.getTime()) ? textOrDash(value) : d.toLocaleDateString()
+    return localDateString(value) || textOrDash(value)
   }
   const quantityOrDash = (value) => {
     if (value == null || !Number.isFinite(Number(value))) return '—'
