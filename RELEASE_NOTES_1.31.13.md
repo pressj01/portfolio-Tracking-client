@@ -299,6 +299,7 @@ Reinvestment Impact now includes a dedicated **Price Impact** tab for answering 
 - The launcher prefers the packaged application when available.
 - Local development uses the development database path rather than accidentally sharing the installed application database.
 - Improved backend process cleanup on Windows and macOS.
+- Installer builds now use a cross-platform Python command, and Intel/Apple Silicon DMGs are built on matching native GitHub runners so each package contains the correct backend architecture.
 
 ---
 
@@ -356,6 +357,7 @@ This release also includes the following targeted fixes:
 - Stale provider distribution yield no longer overrides substantially higher recent payouts.
 - Missing S&P 500 data no longer crashes Dashboard rendering.
 - Application-level render errors show a recoverable error screen instead of a blank window.
+- The macOS release job no longer fails by calling the Windows-only `py` launcher.
 - Runtime uploads and temporary PNG artifacts are excluded from Git.
 
 ---
