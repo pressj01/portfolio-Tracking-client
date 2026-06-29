@@ -1439,6 +1439,10 @@ label {
   flex: 0 1 270px;
   min-width: 220px;
 }
+.daily-change-card .summary-value {
+  font-size: 1.2rem;
+  white-space: nowrap;
+}
 .nav-erosion-severity-card {
   display: flex;
   align-items: center;

@@ -69,6 +69,9 @@ def ensure_tables_exist(conn=None):
             broker_source    TEXT,
             include_in_owner INTEGER NOT NULL DEFAULT 0,
             positions_managed INTEGER NOT NULL DEFAULT 0,
+            cash_value       REAL NOT NULL DEFAULT 0,
+            cash_source      TEXT,
+            cash_updated_at  TEXT,
             created_at       TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -81,6 +84,12 @@ def ensure_tables_exist(conn=None):
         cur.execute("ALTER TABLE profiles ADD COLUMN positions_managed INTEGER NOT NULL DEFAULT 0")
     if "broker_source" not in cols:
         cur.execute("ALTER TABLE profiles ADD COLUMN broker_source TEXT")
+    if "cash_value" not in cols:
+        cur.execute("ALTER TABLE profiles ADD COLUMN cash_value REAL NOT NULL DEFAULT 0")
+    if "cash_source" not in cols:
+        cur.execute("ALTER TABLE profiles ADD COLUMN cash_source TEXT")
+    if "cash_updated_at" not in cols:
+        cur.execute("ALTER TABLE profiles ADD COLUMN cash_updated_at TEXT")
     cur.execute("""
         INSERT OR IGNORE INTO profiles (id, name, include_in_owner, positions_managed) VALUES (1, 'Owner', 1, 0)
     """)

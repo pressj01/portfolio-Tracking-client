@@ -627,6 +627,7 @@ export default function Dashboard() {
   const [betaBenchmark, setBetaBenchmark] = useState('sp500')
   const [upcomingDivs, setUpcomingDivs] = useState([])
   const [incomeSummary, setIncomeSummary] = useState(null)
+  const [portfolioValue, setPortfolioValue] = useState(null)
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
   const [rvyMode, setRvyMode] = useState('cur')
@@ -638,6 +639,7 @@ export default function Dashboard() {
   const [overviewGroups, setOverviewGroups] = useState(null)
   const [overviewCategories, setOverviewCategories] = useState(null)
   const [sp500, setSp500] = useState(null)
+  const [dailyChange, setDailyChange] = useState(null)
   const [navHistory, setNavHistory] = useState([])
   const [navSnapping, setNavSnapping] = useState(false)
   const [navBackfilling, setNavBackfilling] = useState(false)
@@ -691,6 +693,7 @@ export default function Dashboard() {
     if (cached) {
       setHoldings(normalizeDashboardHoldings(cached.holdings))
       setIncomeSummary(cached.incomeSummary || null)
+      setPortfolioValue(cached.portfolioValue || null)
       setUpcomingDivs(cached.upcomingDivs || [])
       setTickerGrades(cached.tickerGrades || {})
       setTickerRisk(cached.tickerRisk || {})
@@ -702,10 +705,12 @@ export default function Dashboard() {
       setTickerCoverageMeta(cached.tickerCoverageMeta || {})
       setOverviewGroups(cached.overviewGroups || null)
       setOverviewCategories(cached.overviewCategories || null)
+      setDailyChange(cached.dailyChange || null)
       setLoading(false)
     } else {
       setHoldings([])
       setIncomeSummary(null)
+      setPortfolioValue(null)
       setUpcomingDivs([])
       setTickerGrades({})
       setTickerRisk({})
@@ -717,6 +722,7 @@ export default function Dashboard() {
       setTickerCoverageMeta({})
       setOverviewGroups(null)
       setOverviewCategories(null)
+      setDailyChange(null)
       setLoading(true)
     }
     setRefreshStatus(null)
@@ -737,6 +743,10 @@ export default function Dashboard() {
           pf('/api/income-summary')
             .then(safeJson)
             .then(d => { if (!stale) setIncomeSummary(d) })
+            .catch(() => {})
+          pf('/api/portfolio-value')
+            .then(safeJson)
+            .then(d => { if (!stale) setPortfolioValue(d) })
             .catch(() => {})
           pf('/api/nav/history')
             .then(safeJson)
@@ -850,17 +860,20 @@ export default function Dashboard() {
             .then(r => {
               if (stale) return
               setRefreshStatus(r.message)
+              setDailyChange(r.daily_change || null)
               return Promise.all([
                 pf('/api/holdings').then(safeJson),
                 pf('/api/income-summary').then(safeJson).catch(() => null),
+                pf('/api/portfolio-value').then(safeJson).catch(() => null),
               ])
             })
             .then(result => {
               if (stale || !result) return
-              const [updated, summary] = result
+              const [updated, summary, valueSummary] = result
               if (!updated) return
               setHoldings(normalizeDashboardHoldings(updated))
               if (summary) setIncomeSummary(summary)
+              if (valueSummary) setPortfolioValue(valueSummary)
               setGradeStatus('Loading risk grades...')
               setTickerRiskLoading(true)
               return pf('/api/portfolio-summary/data')
@@ -896,6 +909,7 @@ export default function Dashboard() {
     writeDashboardCache(dashboardCacheKey, {
       holdings,
       incomeSummary,
+      portfolioValue,
       upcomingDivs,
       tickerGrades,
       tickerRisk,
@@ -906,12 +920,14 @@ export default function Dashboard() {
       tickerCoverageMeta,
       overviewGroups,
       overviewCategories,
+      dailyChange,
     })
   }, [
     dashboardCacheKey,
     loading,
     holdings,
     incomeSummary,
+    portfolioValue,
     upcomingDivs,
     tickerGrades,
     tickerRisk,
@@ -922,6 +938,7 @@ export default function Dashboard() {
     tickerCoverageMeta,
     overviewGroups,
     overviewCategories,
+    dailyChange,
   ])
 
   // Derived totals
@@ -968,8 +985,13 @@ export default function Dashboard() {
     const totalReturn = purchaseValue ? ((gainLoss + totalDivs) / purchaseValue) : 0
     const reinvestPct = monthlyIncome ? (monthlyReinvested / monthlyIncome) : 0
 
-    return { lifetimeIncome: totalDivs, ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, reinvestPct, annualIncome, dividendPaid, withdraw8Annual, withdraw8Monthly, cashNotReinvested, totalCashReinvested, sharesBoughtFromDividend, sharesBoughtInYear, sharesInMonth, dripSharesMonthly, dripSharesYearly, currentValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, gainLoss, currentMonthIncome, currentMonthIncomeDelta, currentMonthReinvested, currentMonthNotReinvested, currentMonthReinvestPct }
-  }, [holdings, incomeSummary])
+    const cashValue = Number(portfolioValue?.cash_value || 0)
+    const accountValue = portfolioValue?.account_value == null
+      ? currentValue
+      : Number(portfolioValue.account_value)
+
+    return { lifetimeIncome: totalDivs, ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, reinvestPct, annualIncome, dividendPaid, withdraw8Annual, withdraw8Monthly, cashNotReinvested, totalCashReinvested, sharesBoughtFromDividend, sharesBoughtInYear, sharesInMonth, dripSharesMonthly, dripSharesYearly, currentValue, cashValue, accountValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, gainLoss, currentMonthIncome, currentMonthIncomeDelta, currentMonthReinvested, currentMonthNotReinvested, currentMonthReinvestPct }
+  }, [holdings, incomeSummary, portfolioValue])
 
   const marketExposure = useMemo(() => {
     const betas = portfolioGrade?.benchmark_betas || {}
@@ -1020,6 +1042,27 @@ export default function Dashboard() {
   }, [holdings, totals, tickerCoverage, tickerCoverageMeta, tickerGrades, tickerRisk, rvyMode])
   const portfolioNavSeverity = portfolioCoverageSeverity || navSeverityFromRatio(portfolioCoverage)
   const portfolioNavColor = navSeverityColor(portfolioNavSeverity)
+  const dailyChangeAmount = Number(dailyChange?.amount)
+  const dailyChangePercent = Number(dailyChange?.percent)
+  const hasDailyChange = Number.isFinite(dailyChangeAmount) && Number.isFinite(dailyChangePercent)
+  const dailyChangeColor = !hasDailyChange
+    ? 'var(--text-dim)'
+    : dailyChangeAmount > 0
+      ? 'var(--pos)'
+      : dailyChangeAmount < 0
+        ? 'var(--neg)'
+        : 'var(--text)'
+  const dailyChangeValue = hasDailyChange
+    ? `${formatMoney(dailyChangeAmount, { signed: true })} (${dailyChangePercent >= 0 ? '+' : ''}${dailyChangePercent.toFixed(2)}%)`
+    : refreshStatus?.startsWith('Updating')
+      ? 'Updating...'
+      : 'Unavailable'
+  const dailyChangeSub = dailyChange?.previous_date && dailyChange?.as_of_date
+    ? `${shortDate(dailyChange.previous_date)} to ${shortDate(dailyChange.as_of_date)}`
+    : null
+  const dailyChangeTitle = dailyChange?.holdings_total > dailyChange?.holdings_covered
+    ? `Price move from the previous market close. Based on ${dailyChange.holdings_covered} of ${dailyChange.holdings_total} holdings with available prices.`
+    : 'Price move from the previous market close, based on current share counts.'
 
   // Sorting
   const sorted = useMemo(() => {
@@ -1542,6 +1585,24 @@ export default function Dashboard() {
             value={portfolioCoverage.toFixed(4)}
             color={portfolioNavColor}
           />
+          <SummaryCard
+            className="daily-change-card"
+            label="Account Day Change"
+            value={dailyChangeValue}
+            color={dailyChangeColor}
+            sub={dailyChangeSub}
+            title={dailyChangeTitle}
+          />
+          <SummaryCard
+            label="Price Return"
+            value={pct(totals.priceReturn)}
+            color={gradeColor(totals.priceReturn)}
+          />
+          <SummaryCard
+            label="Total Return"
+            value={pct(totals.totalReturn)}
+            color={gradeColor(totals.totalReturn)}
+          />
         </div>
       )}
 
@@ -1575,19 +1636,14 @@ export default function Dashboard() {
         <SummaryCard label={`${currentMonth} Not Reinvested`} value={fmt(totals.currentMonthNotReinvested)} color="var(--warning-money)" sub={currentMonthSub} />
         <SummaryCard label={`${currentMonth} % Reinvested`} value={totals.currentMonthReinvestPct != null ? pct(totals.currentMonthReinvestPct) : '—'} color="var(--pos-muted)" sub={currentMonthSub} />
         <SummaryCard label="Est. Annual Income" value={fmt(totals.annualIncome)} color="var(--pos)" />
-        <SummaryCard label="Portfolio Value" value={fmt(totals.currentValue)} color="var(--accent-bright)" />
+        <SummaryCard
+          label="Portfolio Value"
+          value={fmt(totals.accountValue)}
+          color="var(--accent-bright)"
+          sub={totals.cashValue > 0 ? `Includes ${fmt(totals.cashValue)} cash` : null}
+        />
         <SummaryCard label="Avg Yield on Cost" value={pct(totals.avgYoc)} />
         <SummaryCard label="Current Yield" value={pct(totals.currentYield)} />
-        <SummaryCard
-          label="Price Return"
-          value={pct(totals.priceReturn)}
-          color={gradeColor(totals.priceReturn)}
-        />
-        <SummaryCard
-          label="Total Return"
-          value={pct(totals.totalReturn)}
-          color={gradeColor(totals.totalReturn)}
-        />
         {sp500 && (
           <SummaryCard
             label="S&P 500"
@@ -1625,7 +1681,10 @@ export default function Dashboard() {
               setNavSnapping(true)
               setRefreshStatus('Updating prices & dividends before recording NAV...')
               runMarketRefresh({ statusMessage: 'Updating prices & dividends before recording NAV...' })
-                .then(() => pf('/api/nav/snapshot', { method: 'POST' }))
+                .then(r => {
+                  setDailyChange(r.daily_change || null)
+                  return pf('/api/nav/snapshot', { method: 'POST' })
+                })
                 .then(safeJson)
                 .then(d => {
                   if (d?.skipped) {

@@ -706,6 +706,35 @@ def _set_profile_positions_managed(profile_id, managed, conn=None):
             conn.close()
 
 
+def _set_profile_cash_value(conn, profile_id, cash_value, source="positions_import"):
+    """Persist a broker-reported cash balance when the schema supports it."""
+    profile_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()
+    }
+    if "cash_value" not in profile_cols:
+        return
+    conn.execute(
+        """UPDATE profiles
+           SET cash_value = ?, cash_source = ?, cash_updated_at = ?
+           WHERE id = ?""",
+        (
+            round(float(cash_value or 0), 2),
+            source,
+            datetime.datetime.now().isoformat(),
+            profile_id,
+        ),
+    )
+
+
+def _cash_profile_ids_for_read(conn, is_aggregate, profile_ids):
+    """Resolve the source profiles whose cash belongs in the active view."""
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or [1])))
+    if not is_aggregate and ids == [1]:
+        source_ids = _get_owner_source_profile_ids(conn)
+        return source_ids or ids
+    return ids
+
+
 def _get_owner_source_profile_ids(conn):
     """Return profile ids that feed Owner reconciliation/DRIP sync."""
     rows = conn.execute(
@@ -1682,6 +1711,7 @@ def _clear_profile_data(conn, pid):
         "drip_redirects", "swap_candidates", "ticker_categories",
     ]:
         conn.execute(f"DELETE FROM {table} WHERE profile_id = ?", (pid,))
+    _set_profile_cash_value(conn, pid, 0, source="profile_cleared")
 
 
 def _delete_profile_ticker_records(conn, profile_id, ticker, include_transactions=False):
@@ -1736,8 +1766,9 @@ def profiles_summary():
     conn = get_connection()
     rows = conn.execute("""
         SELECT p.id, p.name, p.broker_source, p.created_at, p.include_in_owner,
+               COALESCE(p.cash_value, 0) AS cash_value,
                COUNT(a.ticker) as holdings_count,
-               COALESCE(SUM(a.current_value), 0) as total_value
+               COALESCE(SUM(a.current_value), 0) + COALESCE(p.cash_value, 0) as total_value
         FROM profiles p
         LEFT JOIN all_account_info a ON p.id = a.profile_id
         GROUP BY p.id
@@ -3045,6 +3076,15 @@ def _import_positions(parsed, profile_id, nav_date=None):
             # while preserving imported/manual values for positions-only files.
             _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
 
+        summary = parsed.get("summary") or {}
+        if "cash" in summary:
+            _set_profile_cash_value(
+                conn,
+                profile_id,
+                summary.get("cash") or 0,
+                source=parsed.get("source_format") or "positions_import",
+            )
+
         conn.commit()
 
         # Run normalize passes
@@ -3069,7 +3109,12 @@ def _record_positions_nav_only(parsed, profile_id, nav_date):
     """Record NAV from a positions file without changing current holdings."""
     if not nav_date:
         raise ValueError("NAV snapshot date is required for NAV-only imports.")
-    total_value = round(sum(float(pos.get("current_value") or 0) for pos in parsed.get("positions", [])), 2)
+    positions_value = sum(
+        float(pos.get("current_value") or 0)
+        for pos in parsed.get("positions", [])
+    )
+    cash_value = float((parsed.get("summary") or {}).get("cash") or 0)
+    total_value = round(positions_value + cash_value, 2)
     if total_value <= 0:
         raise ValueError("No positive position value found to record.")
     conn = get_connection()
@@ -3513,6 +3558,45 @@ def api_nav_history():
             rows = conn.execute(query, params).fetchall()
             rows = trim_incompatible_position_history(rows, profile_id, conn)
             return jsonify(history_payload(rows))
+    finally:
+        conn.close()
+
+
+@app.route("/api/portfolio-value", methods=["GET"])
+def api_portfolio_value():
+    """Return holdings, cash, and total account value for the active view."""
+    is_aggregate, profile_ids = get_profile_filter()
+    conn = get_connection()
+    try:
+        placeholders = ",".join("?" * len(profile_ids))
+        holdings_row = conn.execute(
+            f"""SELECT COALESCE(SUM(current_value), 0)
+                FROM all_account_info
+                WHERE profile_id IN ({placeholders}) AND quantity > 0""",
+            profile_ids,
+        ).fetchone()
+        holdings_value = float(holdings_row[0] if holdings_row else 0)
+
+        cash_profile_ids = _cash_profile_ids_for_read(conn, is_aggregate, profile_ids)
+        cash_placeholders = ",".join("?" * len(cash_profile_ids))
+        profile_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()
+        }
+        cash_value = 0.0
+        if "cash_value" in profile_cols:
+            cash_row = conn.execute(
+                f"""SELECT COALESCE(SUM(cash_value), 0)
+                    FROM profiles
+                    WHERE id IN ({cash_placeholders})""",
+                cash_profile_ids,
+            ).fetchone()
+            cash_value = float(cash_row[0] if cash_row else 0)
+
+        return jsonify({
+            "holdings_value": round(holdings_value, 2),
+            "cash_value": round(cash_value, 2),
+            "account_value": round(holdings_value + cash_value, 2),
+        })
     finally:
         conn.close()
 
@@ -7225,6 +7309,92 @@ def _reinvest_history(ticker):
 
 # ── Refresh Market Data ─────────────────────────────────────────────────────────
 
+def _portfolio_daily_price_change(
+    holding_map,
+    close_history,
+    profile_ids,
+    account_current_value=None,
+):
+    """Aggregate the latest session's price move using current share counts.
+
+    When the full account value is known, use it for the percentage denominator
+    so idle cash and temporarily uncovered holdings do not overstate the return.
+    """
+    included_profiles = set(profile_ids or [])
+    current_value = 0.0
+    previous_value = 0.0
+    holdings_total = 0
+    holdings_covered = 0
+    as_of_dates = []
+    previous_dates = []
+
+    for (profile_id, ticker), holding in holding_map.items():
+        if profile_id not in included_profiles:
+            continue
+        try:
+            quantity = float(holding.get("qty") or 0)
+        except (TypeError, ValueError):
+            continue
+        if quantity <= 0:
+            continue
+
+        holdings_total += 1
+        series = close_history.get(ticker)
+        if series is None:
+            continue
+        try:
+            prices = series.dropna()
+            if len(prices) < 2:
+                continue
+            latest_price = float(prices.iloc[-1])
+            previous_price = float(prices.iloc[-2])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if latest_price <= 0 or previous_price <= 0:
+            continue
+
+        holdings_covered += 1
+        current_value += quantity * latest_price
+        previous_value += quantity * previous_price
+        try:
+            as_of_dates.append(pd.Timestamp(prices.index[-1]).date().isoformat())
+            previous_dates.append(pd.Timestamp(prices.index[-2]).date().isoformat())
+        except (TypeError, ValueError):
+            pass
+
+    if holdings_covered == 0 or previous_value <= 0:
+        return None
+
+    amount = current_value - previous_value
+    account_previous_value = None
+    percent_base = previous_value
+    try:
+        full_current_value = float(account_current_value)
+        if full_current_value > 0:
+            account_previous_value = full_current_value - amount
+            if account_previous_value > 0:
+                percent_base = account_previous_value
+    except (TypeError, ValueError):
+        full_current_value = None
+
+    return {
+        "amount": round(amount, 2),
+        "percent": round((amount / percent_base) * 100, 4),
+        "current_value": round(current_value, 2),
+        "previous_value": round(previous_value, 2),
+        "account_current_value": round(full_current_value, 2) if full_current_value else None,
+        "account_previous_value": (
+            round(account_previous_value, 2)
+            if account_previous_value is not None
+            else None
+        ),
+        "holdings_covered": holdings_covered,
+        "holdings_total": holdings_total,
+        "as_of_date": max(as_of_dates) if as_of_dates else None,
+        "previous_date": max(previous_dates) if previous_dates else None,
+    }
+
+
 @app.route("/api/refresh", methods=["POST"])
 def refresh_market_data():
     """Update current price, div/share, ex-div date, and frequency for all holdings from Yahoo Finance."""
@@ -7275,6 +7445,7 @@ def refresh_market_data():
             "updated": 0,
             "dividend_updates": 0,
             "dividend_update_accounts": dividend_update_accounts,
+            "daily_change": None,
             "refresh_date": _dt.now().date().isoformat(),
             "message": "No holdings to refresh",
         })
@@ -7976,6 +8147,7 @@ def refresh_market_data():
                     dividend_updates += 1
                     dividend_updates_by_profile[pid] = dividend_updates_by_profile.get(pid, 0) + 1
                 updated_pids.add(pid)
+            h["qty"] = qty
 
     for pid, distributions in distributions_today_by_profile.items():
         for item in distributions:
@@ -8039,6 +8211,29 @@ def refresh_market_data():
         populate_holdings(pid)
         populate_dividends(pid)
 
+    placeholders = ",".join("?" * len(source_pids))
+    account_value_row = conn.execute(
+        f"""SELECT
+                COALESCE((
+                    SELECT SUM(current_value)
+                    FROM all_account_info
+                    WHERE profile_id IN ({placeholders}) AND quantity > 0
+                ), 0)
+                +
+                COALESCE((
+                    SELECT SUM(cash_value)
+                    FROM profiles
+                    WHERE id IN ({placeholders})
+                ), 0)""",
+        [*source_pids, *source_pids],
+    ).fetchone()
+    account_current_value = float(account_value_row[0] if account_value_row else 0)
+    daily_change = _portfolio_daily_price_change(
+        holding_map,
+        close_history,
+        source_pids,
+        account_current_value=account_current_value,
+    )
     conn.close()
     _clear_dividend_event_caches()
 
@@ -8078,6 +8273,7 @@ def refresh_market_data():
         "updated": updated,
         "dividend_updates": dividend_updates,
         "dividend_update_accounts": dividend_update_accounts,
+        "daily_change": daily_change,
         "refresh_date": refresh_date.isoformat(),
         "message": msg,
     })

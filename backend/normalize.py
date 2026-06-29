@@ -146,7 +146,7 @@ def populate_income_tracking(profile_id=1):
 
 
 def snapshot_nav(profile_id=1, nav_date=None):
-    """Upsert a portfolio value snapshot into portfolio_nav."""
+    """Upsert a holdings-plus-cash account value snapshot into portfolio_nav."""
     snapshot_date = nav_date or date.today().isoformat()
     conn = get_connection()
     try:
@@ -156,7 +156,36 @@ def snapshot_nav(profile_id=1, nav_date=None):
                WHERE profile_id = ? AND COALESCE(quantity, 0) > 1e-9""",
             (profile_id,),
         ).fetchone()
-        total_value = row[0] if row else 0.0
+        holdings_value = row[0] if row else 0.0
+        profile_cols = {
+            col[1] for col in conn.execute("PRAGMA table_info(profiles)").fetchall()
+        }
+        cash_value = 0.0
+        if "cash_value" in profile_cols:
+            if profile_id == 1:
+                source_row = conn.execute(
+                    """SELECT COALESCE(SUM(cash_value), 0)
+                       FROM profiles
+                       WHERE id != 1 AND include_in_owner = 1"""
+                ).fetchone()
+                source_count = conn.execute(
+                    "SELECT COUNT(*) FROM profiles WHERE id != 1 AND include_in_owner = 1"
+                ).fetchone()[0]
+                if source_count:
+                    cash_value = source_row[0] if source_row else 0.0
+                else:
+                    cash_row = conn.execute(
+                        "SELECT cash_value FROM profiles WHERE id = ?",
+                        (profile_id,),
+                    ).fetchone()
+                    cash_value = cash_row[0] if cash_row else 0.0
+            else:
+                cash_row = conn.execute(
+                    "SELECT cash_value FROM profiles WHERE id = ?",
+                    (profile_id,),
+                ).fetchone()
+                cash_value = cash_row[0] if cash_row else 0.0
+        total_value = float(holdings_value or 0) + float(cash_value or 0)
         if total_value <= 0:
             return 0.0
         conn.execute(
