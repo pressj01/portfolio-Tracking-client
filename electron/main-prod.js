@@ -1,4 +1,4 @@
-const { app, BrowserWindow, nativeImage } = require('electron')
+const { app, BrowserWindow, nativeImage, dialog } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { spawn, execSync } = require('child_process')
@@ -6,7 +6,38 @@ const net = require('net')
 
 let mainWindow
 let flaskProcess
+let startupLogPath
 app.setAppUserModelId('com.press.portfolio.tracker.client')
+
+function initializeStartupLog() {
+  try {
+    const userDataDir = app.getPath('userData')
+    fs.mkdirSync(userDataDir, { recursive: true })
+    startupLogPath = path.join(userDataDir, 'startup.log')
+    fs.writeFileSync(
+      startupLogPath,
+      `[${new Date().toISOString()}] Portfolio Tracking Client ${app.getVersion()} starting\n`,
+      'utf8',
+    )
+  } catch (error) {
+    console.error(`Unable to initialize startup log: ${error.message}`)
+  }
+}
+
+function logStartup(message, { error = false } = {}) {
+  const text = String(message).trimEnd()
+  if (error) {
+    console.error(text)
+  } else {
+    console.log(text)
+  }
+  if (!startupLogPath) return
+  try {
+    fs.appendFileSync(startupLogPath, `[${new Date().toISOString()}] ${text}\n`, 'utf8')
+  } catch (logError) {
+    console.error(`Unable to write startup log: ${logError.message}`)
+  }
+}
 
 function getAppIcon() {
   const filename = process.platform === 'win32' ? 'app-icon.ico' : 'app-icon.png'
@@ -87,9 +118,9 @@ function startFlask() {
   const exePath = getBackendPath()
   const cwd = getBackendCwd()
   const databaseDir = getDatabaseDir()
-  console.log('Starting backend:', exePath)
-  console.log('Working directory:', cwd)
-  console.log('Database directory:', databaseDir)
+  logStartup(`Starting backend: ${exePath}`)
+  logStartup(`Working directory: ${cwd}`)
+  logStartup(`Database directory: ${databaseDir}`)
 
   flaskProcess = spawn(exePath, [], {
     cwd: cwd,
@@ -98,10 +129,10 @@ function startFlask() {
     detached: process.platform !== 'win32',  // Create new process group on macOS/Linux for clean tree kill
   })
 
-  flaskProcess.stdout.on('data', (data) => console.log(`Flask: ${data}`))
-  flaskProcess.stderr.on('data', (data) => console.error(`Flask: ${data}`))
-  flaskProcess.on('error', (err) => console.error('Failed to start backend:', err))
-  flaskProcess.on('exit', (code) => console.log('Backend exited with code:', code))
+  flaskProcess.stdout.on('data', (data) => logStartup(`Backend: ${data}`))
+  flaskProcess.stderr.on('data', (data) => logStartup(`Backend: ${data}`, { error: true }))
+  flaskProcess.on('error', (err) => logStartup(`Failed to start backend: ${err.message}`, { error: true }))
+  flaskProcess.on('exit', (code) => logStartup(`Backend exited with code: ${code}`))
 }
 
 function waitForBackend(port, timeout) {
@@ -182,14 +213,22 @@ function killFlask() {
 }
 
 app.whenReady().then(async () => {
+  initializeStartupLog()
   killStaleBackends()
-  startFlask()
   try {
-    await waitForBackend(5001, 15000)
-    console.log('Backend is ready')
+    startFlask()
+    // First launch can be substantially slower while Windows Defender,
+    // Gatekeeper, or another security product scans the bundled backend.
+    await waitForBackend(5001, 60000)
+    logStartup('Backend is ready')
     createWindow()
   } catch (err) {
-    console.error(err.message)
+    const logLocation = startupLogPath || 'the application user-data folder'
+    logStartup(err.message, { error: true })
+    dialog.showErrorBox(
+      'Portfolio Tracking Client could not start',
+      `${err.message}\n\nDiagnostic log:\n${logLocation}`,
+    )
     killFlask()
     app.quit()
   }
