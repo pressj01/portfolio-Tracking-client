@@ -45,6 +45,30 @@ function getBackendCwd() {
 }
 
 function getDatabaseDir() {
+  const environmentDir = String(process.env.PORTFOLIO_DB_DIR || '').trim()
+  if (environmentDir) {
+    return path.resolve(environmentDir)
+  }
+
+  // An installed copy can be pointed at an existing database directory by
+  // placing its absolute path in this file. Keeping the setting in userData
+  // makes it survive application updates without baking a machine-specific
+  // path into installers used on other computers.
+  const databaseDirectoryConfig = path.join(app.getPath('userData'), 'database-directory.txt')
+  try {
+    const configuredDir = fs.readFileSync(databaseDirectoryConfig, 'utf8').trim()
+    if (configuredDir && fs.existsSync(path.join(configuredDir, 'portfolio.db'))) {
+      return path.resolve(configuredDir)
+    }
+    if (configuredDir) {
+      console.warn(`Configured database directory is unavailable: ${configuredDir}`)
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.warn(`Unable to read database directory configuration: ${error.message}`)
+    }
+  }
+
   if (app.isPackaged) {
     const repoBackendDir = path.join(process.resourcesPath, '..', '..', '..', 'backend')
     if (process.execPath.includes(`${path.sep}release${path.sep}win-unpacked${path.sep}`)) {
