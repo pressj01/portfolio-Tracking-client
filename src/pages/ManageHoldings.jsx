@@ -901,12 +901,12 @@ const COLUMNS = [
   { key: 'category', label: 'Category', type: 'string', tip: 'Investment category assigned to this holding' },
   { key: 'percent_of_account', label: '% Acct', type: 'number', compact: true, tip: 'Percent of total account value held in this security' },
   { key: 'quantity', label: 'Shares', type: 'number', tip: 'Total shares currently held (base + DRIP shares)' },
+  { key: 'purchase_date', label: 'Purchase Date', type: 'string', width: 120, tip: 'Date of original purchase (or earliest lot date)' },
   { key: 'base_quantity', label: 'Base Shares', type: 'number', width: 105, tip: 'Original shares purchased, excluding DRIP-acquired shares' },
   { key: 'shares_bought_from_dividend', label: 'DRIP Shares', type: 'number', width: 110, tip: 'Shares acquired through dividend reinvestment (DRIP)' },
   { key: 'total_cash_reinvested', label: 'Cash Reinvested', type: 'number', width: 130, tip: 'Total cash dividend income that has been reinvested via DRIP' },
   { key: 'price_paid', label: 'Price Paid', type: 'number', width: 115, tip: 'Average price paid per share (cost basis per share)' },
   { key: 'current_price', label: 'Current', type: 'number', width: 95, tip: 'Current market price per share' },
-  { key: 'purchase_date', label: 'Purchase Date', type: 'string', width: 120, tip: 'Date of original purchase (or earliest lot date)' },
   { key: 'purchase_value', label: 'Cost Basis', type: 'number', width: 115, tip: 'Total original cost basis (price paid × shares)' },
   { key: 'current_value', label: 'Value', type: 'number', width: 105, tip: 'Current market value (current price × shares)' },
   { key: 'gain_or_loss', label: 'Gain/Loss', type: 'number', width: 115, tip: 'Unrealized gain or loss in dollars (current value − cost basis)' },
@@ -1793,12 +1793,12 @@ export default function ManageHoldings() {
                   <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[2], width: FROZEN_WIDTHS[2], minWidth: FROZEN_WIDTHS[2], maxWidth: FROZEN_WIDTHS[2], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{h.category || '-'}</td>
                   <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[3], width: FROZEN_WIDTHS[3], minWidth: FROZEN_WIDTHS[3], maxWidth: FROZEN_WIDTHS[3], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{fmtPct(h.percent_of_account ?? (totalCurrentValue > 0 ? (Number(h.current_value) || 0) / totalCurrentValue : 0))}</td>
                   <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[4], width: FROZEN_WIDTHS[4], minWidth: FROZEN_WIDTHS[4], maxWidth: FROZEN_WIDTHS[4], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{fmt(h.quantity)}</td>
+                  <td>{h.purchase_date || '-'}</td>
                   <td>{fmt(h.base_quantity, 4)}</td>
                   <td>{fmt(h.shares_bought_from_dividend, 4)}</td>
                   <td>{formatMoney(h.total_cash_reinvested, { fallback: '-' })}</td>
                   <td>{fmtM(h.price_paid, 4)}</td>
                   <td>{fmtM(h.current_price)}</td>
-                  <td>{h.purchase_date || '-'}</td>
                   <td>{fmtM(h.purchase_value)}</td>
                   <td>{fmtM(h.current_value)}</td>
                   <td style={{ color: h.gain_or_loss >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)' }}>
