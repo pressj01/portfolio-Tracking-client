@@ -4888,6 +4888,36 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   color: var(--p-ffd27a); border-radius: 999px; padding: 0.2rem 0.55rem;
   font-size: 0.76rem; font-weight: 700;
 }
+.dc-help {
+  margin: 0 0 0.9rem;
+  background: rgba(126, 207, 255, 0.05);
+  border: 1px solid rgba(126, 207, 255, 0.18);
+  border-radius: 6px;
+}
+.dc-help > summary {
+  cursor: pointer;
+  padding: 0.55rem 0.75rem;
+  color: var(--accent-bright);
+  font-size: 0.8rem;
+  font-weight: 700;
+  user-select: none;
+}
+.dc-help > summary:hover { color: var(--accent); }
+.dc-help[open] > summary { border-bottom: 1px solid rgba(126, 207, 255, 0.18); }
+.dc-help-body {
+  padding: 0.7rem 0.9rem 0.8rem;
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.dc-help-body ol { margin: 0; padding-left: 1.2rem; }
+.dc-help-body li { margin-bottom: 0.35rem; }
+.dc-help-body p {
+  margin: 0.65rem 0 0;
+  padding-top: 0.65rem;
+  border-top: 1px solid rgba(126, 207, 255, 0.14);
+}
+.dc-help-body strong { color: var(--text-strong); }
 
 .dc-grid {
   display: grid;

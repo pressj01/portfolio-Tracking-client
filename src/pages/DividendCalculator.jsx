@@ -1121,6 +1121,28 @@ export default function DividendCalculator() {
           </div>
           {resultsNeedUpdate && <span className="dc-dirty-badge">Needs recalculation</span>}
         </div>
+        <details className="dc-help">
+          <summary>How to use the dividend calculator</summary>
+          <div className="dc-help-body">
+            <ol>
+              <li>
+                Set the projection length, starting investment, annual investment, taxes, growth, and DRIP assumptions.
+              </li>
+              <li>
+                Choose an <strong>Annual Contribution Split</strong>: <strong>Equal dollars</strong> divides new money
+                evenly, <strong>By current value</strong> follows each position&apos;s starting value, and{' '}
+                <strong>Custom per ticker</strong> lets you enter each allocation below.
+              </li>
+              <li>Add one or more tickers, then adjust any ticker-specific values in the cards below.</li>
+              <li>Click <strong>Calculate</strong>. After changing an input, click <strong>Recalculate</strong> to refresh the results.</li>
+            </ol>
+            <p>
+              <strong>Important:</strong> the split applies only to the <strong>Annual Investment Total</strong>.
+              It does not change the starting investment. With one ticker, or an annual total of $0, every split
+              produces the same allocation.
+            </p>
+          </div>
+        </details>
         <div className="dc-grid">
           <div className="dc-field">
             <label>Years to Invest</label>
@@ -1159,7 +1181,7 @@ export default function DividendCalculator() {
             )}
           </div>
           <div className="dc-field">
-            <label>Contribution Split</label>
+            <label>Annual Contribution Split</label>
             <select
               className="dc-input"
               value={contributionMode}

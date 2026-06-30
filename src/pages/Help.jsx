@@ -5251,7 +5251,8 @@ function DividendCalculatorHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Years to Invest</strong> — Length of the projection (1–50 years).</li>
         <li><strong>Initial Investment Per Ticker</strong> — Starting dollar amount applied to each ticker. Updating this value re-derives the share count for any already-loaded tickers.</li>
-        <li><strong>Annual Investment (split equally)</strong> — Total dollars added each year, divided evenly across all loaded tickers and contributed at the end of each compounding period.</li>
+        <li><strong>Annual Investment Total</strong> — Total new dollars added each year and contributed at the end of each compounding period.</li>
+        <li><strong>Annual Contribution Split</strong> — Allocates the annual investment equally, by each ticker's current or starting value, or by custom per-ticker amounts. It does not change the initial investment.</li>
         <li><strong>Dividend Tax Rate</strong> — Applied to taxable dividends each period. The Return of Capital % on each ticker reduces the taxable portion.</li>
         <li><strong>Stock Price Growth (All Tickers)</strong> — Default annual price appreciation applied to every ticker. You can override this per ticker after it loads.</li>
         <li><strong>Dividends Reinvested (DRIP)</strong> — Percentage of net dividends reinvested each period (0–100%). Anything not reinvested is tracked as cash dividends.</li>
@@ -5262,7 +5263,7 @@ function DividendCalculatorHelp() {
         Type a symbol (e.g. <code>SCHD</code>, <code>JEPI</code>, <code>AAPL</code>) into the ticker bar and click
         <strong> Add Ticker</strong>. The app fetches current price, dividend yield, dividend growth rate, and
         payout frequency from Yahoo Finance, then auto-fills the row. Add as many tickers as you like — the
-        annual contribution is split equally across them and final results are aggregated.
+        selected annual contribution split is applied across them and final results are aggregated.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
         Each ticker becomes its own card with editable fields. Click the <strong>x</strong> on a chip or the
