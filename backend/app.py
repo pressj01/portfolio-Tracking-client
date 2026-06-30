@@ -27298,6 +27298,13 @@ def _dc_effective_withdrawal(base_withdrawal, month_index, current_pv, initial_i
     """Effective monthly withdrawal given the withdrawal strategy + inflation drift."""
     if strategy == "percentage":
         eff = current_pv * (withdrawal_pct / 100.0 / 12.0)
+    elif strategy in ("cost_pct_4", "cost_pct_8"):
+        # "4%/8% rule": withdraw a fixed % of the initial cost (investment) per
+        # year, spread monthly. Unlike "percentage" (which floats with current
+        # value), this is anchored to the starting cost and inflation-adjusted
+        # below — the classic safe-withdrawal-rate convention.
+        rule_pct = 4.0 if strategy == "cost_pct_4" else 8.0
+        eff = initial_inv * (rule_pct / 100.0 / 12.0)
     elif strategy == "dynamic":
         eff = base_withdrawal
         threshold = initial_inv * (dynamic_threshold_pct / 100.0)

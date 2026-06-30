@@ -960,6 +960,14 @@ export default function DistributionCompare() {
     // Crossover callout
     const crossoverText = crossover ? `${crossover.leader} overtakes ${crossover.other} at ${crossover.month}` : null
 
+    // Per-fund recap shown under the verdict — at-a-glance outcome for winner AND loser
+    const winnerTicker = gradeLabel !== 'TIE' ? gradeLabel : null
+    const recapFunds = [
+      { f: fa, grade: aGrade, roi: roiPctA, color: FUND_COLORS.a, startShares: fa.initial_shares, endShares: endSharesA },
+      { f: fb, grade: bGrade, roi: roiPctB, color: FUND_COLORS.b, startShares: fb.initial_shares, endShares: endSharesB },
+    ]
+    if (fc) recapFunds.push({ f: fc, grade: cGrade, roi: roiPctC, color: FUND_COLORS.c, startShares: fc.initial_shares, endShares: endSharesC })
+
     gradePanel = (
       <div className="dc-grade-panel">
         <div className="dc-grade-header">
@@ -974,6 +982,30 @@ export default function DistributionCompare() {
             {crossoverText && <div style={{ color: 'var(--amber)', fontSize: '0.85rem', marginTop: 4 }}>{crossoverText}</div>}
             {results.data_start && <div style={{ color: 'var(--p-6b7b8d)', fontSize: '0.82rem', marginTop: 4 }}>Historical data from {results.data_start}</div>}
           </div>
+        </div>
+        <div className="dc-recap">
+          {recapFunds.map((rf, i) => {
+            const isWin = winnerTicker && rf.f.ticker === winnerTicker
+            const tag = winnerTicker ? (isWin ? 'Winner' : 'Loser') : 'Tie'
+            const tagCls = winnerTicker ? (isWin ? 'win' : 'lose') : 'tie'
+            return (
+              <div className={`dc-recap-card${isWin ? ' win' : ''}${winnerTicker && !isWin ? ' lose' : ''}`} key={i}>
+                <div className="dc-recap-head">
+                  <span className="dc-recap-ticker" style={{ color: rf.color }}>{rf.f.ticker}</span>
+                  <span className="dc-recap-grade">{rf.grade}</span>
+                  <span className={`dc-recap-tag ${tagCls}`} style={{ marginLeft: 'auto' }}>{tag}</span>
+                </div>
+                <div className="dc-recap-row"><span>Total Value</span><strong>{fmt$(rf.f.final_total)}</strong></div>
+                <div className="dc-recap-row"><span>End Portfolio</span><strong>{fmt$(rf.f.final_portfolio)}</strong></div>
+                <div className="dc-recap-row"><span>Distributions</span><strong>{fmt$(rf.f.final_distributions)}</strong></div>
+                <div className="dc-recap-row"><span>Withdrawn</span><strong>{fmt$(rf.f.final_withdrawn)}</strong></div>
+                <div className="dc-recap-row hl"><span>Starting Shares</span><strong>{fmtS(rf.startShares)}</strong></div>
+                <div className="dc-recap-row hl"><span>Ending Shares</span><strong>{fmtS(rf.endShares)}</strong></div>
+                <div className="dc-recap-row"><span>Total ROI</span><strong style={{ color: rf.roi >= 0 ? 'var(--pos-bright)' : 'var(--neg)' }}>{fmtPct(rf.roi)}</strong></div>
+                <div className="dc-recap-row"><span>Depleted</span><strong style={{ color: rf.f.depleted ? 'var(--neg)' : 'var(--pos-bright)' }}>{rf.f.depleted ? (rf.f.depletion_month != null ? `Month ${rf.f.depletion_month + 1}` : 'Yes') : 'No'}</strong></div>
+              </div>
+            )
+          })}
         </div>
         <table className="dc-comp-tbl">
           <thead><tr><th>Metric</th><th>{fa.ticker}</th><th>{fb.ticker}</th>{hasFc && <th>{fc.ticker}</th>}</tr></thead>
@@ -1166,11 +1198,13 @@ export default function DistributionCompare() {
             <label>Withdrawal Strategy</label>
             <select value={withdrawalStrategy} onChange={e => setWithdrawalStrategy(e.target.value)}>
               <option value="fixed">Fixed Amount</option>
-              <option value="percentage">Percentage-Based</option>
+              <option value="percentage">Percentage of Current Value</option>
+              <option value="cost_pct_4">4% Rule (of cost)</option>
+              <option value="cost_pct_8">8% Rule (of cost)</option>
               <option value="dynamic">Dynamic (Reduce on Drawdown)</option>
             </select>
           </div>
-          {withdrawalStrategy !== 'percentage' && (
+          {(withdrawalStrategy === 'fixed' || withdrawalStrategy === 'dynamic') && (
             <div className="dc-field">
               <label>Monthly Withdrawal ($)</label>
               <input type="number" value={withdrawal} onChange={e => setWithdrawal(parseFloat(e.target.value) || 0)} min="0" step="50" />
@@ -1180,6 +1214,13 @@ export default function DistributionCompare() {
             <div className="dc-field">
               <label>Annual Withdrawal (%)</label>
               <input type="number" value={withdrawalPct} onChange={e => setWithdrawalPct(parseFloat(e.target.value) || 0)} min="0.1" max="20" step="0.5" />
+            </div>
+          )}
+          {(withdrawalStrategy === 'cost_pct_4' || withdrawalStrategy === 'cost_pct_8') && (
+            <div className="dc-field" style={{ minWidth: 'auto', alignSelf: 'flex-end' }}>
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>
+                Withdraws {withdrawalStrategy === 'cost_pct_4' ? '4' : '8'}% of each fund's initial cost per year{inflationAdj ? ', inflation-adjusted' : ''}.
+              </span>
             </div>
           )}
           {withdrawalStrategy === 'dynamic' && <>
@@ -1274,11 +1315,13 @@ export default function DistributionCompare() {
               <label>Withdrawal Strategy</label>
               <select value={withdrawalStrategy} onChange={e => setWithdrawalStrategy(e.target.value)}>
                 <option value="fixed">Fixed Amount</option>
-                <option value="percentage">Percentage-Based</option>
+                <option value="percentage">Percentage of Current Value</option>
+                <option value="cost_pct_4">4% Rule (of cost)</option>
+                <option value="cost_pct_8">8% Rule (of cost)</option>
                 <option value="dynamic">Dynamic (Reduce on Drawdown)</option>
               </select>
             </div>
-            {withdrawalStrategy !== 'percentage' && (
+            {(withdrawalStrategy === 'fixed' || withdrawalStrategy === 'dynamic') && (
               <div className="dc-field">
                 <label>Monthly Withdrawal ($)</label>
                 <input type="number" value={withdrawal} onChange={e => setWithdrawal(parseFloat(e.target.value) || 0)} min="0" step="50" />
@@ -1288,6 +1331,13 @@ export default function DistributionCompare() {
               <div className="dc-field">
                 <label>Annual Withdrawal (%)</label>
                 <input type="number" value={withdrawalPct} onChange={e => setWithdrawalPct(parseFloat(e.target.value) || 0)} min="0.1" max="20" step="0.5" />
+              </div>
+            )}
+            {(withdrawalStrategy === 'cost_pct_4' || withdrawalStrategy === 'cost_pct_8') && (
+              <div className="dc-field" style={{ minWidth: 'auto', alignSelf: 'flex-end' }}>
+                <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>
+                  Withdraws {withdrawalStrategy === 'cost_pct_4' ? '4' : '8'}% of each basket's initial cost per year{inflationAdj ? ', inflation-adjusted' : ''}.
+                </span>
               </div>
             )}
             {withdrawalStrategy === 'dynamic' && <>
