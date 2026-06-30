@@ -142,30 +142,59 @@ export default function MarkovPanel({ result, windowBars, thr, onChangeWindow, o
         </button>
       </div>
 
-      {/* What the controls do, in plain terms */}
-      <p style={{ fontSize: '0.74rem', color: 'var(--text-dim)', lineHeight: 1.5, margin: '0.6rem 0 0' }}>
-        <b style={{ color: 'var(--text-muted)' }}>Move threshold</b> is how big a price move (±%) over
-        the lookback window must be to label a bar <b style={{ color: 'var(--pos)' }}>Bull</b> or{' '}
-        <b style={{ color: 'var(--neg)' }}>Bear</b> — anything smaller is <b>Sideways</b>. It sets the
-        bar going into the model, so it changes the predictions: <b>raise</b> it and fewer bars qualify
-        as Bull/Bear (more Sideways, a more conservative, longer-trend read); <b>lower</b> it and the
-        model reacts to smaller moves (more Bull/Bear labels, choppier, more frequent regime flips).
-        <b style={{ color: 'var(--text-muted)' }}> Lookback</b> is how many bars back that move is measured over.
-      </p>
+      {/* Practical threshold tuning guidance */}
+      <div style={{
+        marginTop: '0.65rem', padding: '0.55rem 0.7rem',
+        background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 6,
+        fontSize: '0.72rem', color: 'var(--text-dim)', lineHeight: 1.45,
+      }}>
+        <div style={{ color: 'var(--text-muted)', fontWeight: 700, marginBottom: '0.25rem' }}>
+          Threshold guide
+        </div>
+        <div>
+          The threshold is the move over the full lookback: above +threshold is{' '}
+          <b style={{ color: 'var(--pos)' }}>Bull</b>, below −threshold is{' '}
+          <b style={{ color: 'var(--neg)' }}>Bear</b>, and anything between is <b>Sideways</b>.
+        </div>
+        <div style={{ marginTop: '0.3rem' }}>
+          <b>How to read the odds:</b> a high Sideways percentage means the next bar historically
+          remained <em>classified</em> Sideways — it does not mean the next price was flat or has that
+          probability of being flat. Consecutive rolling lookback windows overlap, so persistence is
+          naturally high.
+        </div>
+        <ul style={{ margin: '0.3rem 0 0', paddingLeft: '1.1rem' }}>
+          <li><b>Start with 20 / 5%</b> on a daily chart, then adjust for the ticker&apos;s volatility.</li>
+          <li><b>Lower the threshold</b> if Advanced shows 80%+ Sideways or Bull/Bear rarely appears.</li>
+          <li><b>Raise the threshold</b> if Sideways is near 0% or the regime flips every few bars.</li>
+          <li>Longer lookbacks and more volatile assets generally need higher thresholds.</li>
+        </ul>
+        <div style={{ marginTop: '0.3rem' }}>
+          Use the <b>Long-run base rate</b> under Advanced as the calibration check: aim for a useful mix
+          of all three regimes, then keep the setting consistent when comparing tickers.
+        </div>
+      </div>
 
       {/* Advanced: full matrix + base rate + explanation */}
       {advanced && (
         <div style={{ marginTop: '0.9rem', borderTop: '1px solid var(--border)', paddingTop: '0.8rem' }}>
           <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
-            <div>
+            <div style={{ flex: '1 1 440px', minWidth: 0 }}>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.35rem' }}>
                 Transition matrix (Today&nbsp;↓ &nbsp;/&nbsp; Next&nbsp;→)
               </div>
-              <table style={{ borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+              <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: '0.78rem' }}>
+                <colgroup>
+                  <col style={{ width: '28%' }} />
+                  {DISP.map(c => <col key={c.idx} style={{ width: '24%' }} />)}
+                </colgroup>
                 <thead>
                   <tr>
                     <th />
-                    {DISP.map(c => <th key={c.idx} style={{ padding: '2px 8px', color: c.color }}>{c.label}</th>)}
+                    {DISP.map(c => (
+                      <th key={c.idx} scope="col" style={{ padding: '2px 10px', textAlign: 'right', color: c.color }}>
+                        {c.label}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -180,6 +209,7 @@ export default function MarkovPanel({ result, windowBars, thr, onChangeWindow, o
                             title={`P(${c.label} next | ${r.label} today) = ${pct(matrix[r.idx][c.idx])}`}
                             style={{
                               padding: '2px 10px', textAlign: 'right',
+                              fontVariantNumeric: 'tabular-nums',
                               color: isDiag ? 'var(--text)' : 'var(--text-muted)',
                               fontWeight: isDiag ? 700 : 400,
                               background: isCurRow ? 'var(--surface-sunken)' : 'transparent',
