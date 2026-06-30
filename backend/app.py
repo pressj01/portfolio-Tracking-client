@@ -337,6 +337,34 @@ def _apply_dividend_payment_total_floor(rows, payment_totals):
     return rows
 
 
+def _cumulative_invested_cost_by_ticker(conn, profile_ids):
+    """Total out-of-pocket cash invested per ticker, from BUY transactions.
+
+    Used as the "original cost" denominator for paid-for-itself. total_divs_received
+    is a LIFETIME figure (every dividend the ledger ever recorded), but the current
+    cost basis only reflects the shares still held. When a position has been trimmed,
+    dividing lifetime dividends by the residual basis produces absurd percentages
+    (a near-sold holding shows tens of thousands of percent). The cumulative cash
+    invested is the comparable denominator. DRIP reinvestment buys are excluded so
+    only out-of-pocket capital counts toward "original cost".
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT ticker, COALESCE(SUM(shares * price_per_share), 0) AS invested
+            FROM transactions
+            WHERE profile_id IN ({placeholders})
+              AND UPPER(transaction_type) = 'BUY'
+              AND COALESCE(notes, '') NOT LIKE '%DRIP%'
+              AND COALESCE(notes, '') NOT LIKE '%reinvest%'
+            GROUP BY ticker""",
+        ids,
+    ).fetchall()
+    return {row["ticker"]: _num_or_zero(row["invested"]) for row in rows}
+
+
 def _resolve_aggregate_profile(ticker, profile_ids):
     """For aggregate writes, find the profile with the largest position for a ticker."""
     conn = get_connection()
@@ -562,7 +590,14 @@ def _ensure_basis_columns(conn):
     conn.commit()
 
 
-def _apply_basis_mode_to_holdings(results):
+# Above this dividends/basis multiple, a holding with no buy-transaction history is
+# treated as a trimmed-but-untracked position and its paid-for-itself is shown as
+# unknown rather than an absurd percentage. Legitimate long-held high-yield funds
+# can exceed 100%, so this is set well clear of plausible real recovery ratios.
+_PFI_NO_TXN_MAX_RATIO = 10.0  # i.e. 1000%
+
+
+def _apply_basis_mode_to_holdings(results, invested_by_ticker=None):
     """Expose selected basis through the legacy price_paid/purchase_value fields."""
     mode = _basis_mode()
     for r in results:
@@ -584,8 +619,25 @@ def _apply_basis_mode_to_holdings(results):
             r["gain_or_loss"] = gain
             r["gain_or_loss_percentage"] = gain_pct
             r["percent_change"] = gain_pct
-        if cost > 0 and total_divs is not None:
-            r["paid_for_itself"] = round(float(total_divs) / cost, 6)
+        # Paid-for-itself compares LIFETIME dividends to ORIGINAL cost. For a
+        # trimmed position `cost` is only the residual basis, so prefer the
+        # cumulative cash invested when it is larger (it never shrinks when shares
+        # are sold). Falls back to current basis when no buy history is available.
+        pfi_cost = cost
+        invested = _num_or_zero(invested_by_ticker.get(r.get("ticker"))) if invested_by_ticker else 0.0
+        if invested > pfi_cost:
+            pfi_cost = invested
+        if pfi_cost > 0 and total_divs is not None:
+            # Guard: with no buy history (invested == 0) we can't reconstruct the
+            # original cost of a trimmed position, so lifetime dividends would be
+            # divided by a tiny residual basis. When that ratio is implausibly high
+            # the number is a data artifact, not a real recovery %, so surface it as
+            # unknown (—) instead of a fabricated value. Import the account's
+            # transactions to restore the true figure.
+            if invested == 0 and float(total_divs) > pfi_cost * _PFI_NO_TXN_MAX_RATIO:
+                r["paid_for_itself"] = None
+            else:
+                r["paid_for_itself"] = round(float(total_divs) / pfi_cost, 6)
         if cost > 0 and annual is not None:
             r["annual_yield_on_cost"] = round(float(annual) / cost, 6)
     return results
@@ -8931,7 +8983,10 @@ def list_holdings():
         results,
         _dividend_payment_totals_by_ticker(conn, payment_profile_ids),
     )
-    _apply_basis_mode_to_holdings(results)
+    _apply_basis_mode_to_holdings(
+        results,
+        _cumulative_invested_cost_by_ticker(conn, payment_profile_ids),
+    )
     _apply_holding_display_quantities(results)
 
     # Single-profile reads return all_account_info.* verbatim, so a stale
@@ -10995,7 +11050,10 @@ def _export_profile_data(conn, profile_id):
         cat_map.setdefault(cr["ticker"], []).append(cr["category_name"])
 
     raw_rows = rows_to_dicts(rows)
-    _apply_basis_mode_to_holdings(raw_rows)
+    _apply_basis_mode_to_holdings(
+        raw_rows,
+        _cumulative_invested_cost_by_ticker(conn, [profile_id]),
+    )
 
     out_rows = []
     for row in raw_rows:
