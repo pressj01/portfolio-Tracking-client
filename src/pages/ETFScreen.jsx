@@ -2244,10 +2244,12 @@ export default function ETFScreen() {
 
   // Markov regime params (Markov tab) — persisted like the other chart settings.
   const [mkWindow, setMkWindow] = useState(() => {
-    const v = Number(localStorage.getItem('etf-markov-window')); return v >= 5 ? v : 20
+    const v = Number(localStorage.getItem('etf-markov-window'))
+    return Number.isInteger(v) && v >= 5 && v <= 250 ? v : 20
   })
   const [mkThr, setMkThr] = useState(() => {
-    const v = Number(localStorage.getItem('etf-markov-thr')); return v >= 0.5 ? v : 5
+    const v = Number(localStorage.getItem('etf-markov-thr'))
+    return Number.isFinite(v) && v >= 0.5 && v <= 50 ? v : 5
   })
   useEffect(() => { localStorage.setItem('etf-markov-window', String(mkWindow)) }, [mkWindow])
   useEffect(() => { localStorage.setItem('etf-markov-thr', String(mkThr)) }, [mkThr])

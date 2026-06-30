@@ -3568,22 +3568,23 @@ function ETFScreenHelp() {
       <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Reading the Panel</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Regime badge</strong> — The current regime (Bull / Bear / Sideways) as of the most recent bar.</li>
-        <li><strong>What usually comes next</strong> — Given today's regime, the historical probability that the next bar is Bull, Sideways, or Bear (the dominant outcome is emphasized). This is a base-rate tendency, <em>not</em> a price prediction.</li>
-        <li><strong>Trend stickiness</strong> — How likely the current regime is to persist (High ≥ 80%, Moderate ≥ 60%, otherwise Low/choppy). High stickiness means trends tend to continue; low means the regime flips often.</li>
+        <li><strong>Smoothed next-bar estimate</strong> — Given today's regime, the estimated probability that the next bar is Bull, Sideways, or Bear. The displayed <strong>n</strong> is the number of observed transitions behind that row; small n means low confidence. This is a base-rate tendency, <em>not</em> a price prediction.</li>
+        <li><strong>Estimated stickiness</strong> — How likely the current regime label is to persist (High ≥ 80%, Moderate ≥ 60%, otherwise Low/choppy). Because consecutive lookback windows overlap, high persistence is partly mechanical and does not mean the next price will be flat.</li>
+        <li><strong>Current log move</strong> — Shows the exact lookback return being compared with the threshold. If it is near the boundary, small lookback or threshold changes can legitimately flip the current classification and switch which matrix row is displayed.</li>
         <li><strong>Regime shading</strong> — The chart background behind the candles is tinted by regime (green Bull, rose Bear, faint grey Sideways) so you can see how regimes line up with price.</li>
       </ul>
 
       <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>How the Labeling Works</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Before the model can estimate probabilities it must first label every bar. For each bar on the chart the
-        model asks one question: <em>"How much has price moved, as a percentage, over the past N bars?"</em> The
+        model asks one question: <em>"What is the log-return over the past N bars?"</em> The
         answer to that one question determines the regime label for that bar. The two controls — Lookback and
         Move Threshold — together define what N is and what "enough of a move" means.
       </p>
 
       <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Move Threshold (%)</h4>
       <p style={{ marginBottom: '0.75rem' }}>
-        The move threshold is the <strong>minimum percentage move that counts as a real directional move</strong>.
+        The move threshold is the <strong>minimum log-return percentage that counts as a real directional move</strong>.
         Think of it as the signal filter sitting between raw price data and the model. Here is the exact rule applied
         to every bar:
       </p>
@@ -3595,6 +3596,12 @@ function ETFScreenHelp() {
       <p style={{ marginBottom: '0.75rem' }}>
         The threshold does not affect the chart directly — it affects how the data going <em>into</em> the model is
         classified, which in turn changes every probability the model produces.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The classification is intentionally a hard boundary. For example, +4.9% is Sideways at a 5% threshold,
+        while +5.1% is Bull. Changing the lookback also changes the historical comparison price, so the current
+        move does not have to rise smoothly as the lookback increases. Use the current log-move readout to see
+        when the model is close to this boundary.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
@@ -3703,10 +3710,12 @@ function ETFScreenHelp() {
 
       <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Advanced Details</h4>
       <p style={{ marginBottom: '1rem' }}>
-        Click <strong>Advanced</strong> to reveal the full 3×3 <strong>transition matrix</strong> (rows = today's
-        regime, columns = next bar; each row sums to 100% and the diagonal is persistence) and the
+        Click <strong>Advanced</strong> to reveal the full 3×3 <strong>smoothed transition matrix</strong>
+        (rows = today's regime, columns = next bar; each row sums to 100% and the diagonal is persistence) and the
         <strong> long-run base rate</strong> — the share of time price spends in each regime over the long run if
-        these odds hold. The base rate is a backdrop for comparison, not a forecast.
+        these odds hold. Each row shows its observed transition count (n). A small Jeffreys prior adds 0.5 to
+        each possible outcome so rows with little history do not jump to misleading 0% or 100% estimates; n=0
+        is prior-only. The base rate is solved from the smoothed matrix and is a backdrop for comparison, not a forecast.
       </p>
     </div>
   )
