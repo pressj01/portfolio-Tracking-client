@@ -19,17 +19,17 @@ const FUND_COLORS = { a: '#7ecfff', b: '#ffc107', c: '#ff6b6b' }
 
 const TBL_COLS_BASE = [
   { key: '_month', label: 'Month', fmt: v => v },
-  { key: 'price', label: 'Price', fmt: v => formatMoney(v) },
-  { key: 'shares', label: 'Shares', fmt: v => v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
+  { key: 'price', label: 'Price', fmt: v => formatMoney(v), hideForBasket: true },
+  { key: 'shares', label: 'Shares', fmt: v => v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), hideForBasket: true },
   { key: 'portfolio', label: 'Portfolio', fmt: v => formatMoneyWhole(v) },
-  { key: 'dist_per_share', label: 'Dist/Share', fmt: v => formatMoney(v, { digits: 4 }) },
+  { key: 'dist_per_share', label: 'Dist/Share', fmt: v => formatMoney(v, { digits: 4 }), hideForBasket: true },
   { key: 'income', label: 'Income', fmt: v => formatMoney(v) },
   { key: 'withdrawal', label: 'Withdrawal', fmt: v => formatMoneyWhole(v) },
   { key: 'wedge_drawn', label: 'CW Drawn', fmt: v => formatMoney(v), wedgeOnly: true },
   { key: 'wedge_bal', label: 'CW Balance', fmt: v => formatMoneyWhole(v), wedgeOnly: true },
   { key: 'cash_accumulated', label: 'Cash Accum.', fmt: v => formatMoneyWhole(v), cashOnly: true },
   { key: 'excess', label: 'Excess', fmt: v => formatMoneyDelta(v), color: true },
-  { key: 'shares_delta', label: 'Shares +/-', fmt: v => (v >= 0 ? '+' : '-') + Math.abs(v).toFixed(4), color: true },
+  { key: 'shares_delta', label: 'Shares +/-', fmt: v => (v >= 0 ? '+' : '-') + Math.abs(v).toFixed(4), color: true, hideForBasket: true },
   { key: 'growth', label: 'Growth/Loss', fmt: v => formatMoneyDelta(v, { digits: 0 }), color: true },
   { key: 'cum_income', label: 'Cum. Income', fmt: v => formatMoneyWhole(v) },
   { key: 'roi_dollar', label: 'ROI', fmt: v => formatMoneyDelta(v, { digits: 0 }), color: true },
@@ -114,6 +114,7 @@ function MonthlyTable({ fund, months, which }) {
   const cols = TBL_COLS_BASE.filter(c => {
     if (c.wedgeOnly && !fund.has_cash_wedge) return false
     if (c.cashOnly && !hasCash) return false
+    if (c.hideForBasket && fund.is_basket) return false
     return true
   })
   const rows = fund.monthly_rows
@@ -179,6 +180,248 @@ function MonthlyTable({ fund, months, which }) {
   )
 }
 
+/* ── Portfolio Side Builder ─────────────────────────────────────── */
+function TickerAttributionPanel({ results }) {
+  const attribution = results?.attribution
+  if (!attribution?.eligible) return null
+
+  const positiveDrivers = (attribution.driver_rows || [])
+    .filter(row => row.impact > 0.005)
+    .slice(0, 5)
+  const negativeDrivers = (attribution.driver_rows || [])
+    .filter(row => row.impact < -0.005)
+    .sort((a, b) => a.impact - b.impact)
+    .slice(0, 5)
+  const fmtMaybeMoney = value => value == null ? '\u2014' : formatMoneyDelta(value, { digits: 0 })
+  const valueClass = value => value == null ? '' : (value >= 0 ? 'dc-pos' : 'dc-neg')
+
+  const DriverTable = ({ title, rows, emptyText }) => (
+    <div className="dc-driver-card">
+      <div className="dc-driver-card-title">{title}</div>
+      {rows.length ? (
+        <div className="dc-driver-table-scroll">
+          <table className="dc-driver-table">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>{attribution.winner_name} P/L</th>
+                <th>{attribution.runner_up_name} P/L</th>
+                <th>Effect on gap</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(row => (
+                <tr key={row.ticker}>
+                  <td><strong>{row.ticker}</strong></td>
+                  <td className={valueClass(row.winner_pnl)}>{fmtMaybeMoney(row.winner_pnl)}</td>
+                  <td className={valueClass(row.runner_up_pnl)}>{fmtMaybeMoney(row.runner_up_pnl)}</td>
+                  <td className={valueClass(row.impact)}>{formatMoneyDelta(row.impact, { digits: 0 })}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <div className="dc-driver-empty">{emptyText}</div>}
+    </div>
+  )
+
+  const visiblePerformanceGroups = groups => Object.entries(groups || {})
+    .filter(([key, group]) =>
+      group?.rows?.length && (results[key]?.ticker_attribution?.length || 0) > 1)
+  const derivedBestByFund = ['fund_a', 'fund_b', 'fund_c'].reduce((groups, key) => {
+    const fund = results[key]
+    if (!fund?.ticker_attribution?.length) return groups
+    groups[key] = {
+      name: fund.ticker,
+      rows: [...fund.ticker_attribution]
+        .sort((a, b) => (b.return_pct - a.return_pct) || a.ticker.localeCompare(b.ticker))
+        .slice(0, 3),
+    }
+    return groups
+  }, {})
+  const bestFunds = visiblePerformanceGroups(attribution.best_by_fund || derivedBestByFund)
+  const worstFunds = visiblePerformanceGroups(attribution.worst_by_fund)
+
+  const PerformerSection = ({ title, groups }) => {
+    if (!groups.length) return null
+    return (
+      <div className="dc-worst-section">
+        <div className="dc-worst-title">{title}</div>
+        <div className="dc-worst-grid">
+          {groups.map(([key, group]) => (
+            <div className="dc-worst-card" key={`${title}-${key}`}>
+              <div className="dc-worst-card-title">{group.name}</div>
+              <div className="dc-driver-table-scroll">
+                <table className="dc-driver-table">
+                  <thead><tr><th>Ticker</th><th>Return</th><th>P/L</th><th>Start</th><th>Ending wealth</th></tr></thead>
+                  <tbody>
+                    {group.rows.map(row => (
+                      <tr key={row.ticker}>
+                        <td><strong>{row.ticker}</strong></td>
+                        <td className={valueClass(row.return_pct)}>{fmtPct(row.return_pct)}</td>
+                        <td className={valueClass(row.pnl)}>{formatMoneyDelta(row.pnl, { digits: 0 })}</td>
+                        <td>{fmt$(row.initial_amount)}</td>
+                        <td>{fmt$(row.ending_wealth)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <section className="dc-attribution-panel" aria-labelledby="dc-attribution-title">
+      <div className="dc-attribution-head">
+        <div>
+          <h3 id="dc-attribution-title">What Drove the Result</h3>
+          <p>
+            {attribution.is_tie
+              ? `${attribution.winner_name} and ${attribution.runner_up_name} finished within 2%. Ticker impacts show the performance difference between them.`
+              : `${attribution.winner_name} leads ${attribution.runner_up_name} by ${fmt$(attribution.lead_total)}. Positive impacts widened the lead; negative impacts helped ${attribution.runner_up_name} narrow it.`}
+          </p>
+        </div>
+        <div className="dc-attribution-factors">
+          <span>
+            Ticker P/L effect
+            <strong className={valueClass(attribution.ticker_effect_total)}>
+              {formatMoneyDelta(attribution.ticker_effect_total, { digits: 0 })}
+            </strong>
+          </span>
+          {Math.abs(attribution.starting_capital_effect || 0) >= 0.5 && (
+            <span>
+              Starting capital / cash
+              <strong className={valueClass(attribution.starting_capital_effect)}>
+                {formatMoneyDelta(attribution.starting_capital_effect, { digits: 0 })}
+              </strong>
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="dc-driver-grid">
+        <DriverTable
+          title={`Widened ${attribution.winner_name}'s lead`}
+          rows={positiveDrivers}
+          emptyText={`No ticker widened ${attribution.winner_name}'s lead.`}
+        />
+        <DriverTable
+          title={`Narrowed ${attribution.winner_name}'s lead \u2014 helped ${attribution.runner_up_name}`}
+          rows={negativeDrivers}
+          emptyText={`No ticker helped ${attribution.runner_up_name} narrow the lead.`}
+        />
+      </div>
+
+      <PerformerSection title="Best Performers" groups={bestFunds} />
+      <PerformerSection title="Worst Performers" groups={worstFunds} />
+      {(bestFunds.length > 0 || worstFunds.length > 0) && (
+        <div className="dc-attribution-note">
+          Return includes ending value, distributions, funded withdrawals, and retained cash. Rankings are not based on price movement alone.
+        </div>
+      )}
+    </section>
+  )
+}
+
+function makeSide(name, role, source) {
+  return {
+    name, role: role || 'income', source: source || 'manual', profileId: '',
+    allocationMode: 'actual', total: 100000,
+    legs: [{ ticker: '', amount: 25000 }], drip: true,
+  }
+}
+
+function PortfolioSide({ side, onChange, profilesList, colorKey, onRemove }) {
+  const color = FUND_COLORS[colorKey] || '#7ecfff'
+  const updateLeg = (i, patch) => onChange({ legs: side.legs.map((l, j) => (j === i ? { ...l, ...patch } : l)) })
+  const addLeg = () => onChange({ legs: [...side.legs, { ticker: '', amount: 10000 }] })
+  const removeLeg = (i) => onChange({ legs: side.legs.length > 1 ? side.legs.filter((_, j) => j !== i) : side.legs })
+
+  const isPortfolio = side.source === 'portfolio'
+  const isEven = side.allocationMode === 'even'
+
+  return (
+    <div className="dc-fund-card" style={{ borderColor: color + '33' }}>
+      <div className="dc-fund-title" style={{ color }}>
+        {side.name}
+        {onRemove && <span style={{ cursor: 'pointer', float: 'right', color: 'var(--neg)', fontSize: '0.85rem' }} onClick={onRemove}>&times; Remove</span>}
+      </div>
+
+      <div className="dc-mode-row" style={{ marginBottom: 6 }}>
+        <label><input type="radio" checked={isPortfolio} onChange={() => onChange({ source: 'portfolio' })} /> Portfolio</label>
+        <label><input type="radio" checked={!isPortfolio} onChange={() => onChange({ source: 'manual' })} /> Manual tickers</label>
+      </div>
+
+      {isPortfolio ? (
+        <>
+          <div className="dc-field">
+            <label>Portfolio</label>
+            <select value={side.profileId} onChange={e => onChange({ profileId: e.target.value })}>
+              <option value="">Select a portfolio&hellip;</option>
+              {profilesList.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div className="dc-mode-row" style={{ marginBottom: 6 }}>
+            <label><input type="radio" checked={!isEven} onChange={() => onChange({ allocationMode: 'actual' })} /> Actual $ amounts</label>
+            <label><input type="radio" checked={isEven} onChange={() => onChange({ allocationMode: 'even' })} /> Even split</label>
+          </div>
+          {isEven && (
+            <div className="dc-field">
+              <label>Total to spread evenly ($)</label>
+              <input type="number" value={side.total} onChange={e => onChange({ total: parseFloat(e.target.value) || 0 })} min="1" step="1000" />
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div className="dc-mode-row" style={{ marginBottom: 6 }}>
+            <label><input type="radio" checked={!isEven} onChange={() => onChange({ allocationMode: 'actual' })} /> Per-ticker $</label>
+            <label><input type="radio" checked={isEven} onChange={() => onChange({ allocationMode: 'even' })} /> Even split</label>
+          </div>
+          {isEven && (
+            <div className="dc-field">
+              <label>Total to split evenly ($)</label>
+              <input type="number" value={side.total} onChange={e => onChange({ total: parseFloat(e.target.value) || 0 })} min="1" step="1000" />
+            </div>
+          )}
+          <div className="dc-field">
+            <label>Tickers</label>
+            {side.legs.map((leg, i) => (
+              <div key={i} className="dc-ticker-row" style={{ marginBottom: 4 }}>
+                <input type="text" list="dc-portfolio-tickers" value={leg.ticker}
+                  onChange={e => updateLeg(i, { ticker: e.target.value.toUpperCase() })}
+                  placeholder="e.g. SCHD" style={{ flex: 1 }} />
+                {!isEven && (
+                  <input type="number" value={leg.amount}
+                    onChange={e => updateLeg(i, { amount: parseFloat(e.target.value) || 0 })}
+                    placeholder="$" min="0" step="1000" style={{ width: 110 }} />
+                )}
+                <button className="dc-lookup-btn" onClick={() => removeLeg(i)}
+                  style={{ padding: '4px 8px', color: 'var(--neg)' }} disabled={side.legs.length <= 1}>&times;</button>
+              </div>
+            ))}
+            <button className="dc-lookup-btn" onClick={addLeg} style={{ alignSelf: 'flex-start', marginTop: 2 }}>+ Add ticker</button>
+          </div>
+        </>
+      )}
+
+      <div className="dc-mode-row" style={{ marginTop: 6 }}>
+        <strong style={{ color: 'var(--text)', marginRight: 6, fontSize: '0.82rem' }}>Role:</strong>
+        <label><input type="radio" checked={side.role === 'income'} onChange={() => onChange({ role: 'income' })} /> Income</label>
+        <label><input type="radio" checked={side.role === 'growth'} onChange={() => onChange({ role: 'growth' })} /> Growth</label>
+      </div>
+      <label style={{ color: 'var(--text-dim)', fontSize: '0.82rem', cursor: 'pointer' }}>
+        <input type="checkbox" checked={side.drip} onChange={e => onChange({ drip: e.target.checked })} style={{ marginRight: 4, accentColor: 'var(--accent-bright)' }} />
+        Reinvest excess dividends (DRIP)
+      </label>
+    </div>
+  )
+}
+
 /* ── Main Component ─────────────────────────────────────────────── */
 export default function DistributionCompare() {
   const { isDark } = useTheme()
@@ -227,6 +470,21 @@ export default function DistributionCompare() {
   // Portfolio tickers
   const [portfolioTickers, setPortfolioTickers] = useState([])
 
+  // ── Portfolios tab ──
+  const [activeTab, setActiveTab] = useState('funds') // 'funds' | 'portfolios'
+  const [profilesList, setProfilesList] = useState([])
+  const [pSides, setPSides] = useState(() => ({
+    a: makeSide('Side A', 'income', 'portfolio'),
+    b: makeSide('Side B', 'growth', 'manual'),
+    c: makeSide('Side C', 'growth', 'manual'),
+  }))
+  const [showPSideC, setShowPSideC] = useState(false)
+  const [excludePenny, setExcludePenny] = useState(true)
+  const [pennyThreshold, setPennyThreshold] = useState(1)
+  const updateSide = useCallback((k, patch) => {
+    setPSides(prev => ({ ...prev, [k]: { ...prev[k], ...patch } }))
+  }, [])
+
   // Results & scenarios
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -245,6 +503,30 @@ export default function DistributionCompare() {
       .then(d => setPortfolioTickers(d.tickers || []))
       .catch(() => {})
   }, [pf, selection])
+
+  // Fetch the list of portfolios (profiles) for the Portfolios tab
+  useEffect(() => {
+    pf('/api/profiles')
+      .then(r => r.json())
+      .then(d => setProfilesList(Array.isArray(d) ? d : (d.rows || [])))
+      .catch(() => {})
+  }, [pf])
+
+  // Default any portfolio-source side to the first portfolio once they load
+  useEffect(() => {
+    if (!profilesList.length) return
+    setPSides(prev => {
+      let changed = false
+      const next = { ...prev }
+      for (const k of ['a', 'b', 'c']) {
+        if (next[k].source === 'portfolio' && !next[k].profileId) {
+          next[k] = { ...next[k], profileId: String(profilesList[0].id) }
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [profilesList])
 
   // Persist saved setups
   useEffect(() => {
@@ -348,6 +630,86 @@ export default function DistributionCompare() {
       })
       .catch(e => { setLoading(false); setError('Request failed: ' + e.message) })
   }, [tickerA, tickerB, investA, investB, buildBody])
+
+  // Run portfolio (basket) comparison
+  const runPortfolio = useCallback(() => {
+    const months = parseInt(duration.replace('y', '')) * 12
+
+    const buildSpec = (side, label) => {
+      const spec = {
+        name: (side.name || label).trim() || label,
+        role: side.role,
+        drip: side.drip,
+        source: side.source,
+        allocation_mode: side.allocationMode,
+        total: parseFloat(side.total) || 0,
+      }
+      if (side.source === 'portfolio') {
+        spec.profile_id = side.profileId ? parseInt(side.profileId) : null
+      } else {
+        spec.legs = side.legs
+          .filter(l => l.ticker.trim())
+          .map(l => (side.allocationMode === 'even'
+            ? { ticker: l.ticker.trim().toUpperCase() }
+            : { ticker: l.ticker.trim().toUpperCase(), amount: parseFloat(l.amount) || 0 }))
+      }
+      return spec
+    }
+
+    // Light client-side validation
+    const validate = (side, label) => {
+      if (side.source === 'portfolio') {
+        if (!side.profileId) return `${label}: select a portfolio.`
+        if (side.allocationMode === 'even' && (parseFloat(side.total) || 0) <= 0) return `${label}: enter a total for the even split.`
+      } else {
+        const tickers = side.legs.filter(l => l.ticker.trim())
+        if (!tickers.length) return `${label}: add at least one ticker.`
+        if (side.allocationMode === 'even') {
+          if ((parseFloat(side.total) || 0) <= 0) return `${label}: enter a total for the even split.`
+        } else if (!tickers.some(l => (parseFloat(l.amount) || 0) > 0)) {
+          return `${label}: enter a dollar amount for at least one ticker.`
+        }
+      }
+      return null
+    }
+    const vErr = validate(pSides.a, 'Side A') || validate(pSides.b, 'Side B') || (showPSideC ? validate(pSides.c, 'Side C') : null)
+    if (vErr) { setError(vErr); return }
+
+    const body = {
+      duration_months: months,
+      market,
+      withdrawal_strategy: withdrawalStrategy,
+      monthly_withdrawal: withdrawal,
+      withdrawal_pct: withdrawalPct,
+      inflation_rate: inflationAdj ? inflationRate : null,
+      dynamic_reduce_pct: dynamicReducePct,
+      dynamic_threshold_pct: dynamicThresholdPct,
+      cash_wedge: cashWedge,
+      exclude_penny: excludePenny,
+      penny_threshold: parseFloat(pennyThreshold) || 0,
+      side_a: buildSpec(pSides.a, 'Side A'),
+      side_b: buildSpec(pSides.b, 'Side B'),
+    }
+    if (showPSideC) body.side_c = buildSpec(pSides.c, 'Side C')
+
+    setLoading(true)
+    setError(null)
+    setResults(null)
+    chartsRendered.current = false
+
+    pf('/api/distribution-compare/portfolio-run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(r => r.json())
+      .then(d => {
+        setLoading(false)
+        if (d.error) { setError(d.error); return }
+        setResults(d)
+      })
+      .catch(e => { setLoading(false); setError('Request failed: ' + e.message) })
+  }, [duration, market, withdrawalStrategy, withdrawal, withdrawalPct, inflationAdj, inflationRate, dynamicReducePct, dynamicThresholdPct, cashWedge, excludePenny, pennyThreshold, pSides, showPSideC, pf])
 
   // Export
   const exportExcel = useCallback(() => {
@@ -461,7 +823,9 @@ export default function DistributionCompare() {
       { id: 'dc-chart-portfolio', title: 'Portfolio Value Over Time', ka: 'portfolio_values', kb: 'portfolio_values' },
       { id: 'dc-chart-total', title: 'Total Value (Portfolio + Withdrawn)', ka: 'total_values', kb: 'total_values' },
       { id: 'dc-chart-distributions', title: 'Cumulative Distributions', ka: 'cumulative_distributions', kb: 'cumulative_distributions' },
-      { id: 'dc-chart-shares', title: 'Share Count Over Time', ka: 'shares', kb: 'shares' },
+      // Share-count summed across a basket's tickers is dominated by the cheapest
+      // holding and isn't meaningful, so omit it for baskets (same as the hidden table column).
+      ...(fa.is_basket ? [] : [{ id: 'dc-chart-shares', title: 'Share Count Over Time', ka: 'shares', kb: 'shares' }]),
       { id: 'dc-chart-price', title: 'Price Trend', ka: null, kb: null },
     ]
 
@@ -677,6 +1041,20 @@ export default function DistributionCompare() {
     <div className="page">
       <h2>Distribution Comparison</h2>
 
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 8, margin: '4px 0 16px' }}>
+        {[['funds', 'Funds'], ['portfolios', 'Portfolios']].map(([t, lbl]) => (
+          <button key={t} onClick={() => { if (t !== activeTab) { setActiveTab(t); setResults(null); setError(null) } }} style={{
+            padding: '8px 18px', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem',
+            border: '1px solid var(--p-333)',
+            background: activeTab === t ? 'var(--accent-bright)' : 'transparent',
+            color: activeTab === t ? '#fff' : 'var(--text)',
+          }}>{lbl}</button>
+        ))}
+      </div>
+
+      {activeTab === 'funds' && (<>
+
       {/* Saved Setups */}
       {savedSetups.length > 0 && (
         <div className="dc-saved-strip">
@@ -858,6 +1236,123 @@ export default function DistributionCompare() {
         </div>
       </div>
 
+      </>)}
+
+      {activeTab === 'portfolios' && (
+        <div className="dc-controls">
+          <datalist id="dc-portfolio-tickers">
+            {portfolioTickers.map(t => <option key={t.ticker} value={t.ticker}>{t.description || ''}</option>)}
+          </datalist>
+
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>
+            Forward Monte-Carlo simulation of one basket against another. Each side can be a saved portfolio or a manual list of tickers.
+          </div>
+
+          {/* Market */}
+          <div className="dc-mode-row">
+            <strong style={{ color: 'var(--text)', marginRight: 8 }}>Market:</strong>
+            <label><input type="radio" name="dc-pmarket" value="neutral" checked={market === 'neutral'} onChange={() => setMarket('neutral')} /> Neutral</label>
+            <label><input type="radio" name="dc-pmarket" value="bullish" checked={market === 'bullish'} onChange={() => setMarket('bullish')} /> Bullish</label>
+            <label><input type="radio" name="dc-pmarket" value="bearish" checked={market === 'bearish'} onChange={() => setMarket('bearish')} /> Bearish</label>
+          </div>
+
+          {/* Sides */}
+          <div className="dc-funds">
+            <PortfolioSide side={pSides.a} onChange={p => updateSide('a', p)} profilesList={profilesList} colorKey="a" />
+            <PortfolioSide side={pSides.b} onChange={p => updateSide('b', p)} profilesList={profilesList} colorKey="b" />
+            {showPSideC && (
+              <PortfolioSide side={pSides.c} onChange={p => updateSide('c', p)} profilesList={profilesList} colorKey="c" onRemove={() => setShowPSideC(false)} />
+            )}
+          </div>
+          {!showPSideC && (
+            <button className="dc-lookup-btn" onClick={() => setShowPSideC(true)} style={{ alignSelf: 'flex-start' }}>+ Add Third Side (C)</button>
+          )}
+
+          {/* Withdrawal Strategy */}
+          <div className="dc-global-row">
+            <div className="dc-field">
+              <label>Withdrawal Strategy</label>
+              <select value={withdrawalStrategy} onChange={e => setWithdrawalStrategy(e.target.value)}>
+                <option value="fixed">Fixed Amount</option>
+                <option value="percentage">Percentage-Based</option>
+                <option value="dynamic">Dynamic (Reduce on Drawdown)</option>
+              </select>
+            </div>
+            {withdrawalStrategy !== 'percentage' && (
+              <div className="dc-field">
+                <label>Monthly Withdrawal ($)</label>
+                <input type="number" value={withdrawal} onChange={e => setWithdrawal(parseFloat(e.target.value) || 0)} min="0" step="50" />
+              </div>
+            )}
+            {withdrawalStrategy === 'percentage' && (
+              <div className="dc-field">
+                <label>Annual Withdrawal (%)</label>
+                <input type="number" value={withdrawalPct} onChange={e => setWithdrawalPct(parseFloat(e.target.value) || 0)} min="0.1" max="20" step="0.5" />
+              </div>
+            )}
+            {withdrawalStrategy === 'dynamic' && <>
+              <div className="dc-field">
+                <label>Reduce by (%)</label>
+                <input type="number" value={dynamicReducePct} onChange={e => setDynamicReducePct(parseFloat(e.target.value) || 0)} min="1" max="90" step="5" />
+              </div>
+              <div className="dc-field">
+                <label>When portfolio below (% of initial)</label>
+                <input type="number" value={dynamicThresholdPct} onChange={e => setDynamicThresholdPct(parseFloat(e.target.value) || 0)} min="10" max="100" step="5" />
+              </div>
+            </>}
+          </div>
+
+          {/* Penny-stock exclusion (portfolio sources only) */}
+          <div className="dc-global-row" style={{ alignItems: 'center' }}>
+            <label style={{ color: 'var(--text-dim)', fontSize: '0.82rem', cursor: 'pointer' }}>
+              <input type="checkbox" checked={excludePenny} onChange={e => setExcludePenny(e.target.checked)} style={{ marginRight: 4, accentColor: 'var(--accent-bright)' }} />
+              Exclude penny stocks from portfolios
+            </label>
+            {excludePenny && (
+              <div className="dc-field" style={{ minWidth: 120 }}>
+                <label>Price below ($)</label>
+                <input type="number" value={pennyThreshold} onChange={e => setPennyThreshold(parseFloat(e.target.value) || 0)} min="0" step="0.01" />
+              </div>
+            )}
+            <span style={{ color: 'var(--p-6b7b8d)', fontSize: '0.78rem' }}>Drops portfolio holdings under this price; even-split spreads across the rest. Manual tickers are unaffected.</span>
+          </div>
+
+          {/* Duration + Wedge + Inflation + Run */}
+          <div className="dc-global-row">
+            <div className="dc-field">
+              <label>Duration</label>
+              <select value={duration} onChange={e => setDuration(e.target.value)}>
+                {DURATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            <div className="dc-field">
+              <label>Cash Wedge ($) <span style={{ color: 'var(--p-6b7b8d)' }}>— growth sides</span></label>
+              <input type="number" value={cashWedge} onChange={e => setCashWedge(parseFloat(e.target.value) || 0)} min="0" step="1000" />
+            </div>
+            <div className="dc-field" style={{ minWidth: 'auto' }}>
+              <label style={{ visibility: 'hidden' }}>_</label>
+              <label style={{ color: 'var(--text-dim)', fontSize: '0.82rem', cursor: 'pointer' }}>
+                <input type="checkbox" checked={inflationAdj} onChange={e => setInflationAdj(e.target.checked)} style={{ marginRight: 4, accentColor: 'var(--accent-bright)' }} />
+                Inflation adjust
+              </label>
+            </div>
+            {inflationAdj && (
+              <div className="dc-field" style={{ minWidth: 80 }}>
+                <label>Rate (%/yr)</label>
+                <input type="number" value={inflationRate} onChange={e => setInflationRate(parseFloat(e.target.value) || 0)} min="0" max="20" step="0.5" />
+              </div>
+            )}
+            <button className="dc-run-btn" onClick={runPortfolio} disabled={loading}>Run Comparison</button>
+          </div>
+
+          {/* Action buttons */}
+          <div className="dc-global-row" style={{ gap: 10 }}>
+            {results && <button className="dc-lookup-btn" onClick={saveScenario} disabled={savedScenarios.length >= 3}>Save Scenario ({savedScenarios.length}/3)</button>}
+            {savedScenarios.length > 0 && <button className="dc-lookup-btn" style={{ borderColor: '#ff6b6b44', color: 'var(--neg)' }} onClick={() => setSavedScenarios([])}>Clear Scenarios</button>}
+          </div>
+        </div>
+      )}
+
       {/* Saved Scenarios Strip */}
       {savedScenarios.length > 0 && (
         <div className="dc-saved-strip" style={{ marginTop: 8 }}>
@@ -885,12 +1380,15 @@ export default function DistributionCompare() {
       {results && (
         <div className="dc-results">
           {gradePanel}
+          <TickerAttributionPanel results={results} />
           {summaryCards}
           <div className="dc-charts">
             <div className="dc-chart-wrap"><div id="dc-chart-portfolio" style={{ height: 320 }}></div></div>
             <div className="dc-chart-wrap"><div id="dc-chart-total" style={{ height: 320 }}></div></div>
             <div className="dc-chart-wrap"><div id="dc-chart-distributions" style={{ height: 320 }}></div></div>
-            <div className="dc-chart-wrap"><div id="dc-chart-shares" style={{ height: 320 }}></div></div>
+            {!results.fund_a?.is_basket && (
+              <div className="dc-chart-wrap"><div id="dc-chart-shares" style={{ height: 320 }}></div></div>
+            )}
             <div className="dc-chart-wrap"><div id="dc-chart-price" style={{ height: 320 }}></div></div>
           </div>
           <div className="dc-tables">

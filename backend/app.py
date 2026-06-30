@@ -27229,6 +27229,168 @@ def _distribution_compare_export_inner():
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
+# ── Distribution-compare shared simulation helpers ─────────────────────────────
+# Used by both the single-ticker compute (_distribution_compare_compute) and the
+# basket simulator (_dc_simulate_basket / portfolio-run endpoint).
+
+def _dc_effective_withdrawal(base_withdrawal, month_index, current_pv, initial_inv, *,
+                             strategy="fixed", withdrawal_pct=4.0,
+                             dynamic_threshold_pct=80.0, dynamic_reduce_pct=25.0,
+                             inflation_rate=None):
+    """Effective monthly withdrawal given the withdrawal strategy + inflation drift."""
+    if strategy == "percentage":
+        eff = current_pv * (withdrawal_pct / 100.0 / 12.0)
+    elif strategy == "dynamic":
+        eff = base_withdrawal
+        threshold = initial_inv * (dynamic_threshold_pct / 100.0)
+        if current_pv < threshold:
+            eff = eff * (1.0 - dynamic_reduce_pct / 100.0)
+    else:
+        eff = base_withdrawal
+    if inflation_rate is not None and inflation_rate != 0:
+        eff *= (1.0 + inflation_rate / 100.0) ** (month_index / 12.0)
+    return eff
+
+
+def _dc_risk_metrics(portfolio_values, monthly_rows):
+    """Max drawdown / ulcer / recovery metrics for a portfolio value series."""
+    from grading import _max_drawdown, _ulcer_index
+    pv_series = pd.Series(portfolio_values)
+    max_dd = _max_drawdown(pv_series) if len(pv_series) > 1 else None
+    ulcer = _ulcer_index(pv_series)
+    worst_month_val = min((r["growth"] for r in monthly_rows), default=0)
+    worst_month_idx = next((i for i, r in enumerate(monthly_rows)
+                            if r["growth"] == worst_month_val), None)
+    recovery_months = None
+    if max_dd is not None and max_dd < 0 and len(pv_series) > 1:
+        running_max = pv_series.cummax()
+        drawdowns = (pv_series - running_max) / running_max
+        trough_idx = drawdowns.idxmin()
+        peak_before = running_max.iloc[trough_idx]
+        for ri in range(trough_idx + 1, len(pv_series)):
+            if pv_series.iloc[ri] >= peak_before:
+                recovery_months = ri - trough_idx
+                break
+    return {
+        "max_drawdown_pct": round(max_dd * 100, 2) if max_dd else None,
+        "ulcer_index": ulcer,
+        "worst_month_value": round(worst_month_val, 2),
+        "worst_month_idx": worst_month_idx,
+        "recovery_months": recovery_months,
+    }
+
+
+def _dc_depletion_month(depleted, monthly_rows):
+    """First month index where the portfolio fully depleted, else None."""
+    if not depleted:
+        return None
+    for di, r in enumerate(monthly_rows):
+        if r["shares"] == 0 and r["portfolio"] == 0:
+            return di
+    return None
+
+
+def _dc_nav_erosion_factor(pct_chg):
+    """Distribution haircut/boost vs. the fund's price drawdown (option-income model)."""
+    if pct_chg >= 10:
+        return min(1.0 + (pct_chg - 10) * 0.02, 1.30)
+    elif pct_chg >= -10:
+        return 1.0
+    elif pct_chg >= -20:
+        return 0.85
+    elif pct_chg >= -30:
+        return 0.70
+    else:
+        return max(0.40, 1.0 + pct_chg * 0.02)
+
+
+def _dc_simulate_price_path(sym, duration_months, market_type):
+    """Monte-Carlo median monthly price path for a ticker over ``duration_months``.
+
+    Returns ``(prices, current_price, ttm_yield_detected, error)`` where ``prices`` has
+    length ``duration_months + 1`` (index 0 is the current price). On failure the first
+    three are None and ``error`` is a message string.
+    """
+    import numpy as np
+    import yfinance as yf
+    import warnings
+    warnings.filterwarnings("ignore")
+
+    bias_map = {"bullish": +0.010, "bearish": -0.015, "neutral": 0.0}
+    vol_mult_map = {"bullish": 0.9, "bearish": 1.2, "neutral": 1.0}
+    bias = bias_map.get(market_type, 0.0)
+    vol_mult = vol_mult_map.get(market_type, 1.0)
+
+    try:
+        hist = yf.Ticker(sym).history(period="1y", auto_adjust=False, actions=True)
+    except Exception as e:
+        return None, None, None, f"Failed to fetch data for {sym}: {str(e)}"
+    if hist is None or hist.empty:
+        return None, None, None, f"No data found for {sym}."
+    close = hist["Close"].dropna()
+    if close.empty:
+        return None, None, None, f"No price data for {sym}."
+    current_price = float(close.iloc[-1])
+    if current_price <= 0:
+        return None, None, None, f"Could not determine current price for {sym}."
+
+    divs = hist["Dividends"] if "Dividends" in hist.columns else pd.Series(0.0, index=hist.index)
+    ttm_divs_sum = float(divs.sum()) if divs is not None else 0.0
+    ttm_yield = ttm_divs_sum / current_price if current_price > 0 else 0.0
+
+    monthly_returns = close.resample("ME").last().pct_change().dropna()
+    hist_sigma = float(monthly_returns.std()) if len(monthly_returns) >= 2 else 0.05
+
+    SIGMA_CAP = 0.25
+    REGIME_MONTHS = 42
+    FADE_MONTHS = 6
+    RALLY_PROB = 0.18
+    RALLY_LEN_LO = 2
+    RALLY_LEN_HI = 4
+    neutral_bias = 0.0
+    neutral_vol = 1.0
+
+    mu_arr = np.empty(duration_months)
+    vmul_arr = np.empty(duration_months)
+    rally_remaining = 0
+    for m in range(duration_months):
+        if m < REGIME_MONTHS:
+            regime_w = 1.0
+        elif m < REGIME_MONTHS + FADE_MONTHS:
+            regime_w = 1.0 - (m - REGIME_MONTHS) / FADE_MONTHS
+        else:
+            regime_w = 0.0
+        m_bias = bias * regime_w + neutral_bias * (1.0 - regime_w)
+        m_vmul = vol_mult * regime_w + neutral_vol * (1.0 - regime_w)
+        if market_type == "bearish" and regime_w > 0:
+            if rally_remaining > 0:
+                m_bias = abs(bias) * 0.6 * regime_w
+                m_vmul = 0.9 * regime_w + neutral_vol * (1.0 - regime_w)
+                rally_remaining -= 1
+            elif np.random.random() < RALLY_PROB:
+                rally_remaining = np.random.randint(RALLY_LEN_LO, RALLY_LEN_HI + 1)
+                m_bias = abs(bias) * 0.6 * regime_w
+                m_vmul = 0.9 * regime_w + neutral_vol * (1.0 - regime_w)
+                rally_remaining -= 1
+        mu_arr[m] = m_bias
+        vmul_arr[m] = m_vmul
+
+    sigma_arr = np.minimum(hist_sigma * vmul_arr, SIGMA_CAP)
+    N_PATHS = 300
+    # Use mu_arr directly as the log-drift (no -0.5*sigma^2 Ito term) so the *median*
+    # path tracks the chosen market bias: Neutral (mu=0) renders flat instead of
+    # decaying by the volatility drag. mu_arr is therefore the per-month median return.
+    drift_arr = mu_arr
+    np.random.seed(None)
+    Z = np.random.normal(0.0, 1.0, (N_PATHS, duration_months))
+    log_rets = drift_arr[np.newaxis, :] + sigma_arr[np.newaxis, :] * Z
+    cum_log = np.cumsum(np.hstack([np.zeros((N_PATHS, 1)), log_rets]), axis=1)
+    price_floor = max(current_price * 0.0001, 1e-10)
+    price_matrix = np.maximum(current_price * np.exp(cum_log), price_floor)
+    prices = [float(v) for v in np.median(price_matrix, axis=0)]
+    return prices, current_price, ttm_yield, None
+
+
 def _distribution_compare_compute():
     """Core computation for distribution comparison. Returns a plain dict."""
     import yfinance as yf
@@ -27318,55 +27480,17 @@ def _distribution_compare_compute():
         # income_vs_income: fund_c stays as income (not in growth_funds)
 
     def _compute_effective_withdrawal(base_withdrawal, month_index, current_pv, initial_inv):
-        """Compute effective withdrawal based on strategy + inflation."""
-        if withdrawal_strategy == "percentage":
-            eff = current_pv * (withdrawal_pct / 100.0 / 12.0)
-        elif withdrawal_strategy == "dynamic":
-            eff = base_withdrawal
-            threshold = initial_inv * (dynamic_threshold_pct / 100.0)
-            if current_pv < threshold:
-                eff = eff * (1.0 - dynamic_reduce_pct / 100.0)
-        else:
-            eff = base_withdrawal
-        # Apply inflation
-        if inflation_rate is not None and inflation_rate != 0:
-            eff *= (1.0 + inflation_rate / 100.0) ** (month_index / 12.0)
-        return eff
+        return _dc_effective_withdrawal(
+            base_withdrawal, month_index, current_pv, initial_inv,
+            strategy=withdrawal_strategy, withdrawal_pct=withdrawal_pct,
+            dynamic_threshold_pct=dynamic_threshold_pct,
+            dynamic_reduce_pct=dynamic_reduce_pct, inflation_rate=inflation_rate)
 
     def _compute_risk_metrics(portfolio_values, monthly_rows):
-        """Compute risk metrics for a fund's portfolio value series."""
-        pv_series = pd.Series(portfolio_values)
-        max_dd = _max_drawdown(pv_series) if len(pv_series) > 1 else None
-        ulcer = _ulcer_index(pv_series)
-        worst_month_val = min((r["growth"] for r in monthly_rows), default=0)
-        worst_month_idx = next((i for i, r in enumerate(monthly_rows)
-                                if r["growth"] == worst_month_val), None)
-        recovery_months = None
-        if max_dd is not None and max_dd < 0 and len(pv_series) > 1:
-            running_max = pv_series.cummax()
-            drawdowns = (pv_series - running_max) / running_max
-            trough_idx = drawdowns.idxmin()
-            peak_before = running_max.iloc[trough_idx]
-            for ri in range(trough_idx + 1, len(pv_series)):
-                if pv_series.iloc[ri] >= peak_before:
-                    recovery_months = ri - trough_idx
-                    break
-        return {
-            "max_drawdown_pct": round(max_dd * 100, 2) if max_dd else None,
-            "ulcer_index": ulcer,
-            "worst_month_value": round(worst_month_val, 2),
-            "worst_month_idx": worst_month_idx,
-            "recovery_months": recovery_months,
-        }
+        return _dc_risk_metrics(portfolio_values, monthly_rows)
 
     def _compute_depletion_month(depleted, monthly_rows):
-        """Find the first month where depletion occurred."""
-        if not depleted:
-            return None
-        for di, r in enumerate(monthly_rows):
-            if r["shares"] == 0 and r["portfolio"] == 0:
-                return di
-        return None
+        return _dc_depletion_month(depleted, monthly_rows)
 
     # ── HISTORICAL MODE ──
     if mode == "historical":
@@ -27660,82 +27784,11 @@ def _distribution_compare_compute():
             yo = fund["yield_override"]
             drip = fund["drip"]
 
-            try:
-                hist = yf.Ticker(sym).history(period="1y", auto_adjust=False, actions=True)
-            except Exception as e:
-                return {"error": f"Failed to fetch data for {sym}: {str(e)}"}
-
-            if hist is None or hist.empty:
-                return {"error": f"No data found for {sym}."}
-
-            close = hist["Close"].dropna()
-            if close.empty:
-                return {"error": f"No price data for {sym}."}
-
-            current_price = float(close.iloc[-1])
-            if current_price <= 0:
-                return {"error": f"Could not determine current price for {sym}."}
-
-            divs = hist["Dividends"] if "Dividends" in hist.columns else pd.Series(0.0, index=hist.index)
-            if yo is not None:
-                ttm_yield = yo / 100.0
-            else:
-                ttm_divs_sum = float(divs.sum()) if divs is not None else 0.0
-                ttm_yield = ttm_divs_sum / current_price if current_price > 0 else 0.0
-
-            monthly_returns = close.resample("ME").last().pct_change().dropna()
-            hist_sigma = float(monthly_returns.std()) if len(monthly_returns) >= 2 else 0.05
-
-            SIGMA_CAP = 0.25
-            REGIME_MONTHS = 42
-            FADE_MONTHS = 6
-            RALLY_PROB = 0.18
-            RALLY_LEN_LO = 2
-            RALLY_LEN_HI = 4
-
-            neutral_bias = 0.0
-            neutral_vol = 1.0
-
-            mu_arr = np.empty(duration_months)
-            vmul_arr = np.empty(duration_months)
-            rally_remaining = 0
-
-            for m in range(duration_months):
-                if m < REGIME_MONTHS:
-                    regime_w = 1.0
-                elif m < REGIME_MONTHS + FADE_MONTHS:
-                    regime_w = 1.0 - (m - REGIME_MONTHS) / FADE_MONTHS
-                else:
-                    regime_w = 0.0
-
-                m_bias = bias * regime_w + neutral_bias * (1.0 - regime_w)
-                m_vmul = vol_mult * regime_w + neutral_vol * (1.0 - regime_w)
-
-                if market_type == "bearish" and regime_w > 0:
-                    if rally_remaining > 0:
-                        m_bias = abs(bias) * 0.6 * regime_w
-                        m_vmul = 0.9 * regime_w + neutral_vol * (1.0 - regime_w)
-                        rally_remaining -= 1
-                    elif np.random.random() < RALLY_PROB:
-                        rally_remaining = np.random.randint(RALLY_LEN_LO, RALLY_LEN_HI + 1)
-                        m_bias = abs(bias) * 0.6 * regime_w
-                        m_vmul = 0.9 * regime_w + neutral_vol * (1.0 - regime_w)
-                        rally_remaining -= 1
-
-                mu_arr[m] = m_bias
-                vmul_arr[m] = m_vmul
-
-            sigma_arr = np.minimum(hist_sigma * vmul_arr, SIGMA_CAP)
-
-            N_PATHS = 300
-            drift_arr = mu_arr - 0.5 * sigma_arr ** 2
-            np.random.seed(None)
-            Z = np.random.normal(0.0, 1.0, (N_PATHS, duration_months))
-            log_rets = drift_arr[np.newaxis, :] + sigma_arr[np.newaxis, :] * Z
-            cum_log = np.cumsum(np.hstack([np.zeros((N_PATHS, 1)), log_rets]), axis=1)
-            price_floor = max(current_price * 0.0001, 1e-10)
-            price_matrix = np.maximum(current_price * np.exp(cum_log), price_floor)
-            prices = [float(v) for v in np.median(price_matrix, axis=0)]
+            prices, current_price, ttm_detected, perr = _dc_simulate_price_path(
+                sym, duration_months, market_type)
+            if perr:
+                return {"error": perr}
+            ttm_yield = (yo / 100.0) if yo is not None else ttm_detected
 
             is_growth = label in growth_funds
             wedge = cash_wedge_initial if is_growth else 0.0
@@ -27777,16 +27830,7 @@ def _distribution_compare_compute():
                     continue
 
                 pct_chg = (price - current_price) / current_price * 100
-                if pct_chg >= 10:
-                    factor = min(1.0 + (pct_chg - 10) * 0.02, 1.30)
-                elif pct_chg >= -10:
-                    factor = 1.0
-                elif pct_chg >= -20:
-                    factor = 0.85
-                elif pct_chg >= -30:
-                    factor = 0.70
-                else:
-                    factor = max(0.40, 1.0 + pct_chg * 0.02)
+                factor = _dc_nav_erosion_factor(pct_chg)
 
                 shares_before = shares
                 dist_per_share = (ttm_yield / 12) * price * factor
@@ -27921,6 +27965,642 @@ def _distribution_compare_compute():
         return results
 
     return {"error": f"Unknown mode: {mode}"}
+
+
+def _dc_simulate_basket(legs, *, duration_months, market_type, monthly_withdrawal,
+                        withdrawal_strategy, withdrawal_pct, inflation_rate,
+                        dynamic_reduce_pct, dynamic_threshold_pct,
+                        cash_wedge_initial, is_growth, drip, name,
+                        price_path_cache=None):
+    """Simulate a basket of tickers as a single "fund" over ``duration_months``.
+
+    Mirrors the single-ticker simulate loop in ``_distribution_compare_compute`` but
+    pools distributions / withdrawal / cash-wedge at the basket level and spreads
+    share sales proportionally across legs by value. Returns the same ``fund_result``
+    dict shape the single-ticker path produces (plus ``is_basket`` / ``legs``), so the
+    existing results UI renders it unchanged. Returns ``{"error": ...}`` on failure.
+    """
+    if price_path_cache is None:
+        price_path_cache = {}
+
+    leg_states = []
+    for leg in legs:
+        sym = leg["ticker"]
+        try:
+            amount = float(leg["amount"])
+        except (TypeError, ValueError):
+            return {"error": f"{name}: invalid amount for {sym}."}
+        cache_key = (sym, duration_months, market_type)
+        if cache_key not in price_path_cache:
+            price_path_cache[cache_key] = _dc_simulate_price_path(
+                sym, duration_months, market_type)
+        prices, current_price, ttm_yield, perr = price_path_cache[cache_key]
+        if perr:
+            return {"error": perr}
+        leg_states.append({
+            "sym": sym, "prices": prices, "current_price": current_price,
+            "ttm_yield": ttm_yield, "amount": amount,
+            "shares0": amount / current_price, "shares": amount / current_price,
+            "distributions_generated": 0.0,
+            "withdrawals_funded": 0.0,
+            "cash": 0.0,
+        })
+
+    investment = sum(s["amount"] for s in leg_states)
+    if investment <= 0:
+        return {"error": f"{name}: total investment must be greater than 0."}
+
+    wedge = cash_wedge_initial if is_growth else 0.0
+    cum_withdrawals = 0.0
+    cum_distributions = 0.0
+    cum_wedge_drawn = 0.0
+    unfunded_withdrawals = 0.0
+    prev_pv = investment
+
+    portfolio_values, cumulative_withdrawals_list = [], []
+    cumulative_distributions_list, share_counts, total_values, monthly_rows = [], [], [], []
+    depleted = False
+
+    def _basket_value(m_idx):
+        return sum(s["shares"] * s["prices"][m_idx] for s in leg_states)
+
+    def _price_index(m_idx):
+        # gross market-value index (initial shares, ignores flows) for the Price chart
+        return sum(s["shares0"] * s["prices"][m_idx] for s in leg_states)
+
+    def _cash_total():
+        return sum(s["cash"] for s in leg_states)
+
+    def _allocate(amount, weights):
+        weight_total = sum(max(0.0, float(w)) for w in weights)
+        if amount <= 0 or weight_total <= 0:
+            return [0.0 for _ in weights]
+        return [amount * max(0.0, float(w)) / weight_total for w in weights]
+
+    def _record_distribution_withdrawal(amount, leg_dists):
+        for s, allocated in zip(leg_states, _allocate(amount, leg_dists)):
+            s["withdrawals_funded"] += allocated
+
+    def _add_distribution_cash(amount, leg_dists):
+        for s, allocated in zip(leg_states, _allocate(amount, leg_dists)):
+            s["cash"] += allocated
+
+    def _draw_cash(amount_needed):
+        available = _cash_total()
+        amount_drawn = min(max(0.0, amount_needed), available)
+        if amount_drawn <= 0:
+            return 0.0
+        for s, allocated in zip(
+                leg_states, _allocate(amount_drawn, [s["cash"] for s in leg_states])):
+            s["cash"] = max(0.0, s["cash"] - allocated)
+            s["withdrawals_funded"] += allocated
+        return amount_drawn
+
+    def _sell_value(amount_needed, m_idx):
+        nonlocal depleted
+        total_val = _basket_value(m_idx)
+        if total_val <= 0 or amount_needed <= 0:
+            if total_val <= 0:
+                depleted = True
+            return 0.0
+        amount_sold = min(amount_needed, total_val)
+        frac = amount_sold / total_val
+        for s in leg_states:
+            leg_value = s["shares"] * s["prices"][m_idx]
+            sold_value = leg_value * frac
+            s["shares"] *= (1.0 - frac)
+            s["withdrawals_funded"] += sold_value
+        if amount_needed >= total_val:
+            for s in leg_states:
+                s["shares"] = 0.0
+            depleted = True
+        return amount_sold
+
+    def _reinvest(amount_total, leg_dists, basket_income, m_idx):
+        # reinvest leftover distribution back into each leg in proportion to its own payout
+        if amount_total <= 0 or basket_income <= 0:
+            return
+        for s, d in zip(leg_states, leg_dists):
+            price_i = s["prices"][m_idx]
+            if price_i > 0:
+                s["shares"] += (amount_total * (d / basket_income)) / price_i
+
+    for month_index in range(duration_months):
+        m_idx = month_index + 1  # prices index (0 == current price)
+
+        if depleted or sum(s["shares"] for s in leg_states) <= 0:
+            depleted = True
+            cash_accumulated = _cash_total()
+            portfolio_values.append(0.0)
+            cumulative_withdrawals_list.append(round(cum_withdrawals, 2))
+            cumulative_distributions_list.append(round(cum_distributions, 2))
+            share_counts.append(0.0)
+            tv = cum_withdrawals + wedge + cash_accumulated
+            total_values.append(round(tv, 2))
+            base = investment + (cash_wedge_initial if is_growth else 0)
+            row_data = {
+                "price": 0, "shares": 0, "portfolio": 0, "dist_per_share": 0,
+                "income": 0, "withdrawal": 0, "wedge_drawn": 0, "wedge_bal": round(wedge, 2),
+                "excess": 0, "shares_delta": 0, "growth": 0,
+                "cum_income": round(cum_distributions, 2),
+                "roi_dollar": round(cum_withdrawals + wedge + cash_accumulated - base, 2),
+                "roi_pct": round((cum_withdrawals + wedge + cash_accumulated - base) / investment * 100, 2) if investment else 0,
+            }
+            if not drip:
+                row_data["cash_accumulated"] = round(cash_accumulated, 2)
+            monthly_rows.append(row_data)
+            continue
+
+        shares_before_total = sum(s["shares"] for s in leg_states)
+
+        # Distributions this month (per leg, with NAV erosion vs. its own drawdown)
+        leg_dists = []
+        basket_income = 0.0
+        for s in leg_states:
+            price_i = s["prices"][m_idx]
+            pct_chg_i = (price_i - s["current_price"]) / s["current_price"] * 100 if s["current_price"] else 0.0
+            dist_i = (s["ttm_yield"] / 12.0) * price_i * _dc_nav_erosion_factor(pct_chg_i) * s["shares"]
+            s["distributions_generated"] += dist_i
+            leg_dists.append(dist_i)
+            basket_income += dist_i
+        cum_distributions += basket_income
+
+        current_pv = _basket_value(m_idx)
+        effective_withdrawal = _dc_effective_withdrawal(
+            monthly_withdrawal, month_index, current_pv, investment,
+            strategy=withdrawal_strategy, withdrawal_pct=withdrawal_pct,
+            dynamic_threshold_pct=dynamic_threshold_pct,
+            dynamic_reduce_pct=dynamic_reduce_pct, inflation_rate=inflation_rate)
+
+        wedge_drawn = 0.0
+        if is_growth:
+            need = effective_withdrawal
+            cw_draw = min(wedge, need)
+            wedge -= cw_draw
+            wedge_drawn = cw_draw
+            cum_wedge_drawn += cw_draw
+            need -= cw_draw
+            div_used = min(basket_income, need)
+            _record_distribution_withdrawal(div_used, leg_dists)
+            need -= div_used
+            leftover_div = basket_income - div_used
+            if drip:
+                _reinvest(leftover_div, leg_dists, basket_income, m_idx)
+            else:
+                _add_distribution_cash(leftover_div, leg_dists)
+            if need > 0:
+                if not drip and _cash_total() > 0:
+                    cash_draw = _draw_cash(need)
+                    need -= cash_draw
+                if need > 0:
+                    sold = _sell_value(need, m_idx)
+                    need -= sold
+                if need > 0:
+                    unfunded_withdrawals += need
+            cum_withdrawals += effective_withdrawal
+            excess = basket_income + cw_draw - effective_withdrawal
+        else:
+            excess = basket_income - effective_withdrawal
+            if basket_income >= effective_withdrawal:
+                _record_distribution_withdrawal(effective_withdrawal, leg_dists)
+                if drip:
+                    _reinvest(excess, leg_dists, basket_income, m_idx)
+                else:
+                    _add_distribution_cash(excess, leg_dists)
+                cum_withdrawals += effective_withdrawal
+            else:
+                _record_distribution_withdrawal(basket_income, leg_dists)
+                shortfall = -excess
+                if not drip and _cash_total() > 0:
+                    cash_draw = _draw_cash(shortfall)
+                    shortfall -= cash_draw
+                if shortfall > 0:
+                    sold = _sell_value(shortfall, m_idx)
+                    shortfall -= sold
+                if shortfall > 0:
+                    unfunded_withdrawals += shortfall
+                cum_withdrawals += effective_withdrawal
+
+        total_shares_after = sum(s["shares"] for s in leg_states)
+        if total_shares_after <= 1e-9:
+            for s in leg_states:
+                s["shares"] = 0.0
+            total_shares_after = 0.0
+            depleted = True
+
+        pv = _basket_value(m_idx)
+        cash_accumulated = _cash_total()
+        growth = pv - prev_pv
+        shares_delta = total_shares_after - shares_before_total
+        total_basis = investment + (cash_wedge_initial if is_growth else 0)
+        roi_dollar = pv + cum_withdrawals + wedge + cash_accumulated - total_basis
+        roi_pct = roi_dollar / investment * 100 if investment else 0
+
+        portfolio_values.append(round(pv, 2))
+        cumulative_withdrawals_list.append(round(cum_withdrawals, 2))
+        cumulative_distributions_list.append(round(cum_distributions, 2))
+        share_counts.append(round(total_shares_after, 4))
+        total_values.append(round(pv + cum_withdrawals + wedge + cash_accumulated, 2))
+        row_data = {
+            "price": round(_price_index(m_idx), 2),
+            "shares": round(total_shares_after, 4),
+            "portfolio": round(pv, 2),
+            "dist_per_share": 0,
+            "income": round(basket_income, 2),
+            "withdrawal": round(effective_withdrawal, 2),
+            "wedge_drawn": round(wedge_drawn, 2),
+            "wedge_bal": round(wedge, 2),
+            "excess": round(excess, 2),
+            "shares_delta": round(shares_delta, 4),
+            "growth": round(growth, 2),
+            "cum_income": round(cum_distributions, 2),
+            "roi_dollar": round(roi_dollar, 2),
+            "roi_pct": round(roi_pct, 2),
+        }
+        if not drip:
+            row_data["cash_accumulated"] = round(cash_accumulated, 2)
+        monthly_rows.append(row_data)
+        prev_pv = pv
+
+    total_bought = sum(r["shares_delta"] for r in monthly_rows if r["shares_delta"] > 0)
+    total_sold = sum(-r["shares_delta"] for r in monthly_rows if r["shares_delta"] < 0)
+    initial_shares = sum(s["shares0"] for s in leg_states)
+    final_total = total_values[-1] if total_values else 0.0
+
+    ticker_attribution = []
+    for s in leg_states:
+        final_price = s["prices"][-1] if s["prices"] else s["current_price"]
+        final_value = s["shares"] * final_price
+        ending_wealth = final_value + s["withdrawals_funded"] + s["cash"]
+        pnl = ending_wealth - s["amount"]
+        ticker_attribution.append({
+            "ticker": s["sym"],
+            "initial_amount": round(s["amount"], 2),
+            "initial_weight_pct": round(s["amount"] / investment * 100, 2),
+            "initial_shares": round(s["shares0"], 4),
+            "final_shares": round(s["shares"], 4),
+            "final_value": round(final_value, 2),
+            "distributions_generated": round(s["distributions_generated"], 2),
+            "withdrawals_funded": round(s["withdrawals_funded"], 2),
+            "cash_remaining": round(s["cash"], 2),
+            "ending_wealth": round(ending_wealth, 2),
+            "pnl": round(pnl, 2),
+            "return_pct": round(pnl / s["amount"] * 100, 2) if s["amount"] else 0.0,
+            "price_return_pct": round(
+                (final_price / s["current_price"] - 1.0) * 100, 2
+            ) if s["current_price"] else 0.0,
+            "contribution_pct_points": round(pnl / investment * 100, 2) if investment else 0.0,
+        })
+
+    ticker_ending_wealth = sum(r["ending_wealth"] for r in ticker_attribution)
+    wedge_contribution = cash_wedge_initial if is_growth else 0.0
+    reconciled_total = ticker_ending_wealth + wedge_contribution + unfunded_withdrawals
+
+    fund_result = {
+        "ticker": name,
+        "role": "Growth" if is_growth else "Income",
+        "investment": round(investment, 2),
+        "initial_shares": round(initial_shares, 4),
+        "has_cash_wedge": is_growth and cash_wedge_initial > 0,
+        "cash_wedge_remaining": round(wedge, 2) if is_growth else None,
+        "portfolio_values": portfolio_values,
+        "cumulative_withdrawals": cumulative_withdrawals_list,
+        "cumulative_distributions": cumulative_distributions_list,
+        "total_values": total_values,
+        "shares": share_counts,
+        "monthly_rows": monthly_rows,
+        "total_shares_bought": round(total_bought, 4),
+        "total_shares_sold": round(total_sold, 4),
+        "final_portfolio": portfolio_values[-1] if portfolio_values else 0.0,
+        "final_withdrawn": round(cum_withdrawals, 2),
+        "final_distributions": round(cum_distributions, 2),
+        "final_total": final_total,
+        "depleted": depleted,
+        "depletion_month": _dc_depletion_month(depleted, monthly_rows),
+        "risk_metrics": _dc_risk_metrics(portfolio_values, monthly_rows),
+        "drip": drip,
+        "is_basket": True,
+        "legs": [{"ticker": s["sym"], "amount": round(s["amount"], 2)} for s in leg_states],
+        "ticker_attribution": ticker_attribution,
+        "attribution_reconciliation": {
+            "ticker_ending_wealth": round(ticker_ending_wealth, 2),
+            "cash_wedge_contribution": round(wedge_contribution, 2),
+            "cash_wedge_drawn": round(cum_wedge_drawn, 2),
+            "unfunded_withdrawals": round(unfunded_withdrawals, 2),
+            "reconciled_total": round(reconciled_total, 2),
+            "difference": round(final_total - reconciled_total, 2),
+        },
+    }
+    if not drip:
+        fund_result["cash_accumulated"] = round(_cash_total(), 2)
+    return fund_result
+
+
+def _dc_build_comparison_attribution(results):
+    """Compare ticker P/L for the winning basket against the runner-up basket."""
+    funds = [
+        (key, results[key])
+        for key in ("fund_a", "fund_b", "fund_c")
+        if results.get(key)
+    ]
+    eligible = any(len(fund.get("ticker_attribution") or []) > 1 for _, fund in funds)
+    if not eligible or len(funds) < 2:
+        return {"eligible": False}
+
+    ranked = sorted(funds, key=lambda item: item[1].get("final_total", 0), reverse=True)
+    winner_key, winner = ranked[0]
+    runner_up_key, runner_up = ranked[1]
+    winner_total = float(winner.get("final_total", 0) or 0)
+    runner_up_total = float(runner_up.get("final_total", 0) or 0)
+    lead_total = winner_total - runner_up_total
+    is_tie = winner_total <= runner_up_total * 1.02
+
+    winner_rows = {
+        row["ticker"]: row for row in (winner.get("ticker_attribution") or [])
+    }
+    runner_up_rows = {
+        row["ticker"]: row for row in (runner_up.get("ticker_attribution") or [])
+    }
+    tickers = sorted(set(winner_rows) | set(runner_up_rows))
+    driver_rows = []
+    for ticker in tickers:
+        winner_row = winner_rows.get(ticker)
+        runner_up_row = runner_up_rows.get(ticker)
+        winner_pnl = float(winner_row.get("pnl", 0) or 0) if winner_row else 0.0
+        runner_up_pnl = float(runner_up_row.get("pnl", 0) or 0) if runner_up_row else 0.0
+        driver_rows.append({
+            "ticker": ticker,
+            "winner_pnl": round(winner_pnl, 2) if winner_row else None,
+            "runner_up_pnl": round(runner_up_pnl, 2) if runner_up_row else None,
+            "winner_return_pct": winner_row.get("return_pct") if winner_row else None,
+            "runner_up_return_pct": runner_up_row.get("return_pct") if runner_up_row else None,
+            "impact": round(winner_pnl - runner_up_pnl, 2),
+        })
+    driver_rows.sort(key=lambda row: (-row["impact"], row["ticker"]))
+
+    ticker_effect_total = sum(row["impact"] for row in driver_rows)
+    winner_recon = winner.get("attribution_reconciliation") or {}
+    runner_recon = runner_up.get("attribution_reconciliation") or {}
+    winner_basis = (
+        float(winner.get("investment", 0) or 0)
+        + float(winner_recon.get("cash_wedge_contribution", 0) or 0)
+    )
+    runner_up_basis = (
+        float(runner_up.get("investment", 0) or 0)
+        + float(runner_recon.get("cash_wedge_contribution", 0) or 0)
+    )
+    starting_capital_effect = winner_basis - runner_up_basis
+    unfunded_effect = (
+        float(winner_recon.get("unfunded_withdrawals", 0) or 0)
+        - float(runner_recon.get("unfunded_withdrawals", 0) or 0)
+    )
+    explained = ticker_effect_total + starting_capital_effect + unfunded_effect
+    other_effect = lead_total - explained
+
+    best_by_fund = {}
+    worst_by_fund = {}
+    for key, fund in funds:
+        rows = list(fund.get("ticker_attribution") or [])
+        worst_rows = sorted(
+            rows,
+            key=lambda row: (row.get("return_pct", 0), row.get("ticker", "")),
+        )
+        best_rows = sorted(
+            rows,
+            key=lambda row: (-row.get("return_pct", 0), row.get("ticker", "")),
+        )
+        best_by_fund[key] = {
+            "name": fund.get("ticker", key),
+            "rows": best_rows[:3],
+        }
+        worst_by_fund[key] = {
+            "name": fund.get("ticker", key),
+            "rows": worst_rows[:3],
+        }
+
+    return {
+        "eligible": True,
+        "winner_key": winner_key,
+        "runner_up_key": runner_up_key,
+        "winner_name": winner.get("ticker", winner_key),
+        "runner_up_name": runner_up.get("ticker", runner_up_key),
+        "is_tie": is_tie,
+        "lead_total": round(lead_total, 2),
+        "ticker_effect_total": round(ticker_effect_total, 2),
+        "starting_capital_effect": round(starting_capital_effect, 2),
+        "other_effect": round(other_effect, 2),
+        "driver_rows": driver_rows,
+        "best_by_fund": best_by_fund,
+        "worst_by_fund": worst_by_fund,
+    }
+
+
+def _dc_resolve_side_legs(spec, label, exclude_penny=False, penny_threshold=1.0):
+    """Resolve a portfolio-compare side spec into a normalized config with concrete
+    ``legs=[{ticker, amount}]``. Returns ``(side_cfg, error)``.
+
+    When ``exclude_penny`` is set, portfolio-sourced holdings priced below
+    ``penny_threshold`` are dropped before allocation (so an even split spreads
+    across the remaining tickers). Manual tickers are user-entered and not filtered.
+    """
+    if not spec:
+        return None, None
+    name = (str(spec.get("name") or "").strip()) or label
+    role = str(spec.get("role", "income")).lower()
+    drip = bool(spec.get("drip", True))
+    source = str(spec.get("source", "manual")).lower()
+    allocation_mode = str(spec.get("allocation_mode", "actual")).lower()
+    try:
+        total = float(spec.get("total", 0) or 0)
+    except (TypeError, ValueError):
+        total = 0.0
+
+    raw_legs = []
+    if source == "portfolio":
+        try:
+            pid = int(spec.get("profile_id"))
+        except (TypeError, ValueError):
+            return None, f"{name}: select a portfolio."
+        conn = get_connection()
+        rows = conn.execute(
+            """SELECT ticker, current_value, purchase_value, current_price, quantity
+               FROM all_account_info
+               WHERE profile_id = ? AND current_price IS NOT NULL
+               ORDER BY ticker""",
+            (pid,),
+        ).fetchall()
+        conn.close()
+        agg = {}
+        dropped_penny = 0
+        for r in rows:
+            tk = (r[0] or "").strip().upper()
+            if not tk:
+                continue
+            cp = float(r[3] or 0)
+            if exclude_penny and cp < penny_threshold:
+                dropped_penny += 1
+                continue
+            cur_val = float(r[1] or 0)
+            qty = float(r[4] or 0)
+            if cur_val <= 0 and qty > 0 and cp > 0:
+                cur_val = qty * cp
+            a = agg.setdefault(tk, {"current_value": 0.0, "purchase_value": 0.0})
+            a["current_value"] += cur_val
+            a["purchase_value"] += float(r[2] or 0)
+        tickers = list(agg.keys())
+        if not tickers:
+            if dropped_penny:
+                return None, f"{name}: all holdings are below the ${penny_threshold:g} penny-stock threshold."
+            return None, f"{name}: portfolio has no priced holdings."
+        if allocation_mode == "even":
+            if total <= 0:
+                return None, f"{name}: enter a total dollar amount for the even split."
+            per = total / len(tickers)
+            raw_legs = [{"ticker": t, "amount": per} for t in tickers]
+        else:  # actual market value (fall back to purchase value)
+            for t in tickers:
+                amt = agg[t]["current_value"] or agg[t]["purchase_value"]
+                if amt > 0:
+                    raw_legs.append({"ticker": t, "amount": amt})
+            if not raw_legs:
+                return None, f"{name}: portfolio holdings have no dollar value."
+    else:  # manual
+        legs_in = spec.get("legs") or []
+        ordered_tickers = []
+        for l in legs_in:
+            tk = str(l.get("ticker", "")).strip().upper()
+            if tk and tk not in ordered_tickers:
+                ordered_tickers.append(tk)
+        if not ordered_tickers:
+            return None, f"{name}: add at least one ticker."
+        if allocation_mode == "even":
+            if total <= 0:
+                return None, f"{name}: enter a total dollar amount for the even split."
+            per = total / len(ordered_tickers)
+            raw_legs = [{"ticker": t, "amount": per} for t in ordered_tickers]
+        else:  # per-ticker amounts
+            amt_by_ticker = {}
+            for l in legs_in:
+                tk = str(l.get("ticker", "")).strip().upper()
+                if not tk:
+                    continue
+                try:
+                    amt = float(l.get("amount", 0) or 0)
+                except (TypeError, ValueError):
+                    amt = 0.0
+                amt_by_ticker[tk] = amt_by_ticker.get(tk, 0.0) + amt
+            for t in ordered_tickers:
+                if amt_by_ticker.get(t, 0) > 0:
+                    raw_legs.append({"ticker": t, "amount": amt_by_ticker[t]})
+            if not raw_legs:
+                return None, f"{name}: enter a dollar amount for at least one ticker."
+
+    return {"name": name, "role": role, "is_growth": role == "growth",
+            "drip": drip, "legs": raw_legs}, None
+
+
+def _distribution_compare_portfolio_compute():
+    """Core computation for basket-vs-basket distribution comparison (simulation only)."""
+    data = request.get_json(force=True, silent=True) or {}
+
+    try:
+        duration_months = int(data.get("duration_months", 120))
+    except (TypeError, ValueError):
+        return {"error": "Invalid duration."}
+    if duration_months < 1 or duration_months > 240:
+        return {"error": "Simulation duration must be between 1 and 240 months (20 years max)."}
+
+    market_type = data.get("market", "neutral")
+    try:
+        monthly_withdrawal = float(data.get("monthly_withdrawal", 0))
+    except (TypeError, ValueError):
+        monthly_withdrawal = 0.0
+    if monthly_withdrawal < 0:
+        return {"error": "Monthly withdrawal cannot be negative."}
+
+    withdrawal_strategy = data.get("withdrawal_strategy", "fixed")
+    try:
+        withdrawal_pct = float(data.get("withdrawal_pct", 4))
+    except (TypeError, ValueError):
+        withdrawal_pct = 4.0
+    inflation_rate = data.get("inflation_rate")
+    if inflation_rate is not None:
+        try:
+            inflation_rate = float(inflation_rate)
+        except (TypeError, ValueError):
+            inflation_rate = None
+    try:
+        dynamic_reduce_pct = float(data.get("dynamic_reduce_pct", 25))
+    except (TypeError, ValueError):
+        dynamic_reduce_pct = 25.0
+    try:
+        dynamic_threshold_pct = float(data.get("dynamic_threshold_pct", 80))
+    except (TypeError, ValueError):
+        dynamic_threshold_pct = 80.0
+    try:
+        cash_wedge_initial = float(data.get("cash_wedge", 0))
+    except (TypeError, ValueError):
+        cash_wedge_initial = 0.0
+    if cash_wedge_initial < 0:
+        cash_wedge_initial = 0.0
+
+    exclude_penny = bool(data.get("exclude_penny", False))
+    try:
+        penny_threshold = float(data.get("penny_threshold", 1.0) or 0)
+    except (TypeError, ValueError):
+        penny_threshold = 1.0
+    if penny_threshold < 0:
+        penny_threshold = 0.0
+
+    side_a, err = _dc_resolve_side_legs(data.get("side_a"), "Side A", exclude_penny, penny_threshold)
+    if err:
+        return {"error": err}
+    if not side_a:
+        return {"error": "Side A is required."}
+    side_b, err = _dc_resolve_side_legs(data.get("side_b"), "Side B", exclude_penny, penny_threshold)
+    if err:
+        return {"error": err}
+    if not side_b:
+        return {"error": "Side B is required."}
+    side_c, err = _dc_resolve_side_legs(data.get("side_c"), "Side C", exclude_penny, penny_threshold)
+    if err:
+        return {"error": err}
+
+    results = {}
+    price_path_cache = {}
+    pairs = [("fund_a", side_a), ("fund_b", side_b)]
+    if side_c:
+        pairs.append(("fund_c", side_c))
+    for fkey, side in pairs:
+        fr = _dc_simulate_basket(
+            side["legs"], duration_months=duration_months, market_type=market_type,
+            monthly_withdrawal=monthly_withdrawal, withdrawal_strategy=withdrawal_strategy,
+            withdrawal_pct=withdrawal_pct, inflation_rate=inflation_rate,
+            dynamic_reduce_pct=dynamic_reduce_pct, dynamic_threshold_pct=dynamic_threshold_pct,
+            cash_wedge_initial=cash_wedge_initial, is_growth=side["is_growth"],
+            drip=side["drip"], name=side["name"],
+            price_path_cache=price_path_cache)
+        if isinstance(fr, dict) and "error" in fr:
+            return {"error": fr["error"]}
+        results[fkey] = fr
+
+    results["months"] = [f"Month {i + 1}" for i in range(duration_months)]
+    results["cash_wedge_initial"] = cash_wedge_initial
+    results["comparison_type"] = "portfolio"
+    results["attribution"] = _dc_build_comparison_attribution(results)
+    return results
+
+
+@app.route("/api/distribution-compare/portfolio-run", methods=["POST"])
+def distribution_compare_portfolio_run():
+    import traceback as _tb
+    try:
+        result = _distribution_compare_portfolio_compute()
+        if isinstance(result, dict) and "error" in result:
+            return jsonify(error=result["error"])
+        return jsonify(**result)
+    except Exception as _e:
+        return jsonify(error=f"Server error: {str(_e)}", detail=_tb.format_exc())
 
 
 # ── Consolidation Analysis ─────────────────────────────────────────────────────
