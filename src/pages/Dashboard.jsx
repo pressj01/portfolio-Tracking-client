@@ -1015,7 +1015,18 @@ export default function Dashboard() {
         const cv = h.current_value || 0
         const totalCv = totals.currentValue || 1
         const priceReturn = pv ? (gl / pv) : 0
-        const totalReturn = pv ? ((gl + td) / pv) : 0
+        // Total return divides by the same invested-cost floor used for
+        // paid-for-itself (see backend _apply_basis_mode_to_holdings), not just
+        // the residual purchase_value — otherwise a trimmed position's lifetime
+        // dividends (earned on far more shares than remain) blow the % up.
+        const totalReturnBasis = h.total_return_basis || pv
+        const totalReturnDivs = h.total_return_divs_component != null ? h.total_return_divs_component : td
+        // Gains/losses already realized on shares that were trimmed off (not
+        // just the unrealized gl on what's left) — without this, a trimmed
+        // position with zero dividends can show a total return that doesn't
+        // match its price return even though nothing else changed.
+        const totalReturnRealized = h.total_return_realized_component || 0
+        const totalReturn = totalReturnBasis ? ((gl + totalReturnDivs + totalReturnRealized) / totalReturnBasis) : 0
         const rvyYield = rvyMode === 'yoc' ? h.annual_yield_on_cost : h.current_annual_yield
         const rvy = returnVsYield(totalReturn * 100, (rvyYield || 0) * 100)
         return {

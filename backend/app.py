@@ -988,6 +988,42 @@ def _cumulative_invested_cost_by_ticker(conn, profile_ids):
     return {row["ticker"]: _num_or_zero(row["invested"]) for row in rows}
 
 
+def _realized_gains_by_ticker(conn, profile_ids):
+    """Sum realized gains per ticker, scoped to the current holding lot.
+
+    all_account_info.realized_gains is a running total accumulated across a
+    ticker+profile's ENTIRE transaction history by _rollup_transactions, with
+    no purchase_date scoping. For a position that was fully sold and later
+    re-bought (e.g. EGGY: closed out Sept 2025, re-bought 2026-06-29), that
+    total still includes gains/losses realized on the old, closed-out lot —
+    the same "old lot bleeds into new lot" issue already fixed above for
+    dividend payments and invested cost. Recompute from the per-transaction
+    realized_gain ledger instead (already excludes transfers — see
+    _is_transfer_txn), joined to the live holding row and scoped to
+    transaction_date >= purchase_date, so a freshly reopened position doesn't
+    inherit a prior lot's trading history. It's also, incidentally, the fix
+    for the 'Owner' aggregate row's own realized_gains column always reading
+    0 (never synced from its real sub-accounts) — this sums the sub-accounts
+    directly instead of trusting that column.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT t.ticker, COALESCE(SUM(t.realized_gain), 0) AS realized
+            FROM transactions t
+            JOIN all_account_info a
+              ON a.ticker = t.ticker AND a.profile_id = t.profile_id
+            WHERE t.profile_id IN ({placeholders})
+              AND t.realized_gain IS NOT NULL
+              AND (a.purchase_date IS NULL OR t.transaction_date >= a.purchase_date)
+            GROUP BY t.ticker""",
+        ids,
+    ).fetchall()
+    return {row["ticker"]: _num_or_zero(row["realized"]) for row in rows}
+
+
 def _resolve_aggregate_profile(ticker, profile_ids):
     """For aggregate writes, find the profile with the largest position for a ticker."""
     conn = get_connection()
@@ -1220,7 +1256,7 @@ def _ensure_basis_columns(conn):
 _PFI_NO_TXN_MAX_RATIO = 10.0  # i.e. 1000%
 
 
-def _apply_basis_mode_to_holdings(results, invested_by_ticker=None):
+def _apply_basis_mode_to_holdings(results, invested_by_ticker=None, realized_by_ticker=None):
     """Expose selected basis through the legacy price_paid/purchase_value fields."""
     mode = _basis_mode()
     for r in results:
@@ -1276,6 +1312,14 @@ def _apply_basis_mode_to_holdings(results, invested_by_ticker=None):
         # actually earned those dividends, consistent with paid-for-itself.
         r["total_return_basis"] = round(pfi_cost, 2) if pfi_cost > 0 else None
         r["total_return_divs_component"] = 0.0 if divs_unreliable else _num_or_zero(total_divs)
+        # A trimmed (not fully sold) position's unrealized gain/loss (`gain`
+        # above) only reflects the shares still held. Without also counting
+        # gains/losses already realized on the shares that were sold, a
+        # zero-dividend trimmed position can show a total return that doesn't
+        # match its price return even though nothing else changed hands.
+        r["total_return_realized_component"] = _num_or_zero(
+            realized_by_ticker.get(r.get("ticker")) if realized_by_ticker else 0.0
+        )
     return results
 
 
@@ -9622,6 +9666,7 @@ def list_holdings():
     _apply_basis_mode_to_holdings(
         results,
         _cumulative_invested_cost_by_ticker(conn, payment_profile_ids),
+        _realized_gains_by_ticker(conn, payment_profile_ids),
     )
     _apply_holding_display_quantities(results)
 
@@ -10110,10 +10155,22 @@ def _import_as_transactions(profile_id, pre_snapshot):
     conn.close()
 
 
+def _is_transfer_txn(notes):
+    """True for inter-account/inter-broker transfers (ACAT, TDA internal transfer, etc.).
+
+    These move shares between accounts at price_per_share=0 with a bracketed
+    '[Transfer in]' / '[Transfer out]' notes tag — no real sale occurred.
+    Treating a transfer-out as an ordinary $0 SELL records a fake realized
+    loss equal to the entire cost basis of the transferred shares, which
+    corrupts realized_gains (and anything built on it, like total return).
+    """
+    return bool(notes) and "[transfer" in str(notes).lower()
+
+
 def _refresh_transaction_realized_gains(ticker, profile_id, conn):
     """Recompute realized gains from transactions without changing holdings."""
     rows = conn.execute(
-        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
+        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date, notes "
         "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
         (ticker, profile_id),
     ).fetchall()
@@ -10139,6 +10196,7 @@ def _refresh_transaction_realized_gains(ticker, profile_id, conn):
         price = _val(r, "price_per_share", 3) or 0
         fees = _val(r, "fees", 4) or 0
         tdate = _val(r, "transaction_date", 5)
+        notes = _val(r, "notes", 6)
 
         if txn_type == "BUY":
             if share_deficit > 1e-9:
@@ -10146,6 +10204,13 @@ def _refresh_transaction_realized_gains(ticker, profile_id, conn):
                 share_deficit -= covered
                 shares -= covered
             _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id, txn_date=tdate)
+            conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
+        elif _is_transfer_txn(notes):
+            # Shares moved accounts, not sold: still consume the lots so the
+            # remaining queue is accurate for later transactions, but record
+            # no realized gain/loss.
+            _, sell_remaining = _consume_sell_lots(lots, shares, alloc_map.get(txn_id))
+            share_deficit += sell_remaining
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
         else:
             sell_proceeds = (shares * price) - fees
@@ -10427,7 +10492,7 @@ def _rollup_transactions(ticker, profile_id, conn):
     """
     _ensure_basis_columns(conn)
     rows = conn.execute(
-        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
+        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date, notes "
         "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
         (ticker, profile_id),
     ).fetchall()
@@ -10469,6 +10534,7 @@ def _rollup_transactions(ticker, profile_id, conn):
         price = _val(r, "price_per_share", 3) or 0
         fees = _val(r, "fees", 4) or 0
         tdate = _val(r, "transaction_date", 5)
+        notes = _val(r, "notes", 6)
 
         if txn_type == "BUY":
             if share_deficit > 1e-9:
@@ -10479,6 +10545,13 @@ def _rollup_transactions(ticker, profile_id, conn):
             if shares > 1e-9 and tdate and (earliest_buy is None or tdate < earliest_buy):
                 earliest_buy = tdate
             # Clear any realized_gain on BUY rows
+            conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
+        elif _is_transfer_txn(notes):
+            # Shares moved accounts, not sold: still consume the lots so the
+            # remaining queue (and thus quantity/cost basis) stays accurate,
+            # but don't record a realized gain/loss for a non-economic event.
+            _, sell_remaining = _consume_sell_lots(lots, shares, alloc_map.get(txn_id))
+            share_deficit += sell_remaining
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
         else:  # SELL
             sell_proceeds = (shares * price) - fees  # fees reduce proceeds
@@ -11689,6 +11762,7 @@ def _export_profile_data(conn, profile_id):
     _apply_basis_mode_to_holdings(
         raw_rows,
         _cumulative_invested_cost_by_ticker(conn, [profile_id]),
+        _realized_gains_by_ticker(conn, [profile_id]),
     )
 
     out_rows = []
