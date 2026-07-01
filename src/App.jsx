@@ -34,6 +34,7 @@ import ConsolidationAnalysis from './pages/ConsolidationAnalysis'
 import MacroRegimeDashboard from './pages/MacroRegimeDashboard'
 import IncomeGrowthSim from './pages/IncomeGrowthSim'
 import RetirementReadiness from './pages/RetirementReadiness'
+import CashFlowSustainability from './pages/CashFlowSustainability'
 import DividendHistory from './pages/DividendHistory'
 import ReinvestmentImpact from './pages/ReinvestmentImpact'
 import GainsLosses from './pages/GainsLosses'
@@ -185,6 +186,7 @@ function App() {
         <Route path="/income-sim" element={<PortfolioIncomeSim />} />
         <Route path="/income-growth" element={<IncomeGrowthSim />} />
         <Route path="/retirement-readiness" element={<RetirementReadiness />} />
+        <Route path="/cash-flow" element={<CashFlowSustainability />} />
         <Route path="/correlation" element={<Correlation />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/portfolio-builder" element={<PortfolioBuilder />} />
@@ -288,6 +290,7 @@ function Nav() {
         <NavLink to="/growth">Growth</NavLink>
         <NavLink to="/growth-2">Portfolio Growth 2</NavLink>
         <NavLink to="/retirement-readiness">Retirement Readiness</NavLink>
+        <NavLink to="/cash-flow">Cash Flow &amp; Sustainability</NavLink>
         <NavLink to="/dividends">Dividends</NavLink>
         <NavLink to="/div-calendar">Dividend Calendar</NavLink>
         <NavLink to="/earnings-calendar">Earnings Calendar</NavLink>

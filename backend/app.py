@@ -41,6 +41,17 @@ class NanSafeJSONProvider(DefaultJSONProvider):
         return super().dumps(_sanitize_nan(obj), **kwargs)
 from config import get_connection, FRED_API_KEY, DB_PATH
 from database import ensure_tables_exist
+from cash_flow import (
+    expand_plan as _expand_cash_flow_plan,
+    get_or_create_default_plan as _get_or_create_default_cash_flow_plan,
+    money_to_cents as _cash_flow_money_to_cents,
+    parse_month as _parse_cash_flow_month,
+    serialize_item as _serialize_cash_flow_item,
+    serialize_plan as _serialize_cash_flow_plan,
+    settings_for_plan as _cash_flow_settings_for_plan,
+    simulate_sustainability as _simulate_cash_flow_sustainability,
+    validate_item_payload as _validate_cash_flow_item,
+)
 from import_data import (
     import_from_excel, import_from_upload,
     import_weekly_payouts, import_monthly_payouts,
@@ -292,6 +303,592 @@ def get_profile_filter():
     return False, [pid]
 
 
+# ── Shared cash flow ─────────────────────────────────────────────────────────
+
+def _cash_flow_scope():
+    aggregate_id = _request_aggregate_id()
+    if aggregate_id is not None:
+        return "aggregate", aggregate_id
+    return "profile", get_profile_id()
+
+
+def _cash_flow_plan_for_scope(conn, plan_id=None):
+    """Return a plan that belongs to the current profile/aggregate selection."""
+    scope_type, scope_id = _cash_flow_scope()
+    if plan_id in (None, ""):
+        return _get_or_create_default_cash_flow_plan(
+            conn, scope_type, scope_id
+        )
+    try:
+        plan_id = int(plan_id)
+    except (TypeError, ValueError):
+        return None
+    return conn.execute(
+        """SELECT * FROM cash_flow_plans
+           WHERE id = ? AND scope_type = ? AND scope_id = ?""",
+        (plan_id, scope_type, scope_id),
+    ).fetchone()
+
+
+def _cash_flow_touch_plan(conn, plan_id):
+    conn.execute(
+        """UPDATE cash_flow_plans
+           SET version = version + 1, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?""",
+        (int(plan_id),),
+    )
+
+
+def _cash_flow_portfolio_snapshot(conn, profile_ids):
+    ids = list(dict.fromkeys(int(pid) for pid in profile_ids if pid is not None))
+    if not ids:
+        return {"value": 0.0, "annual_income": 0.0, "profile_count": 0}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT current_value, quantity, current_price,
+                   estim_payment_per_year, approx_monthly_income
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND COALESCE(quantity, 0) > 0""",
+        ids,
+    ).fetchall()
+    value = 0.0
+    annual_income = 0.0
+    for row in rows:
+        current_value = float(row["current_value"] or 0)
+        if current_value <= 0:
+            current_value = float(row["quantity"] or 0) * float(
+                row["current_price"] or 0
+            )
+        value += max(0.0, current_value)
+        estimated = float(row["estim_payment_per_year"] or 0)
+        if estimated <= 0:
+            estimated = float(row["approx_monthly_income"] or 0) * 12.0
+        annual_income += max(0.0, estimated)
+    return {
+        "value": round(value, 2),
+        "annual_income": round(annual_income, 2),
+        "profile_count": len(ids),
+    }
+
+
+def _cash_flow_month_or_current(raw=None):
+    value = raw or datetime.date.today().strftime("%Y-%m")
+    return _parse_cash_flow_month(value).strftime("%Y-%m")
+
+
+@app.route("/api/cash-flow/plans", methods=["GET", "POST"])
+def cash_flow_plans():
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    scope_type, scope_id = _cash_flow_scope()
+
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name", "")).strip()
+        if not name:
+            conn.close()
+            return jsonify(error="Plan name is required."), 400
+        if len(name) > 100:
+            conn.close()
+            return jsonify(error="Plan name must be 100 characters or less."), 400
+        try:
+            cur = conn.execute(
+                """INSERT INTO cash_flow_plans
+                   (name, scope_type, scope_id, is_default)
+                   VALUES (?, ?, ?, 0)""",
+                (name, scope_type, scope_id),
+            )
+            conn.execute(
+                """INSERT INTO cash_flow_settings (plan_id)
+                   VALUES (?)""",
+                (cur.lastrowid,),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM cash_flow_plans WHERE id = ?", (cur.lastrowid,)
+            ).fetchone()
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            conn.close()
+            return jsonify(error="A cash-flow plan with that name already exists."), 409
+        result = _serialize_cash_flow_plan(row)
+        conn.close()
+        return jsonify(plan=result), 201
+
+    _get_or_create_default_cash_flow_plan(conn, scope_type, scope_id)
+    rows = conn.execute(
+        """SELECT * FROM cash_flow_plans
+           WHERE scope_type = ? AND scope_id = ?
+           ORDER BY is_default DESC, name, id""",
+        (scope_type, scope_id),
+    ).fetchall()
+    result = [_serialize_cash_flow_plan(row) for row in rows]
+    conn.close()
+    return jsonify(plans=result)
+
+
+@app.route("/api/cash-flow/plans/<int:plan_id>", methods=["PUT", "DELETE"])
+def cash_flow_plan_detail(plan_id):
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan = _cash_flow_plan_for_scope(conn, plan_id)
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+
+    if request.method == "DELETE":
+        count = conn.execute(
+            """SELECT COUNT(*) AS count FROM cash_flow_plans
+               WHERE scope_type = ? AND scope_id = ?""",
+            (plan["scope_type"], plan["scope_id"]),
+        ).fetchone()["count"]
+        if count <= 1:
+            conn.close()
+            return jsonify(error="The only cash-flow plan cannot be deleted."), 400
+        item_ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM cash_flow_items WHERE plan_id = ?", (plan_id,)
+            ).fetchall()
+        ]
+        if item_ids:
+            placeholders = ",".join("?" * len(item_ids))
+            conn.execute(
+                f"DELETE FROM cash_flow_month_overrides WHERE item_id IN ({placeholders})",
+                item_ids,
+            )
+        conn.execute("DELETE FROM cash_flow_items WHERE plan_id = ?", (plan_id,))
+        conn.execute("DELETE FROM cash_flow_settings WHERE plan_id = ?", (plan_id,))
+        conn.execute("DELETE FROM cash_flow_plans WHERE id = ?", (plan_id,))
+        conn.commit()
+        conn.close()
+        return jsonify(ok=True)
+
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name", "")).strip()
+    if not name:
+        conn.close()
+        return jsonify(error="Plan name is required."), 400
+    try:
+        conn.execute(
+            """UPDATE cash_flow_plans
+               SET name = ?, version = version + 1,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (name[:100], plan_id),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return jsonify(error="A cash-flow plan with that name already exists."), 409
+    row = conn.execute(
+        "SELECT * FROM cash_flow_plans WHERE id = ?", (plan_id,)
+    ).fetchone()
+    result = _serialize_cash_flow_plan(row)
+    conn.close()
+    return jsonify(plan=result)
+
+
+@app.route("/api/cash-flow/items", methods=["GET", "POST"])
+def cash_flow_items():
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    if request.method == "GET":
+        plan = _cash_flow_plan_for_scope(conn, request.args.get("plan_id"))
+        if not plan:
+            conn.close()
+            return jsonify(error="Cash-flow plan not found."), 404
+        rows = conn.execute(
+            """SELECT * FROM cash_flow_items
+               WHERE plan_id = ?
+               ORDER BY kind, active DESC, name, id""",
+            (plan["id"],),
+        ).fetchall()
+        result = [_serialize_cash_flow_item(row) for row in rows]
+        conn.close()
+        return jsonify(items=result)
+
+    data = request.get_json(silent=True) or {}
+    plan = _cash_flow_plan_for_scope(conn, data.get("plan_id"))
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    try:
+        item = _validate_cash_flow_item(data)
+    except ValueError as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+    cur = conn.execute(
+        """INSERT INTO cash_flow_items
+           (plan_id, kind, name, category, amount_cents, frequency,
+            start_date, end_date, essential, tax_rate_pct, annual_change_pct,
+            notes, active)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            plan["id"],
+            item["kind"],
+            item["name"],
+            item["category"],
+            item["amount_cents"],
+            item["frequency"],
+            item["start_date"],
+            item["end_date"],
+            item["essential"],
+            item["tax_rate_pct"],
+            item["annual_change_pct"],
+            item["notes"],
+            item["active"],
+        ),
+    )
+    _cash_flow_touch_plan(conn, plan["id"])
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM cash_flow_items WHERE id = ?", (cur.lastrowid,)
+    ).fetchone()
+    result = _serialize_cash_flow_item(row)
+    conn.close()
+    return jsonify(item=result), 201
+
+
+@app.route("/api/cash-flow/items/<int:item_id>", methods=["PUT", "DELETE"])
+def cash_flow_item_detail(item_id):
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    row = conn.execute(
+        """SELECT i.*, p.scope_type, p.scope_id
+           FROM cash_flow_items i
+           JOIN cash_flow_plans p ON p.id = i.plan_id
+           WHERE i.id = ?""",
+        (item_id,),
+    ).fetchone()
+    scope_type, scope_id = _cash_flow_scope()
+    if (
+        not row
+        or row["scope_type"] != scope_type
+        or int(row["scope_id"]) != int(scope_id)
+    ):
+        conn.close()
+        return jsonify(error="Cash-flow item not found."), 404
+
+    if request.method == "DELETE":
+        conn.execute(
+            "DELETE FROM cash_flow_month_overrides WHERE item_id = ?", (item_id,)
+        )
+        conn.execute("DELETE FROM cash_flow_items WHERE id = ?", (item_id,))
+        _cash_flow_touch_plan(conn, row["plan_id"])
+        conn.commit()
+        conn.close()
+        return jsonify(ok=True)
+
+    data = request.get_json(silent=True) or {}
+    try:
+        item = _validate_cash_flow_item(data)
+    except ValueError as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+    conn.execute(
+        """UPDATE cash_flow_items
+           SET kind = ?, name = ?, category = ?, amount_cents = ?,
+               frequency = ?, start_date = ?, end_date = ?, essential = ?,
+               tax_rate_pct = ?, annual_change_pct = ?, notes = ?, active = ?,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?""",
+        (
+            item["kind"],
+            item["name"],
+            item["category"],
+            item["amount_cents"],
+            item["frequency"],
+            item["start_date"],
+            item["end_date"],
+            item["essential"],
+            item["tax_rate_pct"],
+            item["annual_change_pct"],
+            item["notes"],
+            item["active"],
+            item_id,
+        ),
+    )
+    _cash_flow_touch_plan(conn, row["plan_id"])
+    conn.commit()
+    updated = conn.execute(
+        "SELECT * FROM cash_flow_items WHERE id = ?", (item_id,)
+    ).fetchone()
+    result = _serialize_cash_flow_item(updated)
+    conn.close()
+    return jsonify(item=result)
+
+
+@app.route(
+    "/api/cash-flow/items/<int:item_id>/months/<month>",
+    methods=["PUT", "DELETE"],
+)
+def cash_flow_item_month_override(item_id, month):
+    try:
+        month = _parse_cash_flow_month(month).strftime("%Y-%m")
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    row = conn.execute(
+        """SELECT i.plan_id, p.scope_type, p.scope_id
+           FROM cash_flow_items i
+           JOIN cash_flow_plans p ON p.id = i.plan_id
+           WHERE i.id = ?""",
+        (item_id,),
+    ).fetchone()
+    scope_type, scope_id = _cash_flow_scope()
+    if (
+        not row
+        or row["scope_type"] != scope_type
+        or int(row["scope_id"]) != int(scope_id)
+    ):
+        conn.close()
+        return jsonify(error="Cash-flow item not found."), 404
+    if request.method == "DELETE":
+        conn.execute(
+            "DELETE FROM cash_flow_month_overrides WHERE item_id = ? AND month = ?",
+            (item_id, month),
+        )
+    else:
+        data = request.get_json(silent=True) or {}
+        amount_cents = None
+        if data.get("amount") not in (None, ""):
+            try:
+                amount_cents = _cash_flow_money_to_cents(data.get("amount"))
+            except ValueError as exc:
+                conn.close()
+                return jsonify(error=str(exc)), 400
+        conn.execute(
+            """INSERT INTO cash_flow_month_overrides
+               (item_id, month, amount_cents, excluded, notes)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(item_id, month) DO UPDATE SET
+                   amount_cents = excluded.amount_cents,
+                   excluded = excluded.excluded,
+                   notes = excluded.notes,
+                   updated_at = CURRENT_TIMESTAMP""",
+            (
+                item_id,
+                month,
+                amount_cents,
+                1 if data.get("excluded") else 0,
+                str(data.get("notes", "") or "")[:1000] or None,
+            ),
+        )
+    _cash_flow_touch_plan(conn, row["plan_id"])
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True)
+
+
+@app.route("/api/cash-flow/settings", methods=["GET", "PUT"])
+def cash_flow_settings():
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan_id = (
+        request.args.get("plan_id")
+        if request.method == "GET"
+        else (request.get_json(silent=True) or {}).get("plan_id")
+    )
+    plan = _cash_flow_plan_for_scope(conn, plan_id)
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    if request.method == "GET":
+        result = _cash_flow_settings_for_plan(conn, plan["id"])
+        conn.commit()
+        conn.close()
+        return jsonify(settings=result)
+
+    data = request.get_json(silent=True) or {}
+    try:
+        horizon = int(data.get("horizon_years", 20))
+        inflation = float(data.get("expense_inflation_pct", 3))
+        tax_rate = float(data.get("portfolio_tax_pct", 15))
+        starting_cash_cents = _cash_flow_money_to_cents(
+            data.get("starting_cash", 0), "Starting cash"
+        )
+    except (TypeError, ValueError) as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+    surplus_mode = str(data.get("surplus_mode", "cash")).lower()
+    if not 1 <= horizon <= 50:
+        conn.close()
+        return jsonify(error="Horizon must be between 1 and 50 years."), 400
+    if not -10 <= inflation <= 30:
+        conn.close()
+        return jsonify(error="Expense inflation must be between -10 and 30."), 400
+    if not 0 <= tax_rate <= 95:
+        conn.close()
+        return jsonify(error="Portfolio tax rate must be between 0 and 95."), 400
+    if surplus_mode not in {"cash", "reinvest"}:
+        conn.close()
+        return jsonify(error="Surplus mode must be cash or reinvest."), 400
+    conn.execute(
+        """INSERT INTO cash_flow_settings
+           (plan_id, horizon_years, expense_inflation_pct, portfolio_tax_pct,
+            starting_cash_cents, surplus_mode, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(plan_id) DO UPDATE SET
+               horizon_years = excluded.horizon_years,
+               expense_inflation_pct = excluded.expense_inflation_pct,
+               portfolio_tax_pct = excluded.portfolio_tax_pct,
+               starting_cash_cents = excluded.starting_cash_cents,
+               surplus_mode = excluded.surplus_mode,
+               updated_at = CURRENT_TIMESTAMP""",
+        (
+            plan["id"],
+            horizon,
+            inflation,
+            tax_rate,
+            starting_cash_cents,
+            surplus_mode,
+        ),
+    )
+    _cash_flow_touch_plan(conn, plan["id"])
+    conn.commit()
+    result = _cash_flow_settings_for_plan(conn, plan["id"])
+    conn.close()
+    return jsonify(settings=result)
+
+
+@app.route("/api/cash-flow/summary", methods=["GET"])
+def cash_flow_summary():
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan = _cash_flow_plan_for_scope(conn, request.args.get("plan_id"))
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    try:
+        month = _cash_flow_month_or_current(request.args.get("month"))
+    except ValueError as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+    settings = _cash_flow_settings_for_plan(conn, plan["id"])
+    series = _expand_cash_flow_plan(conn, plan["id"], month, 12)
+    current = series[0]
+    is_aggregate, profile_ids = get_profile_filter()
+    portfolio_profile_ids = _cash_profile_ids_for_read(
+        conn, is_aggregate, profile_ids
+    )
+    portfolio = _cash_flow_portfolio_snapshot(conn, portfolio_profile_ids)
+    portfolio_monthly_gross = portfolio["annual_income"] / 12.0
+    portfolio_monthly_net = portfolio_monthly_gross * (
+        1.0 - settings["portfolio_tax_pct"] / 100.0
+    )
+    total_spendable = portfolio_monthly_net + current["additional_income_net"]
+    gap = total_spendable - current["expenses"]
+    average_expenses = sum(row["expenses"] for row in series) / len(series)
+    average_income = sum(row["additional_income_net"] for row in series) / len(series)
+    result = {
+        **current,
+        "plan": _serialize_cash_flow_plan(plan),
+        "portfolio_value": portfolio["value"],
+        "portfolio_profile_count": portfolio["profile_count"],
+        "portfolio_annual_income": portfolio["annual_income"],
+        "portfolio_monthly_income_gross": round(portfolio_monthly_gross, 2),
+        "portfolio_monthly_income_net": round(portfolio_monthly_net, 2),
+        "total_spendable_income": round(total_spendable, 2),
+        "surplus_shortfall": round(gap, 2),
+        "coverage_ratio": (
+            round(total_spendable / current["expenses"], 4)
+            if current["expenses"] > 0
+            else None
+        ),
+        "covered": gap >= -0.005,
+        "normalized_monthly_expenses": round(average_expenses, 2),
+        "normalized_portfolio_required": round(
+            max(0.0, average_expenses - average_income), 2
+        ),
+    }
+    conn.commit()
+    conn.close()
+    return jsonify(summary=result)
+
+
+@app.route("/api/cash-flow/series", methods=["GET"])
+def cash_flow_series():
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan = _cash_flow_plan_for_scope(conn, request.args.get("plan_id"))
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    try:
+        start_month = _cash_flow_month_or_current(request.args.get("start_month"))
+        months = max(1, min(600, int(request.args.get("months", 12))))
+        series = _expand_cash_flow_plan(conn, plan["id"], start_month, months)
+    except (ValueError, TypeError) as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+    conn.commit()
+    conn.close()
+    return jsonify(
+        plan=_serialize_cash_flow_plan(plan),
+        start_month=start_month,
+        months=months,
+        series=series,
+    )
+
+
+@app.route("/api/cash-flow/simulate", methods=["POST"])
+def cash_flow_simulate():
+    data = request.get_json(silent=True) or {}
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan = _cash_flow_plan_for_scope(conn, data.get("plan_id"))
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    settings = _cash_flow_settings_for_plan(conn, plan["id"])
+    try:
+        start_month = _cash_flow_month_or_current(data.get("start_month"))
+        horizon = int(data.get("horizon_years", settings["horizon_years"]))
+    except (TypeError, ValueError) as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+    if not 1 <= horizon <= 50:
+        conn.close()
+        return jsonify(error="Horizon must be between 1 and 50 years."), 400
+
+    months = horizon * 12
+    series = _expand_cash_flow_plan(conn, plan["id"], start_month, months)
+    is_aggregate, profile_ids = get_profile_filter()
+    portfolio_profile_ids = _cash_profile_ids_for_read(
+        conn, is_aggregate, profile_ids
+    )
+    portfolio = _cash_flow_portfolio_snapshot(conn, portfolio_profile_ids)
+    results = []
+    for scenario in ("bullish", "neutral", "bearish"):
+        for include_income in (True, False):
+            results.append(
+                _simulate_cash_flow_sustainability(
+                    series,
+                    portfolio_value=portfolio["value"],
+                    annual_portfolio_income=portfolio["annual_income"],
+                    portfolio_tax_pct=settings["portfolio_tax_pct"],
+                    starting_cash=settings["starting_cash"],
+                    surplus_mode=settings["surplus_mode"],
+                    scenario=scenario,
+                    include_additional_income=include_income,
+                )
+            )
+    conn.commit()
+    conn.close()
+    return jsonify(
+        plan=_serialize_cash_flow_plan(plan),
+        settings=settings,
+        start_month=start_month,
+        horizon_years=horizon,
+        portfolio=portfolio,
+        results=results,
+    )
+
+
 def _dividend_payment_profile_ids_for_read(conn, profile_ids):
     ids = []
     for pid in profile_ids or [1]:
@@ -305,15 +902,27 @@ def _dividend_payment_profile_ids_for_read(conn, profile_ids):
 
 
 def _dividend_payment_totals_by_ticker(conn, profile_ids):
+    """Sum dividend_payments per ticker, scoped to the current holding lot.
+
+    A ticker can be sold and later re-bought in the same account. The
+    dividend_payments ledger keeps every historical payment, including ones
+    from before the current purchase_date. Joining against the live
+    all_account_info row and requiring payment_date >= purchase_date keeps
+    those pre-purchase payments from inflating total_divs_received (and thus
+    total_return) for a freshly (re)opened position.
+    """
     ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
     if not ids:
         return {}
     placeholders = ",".join("?" * len(ids))
     rows = conn.execute(
-        f"""SELECT ticker, COALESCE(SUM(amount), 0) AS total_divs_received
-            FROM dividend_payments
-            WHERE profile_id IN ({placeholders})
-            GROUP BY ticker""",
+        f"""SELECT dp.ticker, COALESCE(SUM(dp.amount), 0) AS total_divs_received
+            FROM dividend_payments dp
+            JOIN all_account_info a
+              ON a.ticker = dp.ticker AND a.profile_id = dp.profile_id
+            WHERE dp.profile_id IN ({placeholders})
+              AND (a.purchase_date IS NULL OR dp.payment_date >= a.purchase_date)
+            GROUP BY dp.ticker""",
         ids,
     ).fetchall()
     return {
@@ -340,26 +949,40 @@ def _apply_dividend_payment_total_floor(rows, payment_totals):
 def _cumulative_invested_cost_by_ticker(conn, profile_ids):
     """Total out-of-pocket cash invested per ticker, from BUY transactions.
 
-    Used as the "original cost" denominator for paid-for-itself. total_divs_received
-    is a LIFETIME figure (every dividend the ledger ever recorded), but the current
-    cost basis only reflects the shares still held. When a position has been trimmed,
-    dividing lifetime dividends by the residual basis produces absurd percentages
-    (a near-sold holding shows tens of thousands of percent). The cumulative cash
-    invested is the comparable denominator. DRIP reinvestment buys are excluded so
-    only out-of-pocket capital counts toward "original cost".
+    Used as the "original cost" denominator for paid-for-itself and total return.
+    total_divs_received is a LIFETIME figure (every dividend the ledger ever
+    recorded), but the current cost basis only reflects the shares still held.
+    When a position has been trimmed, dividing lifetime dividends by the residual
+    basis produces absurd percentages (a near-sold holding shows tens of
+    thousands of percent). The cumulative cash invested is the comparable
+    denominator. DRIP reinvestment buys are excluded so only out-of-pocket
+    capital counts toward "original cost".
+
+    A ticker can also be sold to zero and later re-bought as a fresh lot (e.g.
+    EGGY: sold down to zero in Sept 2025, re-bought 2026-06-29). BUY
+    transactions from that earlier, closed-out lot aren't capital behind the
+    current position, so — exactly like the dividend-payment floor above —
+    join against the live holding row and only count BUYs on/after its
+    purchase_date. Otherwise a freshly reopened position with zero dividends
+    could show a *lower* total return than price return (invested inflated
+    above the tiny fresh cost basis), which is never mathematically valid when
+    dividends are non-negative.
     """
     ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
     if not ids:
         return {}
     placeholders = ",".join("?" * len(ids))
     rows = conn.execute(
-        f"""SELECT ticker, COALESCE(SUM(shares * price_per_share), 0) AS invested
-            FROM transactions
-            WHERE profile_id IN ({placeholders})
-              AND UPPER(transaction_type) = 'BUY'
-              AND COALESCE(notes, '') NOT LIKE '%DRIP%'
-              AND COALESCE(notes, '') NOT LIKE '%reinvest%'
-            GROUP BY ticker""",
+        f"""SELECT t.ticker, COALESCE(SUM(t.shares * t.price_per_share), 0) AS invested
+            FROM transactions t
+            JOIN all_account_info a
+              ON a.ticker = t.ticker AND a.profile_id = t.profile_id
+            WHERE t.profile_id IN ({placeholders})
+              AND UPPER(t.transaction_type) = 'BUY'
+              AND COALESCE(t.notes, '') NOT LIKE '%DRIP%'
+              AND COALESCE(t.notes, '') NOT LIKE '%reinvest%'
+              AND (a.purchase_date IS NULL OR t.transaction_date >= a.purchase_date)
+            GROUP BY t.ticker""",
         ids,
     ).fetchall()
     return {row["ticker"]: _num_or_zero(row["invested"]) for row in rows}
@@ -627,6 +1250,10 @@ def _apply_basis_mode_to_holdings(results, invested_by_ticker=None):
         invested = _num_or_zero(invested_by_ticker.get(r.get("ticker"))) if invested_by_ticker else 0.0
         if invested > pfi_cost:
             pfi_cost = invested
+        divs_unreliable = (
+            invested == 0 and total_divs is not None and pfi_cost > 0
+            and float(total_divs) > pfi_cost * _PFI_NO_TXN_MAX_RATIO
+        )
         if pfi_cost > 0 and total_divs is not None:
             # Guard: with no buy history (invested == 0) we can't reconstruct the
             # original cost of a trimmed position, so lifetime dividends would be
@@ -634,12 +1261,21 @@ def _apply_basis_mode_to_holdings(results, invested_by_ticker=None):
             # the number is a data artifact, not a real recovery %, so surface it as
             # unknown (—) instead of a fabricated value. Import the account's
             # transactions to restore the true figure.
-            if invested == 0 and float(total_divs) > pfi_cost * _PFI_NO_TXN_MAX_RATIO:
+            if divs_unreliable:
                 r["paid_for_itself"] = None
             else:
                 r["paid_for_itself"] = round(float(total_divs) / pfi_cost, 6)
         if cost > 0 and annual is not None:
             r["annual_yield_on_cost"] = round(float(annual) / cost, 6)
+        # Total return (price change + lifetime dividends) has the exact same
+        # blowup risk as paid-for-itself: FEPI showed 5255% total return because
+        # its lifetime dividends were earned on far more shares than the 0.25
+        # remaining after a big trim, divided by that tiny residual basis. Reuse
+        # the same invested-cost floor and unreliable-dividend guard here so a
+        # trimmed position's total return is judged against the capital that
+        # actually earned those dividends, consistent with paid-for-itself.
+        r["total_return_basis"] = round(pfi_cost, 2) if pfi_cost > 0 else None
+        r["total_return_divs_component"] = 0.0 if divs_unreliable else _num_or_zero(total_divs)
     return results
 
 
@@ -27291,6 +27927,61 @@ def _distribution_compare_export_inner():
 # Used by both the single-ticker compute (_distribution_compare_compute) and the
 # basket simulator (_dc_simulate_basket / portfolio-run endpoint).
 
+def _dc_cash_flow_withdrawal_schedule(data, duration_months, *, historical=False):
+    """Resolve a shared cash-flow plan into withdrawals for Distribution Compare."""
+    plan_id = data.get("cash_flow_plan_id")
+    funding_mode = str(
+        data.get("cash_flow_funding_mode", "net_after_income")
+    ).lower()
+    if funding_mode not in {"gross_expenses", "net_after_income"}:
+        return None, None, "Unknown cash-flow funding target."
+
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    try:
+        plan = _cash_flow_plan_for_scope(conn, plan_id)
+        if not plan:
+            return None, None, "Cash-flow plan not found."
+        start_month = _cash_flow_month_or_current(data.get("cash_flow_start_month"))
+        if historical:
+            # A backtest cannot replay future one-time dates faithfully. Use a
+            # representative twelve-month average in today's dollars.
+            source = _expand_cash_flow_plan(conn, plan["id"], start_month, 12)
+            key = (
+                "expenses"
+                if funding_mode == "gross_expenses"
+                else "portfolio_required"
+            )
+            monthly = sum(float(row[key]) for row in source) / len(source)
+            schedule = [round(monthly, 2)] * max(1, int(duration_months))
+        else:
+            source = _expand_cash_flow_plan(
+                conn, plan["id"], start_month, duration_months
+            )
+            key = (
+                "expenses"
+                if funding_mode == "gross_expenses"
+                else "portfolio_required"
+            )
+            schedule = [round(float(row[key]), 2) for row in source]
+        meta = {
+            "plan_id": plan["id"],
+            "plan_name": plan["name"],
+            "plan_version": plan["version"],
+            "funding_mode": funding_mode,
+            "start_month": start_month,
+            "normalized_monthly_withdrawal": round(
+                sum(schedule) / len(schedule), 2
+            ) if schedule else 0.0,
+        }
+        conn.commit()
+        return schedule, meta, None
+    except (TypeError, ValueError) as exc:
+        return None, None, str(exc)
+    finally:
+        conn.close()
+
+
 def _dc_effective_withdrawal(base_withdrawal, month_index, current_pv, initial_inv, *,
                              strategy="fixed", withdrawal_pct=4.0,
                              dynamic_threshold_pct=80.0, dynamic_reduce_pct=25.0,
@@ -27472,6 +28163,8 @@ def _distribution_compare_compute():
 
     # Withdrawal strategy parameters
     withdrawal_strategy = data.get("withdrawal_strategy", "fixed")
+    cash_flow_schedule = None
+    cash_flow_meta = None
     withdrawal_pct = float(data.get("withdrawal_pct", 4))
     inflation_rate = data.get("inflation_rate")
     if inflation_rate is not None:
@@ -27545,11 +28238,20 @@ def _distribution_compare_compute():
         # income_vs_income: fund_c stays as income (not in growth_funds)
 
     def _compute_effective_withdrawal(base_withdrawal, month_index, current_pv, initial_inv):
+        strategy = withdrawal_strategy
+        applied_inflation = inflation_rate
+        if withdrawal_strategy == "cash_flow":
+            strategy = "fixed"
+            applied_inflation = None
+            if cash_flow_schedule:
+                base_withdrawal = cash_flow_schedule[
+                    min(month_index, len(cash_flow_schedule) - 1)
+                ]
         return _dc_effective_withdrawal(
             base_withdrawal, month_index, current_pv, initial_inv,
-            strategy=withdrawal_strategy, withdrawal_pct=withdrawal_pct,
+            strategy=strategy, withdrawal_pct=withdrawal_pct,
             dynamic_threshold_pct=dynamic_threshold_pct,
-            dynamic_reduce_pct=dynamic_reduce_pct, inflation_rate=inflation_rate)
+            dynamic_reduce_pct=dynamic_reduce_pct, inflation_rate=applied_inflation)
 
     def _compute_risk_metrics(portfolio_values, monthly_rows):
         return _dc_risk_metrics(portfolio_values, monthly_rows)
@@ -27560,6 +28262,13 @@ def _distribution_compare_compute():
     # ── HISTORICAL MODE ──
     if mode == "historical":
         duration_str = data.get("duration", "10y")
+        if withdrawal_strategy == "cash_flow":
+            cash_flow_schedule, cash_flow_meta, cash_flow_error = (
+                _dc_cash_flow_withdrawal_schedule(data, 12, historical=True)
+            )
+            if cash_flow_error:
+                return {"error": cash_flow_error}
+            monthly_withdrawal = cash_flow_schedule[0] if cash_flow_schedule else 0.0
 
         all_funds = [fa, fb]
         if fc:
@@ -27824,6 +28533,8 @@ def _distribution_compare_compute():
         results["data_start"] = common_start.strftime("%Y-%m-%d")
         results["cash_wedge_initial"] = cash_wedge_initial
         results["comparison_type"] = comparison_type
+        if cash_flow_meta:
+            results["cash_flow_plan"] = cash_flow_meta
         return results
 
     # ── SIMULATION MODE ──
@@ -27832,6 +28543,13 @@ def _distribution_compare_compute():
         duration_months = int(data.get("duration_months", 120))
         if duration_months < 1 or duration_months > 240:
             return {"error": "Simulation duration must be between 1 and 240 months (20 years max)."}
+        if withdrawal_strategy == "cash_flow":
+            cash_flow_schedule, cash_flow_meta, cash_flow_error = (
+                _dc_cash_flow_withdrawal_schedule(data, duration_months)
+            )
+            if cash_flow_error:
+                return {"error": cash_flow_error}
+            monthly_withdrawal = cash_flow_schedule[0] if cash_flow_schedule else 0.0
 
         bias_map = {"bullish": +0.010, "bearish": -0.015, "neutral": 0.0}
         vol_mult_map = {"bullish": 0.9, "bearish": 1.2, "neutral": 1.0}
@@ -28027,6 +28745,8 @@ def _distribution_compare_compute():
         results["months"] = date_labels
         results["cash_wedge_initial"] = cash_wedge_initial
         results["comparison_type"] = comparison_type
+        if cash_flow_meta:
+            results["cash_flow_plan"] = cash_flow_meta
         return results
 
     return {"error": f"Unknown mode: {mode}"}
@@ -28036,7 +28756,7 @@ def _dc_simulate_basket(legs, *, duration_months, market_type, monthly_withdrawa
                         withdrawal_strategy, withdrawal_pct, inflation_rate,
                         dynamic_reduce_pct, dynamic_threshold_pct,
                         cash_wedge_initial, is_growth, drip, name,
-                        price_path_cache=None):
+                        price_path_cache=None, monthly_withdrawal_schedule=None):
     """Simulate a basket of tickers as a single "fund" over ``duration_months``.
 
     Mirrors the single-ticker simulate loop in ``_distribution_compare_compute`` but
@@ -28191,11 +28911,20 @@ def _dc_simulate_basket(legs, *, duration_months, market_type, monthly_withdrawa
         cum_distributions += basket_income
 
         current_pv = _basket_value(m_idx)
+        withdrawal_base = monthly_withdrawal
+        effective_strategy = withdrawal_strategy
+        effective_inflation = inflation_rate
+        if withdrawal_strategy == "cash_flow" and monthly_withdrawal_schedule:
+            withdrawal_base = monthly_withdrawal_schedule[
+                min(month_index, len(monthly_withdrawal_schedule) - 1)
+            ]
+            effective_strategy = "fixed"
+            effective_inflation = None
         effective_withdrawal = _dc_effective_withdrawal(
-            monthly_withdrawal, month_index, current_pv, investment,
-            strategy=withdrawal_strategy, withdrawal_pct=withdrawal_pct,
+            withdrawal_base, month_index, current_pv, investment,
+            strategy=effective_strategy, withdrawal_pct=withdrawal_pct,
             dynamic_threshold_pct=dynamic_threshold_pct,
-            dynamic_reduce_pct=dynamic_reduce_pct, inflation_rate=inflation_rate)
+            dynamic_reduce_pct=dynamic_reduce_pct, inflation_rate=effective_inflation)
 
         wedge_drawn = 0.0
         if is_growth:
@@ -28584,6 +29313,8 @@ def _distribution_compare_portfolio_compute():
         return {"error": "Monthly withdrawal cannot be negative."}
 
     withdrawal_strategy = data.get("withdrawal_strategy", "fixed")
+    cash_flow_schedule = None
+    cash_flow_meta = None
     try:
         withdrawal_pct = float(data.get("withdrawal_pct", 4))
     except (TypeError, ValueError):
@@ -28608,6 +29339,14 @@ def _distribution_compare_portfolio_compute():
         cash_wedge_initial = 0.0
     if cash_wedge_initial < 0:
         cash_wedge_initial = 0.0
+
+    if withdrawal_strategy == "cash_flow":
+        cash_flow_schedule, cash_flow_meta, cash_flow_error = (
+            _dc_cash_flow_withdrawal_schedule(data, duration_months)
+        )
+        if cash_flow_error:
+            return {"error": cash_flow_error}
+        monthly_withdrawal = cash_flow_schedule[0] if cash_flow_schedule else 0.0
 
     exclude_penny = bool(data.get("exclude_penny", False))
     try:
@@ -28644,7 +29383,8 @@ def _distribution_compare_portfolio_compute():
             dynamic_reduce_pct=dynamic_reduce_pct, dynamic_threshold_pct=dynamic_threshold_pct,
             cash_wedge_initial=cash_wedge_initial, is_growth=side["is_growth"],
             drip=side["drip"], name=side["name"],
-            price_path_cache=price_path_cache)
+            price_path_cache=price_path_cache,
+            monthly_withdrawal_schedule=cash_flow_schedule)
         if isinstance(fr, dict) and "error" in fr:
             return {"error": fr["error"]}
         results[fkey] = fr
@@ -28653,6 +29393,8 @@ def _distribution_compare_portfolio_compute():
     results["cash_wedge_initial"] = cash_wedge_initial
     results["comparison_type"] = "portfolio"
     results["attribution"] = _dc_build_comparison_attribution(results)
+    if cash_flow_meta:
+        results["cash_flow_plan"] = cash_flow_meta
     return results
 
 

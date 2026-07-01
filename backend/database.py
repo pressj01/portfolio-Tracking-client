@@ -94,6 +94,83 @@ def ensure_tables_exist(conn=None):
         INSERT OR IGNORE INTO profiles (id, name, include_in_owner, positions_managed) VALUES (1, 'Owner', 1, 0)
     """)
 
+    # ── shared cash-flow plans ───────────────────────────────────────────────
+    # A plan belongs to either one portfolio profile or one aggregate. Keeping
+    # the plan separate from its line items lets other tools (Distribution
+    # Compare, Safe Withdrawal, etc.) reuse the same saved spending schedule.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cash_flow_plans (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            scope_type  TEXT NOT NULL CHECK (scope_type IN ('profile', 'aggregate')),
+            scope_id    INTEGER NOT NULL,
+            is_default  INTEGER NOT NULL DEFAULT 0,
+            version     INTEGER NOT NULL DEFAULT 1,
+            created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (scope_type, scope_id, name)
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cash_flow_plans_scope
+        ON cash_flow_plans (scope_type, scope_id, is_default)
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cash_flow_items (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id             INTEGER NOT NULL,
+            kind                TEXT NOT NULL CHECK (kind IN ('expense', 'income')),
+            name                TEXT NOT NULL,
+            category            TEXT,
+            amount_cents        INTEGER NOT NULL DEFAULT 0,
+            frequency           TEXT NOT NULL DEFAULT 'monthly',
+            start_date          TEXT NOT NULL,
+            end_date            TEXT,
+            essential           INTEGER NOT NULL DEFAULT 0,
+            tax_rate_pct        REAL,
+            annual_change_pct   REAL,
+            notes               TEXT,
+            active              INTEGER NOT NULL DEFAULT 1,
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cash_flow_items_plan
+        ON cash_flow_items (plan_id, kind, active)
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cash_flow_month_overrides (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id         INTEGER NOT NULL,
+            month           TEXT NOT NULL,
+            amount_cents    INTEGER,
+            excluded        INTEGER NOT NULL DEFAULT 0,
+            notes           TEXT,
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (item_id, month)
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cash_flow_overrides_item_month
+        ON cash_flow_month_overrides (item_id, month)
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cash_flow_settings (
+            plan_id                 INTEGER PRIMARY KEY,
+            horizon_years           INTEGER NOT NULL DEFAULT 20,
+            expense_inflation_pct   REAL NOT NULL DEFAULT 3,
+            portfolio_tax_pct       REAL NOT NULL DEFAULT 15,
+            starting_cash_cents     INTEGER NOT NULL DEFAULT 0,
+            surplus_mode            TEXT NOT NULL DEFAULT 'cash',
+            updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     # ── all_account_info ───────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS all_account_info (

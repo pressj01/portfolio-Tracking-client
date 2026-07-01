@@ -14,8 +14,37 @@ function fmt$(v) { return formatMoneyWhole(v, { zeroIfInvalid: true }) }
 function fmtS(v) { return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
 function fmtPct(v) { return (v >= 0 ? '+' : '') + v.toFixed(2) + '%' }
 function better(a, b, lower) { return lower ? (a < b ? 'dc-better' : '') : (a > b ? 'dc-better' : '') }
+function currentCashFlowMonth() { return new Date().toISOString().slice(0, 7) }
 
 const FUND_COLORS = { a: '#7ecfff', b: '#ffc107', c: '#ff6b6b' }
+
+function CashFlowWithdrawalControls({ plans, planId, onPlanChange, fundingMode, onFundingModeChange, summary }) {
+  const amount = fundingMode === 'gross_expenses'
+    ? summary?.normalized_monthly_expenses
+    : summary?.normalized_portfolio_required
+  return (
+    <>
+      <div className="dc-field">
+        <label>Cash Flow Plan</label>
+        <select value={planId || ''} onChange={e => onPlanChange(Number(e.target.value))}>
+          {plans.map(plan => <option key={plan.id} value={plan.id}>{plan.name}</option>)}
+        </select>
+      </div>
+      <div className="dc-field">
+        <label>Portfolio must fund</label>
+        <select value={fundingMode} onChange={e => onFundingModeChange(e.target.value)}>
+          <option value="net_after_income">Expenses after additional income</option>
+          <option value="gross_expenses">All expenses</option>
+        </select>
+      </div>
+      <div className="dc-cash-flow-preview">
+        <span>Normalized monthly need</span>
+        <strong>{formatMoneyWhole(amount || 0)}</strong>
+        <small>Future simulations use the exact month-by-month schedule.</small>
+      </div>
+    </>
+  )
+}
 
 const TBL_COLS_BASE = [
   { key: '_month', label: 'Month', fmt: v => v },
@@ -443,6 +472,10 @@ export default function DistributionCompare() {
   const [inflationRate, setInflationRate] = useState(3)
   const [dynamicReducePct, setDynamicReducePct] = useState(25)
   const [dynamicThresholdPct, setDynamicThresholdPct] = useState(80)
+  const [cashFlowPlans, setCashFlowPlans] = useState([])
+  const [cashFlowPlanId, setCashFlowPlanId] = useState(null)
+  const [cashFlowFundingMode, setCashFlowFundingMode] = useState('net_after_income')
+  const [cashFlowSummary, setCashFlowSummary] = useState(null)
 
   // Fund A & B
   const [tickerA, setTickerA] = useState('')
@@ -466,6 +499,33 @@ export default function DistributionCompare() {
   const [infoC, setInfoC] = useState({ text: '', warn: false })
   const [lookupC, setLookupC] = useState(null)
   const [dripC, setDripC] = useState(true)
+
+  useEffect(() => {
+    pf('/api/cash-flow/plans')
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) return
+        const plans = data.plans || []
+        setCashFlowPlans(plans)
+        setCashFlowPlanId(current => (
+          current && plans.some(plan => plan.id === current) ? current : plans[0]?.id || null
+        ))
+      })
+      .catch(() => {})
+  }, [pf, selection])
+
+  useEffect(() => {
+    if (!cashFlowPlanId) {
+      setCashFlowSummary(null)
+      return
+    }
+    pf(`/api/cash-flow/summary?plan_id=${cashFlowPlanId}&month=${currentCashFlowMonth()}`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.error) setCashFlowSummary(data.summary)
+      })
+      .catch(() => {})
+  }, [pf, cashFlowPlanId, selection])
 
   // Portfolio tickers
   const [portfolioTickers, setPortfolioTickers] = useState([])
@@ -588,6 +648,9 @@ export default function DistributionCompare() {
       inflation_rate: inflationAdj ? inflationRate : null,
       dynamic_reduce_pct: dynamicReducePct,
       dynamic_threshold_pct: dynamicThresholdPct,
+      cash_flow_plan_id: cashFlowPlanId,
+      cash_flow_funding_mode: cashFlowFundingMode,
+      cash_flow_start_month: currentCashFlowMonth(),
       fund_a: { ticker: tA, investment: investA, yield_override: yieldA ? parseFloat(yieldA) : null, drip: dripA },
       fund_b: { ticker: tB, investment: investB, yield_override: yieldB ? parseFloat(yieldB) : null, drip: dripB },
     }
@@ -602,7 +665,7 @@ export default function DistributionCompare() {
       body.duration = duration
     }
     return body
-  }, [mode, market, compareType, duration, withdrawal, cashWedge, withdrawalStrategy, withdrawalPct, inflationAdj, inflationRate, dynamicReducePct, dynamicThresholdPct, tickerA, tickerB, investA, investB, yieldA, yieldB, dripA, dripB, showFundC, tickerC, investC, yieldC, dripC])
+  }, [mode, market, compareType, duration, withdrawal, cashWedge, withdrawalStrategy, withdrawalPct, inflationAdj, inflationRate, dynamicReducePct, dynamicThresholdPct, cashFlowPlanId, cashFlowFundingMode, tickerA, tickerB, investA, investB, yieldA, yieldB, dripA, dripB, showFundC, tickerC, investC, yieldC, dripC])
 
   // Run comparison
   const run = useCallback(() => {
@@ -684,6 +747,9 @@ export default function DistributionCompare() {
       inflation_rate: inflationAdj ? inflationRate : null,
       dynamic_reduce_pct: dynamicReducePct,
       dynamic_threshold_pct: dynamicThresholdPct,
+      cash_flow_plan_id: cashFlowPlanId,
+      cash_flow_funding_mode: cashFlowFundingMode,
+      cash_flow_start_month: currentCashFlowMonth(),
       cash_wedge: cashWedge,
       exclude_penny: excludePenny,
       penny_threshold: parseFloat(pennyThreshold) || 0,
@@ -709,7 +775,7 @@ export default function DistributionCompare() {
         setResults(d)
       })
       .catch(e => { setLoading(false); setError('Request failed: ' + e.message) })
-  }, [duration, market, withdrawalStrategy, withdrawal, withdrawalPct, inflationAdj, inflationRate, dynamicReducePct, dynamicThresholdPct, cashWedge, excludePenny, pennyThreshold, pSides, showPSideC, pf])
+  }, [duration, market, withdrawalStrategy, withdrawal, withdrawalPct, inflationAdj, inflationRate, dynamicReducePct, dynamicThresholdPct, cashFlowPlanId, cashFlowFundingMode, cashWedge, excludePenny, pennyThreshold, pSides, showPSideC, pf])
 
   // Export
   const exportExcel = useCallback(() => {
@@ -739,9 +805,10 @@ export default function DistributionCompare() {
     setSavedSetups(prev => [...prev, {
       name, tickerA, tickerB, investA, investB, yieldA, yieldB, duration, withdrawal, cashWedge,
       mode, compareType, market, withdrawalStrategy, withdrawalPct, inflationAdj, inflationRate,
-      dynamicReducePct, dynamicThresholdPct, dripA, dripB, showFundC, tickerC, investC, yieldC, dripC,
+      dynamicReducePct, dynamicThresholdPct, cashFlowPlanId, cashFlowFundingMode,
+      dripA, dripB, showFundC, tickerC, investC, yieldC, dripC,
     }])
-  }, [dialog, tickerA, tickerB, investA, investB, yieldA, yieldB, duration, withdrawal, cashWedge, mode, compareType, market, withdrawalStrategy, withdrawalPct, inflationAdj, inflationRate, dynamicReducePct, dynamicThresholdPct, dripA, dripB, showFundC, tickerC, investC, yieldC, dripC])
+  }, [dialog, tickerA, tickerB, investA, investB, yieldA, yieldB, duration, withdrawal, cashWedge, mode, compareType, market, withdrawalStrategy, withdrawalPct, inflationAdj, inflationRate, dynamicReducePct, dynamicThresholdPct, cashFlowPlanId, cashFlowFundingMode, dripA, dripB, showFundC, tickerC, investC, yieldC, dripC])
 
   const loadSetup = useCallback((s) => {
     setTickerA(s.tickerA || ''); setTickerB(s.tickerB || '')
@@ -753,6 +820,8 @@ export default function DistributionCompare() {
     setWithdrawalStrategy(s.withdrawalStrategy || 'fixed'); setWithdrawalPct(s.withdrawalPct || 4)
     setInflationAdj(s.inflationAdj || false); setInflationRate(s.inflationRate || 3)
     setDynamicReducePct(s.dynamicReducePct || 25); setDynamicThresholdPct(s.dynamicThresholdPct || 80)
+    if (s.cashFlowPlanId) setCashFlowPlanId(s.cashFlowPlanId)
+    setCashFlowFundingMode(s.cashFlowFundingMode || 'net_after_income')
     setDripA(s.dripA !== false); setDripB(s.dripB !== false)
     setShowFundC(s.showFundC || false); setTickerC(s.tickerC || '')
     setInvestC(s.investC || 100000); setYieldC(s.yieldC || ''); setDripC(s.dripC !== false)
@@ -1202,8 +1271,19 @@ export default function DistributionCompare() {
               <option value="cost_pct_4">4% Rule (of cost)</option>
               <option value="cost_pct_8">8% Rule (of cost)</option>
               <option value="dynamic">Dynamic (Reduce on Drawdown)</option>
+              <option value="cash_flow">Cash Flow Plan</option>
             </select>
           </div>
+          {withdrawalStrategy === 'cash_flow' && (
+            <CashFlowWithdrawalControls
+              plans={cashFlowPlans}
+              planId={cashFlowPlanId}
+              onPlanChange={setCashFlowPlanId}
+              fundingMode={cashFlowFundingMode}
+              onFundingModeChange={setCashFlowFundingMode}
+              summary={cashFlowSummary}
+            />
+          )}
           {(withdrawalStrategy === 'fixed' || withdrawalStrategy === 'dynamic') && (
             <div className="dc-field">
               <label>Monthly Withdrawal ($)</label>
@@ -1252,14 +1332,14 @@ export default function DistributionCompare() {
               <input type="number" value={cashWedge} onChange={e => setCashWedge(parseFloat(e.target.value) || 0)} min="0" step="1000" />
             </div>
           )}
-          <div className="dc-field" style={{ minWidth: 'auto' }}>
+          {withdrawalStrategy !== 'cash_flow' && <div className="dc-field" style={{ minWidth: 'auto' }}>
             <label style={{ visibility: 'hidden' }}>_</label>
             <label style={{ color: 'var(--text-dim)', fontSize: '0.82rem', cursor: 'pointer' }}>
               <input type="checkbox" checked={inflationAdj} onChange={e => setInflationAdj(e.target.checked)} style={{ marginRight: 4, accentColor: 'var(--accent-bright)' }} />
               Inflation adjust
             </label>
-          </div>
-          {inflationAdj && (
+          </div>}
+          {withdrawalStrategy !== 'cash_flow' && inflationAdj && (
             <div className="dc-field" style={{ minWidth: 80 }}>
               <label>Rate (%/yr)</label>
               <input type="number" value={inflationRate} onChange={e => setInflationRate(parseFloat(e.target.value) || 0)} min="0" max="20" step="0.5" />
@@ -1319,8 +1399,19 @@ export default function DistributionCompare() {
                 <option value="cost_pct_4">4% Rule (of cost)</option>
                 <option value="cost_pct_8">8% Rule (of cost)</option>
                 <option value="dynamic">Dynamic (Reduce on Drawdown)</option>
+                <option value="cash_flow">Cash Flow Plan</option>
               </select>
             </div>
+            {withdrawalStrategy === 'cash_flow' && (
+              <CashFlowWithdrawalControls
+                plans={cashFlowPlans}
+                planId={cashFlowPlanId}
+                onPlanChange={setCashFlowPlanId}
+                fundingMode={cashFlowFundingMode}
+                onFundingModeChange={setCashFlowFundingMode}
+                summary={cashFlowSummary}
+              />
+            )}
             {(withdrawalStrategy === 'fixed' || withdrawalStrategy === 'dynamic') && (
               <div className="dc-field">
                 <label>Monthly Withdrawal ($)</label>
@@ -1379,14 +1470,14 @@ export default function DistributionCompare() {
               <label>Cash Wedge ($) <span style={{ color: 'var(--p-6b7b8d)' }}>— growth sides</span></label>
               <input type="number" value={cashWedge} onChange={e => setCashWedge(parseFloat(e.target.value) || 0)} min="0" step="1000" />
             </div>
-            <div className="dc-field" style={{ minWidth: 'auto' }}>
+            {withdrawalStrategy !== 'cash_flow' && <div className="dc-field" style={{ minWidth: 'auto' }}>
               <label style={{ visibility: 'hidden' }}>_</label>
               <label style={{ color: 'var(--text-dim)', fontSize: '0.82rem', cursor: 'pointer' }}>
                 <input type="checkbox" checked={inflationAdj} onChange={e => setInflationAdj(e.target.checked)} style={{ marginRight: 4, accentColor: 'var(--accent-bright)' }} />
                 Inflation adjust
               </label>
-            </div>
-            {inflationAdj && (
+            </div>}
+            {withdrawalStrategy !== 'cash_flow' && inflationAdj && (
               <div className="dc-field" style={{ minWidth: 80 }}>
                 <label>Rate (%/yr)</label>
                 <input type="number" value={inflationRate} onChange={e => setInflationRate(parseFloat(e.target.value) || 0)} min="0" max="20" step="0.5" />
