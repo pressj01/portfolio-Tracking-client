@@ -32,6 +32,7 @@ const RETURN_MODES = [
 ]
 
 const COLORS = ['#2f7df6', '#ef7426', '#26a69a', '#b39ddb', '#ffb74d', '#4dd0e1', '#f06292']
+const DIMMED_COLOR = '#7c8595'
 
 const TRACE_STYLES = {
   price: { dash: 'dot', width: 2, label: 'Price' },
@@ -232,6 +233,7 @@ export default function StockComparer() {
   const pf = useProfileFetch()
   const { isDark } = useTheme()
   const [tickers, setTickers] = useState([])
+  const [highlightedSymbol, setHighlightedSymbol] = useState('')
   const [input, setInput] = useState('')
   const inputRef = useRef(null)
   const [period, setPeriod] = useState('6mo')
@@ -442,8 +444,13 @@ export default function StockComparer() {
 
   const removeTicker = (sym) => {
     setTickers(prev => prev.filter(t => t !== sym))
+    setHighlightedSymbol(prev => prev === sym ? '' : prev)
     setTimeout(() => inputRef.current?.focus(), 0)
   }
+
+  const toggleHighlight = useCallback((sym) => {
+    setHighlightedSymbol(prev => prev === sym ? '' : sym)
+  }, [])
 
   const symbols = useMemo(() => tickers.map(normalize).filter(Boolean), [tickers])
   const reinvestDisabled = !['all3', 'all4'].includes(returnMode)
@@ -477,11 +484,18 @@ export default function StockComparer() {
     const [visibleStart, visibleEnd] = visibleDateRange(data, effectiveReturnRange, true)
     const titleWindow = activeReturnRange || normalizeReturnRange(fetchRange)
 
-    symbols.forEach((sym, idx) => {
+    // When a symbol is highlighted, draw it last so its line sits on top of
+    // the dimmed ones instead of being covered by them.
+    const orderedSymbols = highlightedSymbol && symbols.includes(highlightedSymbol)
+      ? [...symbols.filter(s => s !== highlightedSymbol), highlightedSymbol]
+      : symbols
+    orderedSymbols.forEach((sym) => {
+      const idx = symbols.indexOf(sym)
       const dates = data.series[sym]?.dates || []
       const traceMap = data.series[sym]?.traces || {}
       Object.entries(traceMap).forEach(([key, values]) => {
-        const color = COLORS[idx % COLORS.length]
+        const isDimmed = highlightedSymbol && highlightedSymbol !== sym
+        const color = isDimmed ? DIMMED_COLOR : COLORS[idx % COLORS.length]
         const style = TRACE_STYLES[key] || TRACE_STYLES.total
         const baseIdx = firstVisibleIndex(dates, visibleStart, visibleEnd)
         const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
@@ -641,7 +655,7 @@ export default function StockComparer() {
         annotations,
       },
     }
-  }, [data, symbols, period, reinvest, returnPctMode, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange])
+  }, [data, symbols, period, reinvest, returnPctMode, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange, highlightedSymbol])
 
   const rows = useMemo(() => {
     const profiles = data?.profiles || {}
@@ -752,9 +766,20 @@ export default function StockComparer() {
       <div className="etfc-toolbar">
         <div className="etfc-chip-input" onClick={() => inputRef.current?.focus()}>
           {tickers.map((sym, idx) => (
-            <span key={sym} className="etfc-chip" style={{ borderColor: COLORS[idx % COLORS.length] }}>
-              {sym}
-              <button onClick={() => removeTicker(sym)}>×</button>
+            <span
+              key={sym}
+              className={`etfc-chip${highlightedSymbol === sym ? ' etfc-chip-highlighted' : ''}`}
+              style={{ borderColor: COLORS[idx % COLORS.length] }}
+            >
+              <button
+                type="button"
+                className="etfc-chip-symbol"
+                onClick={(e) => { e.stopPropagation(); toggleHighlight(sym) }}
+                title={highlightedSymbol === sym ? 'Click to show all tickers' : 'Click to highlight this ticker on the chart'}
+              >
+                {sym}
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); removeTicker(sym) }}>×</button>
             </span>
           ))}
           <input

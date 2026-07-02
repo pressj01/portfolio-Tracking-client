@@ -1946,6 +1946,7 @@ const RETURN_MODES = [
 ]
 
 const CHIP_COLORS = ['#a0f0c0', '#FFD700', '#ff7eb3', '#b39ddb', '#ff8a65', '#4dd0e1', '#aed581', '#f48fb1']
+const DIMMED_RETURN_COLOR = '#7c8595'
 
 // Match the web version: same blue family, distinct dash patterns
 const TRACE_STYLES = {
@@ -2295,6 +2296,7 @@ export default function ETFScreen() {
   const [returnPctMode, setReturnPctMode] = useState(true)
   const [showRangeSlider, setShowRangeSlider] = useState(false)
   const [returnXRange, setReturnXRange] = useState([null, null])
+  const [highlightedSymbol, setHighlightedSymbol] = useState('')
   const [indicatorMenuOpen, setIndicatorMenuOpen] = useState(false)
   const [indicatorSearch, setIndicatorSearch] = useState('')
   const [visibleAnalysisColumns, setVisibleAnalysisColumns] = useState(DEFAULT_ANALYSIS_COLUMNS)
@@ -2533,6 +2535,11 @@ export default function ETFScreen() {
     // Keep the current range-slider window when switching tickers (the period
     // effect handles resets); preserving the zoom is the desired behavior.
     if (next) setCompareTickers(prev => prev.filter(t => t !== next))
+    setHighlightedSymbol(prev => prev === primaryTicker ? '' : prev)
+  }
+
+  const toggleHighlight = (sym) => {
+    setHighlightedSymbol(prev => prev === sym ? '' : sym)
   }
 
   const addCompareSymbols = (value) => {
@@ -2558,6 +2565,7 @@ export default function ETFScreen() {
   }
   const removeCompare = (s) => {
     setCompareTickers(prev => prev.filter(t => t !== s))
+    setHighlightedSymbol(prev => prev === s ? '' : prev)
   }
 
   const addStudy = (type) => {
@@ -2822,7 +2830,14 @@ export default function ETFScreen() {
     const annotations = []
     const labelCandidates = []
     const visibleYValues = []
-    const allSymbols = Object.keys(returnData.series)
+    // Flask's jsonify() alphabetically sorts object keys, so `series`'s own
+    // key order can't be trusted to put the primary ticker first (e.g.
+    // primary=SPY, extra=QQQ comes back as QQQ-then-SPY). `requested_symbols`
+    // is a plain array (unaffected by that sort) carrying the true order.
+    const seriesKeys = Object.keys(returnData.series)
+    const allSymbols = returnData.requested_symbols?.length
+      ? returnData.requested_symbols.filter(s => seriesKeys.includes(s))
+      : seriesKeys
     // Comparison ticker colors — cycling distinct hues
     const compColors = ['#a0f0c0', '#FFD700', '#ff7eb3', '#b39ddb', '#ff8a65', '#4dd0e1', '#aed581', '#f48fb1']
     const compDashes = ['solid', 'dash', 'dot', 'dashdot', 'longdash']
@@ -2833,9 +2848,16 @@ export default function ETFScreen() {
     // (typed dates or slider), so the chart visually aligns with the date set.
     const [visibleStart, visibleEnd] = getVisibleDateRange(returnData, effectiveReturnRange, true)
 
-    allSymbols.forEach((sym, si) => {
+    // When a symbol is highlighted, draw it last so its line sits on top of
+    // the dimmed ones instead of being covered by them.
+    const orderedSymbols = highlightedSymbol && allSymbols.includes(highlightedSymbol)
+      ? [...allSymbols.filter(s => s !== highlightedSymbol), highlightedSymbol]
+      : allSymbols
+    orderedSymbols.forEach((sym) => {
+      const si = allSymbols.indexOf(sym)
       const { dates, traces: traceMap } = returnData.series[sym]
       const isPrimary = si === 0
+      const isDimmed = highlightedSymbol && highlightedSymbol !== sym
 
       Object.entries(traceMap).forEach(([key, values]) => {
         const style = TRACE_STYLES[key] || { dash: 'solid', color: '#7ecfff', width: 2.5, label: key }
@@ -2843,7 +2865,7 @@ export default function ETFScreen() {
         let color, dash, width, name
         if (isPrimary || allSymbols.length === 1) {
           // Primary ticker: use web-style blue with dash pattern per trace type
-          color = style.color
+          color = isDimmed ? DIMMED_RETURN_COLOR : style.color
           dash = style.dash
           width = style.width
           if (key === 'blend') {
@@ -2859,7 +2881,7 @@ export default function ETFScreen() {
           }
         } else {
           // Comparison tickers: distinct color per ticker, dash per trace type
-          color = compColors[(si - 1) % compColors.length]
+          color = isDimmed ? DIMMED_RETURN_COLOR : compColors[(si - 1) % compColors.length]
           dash = style.dash  // keep trace-type dash
           width = style.width
           name = `${sym} (${key === 'blend' ? returnData.reinvest_pct + '%' : style.label || key})`
@@ -3015,7 +3037,7 @@ export default function ETFScreen() {
       annotations,
     }
     return { data: traces, layout }
-  }, [returnData, ticker, period, showReturnLabels, returnHoverMode, returnPctMode, showRangeSlider, returnXRange, returnDataDateBounds])
+  }, [returnData, ticker, period, showReturnLabels, returnHoverMode, returnPctMode, showRangeSlider, returnXRange, returnDataDateBounds, highlightedSymbol])
 
 
   const handleReturnRelayout = useCallback((eventData) => {
@@ -3101,7 +3123,16 @@ export default function ETFScreen() {
             </select>
           )}
           <input type="text" placeholder="Ticker (e.g. SPY)" value={ticker} onChange={e => setPrimaryTicker(e.target.value)} onKeyDown={handleKeyDown} />
-          {primaryTicker && <span className="primary-chip">{primaryTicker}</span>}
+          {primaryTicker && (
+            <button
+              type="button"
+              className={`primary-chip${highlightedSymbol === primaryTicker ? ' is-highlighted' : ''}`}
+              onClick={() => toggleHighlight(primaryTicker)}
+              title={highlightedSymbol === primaryTicker ? 'Click to show all tickers' : 'Click to highlight this ticker on the returns chart'}
+            >
+              {primaryTicker}
+            </button>
+          )}
           <button className="btn btn-primary" onClick={loadChart} disabled={isLoading || !canLoad}>
             {isLoading ? 'Loading...' : 'Load'}
           </button>
@@ -3327,8 +3358,20 @@ export default function ETFScreen() {
             <input type="text" placeholder="Type ticker..." value={compareInput} onChange={e => setCompareInput(e.target.value.toUpperCase())} onKeyDown={e => { if (e.key === 'Enter') addCompare() }} />
             <button className="btn btn-sm" onClick={addCompare}>Add</button>
             {compareTickers.map((s, i) => (
-              <span key={s} className="compare-chip" style={{ background: CHIP_COLORS[i % CHIP_COLORS.length], color: 'var(--p-111)' }}>
-                {s} <button onClick={() => removeCompare(s)}>&times;</button>
+              <span
+                key={s}
+                className={`compare-chip${highlightedSymbol === s ? ' is-highlighted' : ''}`}
+                style={{ background: CHIP_COLORS[i % CHIP_COLORS.length], color: 'var(--p-111)' }}
+              >
+                <button
+                  type="button"
+                  className="compare-chip-symbol"
+                  onClick={() => toggleHighlight(s)}
+                  title={highlightedSymbol === s ? 'Click to show all tickers' : 'Click to highlight this ticker on the returns chart'}
+                >
+                  {s}
+                </button>
+                {' '}<button onClick={() => removeCompare(s)}>&times;</button>
               </span>
             ))}
           </div>

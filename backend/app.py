@@ -20366,6 +20366,12 @@ def etf_screen_data():
             "profiles": {},
             "warnings": [],
             "symbol_map": yahoo_by_symbol,
+            # Flask's jsonify() alphabetically sorts dict keys by default, so
+            # "series"/"profiles" keys can't be trusted to preserve request
+            # order (e.g. primary=SPY, extra=QQQ comes back QQQ-then-SPY).
+            # This array isn't reordered by that sort, so callers that need
+            # to know which symbol is the primary ticker should use it.
+            "requested_symbols": list(symbols),
         }
         saved_fund_data = {}
         try:
