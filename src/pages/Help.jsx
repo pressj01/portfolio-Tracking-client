@@ -5253,15 +5253,16 @@ function GrowthIncomeFreedomHelp() {
       </p>
 
       <div className="alert alert-info" style={{ marginBottom: '1.25rem' }}>
-        <strong>Accumulation-phase rule:</strong> the simulation makes no withdrawals. Every dividend
+        <strong>Accumulation-phase rule:</strong> the core simulation makes no withdrawals. Every dividend
         and distribution is reinvested into the security that paid it, including distributions paid
-        by holdings inside a Growth strategy.
+        by holdings inside a Growth strategy. The optional Sustainability tests (below) run separate
+        side-calculations on top of this result — they never change the projected value or income lines.
       </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img
-          src="./help-screenshots/growth-income-freedom/01-strategy-setup-and-assumptions.png"
-          alt="Growth and Income Freedom Simulator showing the simulation length, two strategy builders, portfolio holdings, shared assumptions, and Run comparison button"
+          src="./help-screenshots/growth-income-freedom/01-strategy-setup.jpg"
+          alt="Growth and Income Freedom Simulator showing the simulation length and two strategy builders with portfolio holdings"
           style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
         />
       </div>
@@ -5308,6 +5309,22 @@ function GrowthIncomeFreedomHelp() {
         <li><strong>Add a combined strategy</strong> — Adds a third result made by blending Strategies A and B. The slider controls the percentage assigned to each side, and the combined holdings are normalized before simulation.</li>
       </ul>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Optional: Sustainability Tests</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A spectacular headline yield can beat a growth portfolio on a simple &quot;does income reach my
+        target&quot; check even when that yield isn&apos;t realistic. Sustainability tests gate the
+        <strong> Sustainable Freedom</strong> winner (see below) on whether the projected income would
+        actually hold up. Toggle any combination — each one narrows the probability independently, and a
+        strategy only counts as achieving Sustainable Freedom in a given simulated path if every enabled
+        test passes.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Income after estimated taxes</strong> — Off by default. When enabled, projected income is haircut by a single blended tax rate (suggested 15%, editable 0–100%) before checking it against the Freedom target.</li>
+        <li><strong>Payout limited by sustainable total return</strong> — Caps the income counted toward the target at the strategy's blended expected total return. Distribution yield above that implies the fund is returning capital (eroding NAV) rather than paying real income.</li>
+        <li><strong>Capital stays stable after stopping DRIP</strong> — Runs a side simulation where distributions are taken as cash instead of reinvested (new contributions still buy shares). Reports the probability that ending principal still covers everything invested.</li>
+        <li><strong>Dedicated withdrawal-phase simulation</strong> — Appends the chosen number of extra years (1–40, default 20) after the accumulation horizon and actually withdraws the Freedom target each month — funded by distributions first, then share sales — to see whether principal survives or depletes.</li>
+      </ul>
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>4. Run the Comparison</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The line above <strong>Run comparison</strong> confirms the selected years, number of competing
@@ -5342,29 +5359,39 @@ function GrowthIncomeFreedomHelp() {
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img
-          src="./help-screenshots/growth-income-freedom/02-winners-income-and-metrics.png"
-          alt="Growth and Income Freedom results showing Bull Neutral and Bear winner cards, selected scenario winner, projected distribution income, and detailed strategy metrics"
+          src="./help-screenshots/growth-income-freedom/02-sustainability-tests-and-winners.jpg"
+          alt="Growth and Income Freedom Simulator showing the shared assumptions with all four Sustainability tests enabled, the Bull Neutral and Bear winner overview cards, and the Wealth, Income, and Sustainable Freedom winner cards for the selected scenario"
           style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
         />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>5. Read the Bull, Neutral, and Bear Winner Cards</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Each top card names that scenario's winner and shows every strategy's median real ending portfolio value and real monthly distribution income.</li>
+        <li>Each scenario card shows three leader lines at once — <strong>Wealth</strong>, <strong>Income</strong>, and <strong>Sustainable Freedom</strong> — plus every strategy's median real ending portfolio value and real monthly distribution income.</li>
         <li>Values are in today's dollars after inflation. They are medians across the simulated paths, not guaranteed outcomes.</li>
         <li>Select a Bull, Neutral, or Bear card to open that scenario in the detailed results below.</li>
-        <li>The winner cards use the current <strong>Winner determined by</strong> goal. Changing that goal can change the named winner without rerunning the simulation because all four comparison metrics are already calculated.</li>
       </ul>
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How “Winner Determined By” Works</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How the Three Winners Work</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The selected scenario always shows three winner cards side by side instead of one goal you have
+        to pick from a dropdown:
+      </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Financial-freedom probability</strong> — Uses the percentage of paths whose ending organic income or estimated spending capacity reaches the monthly Freedom target. Either route can satisfy the target.</li>
-        <li><strong>Real ending wealth</strong> — Selects the strategy with the highest median inflation-adjusted ending portfolio value.</li>
-        <li><strong>Real monthly income</strong> — Selects the strategy with the highest median inflation-adjusted monthly distribution run rate at the final year.</li>
-        <li><strong>Downside resilience</strong> — Selects the strategy with the highest 10th-percentile real ending value. This emphasizes the weaker simulated outcomes rather than the median.</li>
+        <li><strong>Wealth</strong> — Selects the strategy with the highest median inflation-adjusted ending portfolio value.</li>
+        <li><strong>Income</strong> — Selects the strategy with the highest median inflation-adjusted monthly distribution run rate at the final year.</li>
+        <li><strong>Sustainable Freedom</strong> — Uses the percentage of paths whose ending organic income or estimated spending capacity reaches the monthly Freedom target, <em>and</em> passes every Sustainability test currently enabled (see above). With no sustainability tests enabled, this is identical to a simple income-or-spending target check.</li>
         <li><strong>Ties</strong> — Probabilities within 0.5 percentage point, or dollar results within approximately 0.5%, are declared an effective tie instead of forcing a false winner.</li>
-        <li><strong>Overall scenario lead</strong> — Reports how many of the three market scenarios each strategy wins under the selected goal.</li>
+        <li><strong>Overall scenario lead</strong> — Each card reports how many of the three market scenarios that strategy wins under its own metric.</li>
       </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/growth-income-freedom/03-strategy-metrics-and-charts.jpg"
+          alt="Growth and Income Freedom strategy result cards showing real ending value, income, drawdown, target probabilities, and Sustainability detail, followed by the real portfolio value and real monthly distribution income charts"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>6. Read the Projected Income and Strategy Cards</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -5378,16 +5405,10 @@ function GrowthIncomeFreedomHelp() {
         <li><strong>Distributions reinvested</strong> — Cumulative cash distributions generated and reinvested during the run. It can be large because it totals every payout over time; it is not added on top of total return a second time.</li>
         <li><strong>Organic income target</strong> — The percentage of paths whose final real annual distribution income is at least 12 times the monthly Freedom target. It requires no spending-rate calculation or share sales.</li>
         <li><strong>Spending target</strong> — The percentage of paths whose final real balance, multiplied by the selected spending rate, can support the annual Freedom target.</li>
+        <li><strong>Sustainable freedom</strong> — Same as the Organic income / Spending target check, but also requires every enabled Sustainability test to pass. Equals the higher of the other two when no tests are enabled.</li>
         <li><strong>Not reached by the median path</strong> — The P50 income or spending-capacity path does not reach the target within the selected years. A probability can still be above zero because some stronger paths succeeded.</li>
+        <li><strong>Sustainability detail</strong> — Appears on a strategy card only when at least one Sustainability test is enabled. <strong>Sustainability-adjusted income</strong> shows income after the enabled tax/payout-cap tests; <strong>Payout vs. total return</strong> flags when distribution yield exceeds the strategy's blended expected total return (implying NAV erosion); <strong>Capital stability without DRIP</strong> is the probability principal still covers everything invested after taking all distributions as cash instead of reinvesting; <strong>Withdrawal-phase survival</strong> is the probability principal doesn't run out during the extra withdrawal years while actually funding the Freedom target.</li>
       </ul>
-
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/growth-income-freedom/03-projections-and-scenario-table.png"
-          alt="Growth and Income Freedom projection charts for real portfolio value and real monthly distribution income followed by the all-scenarios finish-line table"
-          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
-        />
-      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>7. Read the Charts and Finish-Line Table</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -5396,6 +5417,14 @@ function GrowthIncomeFreedomHelp() {
         <li><strong>All scenarios at the finish line</strong> — Places Bull, Neutral, and Bear medians in one table for direct comparison of ending value, monthly income, monthly spending capacity, drawdown, and organic-income target probability.</li>
         <li><strong>Scenario colors</strong> — Green identifies Bull, amber identifies Neutral, and red identifies Bear. Strategy name colors match the strategy cards and chart lines.</li>
       </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/growth-income-freedom/04-scenario-finish-line-table.jpg"
+          alt="Growth and Income Freedom all-scenarios finish-line table comparing Bull, Neutral, and Bear real ending value, income, spending, drawdown, and income target chance for each strategy"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Quality and Holding Assumptions</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>

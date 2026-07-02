@@ -9,11 +9,10 @@ const SCENARIOS = [
   { key: 'neutral', label: 'Neutral', color: '#f9a825', detail: 'Long-run history blended with strategy assumptions' },
   { key: 'bearish', label: 'Bear', color: '#e05555', detail: 'Early shock, elevated volatility, then recovery' },
 ]
-const WINNER_GOALS = [
-  { key: 'freedom', label: 'Financial-freedom probability' },
-  { key: 'wealth', label: 'Real ending wealth' },
-  { key: 'income', label: 'Real monthly income' },
-  { key: 'resilience', label: 'Downside resilience' },
+const WINNER_CARDS = [
+  { key: 'wealth', label: 'Wealth' },
+  { key: 'income', label: 'Income' },
+  { key: 'sustainableFreedom', label: 'Sustainable Freedom' },
 ]
 
 const FREQUENCY_MULTIPLIERS = {
@@ -54,6 +53,8 @@ function createStrategy(name, style) {
     profileId: '',
     currentValue: 0,
     holdings: [],
+    portfolioName: name,
+    autoName: true,
   }
 }
 
@@ -83,10 +84,25 @@ function normalizePortfolioSelection(holdings) {
   )))
 }
 
+// When a saved portfolio is trimmed to a subset, "Owner" is a misleading name for
+// what's actually just one or a few tickers. Suggest a clearer name automatically,
+// unless the user has already typed a custom one (autoName === false).
+function suggestPortfolioName(strategy, holdings) {
+  if (strategy.source !== 'portfolio' || strategy.autoName === false) return null
+  const importedRows = holdings.filter(row => row.imported === true)
+  if (!importedRows.length) return null
+  const selected = importedRows.filter(row => row.enabled !== false)
+  const basePortfolioName = strategy.portfolioName || strategy.name
+  if (selected.length === importedRows.length) return basePortfolioName
+  if (selected.length === 1) return selected[0].ticker
+  if (selected.length > 1) return `${basePortfolioName} (${selected.length} of ${importedRows.length})`
+  return null
+}
+
 function winnerValue(strategy, goal, targetEnabled) {
   const summary = strategy?.summary || {}
-  if (goal === 'freedom' && targetEnabled) {
-    const combined = Number(summary.freedom_target_probability)
+  if (goal === 'sustainableFreedom' && targetEnabled) {
+    const combined = Number(summary.sustainable_freedom_probability)
     if (Number.isFinite(combined)) return combined
     return Math.max(Number(summary.income_target_probability) || 0, Number(summary.spending_target_probability) || 0)
   }
@@ -96,8 +112,8 @@ function winnerValue(strategy, goal, targetEnabled) {
 }
 
 function winnerMetricLabel(goal, targetEnabled) {
-  if (goal === 'freedom' && targetEnabled) {
-    return 'chance of meeting the freedom target through income or spending capacity'
+  if (goal === 'sustainableFreedom' && targetEnabled) {
+    return 'chance of meeting the freedom target with the enabled sustainability tests applied'
   }
   if (goal === 'income') return 'real monthly distribution income'
   if (goal === 'resilience') return '10th-percentile real ending value'
@@ -105,7 +121,7 @@ function winnerMetricLabel(goal, targetEnabled) {
 }
 
 function winnerMetricValue(value, goal, targetEnabled) {
-  if (goal === 'freedom' && targetEnabled) return pct(value)
+  if (goal === 'sustainableFreedom' && targetEnabled) return pct(value)
   if (goal === 'income') return `${money(value)}/month`
   return money(value)
 }
@@ -120,7 +136,7 @@ function rankStrategies(strategyResults, goal, targetEnabled) {
     }))
     .sort((left, right) => right.value - left.value)
   const top = ranked[0]
-  const tolerance = goal === 'freedom' && targetEnabled
+  const tolerance = goal === 'sustainableFreedom' && targetEnabled
     ? 0.5
     : Math.max(Math.abs(top.value) * 0.005, 1)
   const leaders = ranked.filter(row => Math.abs(top.value - row.value) <= tolerance)
@@ -179,14 +195,27 @@ function StrategyBuilder({
       row.ticker === ticker ? { ...row, ...patch } : row
     ))
     const changesSelection = Object.prototype.hasOwnProperty.call(patch, 'enabled')
+    const normalizedHoldings = changesSelection ? normalizePortfolioSelection(holdings) : holdings
+    // Skip the live rename while the holding picker is open so the name field
+    // doesn't change on every click mid-selection; the picker-close handler
+    // catches up once the user is done.
+    const suggestedName = changesSelection && !holdingPickerOpen
+      ? suggestPortfolioName(strategy, normalizedHoldings)
+      : null
     onChange({
-      holdings: changesSelection ? normalizePortfolioSelection(holdings) : holdings,
+      holdings: normalizedHoldings,
       ...(changesSelection && strategy.source === 'portfolio' ? { selectionMode: 'custom' } : {}),
+      ...(suggestedName ? { name: suggestedName, autoName: true } : {}),
     })
   }
 
   const removeHolding = ticker => {
-    onChange({ holdings: strategy.holdings.filter(row => row.ticker !== ticker) })
+    const holdings = strategy.holdings.filter(row => row.ticker !== ticker)
+    const suggestedName = suggestPortfolioName(strategy, holdings)
+    onChange({
+      holdings,
+      ...(suggestedName ? { name: suggestedName, autoName: true } : {}),
+    })
   }
 
   const equalWeight = () => {
@@ -212,9 +241,12 @@ function StrategyBuilder({
 
   const checkAllHoldings = () => {
     const holdings = strategy.holdings.map(row => ({ ...row, enabled: true }))
+    const normalizedHoldings = normalizePortfolioSelection(holdings)
+    const suggestedName = suggestPortfolioName(strategy, normalizedHoldings)
     onChange({
-      holdings: normalizePortfolioSelection(holdings),
+      holdings: normalizedHoldings,
       ...(strategy.source === 'portfolio' ? { selectionMode: 'all' } : {}),
+      ...(suggestedName ? { name: suggestedName, autoName: true } : {}),
     })
   }
 
@@ -229,7 +261,13 @@ function StrategyBuilder({
     const holdings = strategy.holdings.map(row => (
       row.imported === true ? { ...row, enabled: true } : row
     ))
-    onChange({ holdings: normalizePortfolioSelection(holdings), selectionMode: 'all' })
+    const normalizedHoldings = normalizePortfolioSelection(holdings)
+    const suggestedName = suggestPortfolioName(strategy, normalizedHoldings)
+    onChange({
+      holdings: normalizedHoldings,
+      selectionMode: 'all',
+      ...(suggestedName ? { name: suggestedName, autoName: true } : {}),
+    })
     setHoldingPickerOpen(false)
     setPortfolioSearch('')
   }
@@ -237,6 +275,14 @@ function StrategyBuilder({
   const choosePortfolioHoldings = () => {
     onChange({ selectionMode: 'custom' })
     setHoldingPickerOpen(true)
+  }
+
+  const toggleHoldingPicker = () => {
+    if (holdingPickerOpen) {
+      const suggestedName = suggestPortfolioName(strategy, strategy.holdings)
+      if (suggestedName) onChange({ name: suggestedName, autoName: true })
+    }
+    setHoldingPickerOpen(open => !open)
   }
 
   const clearImportedSelection = () => {
@@ -303,7 +349,7 @@ function StrategyBuilder({
           <input
             className="gif-name-input"
             value={strategy.name}
-            onChange={event => onChange({ name: event.target.value })}
+            onChange={event => onChange({ name: event.target.value, autoName: false })}
             aria-label={`Strategy ${index === 0 ? 'A' : 'B'} name`}
           />
         </div>
@@ -402,7 +448,7 @@ function StrategyBuilder({
             <>
               <button
                 className="gif-holding-picker-toggle"
-                onClick={() => setHoldingPickerOpen(open => !open)}
+                onClick={toggleHoldingPicker}
                 aria-expanded={holdingPickerOpen}
               >
                 {holdingPickerOpen ? 'Hide holding picker' : `Open holding picker (${importedSelected.length} selected)`}
@@ -556,6 +602,7 @@ function Metric({ label, value, sub, tone }) {
 
 function StrategyResultCard({ result, index, targetEnabled }) {
   const summary = result.summary
+  const detail = summary.sustainability_detail
   const finalRange = summary.final_real_value
   return (
     <article className="gif-result-card" style={{ '--strategy-color': STRATEGY_COLORS[index] }}>
@@ -603,31 +650,65 @@ function StrategyResultCard({ result, index, targetEnabled }) {
               value={pct(summary.spending_target_probability)}
               sub={summary.freedom_year_spending ? `Median reaches in year ${summary.freedom_year_spending}` : 'Not reached by the median path'}
             />
+            <Metric
+              label="Sustainable freedom"
+              value={pct(summary.sustainable_freedom_probability)}
+              sub="Meets the target after any enabled sustainability tests"
+            />
           </>
         )}
       </div>
+      {detail && (detail.apply_tax || detail.cap_payout_to_total_return || detail.check_drip_stop_stability || detail.run_withdrawal_phase) && (
+        <div className="gif-sustainability-detail">
+          <strong>Sustainability detail</strong>
+          <div className="gif-result-metrics">
+            {(detail.apply_tax || detail.cap_payout_to_total_return) && (
+              <Metric
+                label="Sustainability-adjusted income"
+                value={money(detail.sustainability_adjusted_monthly_income?.p50)}
+                sub={detail.apply_tax
+                  ? `After ${detail.tax_rate_pct}% estimated tax${detail.cap_payout_to_total_return ? ' and payout cap' : ''}`
+                  : 'Capped at sustainable total return'}
+              />
+            )}
+            {detail.cap_payout_to_total_return && (
+              <Metric
+                label="Payout vs. total return"
+                value={detail.payout_sustainable_ratio_pct == null ? '—' : pct(detail.payout_sustainable_ratio_pct)}
+                sub={detail.payout_sustainable_ratio_pct > 100 ? 'Yield exceeds expected total return' : 'Within expected total return'}
+                tone={detail.payout_sustainable_ratio_pct > 100 ? 'bad' : undefined}
+              />
+            )}
+            {detail.check_drip_stop_stability && (
+              <Metric
+                label="Capital stability without DRIP"
+                value={pct(detail.capital_stability_probability)}
+                sub="Chance principal holds up once distributions are taken as cash"
+              />
+            )}
+            {detail.run_withdrawal_phase && (
+              <Metric
+                label={`Withdrawal-phase survival (+${detail.withdrawal_years}y)`}
+                value={pct(detail.withdrawal_survival_probability)}
+                sub="Chance principal doesn't deplete funding the freedom target"
+              />
+            )}
+          </div>
+        </div>
+      )}
     </article>
   )
 }
 
-function WinnerPanel({
-  scenario,
-  strategies,
-  allScenarios,
-  years,
-  targetEnabled,
-  goal,
-  onGoalChange,
-}) {
-  const selectedWinner = rankStrategies(strategies, goal, targetEnabled)
-  if (!selectedWinner) return null
+function WinnerCard({ cardKey, label, scenario, strategies, allScenarios, years, targetEnabled }) {
+  const winner = rankStrategies(strategies, cardKey, targetEnabled)
+  if (!winner) return null
 
   const scenarioLabel = SCENARIOS.find(row => row.key === scenario)?.label || scenario
-  const metricLabel = winnerMetricLabel(goal, targetEnabled)
-  const names = selectedWinner.leaders.map(row => row.strategy.name)
-  const goalLabel = WINNER_GOALS.find(row => row.key === goal)?.label || 'selected goal'
+  const metricLabel = winnerMetricLabel(cardKey, targetEnabled)
+  const names = winner.leaders.map(row => row.strategy.name)
   const scenarioRanks = SCENARIOS
-    .map(row => rankStrategies(allScenarios?.[row.key]?.strategies || [], goal, targetEnabled))
+    .map(row => rankStrategies(allScenarios?.[row.key]?.strategies || [], cardKey, targetEnabled))
     .filter(Boolean)
   const winCounts = new Map()
   scenarioRanks.forEach(rank => {
@@ -639,61 +720,44 @@ function WinnerPanel({
   const overallLeaders = [...winCounts.entries()].filter(([, count]) => count === highestCount)
   let overallText = 'All three scenarios are effectively tied.'
   if (highestCount > 0 && overallLeaders.length === 1) {
-    overallText = `${overallLeaders[0][0]} leads ${highestCount} of 3 market scenarios.`
+    overallText = `Leads ${highestCount} of 3 market scenarios.`
   } else if (highestCount > 0) {
-    overallText = `Overall result is split between ${overallLeaders.map(([name]) => name).join(' and ')}.`
+    overallText = `Split between ${overallLeaders.map(([name]) => name).join(' and ')}.`
   }
 
-  const supportingLeaders = [
-    { label: 'Wealth leader', goal: 'wealth' },
-    { label: 'Income leader', goal: 'income' },
-    { label: 'Downside leader', goal: 'resilience' },
-  ].map(item => {
-    const rank = rankStrategies(strategies, item.goal, targetEnabled)
-    return {
-      ...item,
-      value: rank?.tied
-        ? `Tie: ${rank.leaders.map(row => row.strategy.name).join(' / ')}`
-        : rank?.strategy.name || 'Unavailable',
-    }
-  })
-
   return (
-    <section className="gif-winner-card" style={{ '--scenario-color': SCENARIOS.find(row => row.key === scenario)?.color }}>
-      <div className="gif-winner-main">
-        <span className="gif-winner-kicker">{scenarioLabel} winner · {years}-year run</span>
-        <h3>
-          {selectedWinner.tied
-            ? `Projected tie: ${names.join(' and ')}`
-            : `${selectedWinner.strategy.name} is the projected winner`}
-        </h3>
-        <p>
-          {selectedWinner.tied
-            ? `${names.join(' and ')} finish within the tie range at ${winnerMetricValue(selectedWinner.value, goal, targetEnabled)} ${metricLabel}.`
-            : `${selectedWinner.strategy.name} leads with ${winnerMetricValue(selectedWinner.value, goal, targetEnabled)} ${metricLabel}.`}
-          {' '}Winner determined by <strong>{goalLabel}</strong>.
-          {goal === 'freedom' && !targetEnabled && ' No freedom target is set, so real ending wealth is used.'}
-        </p>
-      </div>
-      <div className="gif-winner-controls">
-        <label>
-          Winner determined by
-          <select value={goal} onChange={event => onGoalChange(event.target.value)}>
-            {WINNER_GOALS.map(option => (
-              <option key={option.key} value={option.key}>{option.label}</option>
-            ))}
-          </select>
-        </label>
-        <strong>{overallText}</strong>
-      </div>
-      <div className="gif-winner-leaders">
-        {supportingLeaders.map(item => (
-          <div key={item.goal}>
-            <span>{item.label}</span>
-            <strong>{item.value}</strong>
-          </div>
-        ))}
-      </div>
+    <article className="gif-winner-card" style={{ '--scenario-color': SCENARIOS.find(row => row.key === scenario)?.color }}>
+      <span className="gif-winner-kicker">{label} winner · {scenarioLabel} · {years}-year run</span>
+      <h3>
+        {winner.tied ? `Tie: ${names.join(' and ')}` : winner.strategy.name}
+      </h3>
+      <p>
+        {winner.tied
+          ? `${names.join(' and ')} finish within the tie range at ${winnerMetricValue(winner.value, cardKey, targetEnabled)} ${metricLabel}.`
+          : `Leads with ${winnerMetricValue(winner.value, cardKey, targetEnabled)} ${metricLabel}.`}
+        {cardKey === 'sustainableFreedom' && !targetEnabled && ' No freedom target is set, so real ending wealth is used.'}
+      </p>
+      <strong className="gif-winner-overall">{overallText}</strong>
+    </article>
+  )
+}
+
+function WinnerPanel({ scenario, strategies, allScenarios, years, targetEnabled }) {
+  if (!strategies?.length) return null
+  return (
+    <section className="gif-winner-grid">
+      {WINNER_CARDS.map(card => (
+        <WinnerCard
+          key={card.key}
+          cardKey={card.key}
+          label={card.label}
+          scenario={scenario}
+          strategies={strategies}
+          allScenarios={allScenarios}
+          years={years}
+          targetEnabled={targetEnabled}
+        />
+      ))}
     </section>
   )
 }
@@ -702,11 +766,9 @@ function ScenarioOverviewCards({
   allScenarios,
   years,
   targetEnabled,
-  goal,
   selectedScenario,
   onSelectScenario,
 }) {
-  const goalLabel = WINNER_GOALS.find(row => row.key === goal)?.label || 'selected goal'
   return (
     <section className="gif-scenario-overview">
       <div className="gif-scenario-overview-heading">
@@ -715,16 +777,20 @@ function ScenarioOverviewCards({
           <h2>Bull, neutral and bear winners</h2>
         </div>
         <p>
-          Projected outcomes after {years} year{years === 1 ? '' : 's'} · winners use {goalLabel}
+          Projected outcomes after {years} year{years === 1 ? '' : 's'} · wealth, income, and
+          sustainable-freedom winners per scenario
         </p>
       </div>
       <div className="gif-scenario-overview-grid">
         {SCENARIOS.map(scenario => {
           const strategies = allScenarios?.[scenario.key]?.strategies || []
-          const winner = rankStrategies(strategies, goal, targetEnabled)
-          const winnerText = winner?.tied
-            ? `Tie: ${winner.leaders.map(row => row.strategy.name).join(' / ')}`
-            : `${winner?.strategy.name || 'Unavailable'} wins`
+          const leaderLines = WINNER_CARDS.map(card => {
+            const winner = rankStrategies(strategies, card.key, targetEnabled)
+            const text = winner?.tied
+              ? `Tie: ${winner.leaders.map(row => row.strategy.name).join(' / ')}`
+              : winner?.strategy.name || 'Unavailable'
+            return { key: card.key, label: card.label, text }
+          })
           return (
             <button
               key={scenario.key}
@@ -736,7 +802,11 @@ function ScenarioOverviewCards({
               <div className="gif-scenario-overview-card-head">
                 <div>
                   <span>{scenario.label} market</span>
-                  <strong>{winnerText}</strong>
+                  <div className="gif-scenario-overview-leaders">
+                    {leaderLines.map(item => (
+                      <strong key={item.key}>{item.label}: {item.text}</strong>
+                    ))}
+                  </div>
                 </div>
                 <em>View details</em>
               </div>
@@ -830,7 +900,12 @@ export default function GrowthIncomeFreedom() {
   const [blendEnabled, setBlendEnabled] = useState(false)
   const [blendA, setBlendA] = useState(50)
   const [selectedScenario, setSelectedScenario] = useState('neutral')
-  const [winnerGoal, setWinnerGoal] = useState('freedom')
+  const [applyTax, setApplyTax] = useState(false)
+  const [taxRatePct, setTaxRatePct] = useState(15)
+  const [capPayout, setCapPayout] = useState(false)
+  const [checkDripStop, setCheckDripStop] = useState(false)
+  const [runWithdrawalPhase, setRunWithdrawalPhase] = useState(false)
+  const [withdrawalYears, setWithdrawalYears] = useState(20)
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -864,9 +939,12 @@ export default function GrowthIncomeFreedom() {
         return body
       })
       .then(body => {
+        const portfolioName = body.name || strategies[index].name
         patchStrategy(index, {
           profileId: portfolioKey,
-          name: body.name || strategies[index].name,
+          name: portfolioName,
+          portfolioName,
+          autoName: true,
           currentValue: body.current_value || 0,
           selectionMode: 'all',
           holdings: (body.holdings || []).map(row => ({
@@ -928,6 +1006,14 @@ export default function GrowthIncomeFreedom() {
         spending_rate: spendingRate,
         paths,
         strategies: requestStrategies,
+        sustainability: {
+          apply_tax: applyTax,
+          tax_rate_pct: taxRatePct,
+          cap_payout_to_total_return: capPayout,
+          check_drip_stop_stability: checkDripStop,
+          run_withdrawal_phase: runWithdrawalPhase,
+          withdrawal_years: withdrawalYears,
+        },
       }),
     })
       .then(async response => {
@@ -1138,6 +1224,75 @@ export default function GrowthIncomeFreedom() {
           </div>
         </div>
 
+        <div className="gif-sustainability-control">
+          <div className="gif-sustainability-title">
+            <strong>Sustainability tests</strong>
+            <span>Gate the Sustainable Freedom winner on realistic income. Toggle any combination.</span>
+          </div>
+          <div className="gif-sustainability-grid">
+            <div className="gif-sustainability-item">
+              <label>
+                <input type="checkbox" checked={applyTax} onChange={event => {
+                  setApplyTax(event.target.checked)
+                  setDirty(true)
+                }} />
+                Income after estimated taxes
+              </label>
+              {applyTax && (
+                <div className="gif-percent-input gif-sustainability-subinput">
+                  <input type="number" min="0" max="100" step="1" value={taxRatePct}
+                    onChange={event => {
+                      setTaxRatePct(Math.min(100, Math.max(0, Number(event.target.value) || 0)))
+                      setDirty(true)
+                    }} />
+                  <span>% tax</span>
+                </div>
+              )}
+            </div>
+            <div className="gif-sustainability-item">
+              <label>
+                <input type="checkbox" checked={capPayout} onChange={event => {
+                  setCapPayout(event.target.checked)
+                  setDirty(true)
+                }} />
+                Payout limited by sustainable total return
+              </label>
+            </div>
+            <div className="gif-sustainability-item">
+              <label>
+                <input type="checkbox" checked={checkDripStop} onChange={event => {
+                  setCheckDripStop(event.target.checked)
+                  setDirty(true)
+                }} />
+                Capital stays stable after stopping DRIP
+              </label>
+            </div>
+            <div className="gif-sustainability-item">
+              <label>
+                <input type="checkbox" checked={runWithdrawalPhase} onChange={event => {
+                  setRunWithdrawalPhase(event.target.checked)
+                  setDirty(true)
+                }} />
+                Dedicated withdrawal-phase simulation
+              </label>
+              {runWithdrawalPhase && (
+                <div className="gif-sustainability-subinput">
+                  <input type="number" min="1" max="40" step="1" value={withdrawalYears}
+                    onChange={event => {
+                      setWithdrawalYears(Math.min(40, Math.max(1, Number(event.target.value) || 1)))
+                      setDirty(true)
+                    }} />
+                  <span>years of withdrawals after the horizon</span>
+                </div>
+              )}
+            </div>
+          </div>
+          <small className="gif-sustainability-note">
+            These tests evaluate whether the projected income would hold up in practice — they don&apos;t
+            change the value/income lines above, which always assume 100% DRIP and no withdrawals.
+          </small>
+        </div>
+
         <div className="gif-blend-control">
           <label>
             <input type="checkbox" checked={blendEnabled} onChange={event => {
@@ -1191,7 +1346,6 @@ export default function GrowthIncomeFreedom() {
             allScenarios={result.scenarios}
             years={resultYears}
             targetEnabled={targetEnabled}
-            goal={winnerGoal}
             selectedScenario={selectedScenario}
             onSelectScenario={setSelectedScenario}
           />
@@ -1221,8 +1375,6 @@ export default function GrowthIncomeFreedom() {
             allScenarios={result.scenarios}
             years={resultYears}
             targetEnabled={targetEnabled}
-            goal={winnerGoal}
-            onGoalChange={setWinnerGoal}
           />
 
           <ProjectedIncomePanel
@@ -1372,7 +1524,11 @@ export default function GrowthIncomeFreedom() {
 
           <div className="gif-disclaimer">
             These are hypothetical planning ranges, not forecasts or guarantees. “Spending capacity”
-            is an end-of-horizon comparison metric only; the simulation makes no withdrawals.
+            is an end-of-horizon comparison metric only; the simulation makes no withdrawals. With no
+            sustainability tests enabled, “Sustainable Freedom” is identical to a simple income-or-spending
+            target check; enabling tests narrows it to strategies that hold up under estimated taxes, a
+            payout capped at sustainable total return, DRIP-free capital stability, or an actual
+            withdrawal-phase simulation.
           </div>
         </section>
       )}

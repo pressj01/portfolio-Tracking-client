@@ -108,6 +108,32 @@ class SimulationSettings:
     seed: int
 
 
+@dataclass(frozen=True)
+class SustainabilityOptions:
+    """Optional tests gating whether projected 'freedom' income is realistic.
+
+    Every field defaults to off/neutral so a request with no ``sustainability``
+    block reproduces today's ``freedom_target_probability`` exactly.
+    """
+
+    apply_tax: bool
+    tax_rate: float  # fraction, 0..1
+    cap_payout_to_total_return: bool
+    check_drip_stop_stability: bool
+    run_withdrawal_phase: bool
+    withdrawal_years: int
+
+
+_DEFAULT_SUSTAINABILITY = SustainabilityOptions(
+    apply_tax=False,
+    tax_rate=0.0,
+    cap_payout_to_total_return=False,
+    check_drip_stop_stability=False,
+    run_withdrawal_phase=False,
+    withdrawal_years=20,
+)
+
+
 def _finite(value: Any, default: float = 0.0) -> float:
     try:
         number = float(value)
@@ -210,6 +236,20 @@ def validate_settings(payload: dict[str, Any]) -> SimulationSettings:
         spending_rate=spending_rate / 100.0,
         paths=paths,
         seed=seed,
+    )
+
+
+def validate_sustainability(payload: dict[str, Any]) -> SustainabilityOptions:
+    apply_tax = bool(payload.get("apply_tax", False))
+    tax_rate_pct = _clip(_finite(payload.get("tax_rate_pct"), 15.0), 0.0, 100.0)
+    withdrawal_years = int(round(_clip(_finite(payload.get("withdrawal_years"), 20.0), 1.0, 40.0)))
+    return SustainabilityOptions(
+        apply_tax=apply_tax,
+        tax_rate=tax_rate_pct / 100.0,
+        cap_payout_to_total_return=bool(payload.get("cap_payout_to_total_return", False)),
+        check_drip_stop_stability=bool(payload.get("check_drip_stop_stability", False)),
+        run_withdrawal_phase=bool(payload.get("run_withdrawal_phase", False)),
+        withdrawal_years=withdrawal_years,
     )
 
 
@@ -460,23 +500,51 @@ def _scenario_month_parameters(
     return neutral_return, 1.0, neutral_income_growth
 
 
+def _draw_normal_blocks(
+    rng: np.random.Generator, paths: int, accumulation_months: int, withdrawal_months: int
+) -> np.ndarray:
+    """Draw accumulation, then withdrawal, blocks from one Generator.
+
+    A single ``rng.normal(0, 1, (paths, months))`` call fills row-major, so
+    growing ``months`` reshuffles every row after row 0 and silently changes
+    the accumulation-phase draws. Drawing two sequential blocks and
+    concatenating keeps the accumulation block bit-identical regardless of
+    whether a withdrawal phase follows it.
+    """
+    accumulation_block = rng.normal(0.0, 1.0, (paths, accumulation_months))
+    if withdrawal_months <= 0:
+        return accumulation_block
+    withdrawal_block = rng.normal(0.0, 1.0, (paths, withdrawal_months))
+    return np.concatenate([accumulation_block, withdrawal_block], axis=1)
+
+
 def generate_return_paths(
     assumptions: dict[str, dict[str, Any]],
     scenario: str,
     settings: SimulationSettings,
+    *,
+    withdrawal_months: int = 0,
 ) -> dict[str, dict[str, np.ndarray]]:
-    """Generate shared, correlated monthly return and DPS-growth paths."""
+    """Generate shared, correlated monthly return and DPS-growth paths.
+
+    ``withdrawal_months`` optionally extends the path beyond the accumulation
+    horizon (``settings.years * 12``) for the withdrawal-phase sustainability
+    test; the accumulation-phase months are unaffected either way.
+    """
     if scenario not in SCENARIOS:
         raise ValueError(f"Unknown market scenario: {scenario}")
-    months = settings.years * 12
+    accumulation_months = settings.years * 12
+    months = accumulation_months + max(0, withdrawal_months)
     common_rng = np.random.default_rng(_stable_seed(settings.seed, scenario, "market"))
-    common_z = common_rng.normal(0.0, 1.0, (settings.paths, months))
+    common_z = _draw_normal_blocks(common_rng, settings.paths, accumulation_months, withdrawal_months)
     market_sigma = 0.16
     output: dict[str, dict[str, np.ndarray]] = {}
 
     for ticker, assumption in sorted(assumptions.items()):
         ticker_rng = np.random.default_rng(_stable_seed(settings.seed, scenario, ticker))
-        idiosyncratic_z = ticker_rng.normal(0.0, 1.0, (settings.paths, months))
+        idiosyncratic_z = _draw_normal_blocks(
+            ticker_rng, settings.paths, accumulation_months, withdrawal_months
+        )
         beta = _finite(assumption["beta"], 0.8)
         annual_vol = max(0.0, _finite(assumption["annual_volatility"], 0.18))
         systematic_vol = min(annual_vol * 0.95, abs(beta) * market_sigma)
@@ -507,6 +575,7 @@ def _simulate_strategy(
     assumptions: dict[str, dict[str, Any]],
     paths_by_ticker: dict[str, dict[str, np.ndarray]],
     settings: SimulationSettings,
+    sustainability: SustainabilityOptions = _DEFAULT_SUSTAINABILITY,
 ) -> dict[str, Any]:
     months = settings.years * 12
     portfolio_values = np.zeros((settings.paths, months + 1), dtype=np.float64)
@@ -514,9 +583,11 @@ def _simulate_strategy(
     annual_income = np.zeros((settings.paths, months + 1), dtype=np.float64)
     cumulative_distributions = np.zeros(settings.paths, dtype=np.float64)
     portfolio_values[:, 0] = settings.starting_capital
+    no_drip_cash_collected = np.zeros(settings.paths, dtype=np.float64)
 
     weights = {row["ticker"]: row["weight"] for row in strategy["holdings"]}
     weighted_yield = 0.0
+    blended_expected_total_return = 0.0
     ticker_states: dict[str, dict[str, np.ndarray]] = {}
     for holding in strategy["holdings"]:
         ticker = holding["ticker"]
@@ -538,8 +609,13 @@ def _simulate_strategy(
                 SUSTAINABLE_YIELD_CAPS[assumption["scenario_type"]],
             ),
         }
+        if sustainability.check_drip_stop_stability:
+            ticker_states[ticker]["shares_no_drip"] = shares.copy()
         annual_income[:, 0] += shares * dps
         weighted_yield += holding["weight"] * assumption["current_yield"]
+        blended_expected_total_return += holding["weight"] * _finite(
+            assumption["expected_total_return"], 0.0
+        )
 
     for month in range(months):
         month_total = np.zeros(settings.paths, dtype=np.float64)
@@ -560,12 +636,17 @@ def _simulate_strategy(
             price_end = state["price"] * (1.0 + total_return) - payout_per_share
             price_end = np.maximum(price_end, state["price"] * 0.01)
 
+            if sustainability.check_drip_stop_stability:
+                no_drip_cash_collected += state["shares_no_drip"] * payout_per_share
+
             # All distributions are reinvested into the paying security.
             state["shares"] += distribution / price_end
             month_pre_contribution += state["shares"] * price_end
             contribution = settings.monthly_contribution * weights[ticker]
             if contribution > 0:
                 state["shares"] += contribution / price_end
+                if sustainability.check_drip_stop_stability:
+                    state["shares_no_drip"] += contribution / price_end
             state["price"] = price_end
             state["dps"] = np.minimum(
                 state["dps"] * path["dps_growth"][month],
@@ -587,6 +668,82 @@ def _simulate_strategy(
             flow_adjusted_index[:, month] * monthly_portfolio_factor
         )
         annual_income[:, month + 1] = month_income
+
+    if sustainability.check_drip_stop_stability:
+        no_drip_final_value = np.zeros(settings.paths, dtype=np.float64)
+        for state in ticker_states.values():
+            no_drip_final_value += state["shares_no_drip"] * state["price"]
+        total_invested = settings.starting_capital + settings.monthly_contribution * months
+        capital_ok = no_drip_final_value >= total_invested
+        capital_stability_probability = round(float(np.mean(capital_ok) * 100.0), 1)
+    else:
+        capital_ok = np.ones(settings.paths, dtype=bool)
+        capital_stability_probability = None
+
+    depleted = np.zeros(settings.paths, dtype=bool)
+    if sustainability.run_withdrawal_phase:
+        withdrawal_months = sustainability.withdrawal_years * 12
+        for offset in range(withdrawal_months):
+            month = months + offset
+            ticker_price_end: dict[str, np.ndarray] = {}
+            total_distribution = np.zeros(settings.paths, dtype=np.float64)
+            for ticker, state in ticker_states.items():
+                path = paths_by_ticker[ticker]
+                payout_per_share = np.minimum(
+                    state["dps"] / 12.0,
+                    state["price"] * state["yield_cap"] / 12.0,
+                )
+                distribution = state["shares"] * payout_per_share
+                total_return = np.expm1(path["log_returns"][:, month])
+                price_end = state["price"] * (1.0 + total_return) - payout_per_share
+                price_end = np.maximum(price_end, state["price"] * 0.01)
+                ticker_price_end[ticker] = price_end
+                total_distribution += distribution
+
+            target = settings.freedom_monthly_target * (
+                (1.0 + settings.inflation_rate) ** ((month + 1) / 12.0)
+            )
+            shortfall = np.maximum(target - total_distribution, 0.0)
+            surplus = np.maximum(total_distribution - target, 0.0)
+
+            total_value = np.zeros(settings.paths, dtype=np.float64)
+            ticker_value: dict[str, np.ndarray] = {}
+            for ticker, state in ticker_states.items():
+                value = state["shares"] * ticker_price_end[ticker]
+                ticker_value[ticker] = value
+                total_value += value
+            depleted |= total_value <= 1e-6
+
+            for ticker, state in ticker_states.items():
+                price_end = ticker_price_end[ticker]
+                weight_frac = np.divide(
+                    ticker_value[ticker],
+                    total_value,
+                    out=np.zeros(settings.paths, dtype=np.float64),
+                    where=total_value > 1e-9,
+                )
+                sell_shares = np.divide(
+                    shortfall * weight_frac,
+                    price_end,
+                    out=np.zeros(settings.paths, dtype=np.float64),
+                    where=price_end > 1e-9,
+                )
+                buy_shares = np.divide(
+                    surplus * weight_frac,
+                    price_end,
+                    out=np.zeros(settings.paths, dtype=np.float64),
+                    where=price_end > 1e-9,
+                )
+                state["shares"] = np.maximum(state["shares"] - sell_shares + buy_shares, 0.0)
+                state["price"] = price_end
+                state["dps"] = np.minimum(
+                    state["dps"] * paths_by_ticker[ticker]["dps_growth"][month],
+                    state["price"] * state["yield_cap"],
+                )
+
+        withdrawal_survival_probability = round(float(np.mean(~depleted) * 100.0), 1)
+    else:
+        withdrawal_survival_probability = None
 
     inflation_factors = np.power(
         1.0 + settings.inflation_rate,
@@ -668,6 +825,58 @@ def _simulate_strategy(
         if annual_target > 0 else None
     )
 
+    # Sustainability-adjusted income: cap at the strategy's blended expected
+    # total return (payout above that implies NAV erosion, i.e. return of
+    # capital) and/or haircut for estimated taxes, per the enabled tests.
+    # With both tests off this equals `annual_income[:, -1]` exactly, which
+    # keeps `sustainable_freedom_probability` identical to
+    # `freedom_target_probability` when no sustainability tests are enabled.
+    sustainability_income = annual_income[:, -1].copy()
+    if sustainability.cap_payout_to_total_return:
+        sustainability_income = np.minimum(
+            sustainability_income, portfolio_values[:, -1] * blended_expected_total_return
+        )
+    if sustainability.apply_tax:
+        sustainability_income = sustainability_income * (1.0 - sustainability.tax_rate)
+    final_real_sustainability_income = sustainability_income / final_inflation
+
+    if annual_target > 0:
+        income_ok = final_real_sustainability_income >= annual_target
+        spending_ok = final_spending >= annual_target
+        reaches_target = income_ok | spending_ok
+        withdrawal_ok = ~depleted  # all-False `depleted` (test disabled) means all-True here
+        sustainable_freedom_probability = round(
+            float(np.mean(reaches_target & capital_ok & withdrawal_ok) * 100.0),
+            1,
+        )
+    else:
+        sustainable_freedom_probability = None
+
+    payout_sustainable_ratio_pct = (
+        round(weighted_yield / blended_expected_total_return * 100.0, 1)
+        if blended_expected_total_return > 0 else None
+    )
+    sustainability_detail = {
+        "apply_tax": sustainability.apply_tax,
+        "tax_rate_pct": round(sustainability.tax_rate * 100.0, 1),
+        "cap_payout_to_total_return": sustainability.cap_payout_to_total_return,
+        "blended_expected_total_return_pct": round(blended_expected_total_return * 100.0, 2),
+        "payout_sustainable_ratio_pct": payout_sustainable_ratio_pct,
+        "sustainability_adjusted_monthly_income": (
+            _percentiles(sustainability_income / 12.0)
+            if sustainability.apply_tax or sustainability.cap_payout_to_total_return
+            else None
+        ),
+        "check_drip_stop_stability": sustainability.check_drip_stop_stability,
+        "capital_stability_probability": capital_stability_probability,
+        "no_drip_cash_collected": (
+            _percentiles(no_drip_cash_collected) if sustainability.check_drip_stop_stability else None
+        ),
+        "run_withdrawal_phase": sustainability.run_withdrawal_phase,
+        "withdrawal_years": sustainability.withdrawal_years if sustainability.run_withdrawal_phase else None,
+        "withdrawal_survival_probability": withdrawal_survival_probability,
+    }
+
     summary = {
         "starting_capital": round(settings.starting_capital, 2),
         "monthly_contribution": round(settings.monthly_contribution, 2),
@@ -690,6 +899,8 @@ def _simulate_strategy(
         "freedom_target_probability": target_freedom_probability,
         "freedom_year_income": freedom_year_income,
         "freedom_year_spending": freedom_year_spending,
+        "sustainable_freedom_probability": sustainable_freedom_probability,
+        "sustainability_detail": sustainability_detail,
     }
     return {
         "name": strategy["name"],
@@ -708,6 +919,7 @@ def run_accumulation_comparison(
 ) -> dict[str, Any]:
     """Validate, calibrate, and simulate every strategy across all scenarios."""
     settings = validate_settings(payload)
+    sustainability = validate_sustainability(payload.get("sustainability") or {})
     strategies = [normalize_strategy(row) for row in (payload.get("strategies") or [])]
     if len(strategies) < 2 or len(strategies) > 3:
         raise ValueError("Provide two strategies and, optionally, one blended strategy.")
@@ -730,11 +942,13 @@ def run_accumulation_comparison(
                     holding.get("current_price", 0.0),
                 )
 
+    withdrawal_months = (
+        sustainability.withdrawal_years * 12 if sustainability.run_withdrawal_phase else 0
+    )
     return_path_cells = (
         len(holdings_by_ticker)
         * settings.paths
-        * settings.years
-        * 12
+        * (settings.years * 12 + withdrawal_months)
     )
     if return_path_cells > MAX_RETURN_PATH_CELLS:
         max_cells = f"{MAX_RETURN_PATH_CELLS:,}"
@@ -758,10 +972,12 @@ def run_accumulation_comparison(
 
     scenario_results: dict[str, Any] = {}
     for scenario in SCENARIOS:
-        return_paths = generate_return_paths(assumptions, scenario, settings)
+        return_paths = generate_return_paths(
+            assumptions, scenario, settings, withdrawal_months=withdrawal_months
+        )
         scenario_results[scenario] = {
             "strategies": [
-                _simulate_strategy(strategy, assumptions, return_paths, settings)
+                _simulate_strategy(strategy, assumptions, return_paths, settings, sustainability)
                 for strategy in strategies
             ]
         }
@@ -780,6 +996,14 @@ def run_accumulation_comparison(
             "seed": settings.seed,
             "reinvest_distributions_pct": 100,
             "withdrawals": 0,
+            "sustainability": {
+                "apply_tax": sustainability.apply_tax,
+                "tax_rate_pct": round(sustainability.tax_rate * 100.0, 1),
+                "cap_payout_to_total_return": sustainability.cap_payout_to_total_return,
+                "check_drip_stop_stability": sustainability.check_drip_stop_stability,
+                "run_withdrawal_phase": sustainability.run_withdrawal_phase,
+                "withdrawal_years": sustainability.withdrawal_years,
+            },
         },
         "strategies": strategies,
         "assumptions": [assumptions[ticker] for ticker in sorted(assumptions)],

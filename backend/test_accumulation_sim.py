@@ -6,7 +6,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from accumulation_sim import normalize_strategy, run_accumulation_comparison
+from accumulation_sim import (
+    generate_return_paths,
+    normalize_strategy,
+    run_accumulation_comparison,
+    validate_settings,
+)
 
 
 def assumption(ticker, *, total_return=0.0, yield_rate=0.0, scenario_type="other"):
@@ -272,6 +277,145 @@ class AccumulationSimulationTest(unittest.TestCase):
             ["max_drawdown_pct"]["p50"]
         )
         self.assertLess(drawdown, -10)
+
+    def test_generate_return_paths_extension_preserves_existing_months(self):
+        payload = self.base_payload()
+        payload["years"] = 2
+        settings = validate_settings(payload)
+        assumptions = {"AAA": assumption("AAA", total_return=0.07, yield_rate=0.04)}
+        short = generate_return_paths(assumptions, "neutral", settings)
+        extended = generate_return_paths(assumptions, "neutral", settings, withdrawal_months=240)
+        accumulation_months = settings.years * 12
+        np.testing.assert_array_equal(
+            short["AAA"]["log_returns"],
+            extended["AAA"]["log_returns"][:, :accumulation_months],
+        )
+        np.testing.assert_array_equal(
+            short["AAA"]["dps_growth"],
+            extended["AAA"]["dps_growth"][:accumulation_months],
+        )
+
+    def test_sustainable_freedom_probability_matches_freedom_target_probability_with_all_toggles_off(self):
+        payload = self.base_payload()
+        payload.update({"years": 10, "freedom_monthly_target": 50})
+        result = run_accumulation_comparison(
+            payload,
+            assumptions_override={
+                "AAA": assumption("AAA", total_return=0.07, yield_rate=0.05),
+                "BBB": assumption("BBB", total_return=0.08, yield_rate=0.01),
+            },
+        )
+        for scenario in ("bullish", "neutral", "bearish"):
+            for strategy in result["scenarios"][scenario]["strategies"]:
+                summary = strategy["summary"]
+                self.assertEqual(
+                    summary["sustainable_freedom_probability"],
+                    summary["freedom_target_probability"],
+                )
+
+        zero_target_result = run_accumulation_comparison(
+            self.base_payload(),
+            assumptions_override={
+                "AAA": assumption("AAA", total_return=0.07, yield_rate=0.05),
+                "BBB": assumption("BBB", total_return=0.08, yield_rate=0.01),
+            },
+        )
+        zero_summary = zero_target_result["scenarios"]["neutral"]["strategies"][0]["summary"]
+        self.assertIsNone(zero_summary["freedom_target_probability"])
+        self.assertIsNone(zero_summary["sustainable_freedom_probability"])
+
+    def test_drip_stop_capital_stability_hand_computable(self):
+        payload = self.base_payload()
+        payload["monthly_contribution"] = 0
+        payload["sustainability"] = {"check_drip_stop_stability": True}
+
+        positive = run_accumulation_comparison(
+            payload,
+            assumptions_override={
+                "AAA": assumption("AAA", total_return=0.05, yield_rate=0.0),
+                "BBB": assumption("BBB", total_return=0.05, yield_rate=0.0),
+            },
+        )
+        positive_summary = positive["scenarios"]["neutral"]["strategies"][0]["summary"]
+        self.assertEqual(
+            positive_summary["sustainability_detail"]["capital_stability_probability"], 100.0
+        )
+
+        negative = run_accumulation_comparison(
+            payload,
+            assumptions_override={
+                "AAA": assumption("AAA", total_return=-0.30, yield_rate=0.0),
+                "BBB": assumption("BBB", total_return=-0.30, yield_rate=0.0),
+            },
+        )
+        negative_summary = negative["scenarios"]["neutral"]["strategies"][0]["summary"]
+        self.assertEqual(
+            negative_summary["sustainability_detail"]["capital_stability_probability"], 0.0
+        )
+
+    def test_withdrawal_phase_depletion_under_extreme_case(self):
+        payload = self.base_payload()
+        payload.update({
+            "starting_capital": 2000,
+            "monthly_contribution": 0,
+            "freedom_monthly_target": 2000,
+            "sustainability": {"run_withdrawal_phase": True, "withdrawal_years": 5},
+        })
+        result = run_accumulation_comparison(
+            payload,
+            assumptions_override={
+                "AAA": assumption("AAA", total_return=0.05, yield_rate=0.03),
+                "BBB": assumption("BBB", total_return=0.05, yield_rate=0.03),
+            },
+        )
+        detail = result["scenarios"]["neutral"]["strategies"][0]["summary"]["sustainability_detail"]
+        survival = detail["withdrawal_survival_probability"]
+        self.assertIsNotNone(survival)
+        self.assertGreaterEqual(survival, 0.0)
+        self.assertLess(survival, 10.0)
+
+    def test_payout_cap_limits_sustainable_income_when_yield_exceeds_total_return(self):
+        payload = self.base_payload()
+        payload["monthly_contribution"] = 0
+        payload["freedom_monthly_target"] = 1
+        payload["sustainability"] = {"cap_payout_to_total_return": True}
+        result = run_accumulation_comparison(
+            payload,
+            assumptions_override={
+                "AAA": assumption(
+                    "AAA", total_return=0.05, yield_rate=0.20, scenario_type="high_distribution_option"
+                ),
+                "BBB": assumption(
+                    "BBB", total_return=0.05, yield_rate=0.20, scenario_type="high_distribution_option"
+                ),
+            },
+        )
+        summary = result["scenarios"]["neutral"]["strategies"][0]["summary"]
+        detail = summary["sustainability_detail"]
+        # Yield (20%) exceeds total return (5%) -> ratio well above 100%.
+        self.assertGreater(detail["payout_sustainable_ratio_pct"], 100.0)
+        adjusted = detail["sustainability_adjusted_monthly_income"]
+        gross = summary["final_monthly_income"]
+        self.assertIsNotNone(adjusted)
+        self.assertLessEqual(adjusted["p50"], gross["p50"])
+
+    def test_oversized_workload_with_withdrawal_phase_is_rejected(self):
+        holdings = [{"ticker": f"T{i:03d}", "weight": 1} for i in range(200)]
+        payload = self.base_payload()
+        payload.update({
+            "years": 4,
+            "paths": 2000,
+            "strategies": [
+                {"name": "Large A", "style": "custom", "holdings": holdings},
+                {"name": "Large B", "style": "custom", "holdings": holdings},
+            ],
+            "sustainability": {"run_withdrawal_phase": True, "withdrawal_years": 1},
+        })
+        # Accumulation-only cell count (200 * 2000 * 48 = 19.2M) is under the
+        # 20M guard; adding the withdrawal months (12 more) pushes it over,
+        # so the guard must account for withdrawal months to catch this.
+        with self.assertRaisesRegex(ValueError, "ticker-path-months"):
+            run_accumulation_comparison(payload, assumptions_override={})
 
 
 if __name__ == "__main__":
