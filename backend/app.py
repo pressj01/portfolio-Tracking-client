@@ -718,6 +718,94 @@ def cash_flow_item_detail(item_id):
     return jsonify(item=result)
 
 
+@app.route("/api/cash-flow/items/<int:item_id>/move", methods=["POST"])
+def cash_flow_item_move(item_id):
+    """Move one expense or additional-income item to another profile."""
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    row = conn.execute(
+        """SELECT i.*, p.scope_type, p.scope_id
+           FROM cash_flow_items i
+           JOIN cash_flow_plans p ON p.id = i.plan_id
+           WHERE i.id = ?""",
+        (item_id,),
+    ).fetchone()
+    scope_type, scope_id = _cash_flow_scope()
+    if (
+        not row
+        or row["scope_type"] != scope_type
+        or int(row["scope_id"]) != int(scope_id)
+    ):
+        conn.close()
+        return jsonify(error="Cash-flow item not found."), 404
+
+    data = request.get_json(silent=True) or {}
+    target_scope_type = str(data.get("target_scope_type") or "").strip().lower()
+    target_scope_id_raw = data.get("target_scope_id")
+    if not target_scope_type and data.get("target_profile_id") not in (None, ""):
+        # Backward compatibility for clients that predate aggregate destinations.
+        target_scope_type = "profile"
+        target_scope_id_raw = data.get("target_profile_id")
+    if target_scope_type not in {"profile", "aggregate"}:
+        conn.close()
+        return jsonify(error="Choose a destination account."), 400
+    try:
+        target_scope_id = int(target_scope_id_raw)
+    except (TypeError, ValueError):
+        conn.close()
+        return jsonify(error="Choose a destination account."), 400
+    target_table = "profiles" if target_scope_type == "profile" else "aggregates"
+    target_scope = conn.execute(
+        f"SELECT id, name FROM {target_table} WHERE id = ?",
+        (target_scope_id,),
+    ).fetchone()
+    if not target_scope:
+        conn.close()
+        return jsonify(error="Destination account not found."), 404
+    if scope_type == target_scope_type and int(scope_id) == target_scope_id:
+        conn.close()
+        return jsonify(error="Choose a different destination account."), 400
+
+    source_plan_id = int(row["plan_id"])
+    target_plan = _get_or_create_default_cash_flow_plan(
+        conn, target_scope_type, target_scope_id
+    )
+    conn.execute(
+        """UPDATE cash_flow_items
+           SET plan_id = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?""",
+        (target_plan["id"], item_id),
+    )
+    _cash_flow_touch_plan(conn, source_plan_id)
+    _cash_flow_touch_plan(conn, target_plan["id"])
+    conn.commit()
+    updated = conn.execute(
+        "SELECT * FROM cash_flow_items WHERE id = ?", (item_id,)
+    ).fetchone()
+    result = _cash_flow_item_result(conn, updated)
+    target = {
+        "scope_type": target_scope_type,
+        "scope_id": int(target_scope["id"]),
+        "scope_name": target_scope["name"],
+        "profile_id": (
+            int(target_scope["id"]) if target_scope_type == "profile" else None
+        ),
+        "profile_name": (
+            target_scope["name"] if target_scope_type == "profile" else None
+        ),
+        "aggregate_id": (
+            int(target_scope["id"]) if target_scope_type == "aggregate" else None
+        ),
+        "aggregate_name": (
+            target_scope["name"] if target_scope_type == "aggregate" else None
+        ),
+        "plan_id": int(target_plan["id"]),
+        "plan_name": target_plan["name"],
+    }
+    conn.close()
+    return jsonify(ok=True, item=result, target=target)
+
+
 @app.route(
     "/api/cash-flow/items/<int:item_id>/months/<month>",
     methods=["PUT", "DELETE"],

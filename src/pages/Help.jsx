@@ -95,6 +95,8 @@ const GROUPS = [
       { type: 'heading', label: 'Planning & Optimization' },
       { id: 'portfolio-builder', label: 'Portfolio Builder' },
       { id: 'portfolio-tester', label: 'Portfolio Tester' },
+      { id: 'cash-flow', label: 'Cash Flow & Sustainability' },
+      { id: 'retirement-readiness', label: 'Retirement Readiness' },
       { id: 'rebalance-wizard', label: 'Rebalance Wizard' },
     ],
   },
@@ -5237,6 +5239,141 @@ function RetirementReadinessHelp() {
   )
 }
 
+function CashFlowHelp() {
+  return (
+    <div>
+      <h2>Cash Flow &amp; Sustainability</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Cash Flow &amp; Sustainability is the monthly planning page for matching your bills against portfolio
+        distributions and any additional income you save in the app. It lets you track when bills are due,
+        when you want to pay them, what has already been paid, and whether the selected portfolio can keep
+        covering those bills over time.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/cash-flow/cash-flow-overview.png"
+          alt="Cash Flow and Sustainability page showing monthly summary cards, expenses table with due date and pay by columns, and additional income section"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>What the top section shows</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>View month</strong> - choose the month you want to review. Totals, due dates, pay-by dates, and paid status all reflect that month.</li>
+        <li><strong>Expenses This Month</strong> - total of active bills scheduled for the selected month.</li>
+        <li><strong>Portfolio Income (Gross / After Tax)</strong> - the selected account or aggregate portfolio's current monthly distributions before and after the portfolio-income tax assumption.</li>
+        <li><strong>Additional Income</strong> - non-portfolio income you entered here, such as Social Security, pension, or rental income.</li>
+        <li><strong>Leftover cards</strong> - how much remains after bills, first before tax and then after the portfolio tax setting.</li>
+        <li><strong>Status banner</strong> - quickly tells you whether the selected month's bills are covered and how much portfolio-only funding is needed.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Managing expenses</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Add expense</strong> - enter the bill name, amount, frequency, and optional category, then open the dates and notes area for the schedule details.</li>
+        <li><strong>Active from</strong> - the first month the bill should begin appearing.</li>
+        <li><strong>Due date</strong> - the date the bill is due. This is fully editable.</li>
+        <li><strong>Pay by</strong> - defaults to 2 days before the due date, but you can edit it to whatever reminder date you prefer.</li>
+        <li><strong>Stop after</strong> - optional end date if the bill should stop automatically after a specific month.</li>
+        <li><strong>Paid checkbox</strong> - tracks whether that bill occurrence has been paid. It follows the bill's due occurrence instead of blindly clearing at every month change.</li>
+      </ul>
+
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each expense row also includes actions for <strong>Edit</strong>, <strong>Move</strong>, <strong>Save off</strong>, and
+        <strong> Delete</strong>. <strong>Move</strong> transfers the saved item to another individual account or an aggregate account.
+        <strong> Save off</strong> keeps the bill in history but removes it from active monthly totals until you restore it.
+      </p>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+        <strong>Why pay dates matter:</strong> some bills are due at the beginning of a month but get paid near the end of the prior month.
+        The separate <strong>Due date</strong> and <strong>Pay by</strong> fields are there so you can track both the real bill deadline and
+        your own payment timing.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Managing additional income</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Add income</strong> - save outside income sources like Social Security, pension, salary, or rent.</li>
+        <li><strong>Tax %</strong> - each income item can carry its own tax treatment, separate from the portfolio-income tax assumption.</li>
+        <li><strong>Move</strong> - transfers the saved income source to another account or aggregate when you want that income tied somewhere else.</li>
+        <li><strong>Save off</strong> - archives the income source without deleting it so it can be restored later.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Running the sustainability test</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The Forward Stress Test section projects whether the selected portfolio can continue paying your bills for the chosen horizon.
+        You can save assumptions and run scenarios both <strong>with</strong> and <strong>without</strong> your additional income.
+      </p>
+
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Horizon</strong> - number of years to project.</li>
+        <li><strong>Expense inflation</strong> - how quickly bills grow over time.</li>
+        <li><strong>Portfolio income tax</strong> - tax rate applied to portfolio distributions in the cash-flow model.</li>
+        <li><strong>Starting cash reserve</strong> - extra cash available before the model would ever need to sell shares.</li>
+        <li><strong>Unused income after bills</strong> - controls what the model does with surplus cash, such as reinvesting it into more shares.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/cash-flow/cash-flow-sustainability-results.png"
+          alt="Cash Flow and Sustainability forward stress test showing the assumptions area, explanation panel, and bull neutral bear scenario results"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to read the scenario table</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Bull / Neutral / Bear</strong> - the model tests positive, moderate, and negative market paths.</li>
+        <li><strong>Portfolio + Additional Income</strong> - includes the saved outside-income entries.</li>
+        <li><strong>Portfolio Distributions Only</strong> - excludes all additional-income entries so you can see what the portfolio alone can support.</li>
+        <li><strong>All bills covered by income</strong> - distributions and allowed income covered every projected bill without selling shares.</li>
+        <li><strong>Some shares must be sold</strong> - bills were larger than available income and reserve cash in that scenario, so the model had to draw on principal.</li>
+        <li><strong>Portfolio value after X years</strong> - projected ending account value.</li>
+        <li><strong>Portfolio growth</strong> - dollar change between the starting and ending portfolio value.</li>
+        <li><strong>Final distributions</strong> - projected monthly and yearly gross income being generated at the end of the test.</li>
+      </ul>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+        <strong>How this model works:</strong> it uses the selected portfolio's current distribution yield as the income starting point, changes
+        distributions separately from market value, and reinvests surplus cash when you choose a reinvestment option. That is why the final
+        income can rise even when the market path is uneven.
+      </div>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/cash-flow/cash-flow-projected-balance-chart.png"
+          alt="Projected Portfolio Balance chart comparing bull neutral and bear scenarios with and without additional income"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Projected balance chart</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The line chart shows the portfolio path over time for all six scenario combinations: bull, neutral, and bear, each with and without
+        additional income. Solid lines include additional income. Dotted lines show portfolio-only results. Hover any year to compare the
+        projected balances side by side.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Saved-off items and transfers</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Saved expenses</strong> and <strong>Saved additional income</strong> sections keep archived items out of the active monthly plan.</li>
+        <li><strong>Restore</strong> brings a saved-off item back into the current plan.</li>
+        <li><strong>Delete</strong> permanently removes it.</li>
+        <li><strong>Move</strong> preserves the same saved item while changing which account or aggregate owns it.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Suggested workflow</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Pick the month you want to plan.</li>
+        <li>Add or update all recurring bills, including due date and pay-by date.</li>
+        <li>Mark bills paid as you work through the month.</li>
+        <li>Add outside income sources that should count toward bill coverage.</li>
+        <li>Set your stress assumptions and choose what to do with leftover income.</li>
+        <li>Run the sustainability test and compare the with-income and portfolio-only columns.</li>
+      </ol>
+    </div>
+  )
+}
+
 function DividendCalculatorHelp() {
   return (
     <div>
@@ -6948,6 +7085,7 @@ const CONTENT_MAP = {
   analytics: AnalyticsHelp,
   'portfolio-builder': PortfolioBuilderHelp,
   'portfolio-tester': PortfolioTesterHelp,
+  'cash-flow': CashFlowHelp,
   'dist-compare': DistCompareHelp,
   consolidation: ConsolidationHelp,
   'macro-dashboard': MacroDashboardHelp,

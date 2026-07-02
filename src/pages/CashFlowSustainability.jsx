@@ -239,7 +239,17 @@ function ItemEditor({ kind, value, onChange, onSubmit, onCancel, saving }) {
   )
 }
 
-function ItemTable({ kind, items, onEdit, onDelete, onTogglePaid }) {
+function ItemTable({
+  kind,
+  items,
+  onEdit,
+  onDelete,
+  onTogglePaid,
+  onMove,
+  onSaveOff,
+  onRestore,
+  saved = false,
+}) {
   const frequencyLabel = Object.fromEntries(FREQUENCIES)
   if (!items.length) {
     return (
@@ -263,7 +273,7 @@ function ItemTable({ kind, items, onEdit, onDelete, onTogglePaid }) {
             {kind === 'expense' && <th>Pay by</th>}
             <th className="cf-num">Amount</th>
             {kind === 'income' && <th className="cf-num">Tax</th>}
-            {kind === 'expense' && <th className="cf-center">Paid</th>}
+            {kind === 'expense' && !saved && <th className="cf-center">Paid</th>}
             <th aria-label="Actions" />
           </tr>
         </thead>
@@ -282,7 +292,7 @@ function ItemTable({ kind, items, onEdit, onDelete, onTogglePaid }) {
                 {kind === 'expense' && <td className="cf-date">{item.current_pay_date || '—'}</td>}
                 <td className="cf-num"><strong>{money(item.amount, 2)}</strong></td>
                 {kind === 'income' && <td className="cf-num">{Number(item.tax_rate_pct || 0).toFixed(1)}%</td>}
-                {kind === 'expense' && (
+                {kind === 'expense' && !saved && (
                   <td className="cf-center">
                     {item.current_due_date ? (
                       <input
@@ -297,7 +307,14 @@ function ItemTable({ kind, items, onEdit, onDelete, onTogglePaid }) {
                   </td>
                 )}
                 <td className="cf-actions">
-                  <button type="button" onClick={() => onEdit(item)}>Edit</button>
+                  {!saved && <button type="button" onClick={() => onEdit(item)}>Edit</button>}
+                  {onMove && <button type="button" onClick={() => onMove(item)}>Move</button>}
+                  {!saved && onSaveOff && (
+                    <button type="button" onClick={() => onSaveOff(item)}>Save off</button>
+                  )}
+                  {saved && onRestore && (
+                    <button type="button" onClick={() => onRestore(item)}>Restore</button>
+                  )}
                   <button type="button" className="cf-delete" onClick={() => onDelete(item)}>Delete</button>
                 </td>
               </tr>
@@ -305,6 +322,63 @@ function ItemTable({ kind, items, onEdit, onDelete, onTogglePaid }) {
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+function MoveCashFlowItemDialog({
+  item,
+  profiles,
+  aggregates,
+  sourceName,
+  targetDestination,
+  onTargetChange,
+  onCancel,
+  onMove,
+  moving,
+}) {
+  if (!item) return null
+  const itemType = item.kind === 'income' ? 'additional income' : 'expense'
+  return (
+    <div className="dialog-overlay" role="presentation" onMouseDown={event => {
+      if (event.target === event.currentTarget && !moving) onCancel()
+    }}>
+      <div className="dialog-box cf-move-box" role="dialog" aria-modal="true" aria-labelledby="cf-move-title">
+        <h3 id="cf-move-title">Move {itemType} to another account</h3>
+        <p>
+          <strong>{item.name}</strong> will be removed from {sourceName} and added to the destination
+          account&apos;s monthly cash-flow plan. Its dates, notes, saved status, and any payment history will move with it.
+        </p>
+        <label>
+          <span>Destination account</span>
+          <select value={targetDestination} onChange={event => onTargetChange(event.target.value)} autoFocus>
+            <option value="">Choose an account...</option>
+            {profiles.length > 0 && (
+              <optgroup label="Individual accounts">
+                {profiles.map(profile => (
+                  <option key={`profile:${profile.id}`} value={`profile:${profile.id}`}>{profile.name}</option>
+                ))}
+              </optgroup>
+            )}
+            {aggregates.length > 0 && (
+              <optgroup label="Aggregate accounts">
+                {aggregates.map(aggregate => (
+                  <option key={`aggregate:${aggregate.id}`} value={`aggregate:${aggregate.id}`}>
+                    {aggregate.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+          <small>No account is selected automatically.</small>
+        </label>
+        <div className="dialog-buttons">
+          <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={moving}>Cancel</button>
+          <button type="button" className="btn btn-primary" onClick={onMove} disabled={!targetDestination || moving}>
+            {moving ? 'Moving...' : `Move ${item.kind === 'income' ? 'income' : 'expense'}`}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -341,7 +415,15 @@ function ScenarioOutcome({ result, horizonYears, surplusMode }) {
 
 export default function CashFlowSustainability() {
   const pf = useProfileFetch()
-  const { selection, currentProfileName, isAggregate } = useProfile()
+  const {
+    selection,
+    currentProfileName,
+    isAggregate,
+    profileId,
+    profiles,
+    aggregateId,
+    aggregates,
+  } = useProfile()
   const { isDark } = useTheme()
   const dialog = useDialog()
   const ct = chartTheme(isDark)
@@ -360,6 +442,9 @@ export default function CashFlowSustainability() {
   const [simLoading, setSimLoading] = useState(false)
   const [error, setError] = useState('')
   const [calendarDay, setCalendarDay] = useState(localDateKey())
+  const [moveItem, setMoveItem] = useState(null)
+  const [moveTargetDestination, setMoveTargetDestination] = useState('')
+  const [movingItem, setMovingItem] = useState(false)
 
   const apiJson = useCallback(async (path, options) => {
     const response = await pf(path, options)
@@ -462,7 +547,11 @@ export default function CashFlowSustainability() {
   }
 
   const deleteItem = async item => {
-    const confirmed = await dialog.confirm(`Delete "${item.name}" from this cash-flow plan?`)
+    const confirmed = await dialog.confirm(
+      item.kind === 'expense'
+        ? `Permanently delete "${item.name}" and its payment history?\n\nUse "Save off" instead if you may need this expense again.`
+        : `Permanently delete "${item.name}" from additional income?\n\nUse "Save off" instead if you may need this income again.`,
+    )
     if (!confirmed) return
     setError('')
     try {
@@ -470,6 +559,81 @@ export default function CashFlowSustainability() {
       await loadPlanData(planId)
     } catch (err) {
       setError(err.message)
+    }
+  }
+
+  const setItemActive = async (item, active) => {
+    setSaving(true)
+    setError('')
+    try {
+      await apiJson(`/api/cash-flow/items/${item.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...item, active, plan_id: planId }),
+      })
+      if (item.kind === 'expense' && expenseDraft.id === item.id) {
+        setExpenseDraft(blankItem('expense', month))
+      }
+      if (item.kind === 'income' && incomeDraft.id === item.id) {
+        setIncomeDraft(blankItem('income', month))
+      }
+      await loadPlanData(planId)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const saveOffItem = async item => {
+    const label = item.kind === 'income' ? 'additional income' : 'expense'
+    const confirmed = await dialog.confirm(
+      `Save off "${item.name}"?\n\nIt will be removed from ${label} totals but kept under Saved ${label} so it can be restored later.`,
+    )
+    if (confirmed) await setItemActive(item, false)
+  }
+
+  const restoreItem = item => setItemActive(item, true)
+
+  const openMoveItem = item => {
+    setMoveItem(item)
+    setMoveTargetDestination('')
+  }
+
+  const closeMoveItem = () => {
+    if (movingItem) return
+    setMoveItem(null)
+    setMoveTargetDestination('')
+  }
+
+  const confirmMoveItem = async () => {
+    if (!moveItem || !moveTargetDestination) return
+    const [targetScopeType, targetScopeId] = moveTargetDestination.split(':')
+    if (!['profile', 'aggregate'].includes(targetScopeType) || !targetScopeId) return
+    setMovingItem(true)
+    setError('')
+    try {
+      await apiJson(`/api/cash-flow/items/${moveItem.id}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_scope_type: targetScopeType,
+          target_scope_id: Number(targetScopeId),
+        }),
+      })
+      if (moveItem.kind === 'expense' && expenseDraft.id === moveItem.id) {
+        setExpenseDraft(blankItem('expense', month))
+      }
+      if (moveItem.kind === 'income' && incomeDraft.id === moveItem.id) {
+        setIncomeDraft(blankItem('income', month))
+      }
+      setMoveItem(null)
+      setMoveTargetDestination('')
+      await loadPlanData(planId)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setMovingItem(false)
     }
   }
 
@@ -521,7 +685,17 @@ export default function CashFlowSustainability() {
   }
 
   const expenses = useMemo(() => items.filter(item => item.kind === 'expense' && item.active), [items])
+  const savedExpenses = useMemo(() => items.filter(item => item.kind === 'expense' && !item.active), [items])
   const incomes = useMemo(() => items.filter(item => item.kind === 'income' && item.active), [items])
+  const savedIncomes = useMemo(() => items.filter(item => item.kind === 'income' && !item.active), [items])
+  const moveDestinationProfiles = useMemo(
+    () => profiles.filter(profile => isAggregate || Number(profile.id) !== Number(profileId)),
+    [profiles, isAggregate, profileId],
+  )
+  const moveDestinationAggregates = useMemo(
+    () => aggregates.filter(aggregate => !isAggregate || Number(aggregate.id) !== Number(aggregateId)),
+    [aggregates, isAggregate, aggregateId],
+  )
   const togglePaid = useCallback(async (item, paid) => {
     if (!item.current_due_date) return
     try {
@@ -669,7 +843,33 @@ export default function CashFlowSustainability() {
           saving={saving}
         />
         {loading ? <div className="cf-empty">Loading expenses...</div> : (
-          <ItemTable kind="expense" items={expenses} onEdit={editItem} onDelete={deleteItem} onTogglePaid={togglePaid} />
+          <>
+            <ItemTable
+              kind="expense"
+              items={expenses}
+              onEdit={editItem}
+              onDelete={deleteItem}
+              onTogglePaid={togglePaid}
+              onMove={openMoveItem}
+              onSaveOff={saveOffItem}
+            />
+            {savedExpenses.length > 0 && (
+              <details className="cf-saved-expenses">
+                <summary>
+                  <strong>Saved expenses ({savedExpenses.length})</strong>
+                  <span>Not included in monthly totals. Open to restore, move, or permanently delete.</span>
+                </summary>
+                <ItemTable
+                  kind="expense"
+                  items={savedExpenses}
+                  onDelete={deleteItem}
+                  onMove={openMoveItem}
+                  onRestore={restoreItem}
+                  saved
+                />
+              </details>
+            )}
+          </>
         )}
       </section>
 
@@ -690,9 +890,46 @@ export default function CashFlowSustainability() {
           saving={saving}
         />
         {loading ? <div className="cf-empty">Loading income...</div> : (
-          <ItemTable kind="income" items={incomes} onEdit={editItem} onDelete={deleteItem} />
+          <>
+            <ItemTable
+              kind="income"
+              items={incomes}
+              onEdit={editItem}
+              onDelete={deleteItem}
+              onMove={openMoveItem}
+              onSaveOff={saveOffItem}
+            />
+            {savedIncomes.length > 0 && (
+              <details className="cf-saved-expenses">
+                <summary>
+                  <strong>Saved additional income ({savedIncomes.length})</strong>
+                  <span>Not included in income totals. Open to restore, move, or permanently delete.</span>
+                </summary>
+                <ItemTable
+                  kind="income"
+                  items={savedIncomes}
+                  onDelete={deleteItem}
+                  onMove={openMoveItem}
+                  onRestore={restoreItem}
+                  saved
+                />
+              </details>
+            )}
+          </>
         )}
       </section>
+
+      <MoveCashFlowItemDialog
+        item={moveItem}
+        profiles={moveDestinationProfiles}
+        aggregates={moveDestinationAggregates}
+        sourceName={currentProfileName}
+        targetDestination={moveTargetDestination}
+        onTargetChange={setMoveTargetDestination}
+        onCancel={closeMoveItem}
+        onMove={confirmMoveItem}
+        moving={movingItem}
+      />
 
       <section className="cf-sim-panel">
         <div className="cf-section-head cf-sim-head">

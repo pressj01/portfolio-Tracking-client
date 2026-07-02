@@ -156,6 +156,154 @@ class CashFlowApiTest(unittest.TestCase):
         self.assertEqual(detail["due_dates"], ["2026-07-01"])
         self.assertEqual(detail["pay_dates"], ["2026-06-28"])
 
+    def test_expense_can_be_saved_off_and_restored(self):
+        created = self._add().get_json()["item"]
+        created["active"] = False
+        saved = self.client.put(
+            f"/api/cash-flow/items/{created['id']}?profile_id=1",
+            json=created,
+        )
+        self.assertEqual(saved.status_code, 200)
+        self.assertFalse(saved.get_json()["item"]["active"])
+
+        summary = self.client.get(
+            f"/api/cash-flow/summary?profile_id=1&plan_id={self.plan_id}&month=2026-01"
+        ).get_json()["summary"]
+        self.assertEqual(summary["expenses"], 0)
+        items = self.client.get(
+            f"/api/cash-flow/items?profile_id=1&plan_id={self.plan_id}"
+        ).get_json()["items"]
+        self.assertEqual(len(items), 1)
+        self.assertFalse(items[0]["active"])
+
+        created["active"] = True
+        restored = self.client.put(
+            f"/api/cash-flow/items/{created['id']}?profile_id=1",
+            json=created,
+        )
+        self.assertEqual(restored.status_code, 200)
+        self.assertTrue(restored.get_json()["item"]["active"])
+
+    def test_expense_can_move_to_another_account_with_payment_history(self):
+        conn = self._get_connection()
+        try:
+            conn.execute("INSERT INTO profiles (id, name) VALUES (2, 'Second Account')")
+            conn.commit()
+        finally:
+            conn.close()
+        due_date = datetime.date.today() + datetime.timedelta(days=1)
+        created = self._add(
+            frequency="one_time",
+            start_date=due_date.isoformat(),
+            due_date=due_date.isoformat(),
+            pay_date=(due_date - datetime.timedelta(days=2)).isoformat(),
+        ).get_json()["item"]
+        paid = self.client.put(
+            f"/api/cash-flow/items/{created['id']}/payments/{due_date.isoformat()}?profile_id=1",
+            json={"paid": True},
+        )
+        self.assertEqual(paid.status_code, 200)
+
+        moved = self.client.post(
+            f"/api/cash-flow/items/{created['id']}/move?profile_id=1",
+            json={"target_profile_id": 2},
+        )
+        self.assertEqual(moved.status_code, 200)
+        self.assertEqual(moved.get_json()["target"]["profile_name"], "Second Account")
+        self.assertTrue(moved.get_json()["item"]["paid"])
+
+        source_items = self.client.get(
+            f"/api/cash-flow/items?profile_id=1&plan_id={self.plan_id}"
+        ).get_json()["items"]
+        self.assertEqual(source_items, [])
+        target_plan_id = moved.get_json()["target"]["plan_id"]
+        target_items = self.client.get(
+            f"/api/cash-flow/items?profile_id=2&plan_id={target_plan_id}"
+        ).get_json()["items"]
+        self.assertEqual(len(target_items), 1)
+        self.assertEqual(target_items[0]["id"], created["id"])
+        self.assertTrue(target_items[0]["paid"])
+
+        same_account = self.client.post(
+            f"/api/cash-flow/items/{created['id']}/move?profile_id=2",
+            json={"target_profile_id": 2},
+        )
+        self.assertEqual(same_account.status_code, 400)
+
+    def test_additional_income_can_be_saved_off_moved_and_restored(self):
+        conn = self._get_connection()
+        try:
+            conn.execute("INSERT INTO profiles (id, name) VALUES (2, 'Income Account')")
+            conn.commit()
+        finally:
+            conn.close()
+        created = self._add(
+            kind="income",
+            name="Pension",
+            amount=500,
+            category="Pension",
+            tax_rate_pct=10,
+            essential=False,
+        ).get_json()["item"]
+        created["active"] = False
+        saved = self.client.put(
+            f"/api/cash-flow/items/{created['id']}?profile_id=1",
+            json=created,
+        )
+        self.assertEqual(saved.status_code, 200)
+        self.assertFalse(saved.get_json()["item"]["active"])
+
+        moved = self.client.post(
+            f"/api/cash-flow/items/{created['id']}/move?profile_id=1",
+            json={"target_profile_id": 2},
+        )
+        self.assertEqual(moved.status_code, 200)
+        target_plan_id = moved.get_json()["target"]["plan_id"]
+        self.assertEqual(moved.get_json()["target"]["profile_name"], "Income Account")
+        self.assertFalse(moved.get_json()["item"]["active"])
+
+        moved_item = moved.get_json()["item"]
+        moved_item["active"] = True
+        restored = self.client.put(
+            f"/api/cash-flow/items/{created['id']}?profile_id=2",
+            json=moved_item,
+        )
+        self.assertEqual(restored.status_code, 200)
+        self.assertTrue(restored.get_json()["item"]["active"])
+        target_summary = self.client.get(
+            f"/api/cash-flow/summary?profile_id=2&plan_id={target_plan_id}&month=2026-01"
+        ).get_json()["summary"]
+        self.assertEqual(target_summary["additional_income_net"], 450)
+
+    def test_cash_flow_item_can_move_to_an_aggregate_account(self):
+        conn = self._get_connection()
+        try:
+            conn.execute("INSERT INTO aggregates (id, name) VALUES (1, 'Household')")
+            conn.commit()
+        finally:
+            conn.close()
+        created = self._add(name="Utilities").get_json()["item"]
+
+        moved = self.client.post(
+            f"/api/cash-flow/items/{created['id']}/move?profile_id=1",
+            json={"target_scope_type": "aggregate", "target_scope_id": 1},
+        )
+        self.assertEqual(moved.status_code, 200)
+        target = moved.get_json()["target"]
+        self.assertEqual(target["scope_type"], "aggregate")
+        self.assertEqual(target["aggregate_name"], "Household")
+        target_items = self.client.get(
+            f"/api/cash-flow/items?aggregate_id=1&plan_id={target['plan_id']}"
+        ).get_json()["items"]
+        self.assertEqual(len(target_items), 1)
+        self.assertEqual(target_items[0]["name"], "Utilities")
+
+        same_aggregate = self.client.post(
+            f"/api/cash-flow/items/{created['id']}/move?aggregate_id=1",
+            json={"target_scope_type": "aggregate", "target_scope_id": 1},
+        )
+        self.assertEqual(same_aggregate.status_code, 400)
+
     def test_paid_check_is_tied_to_due_occurrence_not_view_month(self):
         today = datetime.date.today()
         due_date = today + datetime.timedelta(days=1)
