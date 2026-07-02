@@ -42,10 +42,13 @@ class NanSafeJSONProvider(DefaultJSONProvider):
 from config import get_connection, FRED_API_KEY, DB_PATH
 from database import ensure_tables_exist
 from cash_flow import (
+    classify_holding_scenario_type as _classify_cash_flow_holding,
     expand_plan as _expand_cash_flow_plan,
     get_or_create_default_plan as _get_or_create_default_cash_flow_plan,
     money_to_cents as _cash_flow_money_to_cents,
+    next_bill_schedule as _next_cash_flow_bill,
     parse_month as _parse_cash_flow_month,
+    portfolio_scenario_assumptions as _cash_flow_scenario_assumptions,
     serialize_item as _serialize_cash_flow_item,
     serialize_plan as _serialize_cash_flow_plan,
     settings_for_plan as _cash_flow_settings_for_plan,
@@ -339,36 +342,118 @@ def _cash_flow_touch_plan(conn, plan_id):
     )
 
 
+def _cash_flow_item_result(conn, row):
+    item = _serialize_cash_flow_item(row)
+    schedule = _next_cash_flow_bill(row)
+    item["current_due_date"] = schedule["due_date"]
+    item["current_pay_date"] = schedule["pay_date"]
+    item["paid"] = False
+    item["paid_at"] = None
+    if schedule["due_date"]:
+        payment = conn.execute(
+            """SELECT paid_at
+               FROM cash_flow_item_payments
+               WHERE item_id = ? AND due_date = ?""",
+            (row["id"], schedule["due_date"]),
+        ).fetchone()
+        if payment:
+            item["paid"] = True
+            item["paid_at"] = payment["paid_at"]
+    return item
+
+
 def _cash_flow_portfolio_snapshot(conn, profile_ids):
     ids = list(dict.fromkeys(int(pid) for pid in profile_ids if pid is not None))
     if not ids:
-        return {"value": 0.0, "annual_income": 0.0, "profile_count": 0}
+        return {
+            "value": 0.0,
+            "annual_income": 0.0,
+            "profile_count": 0,
+            "holdings": [],
+        }
     placeholders = ",".join("?" * len(ids))
     rows = conn.execute(
-        f"""SELECT current_value, quantity, current_price,
-                   estim_payment_per_year, approx_monthly_income
-            FROM all_account_info
-            WHERE profile_id IN ({placeholders})
-              AND COALESCE(quantity, 0) > 0""",
+        f"""SELECT a.ticker, a.description, a.classification_type,
+                   a.current_value, a.quantity, a.current_price,
+                   a.estim_payment_per_year, a.approx_monthly_income,
+                   g.etf_category, g.etf_strategy, o.fund_kind
+            FROM all_account_info a
+            LEFT JOIN general_scanner_cache g ON g.ticker = a.ticker
+            LEFT JOIN etf_type_overrides o ON o.ticker = a.ticker
+            WHERE a.profile_id IN ({placeholders})
+              AND COALESCE(a.quantity, 0) > 0""",
         ids,
     ).fetchall()
-    value = 0.0
-    annual_income = 0.0
+    override_rows = conn.execute(
+        f"""SELECT ticker, bucket
+            FROM income_overrides
+            WHERE profile_id IN ({placeholders})""",
+        ids,
+    ).fetchall()
+    income_overrides = {row["ticker"]: row["bucket"] for row in override_rows}
+
+    holdings_by_ticker = {}
     for row in rows:
+        ticker = str(row["ticker"] or "").strip().upper()
+        if not ticker:
+            continue
         current_value = float(row["current_value"] or 0)
         if current_value <= 0:
             current_value = float(row["quantity"] or 0) * float(
                 row["current_price"] or 0
             )
-        value += max(0.0, current_value)
         estimated = float(row["estim_payment_per_year"] or 0)
         if estimated <= 0:
             estimated = float(row["approx_monthly_income"] or 0) * 12.0
-        annual_income += max(0.0, estimated)
+        holding = holdings_by_ticker.setdefault(
+            ticker,
+            {
+                "ticker": ticker,
+                "description": row["description"] or "",
+                "classification_type": row["classification_type"] or "",
+                "etf_category": row["etf_category"] or "",
+                "etf_strategy": row["etf_strategy"] or "",
+                "fund_kind": row["fund_kind"] or "",
+                "value": 0.0,
+                "annual_income": 0.0,
+            },
+        )
+        holding["value"] += max(0.0, current_value)
+        holding["annual_income"] += max(0.0, estimated)
+        for field in (
+            "description",
+            "classification_type",
+            "etf_category",
+            "etf_strategy",
+            "fund_kind",
+        ):
+            if not holding[field] and row[field]:
+                holding[field] = row[field]
+
+    holdings = []
+    for holding in holdings_by_ticker.values():
+        override = income_overrides.get(holding["ticker"])
+        if override and override != "Excluded":
+            holding["income_bucket"] = override
+        else:
+            holding["income_bucket"] = _get_income_bucket(
+                holding["ticker"],
+                holding["classification_type"],
+                holding["description"],
+            )
+        holding["value"] = round(holding["value"], 2)
+        holding["annual_income"] = round(holding["annual_income"], 2)
+        holding["scenario_type"] = _classify_cash_flow_holding(holding)
+        holdings.append(holding)
+    holdings.sort(key=lambda row: (-row["annual_income"], -row["value"], row["ticker"]))
+
+    value = sum(row["value"] for row in holdings)
+    annual_income = sum(row["annual_income"] for row in holdings)
     return {
         "value": round(value, 2),
         "annual_income": round(annual_income, 2),
         "profile_count": len(ids),
+        "holdings": holdings,
     }
 
 
@@ -455,6 +540,10 @@ def cash_flow_plan_detail(plan_id):
         if item_ids:
             placeholders = ",".join("?" * len(item_ids))
             conn.execute(
+                f"DELETE FROM cash_flow_item_payments WHERE item_id IN ({placeholders})",
+                item_ids,
+            )
+            conn.execute(
                 f"DELETE FROM cash_flow_month_overrides WHERE item_id IN ({placeholders})",
                 item_ids,
             )
@@ -506,7 +595,7 @@ def cash_flow_items():
                ORDER BY kind, active DESC, name, id""",
             (plan["id"],),
         ).fetchall()
-        result = [_serialize_cash_flow_item(row) for row in rows]
+        result = [_cash_flow_item_result(conn, row) for row in rows]
         conn.close()
         return jsonify(items=result)
 
@@ -523,9 +612,9 @@ def cash_flow_items():
     cur = conn.execute(
         """INSERT INTO cash_flow_items
            (plan_id, kind, name, category, amount_cents, frequency,
-            start_date, end_date, essential, tax_rate_pct, annual_change_pct,
-            notes, active)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            start_date, end_date, due_date, pay_date, essential, tax_rate_pct,
+            annual_change_pct, notes, active)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             plan["id"],
             item["kind"],
@@ -535,6 +624,8 @@ def cash_flow_items():
             item["frequency"],
             item["start_date"],
             item["end_date"],
+            item["due_date"],
+            item["pay_date"],
             item["essential"],
             item["tax_rate_pct"],
             item["annual_change_pct"],
@@ -547,7 +638,7 @@ def cash_flow_items():
     row = conn.execute(
         "SELECT * FROM cash_flow_items WHERE id = ?", (cur.lastrowid,)
     ).fetchone()
-    result = _serialize_cash_flow_item(row)
+    result = _cash_flow_item_result(conn, row)
     conn.close()
     return jsonify(item=result), 201
 
@@ -574,6 +665,9 @@ def cash_flow_item_detail(item_id):
 
     if request.method == "DELETE":
         conn.execute(
+            "DELETE FROM cash_flow_item_payments WHERE item_id = ?", (item_id,)
+        )
+        conn.execute(
             "DELETE FROM cash_flow_month_overrides WHERE item_id = ?", (item_id,)
         )
         conn.execute("DELETE FROM cash_flow_items WHERE id = ?", (item_id,))
@@ -591,8 +685,9 @@ def cash_flow_item_detail(item_id):
     conn.execute(
         """UPDATE cash_flow_items
            SET kind = ?, name = ?, category = ?, amount_cents = ?,
-               frequency = ?, start_date = ?, end_date = ?, essential = ?,
-               tax_rate_pct = ?, annual_change_pct = ?, notes = ?, active = ?,
+               frequency = ?, start_date = ?, end_date = ?, due_date = ?,
+               pay_date = ?, essential = ?, tax_rate_pct = ?,
+               annual_change_pct = ?, notes = ?, active = ?,
                updated_at = CURRENT_TIMESTAMP
            WHERE id = ?""",
         (
@@ -603,6 +698,8 @@ def cash_flow_item_detail(item_id):
             item["frequency"],
             item["start_date"],
             item["end_date"],
+            item["due_date"],
+            item["pay_date"],
             item["essential"],
             item["tax_rate_pct"],
             item["annual_change_pct"],
@@ -616,7 +713,7 @@ def cash_flow_item_detail(item_id):
     updated = conn.execute(
         "SELECT * FROM cash_flow_items WHERE id = ?", (item_id,)
     ).fetchone()
-    result = _serialize_cash_flow_item(updated)
+    result = _cash_flow_item_result(conn, updated)
     conn.close()
     return jsonify(item=result)
 
@@ -684,6 +781,62 @@ def cash_flow_item_month_override(item_id, month):
     return jsonify(ok=True)
 
 
+@app.route(
+    "/api/cash-flow/items/<int:item_id>/payments/<due_date>",
+    methods=["PUT"],
+)
+def cash_flow_item_payment(item_id, due_date):
+    """Toggle one due occurrence without tying it to the selected view month."""
+    try:
+        due_date = datetime.date.fromisoformat(str(due_date)).isoformat()
+    except (TypeError, ValueError):
+        return jsonify(error="Due date must use YYYY-MM-DD format."), 400
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    row = conn.execute(
+        """SELECT i.*, p.scope_type, p.scope_id
+           FROM cash_flow_items i
+           JOIN cash_flow_plans p ON p.id = i.plan_id
+           WHERE i.id = ?""",
+        (item_id,),
+    ).fetchone()
+    scope_type, scope_id = _cash_flow_scope()
+    if (
+        not row
+        or row["scope_type"] != scope_type
+        or int(row["scope_id"]) != int(scope_id)
+    ):
+        conn.close()
+        return jsonify(error="Cash-flow item not found."), 404
+    schedule = _next_cash_flow_bill(row)
+    if schedule["due_date"] != due_date:
+        conn.close()
+        return jsonify(error="This bill has rolled to a new due date. Refresh and try again."), 409
+    data = request.get_json(silent=True) or {}
+    if data.get("paid"):
+        conn.execute(
+            """INSERT INTO cash_flow_item_payments (item_id, due_date)
+               VALUES (?, ?)
+               ON CONFLICT(item_id, due_date) DO UPDATE SET
+                   paid_at = CURRENT_TIMESTAMP""",
+            (item_id, due_date),
+        )
+    else:
+        conn.execute(
+            """DELETE FROM cash_flow_item_payments
+               WHERE item_id = ? AND due_date = ?""",
+            (item_id, due_date),
+        )
+    _cash_flow_touch_plan(conn, row["plan_id"])
+    conn.commit()
+    updated = conn.execute(
+        "SELECT * FROM cash_flow_items WHERE id = ?", (item_id,)
+    ).fetchone()
+    result = _cash_flow_item_result(conn, updated)
+    conn.close()
+    return jsonify(ok=True, item=result)
+
+
 @app.route("/api/cash-flow/settings", methods=["GET", "PUT"])
 def cash_flow_settings():
     conn = get_connection()
@@ -714,7 +867,7 @@ def cash_flow_settings():
     except (TypeError, ValueError) as exc:
         conn.close()
         return jsonify(error=str(exc)), 400
-    surplus_mode = str(data.get("surplus_mode", "cash")).lower()
+    surplus_mode = str(data.get("surplus_mode", "reinvest")).lower()
     if not 1 <= horizon <= 50:
         conn.close()
         return jsonify(error="Horizon must be between 1 and 50 years."), 400
@@ -870,6 +1023,7 @@ def cash_flow_simulate():
                     series,
                     portfolio_value=portfolio["value"],
                     annual_portfolio_income=portfolio["annual_income"],
+                    portfolio_holdings=portfolio["holdings"],
                     portfolio_tax_pct=settings["portfolio_tax_pct"],
                     starting_cash=settings["starting_cash"],
                     surplus_mode=settings["surplus_mode"],
@@ -877,6 +1031,18 @@ def cash_flow_simulate():
                     include_additional_income=include_income,
                 )
             )
+    scenario_assumptions = {
+        scenario: _cash_flow_scenario_assumptions(
+            portfolio["holdings"], scenario
+        )
+        for scenario in ("bullish", "neutral", "bearish")
+    }
+    portfolio_public = {
+        key: value for key, value in portfolio.items() if key != "holdings"
+    }
+    portfolio_public["distribution_yield_pct"] = round(
+        portfolio["annual_income"] / portfolio["value"] * 100.0, 2
+    ) if portfolio["value"] > 0 else 0.0
     conn.commit()
     conn.close()
     return jsonify(
@@ -884,7 +1050,8 @@ def cash_flow_simulate():
         settings=settings,
         start_month=start_month,
         horizon_years=horizon,
-        portfolio=portfolio,
+        portfolio=portfolio_public,
+        scenario_assumptions=scenario_assumptions,
         results=results,
     )
 

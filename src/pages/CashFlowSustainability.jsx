@@ -17,8 +17,9 @@ const FREQUENCIES = [
 ]
 
 const EXPENSE_CATEGORIES = [
-  'Housing', 'Utilities', 'Food', 'Transportation', 'Insurance', 'Healthcare',
-  'Debt', 'Taxes', 'Personal', 'Entertainment', 'Travel', 'Giving', 'Other',
+  'Housing', 'Utilities', 'Trash', 'HOA', 'Food', 'Transportation', 'Insurance', 'Healthcare',
+  'Debt', 'Taxes', 'Personal', 'Entertainment', 'Travel', 'Giving', 'Subscriptions', 'Cell Phone',
+  'Pet Care', 'Home Maintenance', 'Pest Control', 'Childcare', 'Other',
 ]
 
 const INCOME_CATEGORIES = [
@@ -27,16 +28,32 @@ const INCOME_CATEGORIES = [
 ]
 
 const SCENARIOS = [
-  { key: 'bullish', label: 'Bull', color: '#00c853', detail: '4% income growth / 8% price growth' },
-  { key: 'neutral', label: 'Neutral', color: '#f9a825', detail: '1% income growth / 3% price growth' },
-  { key: 'bearish', label: 'Bear', color: '#e05555', detail: 'Year-one income and price shock, then recovery' },
+  { key: 'bullish', label: 'Bull', color: '#00c853', detail: 'Distribution growth plus positive market movement' },
+  { key: 'neutral', label: 'Neutral', color: '#f9a825', detail: 'Current distributions plus moderate market movement' },
+  { key: 'bearish', label: 'Bear', color: '#e05555', detail: 'A larger market decline with a smaller distribution reduction' },
 ]
 
 function currentMonth() {
-  return new Date().toISOString().slice(0, 7)
+  return localDateKey().slice(0, 7)
+}
+
+function localDateKey(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function shiftIsoDate(value, days) {
+  if (!value) return ''
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
 }
 
 function blankItem(kind, month = currentMonth()) {
+  const dueDate = `${month}-01`
   return {
     kind,
     name: '',
@@ -45,6 +62,8 @@ function blankItem(kind, month = currentMonth()) {
     frequency: 'monthly',
     start_date: `${month}-01`,
     end_date: '',
+    due_date: kind === 'expense' ? dueDate : '',
+    pay_date: kind === 'expense' ? shiftIsoDate(dueDate, -2) : '',
     essential: kind === 'expense',
     tax_rate_pct: kind === 'income' ? 0 : '',
     annual_change_pct: '',
@@ -57,10 +76,16 @@ function money(value, digits = 0) {
   return formatMoney(value, { digits, zeroIfInvalid: true })
 }
 
+function movementCopy(value, subject) {
+  const number = Number(value || 0)
+  if (Math.abs(number) < 0.05) return `${subject} stay about the same`
+  return `${subject} ${number > 0 ? 'rise' : 'fall'} ${Math.abs(number).toFixed(1)}%`
+}
+
 function statusCopy(status) {
-  if (status === 'income_covered') return { label: 'Income covered', tone: 'good' }
-  if (status === 'funded_from_principal') return { label: 'Uses principal', tone: 'warn' }
-  return { label: 'Not sustainable', tone: 'bad' }
+  if (status === 'income_covered') return { label: 'All bills covered by income', tone: 'good' }
+  if (status === 'funded_from_principal') return { label: 'Some shares must be sold', tone: 'warn' }
+  return { label: 'Portfolio runs out', tone: 'bad' }
 }
 
 function SummaryTile({ label, value, sub, tone = '' }) {
@@ -78,6 +103,11 @@ function ItemEditor({ kind, value, onChange, onSubmit, onCancel, saving }) {
   const isEdit = Boolean(value.id)
   const categories = kind === 'expense' ? EXPENSE_CATEGORIES : INCOME_CATEGORIES
   const set = (field, next) => onChange({ ...value, [field]: next })
+  const setDueDate = next => onChange({
+    ...value,
+    due_date: next,
+    pay_date: shiftIsoDate(next, -2),
+  })
 
   useEffect(() => {
     if (isEdit) setDetailsOpen(true)
@@ -144,13 +174,25 @@ function ItemEditor({ kind, value, onChange, onSubmit, onCancel, saving }) {
 
       {detailsOpen && (
         <div className="cf-detail-fields">
+          {kind === 'expense' && (
+            <>
+              <label>
+                <span>Due date</span>
+                <input type="date" value={value.due_date || ''} onInput={e => setDueDate(e.target.value)} required />
+              </label>
+              <label>
+                <span>Pay by <em>defaults 2 days early</em></span>
+                <input type="date" value={value.pay_date || ''} onInput={e => set('pay_date', e.target.value)} required />
+              </label>
+            </>
+          )}
           <label>
-            <span>{value.frequency === 'one_time' ? 'Occurs on' : 'Starts'}</span>
+            <span>{value.frequency === 'one_time' ? 'Active on' : 'Active from'}</span>
             <input type="date" value={value.start_date} onChange={e => set('start_date', e.target.value)} required />
           </label>
           {value.frequency !== 'one_time' && (
             <label>
-              <span>Ends <em>optional</em></span>
+              <span>Stop after <em>optional</em></span>
               <input type="date" value={value.end_date || ''} onChange={e => set('end_date', e.target.value)} />
             </label>
           )}
@@ -197,7 +239,7 @@ function ItemEditor({ kind, value, onChange, onSubmit, onCancel, saving }) {
   )
 }
 
-function ItemTable({ kind, items, onEdit, onDelete }) {
+function ItemTable({ kind, items, onEdit, onDelete, onTogglePaid }) {
   const frequencyLabel = Object.fromEntries(FREQUENCIES)
   if (!items.length) {
     return (
@@ -216,49 +258,83 @@ function ItemTable({ kind, items, onEdit, onDelete }) {
             <th>Name</th>
             <th>Category</th>
             <th>Frequency</th>
-            <th>Starts</th>
+            <th>Active from</th>
+            {kind === 'expense' && <th>Due date</th>}
+            {kind === 'expense' && <th>Pay by</th>}
             <th className="cf-num">Amount</th>
             {kind === 'income' && <th className="cf-num">Tax</th>}
+            {kind === 'expense' && <th className="cf-center">Paid</th>}
             <th aria-label="Actions" />
           </tr>
         </thead>
         <tbody>
-          {items.map(item => (
-            <tr key={item.id}>
-              <td>
-                <strong>{item.name}</strong>
-                {item.notes && <small>{item.notes}</small>}
-              </td>
-              <td>{item.category || 'Uncategorized'}</td>
-              <td>{frequencyLabel[item.frequency] || item.frequency}</td>
-              <td>{item.start_date}</td>
-              <td className="cf-num"><strong>{money(item.amount, 2)}</strong></td>
-              {kind === 'income' && <td className="cf-num">{Number(item.tax_rate_pct || 0).toFixed(1)}%</td>}
-              <td className="cf-actions">
-                <button type="button" onClick={() => onEdit(item)}>Edit</button>
-                <button type="button" className="cf-delete" onClick={() => onDelete(item)}>Delete</button>
-              </td>
-            </tr>
-          ))}
+          {items.map(item => {
+            return (
+              <tr key={item.id}>
+                <td>
+                  <strong>{item.name}</strong>
+                  {item.notes && <small>{item.notes}</small>}
+                </td>
+                <td>{item.category || 'Uncategorized'}</td>
+                <td>{frequencyLabel[item.frequency] || item.frequency}</td>
+                <td>{item.start_date}</td>
+                {kind === 'expense' && <td className="cf-date">{item.current_due_date || 'Complete'}</td>}
+                {kind === 'expense' && <td className="cf-date">{item.current_pay_date || '—'}</td>}
+                <td className="cf-num"><strong>{money(item.amount, 2)}</strong></td>
+                {kind === 'income' && <td className="cf-num">{Number(item.tax_rate_pct || 0).toFixed(1)}%</td>}
+                {kind === 'expense' && (
+                  <td className="cf-center">
+                    {item.current_due_date ? (
+                      <input
+                        type="checkbox"
+                        checked={Boolean(item.paid)}
+                        onChange={e => onTogglePaid(item, e.target.checked)}
+                        title={`Mark the bill due ${item.current_due_date} as paid`}
+                      />
+                    ) : (
+                      <span className="cf-muted-dash" title="No remaining occurrence">—</span>
+                    )}
+                  </td>
+                )}
+                <td className="cf-actions">
+                  <button type="button" onClick={() => onEdit(item)}>Edit</button>
+                  <button type="button" className="cf-delete" onClick={() => onDelete(item)}>Delete</button>
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
   )
 }
 
-function ScenarioOutcome({ result }) {
+function ScenarioOutcome({ result, horizonYears, surplusMode }) {
   if (!result) return <div className="cf-outcome cf-outcome-empty">Run the simulation</div>
   const status = statusCopy(result.status)
+  const portfolioChange = Number(result.ending_portfolio || 0) - Number(result.starting_portfolio || 0)
+  const finalMonth = result.series?.[result.series.length - 1]
+  const finalMonthlyDistributions = Number(finalMonth?.portfolio_income_gross || 0)
   return (
     <div className={`cf-outcome cf-tone-${status.tone}`}>
       <span className="cf-status-pill">{status.label}</span>
+      <small className="cf-outcome-label">Portfolio value after {horizonYears} years</small>
       <strong>{money(result.ending_portfolio)}</strong>
-      <small>Ending portfolio</small>
+      <small>{Number(result.ending_value_retained_pct || 0).toFixed(0)}% of the starting {money(result.starting_portfolio)}</small>
+      <small className="cf-outcome-highlight">
+        Portfolio {portfolioChange >= 0 ? 'growth' : 'decrease'}: {money(Math.abs(portfolioChange))}
+      </small>
+      <small className="cf-outcome-highlight">
+        Final distributions: {money(finalMonthlyDistributions)}/month · {money(finalMonthlyDistributions * 12)}/year gross
+      </small>
+      {result.ending_cash > 0
+        ? <small>Cash reserve after {horizonYears} years: {money(result.ending_cash)}</small>
+        : surplusMode === 'reinvest' && <small>Unused income was reinvested in more shares</small>}
       {result.depletion_month
-        ? <em>Depletes in year {(result.depletion_month / 12).toFixed(1)}</em>
+        ? <em>Portfolio reaches $0 in year {(result.depletion_month / 12).toFixed(1)}</em>
         : result.principal_drawn > 0
-          ? <em>{money(result.principal_drawn)} principal used</em>
-          : <em>No principal needed</em>}
+          ? <em>Shares sold to cover shortfalls: {money(result.principal_drawn)}</em>
+          : <em>No shares sold to pay bills</em>}
     </div>
   )
 }
@@ -283,6 +359,7 @@ export default function CashFlowSustainability() {
   const [saving, setSaving] = useState(false)
   const [simLoading, setSimLoading] = useState(false)
   const [error, setError] = useState('')
+  const [calendarDay, setCalendarDay] = useState(localDateKey())
 
   const apiJson = useCallback(async (path, options) => {
     const response = await pf(path, options)
@@ -332,12 +409,29 @@ export default function CashFlowSustainability() {
 
   useEffect(() => {
     if (planId) loadPlanData(planId)
-  }, [planId, loadPlanData])
+  }, [planId, loadPlanData, calendarDay])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const nextDay = localDateKey()
+      setCalendarDay(previous => previous === nextDay ? previous : nextDay)
+    }, 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     if (planId) {
       loadSummary(planId, month).catch(err => setError(err.message))
-      setExpenseDraft(prev => prev.id ? prev : { ...prev, start_date: `${month}-01` })
+      setExpenseDraft(prev => {
+        if (prev.id) return prev
+        const dueDate = `${month}-01`
+        return {
+          ...prev,
+          start_date: dueDate,
+          due_date: dueDate,
+          pay_date: shiftIsoDate(dueDate, -2),
+        }
+      })
       setIncomeDraft(prev => prev.id ? prev : { ...prev, start_date: `${month}-01` })
     }
   }, [month, planId, loadSummary])
@@ -428,6 +522,19 @@ export default function CashFlowSustainability() {
 
   const expenses = useMemo(() => items.filter(item => item.kind === 'expense' && item.active), [items])
   const incomes = useMemo(() => items.filter(item => item.kind === 'income' && item.active), [items])
+  const togglePaid = useCallback(async (item, paid) => {
+    if (!item.current_due_date) return
+    try {
+      const data = await apiJson(`/api/cash-flow/items/${item.id}/payments/${item.current_due_date}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paid }),
+      })
+      setItems(current => current.map(row => row.id === item.id ? data.item : row))
+    } catch (err) {
+      setError(err.message)
+    }
+  }, [apiJson])
   const resultMap = useMemo(() => {
     const map = {}
     for (const result of simulation?.results || []) {
@@ -435,6 +542,13 @@ export default function CashFlowSustainability() {
     }
     return map
   }, [simulation])
+  const scenarioDetail = useCallback(scenario => {
+    const assumptions = simulation?.scenario_assumptions?.[scenario.key]
+    if (!assumptions) return scenario.detail
+    const marketReturn = assumptions.year_one_market_return_pct ?? assumptions.year_one_total_return_pct
+    return `Year 1: ${movementCopy(assumptions.year_one_income_change_pct, 'distributions')}; ${movementCopy(marketReturn, 'holding prices')}`
+  }, [simulation])
+  const scenarioMix = simulation?.scenario_assumptions?.neutral?.mix || []
 
   const chartData = useMemo(() => {
     if (!simulation?.results) return []
@@ -460,6 +574,10 @@ export default function CashFlowSustainability() {
 
   const gap = summary?.surplus_shortfall || 0
   const coverageTone = summary?.covered ? 'good' : 'bad'
+  const grossLeftover = (summary?.portfolio_monthly_income_gross || 0)
+    + (summary?.additional_income_gross || 0)
+    - (summary?.expenses || 0)
+  const grossLeftoverTone = grossLeftover >= 0 ? 'good' : 'bad'
 
   return (
     <div className="page cf-page">
@@ -496,15 +614,26 @@ export default function CashFlowSustainability() {
         <SummaryTile
           label="Portfolio income (gross)"
           value={money(summary?.portfolio_monthly_income_gross)}
-          sub={`${summary?.portfolio_profile_count > 1 ? `${summary.portfolio_profile_count} linked accounts · ` : ''}${money(summary?.portfolio_monthly_income_net)} spendable after ${Number(settings?.portfolio_tax_pct || 0).toFixed(0)}% tax`}
+          sub={summary?.portfolio_profile_count > 1 ? `${summary.portfolio_profile_count} linked accounts` : 'Before tax'}
         />
-        <SummaryTile label="Additional income" value={money(summary?.additional_income_net)} sub={incomes.length ? 'After item-level taxes' : 'Optional'} />
         <SummaryTile
-          label={gap >= 0 ? 'Monthly surplus' : 'Monthly shortfall'}
+          label="Portfolio income (after tax)"
+          value={money(summary?.portfolio_monthly_income_net)}
+          sub={`After ${Number(settings?.portfolio_tax_pct || 0).toFixed(0)}% tax`}
+        />
+        <SummaryTile
+          label={grossLeftover >= 0 ? 'Gross leftover' : 'Gross shortfall'}
+          value={money(Math.abs(grossLeftover))}
+          sub="Before tax"
+          tone={grossLeftoverTone}
+        />
+        <SummaryTile
+          label={gap >= 0 ? 'After-tax leftover' : 'After-tax shortfall'}
           value={money(Math.abs(gap))}
           sub={summary?.coverage_ratio == null ? 'No expenses entered' : `${(summary.coverage_ratio * 100).toFixed(0)}% covered`}
           tone={coverageTone}
         />
+        <SummaryTile label="Additional income" value={money(summary?.additional_income_net)} sub={incomes.length ? 'After item-level taxes' : 'Optional'} />
       </section>
 
       <div className={`cf-answer cf-answer-${coverageTone}`}>
@@ -527,6 +656,7 @@ export default function CashFlowSustainability() {
           <div>
             <span className="cf-section-kicker">Outflows</span>
             <h2>Expenses</h2>
+            <small className="cf-rollover-note">Paid checks follow each due date and advance automatically after it passes.</small>
           </div>
           <strong>{money(summary?.expenses)} in {month}</strong>
         </div>
@@ -539,7 +669,7 @@ export default function CashFlowSustainability() {
           saving={saving}
         />
         {loading ? <div className="cf-empty">Loading expenses...</div> : (
-          <ItemTable kind="expense" items={expenses} onEdit={editItem} onDelete={deleteItem} />
+          <ItemTable kind="expense" items={expenses} onEdit={editItem} onDelete={deleteItem} onTogglePaid={togglePaid} />
         )}
       </section>
 
@@ -595,31 +725,81 @@ export default function CashFlowSustainability() {
               <div><b>$</b><input type="number" min="0" step="100" value={settings.starting_cash} onChange={e => setSettings({ ...settings, starting_cash: e.target.value })} /></div>
             </label>
             <label>
-              <span>Monthly surplus</span>
+              <span>Unused income after bills</span>
               <select value={settings.surplus_mode} onChange={e => setSettings({ ...settings, surplus_mode: e.target.value })}>
-                <option value="cash">Add to cash reserve</option>
-                <option value="reinvest">Reinvest in portfolio</option>
+                <option value="reinvest">Reinvest by buying more shares</option>
+                <option value="cash">Keep as cash reserve</option>
               </select>
             </label>
             <button className="btn btn-secondary" onClick={saveSettings} disabled={saving}>Save assumptions</button>
           </div>
         )}
 
+        {simulation && (
+          <div className="cf-results-guide">
+            <strong>What this projection is doing</strong>
+            <p>
+              It starts with {currentProfileName}&apos;s {money(simulation.portfolio?.value)} portfolio,
+              producing {money(simulation.portfolio?.annual_income)} per year
+              ({money((simulation.portfolio?.annual_income || 0) / 12)} per month before tax) at its current
+              {' '}{Number(simulation.portfolio?.distribution_yield_pct || 0).toFixed(2)}% distribution rate.
+            </p>
+            <p>
+              Distributions are cash paid by the holdings; market value is the changing price of those holdings.
+              The model changes them separately and does not subtract a distribution from the portfolio value a second time.
+            </p>
+            <p>
+              <b>All bills covered by income</b> means distributions and the income allowed in that column paid every
+              projected bill for all {simulation.horizon_years} years—no shares were sold.
+              {settings?.surplus_mode === 'reinvest'
+                ? ' Any income left after bills buys more shares, increasing the projected portfolio and its future distributions.'
+                : ' Income left after bills is kept in the projected cash reserve under your current setting.'}
+            </p>
+          </div>
+        )}
+
         <div className="cf-scenario-grid">
           <div className="cf-grid-label" />
-          <div className="cf-grid-colhead">With additional income</div>
-          <div className="cf-grid-colhead">Portfolio income only</div>
+          <div className="cf-grid-colhead">
+            <strong>Portfolio + additional income</strong>
+            <span>Includes distributions and your saved Social Security or other income</span>
+          </div>
+          <div className="cf-grid-colhead">
+            <strong>Portfolio distributions only</strong>
+            <span>Excludes Social Security and every other additional-income entry</span>
+          </div>
           {SCENARIOS.map(scenario => (
             <React.Fragment key={scenario.key}>
               <div className="cf-scenario-label" style={{ '--scenario-color': scenario.color }}>
                 <strong>{scenario.label}</strong>
-                <small>{scenario.detail}</small>
+                <small>{scenarioDetail(scenario)}</small>
               </div>
-              <ScenarioOutcome result={resultMap[`${scenario.key}:with`]} />
-              <ScenarioOutcome result={resultMap[`${scenario.key}:without`]} />
+              <ScenarioOutcome result={resultMap[`${scenario.key}:with`]} horizonYears={simulation?.horizon_years || settings?.horizon_years} surplusMode={settings?.surplus_mode} />
+              <ScenarioOutcome result={resultMap[`${scenario.key}:without`]} horizonYears={simulation?.horizon_years || settings?.horizon_years} surplusMode={settings?.surplus_mode} />
             </React.Fragment>
           ))}
         </div>
+
+        {scenarioMix.length > 0 && (
+          <div className="cf-model-note">
+            <div>
+              <strong>Why distributions change differently from market prices</strong>
+              <span>
+                Each holding is grouped by how it produces income. In a bear market, the model reduces distributions
+                according to that holding type, generally by less than its market-price decline. The percentages at right
+                show how much each group contributes to this portfolio&apos;s income and value.
+              </span>
+            </div>
+            <div className="cf-model-mix">
+              {scenarioMix.map(row => (
+                <span key={row.key}>
+                  <b>{row.label}</b>
+                  {Number(row.income_pct || 0).toFixed(0)}% of income · {Number(row.value_pct || 0).toFixed(0)}% of value
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         {chartData.length > 0 && (
           <div className="cf-chart">

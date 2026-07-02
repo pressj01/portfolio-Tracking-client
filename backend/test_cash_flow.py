@@ -1,3 +1,4 @@
+import datetime
 import sqlite3
 import sys
 import tempfile
@@ -8,7 +9,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import app as app_module
 import database
-from cash_flow import expand_plan, simulate_sustainability
+from cash_flow import (
+    classify_holding_scenario_type,
+    expand_plan,
+    next_bill_schedule,
+    portfolio_scenario_assumptions,
+    simulate_sustainability,
+)
 
 
 class CashFlowApiTest(unittest.TestCase):
@@ -125,6 +132,59 @@ class CashFlowApiTest(unittest.TestCase):
         ).get_json()["items"]
         self.assertEqual(items, [])
 
+    def test_expense_due_and_pay_dates_are_saved_and_editable(self):
+        created = self._add(
+            start_date="2026-07-01",
+            due_date="2026-07-01",
+            pay_date="2026-06-29",
+        ).get_json()["item"]
+        self.assertEqual(created["due_date"], "2026-07-01")
+        self.assertEqual(created["pay_date"], "2026-06-29")
+
+        created["pay_date"] = "2026-06-28"
+        updated = self.client.put(
+            f"/api/cash-flow/items/{created['id']}?profile_id=1",
+            json=created,
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.get_json()["item"]["pay_date"], "2026-06-28")
+
+        summary = self.client.get(
+            f"/api/cash-flow/summary?profile_id=1&plan_id={self.plan_id}&month=2026-07"
+        ).get_json()["summary"]
+        detail = next(row for row in summary["items"] if row["id"] == created["id"])
+        self.assertEqual(detail["due_dates"], ["2026-07-01"])
+        self.assertEqual(detail["pay_dates"], ["2026-06-28"])
+
+    def test_paid_check_is_tied_to_due_occurrence_not_view_month(self):
+        today = datetime.date.today()
+        due_date = today + datetime.timedelta(days=1)
+        pay_date = due_date - datetime.timedelta(days=2)
+        created = self._add(
+            frequency="one_time",
+            start_date=due_date.isoformat(),
+            due_date=due_date.isoformat(),
+            pay_date=pay_date.isoformat(),
+        ).get_json()["item"]
+
+        checked = self.client.put(
+            f"/api/cash-flow/items/{created['id']}/payments/{due_date.isoformat()}?profile_id=1",
+            json={"paid": True},
+        )
+        self.assertEqual(checked.status_code, 200)
+        self.assertTrue(checked.get_json()["item"]["paid"])
+
+        # Loading unrelated planning months cannot clear the current checklist.
+        self.client.get(
+            f"/api/cash-flow/summary?profile_id=1&plan_id={self.plan_id}&month=2025-01"
+        )
+        items = self.client.get(
+            f"/api/cash-flow/items?profile_id=1&plan_id={self.plan_id}"
+        ).get_json()["items"]
+        item = next(row for row in items if row["id"] == created["id"])
+        self.assertTrue(item["paid"])
+        self.assertEqual(item["current_due_date"], due_date.isoformat())
+
     def test_summary_combines_portfolio_and_after_tax_outside_income(self):
         self._add()
         self._add(
@@ -214,6 +274,14 @@ class CashFlowApiTest(unittest.TestCase):
             {row["scenario"] for row in results},
             {"bullish", "neutral", "bearish"},
         )
+        assumptions = response.get_json()["scenario_assumptions"]
+        self.assertEqual(
+            assumptions["bearish"]["method"],
+            "holding_level_market_plus_distributions",
+        )
+        self.assertGreater(
+            assumptions["bearish"]["year_one_income_change_pct"], -35
+        )
 
     def test_distribution_compare_schedule_reuses_saved_plan(self):
         self._add()
@@ -241,6 +309,194 @@ class CashFlowApiTest(unittest.TestCase):
 
 
 class SustainabilityMathTest(unittest.TestCase):
+    @staticmethod
+    def _flat_series(months=12, expenses=0):
+        return [
+            {
+                "month": f"2026-{month:02d}",
+                "expenses": expenses,
+                "additional_income_net": 0,
+            }
+            for month in range(1, months + 1)
+        ]
+
+    def test_holding_types_separate_option_income_from_bonds_and_bdcs(self):
+        self.assertEqual(
+            classify_holding_scenario_type(
+                {
+                    "ticker": "OPTION",
+                    "description": "Concentrated Option Income ETF",
+                    "value": 100000,
+                    "annual_income": 25000,
+                }
+            ),
+            "high_distribution_option",
+        )
+        self.assertEqual(
+            classify_holding_scenario_type(
+                {
+                    "ticker": "MUNI",
+                    "description": "Short-Term Municipal Bond ETF",
+                    "value": 100000,
+                    "annual_income": 4000,
+                }
+            ),
+            "fixed_income",
+        )
+        self.assertEqual(
+            classify_holding_scenario_type(
+                {
+                    "ticker": "MAIN",
+                    "description": "Business Development Company",
+                    "value": 100000,
+                    "annual_income": 7000,
+                }
+            ),
+            "bdc",
+        )
+
+    def test_bill_rolls_only_after_due_date_and_keeps_prior_month_pay_date(self):
+        bill = {
+            "kind": "expense",
+            "frequency": "monthly",
+            "start_date": "2026-01-01",
+            "end_date": None,
+            "due_date": "2026-01-01",
+            "pay_date": "2025-12-30",
+        }
+        before_due = next_bill_schedule(bill, datetime.date(2026, 6, 29))
+        on_due = next_bill_schedule(bill, datetime.date(2026, 7, 1))
+        after_due = next_bill_schedule(bill, datetime.date(2026, 7, 2))
+
+        self.assertEqual(
+            before_due,
+            {"due_date": "2026-07-01", "pay_date": "2026-06-29"},
+        )
+        self.assertEqual(on_due, before_due)
+        self.assertEqual(
+            after_due,
+            {"due_date": "2026-08-01", "pay_date": "2026-07-30"},
+        )
+
+    def test_bear_income_stress_is_not_copied_from_market_return(self):
+        holdings = [
+            {
+                "ticker": "COVERED",
+                "description": "Diversified Covered Call ETF",
+                "value": 100000,
+                "annual_income": 12000,
+            }
+        ]
+        assumptions = portfolio_scenario_assumptions(holdings, "bearish")
+        result = simulate_sustainability(
+            self._flat_series(),
+            portfolio_value=100000,
+            annual_portfolio_income=12000,
+            portfolio_holdings=holdings,
+            portfolio_tax_pct=0,
+            surplus_mode="cash",
+            scenario="bearish",
+        )
+        self.assertEqual(assumptions["year_one_income_change_pct"], -10)
+        self.assertEqual(assumptions["year_one_market_return_pct"], -18)
+        self.assertAlmostEqual(result["ending_portfolio"], 82000, delta=1)
+        self.assertAlmostEqual(
+            result["series"][-1]["portfolio_income_gross"], 900, places=2
+        )
+
+    def test_distributions_are_cash_and_do_not_reduce_market_value(self):
+        holdings = [
+            {
+                "ticker": "HIGH",
+                "description": "Concentrated Option Income ETF",
+                "value": 100000,
+                "annual_income": 30000,
+            }
+        ]
+        cash_result = simulate_sustainability(
+            self._flat_series(),
+            portfolio_value=100000,
+            annual_portfolio_income=30000,
+            portfolio_holdings=holdings,
+            portfolio_tax_pct=0,
+            surplus_mode="cash",
+            scenario="neutral",
+        )
+        reinvested_result = simulate_sustainability(
+            self._flat_series(),
+            portfolio_value=100000,
+            annual_portfolio_income=30000,
+            portfolio_holdings=holdings,
+            portfolio_tax_pct=0,
+            surplus_mode="reinvest",
+            scenario="neutral",
+        )
+        self.assertAlmostEqual(cash_result["ending_portfolio"], 107000, delta=1)
+        self.assertGreater(cash_result["ending_cash"], 25000)
+        self.assertGreater(reinvested_result["ending_portfolio"], 135000)
+        self.assertEqual(reinvested_result["ending_cash"], 0)
+
+    def test_each_tested_portfolio_uses_its_own_distribution_rate(self):
+        low_yield = simulate_sustainability(
+            self._flat_series(),
+            portfolio_value=100000,
+            annual_portfolio_income=8000,
+            portfolio_holdings=[
+                {
+                    "ticker": "LOW",
+                    "value": 100000,
+                    "annual_income": 8000,
+                }
+            ],
+            portfolio_tax_pct=0,
+            scenario="neutral",
+        )
+        high_yield = simulate_sustainability(
+            self._flat_series(),
+            portfolio_value=100000,
+            annual_portfolio_income=20000,
+            portfolio_holdings=[
+                {
+                    "ticker": "HIGH",
+                    "value": 100000,
+                    "annual_income": 20000,
+                }
+            ],
+            portfolio_tax_pct=0,
+            scenario="neutral",
+        )
+
+        self.assertEqual(low_yield["starting_distribution_yield_pct"], 8)
+        self.assertEqual(high_yield["starting_distribution_yield_pct"], 20)
+        self.assertAlmostEqual(
+            high_yield["series"][0]["portfolio_income_gross"]
+            / low_yield["series"][0]["portfolio_income_gross"],
+            20000 / 8000,
+            places=4,
+        )
+
+    def test_shares_are_not_sold_when_distributions_cover_expenses(self):
+        holdings = [
+            {
+                "ticker": "INCOME",
+                "description": "Concentrated Option Income ETF",
+                "value": 100000,
+                "annual_income": 36000,
+            }
+        ]
+        result = simulate_sustainability(
+            self._flat_series(expenses=2000),
+            portfolio_value=100000,
+            annual_portfolio_income=36000,
+            portfolio_holdings=holdings,
+            portfolio_tax_pct=0,
+            scenario="neutral",
+        )
+        self.assertEqual(result["status"], "income_covered")
+        self.assertEqual(result["principal_drawn"], 0)
+        self.assertGreater(result["ending_portfolio"], 120000)
+        self.assertEqual(result["ending_cash"], 0)
+
     def test_external_income_toggle_changes_principal_use(self):
         series = [
             {

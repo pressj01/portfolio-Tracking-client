@@ -127,6 +127,8 @@ def ensure_tables_exist(conn=None):
             frequency           TEXT NOT NULL DEFAULT 'monthly',
             start_date          TEXT NOT NULL,
             end_date            TEXT,
+            due_date            TEXT,
+            pay_date            TEXT,
             essential           INTEGER NOT NULL DEFAULT 0,
             tax_rate_pct        REAL,
             annual_change_pct   REAL,
@@ -140,6 +142,23 @@ def ensure_tables_exist(conn=None):
         CREATE INDEX IF NOT EXISTS idx_cash_flow_items_plan
         ON cash_flow_items (plan_id, kind, active)
     """)
+    item_cols = [
+        r[1] for r in cur.execute("PRAGMA table_info(cash_flow_items)").fetchall()
+    ]
+    if "due_date" not in item_cols:
+        cur.execute("ALTER TABLE cash_flow_items ADD COLUMN due_date TEXT")
+    if "pay_date" not in item_cols:
+        cur.execute("ALTER TABLE cash_flow_items ADD COLUMN pay_date TEXT")
+    cur.execute("""
+        UPDATE cash_flow_items
+           SET due_date = COALESCE(due_date, start_date)
+         WHERE kind = 'expense'
+    """)
+    cur.execute("""
+        UPDATE cash_flow_items
+           SET pay_date = COALESCE(pay_date, date(due_date, '-2 days'))
+         WHERE kind = 'expense'
+    """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cash_flow_month_overrides (
@@ -148,15 +167,38 @@ def ensure_tables_exist(conn=None):
             month           TEXT NOT NULL,
             amount_cents    INTEGER,
             excluded        INTEGER NOT NULL DEFAULT 0,
+            paid            INTEGER NOT NULL DEFAULT 0,
             notes           TEXT,
             created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (item_id, month)
         )
     """)
+    # Migration: add paid column if missing (existing databases)
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(cash_flow_month_overrides)").fetchall()]
+    if "paid" not in cols:
+        cur.execute("ALTER TABLE cash_flow_month_overrides ADD COLUMN paid INTEGER NOT NULL DEFAULT 0")
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_cash_flow_overrides_item_month
         ON cash_flow_month_overrides (item_id, month)
+    """)
+
+    # A payment belongs to a bill occurrence, not to whichever month happens
+    # to be selected in the UI. This preserves history and lets an early-month
+    # bill be checked off in the prior month without being reset at month-end.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cash_flow_item_payments (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id         INTEGER NOT NULL,
+            due_date        TEXT NOT NULL,
+            paid_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (item_id, due_date)
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cash_flow_payments_item_due
+        ON cash_flow_item_payments (item_id, due_date)
     """)
 
     cur.execute("""
@@ -166,7 +208,7 @@ def ensure_tables_exist(conn=None):
             expense_inflation_pct   REAL NOT NULL DEFAULT 3,
             portfolio_tax_pct       REAL NOT NULL DEFAULT 15,
             starting_cash_cents     INTEGER NOT NULL DEFAULT 0,
-            surplus_mode            TEXT NOT NULL DEFAULT 'cash',
+            surplus_mode            TEXT NOT NULL DEFAULT 'reinvest',
             updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
