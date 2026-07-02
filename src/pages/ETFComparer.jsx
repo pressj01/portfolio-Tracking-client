@@ -20,6 +20,7 @@ const PERIODS = [
   { value: '5y', label: '5Y' },
   { value: '10y', label: '10Y' },
   { value: 'max', label: 'MAX' },
+  { value: 'all', label: 'ALL' },
 ]
 
 const RETURN_MODES = [
@@ -44,7 +45,7 @@ const TRACE_STYLES = {
 const COLUMNS = [
   { key: 'symbol', label: 'Symbol', locked: true },
   { key: 'name', label: 'Fund Name', locked: true },
-  { key: 'price', label: 'Stock Price' },
+  { key: 'price', label: 'ETF Price' },
   { key: 'change_pct', label: '% Change' },
   { key: 'assets', label: 'Assets' },
   { key: 'expense_ratio', label: 'Exp. Ratio' },
@@ -214,10 +215,21 @@ export default function ETFComparer() {
 
   const dataDateBounds = useMemo(() => {
     if (!data?.series) return [null, null]
-    const allDates = Object.values(data.series).flatMap(s => s.dates || [])
+    const dateSeries = Object.values(data.series)
+      .map(s => (s.dates || []).map(dateKey).filter(Boolean))
+      .filter(dates => dates.length)
+    const allDates = dateSeries.flat()
     if (!allDates.length) return [null, null]
-    return [dateKey(allDates.reduce((a, b) => a < b ? a : b)), dateKey(allDates.reduce((a, b) => a > b ? a : b))]
-  }, [data])
+    const earliestDate = allDates.reduce((a, b) => a < b ? a : b)
+    // MAX is most useful as an apples-to-apples comparison: begin at the
+    // newest first observation (the selected ETF with the shortest history)
+    // so every fund is present and rebased over the same window.
+    const commonStart = dateSeries
+      .map(dates => dates.reduce((a, b) => a < b ? a : b))
+      .reduce((a, b) => a > b ? a : b)
+    const startDate = period === 'max' && !fetchRange ? commonStart : earliestDate
+    return [startDate, allDates.reduce((a, b) => a > b ? a : b)]
+  }, [data, period, fetchRange])
 
   const rangeStart = returnXRange[0] || dataDateBounds[0] || ''
   const rangeEnd = returnXRange[1] || dataDateBounds[1] || ''
@@ -255,7 +267,10 @@ export default function ETFComparer() {
     const [primary, ...extra] = symbols
     const fr = normalizeReturnRange(fetchRange)
     const rangeParam = fr ? `&start=${fr[0]}&end=${fr[1]}` : ''
-    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}${rangeParam}`)
+    // MAX and ALL both fetch the complete histories. Their chart windows
+    // differ below: MAX uses common history, while ALL shows every observation.
+    const requestPeriod = period === 'all' ? 'max' : period
+    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${requestPeriod}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}${rangeParam}`)
       .then(r => r.json())
       .then(d => {
         if (loadSeqRef.current !== loadSeq) return
@@ -391,7 +406,7 @@ export default function ETFComparer() {
     const effectiveReturnRange = activeReturnRange || fallbackRange
     // Rebasing, end labels and y-scaling always follow the active window (typed
     // dates or slider) so the chart visually aligns with the date set.
-    const [visibleStart, visibleEnd] = visibleDateRange(data, returnXRange, true)
+    const [visibleStart, visibleEnd] = visibleDateRange(data, effectiveReturnRange, true)
     const titleWindow = activeReturnRange || normalizeReturnRange(fetchRange)
 
     symbols.forEach((sym, idx) => {
@@ -957,6 +972,7 @@ export default function ETFComparer() {
           {symbols.map(sym => (
             <div key={sym} className="etfc-holdings-card">
               <h3>{sym} - {(rows.find(r => r.symbol === sym)?.name || sym)}</h3>
+              <div className="etfc-holdings-table-wrap">
               <table>
                 <thead>
                   <tr><th>No.</th><th>Symbol</th><th>Name</th><th>Weight</th></tr>
@@ -975,6 +991,7 @@ export default function ETFComparer() {
                   )}
                 </tbody>
               </table>
+              </div>
             </div>
           ))}
         </div>

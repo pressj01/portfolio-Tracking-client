@@ -1,12 +1,12 @@
 {
   "name": "portfolio-tracking-client",
-  "version": "1.31.12",
+  "version": "1.31.15",
   "private": true,
   "description": "Portfolio Tracking Desktop Application",
   "author": "Press",
   "main": "electron/main.js",
   "scripts": {
-    "icons": "py scripts/generate-app-icon.py",
+    "icons": "node scripts/run-python.js scripts/generate-app-icon.py",
     "dev": "vite",
     "dev:all": "concurrently --kill-others \"py backend/app.py\" \"vite\"",
     "start": "concurrently --kill-others \"py backend/app.py\" \"wait-on http://localhost:5001/api/profiles && electron .\"",

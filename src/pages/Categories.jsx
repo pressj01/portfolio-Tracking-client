@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
@@ -108,16 +108,29 @@ function TickerTable({ tickers, categoryValue, onUnassign, fmt, moveTargets = nu
 
 function SubcategoryModal({ subModal, onSave, onCancel }) {
   const [name, setName] = useState(subModal?.sub?.name || '')
+  const [target, setTarget] = useState(subModal?.sub?.target_pct ?? '')
+  // Sub-category targets are expressed as a % of the parent category and should
+  // sum to 100% within that category. Base = siblings' targets (excluding this one).
+  const siblings = subModal?.siblings || []
+  const targetBaseTotal = siblings
+    .filter(s => !subModal?.sub || s.id !== subModal.sub.id)
+    .reduce((sum, s) => sum + (Number(s.target_pct) || 0), 0)
+  const targetValue = target === '' ? 0 : Number(target)
+  const cleanTargetValue = Number.isFinite(targetValue) ? targetValue : 0
+  const projectedTotal = targetBaseTotal + cleanTargetValue
+  const remaining = 100 - projectedTotal
+  const totalColor = projectedTotal > 100 ? '#ff6b6b' : Math.abs(projectedTotal - 100) <= 0.05 ? '#00e89a' : '#ffc107'
+
   const handleSubmit = (e) => {
     e.preventDefault()
     if (!name.trim()) return
-    onSave({ name: name.trim() })
+    onSave({ name: name.trim(), target_pct: target !== '' ? parseFloat(target) : null })
   }
   return (
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal-content" style={{ maxWidth: 400 }} onClick={e => e.stopPropagation()}>
         <button className="modal-close" onClick={onCancel}>&times;</button>
-        <h2>{subModal?.sub ? 'Rename Sub-category' : 'New Sub-category'}</h2>
+        <h2>{subModal?.sub ? 'Edit Sub-category' : 'New Sub-category'}</h2>
         <p style={{ color: 'var(--text-dim-2)', marginTop: '-0.4rem', marginBottom: '0.9rem', fontSize: '0.85rem' }}>
           Within <strong style={{ color: 'var(--accent-bright)' }}>{subModal?.categoryName}</strong>
         </p>
@@ -126,8 +139,23 @@ function SubcategoryModal({ subModal, onSave, onCancel }) {
             <label>Name *</label>
             <input value={name} onChange={e => setName(e.target.value)} required maxLength={100} style={{ width: '100%' }} autoFocus placeholder="e.g. Gold" />
           </div>
+          <div className="form-group">
+            <label>Target Allocation % (of {subModal?.categoryName})</label>
+            <input type="number" step="0.1" min="0" max="100" value={target} onChange={e => setTarget(e.target.value)} placeholder="Optional" style={{ width: '100%' }} />
+            <div style={{ marginTop: '0.55rem', border: '1px solid var(--border)', background: 'var(--bg)', borderRadius: 6, padding: '0.6rem 0.7rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center' }}>
+                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.8rem' }}>Category total after save</span>
+                <strong style={{ color: totalColor }}>{projectedTotal.toFixed(1)}% / 100%</strong>
+              </div>
+              <div style={{ marginTop: '0.25rem', color: remaining < 0 ? 'var(--p-ffb3b3)' : 'var(--text-muted)', fontSize: '0.78rem' }}>
+                {remaining < 0
+                  ? `${Math.abs(remaining).toFixed(1)}% over category target`
+                  : `${remaining.toFixed(1)}% remaining in category`}
+              </div>
+            </div>
+          </div>
           <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
-            <button type="submit" className="btn btn-success">{subModal?.sub ? 'Rename' : 'Create'}</button>
+            <button type="submit" className="btn btn-success">{subModal?.sub ? 'Save' : 'Create'}</button>
             <button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button>
           </div>
         </form>
@@ -472,7 +500,7 @@ function enrichCategoryData(categoryData, holdings = [], navCoverage = null) {
 
 export default function Categories() {
   const pf = useProfileFetch()
-  const { selection, profileId, isAggregate } = useProfile()
+  const { selection, profileId, isAggregate, currentProfileName } = useProfile()
   const dialog = useDialog()
   const navigate = useNavigate()
   const [data, setData] = useState({ categories: [], unallocated: [], total_value: 0 })
@@ -496,9 +524,21 @@ export default function Categories() {
   })
   const [constraintsSeeded, setConstraintsSeeded] = useState(false)
   const [incomeFloorTouched, setIncomeFloorTouched] = useState(false)
+  const reloadSeq = useRef(0)
   const isOwnerProfile = !isAggregate && Number(profileId) === 1
+  // Only show "Push to Sub-accounts" when there are actually included sub-accounts
+  // to push to (owner-target-reference.profiles == include_in_owner accounts).
+  const hasSubaccounts = (data.owner_target_reference?.profiles?.length || 0) > 0
 
   const reload = useCallback(async () => {
+    const seq = reloadSeq.current + 1
+    reloadSeq.current = seq
+    if (isAggregate) {
+      setData({ categories: [], unallocated: [], total_value: 0, _selection: selection })
+      setError(null)
+      setLoading(false)
+      return
+    }
     try {
       const [catRes, holdingsRes, navCoverageRes, ownerTargetRefRes] = await Promise.all([
         pf('/api/categories/data'),
@@ -510,6 +550,7 @@ export default function Categories() {
       const holdings = holdingsRes ? await holdingsRes.json() : []
       const navCoverage = navCoverageRes ? await navCoverageRes.json() : null
       const ownerTargetReference = ownerTargetRefRes ? await ownerTargetRefRes.json() : null
+      if (seq !== reloadSeq.current) return
       setData({
         ...enrichCategoryData(d, Array.isArray(holdings) ? holdings : [], navCoverage),
         owner_target_reference: ownerTargetReference,
@@ -517,11 +558,11 @@ export default function Categories() {
       })
       setError(null)
     } catch (e) {
-      setError('Failed to load categories')
+      if (seq === reloadSeq.current) setError('Failed to load categories')
     } finally {
-      setLoading(false)
+      if (seq === reloadSeq.current) setLoading(false)
     }
-  }, [pf, selection, isOwnerProfile])
+  }, [pf, selection, isOwnerProfile, isAggregate])
 
   useEffect(() => { reload() }, [reload, selection])
 
@@ -558,6 +599,10 @@ export default function Categories() {
   const handleEdit = (cat) => { setEditCat(cat); setShowModal(true) }
 
   const handleSave = async ({ name, target_pct }) => {
+    if (isAggregate) {
+      setError('Select an individual account before editing categories.')
+      return
+    }
     setError(null)
     if (target_pct != null) {
       const otherTotal = data.categories
@@ -581,59 +626,108 @@ export default function Categories() {
         })
       }
       setShowModal(false)
-      reload()
+      await reload()
     } catch (e) { setError(e.message) }
   }
 
   const handleDelete = async (cat) => {
+    if (isAggregate) {
+      setError('Select an individual account before editing categories.')
+      return
+    }
     if (!await dialog.confirm(`Delete category "${cat.name}"? Tickers will become unallocated.`)) return
     await pf(`/api/categories/${cat.id}`, { method: 'DELETE' })
     if (expandedId === cat.id) setExpandedId(null)
-    reload()
+    await reload()
   }
 
   const handleAssign = async (tickers, categoryId, subcategoryId = null) => {
+    if (isAggregate) {
+      setError('Select an individual account before assigning categories.')
+      return
+    }
     await pf('/api/categories/assign', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ category_id: categoryId, subcategory_id: subcategoryId, tickers }),
     })
     setSelectedUnalloc(new Set())
-    reload()
+    await reload()
   }
 
-  const handleSaveSub = async ({ name }) => {
+  const handleSaveSub = async ({ name, target_pct }) => {
+    if (isAggregate) {
+      setError('Select an individual account before editing sub-categories.')
+      return
+    }
     if (!subModal) return
     setError(null)
+    if (target_pct != null) {
+      const otherTotal = (subModal.siblings || [])
+        .filter(s => !subModal.sub || s.id !== subModal.sub.id)
+        .reduce((sum, s) => sum + (Number(s.target_pct) || 0), 0)
+      if (otherTotal + target_pct > 100) {
+        setError(`Sub-category targets in ${subModal.categoryName} would total ${(otherTotal + target_pct).toFixed(1)}% — cannot exceed 100% of the category. Available: ${(100 - otherTotal).toFixed(1)}%`)
+        return
+      }
+    }
     try {
       if (subModal.sub) {
         await pf(`/api/subcategories/${subModal.sub.id}`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name }),
+          body: JSON.stringify({ name, target_pct }),
         })
       } else {
         await pf(`/api/categories/${subModal.categoryId}/subcategories`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name }),
+          body: JSON.stringify({ name, target_pct }),
         })
       }
       setSubModal(null)
-      reload()
+      await reload()
     } catch (e) { setError(e.message) }
   }
 
+  const handlePushToSubaccounts = async () => {
+    const ok = await dialog.confirm(
+      'Push your categories and sub-categories (including target %) to every included sub-account?\n\n' +
+      'Same-named categories and sub-categories are matched and updated to your targets — existing ticker assignments are kept. Only sub-categories you no longer have are removed (their tickers fall back to unclassified within the category). Ticker→category assignments are never changed.'
+    )
+    if (!ok) return
+    setError(null)
+    try {
+      const res = await pf('/api/categories/push-to-subaccounts', { method: 'POST' })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setError(body.error || 'Could not push categories to sub-accounts.')
+        return
+      }
+      await dialog.alert(body.message || 'Categories pushed to sub-accounts.')
+    } catch (e) {
+      setError(e.message || 'Could not push categories to sub-accounts.')
+    }
+  }
+
   const handleDeleteSub = async (sub) => {
+    if (isAggregate) {
+      setError('Select an individual account before editing sub-categories.')
+      return
+    }
     if (!await dialog.confirm(`Delete sub-category "${sub.name}"? Its tickers stay in the parent category but become unclassified.`)) return
     await pf(`/api/subcategories/${sub.id}`, { method: 'DELETE' })
     if (expandedSubId === sub.id) setExpandedSubId(null)
-    reload()
+    await reload()
   }
 
   const handleUnassign = async (tickers) => {
+    if (isAggregate) {
+      setError('Select an individual account before assigning categories.')
+      return
+    }
     await pf('/api/categories/unassign', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers }),
     })
-    reload()
+    await reload()
   }
 
   const toggleUnalloc = (ticker) => {
@@ -1010,11 +1104,32 @@ export default function Categories() {
 
   if (loading) return <div className="page" style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
 
+  if (isAggregate) {
+    return (
+      <div className="page">
+        <h1>Categories</h1>
+        <div className="card" style={{ padding: '1rem', maxWidth: 760 }}>
+          <h2 style={{ marginTop: 0 }}>Select an individual account</h2>
+          <p style={{ color: 'var(--text-muted)', marginBottom: 0 }}>
+            Categories and sub-categories are edited per account. You are viewing {currentProfileName || 'an aggregate portfolio'}, so assignments are locked here to avoid writing changes to the wrong account.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <h1>Categories</h1>
-        <button className="btn btn-success" onClick={handleCreate}>+ New Category</button>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          {isOwnerProfile && hasSubaccounts && (
+            <button className="btn btn-secondary" onClick={handlePushToSubaccounts} title="Copy your categories, sub-categories and targets down to every included sub-account">
+              Push to Sub-accounts
+            </button>
+          )}
+          <button className="btn btn-success" onClick={handleCreate}>+ New Category</button>
+        </div>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
@@ -1362,7 +1477,7 @@ export default function Categories() {
                     <div style={{ marginTop: '0.75rem' }} onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '0.5rem' }}>
                         <button className="btn btn-primary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={() => handleEdit(cat)}>Edit</button>
-                        <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={() => setSubModal({ categoryId: cat.id, categoryName: cat.name })}>+ Sub-category</button>
+                        <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={() => setSubModal({ categoryId: cat.id, categoryName: cat.name, siblings: cat.subcategories || [] })}>+ Sub-category</button>
                         <button className="btn btn-danger" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={() => handleDelete(cat)}>Delete</button>
                         {!hasSubs && cat.tickers.length > 0 && (
                           <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
@@ -1390,8 +1505,11 @@ export default function Categories() {
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                                     <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--p-bb86fc)' }}>{sub.actual_pct.toFixed(1)}%</span>
                                     <span style={{ fontSize: '0.78rem', color: 'var(--text-dim-2)' }}>{sub.category_pct.toFixed(1)}% of {cat.name}</span>
+                                    {sub.target_pct != null && (
+                                      <span style={{ fontSize: '0.78rem', color: 'var(--accent-2)' }}>Target {sub.target_pct.toFixed(1)}% of cat</span>
+                                    )}
                                     <span style={{ fontSize: '0.82rem', color: 'var(--text-dim-2)' }}>{fmt(sub.actual_value)}</span>
-                                    <button className="btn btn-secondary" style={{ padding: '0.1rem 0.4rem', fontSize: '0.7rem' }} onClick={(e) => { e.stopPropagation(); setSubModal({ categoryId: cat.id, categoryName: cat.name, sub }) }}>Rename</button>
+                                    <button className="btn btn-secondary" style={{ padding: '0.1rem 0.4rem', fontSize: '0.7rem' }} onClick={(e) => { e.stopPropagation(); setSubModal({ categoryId: cat.id, categoryName: cat.name, sub, siblings: cat.subcategories || [] }) }}>Edit</button>
                                     <button style={{ background: 'none', border: 'none', color: 'var(--p-ef9a9a)', cursor: 'pointer', fontSize: '1rem', padding: '0 0.25rem' }} title="Delete sub-category" onClick={(e) => { e.stopPropagation(); handleDeleteSub(sub) }}>&times;</button>
                                   </div>
                                 </div>

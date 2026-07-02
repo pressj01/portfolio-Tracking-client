@@ -100,6 +100,7 @@ function DataTable({ rows }) {
 }
 
 function FundChart({ detail }) {
+  const { isDark } = useTheme()
   const chartRef = useRef(null)
 
   useEffect(() => {
@@ -150,6 +151,7 @@ function FundChart({ detail }) {
 }
 
 function TotalReturnChart({ ticker, period }) {
+  const { isDark } = useTheme()
   const chartRef = useRef(null)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -234,6 +236,7 @@ function TotalReturnChart({ ticker, period }) {
 }
 
 function PerformanceBarChart({ rows, title, asOf }) {
+  const { isDark } = useTheme()
   const chartRef = useRef(null)
 
   useEffect(() => {
@@ -315,6 +318,7 @@ function SimpleCharacteristicsTable({ title, asOf, rows, columns }) {
 }
 
 function AssetAllocationChart({ allocation }) {
+  const { isDark } = useTheme()
   const chartRef = useRef(null)
   const rows = allocation?.rows || []
 
@@ -801,7 +805,7 @@ export default function ClosedCEFInformation() {
       <div className="cef-controls">
         <label>
           Search
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Ticker, fund, sponsor..." />
+          <input value={query} onChange={e => setQuery(e.target.value.toUpperCase())} placeholder="Ticker, fund, sponsor..." />
         </label>
         <label>
           Category

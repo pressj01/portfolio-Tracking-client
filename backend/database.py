@@ -69,6 +69,9 @@ def ensure_tables_exist(conn=None):
             broker_source    TEXT,
             include_in_owner INTEGER NOT NULL DEFAULT 0,
             positions_managed INTEGER NOT NULL DEFAULT 0,
+            cash_value       REAL NOT NULL DEFAULT 0,
+            cash_source      TEXT,
+            cash_updated_at  TEXT,
             created_at       TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -81,8 +84,133 @@ def ensure_tables_exist(conn=None):
         cur.execute("ALTER TABLE profiles ADD COLUMN positions_managed INTEGER NOT NULL DEFAULT 0")
     if "broker_source" not in cols:
         cur.execute("ALTER TABLE profiles ADD COLUMN broker_source TEXT")
+    if "cash_value" not in cols:
+        cur.execute("ALTER TABLE profiles ADD COLUMN cash_value REAL NOT NULL DEFAULT 0")
+    if "cash_source" not in cols:
+        cur.execute("ALTER TABLE profiles ADD COLUMN cash_source TEXT")
+    if "cash_updated_at" not in cols:
+        cur.execute("ALTER TABLE profiles ADD COLUMN cash_updated_at TEXT")
     cur.execute("""
         INSERT OR IGNORE INTO profiles (id, name, include_in_owner, positions_managed) VALUES (1, 'Owner', 1, 0)
+    """)
+
+    # ── shared cash-flow plans ───────────────────────────────────────────────
+    # A plan belongs to either one portfolio profile or one aggregate. Keeping
+    # the plan separate from its line items lets other tools (Distribution
+    # Compare, Safe Withdrawal, etc.) reuse the same saved spending schedule.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cash_flow_plans (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            scope_type  TEXT NOT NULL CHECK (scope_type IN ('profile', 'aggregate')),
+            scope_id    INTEGER NOT NULL,
+            is_default  INTEGER NOT NULL DEFAULT 0,
+            version     INTEGER NOT NULL DEFAULT 1,
+            created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (scope_type, scope_id, name)
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cash_flow_plans_scope
+        ON cash_flow_plans (scope_type, scope_id, is_default)
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cash_flow_items (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id             INTEGER NOT NULL,
+            kind                TEXT NOT NULL CHECK (kind IN ('expense', 'income')),
+            name                TEXT NOT NULL,
+            category            TEXT,
+            amount_cents        INTEGER NOT NULL DEFAULT 0,
+            frequency           TEXT NOT NULL DEFAULT 'monthly',
+            start_date          TEXT NOT NULL,
+            end_date            TEXT,
+            due_date            TEXT,
+            pay_date            TEXT,
+            essential           INTEGER NOT NULL DEFAULT 0,
+            tax_rate_pct        REAL,
+            annual_change_pct   REAL,
+            notes               TEXT,
+            active              INTEGER NOT NULL DEFAULT 1,
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cash_flow_items_plan
+        ON cash_flow_items (plan_id, kind, active)
+    """)
+    item_cols = [
+        r[1] for r in cur.execute("PRAGMA table_info(cash_flow_items)").fetchall()
+    ]
+    if "due_date" not in item_cols:
+        cur.execute("ALTER TABLE cash_flow_items ADD COLUMN due_date TEXT")
+    if "pay_date" not in item_cols:
+        cur.execute("ALTER TABLE cash_flow_items ADD COLUMN pay_date TEXT")
+    cur.execute("""
+        UPDATE cash_flow_items
+           SET due_date = COALESCE(due_date, start_date)
+         WHERE kind = 'expense'
+    """)
+    cur.execute("""
+        UPDATE cash_flow_items
+           SET pay_date = COALESCE(pay_date, date(due_date, '-2 days'))
+         WHERE kind = 'expense'
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cash_flow_month_overrides (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id         INTEGER NOT NULL,
+            month           TEXT NOT NULL,
+            amount_cents    INTEGER,
+            excluded        INTEGER NOT NULL DEFAULT 0,
+            paid            INTEGER NOT NULL DEFAULT 0,
+            notes           TEXT,
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (item_id, month)
+        )
+    """)
+    # Migration: add paid column if missing (existing databases)
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(cash_flow_month_overrides)").fetchall()]
+    if "paid" not in cols:
+        cur.execute("ALTER TABLE cash_flow_month_overrides ADD COLUMN paid INTEGER NOT NULL DEFAULT 0")
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cash_flow_overrides_item_month
+        ON cash_flow_month_overrides (item_id, month)
+    """)
+
+    # A payment belongs to a bill occurrence, not to whichever month happens
+    # to be selected in the UI. This preserves history and lets an early-month
+    # bill be checked off in the prior month without being reset at month-end.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cash_flow_item_payments (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id         INTEGER NOT NULL,
+            due_date        TEXT NOT NULL,
+            paid_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (item_id, due_date)
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cash_flow_payments_item_due
+        ON cash_flow_item_payments (item_id, due_date)
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cash_flow_settings (
+            plan_id                 INTEGER PRIMARY KEY,
+            horizon_years           INTEGER NOT NULL DEFAULT 20,
+            expense_inflation_pct   REAL NOT NULL DEFAULT 3,
+            portfolio_tax_pct       REAL NOT NULL DEFAULT 15,
+            starting_cash_cents     INTEGER NOT NULL DEFAULT 0,
+            surplus_mode            TEXT NOT NULL DEFAULT 'reinvest',
+            updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
     """)
 
     # ── all_account_info ───────────────────────────────────────────────────────
@@ -683,34 +811,99 @@ def ensure_tables_exist(conn=None):
             ticker      TEXT NOT NULL,
             category_id INTEGER NOT NULL,
             profile_id  INTEGER NOT NULL DEFAULT 1,
-            UNIQUE (ticker, category_id, profile_id),
+            subcategory_id INTEGER,
+            UNIQUE (ticker, profile_id),
             FOREIGN KEY (category_id) REFERENCES categories(id)
         )
     """)
 
-    # Migrate: widen unique constraint from (ticker, profile_id) to (ticker, category_id, profile_id)
-    _needs_tc_migrate = False
+    # A ticker belongs to exactly one top-level category per profile. Older
+    # builds allowed multiple rows as long as category_id differed, which made
+    # category/sub-category displays ambiguous after edits.
+    _tc_cols_before = {r[1] for r in cur.execute("PRAGMA table_info(ticker_categories)").fetchall()}
+    _has_id = "id" in _tc_cols_before
+    _has_subcategory_id = "subcategory_id" in _tc_cols_before
+    _has_ticker_profile_unique = False
     for idx in cur.execute("PRAGMA index_list(ticker_categories)").fetchall():
         if idx[2] == 1:  # unique index
             cols = [r[2] for r in cur.execute(f"PRAGMA index_info('{idx[1]}')").fetchall()]
-            if len(cols) == 2 and "category_id" not in cols:
-                _needs_tc_migrate = True
+            if cols == ["ticker", "profile_id"]:
+                _has_ticker_profile_unique = True
                 break
-    if _needs_tc_migrate:
-        cur.executescript("""
-            CREATE TABLE IF NOT EXISTS ticker_categories_new (
+    if not _has_ticker_profile_unique or not _has_subcategory_id:
+        cur.execute("""
+            CREATE TABLE ticker_categories_new (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 ticker      TEXT NOT NULL,
                 category_id INTEGER NOT NULL,
                 profile_id  INTEGER NOT NULL DEFAULT 1,
-                UNIQUE (ticker, category_id, profile_id),
+                subcategory_id INTEGER,
+                UNIQUE (ticker, profile_id),
                 FOREIGN KEY (category_id) REFERENCES categories(id)
-            );
-            INSERT OR IGNORE INTO ticker_categories_new (id, ticker, category_id, profile_id)
-                SELECT id, ticker, category_id, profile_id FROM ticker_categories;
-            DROP TABLE ticker_categories;
-            ALTER TABLE ticker_categories_new RENAME TO ticker_categories;
+            )
         """)
+        if _has_id and _has_subcategory_id:
+            cur.execute("""
+                INSERT OR IGNORE INTO ticker_categories_new
+                    (id, ticker, category_id, profile_id, subcategory_id)
+                SELECT tc.id, tc.ticker, tc.category_id, tc.profile_id, tc.subcategory_id
+                  FROM ticker_categories tc
+                  JOIN (
+                    SELECT ticker, profile_id, MAX(id) AS keep_id
+                      FROM ticker_categories
+                     GROUP BY ticker, profile_id
+                  ) keep
+                    ON keep.ticker = tc.ticker
+                   AND keep.profile_id = tc.profile_id
+                   AND keep.keep_id = tc.id
+            """)
+        elif _has_id:
+            cur.execute("""
+                INSERT OR IGNORE INTO ticker_categories_new
+                    (id, ticker, category_id, profile_id)
+                SELECT tc.id, tc.ticker, tc.category_id, tc.profile_id
+                  FROM ticker_categories tc
+                  JOIN (
+                    SELECT ticker, profile_id, MAX(id) AS keep_id
+                      FROM ticker_categories
+                     GROUP BY ticker, profile_id
+                  ) keep
+                    ON keep.ticker = tc.ticker
+                   AND keep.profile_id = tc.profile_id
+                   AND keep.keep_id = tc.id
+            """)
+        elif _has_subcategory_id:
+            cur.execute("""
+                INSERT OR IGNORE INTO ticker_categories_new
+                    (ticker, category_id, profile_id, subcategory_id)
+                SELECT tc.ticker, tc.category_id, tc.profile_id, tc.subcategory_id
+                  FROM ticker_categories tc
+                  JOIN (
+                    SELECT ticker, profile_id, MAX(rowid) AS keep_rowid
+                      FROM ticker_categories
+                     GROUP BY ticker, profile_id
+                  ) keep
+                    ON keep.ticker = tc.ticker
+                   AND keep.profile_id = tc.profile_id
+                   AND keep.keep_rowid = tc.rowid
+            """)
+        else:
+            cur.execute("""
+                INSERT OR IGNORE INTO ticker_categories_new
+                    (ticker, category_id, profile_id)
+                SELECT tc.ticker, tc.category_id, tc.profile_id
+                  FROM ticker_categories tc
+                  JOIN (
+                    SELECT ticker, profile_id, MAX(rowid) AS keep_rowid
+                      FROM ticker_categories
+                     GROUP BY ticker, profile_id
+                  ) keep
+                    ON keep.ticker = tc.ticker
+                   AND keep.profile_id = tc.profile_id
+                   AND keep.keep_rowid = tc.rowid
+            """)
+        cur.execute("DROP TABLE ticker_categories")
+        cur.execute("ALTER TABLE ticker_categories_new RENAME TO ticker_categories")
 
     # ── subcategories ───────────────────────────────────────────────────────────
     # Optional second tier within a category (e.g. Metals → Gold / Silver / Copper).
@@ -722,12 +915,21 @@ def ensure_tables_exist(conn=None):
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             category_id INTEGER NOT NULL,
             name        TEXT NOT NULL,
+            target_pct  REAL,
             profile_id  INTEGER NOT NULL DEFAULT 1,
             sort_order  INTEGER NOT NULL DEFAULT 0,
             UNIQUE (category_id, name, profile_id),
             FOREIGN KEY (category_id) REFERENCES categories(id)
         )
     """)
+
+    # Add target_pct to subcategories if missing (sub-category target = % of parent category)
+    _subcat_cols = {r[1] for r in cur.execute("PRAGMA table_info(subcategories)").fetchall()}
+    if "target_pct" not in _subcat_cols:
+        try:
+            cur.execute("ALTER TABLE subcategories ADD COLUMN target_pct REAL")
+        except Exception:
+            pass
 
     # Add subcategory_id to ticker_categories if missing
     _tc_cols = {r[1] for r in cur.execute("PRAGMA table_info(ticker_categories)").fetchall()}
@@ -1153,6 +1355,15 @@ def ensure_tables_exist(conn=None):
     _nav_cols = {r[1] for r in cur.execute("PRAGMA table_info(portfolio_nav)").fetchall()}
     if "source" not in _nav_cols:
         cur.execute("ALTER TABLE portfolio_nav ADD COLUMN source TEXT")
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS etf_type_overrides (
+            ticker    TEXT PRIMARY KEY,
+            fund_kind TEXT NOT NULL CHECK(fund_kind IN ('option_income','etf','cef')),
+            note      TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
     _seed_etf_provider_data(conn)
 

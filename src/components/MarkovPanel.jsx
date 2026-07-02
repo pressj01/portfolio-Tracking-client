@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 
 // Plain-English Markov regime panel for the Stock & ETF Analysis "Markov" tab.
 // Default view answers "what regime are we in and what usually comes next?".
@@ -8,6 +8,12 @@ import React, { useState } from 'react'
 // Regime index map matches src/utils/markov.js: 0 = Bear, 1 = Sideways, 2 = Bull.
 
 const pct = (v) => `${Math.round((v || 0) * 100)}%`
+const signedPct = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
+const WINDOW_MIN = 5
+const WINDOW_MAX = 250
+const THRESHOLD_MIN = 0.5
+const THRESHOLD_MAX = 50
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
 
 // Display order Bull → Sideways → Bear, with the matrix index for each and a
 // theme color for the label.
@@ -37,6 +43,45 @@ const cardStyle = {
 
 export default function MarkovPanel({ result, windowBars, thr, onChangeWindow, onChangeThr }) {
   const [advanced, setAdvanced] = useState(false)
+  const [windowInput, setWindowInput] = useState(String(windowBars))
+  const [thresholdInput, setThresholdInput] = useState(String(thr))
+
+  useEffect(() => { setWindowInput(String(windowBars)) }, [windowBars])
+  useEffect(() => { setThresholdInput(String(thr)) }, [thr])
+
+  // Debounce valid typed values so replacing "5" with "50" does not briefly
+  // recalculate the model at the intermediate value. Blur/Enter clamps values.
+  useEffect(() => {
+    const parsed = Number(windowInput)
+    if (!Number.isInteger(parsed) || parsed < WINDOW_MIN || parsed > WINDOW_MAX || parsed === windowBars) return undefined
+    const timer = setTimeout(() => onChangeWindow(parsed), 300)
+    return () => clearTimeout(timer)
+  }, [windowInput, windowBars, onChangeWindow])
+
+  useEffect(() => {
+    const parsed = Number(thresholdInput)
+    if (!Number.isFinite(parsed) || parsed < THRESHOLD_MIN || parsed > THRESHOLD_MAX || parsed === thr) return undefined
+    const timer = setTimeout(() => onChangeThr(parsed), 300)
+    return () => clearTimeout(timer)
+  }, [thresholdInput, thr, onChangeThr])
+
+  const commitWindowInput = () => {
+    const parsed = Number(windowInput)
+    const next = Number.isFinite(parsed)
+      ? clamp(Math.round(parsed), WINDOW_MIN, WINDOW_MAX)
+      : windowBars
+    setWindowInput(String(next))
+    if (next !== windowBars) onChangeWindow(next)
+  }
+
+  const commitThresholdInput = () => {
+    const parsed = Number(thresholdInput)
+    const next = Number.isFinite(parsed)
+      ? clamp(parsed, THRESHOLD_MIN, THRESHOLD_MAX)
+      : thr
+    setThresholdInput(String(next))
+    if (next !== thr) onChangeThr(next)
+  }
 
   if (!result || !result.ok) {
     return (
@@ -44,16 +89,20 @@ export default function MarkovPanel({ result, windowBars, thr, onChangeWindow, o
         <strong style={{ color: 'var(--accent-2)' }}>Markov Regime</strong>
         <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', margin: '0.4rem 0 0' }}>
           Not enough price history to model regimes. Load a longer period
-          (need at least {windowBars + 2} bars for a lookback of {windowBars}).
+          Check that the lookback and threshold are valid and load at least {windowBars + 2} price bars.
         </p>
       </div>
     )
   }
 
-  const { matrix, stationary, currentRegime, regimeName } = result
+  const {
+    matrix, stationary, transitionSamples = [], currentRegime, regimeName,
+    currentLogReturnPct,
+  } = result
   const row = matrix[currentRegime] || [1 / 3, 1 / 3, 1 / 3]
   const diag = row[currentRegime] || 0
   const stick = stickiness(diag)
+  const currentSamples = transitionSamples[currentRegime] || 0
 
   // Dominant next-bar outcome from the current regime's row.
   const domIdx = row.indexOf(Math.max(...row))
@@ -76,15 +125,22 @@ export default function MarkovPanel({ result, windowBars, thr, onChangeWindow, o
           {regimeName.toUpperCase()}
         </span>
         <span style={{ color: 'var(--text)', fontSize: '0.88rem' }}>
-          Currently <b style={{ color: regimeColor(currentRegime) }}>{regimeName}</b>.
-          {' '}Historically, the next bar was most often{' '}
-          <b style={{ color: regimeColor(domIdx) }}>{domLabel}</b> ({pct(maxP)}).
+          Currently <b style={{ color: regimeColor(currentRegime) }}>{regimeName}</b>.{' '}
+          {currentSamples > 0 ? (
+            <>
+              Across {currentSamples} observed {regimeName} transition{currentSamples === 1 ? '' : 's'}, the
+              smoothed next-bar estimate was most often{' '}
+              <b style={{ color: regimeColor(domIdx) }}>{domLabel}</b> ({pct(maxP)}).
+            </>
+          ) : (
+            <>No observed transitions from {regimeName}; the bars show a neutral prior.</>
+          )}
         </span>
         <span style={{
           marginLeft: 'auto', fontSize: '0.78rem', color: 'var(--text-muted)',
           whiteSpace: 'nowrap',
         }}>
-          Trend stickiness:{' '}
+          Estimated stickiness:{' '}
           <b style={{ color: 'var(--text)' }}>{stick.label}</b> ({pct(diag)}) · {stick.note}
         </span>
       </div>
@@ -92,7 +148,7 @@ export default function MarkovPanel({ result, windowBars, thr, onChangeWindow, o
       {/* Next-bar forecast bars */}
       <div style={{ marginTop: '0.7rem' }}>
         <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.35rem' }}>
-          What usually comes next (from {regimeName})
+          Smoothed next-bar estimate (from {regimeName}, n={currentSamples})
         </div>
         <div style={{ display: 'flex', gap: '0.6rem' }}>
           {forecast.map(f => (
@@ -107,21 +163,55 @@ export default function MarkovPanel({ result, windowBars, thr, onChangeWindow, o
             </div>
           ))}
         </div>
+        {currentSamples < 20 && (
+          <div style={{ color: 'var(--warning-text)', fontSize: '0.68rem', marginTop: '0.35rem' }}>
+            Limited sample: only {currentSamples} observed transition{currentSamples === 1 ? '' : 's'} from
+            the current regime. Treat this estimate as low confidence.
+          </div>
+        )}
       </div>
+
+      {/* Show the exact quantity being compared with the hard regime boundary. */}
+      {Number.isFinite(currentLogReturnPct) && (
+        <div style={{
+          marginTop: '0.65rem', padding: '0.35rem 0.55rem', borderRadius: 5,
+          background: 'var(--surface-sunken)', color: 'var(--text-dim)', fontSize: '0.72rem',
+        }}>
+          Current {windowBars}-bar log move:{' '}
+          <b style={{ color: regimeColor(currentRegime) }}>{signedPct(currentLogReturnPct)}</b>
+          {' '}vs ±{Number(thr).toFixed(1)}% threshold →{' '}
+          <b style={{ color: regimeColor(currentRegime) }}>{regimeName}</b>.
+          {Math.abs(Math.abs(currentLogReturnPct) - Number(thr)) <= Math.max(0.25, Number(thr) * 0.1) && (
+            <span style={{ color: 'var(--warning-text)' }}>
+              {' '}Near the boundary—small lookback or threshold changes can flip the classification.
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Friendly controls */}
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: '1rem', flexWrap: 'wrap', marginTop: '0.8rem' }}>
         <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.72rem', color: 'var(--text-dim)' }}>
           Lookback (bars)
-          <input type="number" min={5} max={250} step={5} value={windowBars}
-            onChange={e => onChangeWindow(Number(e.target.value))}
+          <input type="number" min={WINDOW_MIN} max={WINDOW_MAX} step={5} value={windowInput}
+            onChange={e => setWindowInput(e.target.value)}
+            onBlur={commitWindowInput}
+            onKeyDown={e => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+              if (e.key === 'Escape') setWindowInput(String(windowBars))
+            }}
             title="How many bars back to measure the move that defines the regime"
             style={{ width: 80, marginTop: 2 }} />
         </label>
         <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.72rem', color: 'var(--text-dim)' }}>
           Move threshold (%)
-          <input type="number" min={0.5} max={50} step={0.5} value={thr}
-            onChange={e => onChangeThr(Number(e.target.value))}
+          <input type="number" min={THRESHOLD_MIN} max={THRESHOLD_MAX} step={0.5} value={thresholdInput}
+            onChange={e => setThresholdInput(e.target.value)}
+            onBlur={commitThresholdInput}
+            onKeyDown={e => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+              if (e.key === 'Escape') setThresholdInput(String(thr))
+            }}
             title="A move bigger than ±this over the lookback counts as Bull / Bear; smaller is Sideways"
             style={{ width: 80, marginTop: 2 }} />
         </label>
@@ -131,7 +221,12 @@ export default function MarkovPanel({ result, windowBars, thr, onChangeWindow, o
             return (
               <button key={p.label} className={`btn btn-sm${active ? ' btn-active' : ''}`}
                 title={p.hint}
-                onClick={() => { onChangeWindow(p.window); onChangeThr(p.thr) }}>
+                onClick={() => {
+                  setWindowInput(String(p.window))
+                  setThresholdInput(String(p.thr))
+                  onChangeWindow(p.window)
+                  onChangeThr(p.thr)
+                }}>
                 {p.label}
               </button>
             )
@@ -142,47 +237,85 @@ export default function MarkovPanel({ result, windowBars, thr, onChangeWindow, o
         </button>
       </div>
 
-      {/* What the controls do, in plain terms */}
-      <p style={{ fontSize: '0.74rem', color: 'var(--text-dim)', lineHeight: 1.5, margin: '0.6rem 0 0' }}>
-        <b style={{ color: 'var(--text-muted)' }}>Move threshold</b> is how big a price move (±%) over
-        the lookback window must be to label a bar <b style={{ color: 'var(--pos)' }}>Bull</b> or{' '}
-        <b style={{ color: 'var(--neg)' }}>Bear</b> — anything smaller is <b>Sideways</b>. It sets the
-        bar going into the model, so it changes the predictions: <b>raise</b> it and fewer bars qualify
-        as Bull/Bear (more Sideways, a more conservative, longer-trend read); <b>lower</b> it and the
-        model reacts to smaller moves (more Bull/Bear labels, choppier, more frequent regime flips).
-        <b style={{ color: 'var(--text-muted)' }}> Lookback</b> is how many bars back that move is measured over.
-      </p>
+      {/* Practical threshold tuning guidance */}
+      <div style={{
+        marginTop: '0.65rem', padding: '0.55rem 0.7rem',
+        background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 6,
+        fontSize: '0.72rem', color: 'var(--text-dim)', lineHeight: 1.45,
+      }}>
+        <div style={{ color: 'var(--text-muted)', fontWeight: 700, marginBottom: '0.25rem' }}>
+          Threshold guide
+        </div>
+        <div>
+          The threshold is the log-return over the full lookback: above +threshold is{' '}
+          <b style={{ color: 'var(--pos)' }}>Bull</b>, below −threshold is{' '}
+          <b style={{ color: 'var(--neg)' }}>Bear</b>, and anything between is <b>Sideways</b>.
+        </div>
+        <div style={{ marginTop: '0.3rem' }}>
+          <b>How to read the odds:</b> a high Sideways percentage means the next bar historically
+          remained <em>classified</em> Sideways — it does not mean the next price was flat or has that
+          probability of being flat. Consecutive rolling lookback windows overlap, so persistence is
+          naturally high.
+        </div>
+        <ul style={{ margin: '0.3rem 0 0', paddingLeft: '1.1rem' }}>
+          <li><b>Start with 20 / 5%</b> on a daily chart, then adjust for the ticker&apos;s volatility.</li>
+          <li><b>Lower the threshold</b> if Advanced shows 80%+ Sideways or Bull/Bear rarely appears.</li>
+          <li><b>Raise the threshold</b> if Sideways is near 0% or the regime flips every few bars.</li>
+          <li>Longer lookbacks and more volatile assets generally need higher thresholds.</li>
+        </ul>
+        <div style={{ marginTop: '0.3rem' }}>
+          Use the <b>Long-run base rate</b> under Advanced as the calibration check: aim for a useful mix
+          of all three regimes, then keep the setting consistent when comparing tickers. Watch the current
+          log-move readout above—hard classifications can flip when it sits near the threshold.
+        </div>
+      </div>
 
       {/* Advanced: full matrix + base rate + explanation */}
       {advanced && (
         <div style={{ marginTop: '0.9rem', borderTop: '1px solid var(--border)', paddingTop: '0.8rem' }}>
           <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
-            <div>
+            <div style={{ flex: '1 1 440px', minWidth: 0 }}>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.35rem' }}>
-                Transition matrix (Today&nbsp;↓ &nbsp;/&nbsp; Next&nbsp;→)
+                Smoothed transition matrix (Today&nbsp;↓ &nbsp;/&nbsp; Next&nbsp;→)
               </div>
-              <table style={{ borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+              <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: '0.78rem' }}>
+                <colgroup>
+                  <col style={{ width: '28%' }} />
+                  {DISP.map(c => <col key={c.idx} style={{ width: '24%' }} />)}
+                </colgroup>
                 <thead>
                   <tr>
                     <th />
-                    {DISP.map(c => <th key={c.idx} style={{ padding: '2px 8px', color: c.color }}>{c.label}</th>)}
+                    {DISP.map(c => (
+                      <th key={c.idx} scope="col" style={{ padding: '2px 10px', textAlign: 'right', color: c.color }}>
+                        {c.label}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {DISP.map(r => (
                     <tr key={r.idx}>
-                      <td style={{ padding: '2px 8px', color: r.color, fontWeight: 600 }}>{r.label}</td>
+                      <td style={{ padding: '2px 8px', color: r.color, fontWeight: 600 }}>
+                        {r.label}{' '}
+                        <span style={{ color: 'var(--text-dim)', fontSize: '0.66rem', fontWeight: 400 }}>
+                          n={transitionSamples[r.idx] || 0}
+                        </span>
+                      </td>
                       {DISP.map(c => {
                         const isDiag = r.idx === c.idx
                         const isCurRow = r.idx === currentRegime
+                        const sampleCount = transitionSamples[r.idx] || 0
                         return (
                           <td key={c.idx}
-                            title={`P(${c.label} next | ${r.label} today) = ${pct(matrix[r.idx][c.idx])}`}
+                            title={`Smoothed P(${c.label} next | ${r.label} today) = ${pct(matrix[r.idx][c.idx])}; n=${sampleCount} observed transitions`}
                             style={{
                               padding: '2px 10px', textAlign: 'right',
+                              fontVariantNumeric: 'tabular-nums',
                               color: isDiag ? 'var(--text)' : 'var(--text-muted)',
                               fontWeight: isDiag ? 700 : 400,
                               background: isCurRow ? 'var(--surface-sunken)' : 'transparent',
+                              opacity: sampleCount === 0 ? 0.65 : 1,
                             }}>
                             {pct(matrix[r.idx][c.idx])}
                           </td>
@@ -193,7 +326,8 @@ export default function MarkovPanel({ result, windowBars, thr, onChangeWindow, o
                 </tbody>
               </table>
               <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)', marginTop: 4 }}>
-                Each row sums to 100%. The highlighted row is today’s regime. The diagonal is persistence.
+                Each row sums to 100%. n is the observed transition count. A Jeffreys prior (+0.5 per
+                outcome) stabilizes sparse rows; n=0 is prior-only. The diagonal is persistence.
               </div>
             </div>
 
@@ -209,13 +343,13 @@ export default function MarkovPanel({ result, windowBars, thr, onChangeWindow, o
                 ))}
               </div>
               <p style={{ fontSize: '0.72rem', color: 'var(--text-dim)', lineHeight: 1.45, marginTop: '0.6rem' }}>
-                Where price spends its time over the long run if these transition odds hold — a base
+                Where price spends its time over the long run if these smoothed transition odds hold — a base
                 rate, <em>not</em> a forecast. Compare it to the “what usually comes next” bars above.
               </p>
               <p style={{ fontSize: '0.7rem', color: 'var(--text-dim)', lineHeight: 1.45, marginTop: '0.5rem' }}>
                 <b>How it works:</b> each bar is labelled Bull / Bear / Sideways by the log-return over
-                the lookback vs ±threshold. We count how often each regime follows another to build the
-                matrix, then raise it to a high power to get the base rate.
+                the lookback vs ±threshold. We count how often each regime follows another, apply a small
+                sparse-sample adjustment, then solve the matrix’s stationary distribution for the base rate.
               </p>
             </div>
           </div>

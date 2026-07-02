@@ -532,11 +532,19 @@ def parse_schwab_csv(file_path, filename):
     positions = []
     filtered_count = 0
     options_count = 0
+    cash_value = 0.0
+    cash_seen = False
 
     for row in reader:
         sym = str(row.get("Symbol") or "").strip()
         desc = str(row.get("Description") or "").strip()
         asset_type = str(row.get("Asset Type") or "").strip()
+
+        if sym == "Cash & Cash Investments":
+            cash_value = _safe_float(row.get("Mkt Val (Market Value)")) or 0.0
+            cash_seen = True
+            filtered_count += 1
+            continue
 
         # Skip summary rows
         if sym in _SCHWAB_SKIP_SYMBOLS or not sym:
@@ -623,14 +631,23 @@ def parse_schwab_csv(file_path, filename):
             "Please use 'Charles Schwab (Transactions)' for transaction history files."
         )
 
+    summary = {
+        "holdings": len(positions),
+        "filtered": filtered_count,
+        "options": options_count,
+    }
+    if cash_seen:
+        summary["cash"] = round(cash_value, 2)
+        summary["account_value"] = round(
+            sum(position["current_value"] for position in positions) + cash_value,
+            2,
+        )
+
     return {
         "positions": positions,
-        "summary": {
-            "holdings": len(positions),
-            "filtered": filtered_count,
-            "options": options_count,
-        },
+        "summary": summary,
         "format_type": "positions",
+        "source_format": "schwab",
     }
 
 

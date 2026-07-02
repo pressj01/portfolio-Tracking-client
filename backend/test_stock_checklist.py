@@ -113,6 +113,39 @@ class FundKindClassifierTest(unittest.TestCase):
             self._kind('EQUITY', 'Realty Income is a real estate investment trust.', industry='REIT - Retail'),
         )
 
+    def test_option_income_etf_detected_from_name_when_yahoo_category_is_generic(self):
+        info = {'quoteType': 'ETF', 'category': 'Digital Assets'}
+        self.assertEqual(
+            app_module._classify_fund_kind(
+                'SOLM', info, 'Amplify Solana 3% Monthly Option Income ETF', cef_universe=set()
+            ),
+            'option_income',
+        )
+
+    def test_option_income_etf_detected_from_summary_keywords(self):
+        for phrase in ('covered call', 'buy-write', 'option premium'):
+            with self.subTest(phrase=phrase):
+                info = {
+                    'quoteType': 'ETF',
+                    'category': 'Large Blend',
+                    'longBusinessSummary': f'The fund uses a {phrase} strategy to generate income.',
+                }
+                self.assertEqual(
+                    app_module._classify_fund_kind(
+                        'TEST', info, 'Example ETF', cef_universe=set()
+                    ),
+                    'option_income',
+                )
+
+    def test_option_income_name_does_not_override_cef_detection(self):
+        info = {'quoteType': 'ETF', 'category': 'Derivative Income'}
+        self.assertEqual(
+            app_module._classify_fund_kind(
+                'TEST', info, 'Covered Call Fund', cef_universe={'TEST'}
+            ),
+            'cef',
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

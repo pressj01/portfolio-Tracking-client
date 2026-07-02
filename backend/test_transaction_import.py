@@ -125,6 +125,26 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(position["purchase_value"], 600.00)
         self.assertEqual(position["cost_per_share"], 60.00)
 
+    def test_schwab_positions_captures_cash_for_account_value(self):
+        content = "\n".join([
+            '"Positions for account Brokerage ...843 as of 04:00 PM ET, 2026/06/29",,,,,,,,,',
+            ",,,,,,,,,",
+            "Symbol,Description,Qty (Quantity),Price,Mkt Val (Market Value),Cost Basis,Gain $ (Gain/Loss $),Reinvest?,Asset Type",
+            "BLOX,NICHOLAS CRYPTO INCOME ETF,10,$17.25,$172.50,$200.00,($27.50),Yes,ETFs & Closed End Funds",
+            'Cash & Cash Investments,,,,\"$6,425.39\",,,,Cash and Money Market',
+            'Positions Total,,,,\"$6,597.89\",,,,',
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab-positions-with-cash.csv"
+            path.write_text(content, encoding="utf-8")
+
+            result = parse_schwab_csv(str(path), path.name)
+
+        self.assertEqual(result["summary"]["cash"], 6425.39)
+        self.assertEqual(result["summary"]["account_value"], 6597.89)
+        self.assertEqual(result["source_format"], "schwab")
+
     def test_shear_group_positions_accepts_csv_export(self):
         content = "\n".join([
             "Account Number,Account Name,Account Nick Name,Symbol/CUSIP,Description,Quantity,Price ($),Day Change ($),Value ($),Price as Of,Unit Cost,Cost Basis ($),Unrealized G/L ($),Unrealized G/L (%),Held In,Security Type Description",

@@ -640,6 +640,74 @@ export default function RebalanceWizard() {
         </button>
       </div>
 
+      <details style={{ marginBottom: '1rem', borderLeft: '3px solid var(--accent-2)', background: 'var(--p-0a1628)', borderRadius: '4px', padding: '0.5rem 0.75rem' }}>
+        <summary style={{ cursor: 'pointer', color: 'var(--accent-2)', fontWeight: 600, fontSize: '0.85rem' }}>
+          How this screen works — what every field & column means {'ⓘ'}
+        </summary>
+        <div style={{ marginTop: '0.6rem', fontSize: '0.8rem', color: 'var(--text-dim)', lineHeight: 1.55 }}>
+          <p style={{ margin: '0 0 0.6rem' }}>
+            <strong style={{ color: 'var(--text-strong)' }}>What it does.</strong> The Rebalance Wizard compares each category's
+            actual weight to the <strong>target %</strong> you set on the Categories screen, then builds a buy/sell list that
+            closes the gaps — while keeping your monthly income at or above a floor you choose. Nothing is sent to a broker;
+            it produces a plan you review, edit, save, and export.
+          </p>
+
+          <p style={{ margin: '0 0 0.35rem' }}>
+            <strong style={{ color: 'var(--text-strong)' }}>How to use it.</strong>
+          </p>
+          <ol style={{ margin: '0 0 0.7rem 1.1rem', padding: 0 }}>
+            <li>Set the options below (income mode, priority, floors, new cash).</li>
+            <li>Click <strong>Generate Plan</strong>.</li>
+            <li>Review the <strong>Category Drift</strong> table and the suggested trades.</li>
+            <li>Optionally set <strong>Buy Candidate Preferences</strong> so the wizard buys the tickers you prefer.</li>
+            <li>Edit, remove, or add trades; <strong>Save Scenario</strong> to compare options; export when satisfied.</li>
+          </ol>
+
+          <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Setup options</p>
+          <ul style={{ margin: '0 0 0.7rem 1.1rem', padding: 0 }}>
+            <li><strong>Income Mode</strong> — <em>Preserve current</em> won't let the plan drop your monthly income below today's level; <em>Custom</em> uses only the floor you type in.</li>
+            <li><strong>Rebalance Priority</strong> — <em>Close largest gaps first</em> chases target drift; <em>Prioritize income</em> leans toward higher-income buys while still reducing drift.</li>
+            <li><strong>Minimum Portfolio Yield / Minimum Monthly Income</strong> — guardrails the plan must satisfy; if it can't, exports stay blocked.</li>
+            <li><strong>New Cash To Invest</strong> — fresh money to deploy (buys only, no sells needed).</li>
+            <li><strong>Minimum Trade Size</strong> — ignore trades smaller than this to avoid odd-lot noise.</li>
+            <li><strong>Do Not Trade These Tickers</strong> — comma-separated list the wizard will never buy or sell.</li>
+            <li><strong>Allow sells…</strong> — when on, the plan may trim overweight categories to fund underweight ones; when off, it only uses new cash.</li>
+          </ul>
+
+          <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Category Drift table</p>
+          <ul style={{ margin: '0 0 0.7rem 1.1rem', padding: 0 }}>
+            <li><strong>Target / Actual / Drift</strong> — your target weight vs. current weight, and the difference (green ≤2%, amber ≤5%, red beyond).</li>
+            <li><strong>To Target</strong> — dollars needed to reach the target (+ = buy, − = sell). <strong>After Edits</strong> is what's left once your edited trades are applied.</li>
+            <li><strong>Income Before / After / Delta</strong> — the monthly income effect of the plan on that category.</li>
+          </ul>
+
+          <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Buy Candidate Preferences — the “NAV Risk” column</p>
+          <p style={{ margin: '0 0 0.45rem' }}>
+            For each category the wizard lists the tickers it could buy. The <strong>NAV Risk</strong> column flags funds whose
+            <em> net asset value can structurally erode</em> — i.e. funds that pay big distributions partly by returning capital
+            or capping upside (option-income / covered-call, single-stock option, leveraged/“2x”, YieldMax-style, and similar
+            high-income products). It is a <strong>“look before you buy more” flag, not a verdict</strong>. Values:
+          </p>
+          <ul style={{ margin: '0 0 0.5rem 1.1rem', padding: 0 }}>
+            <li><strong style={{ color: 'var(--p-ffb74d)' }}>Candidate</strong> — auto-detected as a NAV-erosion-prone fund type. Worth checking its NAV trend and distribution coverage before increasing the position.</li>
+            <li><strong style={{ color: 'var(--p-ffb74d)' }}>Test</strong> — you manually marked this ticker for NAV-erosion testing (in Manage Holdings / Settings).</li>
+            <li><strong style={{ color: 'var(--text-strong)' }}>Low</strong> — not a NAV-erosion type (plain equities, broad/dividend ETFs, BDCs); no structural-decay concern.</li>
+            <li><strong style={{ color: 'var(--text-strong)' }}>Skipped</strong> — you told the app to skip NAV checks for this ticker.</li>
+          </ul>
+          <p style={{ margin: '0 0 0.7rem' }}>
+            <strong style={{ color: 'var(--text-strong)' }}>Preferred / Rank</strong> let you pin and order the tickers the wizard should buy first in that
+            category; <strong>Source</strong> shows where the candidate came from (your holdings vs. a lookup).
+          </p>
+
+          <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Review banners</p>
+          <ul style={{ margin: '0 0 0.2rem 1.1rem', padding: 0 }}>
+            <li><strong>Income guardrail</strong> — appears if your edits push projected income below the floor; exports stay disabled until fixed.</li>
+            <li><strong>High-yield review</strong> — flags buys at an unusually high yield; confirm the payout is sustainable.</li>
+            <li><strong>NAV review</strong> — lists any <em>Candidate</em>/<em>Test</em> tickers in the plan to double-check for NAV erosion before executing.</li>
+          </ul>
+        </div>
+      </details>
+
       <div className="card" style={{ marginBottom: '1rem' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '0.9rem', alignItems: 'end' }}>
           <div>

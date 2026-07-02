@@ -52,7 +52,16 @@ The calculator displays your current Federal, State, Combined, and LTCG marginal
 3. If found, the name, yield, and tax type fill automatically
 4. If not found, you'll be prompted to enter the yield manually (saves to localStorage for future sessions)
 
-### Step 3: Configure Each Fund
+### Step 3: Load Tickers From Your Portfolio
+
+Click **From Portfolio** to open a picker with your current portfolio holdings. Use the search box to narrow the list, check any combination of tickers, or use **Select All** / **Deselect All** to quickly choose the full portfolio or clear the selection. Click **Add Tickers** to add the selected holdings to the calculator with their current values as allocations.
+
+You can still add tickers that are not in your portfolio by typing them into the ticker box and clicking **Add Fund**. Portfolio-loaded tickers and manually added tickers can be mixed in the same blended-yield scenario.
+
+**Screenshot 2:** Portfolio Picker
+![Portfolio Picker](../help-screenshots/blended-yield/04-portfolio-picker.png)
+
+### Step 4: Configure Each Fund
 
 For each added fund card:
 1. **Distribution Yield %** — Annual yield (verify current yield from your broker)
@@ -65,7 +74,7 @@ The card displays results in real-time:
 - **Tax-Equiv Yield (TEY)** — Used in blended calculation (shown **bold** and underlined when active)
 - **Eff. Tax Rate** — The tax impact on this fund
 
-### Step 4: Review Portfolio Summary
+### Step 5: Review Portfolio Summary
 
 The **Portfolio Summary** at the bottom shows:
 - **Blended Yield (TEY)** — Your portfolio's composite after-tax yield
@@ -77,7 +86,7 @@ The **Portfolio Summary** at the bottom shows:
 
 A color-coded allocation bar shows the weight of each fund. A breakdown table lists every fund with yields, tax rates, allocations, and income.
 
-**Screenshot 2:** Portfolio Summary Results
+**Screenshot 3:** Portfolio Summary Results
 ![Portfolio Summary](../help-screenshots/blended-yield/02-portfolio-summary.jpg)
 
 ## Customizing Tax Brackets
@@ -102,7 +111,7 @@ The **Tax Bracket Settings** panel lets you customize Federal, State, and LTCG b
 
 A "**Custom**" badge appears when custom brackets are saved. An "**Unsaved**" badge appears when you've made changes but haven't saved yet.
 
-**Screenshot 3:** Tax Bracket Editor
+**Screenshot 4:** Tax Bracket Editor
 ![Tax Bracket Settings](../help-screenshots/blended-yield/03-tax-bracket-settings.jpg)
 
 ## Built-in Fund Database
@@ -170,5 +179,7 @@ This is a calculator only. Tax situations vary widely by individual. **Consult a
 1. Search your broker or Morningstar for the current yield
 2. Enter it manually (a 1.5s timeout gives search time)
 3. The fund saves to localStorage with a blue ★ badge for next time
+
+**Load a Partial Portfolio:** Use **From Portfolio** when you want the calculator to start from real holdings. Select only the funds you want to compare, or click **Select All** to model the whole portfolio. **Deselect All** is useful when you want to build a small subset from scratch.
 
 **Allocation Constraints:** Allocations must sum to 100% for meaningful blended yield. The calculator warns if they don't, but still computes based on proportional weights.

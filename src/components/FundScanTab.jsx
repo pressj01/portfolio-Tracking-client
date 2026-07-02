@@ -264,7 +264,7 @@ export default function FundScanTab({
                             return <td key={c.key} style={{ padding: '0.5rem 0.6rem' }}><strong style={{ color: 'var(--teal-2)' }}>{r.ticker}</strong></td>
                           }
                           if (c.key === 'verdict') {
-                            return <td key={c.key} style={{ padding: '0.5rem 0.6rem' }}><span className={`stock-check-badge tone-${r.tone}`}>{r.verdict}</span></td>
+                            return <td key={c.key} className="fund-scan-verdict-cell" style={{ padding: '0.5rem 0.6rem' }}><span className={`stock-check-badge fund-scan-verdict-badge tone-${r.tone}`}>{r.verdict}</span></td>
                           }
                           if (c.key === 'name') {
                             return <td key={c.key} style={{ padding: '0.5rem 0.6rem', color: 'var(--p-b8c8e0)', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</td>

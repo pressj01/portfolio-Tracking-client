@@ -32,6 +32,21 @@ function badgeFromScore(score) {
   return 'fail'
 }
 
+// Expense, fund size, and age can describe a fund without showing whether the
+// strategy actually works. A buy/do-not-buy verdict therefore requires at
+// least one scored outcome/risk criterion in addition to the minimum coverage.
+const PERFORMANCE_EVIDENCE_KEYS = new Set([
+  'performance',
+  'navErosion',
+  'yieldSustainability',
+  'risk',
+  'riskRatios',
+])
+
+function hasPerformanceEvidence(criteria) {
+  return criteria.some(c => PERFORMANCE_EVIDENCE_KEYS.has(c.key) && typeof c.score === 'number')
+}
+
 const pct = (n, d = 2) => (n === null || n === undefined ? 'n/a' : `${Number(n).toFixed(d)}%`)
 const money = (n) => {
   return formatMoneyCompact(n, { fallback: 'n/a' })
@@ -297,7 +312,9 @@ export function gradeETF(fund, peers, thresholds) {
     gradeRiskRatios(fund, 7),
   ]
   const scored = criteria.filter(c => typeof c.score === 'number')
-  const composite = scored.length ? scored.reduce((s, c) => s + c.score, 0) / scored.length : null
+  const composite = scored.length >= 3 && hasPerformanceEvidence(criteria)
+    ? scored.reduce((s, c) => s + c.score, 0) / scored.length
+    : null
   return { fund, criteria, composite }
 }
 
@@ -484,7 +501,7 @@ function optGradeTrackRecord(fund, peers, thresholds) {
     { label: '3Y avg total return', value: pct(r3y) },
     { label: 'Option-income peer median (3Y)', value: pct(median) },
   ]
-  let score = 60, rationale
+  let score = null, rationale
   if (ageYears !== null && ageYears < t.warnAgeYears) {
     score = 25
     rationale = `Fund is only ${ageYears.toFixed(1)} years old — less than ${t.warnAgeYears} year. No meaningful track record.`
@@ -564,7 +581,9 @@ export function gradeOptionIncomeETF(fund, peers, thresholds) {
     gradeRiskRatios(fund, 8),
   ]
   const scored = criteria.filter(c => typeof c.score === 'number')
-  const composite = scored.length ? scored.reduce((s, c) => s + c.score, 0) / scored.length : null
+  const composite = scored.length >= 3 && hasPerformanceEvidence(criteria)
+    ? scored.reduce((s, c) => s + c.score, 0) / scored.length
+    : null
   return { fund, criteria, composite }
 }
 

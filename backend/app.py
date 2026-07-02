@@ -41,6 +41,20 @@ class NanSafeJSONProvider(DefaultJSONProvider):
         return super().dumps(_sanitize_nan(obj), **kwargs)
 from config import get_connection, FRED_API_KEY, DB_PATH
 from database import ensure_tables_exist
+from cash_flow import (
+    classify_holding_scenario_type as _classify_cash_flow_holding,
+    expand_plan as _expand_cash_flow_plan,
+    get_or_create_default_plan as _get_or_create_default_cash_flow_plan,
+    money_to_cents as _cash_flow_money_to_cents,
+    next_bill_schedule as _next_cash_flow_bill,
+    parse_month as _parse_cash_flow_month,
+    portfolio_scenario_assumptions as _cash_flow_scenario_assumptions,
+    serialize_item as _serialize_cash_flow_item,
+    serialize_plan as _serialize_cash_flow_plan,
+    settings_for_plan as _cash_flow_settings_for_plan,
+    simulate_sustainability as _simulate_cash_flow_sustainability,
+    validate_item_payload as _validate_cash_flow_item,
+)
 from import_data import (
     import_from_excel, import_from_upload,
     import_weekly_payouts, import_monthly_payouts,
@@ -264,6 +278,14 @@ def _request_aggregate_id():
         return None
 
 
+def _reject_aggregate_category_write():
+    if _request_aggregate_id() is None:
+        return None
+    return jsonify({
+        "error": "Categories can only be edited on an individual account, not an aggregate portfolio."
+    }), 400
+
+
 def get_profile_filter():
     """Return (is_aggregate, profile_ids_list) for read operations.
 
@@ -284,6 +306,844 @@ def get_profile_filter():
     return False, [pid]
 
 
+# ── Shared cash flow ─────────────────────────────────────────────────────────
+
+def _cash_flow_scope():
+    aggregate_id = _request_aggregate_id()
+    if aggregate_id is not None:
+        return "aggregate", aggregate_id
+    return "profile", get_profile_id()
+
+
+def _cash_flow_plan_for_scope(conn, plan_id=None):
+    """Return a plan that belongs to the current profile/aggregate selection."""
+    scope_type, scope_id = _cash_flow_scope()
+    if plan_id in (None, ""):
+        return _get_or_create_default_cash_flow_plan(
+            conn, scope_type, scope_id
+        )
+    try:
+        plan_id = int(plan_id)
+    except (TypeError, ValueError):
+        return None
+    return conn.execute(
+        """SELECT * FROM cash_flow_plans
+           WHERE id = ? AND scope_type = ? AND scope_id = ?""",
+        (plan_id, scope_type, scope_id),
+    ).fetchone()
+
+
+def _cash_flow_touch_plan(conn, plan_id):
+    conn.execute(
+        """UPDATE cash_flow_plans
+           SET version = version + 1, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?""",
+        (int(plan_id),),
+    )
+
+
+def _cash_flow_item_result(conn, row):
+    item = _serialize_cash_flow_item(row)
+    schedule = _next_cash_flow_bill(row)
+    item["current_due_date"] = schedule["due_date"]
+    item["current_pay_date"] = schedule["pay_date"]
+    item["paid"] = False
+    item["paid_at"] = None
+    if schedule["due_date"]:
+        payment = conn.execute(
+            """SELECT paid_at
+               FROM cash_flow_item_payments
+               WHERE item_id = ? AND due_date = ?""",
+            (row["id"], schedule["due_date"]),
+        ).fetchone()
+        if payment:
+            item["paid"] = True
+            item["paid_at"] = payment["paid_at"]
+    return item
+
+
+def _cash_flow_portfolio_snapshot(conn, profile_ids):
+    ids = list(dict.fromkeys(int(pid) for pid in profile_ids if pid is not None))
+    if not ids:
+        return {
+            "value": 0.0,
+            "annual_income": 0.0,
+            "profile_count": 0,
+            "holdings": [],
+        }
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT a.ticker, a.description, a.classification_type,
+                   a.current_value, a.quantity, a.current_price,
+                   a.estim_payment_per_year, a.approx_monthly_income,
+                   g.etf_category, g.etf_strategy, o.fund_kind
+            FROM all_account_info a
+            LEFT JOIN general_scanner_cache g ON g.ticker = a.ticker
+            LEFT JOIN etf_type_overrides o ON o.ticker = a.ticker
+            WHERE a.profile_id IN ({placeholders})
+              AND COALESCE(a.quantity, 0) > 0""",
+        ids,
+    ).fetchall()
+    override_rows = conn.execute(
+        f"""SELECT ticker, bucket
+            FROM income_overrides
+            WHERE profile_id IN ({placeholders})""",
+        ids,
+    ).fetchall()
+    income_overrides = {row["ticker"]: row["bucket"] for row in override_rows}
+
+    holdings_by_ticker = {}
+    for row in rows:
+        ticker = str(row["ticker"] or "").strip().upper()
+        if not ticker:
+            continue
+        current_value = float(row["current_value"] or 0)
+        if current_value <= 0:
+            current_value = float(row["quantity"] or 0) * float(
+                row["current_price"] or 0
+            )
+        estimated = float(row["estim_payment_per_year"] or 0)
+        if estimated <= 0:
+            estimated = float(row["approx_monthly_income"] or 0) * 12.0
+        holding = holdings_by_ticker.setdefault(
+            ticker,
+            {
+                "ticker": ticker,
+                "description": row["description"] or "",
+                "classification_type": row["classification_type"] or "",
+                "etf_category": row["etf_category"] or "",
+                "etf_strategy": row["etf_strategy"] or "",
+                "fund_kind": row["fund_kind"] or "",
+                "value": 0.0,
+                "annual_income": 0.0,
+            },
+        )
+        holding["value"] += max(0.0, current_value)
+        holding["annual_income"] += max(0.0, estimated)
+        for field in (
+            "description",
+            "classification_type",
+            "etf_category",
+            "etf_strategy",
+            "fund_kind",
+        ):
+            if not holding[field] and row[field]:
+                holding[field] = row[field]
+
+    holdings = []
+    for holding in holdings_by_ticker.values():
+        override = income_overrides.get(holding["ticker"])
+        if override and override != "Excluded":
+            holding["income_bucket"] = override
+        else:
+            holding["income_bucket"] = _get_income_bucket(
+                holding["ticker"],
+                holding["classification_type"],
+                holding["description"],
+            )
+        holding["value"] = round(holding["value"], 2)
+        holding["annual_income"] = round(holding["annual_income"], 2)
+        holding["scenario_type"] = _classify_cash_flow_holding(holding)
+        holdings.append(holding)
+    holdings.sort(key=lambda row: (-row["annual_income"], -row["value"], row["ticker"]))
+
+    value = sum(row["value"] for row in holdings)
+    annual_income = sum(row["annual_income"] for row in holdings)
+    return {
+        "value": round(value, 2),
+        "annual_income": round(annual_income, 2),
+        "profile_count": len(ids),
+        "holdings": holdings,
+    }
+
+
+def _cash_flow_month_or_current(raw=None):
+    value = raw or datetime.date.today().strftime("%Y-%m")
+    return _parse_cash_flow_month(value).strftime("%Y-%m")
+
+
+@app.route("/api/cash-flow/plans", methods=["GET", "POST"])
+def cash_flow_plans():
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    scope_type, scope_id = _cash_flow_scope()
+
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name", "")).strip()
+        if not name:
+            conn.close()
+            return jsonify(error="Plan name is required."), 400
+        if len(name) > 100:
+            conn.close()
+            return jsonify(error="Plan name must be 100 characters or less."), 400
+        try:
+            cur = conn.execute(
+                """INSERT INTO cash_flow_plans
+                   (name, scope_type, scope_id, is_default)
+                   VALUES (?, ?, ?, 0)""",
+                (name, scope_type, scope_id),
+            )
+            conn.execute(
+                """INSERT INTO cash_flow_settings (plan_id)
+                   VALUES (?)""",
+                (cur.lastrowid,),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM cash_flow_plans WHERE id = ?", (cur.lastrowid,)
+            ).fetchone()
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            conn.close()
+            return jsonify(error="A cash-flow plan with that name already exists."), 409
+        result = _serialize_cash_flow_plan(row)
+        conn.close()
+        return jsonify(plan=result), 201
+
+    _get_or_create_default_cash_flow_plan(conn, scope_type, scope_id)
+    rows = conn.execute(
+        """SELECT * FROM cash_flow_plans
+           WHERE scope_type = ? AND scope_id = ?
+           ORDER BY is_default DESC, name, id""",
+        (scope_type, scope_id),
+    ).fetchall()
+    result = [_serialize_cash_flow_plan(row) for row in rows]
+    conn.close()
+    return jsonify(plans=result)
+
+
+@app.route("/api/cash-flow/plans/<int:plan_id>", methods=["PUT", "DELETE"])
+def cash_flow_plan_detail(plan_id):
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan = _cash_flow_plan_for_scope(conn, plan_id)
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+
+    if request.method == "DELETE":
+        count = conn.execute(
+            """SELECT COUNT(*) AS count FROM cash_flow_plans
+               WHERE scope_type = ? AND scope_id = ?""",
+            (plan["scope_type"], plan["scope_id"]),
+        ).fetchone()["count"]
+        if count <= 1:
+            conn.close()
+            return jsonify(error="The only cash-flow plan cannot be deleted."), 400
+        item_ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM cash_flow_items WHERE plan_id = ?", (plan_id,)
+            ).fetchall()
+        ]
+        if item_ids:
+            placeholders = ",".join("?" * len(item_ids))
+            conn.execute(
+                f"DELETE FROM cash_flow_item_payments WHERE item_id IN ({placeholders})",
+                item_ids,
+            )
+            conn.execute(
+                f"DELETE FROM cash_flow_month_overrides WHERE item_id IN ({placeholders})",
+                item_ids,
+            )
+        conn.execute("DELETE FROM cash_flow_items WHERE plan_id = ?", (plan_id,))
+        conn.execute("DELETE FROM cash_flow_settings WHERE plan_id = ?", (plan_id,))
+        conn.execute("DELETE FROM cash_flow_plans WHERE id = ?", (plan_id,))
+        conn.commit()
+        conn.close()
+        return jsonify(ok=True)
+
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name", "")).strip()
+    if not name:
+        conn.close()
+        return jsonify(error="Plan name is required."), 400
+    try:
+        conn.execute(
+            """UPDATE cash_flow_plans
+               SET name = ?, version = version + 1,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (name[:100], plan_id),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return jsonify(error="A cash-flow plan with that name already exists."), 409
+    row = conn.execute(
+        "SELECT * FROM cash_flow_plans WHERE id = ?", (plan_id,)
+    ).fetchone()
+    result = _serialize_cash_flow_plan(row)
+    conn.close()
+    return jsonify(plan=result)
+
+
+@app.route("/api/cash-flow/items", methods=["GET", "POST"])
+def cash_flow_items():
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    if request.method == "GET":
+        plan = _cash_flow_plan_for_scope(conn, request.args.get("plan_id"))
+        if not plan:
+            conn.close()
+            return jsonify(error="Cash-flow plan not found."), 404
+        rows = conn.execute(
+            """SELECT * FROM cash_flow_items
+               WHERE plan_id = ?
+               ORDER BY kind, active DESC, name, id""",
+            (plan["id"],),
+        ).fetchall()
+        result = [_cash_flow_item_result(conn, row) for row in rows]
+        conn.close()
+        return jsonify(items=result)
+
+    data = request.get_json(silent=True) or {}
+    plan = _cash_flow_plan_for_scope(conn, data.get("plan_id"))
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    try:
+        item = _validate_cash_flow_item(data)
+    except ValueError as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+    cur = conn.execute(
+        """INSERT INTO cash_flow_items
+           (plan_id, kind, name, category, amount_cents, frequency,
+            start_date, end_date, due_date, pay_date, essential, tax_rate_pct,
+            annual_change_pct, notes, active)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            plan["id"],
+            item["kind"],
+            item["name"],
+            item["category"],
+            item["amount_cents"],
+            item["frequency"],
+            item["start_date"],
+            item["end_date"],
+            item["due_date"],
+            item["pay_date"],
+            item["essential"],
+            item["tax_rate_pct"],
+            item["annual_change_pct"],
+            item["notes"],
+            item["active"],
+        ),
+    )
+    _cash_flow_touch_plan(conn, plan["id"])
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM cash_flow_items WHERE id = ?", (cur.lastrowid,)
+    ).fetchone()
+    result = _cash_flow_item_result(conn, row)
+    conn.close()
+    return jsonify(item=result), 201
+
+
+@app.route("/api/cash-flow/items/<int:item_id>", methods=["PUT", "DELETE"])
+def cash_flow_item_detail(item_id):
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    row = conn.execute(
+        """SELECT i.*, p.scope_type, p.scope_id
+           FROM cash_flow_items i
+           JOIN cash_flow_plans p ON p.id = i.plan_id
+           WHERE i.id = ?""",
+        (item_id,),
+    ).fetchone()
+    scope_type, scope_id = _cash_flow_scope()
+    if (
+        not row
+        or row["scope_type"] != scope_type
+        or int(row["scope_id"]) != int(scope_id)
+    ):
+        conn.close()
+        return jsonify(error="Cash-flow item not found."), 404
+
+    if request.method == "DELETE":
+        conn.execute(
+            "DELETE FROM cash_flow_item_payments WHERE item_id = ?", (item_id,)
+        )
+        conn.execute(
+            "DELETE FROM cash_flow_month_overrides WHERE item_id = ?", (item_id,)
+        )
+        conn.execute("DELETE FROM cash_flow_items WHERE id = ?", (item_id,))
+        _cash_flow_touch_plan(conn, row["plan_id"])
+        conn.commit()
+        conn.close()
+        return jsonify(ok=True)
+
+    data = request.get_json(silent=True) or {}
+    try:
+        item = _validate_cash_flow_item(data)
+    except ValueError as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+    conn.execute(
+        """UPDATE cash_flow_items
+           SET kind = ?, name = ?, category = ?, amount_cents = ?,
+               frequency = ?, start_date = ?, end_date = ?, due_date = ?,
+               pay_date = ?, essential = ?, tax_rate_pct = ?,
+               annual_change_pct = ?, notes = ?, active = ?,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?""",
+        (
+            item["kind"],
+            item["name"],
+            item["category"],
+            item["amount_cents"],
+            item["frequency"],
+            item["start_date"],
+            item["end_date"],
+            item["due_date"],
+            item["pay_date"],
+            item["essential"],
+            item["tax_rate_pct"],
+            item["annual_change_pct"],
+            item["notes"],
+            item["active"],
+            item_id,
+        ),
+    )
+    _cash_flow_touch_plan(conn, row["plan_id"])
+    conn.commit()
+    updated = conn.execute(
+        "SELECT * FROM cash_flow_items WHERE id = ?", (item_id,)
+    ).fetchone()
+    result = _cash_flow_item_result(conn, updated)
+    conn.close()
+    return jsonify(item=result)
+
+
+@app.route("/api/cash-flow/items/<int:item_id>/move", methods=["POST"])
+def cash_flow_item_move(item_id):
+    """Move one expense or additional-income item to another profile."""
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    row = conn.execute(
+        """SELECT i.*, p.scope_type, p.scope_id
+           FROM cash_flow_items i
+           JOIN cash_flow_plans p ON p.id = i.plan_id
+           WHERE i.id = ?""",
+        (item_id,),
+    ).fetchone()
+    scope_type, scope_id = _cash_flow_scope()
+    if (
+        not row
+        or row["scope_type"] != scope_type
+        or int(row["scope_id"]) != int(scope_id)
+    ):
+        conn.close()
+        return jsonify(error="Cash-flow item not found."), 404
+
+    data = request.get_json(silent=True) or {}
+    target_scope_type = str(data.get("target_scope_type") or "").strip().lower()
+    target_scope_id_raw = data.get("target_scope_id")
+    if not target_scope_type and data.get("target_profile_id") not in (None, ""):
+        # Backward compatibility for clients that predate aggregate destinations.
+        target_scope_type = "profile"
+        target_scope_id_raw = data.get("target_profile_id")
+    if target_scope_type not in {"profile", "aggregate"}:
+        conn.close()
+        return jsonify(error="Choose a destination account."), 400
+    try:
+        target_scope_id = int(target_scope_id_raw)
+    except (TypeError, ValueError):
+        conn.close()
+        return jsonify(error="Choose a destination account."), 400
+    target_table = "profiles" if target_scope_type == "profile" else "aggregates"
+    target_scope = conn.execute(
+        f"SELECT id, name FROM {target_table} WHERE id = ?",
+        (target_scope_id,),
+    ).fetchone()
+    if not target_scope:
+        conn.close()
+        return jsonify(error="Destination account not found."), 404
+    if scope_type == target_scope_type and int(scope_id) == target_scope_id:
+        conn.close()
+        return jsonify(error="Choose a different destination account."), 400
+
+    source_plan_id = int(row["plan_id"])
+    target_plan = _get_or_create_default_cash_flow_plan(
+        conn, target_scope_type, target_scope_id
+    )
+    conn.execute(
+        """UPDATE cash_flow_items
+           SET plan_id = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?""",
+        (target_plan["id"], item_id),
+    )
+    _cash_flow_touch_plan(conn, source_plan_id)
+    _cash_flow_touch_plan(conn, target_plan["id"])
+    conn.commit()
+    updated = conn.execute(
+        "SELECT * FROM cash_flow_items WHERE id = ?", (item_id,)
+    ).fetchone()
+    result = _cash_flow_item_result(conn, updated)
+    target = {
+        "scope_type": target_scope_type,
+        "scope_id": int(target_scope["id"]),
+        "scope_name": target_scope["name"],
+        "profile_id": (
+            int(target_scope["id"]) if target_scope_type == "profile" else None
+        ),
+        "profile_name": (
+            target_scope["name"] if target_scope_type == "profile" else None
+        ),
+        "aggregate_id": (
+            int(target_scope["id"]) if target_scope_type == "aggregate" else None
+        ),
+        "aggregate_name": (
+            target_scope["name"] if target_scope_type == "aggregate" else None
+        ),
+        "plan_id": int(target_plan["id"]),
+        "plan_name": target_plan["name"],
+    }
+    conn.close()
+    return jsonify(ok=True, item=result, target=target)
+
+
+@app.route(
+    "/api/cash-flow/items/<int:item_id>/months/<month>",
+    methods=["PUT", "DELETE"],
+)
+def cash_flow_item_month_override(item_id, month):
+    try:
+        month = _parse_cash_flow_month(month).strftime("%Y-%m")
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    row = conn.execute(
+        """SELECT i.plan_id, p.scope_type, p.scope_id
+           FROM cash_flow_items i
+           JOIN cash_flow_plans p ON p.id = i.plan_id
+           WHERE i.id = ?""",
+        (item_id,),
+    ).fetchone()
+    scope_type, scope_id = _cash_flow_scope()
+    if (
+        not row
+        or row["scope_type"] != scope_type
+        or int(row["scope_id"]) != int(scope_id)
+    ):
+        conn.close()
+        return jsonify(error="Cash-flow item not found."), 404
+    if request.method == "DELETE":
+        conn.execute(
+            "DELETE FROM cash_flow_month_overrides WHERE item_id = ? AND month = ?",
+            (item_id, month),
+        )
+    else:
+        data = request.get_json(silent=True) or {}
+        amount_cents = None
+        if data.get("amount") not in (None, ""):
+            try:
+                amount_cents = _cash_flow_money_to_cents(data.get("amount"))
+            except ValueError as exc:
+                conn.close()
+                return jsonify(error=str(exc)), 400
+        conn.execute(
+            """INSERT INTO cash_flow_month_overrides
+               (item_id, month, amount_cents, excluded, notes)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(item_id, month) DO UPDATE SET
+                   amount_cents = excluded.amount_cents,
+                   excluded = excluded.excluded,
+                   notes = excluded.notes,
+                   updated_at = CURRENT_TIMESTAMP""",
+            (
+                item_id,
+                month,
+                amount_cents,
+                1 if data.get("excluded") else 0,
+                str(data.get("notes", "") or "")[:1000] or None,
+            ),
+        )
+    _cash_flow_touch_plan(conn, row["plan_id"])
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True)
+
+
+@app.route(
+    "/api/cash-flow/items/<int:item_id>/payments/<due_date>",
+    methods=["PUT"],
+)
+def cash_flow_item_payment(item_id, due_date):
+    """Toggle one due occurrence without tying it to the selected view month."""
+    try:
+        due_date = datetime.date.fromisoformat(str(due_date)).isoformat()
+    except (TypeError, ValueError):
+        return jsonify(error="Due date must use YYYY-MM-DD format."), 400
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    row = conn.execute(
+        """SELECT i.*, p.scope_type, p.scope_id
+           FROM cash_flow_items i
+           JOIN cash_flow_plans p ON p.id = i.plan_id
+           WHERE i.id = ?""",
+        (item_id,),
+    ).fetchone()
+    scope_type, scope_id = _cash_flow_scope()
+    if (
+        not row
+        or row["scope_type"] != scope_type
+        or int(row["scope_id"]) != int(scope_id)
+    ):
+        conn.close()
+        return jsonify(error="Cash-flow item not found."), 404
+    schedule = _next_cash_flow_bill(row)
+    if schedule["due_date"] != due_date:
+        conn.close()
+        return jsonify(error="This bill has rolled to a new due date. Refresh and try again."), 409
+    data = request.get_json(silent=True) or {}
+    if data.get("paid"):
+        conn.execute(
+            """INSERT INTO cash_flow_item_payments (item_id, due_date)
+               VALUES (?, ?)
+               ON CONFLICT(item_id, due_date) DO UPDATE SET
+                   paid_at = CURRENT_TIMESTAMP""",
+            (item_id, due_date),
+        )
+    else:
+        conn.execute(
+            """DELETE FROM cash_flow_item_payments
+               WHERE item_id = ? AND due_date = ?""",
+            (item_id, due_date),
+        )
+    _cash_flow_touch_plan(conn, row["plan_id"])
+    conn.commit()
+    updated = conn.execute(
+        "SELECT * FROM cash_flow_items WHERE id = ?", (item_id,)
+    ).fetchone()
+    result = _cash_flow_item_result(conn, updated)
+    conn.close()
+    return jsonify(ok=True, item=result)
+
+
+@app.route("/api/cash-flow/settings", methods=["GET", "PUT"])
+def cash_flow_settings():
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan_id = (
+        request.args.get("plan_id")
+        if request.method == "GET"
+        else (request.get_json(silent=True) or {}).get("plan_id")
+    )
+    plan = _cash_flow_plan_for_scope(conn, plan_id)
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    if request.method == "GET":
+        result = _cash_flow_settings_for_plan(conn, plan["id"])
+        conn.commit()
+        conn.close()
+        return jsonify(settings=result)
+
+    data = request.get_json(silent=True) or {}
+    try:
+        horizon = int(data.get("horizon_years", 20))
+        inflation = float(data.get("expense_inflation_pct", 3))
+        tax_rate = float(data.get("portfolio_tax_pct", 15))
+        starting_cash_cents = _cash_flow_money_to_cents(
+            data.get("starting_cash", 0), "Starting cash"
+        )
+    except (TypeError, ValueError) as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+    surplus_mode = str(data.get("surplus_mode", "reinvest")).lower()
+    if not 1 <= horizon <= 50:
+        conn.close()
+        return jsonify(error="Horizon must be between 1 and 50 years."), 400
+    if not -10 <= inflation <= 30:
+        conn.close()
+        return jsonify(error="Expense inflation must be between -10 and 30."), 400
+    if not 0 <= tax_rate <= 95:
+        conn.close()
+        return jsonify(error="Portfolio tax rate must be between 0 and 95."), 400
+    if surplus_mode not in {"cash", "reinvest"}:
+        conn.close()
+        return jsonify(error="Surplus mode must be cash or reinvest."), 400
+    conn.execute(
+        """INSERT INTO cash_flow_settings
+           (plan_id, horizon_years, expense_inflation_pct, portfolio_tax_pct,
+            starting_cash_cents, surplus_mode, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(plan_id) DO UPDATE SET
+               horizon_years = excluded.horizon_years,
+               expense_inflation_pct = excluded.expense_inflation_pct,
+               portfolio_tax_pct = excluded.portfolio_tax_pct,
+               starting_cash_cents = excluded.starting_cash_cents,
+               surplus_mode = excluded.surplus_mode,
+               updated_at = CURRENT_TIMESTAMP""",
+        (
+            plan["id"],
+            horizon,
+            inflation,
+            tax_rate,
+            starting_cash_cents,
+            surplus_mode,
+        ),
+    )
+    _cash_flow_touch_plan(conn, plan["id"])
+    conn.commit()
+    result = _cash_flow_settings_for_plan(conn, plan["id"])
+    conn.close()
+    return jsonify(settings=result)
+
+
+@app.route("/api/cash-flow/summary", methods=["GET"])
+def cash_flow_summary():
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan = _cash_flow_plan_for_scope(conn, request.args.get("plan_id"))
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    try:
+        month = _cash_flow_month_or_current(request.args.get("month"))
+    except ValueError as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+    settings = _cash_flow_settings_for_plan(conn, plan["id"])
+    series = _expand_cash_flow_plan(conn, plan["id"], month, 12)
+    current = series[0]
+    is_aggregate, profile_ids = get_profile_filter()
+    portfolio_profile_ids = _cash_profile_ids_for_read(
+        conn, is_aggregate, profile_ids
+    )
+    portfolio = _cash_flow_portfolio_snapshot(conn, portfolio_profile_ids)
+    portfolio_monthly_gross = portfolio["annual_income"] / 12.0
+    portfolio_monthly_net = portfolio_monthly_gross * (
+        1.0 - settings["portfolio_tax_pct"] / 100.0
+    )
+    total_spendable = portfolio_monthly_net + current["additional_income_net"]
+    gap = total_spendable - current["expenses"]
+    average_expenses = sum(row["expenses"] for row in series) / len(series)
+    average_income = sum(row["additional_income_net"] for row in series) / len(series)
+    result = {
+        **current,
+        "plan": _serialize_cash_flow_plan(plan),
+        "portfolio_value": portfolio["value"],
+        "portfolio_profile_count": portfolio["profile_count"],
+        "portfolio_annual_income": portfolio["annual_income"],
+        "portfolio_monthly_income_gross": round(portfolio_monthly_gross, 2),
+        "portfolio_monthly_income_net": round(portfolio_monthly_net, 2),
+        "total_spendable_income": round(total_spendable, 2),
+        "surplus_shortfall": round(gap, 2),
+        "coverage_ratio": (
+            round(total_spendable / current["expenses"], 4)
+            if current["expenses"] > 0
+            else None
+        ),
+        "covered": gap >= -0.005,
+        "normalized_monthly_expenses": round(average_expenses, 2),
+        "normalized_portfolio_required": round(
+            max(0.0, average_expenses - average_income), 2
+        ),
+    }
+    conn.commit()
+    conn.close()
+    return jsonify(summary=result)
+
+
+@app.route("/api/cash-flow/series", methods=["GET"])
+def cash_flow_series():
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan = _cash_flow_plan_for_scope(conn, request.args.get("plan_id"))
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    try:
+        start_month = _cash_flow_month_or_current(request.args.get("start_month"))
+        months = max(1, min(600, int(request.args.get("months", 12))))
+        series = _expand_cash_flow_plan(conn, plan["id"], start_month, months)
+    except (ValueError, TypeError) as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+    conn.commit()
+    conn.close()
+    return jsonify(
+        plan=_serialize_cash_flow_plan(plan),
+        start_month=start_month,
+        months=months,
+        series=series,
+    )
+
+
+@app.route("/api/cash-flow/simulate", methods=["POST"])
+def cash_flow_simulate():
+    data = request.get_json(silent=True) or {}
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan = _cash_flow_plan_for_scope(conn, data.get("plan_id"))
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    settings = _cash_flow_settings_for_plan(conn, plan["id"])
+    try:
+        start_month = _cash_flow_month_or_current(data.get("start_month"))
+        horizon = int(data.get("horizon_years", settings["horizon_years"]))
+    except (TypeError, ValueError) as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+    if not 1 <= horizon <= 50:
+        conn.close()
+        return jsonify(error="Horizon must be between 1 and 50 years."), 400
+
+    months = horizon * 12
+    series = _expand_cash_flow_plan(conn, plan["id"], start_month, months)
+    is_aggregate, profile_ids = get_profile_filter()
+    portfolio_profile_ids = _cash_profile_ids_for_read(
+        conn, is_aggregate, profile_ids
+    )
+    portfolio = _cash_flow_portfolio_snapshot(conn, portfolio_profile_ids)
+    results = []
+    for scenario in ("bullish", "neutral", "bearish"):
+        for include_income in (True, False):
+            results.append(
+                _simulate_cash_flow_sustainability(
+                    series,
+                    portfolio_value=portfolio["value"],
+                    annual_portfolio_income=portfolio["annual_income"],
+                    portfolio_holdings=portfolio["holdings"],
+                    portfolio_tax_pct=settings["portfolio_tax_pct"],
+                    starting_cash=settings["starting_cash"],
+                    surplus_mode=settings["surplus_mode"],
+                    scenario=scenario,
+                    include_additional_income=include_income,
+                )
+            )
+    scenario_assumptions = {
+        scenario: _cash_flow_scenario_assumptions(
+            portfolio["holdings"], scenario
+        )
+        for scenario in ("bullish", "neutral", "bearish")
+    }
+    portfolio_public = {
+        key: value for key, value in portfolio.items() if key != "holdings"
+    }
+    portfolio_public["distribution_yield_pct"] = round(
+        portfolio["annual_income"] / portfolio["value"] * 100.0, 2
+    ) if portfolio["value"] > 0 else 0.0
+    conn.commit()
+    conn.close()
+    return jsonify(
+        plan=_serialize_cash_flow_plan(plan),
+        settings=settings,
+        start_month=start_month,
+        horizon_years=horizon,
+        portfolio=portfolio_public,
+        scenario_assumptions=scenario_assumptions,
+        results=results,
+    )
+
+
 def _dividend_payment_profile_ids_for_read(conn, profile_ids):
     ids = []
     for pid in profile_ids or [1]:
@@ -297,15 +1157,27 @@ def _dividend_payment_profile_ids_for_read(conn, profile_ids):
 
 
 def _dividend_payment_totals_by_ticker(conn, profile_ids):
+    """Sum dividend_payments per ticker, scoped to the current holding lot.
+
+    A ticker can be sold and later re-bought in the same account. The
+    dividend_payments ledger keeps every historical payment, including ones
+    from before the current purchase_date. Joining against the live
+    all_account_info row and requiring payment_date >= purchase_date keeps
+    those pre-purchase payments from inflating total_divs_received (and thus
+    total_return) for a freshly (re)opened position.
+    """
     ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
     if not ids:
         return {}
     placeholders = ",".join("?" * len(ids))
     rows = conn.execute(
-        f"""SELECT ticker, COALESCE(SUM(amount), 0) AS total_divs_received
-            FROM dividend_payments
-            WHERE profile_id IN ({placeholders})
-            GROUP BY ticker""",
+        f"""SELECT dp.ticker, COALESCE(SUM(dp.amount), 0) AS total_divs_received
+            FROM dividend_payments dp
+            JOIN all_account_info a
+              ON a.ticker = dp.ticker AND a.profile_id = dp.profile_id
+            WHERE dp.profile_id IN ({placeholders})
+              AND (a.purchase_date IS NULL OR dp.payment_date >= a.purchase_date)
+            GROUP BY dp.ticker""",
         ids,
     ).fetchall()
     return {
@@ -327,6 +1199,84 @@ def _apply_dividend_payment_total_floor(rows, payment_totals):
             payment_total,
         )
     return rows
+
+
+def _cumulative_invested_cost_by_ticker(conn, profile_ids):
+    """Total out-of-pocket cash invested per ticker, from BUY transactions.
+
+    Used as the "original cost" denominator for paid-for-itself and total return.
+    total_divs_received is a LIFETIME figure (every dividend the ledger ever
+    recorded), but the current cost basis only reflects the shares still held.
+    When a position has been trimmed, dividing lifetime dividends by the residual
+    basis produces absurd percentages (a near-sold holding shows tens of
+    thousands of percent). The cumulative cash invested is the comparable
+    denominator. DRIP reinvestment buys are excluded so only out-of-pocket
+    capital counts toward "original cost".
+
+    A ticker can also be sold to zero and later re-bought as a fresh lot (e.g.
+    EGGY: sold down to zero in Sept 2025, re-bought 2026-06-29). BUY
+    transactions from that earlier, closed-out lot aren't capital behind the
+    current position, so — exactly like the dividend-payment floor above —
+    join against the live holding row and only count BUYs on/after its
+    purchase_date. Otherwise a freshly reopened position with zero dividends
+    could show a *lower* total return than price return (invested inflated
+    above the tiny fresh cost basis), which is never mathematically valid when
+    dividends are non-negative.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT t.ticker, COALESCE(SUM(t.shares * t.price_per_share), 0) AS invested
+            FROM transactions t
+            JOIN all_account_info a
+              ON a.ticker = t.ticker AND a.profile_id = t.profile_id
+            WHERE t.profile_id IN ({placeholders})
+              AND UPPER(t.transaction_type) = 'BUY'
+              AND COALESCE(t.notes, '') NOT LIKE '%DRIP%'
+              AND COALESCE(t.notes, '') NOT LIKE '%reinvest%'
+              AND (a.purchase_date IS NULL OR t.transaction_date >= a.purchase_date)
+            GROUP BY t.ticker""",
+        ids,
+    ).fetchall()
+    return {row["ticker"]: _num_or_zero(row["invested"]) for row in rows}
+
+
+def _realized_gains_by_ticker(conn, profile_ids):
+    """Sum realized gains per ticker, scoped to the current holding lot.
+
+    all_account_info.realized_gains is a running total accumulated across a
+    ticker+profile's ENTIRE transaction history by _rollup_transactions, with
+    no purchase_date scoping. For a position that was fully sold and later
+    re-bought (e.g. EGGY: closed out Sept 2025, re-bought 2026-06-29), that
+    total still includes gains/losses realized on the old, closed-out lot —
+    the same "old lot bleeds into new lot" issue already fixed above for
+    dividend payments and invested cost. Recompute from the per-transaction
+    realized_gain ledger instead (already excludes transfers — see
+    _is_transfer_txn), joined to the live holding row and scoped to
+    transaction_date >= purchase_date, so a freshly reopened position doesn't
+    inherit a prior lot's trading history. It's also, incidentally, the fix
+    for the 'Owner' aggregate row's own realized_gains column always reading
+    0 (never synced from its real sub-accounts) — this sums the sub-accounts
+    directly instead of trusting that column.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT t.ticker, COALESCE(SUM(t.realized_gain), 0) AS realized
+            FROM transactions t
+            JOIN all_account_info a
+              ON a.ticker = t.ticker AND a.profile_id = t.profile_id
+            WHERE t.profile_id IN ({placeholders})
+              AND t.realized_gain IS NOT NULL
+              AND (a.purchase_date IS NULL OR t.transaction_date >= a.purchase_date)
+            GROUP BY t.ticker""",
+        ids,
+    ).fetchall()
+    return {row["ticker"]: _num_or_zero(row["realized"]) for row in rows}
 
 
 def _resolve_aggregate_profile(ticker, profile_ids):
@@ -483,10 +1433,14 @@ def _basis_total_expr(alias="a"):
     else:
         price = f"COALESCE({prefix}original_price_paid, {prefix}price_paid, {prefix}broker_price_paid)"
         stored = f"COALESCE({prefix}original_purchase_value, {prefix}purchase_value, {prefix}broker_purchase_value)"
-    # Prefer quantity x per-share basis: the stored *_purchase_value total is
-    # frozen at first import and goes stale when the share count later changes.
-    return (f"CASE WHEN {price} IS NOT NULL AND {prefix}quantity IS NOT NULL "
-            f"THEN ROUND({prefix}quantity * {price}, 2) ELSE {stored} END")
+    # The explicit total is authoritative. It can legitimately differ from
+    # quantity x average price when the displayed share count includes DRIP
+    # shares or when a broker supplies an adjusted total with more precision.
+    # Import and transaction rollups refresh the stored total after position
+    # changes; derive it only for legacy/incomplete rows where no total exists.
+    return (f"COALESCE({stored}, "
+            f"CASE WHEN {price} IS NOT NULL AND {prefix}quantity IS NOT NULL "
+            f"THEN ROUND({prefix}quantity * {price}, 2) END)")
 
 
 def _first_not_none(*values):
@@ -498,11 +1452,15 @@ def _first_not_none(*values):
 
 def _basis_fallback_total(row, mode=None):
     mode = mode or _basis_mode()
-    # The per-share basis price is refreshed to track the current position, but
-    # the stored *_purchase_value total is frozen at first import and goes stale
-    # when the share count later changes (e.g. partial sells), producing a wrong
-    # gain/loss. Derive the total from quantity x per-share price when possible,
-    # falling back to the stored total only when the price is unavailable.
+    if mode == "broker_adjusted":
+        stored = _first_not_none(row.get("broker_purchase_value"), row.get("purchase_value"), row.get("original_purchase_value"))
+    else:
+        stored = _first_not_none(row.get("original_purchase_value"), row.get("purchase_value"), row.get("broker_purchase_value"))
+    if stored is not None:
+        return stored
+
+    # Legacy/incomplete row fallback: reconstruct a total only when no explicit
+    # cost-basis total is available in any basis field.
     price = _basis_fallback_price(row, mode)
     qty = row.get("quantity")
     if price is not None and qty is not None:
@@ -510,9 +1468,7 @@ def _basis_fallback_total(row, mode=None):
             return round(float(qty) * float(price), 2)
         except (TypeError, ValueError):
             pass
-    if mode == "broker_adjusted":
-        return _first_not_none(row.get("broker_purchase_value"), row.get("purchase_value"), row.get("original_purchase_value"))
-    return _first_not_none(row.get("original_purchase_value"), row.get("purchase_value"), row.get("broker_purchase_value"))
+    return None
 
 
 def _basis_fallback_price(row, mode=None):
@@ -548,7 +1504,14 @@ def _ensure_basis_columns(conn):
     conn.commit()
 
 
-def _apply_basis_mode_to_holdings(results):
+# Above this dividends/basis multiple, a holding with no buy-transaction history is
+# treated as a trimmed-but-untracked position and its paid-for-itself is shown as
+# unknown rather than an absurd percentage. Legitimate long-held high-yield funds
+# can exceed 100%, so this is set well clear of plausible real recovery ratios.
+_PFI_NO_TXN_MAX_RATIO = 10.0  # i.e. 1000%
+
+
+def _apply_basis_mode_to_holdings(results, invested_by_ticker=None, realized_by_ticker=None):
     """Expose selected basis through the legacy price_paid/purchase_value fields."""
     mode = _basis_mode()
     for r in results:
@@ -570,10 +1533,48 @@ def _apply_basis_mode_to_holdings(results):
             r["gain_or_loss"] = gain
             r["gain_or_loss_percentage"] = gain_pct
             r["percent_change"] = gain_pct
-        if cost > 0 and total_divs is not None:
-            r["paid_for_itself"] = round(float(total_divs) / cost, 6)
+        # Paid-for-itself compares LIFETIME dividends to ORIGINAL cost. For a
+        # trimmed position `cost` is only the residual basis, so prefer the
+        # cumulative cash invested when it is larger (it never shrinks when shares
+        # are sold). Falls back to current basis when no buy history is available.
+        pfi_cost = cost
+        invested = _num_or_zero(invested_by_ticker.get(r.get("ticker"))) if invested_by_ticker else 0.0
+        if invested > pfi_cost:
+            pfi_cost = invested
+        divs_unreliable = (
+            invested == 0 and total_divs is not None and pfi_cost > 0
+            and float(total_divs) > pfi_cost * _PFI_NO_TXN_MAX_RATIO
+        )
+        if pfi_cost > 0 and total_divs is not None:
+            # Guard: with no buy history (invested == 0) we can't reconstruct the
+            # original cost of a trimmed position, so lifetime dividends would be
+            # divided by a tiny residual basis. When that ratio is implausibly high
+            # the number is a data artifact, not a real recovery %, so surface it as
+            # unknown (—) instead of a fabricated value. Import the account's
+            # transactions to restore the true figure.
+            if divs_unreliable:
+                r["paid_for_itself"] = None
+            else:
+                r["paid_for_itself"] = round(float(total_divs) / pfi_cost, 6)
         if cost > 0 and annual is not None:
             r["annual_yield_on_cost"] = round(float(annual) / cost, 6)
+        # Total return (price change + lifetime dividends) has the exact same
+        # blowup risk as paid-for-itself: FEPI showed 5255% total return because
+        # its lifetime dividends were earned on far more shares than the 0.25
+        # remaining after a big trim, divided by that tiny residual basis. Reuse
+        # the same invested-cost floor and unreliable-dividend guard here so a
+        # trimmed position's total return is judged against the capital that
+        # actually earned those dividends, consistent with paid-for-itself.
+        r["total_return_basis"] = round(pfi_cost, 2) if pfi_cost > 0 else None
+        r["total_return_divs_component"] = 0.0 if divs_unreliable else _num_or_zero(total_divs)
+        # A trimmed (not fully sold) position's unrealized gain/loss (`gain`
+        # above) only reflects the shares still held. Without also counting
+        # gains/losses already realized on the shares that were sold, a
+        # zero-dividend trimmed position can show a total return that doesn't
+        # match its price return even though nothing else changed hands.
+        r["total_return_realized_component"] = _num_or_zero(
+            realized_by_ticker.get(r.get("ticker")) if realized_by_ticker else 0.0
+        )
     return results
 
 
@@ -690,6 +1691,35 @@ def _set_profile_positions_managed(profile_id, managed, conn=None):
     finally:
         if close:
             conn.close()
+
+
+def _set_profile_cash_value(conn, profile_id, cash_value, source="positions_import"):
+    """Persist a broker-reported cash balance when the schema supports it."""
+    profile_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()
+    }
+    if "cash_value" not in profile_cols:
+        return
+    conn.execute(
+        """UPDATE profiles
+           SET cash_value = ?, cash_source = ?, cash_updated_at = ?
+           WHERE id = ?""",
+        (
+            round(float(cash_value or 0), 2),
+            source,
+            datetime.datetime.now().isoformat(),
+            profile_id,
+        ),
+    )
+
+
+def _cash_profile_ids_for_read(conn, is_aggregate, profile_ids):
+    """Resolve the source profiles whose cash belongs in the active view."""
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or [1])))
+    if not is_aggregate and ids == [1]:
+        source_ids = _get_owner_source_profile_ids(conn)
+        return source_ids or ids
+    return ids
 
 
 def _get_owner_source_profile_ids(conn):
@@ -1208,6 +2238,7 @@ def _optional_float(value):
 def _prepare_manual_holding_payload(data, existing=None):
     """Recalculate direct holding value fields from the final edited inputs."""
     payload = dict(data or {})
+    basis_mode = _basis_mode()
 
     def final_value(field):
         if field in payload:
@@ -1253,13 +2284,17 @@ def _prepare_manual_holding_payload(data, existing=None):
         payload["paid_for_itself"] = round(total_divs / purchase_value, 6) if purchase_value > 0 else 0
 
     if "price_paid" in payload:
-        payload["original_price_paid"] = payload.get("price_paid")
-        if existing is None or final_value("broker_price_paid") is None:
-            payload["broker_price_paid"] = payload.get("price_paid")
+        selected_price_field = "broker_price_paid" if basis_mode == "broker_adjusted" else "original_price_paid"
+        fallback_price_field = "original_price_paid" if basis_mode == "broker_adjusted" else "broker_price_paid"
+        payload[selected_price_field] = payload.get("price_paid")
+        if existing is None or final_value(fallback_price_field) is None:
+            payload[fallback_price_field] = payload.get("price_paid")
     if "purchase_value" in payload:
-        payload["original_purchase_value"] = payload.get("purchase_value")
-        if existing is None or final_value("broker_purchase_value") is None:
-            payload["broker_purchase_value"] = payload.get("purchase_value")
+        selected_total_field = "broker_purchase_value" if basis_mode == "broker_adjusted" else "original_purchase_value"
+        fallback_total_field = "original_purchase_value" if basis_mode == "broker_adjusted" else "broker_purchase_value"
+        payload[selected_total_field] = payload.get("purchase_value")
+        if existing is None or final_value(fallback_total_field) is None:
+            payload[fallback_total_field] = payload.get("purchase_value")
 
     return payload
 
@@ -1388,13 +2423,20 @@ def _assign_position_category(conn, profile_id, ticker, category_name):
         )
         category_id = cur.lastrowid
 
+    _replace_ticker_category(conn, profile_id, ticker, category_id)
+
+
+def _replace_ticker_category(conn, profile_id, ticker, category_id, subcategory_id=None):
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return
     conn.execute(
         "DELETE FROM ticker_categories WHERE ticker = ? AND profile_id = ?",
         (ticker, profile_id),
     )
     conn.execute(
-        "INSERT INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
-        (ticker, category_id, profile_id),
+        "INSERT INTO ticker_categories (ticker, category_id, subcategory_id, profile_id) VALUES (?, ?, ?, ?)",
+        (ticker, category_id, subcategory_id, profile_id),
     )
 
 
@@ -1656,6 +2698,7 @@ def _clear_profile_data(conn, pid):
         "drip_redirects", "swap_candidates", "ticker_categories",
     ]:
         conn.execute(f"DELETE FROM {table} WHERE profile_id = ?", (pid,))
+    _set_profile_cash_value(conn, pid, 0, source="profile_cleared")
 
 
 def _delete_profile_ticker_records(conn, profile_id, ticker, include_transactions=False):
@@ -1710,8 +2753,9 @@ def profiles_summary():
     conn = get_connection()
     rows = conn.execute("""
         SELECT p.id, p.name, p.broker_source, p.created_at, p.include_in_owner,
+               COALESCE(p.cash_value, 0) AS cash_value,
                COUNT(a.ticker) as holdings_count,
-               COALESCE(SUM(a.current_value), 0) as total_value
+               COALESCE(SUM(a.current_value), 0) + COALESCE(p.cash_value, 0) as total_value
         FROM profiles p
         LEFT JOIN all_account_info a ON p.id = a.profile_id
         GROUP BY p.id
@@ -2705,6 +3749,7 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
                     original_basis_skipped += 1
                     if len(original_basis_mismatches) < 10:
                         original_basis_mismatches.append(basis_result)
+                _sync_preserved_position_purchase_date(ticker, profile_id, conn)
                 _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
 
         current_year = str(datetime.date.today().year)
@@ -3018,6 +4063,15 @@ def _import_positions(parsed, profile_id, nav_date=None):
             # while preserving imported/manual values for positions-only files.
             _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
 
+        summary = parsed.get("summary") or {}
+        if "cash" in summary:
+            _set_profile_cash_value(
+                conn,
+                profile_id,
+                summary.get("cash") or 0,
+                source=parsed.get("source_format") or "positions_import",
+            )
+
         conn.commit()
 
         # Run normalize passes
@@ -3042,7 +4096,12 @@ def _record_positions_nav_only(parsed, profile_id, nav_date):
     """Record NAV from a positions file without changing current holdings."""
     if not nav_date:
         raise ValueError("NAV snapshot date is required for NAV-only imports.")
-    total_value = round(sum(float(pos.get("current_value") or 0) for pos in parsed.get("positions", [])), 2)
+    positions_value = sum(
+        float(pos.get("current_value") or 0)
+        for pos in parsed.get("positions", [])
+    )
+    cash_value = float((parsed.get("summary") or {}).get("cash") or 0)
+    total_value = round(positions_value + cash_value, 2)
     if total_value <= 0:
         raise ValueError("No positive position value found to record.")
     conn = get_connection()
@@ -3334,6 +4393,7 @@ def api_import_transactions():
                     original_basis_skipped += 1
                     if len(original_basis_mismatches) < 10:
                         original_basis_mismatches.append(basis_result)
+                _sync_preserved_position_purchase_date(ticker, profile_id, conn)
                 # Broker-managed quantities stay put, but surface the reinvested
                 # share/cash totals from the freshly imported [DRIP] buys.
                 _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
@@ -3485,6 +4545,45 @@ def api_nav_history():
             rows = conn.execute(query, params).fetchall()
             rows = trim_incompatible_position_history(rows, profile_id, conn)
             return jsonify(history_payload(rows))
+    finally:
+        conn.close()
+
+
+@app.route("/api/portfolio-value", methods=["GET"])
+def api_portfolio_value():
+    """Return holdings, cash, and total account value for the active view."""
+    is_aggregate, profile_ids = get_profile_filter()
+    conn = get_connection()
+    try:
+        placeholders = ",".join("?" * len(profile_ids))
+        holdings_row = conn.execute(
+            f"""SELECT COALESCE(SUM(current_value), 0)
+                FROM all_account_info
+                WHERE profile_id IN ({placeholders}) AND quantity > 0""",
+            profile_ids,
+        ).fetchone()
+        holdings_value = float(holdings_row[0] if holdings_row else 0)
+
+        cash_profile_ids = _cash_profile_ids_for_read(conn, is_aggregate, profile_ids)
+        cash_placeholders = ",".join("?" * len(cash_profile_ids))
+        profile_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()
+        }
+        cash_value = 0.0
+        if "cash_value" in profile_cols:
+            cash_row = conn.execute(
+                f"""SELECT COALESCE(SUM(cash_value), 0)
+                    FROM profiles
+                    WHERE id IN ({cash_placeholders})""",
+                cash_profile_ids,
+            ).fetchone()
+            cash_value = float(cash_row[0] if cash_row else 0)
+
+        return jsonify({
+            "holdings_value": round(holdings_value, 2),
+            "cash_value": round(cash_value, 2),
+            "account_value": round(holdings_value + cash_value, 2),
+        })
     finally:
         conn.close()
 
@@ -7197,6 +8296,92 @@ def _reinvest_history(ticker):
 
 # ── Refresh Market Data ─────────────────────────────────────────────────────────
 
+def _portfolio_daily_price_change(
+    holding_map,
+    close_history,
+    profile_ids,
+    account_current_value=None,
+):
+    """Aggregate the latest session's price move using current share counts.
+
+    When the full account value is known, use it for the percentage denominator
+    so idle cash and temporarily uncovered holdings do not overstate the return.
+    """
+    included_profiles = set(profile_ids or [])
+    current_value = 0.0
+    previous_value = 0.0
+    holdings_total = 0
+    holdings_covered = 0
+    as_of_dates = []
+    previous_dates = []
+
+    for (profile_id, ticker), holding in holding_map.items():
+        if profile_id not in included_profiles:
+            continue
+        try:
+            quantity = float(holding.get("qty") or 0)
+        except (TypeError, ValueError):
+            continue
+        if quantity <= 0:
+            continue
+
+        holdings_total += 1
+        series = close_history.get(ticker)
+        if series is None:
+            continue
+        try:
+            prices = series.dropna()
+            if len(prices) < 2:
+                continue
+            latest_price = float(prices.iloc[-1])
+            previous_price = float(prices.iloc[-2])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if latest_price <= 0 or previous_price <= 0:
+            continue
+
+        holdings_covered += 1
+        current_value += quantity * latest_price
+        previous_value += quantity * previous_price
+        try:
+            as_of_dates.append(pd.Timestamp(prices.index[-1]).date().isoformat())
+            previous_dates.append(pd.Timestamp(prices.index[-2]).date().isoformat())
+        except (TypeError, ValueError):
+            pass
+
+    if holdings_covered == 0 or previous_value <= 0:
+        return None
+
+    amount = current_value - previous_value
+    account_previous_value = None
+    percent_base = previous_value
+    try:
+        full_current_value = float(account_current_value)
+        if full_current_value > 0:
+            account_previous_value = full_current_value - amount
+            if account_previous_value > 0:
+                percent_base = account_previous_value
+    except (TypeError, ValueError):
+        full_current_value = None
+
+    return {
+        "amount": round(amount, 2),
+        "percent": round((amount / percent_base) * 100, 4),
+        "current_value": round(current_value, 2),
+        "previous_value": round(previous_value, 2),
+        "account_current_value": round(full_current_value, 2) if full_current_value else None,
+        "account_previous_value": (
+            round(account_previous_value, 2)
+            if account_previous_value is not None
+            else None
+        ),
+        "holdings_covered": holdings_covered,
+        "holdings_total": holdings_total,
+        "as_of_date": max(as_of_dates) if as_of_dates else None,
+        "previous_date": max(previous_dates) if previous_dates else None,
+    }
+
+
 @app.route("/api/refresh", methods=["POST"])
 def refresh_market_data():
     """Update current price, div/share, ex-div date, and frequency for all holdings from Yahoo Finance."""
@@ -7247,6 +8432,7 @@ def refresh_market_data():
             "updated": 0,
             "dividend_updates": 0,
             "dividend_update_accounts": dividend_update_accounts,
+            "daily_change": None,
             "refresh_date": _dt.now().date().isoformat(),
             "message": "No holdings to refresh",
         })
@@ -7948,6 +9134,7 @@ def refresh_market_data():
                     dividend_updates += 1
                     dividend_updates_by_profile[pid] = dividend_updates_by_profile.get(pid, 0) + 1
                 updated_pids.add(pid)
+            h["qty"] = qty
 
     for pid, distributions in distributions_today_by_profile.items():
         for item in distributions:
@@ -8011,6 +9198,29 @@ def refresh_market_data():
         populate_holdings(pid)
         populate_dividends(pid)
 
+    placeholders = ",".join("?" * len(source_pids))
+    account_value_row = conn.execute(
+        f"""SELECT
+                COALESCE((
+                    SELECT SUM(current_value)
+                    FROM all_account_info
+                    WHERE profile_id IN ({placeholders}) AND quantity > 0
+                ), 0)
+                +
+                COALESCE((
+                    SELECT SUM(cash_value)
+                    FROM profiles
+                    WHERE id IN ({placeholders})
+                ), 0)""",
+        [*source_pids, *source_pids],
+    ).fetchone()
+    account_current_value = float(account_value_row[0] if account_value_row else 0)
+    daily_change = _portfolio_daily_price_change(
+        holding_map,
+        close_history,
+        source_pids,
+        account_current_value=account_current_value,
+    )
     conn.close()
     _clear_dividend_event_caches()
 
@@ -8050,6 +9260,7 @@ def refresh_market_data():
         "updated": updated,
         "dividend_updates": dividend_updates,
         "dividend_update_accounts": dividend_update_accounts,
+        "daily_change": daily_change,
         "refresh_date": refresh_date.isoformat(),
         "message": msg,
     })
@@ -8707,7 +9918,11 @@ def list_holdings():
         results,
         _dividend_payment_totals_by_ticker(conn, payment_profile_ids),
     )
-    _apply_basis_mode_to_holdings(results)
+    _apply_basis_mode_to_holdings(
+        results,
+        _cumulative_invested_cost_by_ticker(conn, payment_profile_ids),
+        _realized_gains_by_ticker(conn, payment_profile_ids),
+    )
     _apply_holding_display_quantities(results)
 
     # Single-profile reads return all_account_info.* verbatim, so a stale
@@ -8897,10 +10112,7 @@ def add_holding():
             (cat_name, profile_id),
         ).fetchone()
         if cat_row:
-            conn.execute(
-                "INSERT OR IGNORE INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
-                (ticker, cat_row["id"], profile_id),
-            )
+            _replace_ticker_category(conn, profile_id, ticker, cat_row["id"])
 
     _recompute_position_income_fields(conn, profile_id, ticker)
     conn.commit()
@@ -8929,7 +10141,7 @@ def update_holding(ticker):
     existing = conn.execute(
         "SELECT quantity, price_paid, current_price, purchase_value, current_value, "
         "       total_divs_received, estim_payment_per_year, broker_price_paid, "
-        "       broker_purchase_value "
+        "       broker_purchase_value, original_price_paid, original_purchase_value "
         "FROM all_account_info WHERE ticker = ? AND profile_id = ?",
         (ticker, profile_id),
     ).fetchone()
@@ -8989,10 +10201,7 @@ def update_holding(ticker):
                 (cat_name, profile_id),
             ).fetchone()
             if cat_row:
-                conn.execute(
-                    "INSERT INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
-                    (ticker, cat_row["id"], profile_id),
-                )
+                _replace_ticker_category(conn, profile_id, ticker, cat_row["id"])
 
     previous_quantity = existing["quantity"] if isinstance(existing, dict) else existing[0]
     previous_annual_income = existing["estim_payment_per_year"] if isinstance(existing, dict) else existing[6]
@@ -9201,10 +10410,22 @@ def _import_as_transactions(profile_id, pre_snapshot):
     conn.close()
 
 
+def _is_transfer_txn(notes):
+    """True for inter-account/inter-broker transfers (ACAT, TDA internal transfer, etc.).
+
+    These move shares between accounts at price_per_share=0 with a bracketed
+    '[Transfer in]' / '[Transfer out]' notes tag — no real sale occurred.
+    Treating a transfer-out as an ordinary $0 SELL records a fake realized
+    loss equal to the entire cost basis of the transferred shares, which
+    corrupts realized_gains (and anything built on it, like total return).
+    """
+    return bool(notes) and "[transfer" in str(notes).lower()
+
+
 def _refresh_transaction_realized_gains(ticker, profile_id, conn):
     """Recompute realized gains from transactions without changing holdings."""
     rows = conn.execute(
-        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
+        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date, notes "
         "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
         (ticker, profile_id),
     ).fetchall()
@@ -9230,6 +10451,7 @@ def _refresh_transaction_realized_gains(ticker, profile_id, conn):
         price = _val(r, "price_per_share", 3) or 0
         fees = _val(r, "fees", 4) or 0
         tdate = _val(r, "transaction_date", 5)
+        notes = _val(r, "notes", 6)
 
         if txn_type == "BUY":
             if share_deficit > 1e-9:
@@ -9237,6 +10459,13 @@ def _refresh_transaction_realized_gains(ticker, profile_id, conn):
                 share_deficit -= covered
                 shares -= covered
             _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id, txn_date=tdate)
+            conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
+        elif _is_transfer_txn(notes):
+            # Shares moved accounts, not sold: still consume the lots so the
+            # remaining queue is accurate for later transactions, but record
+            # no realized gain/loss.
+            _, sell_remaining = _consume_sell_lots(lots, shares, alloc_map.get(txn_id))
+            share_deficit += sell_remaining
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
         else:
             sell_proceeds = (shares * price) - fees
@@ -9250,6 +10479,85 @@ def _refresh_transaction_realized_gains(ticker, profile_id, conn):
                 "UPDATE transactions SET realized_gain = ? WHERE id = ?",
                 (round(sell_proceeds - cost_of_sold, 2), txn_id),
             )
+
+
+def _sync_preserved_position_purchase_date(ticker, profile_id, conn):
+    """Sync a broker-managed position to the earliest transaction lot still open.
+
+    Transaction imports can be layered onto a broker position snapshot without
+    changing the broker-reported quantity. When an older lot has been fully
+    sold, the position's purchase date should advance to the earliest remaining
+    BUY lot even though the rest of the holding row is intentionally preserved.
+    """
+    holding = conn.execute(
+        "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    if not holding:
+        return None
+
+    rows = conn.execute(
+        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
+        "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
+        (ticker, profile_id),
+    ).fetchall()
+    if not rows:
+        return None
+
+    def _val(row, key, index):
+        return row[key] if isinstance(row, dict) else row[index]
+
+    sell_ids = [
+        _val(row, "id", 0)
+        for row in rows
+        if (_val(row, "transaction_type", 1) or "BUY").upper() == "SELL"
+    ]
+    alloc_map = _load_lot_alloc_map(conn, sell_ids)
+    lots = []
+    share_deficit = 0.0
+
+    for row in rows:
+        txn_id = _val(row, "id", 0)
+        txn_type = (_val(row, "transaction_type", 1) or "BUY").upper()
+        txn_shares = abs(float(_val(row, "shares", 2) or 0))
+        price = _val(row, "price_per_share", 3) or 0
+        fees = _val(row, "fees", 4) or 0
+        txn_date = _val(row, "transaction_date", 5)
+
+        if txn_type == "BUY":
+            if share_deficit > 1e-9:
+                covered = min(share_deficit, txn_shares)
+                share_deficit -= covered
+                txn_shares -= covered
+            _apply_buy_to_lots(
+                lots,
+                txn_shares,
+                price,
+                fees,
+                txn_id=txn_id,
+                txn_date=txn_date,
+            )
+        else:
+            _, sell_remaining = _consume_sell_lots(
+                lots,
+                txn_shares,
+                alloc_map.get(txn_id),
+            )
+            share_deficit += sell_remaining
+
+    open_dates = [
+        lot.get("date")
+        for lot in lots
+        if float(lot.get("shares") or 0) > 1e-9 and lot.get("date")
+    ]
+    earliest_open_buy = min(open_dates) if open_dates else None
+    if earliest_open_buy:
+        conn.execute(
+            "UPDATE all_account_info SET purchase_date = ? "
+            "WHERE ticker = ? AND profile_id = ?",
+            (earliest_open_buy, ticker, profile_id),
+        )
+    return earliest_open_buy
 
 
 def _basis_share_tolerance(expected_shares):
@@ -9439,7 +10747,7 @@ def _rollup_transactions(ticker, profile_id, conn):
     """
     _ensure_basis_columns(conn)
     rows = conn.execute(
-        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
+        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date, notes "
         "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
         (ticker, profile_id),
     ).fetchall()
@@ -9481,6 +10789,7 @@ def _rollup_transactions(ticker, profile_id, conn):
         price = _val(r, "price_per_share", 3) or 0
         fees = _val(r, "fees", 4) or 0
         tdate = _val(r, "transaction_date", 5)
+        notes = _val(r, "notes", 6)
 
         if txn_type == "BUY":
             if share_deficit > 1e-9:
@@ -9491,6 +10800,13 @@ def _rollup_transactions(ticker, profile_id, conn):
             if shares > 1e-9 and tdate and (earliest_buy is None or tdate < earliest_buy):
                 earliest_buy = tdate
             # Clear any realized_gain on BUY rows
+            conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
+        elif _is_transfer_txn(notes):
+            # Shares moved accounts, not sold: still consume the lots so the
+            # remaining queue (and thus quantity/cost basis) stays accurate,
+            # but don't record a realized gain/loss for a non-economic event.
+            _, sell_remaining = _consume_sell_lots(lots, shares, alloc_map.get(txn_id))
+            share_deficit += sell_remaining
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
         else:  # SELL
             sell_proceeds = (shares * price) - fees  # fees reduce proceeds
@@ -10001,10 +11317,7 @@ def add_transaction(ticker):
             ).fetchone()
             if cat_row:
                 cat_id = cat_row["id"] if isinstance(cat_row, dict) else cat_row[0]
-                conn.execute(
-                    "INSERT OR IGNORE INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
-                    (ticker, cat_id, profile_id),
-                )
+                _replace_ticker_category(conn, profile_id, ticker, cat_id)
         conn.commit()
     else:
         # Auto-seed existing holding's current data as the first transaction
@@ -10701,7 +12014,11 @@ def _export_profile_data(conn, profile_id):
         cat_map.setdefault(cr["ticker"], []).append(cr["category_name"])
 
     raw_rows = rows_to_dicts(rows)
-    _apply_basis_mode_to_holdings(raw_rows)
+    _apply_basis_mode_to_holdings(
+        raw_rows,
+        _cumulative_invested_cost_by_ticker(conn, [profile_id]),
+        _realized_gains_by_ticker(conn, [profile_id]),
+    )
 
     out_rows = []
     for row in raw_rows:
@@ -11889,8 +13206,13 @@ def portfolio_summary_data():
     is_agg, pids = get_profile_filter()
     conn = get_connection()
     placeholders = ",".join("?" * len(pids))
+    # Gate on actually-held market value, NOT cost basis. Grades/beta/deltas are
+    # derived purely from market price history, so a real position with a missing
+    # cost basis (e.g. a broker import that left purchase_value = 0, like QQQI /
+    # BTCI in some IRA accounts) must still be graded — keying on purchase_value
+    # would silently drop it from the ticker set and blank its risk columns.
     rows = conn.execute(
-        f"SELECT ticker, SUM(current_value) as current_value FROM all_account_info WHERE profile_id IN ({placeholders}) AND purchase_value > 0 AND quantity > 0 GROUP BY ticker",
+        f"SELECT ticker, SUM(current_value) as current_value FROM all_account_info WHERE profile_id IN ({placeholders}) AND quantity > 0 AND current_value > 0 GROUP BY ticker",
         pids,
     ).fetchall()
     conn.close()
@@ -11969,16 +13291,21 @@ def portfolio_summary_data():
     ticker_grades = {}
     ticker_risk = {}
     available = []
-    for t in tickers:
-        if t not in close.columns:
+
+    def _blank_risk():
+        return {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
+
+    def _compute_ticker_metrics(t, tc):
+        """Grade + best-fit beta/deltas for one ticker's close series.
+
+        Returns True when the ticker priced well enough to grade (so it can join
+        the portfolio-level regression), False otherwise. Always populates
+        ticker_grades[t] and ticker_risk[t].
+        """
+        if tc is None or len(tc) < 30:
             ticker_grades[t] = {"grade": "N/A", "score": None}
-            ticker_risk[t] = {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
-            continue
-        tc = close[t].dropna()
-        if len(tc) < 30:
-            ticker_grades[t] = {"grade": "N/A", "score": None}
-            ticker_risk[t] = {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
-            continue
+            ticker_risk[t] = _blank_risk()
+            return False
         try:
             tr = tc.pct_change().dropna()
             score, *_ = ticker_score(tc, tr, bench_ret)
@@ -11995,10 +13322,54 @@ def portfolio_summary_data():
                 "delta_up": delta_up,
                 "delta_down": delta_down,
             }
-            available.append(t)
+            return True
         except Exception:
             ticker_grades[t] = {"grade": "N/A", "score": None}
-            ticker_risk[t] = {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
+            ticker_risk[t] = _blank_risk()
+            return False
+
+    for t in tickers:
+        tc = close[t].dropna() if t in close.columns else None
+        if _compute_ticker_metrics(t, tc):
+            available.append(t)
+
+    # Recovery pass: yfinance silently drops the occasional single symbol from a
+    # batch download, leaving that ticker with no price column and a blank
+    # beta/delta row — which then gets cached for the full TTL even though the
+    # rest of the portfolio graded fine. Re-fetch just the missing symbols
+    # individually (rare, so cheap) and recompute before we build the response.
+    missing = [t for t in tickers if t not in close.columns]
+    for t in missing:
+        try:
+            r = _chunked_yf_download(t, period="1y", auto_adjust=True, progress=False, threads=False)
+            if r is None or r.empty:
+                continue
+            if isinstance(r.columns, pd.MultiIndex):
+                series = r["Close"].iloc[:, 0] if "Close" in r.columns.get_level_values(0) else None
+            else:
+                series = r["Close"] if "Close" in r.columns else None
+            if series is None:
+                continue
+            series = pd.to_numeric(series, errors="coerce").dropna()
+            if series.empty:
+                continue
+            close[t] = series
+            if _compute_ticker_metrics(t, close[t].dropna()) and t not in available:
+                available.append(t)
+        except Exception:
+            continue
+
+    # Safety net: if a ticker still came back blank (re-fetch also failed, or it
+    # genuinely lacks enough history right now), reuse the last cached good beta
+    # row rather than reverting a previously-computed value to "—". Market betas
+    # move slowly, so a slightly stale row beats a blank one.
+    if cached:
+        cached_risk = cached.get("ticker_risk", {}) or {}
+        for t in tickers:
+            if ticker_risk.get(t, {}).get("beta") is None:
+                prev = cached_risk.get(t)
+                if prev and prev.get("beta") is not None:
+                    ticker_risk[t] = prev
 
     import numpy as np
     portfolio_grade_info = {}
@@ -12403,6 +13774,155 @@ def _fetch_neos_top_holdings(ticker, limit=25):
     return rows
 
 
+_TUTTLE_INCOME_BLAST_TICKERS = {"DRMP", "SPCI", "MEMY", "MAGO", "BITK"}
+
+
+def _is_tuttle_capital_fund(ticker, description=""):
+    """Identify Tuttle Capital / Income Blast funds with official holdings pages."""
+    ticker = (ticker or "").strip().upper()
+    description_l = (description or "").lower()
+    return (
+        ticker in _TUTTLE_INCOME_BLAST_TICKERS
+        or "tuttle capital" in description_l
+        or "income blast" in description_l
+    )
+
+
+def _income_blast_number(value):
+    text = str(value or "").strip()
+    if not text or text.lower() in {"null", "nan", "n/a", "--", "-"}:
+        return None
+    text = re.sub(r"[^0-9.\-]", "", text)
+    if not text:
+        return None
+    try:
+        return float(text)
+    except Exception:
+        return None
+
+
+def _income_blast_page(ticker):
+    import requests
+
+    ticker = (ticker or "").strip().lower()
+    if not ticker:
+        return "", None
+
+    url = f"https://www.incomeblastetfs.com/etf/{ticker}"
+    try:
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0 PortfolioTrackingClient/1.0"})
+        if resp.status_code == 404:
+            return "", url
+        resp.raise_for_status()
+        return resp.text or "", url
+    except Exception:
+        return "", url
+
+
+def _income_blast_csv_url(html_text):
+    import html as html_lib
+
+    if not html_text:
+        return None
+    match = re.search(
+        r"https://docs\.google\.com/spreadsheets/export\?[^\"'<> ]*exportFormat=csv[^\"'<> ]*",
+        html_text,
+        flags=re.I,
+    )
+    if match:
+        return html_lib.unescape(match.group(0))
+    match = re.search(r'href=["\']([^"\']*docs\.google\.com/spreadsheets/export[^"\']*)["\']', html_text, flags=re.I)
+    return html_lib.unescape(match.group(1)) if match else None
+
+
+def _fetch_income_blast_csv_holdings(csv_url, limit=25):
+    import csv
+    import requests
+    from io import StringIO
+
+    if not csv_url:
+        return []
+    try:
+        resp = requests.get(csv_url, timeout=20, headers={"User-Agent": "Mozilla/5.0 PortfolioTrackingClient/1.0"})
+        resp.raise_for_status()
+    except Exception:
+        return []
+
+    try:
+        reader = csv.DictReader(StringIO(resp.text or ""))
+    except Exception:
+        return []
+
+    rows = []
+    for row in reader:
+        symbol = (row.get("Stock Ticker") or row.get("Ticker") or row.get("CUSIP") or "").strip()
+        name = (row.get("Security Name") or row.get("Security Description") or "").strip()
+        if not symbol and not name:
+            continue
+        weight = _income_blast_number(row.get("Weightings") or row.get("% of Funds") or row.get("Weight"))
+        rows.append({
+            "symbol": symbol or name,
+            "name": name or symbol,
+            "weight_pct": round(weight, 2) if weight is not None else None,
+        })
+
+    rows.sort(key=lambda r: (r["weight_pct"] is not None, r["weight_pct"] or -999999), reverse=True)
+    return rows[:limit]
+
+
+def _income_blast_text_from_html(html_text):
+    import html as html_lib
+
+    text = re.sub(r"(?is)<(script|style).*?</\1>", " ", html_text or "")
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</(p|div|li|tr|td|th|h[1-6]|section|a)>", "\n", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = html_lib.unescape(text)
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
+def _fetch_income_blast_table_holdings(html_text, limit=25):
+    text = _income_blast_text_from_html(html_text)
+    section = _vistashares_section(
+        text,
+        r"Holdings\s+As of:.*?Ticker\s+Security Description\s+CUSIP / ISIN\s+% of Funds\s+Shares\s+Market Value\s+(.*?)\s+Fund holdings and allocations",
+    )
+    if not section:
+        return []
+
+    lines = [line.strip() for line in section.splitlines() if line.strip()]
+    rows = []
+    i = 0
+    while i + 5 < len(lines):
+        symbol, name, _cusip, weight_text, _shares, _market_value = lines[i:i + 6]
+        weight = _income_blast_number(weight_text)
+        if symbol and name and weight is not None:
+            rows.append({
+                "symbol": symbol,
+                "name": name,
+                "weight_pct": round(weight, 2),
+            })
+            i += 6
+        else:
+            i += 1
+
+    rows.sort(key=lambda r: (r["weight_pct"] is not None, r["weight_pct"] or -999999), reverse=True)
+    return rows[:limit]
+
+
+def _fetch_income_blast_top_holdings(ticker, limit=25):
+    """Fetch Tuttle Capital Income Blast holdings from the official fund page."""
+    html_text, _url = _income_blast_page(ticker)
+    if not html_text:
+        return []
+
+    rows = _fetch_income_blast_csv_holdings(_income_blast_csv_url(html_text), limit=limit)
+    if rows:
+        return rows
+    return _fetch_income_blast_table_holdings(html_text, limit=limit)
+
+
 def _strip_html_text(value):
     import html
     import re
@@ -12425,8 +13945,16 @@ def _fetch_stockanalysis_top_holdings(ticker, limit=25):
     try:
         resp = requests.get(url, timeout=15, headers={"User-Agent": "PortfolioTrackingClient/1.0"})
         if resp.status_code == 404:
-            return []
-        resp.raise_for_status()
+            # CEFs live under /stocks/ on StockAnalysis, not /etf/
+            alt_url = f"https://stockanalysis.com/stocks/{ticker}/holdings/"
+            try:
+                resp = requests.get(alt_url, timeout=15, headers={"User-Agent": "PortfolioTrackingClient/1.0"})
+                if resp.status_code != 200:
+                    return []
+            except Exception:
+                return []
+        else:
+            resp.raise_for_status()
     except Exception:
         return []
 
@@ -12465,15 +13993,55 @@ def _fetch_stockanalysis_top_holdings(ticker, limit=25):
     return rows
 
 
+def _fetch_cefconnect_top_holdings(ticker, limit=25):
+    """Fetch top holdings for a CEF from CEF Connect's fund page HTML."""
+    if not ticker:
+        return []
+    sym = ticker.strip().upper()
+    try:
+        html = _cefconnect_text(f"/fund/{urllib.parse.quote(sym)}", f"fund-html:{sym}")
+    except Exception:
+        return []
+    if not html:
+        return []
+    holding_rows = _cef_extract_table(html, "ucPortChar_TopHoldingsGrid")
+    # First row is often the header
+    if holding_rows and len(holding_rows[0]) >= 3 and not holding_rows[0][2].replace(".", "").replace("%", "").strip().lstrip("-").isdigit():
+        holding_rows = holding_rows[1:]
+    rows = []
+    for row in holding_rows[:limit]:
+        if len(row) < 2:
+            continue
+        name = row[0].strip()
+        pct_text = row[-1].strip().replace("%", "").replace(",", "")
+        try:
+            weight = round(float(pct_text), 2)
+        except Exception:
+            weight = None
+        if not name:
+            continue
+        rows.append({"symbol": "", "name": name, "weight_pct": weight})
+    return rows
+
+
 def _research_top_holdings(fund_data, limit=25, ticker=None, description=""):
+    if _is_tuttle_capital_fund(ticker, description):
+        income_blast_rows = _fetch_income_blast_top_holdings(ticker, limit=limit)
+        if income_blast_rows:
+            return income_blast_rows
+
     if _is_neos_fund(ticker, description):
         neos_rows = _fetch_neos_top_holdings(ticker, limit=limit)
         if neos_rows:
             return neos_rows
 
     stockanalysis_rows = _fetch_stockanalysis_top_holdings(ticker, limit=limit)
-    if len(stockanalysis_rows) > 10:
+    if len(stockanalysis_rows) >= 5:
         return stockanalysis_rows
+
+    cefconnect_rows = _fetch_cefconnect_top_holdings(ticker, limit=limit)
+    if len(cefconnect_rows) >= 3:
+        return cefconnect_rows
 
     try:
         holdings = fund_data.top_holdings
@@ -12712,7 +14280,45 @@ def _research_multi_return_summary(symbols, rows):
     )
 
 
-def _research_return_summary(ticker, benchmark, rows):
+def _research_approx_yield(ticker):
+    """Estimate annualized yield from the last 3 months of distributions (1 month fallback)."""
+    try:
+        import yfinance as yf
+        import datetime
+        t = yf.Ticker(ticker)
+        divs = t.dividends
+        if divs is None or divs.empty:
+            return None
+        divs = divs[divs > 0].dropna()
+        if divs.empty:
+            return None
+        divs.index = divs.index.tz_localize(None) if divs.index.tz else divs.index
+        cutoff_3m = datetime.datetime.now() - datetime.timedelta(days=92)
+        cutoff_1m = datetime.datetime.now() - datetime.timedelta(days=31)
+        recent_3m = divs[divs.index >= cutoff_3m]
+        recent_1m = divs[divs.index >= cutoff_1m]
+        price = None
+        info = t.fast_info
+        try:
+            price = float(info.last_price)
+        except Exception:
+            pass
+        if not price or price <= 0:
+            return None
+        if not recent_3m.empty:
+            annualized = float(recent_3m.sum()) * 4
+            months_used = 3
+        elif not recent_1m.empty:
+            annualized = float(recent_1m.sum()) * 12
+            months_used = 1
+        else:
+            return None
+        return {"yield_pct": round(annualized / price * 100, 2), "months_used": months_used}
+    except Exception:
+        return None
+
+
+def _research_return_summary(ticker, benchmark, rows, yield_info=None):
     one_year = next((row for row in rows if row["label"] == "1 Year"), None)
     if one_year and one_year["ticker_return"] is not None:
         period_label = "In the past year"
@@ -12725,8 +14331,13 @@ def _research_return_summary(ticker, benchmark, rows):
         period_label = "Since inception"
         t_ret = inception["ticker_return"]
         b_ret = inception.get("benchmark_return")
+
+    yield_suffix = ""
+    if yield_info:
+        yield_suffix = f" with an approximate yield of {yield_info['yield_pct']:.2f}%"
+
     if b_ret is None:
-        return f"{period_label}, {ticker} returned a total of {t_ret:.2f}%."
+        return f"{period_label}, {ticker} returned a total of {t_ret:.2f}%{yield_suffix}."
 
     diff = t_ret - b_ret
     if abs(diff) < 0.25:
@@ -12738,7 +14349,7 @@ def _research_return_summary(ticker, benchmark, rows):
 
     return (
         f"{period_label}, {ticker} returned a total of {t_ret:.2f}%, "
-        f"which is {relation} {benchmark}'s {b_ret:.2f}% return."
+        f"which is {relation} {benchmark}'s {b_ret:.2f}% return{yield_suffix}."
     )
 
 
@@ -12933,6 +14544,49 @@ def _fetch_vistashares_etf_profile(ticker):
     }
 
 
+def _fetch_income_blast_etf_profile(ticker):
+    html_text, url = _income_blast_page(ticker)
+    if not html_text or "Tuttle Capital" not in html_text:
+        return None
+
+    text = _income_blast_text_from_html(html_text)
+    if not _is_tuttle_capital_fund(ticker, text):
+        return None
+
+    title = _vistashares_match(text, rf"#\s*{re.escape((ticker or '').strip().upper())}\s+(.*?)\s+Prospectus")
+    objective = _vistashares_match(text, r"Investment Objective:\s+(.*?)\s+NAV Price")
+    holdings = _fetch_income_blast_top_holdings(ticker, limit=25)
+
+    dist_rate = _vistashares_match(text, r"Distribution Rate\s+([0-9.]+)\s+X\.XX%")
+    sec_yield = _vistashares_match(text, r"30 Day SEC\s*Yield\s+(-?[0-9.]+)\s+X\.XX%")
+    expense_ratio = _vistashares_match(text, r"Expense Ratio\s+([0-9.]+)\s+X\.XX%")
+    net_assets = _vistashares_match(text, r"Net Assets\s+([0-9.,]+)\s+\$XXX")
+    nav_price = _vistashares_match(text, r"NAV Price\s+([0-9.]+)\s+\$XX")
+    inception = _vistashares_match(text, r"inception date\s+([A-Za-z]{3}\s+\d{1,2},\s+\d{4})\s+MM/DD/YYYY")
+
+    return {
+        "name": title,
+        "fund_type": "ETF",
+        "description": objective,
+        "objective": objective,
+        "issuer": "Tuttle Capital Management",
+        "legal_type": "Exchange Traded Fund",
+        "expense_ratio_pct": _research_expense_pct(expense_ratio),
+        "total_assets": _vistashares_money(net_assets),
+        "total_assets_label": "Net Assets",
+        "nav_price": _vistashares_money(nav_price),
+        "nav_label": "NAV",
+        "inception_date": inception,
+        "estimated_yield_pct": _research_pct(dist_rate),
+        "distribution_rate_pct": _research_pct(dist_rate),
+        "sec_30_day_yield_pct": _research_pct(sec_yield),
+        "target_yield_label": "Distribution Rate",
+        "top_holdings": holdings,
+        "source_url": url,
+        "data_source": "Income Blast ETFs",
+    }
+
+
 def _research_has_value(value):
     return value not in (None, "", [])
 
@@ -12952,8 +14606,11 @@ def _fetch_provider_etf_profile(ticker, response):
     """Try official issuer/provider pages when the market-data feed is sparse."""
     provider_hints = " ".join(str(response.get(k) or "") for k in ("name", "issuer", "data_source"))
     fetchers = []
+    if _is_tuttle_capital_fund(ticker, provider_hints):
+        fetchers.append(_fetch_income_blast_etf_profile)
     if "vistashares" in provider_hints.lower():
         fetchers.append(_fetch_vistashares_etf_profile)
+    fetchers.append(_fetch_income_blast_etf_profile)
     fetchers.append(_fetch_vistashares_etf_profile)
 
     seen = set()
@@ -13106,7 +14763,7 @@ def security_research(kind, ticker):
             "ttm_dividend_per_share": ttm_dividend,
             "estimated_yield_pct": _research_pct(_research_info_value(info, "yield", "dividendYield", "trailingAnnualDividendYield")),
             "target_yield_label": "Estimated forward yield",
-            "top_holdings": _research_top_holdings(fund_data, ticker=lookup_symbol, description=f"{name} {summary}") if fund_data is not None else _fetch_neos_top_holdings(lookup_symbol, 25) if _is_neos_fund(lookup_symbol, f"{name} {summary}") else [],
+            "top_holdings": _research_top_holdings(fund_data, ticker=lookup_symbol, description=f"{name} {summary}"),
             "sector_weightings": _research_weight_map(getattr(fund_data, "sector_weightings", None)) if fund_data is not None else [],
             "asset_classes": _research_weight_map(getattr(fund_data, "asset_classes", None)) if fund_data is not None else [],
             "data_source": "Yahoo Finance",
@@ -13276,7 +14933,8 @@ def security_research_average_return(kind, ticker):
         return jsonify({"error": f"No return data for {ticker}"}), 404
 
     rows = _research_period_return_rows(primary_series, benchmark_series)
-    summary = _research_return_summary(ticker, benchmark, rows)
+    yield_info = _research_approx_yield(ticker)
+    summary = _research_return_summary(ticker, benchmark, rows, yield_info)
 
     return jsonify({
         "kind": kind,
@@ -14146,19 +15804,6 @@ def categories_data():
                 )
         conn.commit()
 
-    # Keep category data aligned to active holdings only.
-    conn.execute(
-        """DELETE FROM ticker_categories
-           WHERE profile_id = ?
-             AND ticker NOT IN (
-                 SELECT ticker
-                 FROM all_account_info
-                 WHERE profile_id = ? AND quantity > 0
-             )""",
-        (profile_id, profile_id),
-    )
-    conn.commit()
-
     # Fetch categories
     cats = conn.execute(
         "SELECT id, name, target_pct, sort_order FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
@@ -14167,7 +15812,8 @@ def categories_data():
 
     # Fetch active holdings only
     all_holdings = conn.execute(
-        """SELECT ticker, description, classification_type, current_value, approx_monthly_income,
+        """SELECT ticker, description, classification_type, quantity, current_price,
+                  current_value, approx_monthly_income,
                   current_annual_yield, div_frequency, nav_erosion_scope, gain_or_loss_percentage
            FROM all_account_info
            WHERE profile_id = ? AND quantity > 0""",
@@ -14193,7 +15839,7 @@ def categories_data():
     ).fetchall()
     # Fetch subcategories (second tier within a category)
     subcat_rows = conn.execute(
-        "SELECT id, category_id, name, sort_order FROM subcategories WHERE profile_id = ? ORDER BY sort_order, name",
+        "SELECT id, category_id, name, target_pct, sort_order FROM subcategories WHERE profile_id = ? ORDER BY sort_order, name",
         (profile_id,),
     ).fetchall()
     subcats_by_category = {}
@@ -14201,6 +15847,7 @@ def categories_data():
         subcats_by_category.setdefault(s["category_id"], []).append({
             "id": s["id"],
             "name": s["name"],
+            "target_pct": s["target_pct"],
             "sort_order": s["sort_order"],
         })
     # Build response
@@ -14226,6 +15873,8 @@ def categories_data():
                         "ticker": t,
                         "description": h["description"],
                         "classification_type": h["classification_type"],
+                        "quantity": float(h["quantity"] or 0),
+                        "current_price": float(h["current_price"] or 0),
                         "current_value": h_value,
                         "monthly_income": h_monthly_income,
                         "current_yield": (h_monthly_income * 12 / h_value * 100) if h_value > 0 else 0,
@@ -14290,6 +15939,8 @@ def categories_data():
                 "ticker": h["ticker"],
                 "description": h["description"],
                 "classification_type": h["classification_type"],
+                "quantity": float(h["quantity"] or 0),
+                "current_price": float(h["current_price"] or 0),
                 "current_value": h_value,
                 "monthly_income": h_monthly_income,
                 "current_yield": (h_monthly_income * 12 / h_value * 100) if h_value > 0 else 0,
@@ -14435,6 +16086,9 @@ def owner_target_reference():
 
 @app.route("/api/categories", methods=["POST"])
 def create_category():
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     data = request.get_json()
     name = (data.get("name") or "").strip()
@@ -14461,6 +16115,9 @@ def create_category():
 
 @app.route("/api/categories/<int:cat_id>", methods=["PUT"])
 def update_category(cat_id):
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     data = request.get_json()
     conn = get_connection()
@@ -14485,6 +16142,9 @@ def update_category(cat_id):
 
 @app.route("/api/categories/<int:cat_id>", methods=["DELETE"])
 def delete_category(cat_id):
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     conn = get_connection()
     conn.execute(
@@ -14506,14 +16166,34 @@ def delete_category(cat_id):
 
 @app.route("/api/categories/assign", methods=["POST"])
 def assign_tickers():
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
-    data = request.get_json()
+    data = request.get_json() or {}
     category_id = data.get("category_id")
     subcategory_id = data.get("subcategory_id")
-    tickers = data.get("tickers", [])
+    tickers = [
+        str(t).strip().upper()
+        for t in data.get("tickers", [])
+        if str(t or "").strip()
+    ]
+    try:
+        category_id = int(category_id)
+        if subcategory_id is not None:
+            subcategory_id = int(subcategory_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "category_id and subcategory_id must be numeric"}), 400
     if not category_id or not tickers:
         return jsonify({"error": "category_id and tickers required"}), 400
     conn = get_connection()
+    category = conn.execute(
+        "SELECT id FROM categories WHERE id = ? AND profile_id = ?",
+        (category_id, profile_id),
+    ).fetchone()
+    if not category:
+        conn.close()
+        return jsonify({"error": "Category not found"}), 404
     # Validate the subcategory belongs to this category, if provided
     if subcategory_id is not None:
         owner = conn.execute(
@@ -14524,14 +16204,7 @@ def assign_tickers():
             conn.close()
             return jsonify({"error": "Sub-category does not belong to that category"}), 400
     for t in tickers:
-        conn.execute(
-            "DELETE FROM ticker_categories WHERE ticker = ? AND profile_id = ?",
-            (t, profile_id),
-        )
-        conn.execute(
-            "INSERT INTO ticker_categories (ticker, category_id, subcategory_id, profile_id) VALUES (?, ?, ?, ?)",
-            (t, category_id, subcategory_id, profile_id),
-        )
+        _replace_ticker_category(conn, profile_id, t, category_id, subcategory_id)
     conn.commit()
     conn.close()
     return jsonify({"message": f"Assigned {len(tickers)} ticker(s)"})
@@ -14539,9 +16212,16 @@ def assign_tickers():
 
 @app.route("/api/categories/unassign", methods=["POST"])
 def unassign_tickers():
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
-    data = request.get_json()
-    tickers = data.get("tickers", [])
+    data = request.get_json() or {}
+    tickers = [
+        str(t).strip().upper()
+        for t in data.get("tickers", [])
+        if str(t or "").strip()
+    ]
     if not tickers:
         return jsonify({"error": "tickers required"}), 400
     conn = get_connection()
@@ -14557,6 +16237,9 @@ def unassign_tickers():
 
 @app.route("/api/categories/reorder", methods=["POST"])
 def reorder_categories():
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     data = request.get_json()
     order = data.get("order", [])  # list of category IDs in desired order
@@ -14573,11 +16256,15 @@ def reorder_categories():
 
 @app.route("/api/categories/<int:cat_id>/subcategories", methods=["POST"])
 def create_subcategory(cat_id):
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     data = request.get_json()
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "Name is required"}), 400
+    target_pct = data.get("target_pct")
     conn = get_connection()
     # Ensure the parent category exists for this profile
     parent = conn.execute(
@@ -14593,8 +16280,8 @@ def create_subcategory(cat_id):
     ).fetchone()["n"]
     try:
         conn.execute(
-            "INSERT INTO subcategories (category_id, name, profile_id, sort_order) VALUES (?, ?, ?, ?)",
-            (cat_id, name, profile_id, max_order),
+            "INSERT INTO subcategories (category_id, name, target_pct, profile_id, sort_order) VALUES (?, ?, ?, ?, ?)",
+            (cat_id, name, target_pct, profile_id, max_order),
         )
         conn.commit()
     except Exception:
@@ -14606,27 +16293,45 @@ def create_subcategory(cat_id):
 
 @app.route("/api/subcategories/<int:sub_id>", methods=["PUT"])
 def update_subcategory(sub_id):
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     data = request.get_json()
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "Name is required"}), 400
     conn = get_connection()
+    sets, vals = [], []
+    if "name" in data:
+        name = (data.get("name") or "").strip()
+        if not name:
+            conn.close()
+            return jsonify({"error": "Name is required"}), 400
+        sets.append("name = ?")
+        vals.append(name)
+    if "target_pct" in data:
+        sets.append("target_pct = ?")
+        vals.append(data["target_pct"])
+    if not sets:
+        conn.close()
+        return jsonify({"error": "Nothing to update"}), 400
+    vals.extend([sub_id, profile_id])
     try:
         conn.execute(
-            "UPDATE subcategories SET name = ? WHERE id = ? AND profile_id = ?",
-            (name, sub_id, profile_id),
+            f"UPDATE subcategories SET {', '.join(sets)} WHERE id = ? AND profile_id = ?",
+            vals,
         )
         conn.commit()
     except Exception:
         conn.close()
-        return jsonify({"error": f"Sub-category '{name}' already exists in this category"}), 409
+        return jsonify({"error": "Sub-category already exists in this category"}), 409
     conn.close()
     return jsonify({"message": "Sub-category updated"})
 
 
 @app.route("/api/subcategories/<int:sub_id>", methods=["DELETE"])
 def delete_subcategory(sub_id):
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
     profile_id = get_profile_id()
     conn = get_connection()
     # Tickers in this sub-category fall back to their parent category (unclassified within it)
@@ -14641,6 +16346,109 @@ def delete_subcategory(sub_id):
     conn.commit()
     conn.close()
     return jsonify({"message": "Sub-category deleted"})
+
+
+@app.route("/api/categories/push-to-subaccounts", methods=["POST"])
+def push_categories_to_subaccounts():
+    """Owner-only: copy the Owner's categories + sub-categories (incl. targets)
+    down to every included sub-account. Same-named categories are overwritten:
+    their target is reset to the Owner's and their sub-categories are rebuilt to
+    match the Owner's, so any ticker assigned to a removed sub-category falls back
+    to unclassified within its parent category. Ticker→category assignments and
+    categories the Owner does not define are left untouched."""
+    if _request_aggregate_id() is not None or get_profile_id() != 1:
+        return jsonify({"error": "Only the Owner profile can push categories to sub-accounts"}), 403
+
+    conn = get_connection()
+    source_ids = _get_owner_source_profile_ids(conn)
+    if not source_ids:
+        conn.close()
+        return jsonify({"error": "No included sub-accounts to push to"}), 400
+
+    owner_cats = conn.execute(
+        "SELECT id, name, target_pct, sort_order FROM categories WHERE profile_id = 1 ORDER BY sort_order, name"
+    ).fetchall()
+    owner_subs_by_cat = {}
+    for s in conn.execute(
+        "SELECT category_id, name, target_pct, sort_order FROM subcategories WHERE profile_id = 1 ORDER BY sort_order, name"
+    ).fetchall():
+        owner_subs_by_cat.setdefault(s["category_id"], []).append(s)
+
+    cats_created = 0
+    cats_overwritten = 0
+    subs_pushed = 0
+    for pid in source_ids:
+        for oc in owner_cats:
+            name = (oc["name"] or "").strip()
+            if not name:
+                continue
+            owner_subs = [s for s in owner_subs_by_cat.get(oc["id"], []) if (s["name"] or "").strip()]
+            owner_sub_names = {(s["name"] or "").strip() for s in owner_subs}
+            existing = conn.execute(
+                "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
+                (name, pid),
+            ).fetchone()
+            if existing:
+                cat_id = existing["id"]
+                conn.execute(
+                    "UPDATE categories SET target_pct = ?, sort_order = ? WHERE id = ? AND profile_id = ?",
+                    (oc["target_pct"], oc["sort_order"], cat_id, pid),
+                )
+                cats_overwritten += 1
+                # Existing sub-categories in this sub-account, keyed by name.
+                existing_subs = {
+                    (r["name"] or "").strip(): r["id"]
+                    for r in conn.execute(
+                        "SELECT id, name FROM subcategories WHERE category_id = ? AND profile_id = ?",
+                        (cat_id, pid),
+                    ).fetchall()
+                }
+                # Overwrite: remove only the sub-categories the Owner no longer has.
+                # Their tickers fall back to unclassified within the parent category.
+                stale_ids = [sid for sname, sid in existing_subs.items() if sname not in owner_sub_names]
+                if stale_ids:
+                    sph = ",".join("?" * len(stale_ids))
+                    conn.execute(
+                        f"UPDATE ticker_categories SET subcategory_id = NULL WHERE profile_id = ? AND subcategory_id IN ({sph})",
+                        [pid, *stale_ids],
+                    )
+                    conn.execute(
+                        f"DELETE FROM subcategories WHERE profile_id = ? AND id IN ({sph})",
+                        [pid, *stale_ids],
+                    )
+            else:
+                cur = conn.execute(
+                    "INSERT INTO categories (name, target_pct, profile_id, sort_order) VALUES (?, ?, ?, ?)",
+                    (name, oc["target_pct"], pid, oc["sort_order"]),
+                )
+                cat_id = cur.lastrowid
+                cats_created += 1
+                existing_subs = {}
+            # Upsert the Owner's sub-categories BY NAME. Matching same-named
+            # sub-categories keep their id, so existing ticker -> sub-category
+            # assignments in the sub-account are preserved (only the target is synced).
+            for os in owner_subs:
+                sub_name = (os["name"] or "").strip()
+                if sub_name in existing_subs:
+                    conn.execute(
+                        "UPDATE subcategories SET target_pct = ?, sort_order = ? WHERE id = ? AND profile_id = ?",
+                        (os["target_pct"], os["sort_order"], existing_subs[sub_name], pid),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO subcategories (category_id, name, target_pct, profile_id, sort_order) VALUES (?, ?, ?, ?, ?)",
+                        (cat_id, sub_name, os["target_pct"], pid, os["sort_order"]),
+                    )
+                subs_pushed += 1
+    conn.commit()
+    conn.close()
+    return jsonify({
+        "message": f"Pushed {len(owner_cats)} categories to {len(source_ids)} sub-account(s)",
+        "subaccounts": len(source_ids),
+        "categories_created": cats_created,
+        "categories_overwritten": cats_overwritten,
+        "subcategories_pushed": subs_pushed,
+    })
 
 
 # ── Dividend Analysis ──────────────────────────────────────────────────────────
@@ -20295,6 +22103,288 @@ def stock_evaluate(ticker):
     return jsonify(metrics)
 
 
+def _val_stmt_value(df, *labels):
+    """Best-effort single-cell (most recent period) lookup from a yfinance
+    financial-statement DataFrame, tolerant of label/version differences."""
+    try:
+        if df is None or getattr(df, "empty", True):
+            return None
+        for label in labels:
+            if label in df.index:
+                return _research_money(df.loc[label, df.columns[0]])
+    except Exception:
+        pass
+    return None
+
+
+def _val_fcf_cagr(cashflow):
+    """Compound annual growth of free cash flow across the statement's columns,
+    used only as a last-resort DCF growth default. Returns a fraction or None."""
+    try:
+        if cashflow is None or cashflow.empty:
+            return None
+        op_label = next((l for l in ("Operating Cash Flow", "Total Cash From Operating Activities")
+                         if l in cashflow.index), None)
+        capex_label = next((l for l in ("Capital Expenditure", "Capital Expenditures")
+                            if l in cashflow.index), None)
+        if not op_label:
+            return None
+        op = cashflow.loc[op_label].dropna()
+        capex = cashflow.loc[capex_label].dropna() if capex_label else None
+        fcf = []
+        for col in cashflow.columns:
+            o = _research_clean_value(op.get(col)) if col in op.index else None
+            if o is None:
+                continue
+            c = _research_clean_value(capex.get(col)) if (capex is not None and col in capex.index) else 0.0
+            fcf.append(float(o) + float(c or 0.0))  # capex is reported negative
+        # Columns are most-recent-first; reverse to oldest→newest for the CAGR.
+        fcf = list(reversed(fcf))
+        if len(fcf) < 2 or fcf[0] <= 0 or fcf[-1] <= 0:
+            return None
+        n = len(fcf) - 1
+        return (fcf[-1] / fcf[0]) ** (1 / n) - 1
+    except Exception:
+        return None
+
+
+def _build_stock_valuation(symbol, overrides=None):
+    """Estimate intrinsic value for one ticker via a DCF blended with multiples,
+    plus the full ratio set and a quality/risk scorecard.
+
+    Returns (payload, error). Funds (ETF/CEF/mutual fund/BDC) are rejected with a
+    friendly payload because a company DCF does not apply to them.
+    """
+    import yfinance as yf
+    import valuation as ve
+
+    overrides = overrides or {}
+    symbol = (symbol or "").strip().upper()
+    if not symbol:
+        return None, "ticker is required"
+    lookup = _yahoo_symbol_for_ticker(symbol)
+    try:
+        tk = yf.Ticker(lookup)
+        info = tk.info or {}
+        info_symbol = (info.get("symbol") or "").upper()
+        if info_symbol and info_symbol != lookup:
+            lookup = info_symbol
+            tk = yf.Ticker(lookup)
+            info = tk.info or {}
+    except Exception as exc:
+        return None, f"Could not load {symbol}: {exc}"
+
+    name = _research_info_value(info, "longName", "shortName", "displayName")
+    quote_type = (_research_info_value(info, "quoteType") or "").upper()
+    if not name:
+        return None, f"Ticker {symbol} not found in Yahoo Finance."
+
+    sector = _research_info_value(info, "sector")
+    industry = _research_info_value(info, "industry")
+    currency = _research_info_value(info, "currency") or "USD"
+    price = _research_money(_research_info_value(info, "regularMarketPrice", "currentPrice", "previousClose"))
+    market_cap = _research_money(_research_info_value(info, "marketCap"))
+
+    fund_kind = _stock_checklist_fund_kind(quote_type, info, name)
+    if fund_kind:
+        return {
+            "ticker": lookup, "requested_ticker": symbol, "name": name,
+            "sector": sector, "industry": industry, "price": price, "currency": currency,
+            "is_fund": True, "fund_kind": fund_kind,
+            "message": (
+                f"{lookup} is a {fund_kind}, not an operating company. A discounted-cash-flow "
+                "valuation models company earnings and doesn't apply to funds. Use the ETF, "
+                "Option-Income ETF, or CEF evaluators for funds instead."
+            ),
+        }, None
+
+    # ── raw inputs from the info blob ────────────────────────────────────────
+    shares = _research_clean_value(_research_info_value(info, "sharesOutstanding", "impliedSharesOutstanding"))
+    beta = _research_clean_value(_research_info_value(info, "beta"))
+    forward_eps = _research_clean_value(_research_info_value(info, "forwardEps"))
+    trailing_eps = _research_clean_value(_research_info_value(info, "trailingEps"))
+    book_value_ps = _research_clean_value(_research_info_value(info, "bookValue"))
+    revenue_ps = _research_clean_value(_research_info_value(info, "revenuePerShare"))
+    forward_pe = _research_clean_value(_research_info_value(info, "forwardPE"))
+    price_to_book = _research_clean_value(_research_info_value(info, "priceToBook"))
+    price_to_sales = _research_clean_value(_research_info_value(info, "priceToSalesTrailing12Months"))
+    free_cash_flow = _research_money(_research_info_value(info, "freeCashflow"))
+    total_cash = _research_money(_research_info_value(info, "totalCash"))
+    total_debt = _research_money(_research_info_value(info, "totalDebt"))
+    dividend_rate = _research_clean_value(_research_info_value(info, "dividendRate"))
+    operating_margin = _checklist_frac_pct(_research_info_value(info, "operatingMargins"))
+    profit_margin = _checklist_frac_pct(_research_info_value(info, "profitMargins"))
+    gross_margin = _checklist_frac_pct(_research_info_value(info, "grossMargins"))
+    debt_to_equity = _research_clean_value(_research_info_value(info, "debtToEquity"))
+    current_ratio = _research_clean_value(_research_info_value(info, "currentRatio"))
+    earnings_growth_pct = _checklist_frac_pct(_research_info_value(info, "earningsGrowth"))
+    revenue_growth_pct = _checklist_frac_pct(_research_info_value(info, "revenueGrowth"))
+    info_payout = _checklist_frac_pct(_research_info_value(info, "payoutRatio"))
+    info_peg = _research_clean_value(_research_info_value(info, "pegRatio", "trailingPegRatio"))
+    info_roe = _checklist_frac_pct(_research_info_value(info, "returnOnEquity"))
+    info_roa = _checklist_frac_pct(_research_info_value(info, "returnOnAssets"))
+
+    # ── financial statements (tolerant lookups) ──────────────────────────────
+    try:
+        balance_sheet = tk.balance_sheet
+    except Exception:
+        balance_sheet = None
+    try:
+        income_stmt = tk.financials
+    except Exception:
+        income_stmt = None
+    try:
+        cashflow = tk.cashflow
+    except Exception:
+        cashflow = None
+
+    total_assets = _val_stmt_value(balance_sheet, "Total Assets")
+    equity = _val_stmt_value(balance_sheet, "Stockholders Equity", "Total Stockholder Equity", "Common Stock Equity")
+    ebit = _val_stmt_value(income_stmt, "EBIT", "Operating Income", "Ebit")
+    interest_expense = _val_stmt_value(income_stmt, "Interest Expense", "Interest Expense Non Operating")
+    net_income = _val_stmt_value(income_stmt, "Net Income", "Net Income Common Stockholders")
+
+    # FCF fallback from the cash-flow statement (capex is reported negative).
+    if free_cash_flow is None:
+        op_cf = _val_stmt_value(cashflow, "Operating Cash Flow", "Total Cash From Operating Activities")
+        capex = _val_stmt_value(cashflow, "Capital Expenditure", "Capital Expenditures")
+        if op_cf is not None:
+            free_cash_flow = round(float(op_cf) + float(capex or 0.0), 2)
+
+    # ── derived ratios (compute what yfinance omitted) ───────────────────────
+    fcf_yield = ve.fcf_yield_pct(free_cash_flow, market_cap)
+    dratio = ve.debt_ratio(total_debt, total_assets)
+    int_cov = ve.interest_coverage(ebit, interest_expense)
+    payout = info_payout if info_payout is not None else ve.payout_ratio_pct(dividend_rate, trailing_eps)
+    peg = info_peg if info_peg is not None else ve.peg_ratio(forward_pe, earnings_growth_pct)
+    roe = info_roe if info_roe is not None else ve.roe_pct(net_income, equity)
+    roa = info_roa if info_roa is not None else ve.roa_pct(net_income, total_assets)
+    if revenue_ps is None and shares not in (None, 0):
+        total_revenue = _val_stmt_value(income_stmt, "Total Revenue", "Operating Revenue")
+        revenue_ps = _research_money(_research_clean_value(total_revenue) / float(shares)) if total_revenue else None
+
+    # ── DCF assumptions (auto defaults, query-overridable) ───────────────────
+    def _clamp(v, lo, hi):
+        return max(lo, min(hi, v))
+
+    growth_default = None
+    for cand in (earnings_growth_pct, revenue_growth_pct):
+        if cand is not None and cand > 0:
+            growth_default = cand / 100.0
+            break
+    if growth_default is None:
+        cagr = _val_fcf_cagr(cashflow)
+        growth_default = cagr if (cagr is not None and cagr > 0) else 0.05
+    growth_default = round(_clamp(growth_default, 0.03, 0.20), 4)
+
+    discount_default = ve.capm_cost_of_equity(beta)
+    terminal_default = 0.025
+    years_default = 10
+
+    def _ov(key, fallback):
+        try:
+            return float(overrides[key]) if overrides.get(key) not in (None, "") else fallback
+        except (TypeError, ValueError):
+            return fallback
+
+    growth = round(_clamp(_ov("growth", growth_default), -0.5, 0.6), 4)
+    discount = round(_clamp(_ov("discount", discount_default), 0.03, 0.30), 4)
+    terminal = round(_clamp(_ov("terminal", terminal_default), 0.0, 0.05), 4)
+    try:
+        years = int(_ov("years", years_default))
+    except (TypeError, ValueError):
+        years = years_default
+    years = int(_clamp(years, 3, 20))
+    # Gordon terminal value requires the discount rate to exceed terminal growth.
+    if terminal >= discount:
+        terminal = round(discount - 0.01, 4)
+
+    net_cash = None
+    if total_cash is not None or total_debt is not None:
+        net_cash = (total_cash or 0.0) - (total_debt or 0.0)
+
+    dcf = ve.discounted_cash_flow(
+        base_fcf=free_cash_flow, growth=growth, discount=discount,
+        terminal_growth=terminal, years=years, net_cash=net_cash or 0.0, shares=shares,
+    )
+    dcf_value = dcf["value"] if dcf else None
+
+    # ── multiples-implied fair values + DDM ──────────────────────────────────
+    fair = ve.sector_fair_multiples(sector)
+    pe_fv = ve.fair_value_from_multiple(fair["forward_pe"], forward_eps)
+    pb_fv = ve.fair_value_from_multiple(fair["price_to_book"], book_value_ps)
+    ps_fv = ve.fair_value_from_multiple(fair["price_to_sales"], revenue_ps)
+    # The Gordon DDM explodes as dividend growth approaches the discount rate
+    # (common for low-beta payers where CAPM gives a small discount). Cap growth
+    # so there is always a ≥3% spread, keeping the DDM value realistic.
+    div_growth = round(min(growth, 0.06, discount - 0.03), 4)
+    ddm_fv = ve.dividend_discount_value(dividend_rate, discount, div_growth)
+
+    intrinsic = ve.blend_intrinsic_value([
+        {"name": "Discounted cash flow", "value": dcf_value, "weight": 0.45},
+        {"name": "Fair forward P/E", "value": pe_fv, "weight": 0.25},
+        {"name": "Fair price / book", "value": pb_fv, "weight": 0.15},
+        {"name": "Fair price / sales", "value": ps_fv, "weight": 0.10},
+        {"name": "Dividend discount model", "value": ddm_fv, "weight": 0.15},
+    ])
+    intrinsic["upside_pct"] = None
+    if intrinsic["value"] is not None and price not in (None, 0):
+        intrinsic["upside_pct"] = round((intrinsic["value"] - price) / price * 100, 1)
+
+    verdict = ve.valuation_verdict(price, intrinsic["value"])
+
+    # ── risk-adjusted ratios from ~3y daily history ──────────────────────────
+    try:
+        hist = tk.history(period="3y", auto_adjust=True)
+        close = hist["Close"].dropna() if (hist is not None and not hist.empty and "Close" in hist.columns) else None
+    except Exception:
+        close = None
+    risk = ve.risk_ratios(close)
+
+    sections = [
+        ve.valuation_section(forward_pe, peg, price_to_book, price_to_sales, fcf_yield, payout, sector),
+        ve.quality_section(roe, roa, operating_margin, profit_margin, gross_margin),
+        ve.health_section(debt_to_equity, dratio, int_cov, current_ratio),
+        ve.risk_section(risk["sharpe"], risk["sortino"], risk["calmar"], risk["omega"]),
+    ]
+
+    payload = {
+        "ticker": lookup, "requested_ticker": symbol, "name": name,
+        "sector": sector, "industry": industry, "currency": currency,
+        "price": price, "market_cap": market_cap, "is_fund": False,
+        "intrinsic": intrinsic,
+        "verdict": verdict,
+        "dcf": {
+            "assumptions": {"growth": growth, "discount": discount, "terminal": terminal, "years": years},
+            "defaults": {"growth": growth_default, "discount": discount_default,
+                         "terminal": terminal_default, "years": years_default},
+            "value": dcf_value,
+            "projection": dcf["projection"] if dcf else [],
+            "base_fcf": free_cash_flow,
+            "net_cash": _research_money(net_cash) if net_cash is not None else None,
+            "note": (
+                None if dcf else
+                "DCF unavailable — needs positive free cash flow and a share count. "
+                "The blended value below leans on the multiples instead."
+            ),
+        },
+        "sections": sections,
+        "data_source": "Yahoo Finance",
+    }
+    return payload, None
+
+
+@app.route("/api/stock-valuation/<ticker>")
+def stock_valuation(ticker):
+    """Blended DCF + multiples intrinsic value, ratios, and a quality/risk scorecard."""
+    overrides = {k: request.args.get(k) for k in ("growth", "discount", "terminal", "years")}
+    payload, error = _build_stock_valuation(ticker, overrides)
+    if error:
+        status = 404 if "not found" in error.lower() else 502
+        return jsonify({"error": error}), status
+    return jsonify(payload)
+
+
 @app.route("/api/stock-checklist/scan", methods=["POST"])
 def stock_checklist_scan():
     """Batch metrics for a list of tickers or a named source (portfolio/watchlist).
@@ -23829,6 +25919,18 @@ def analytics_backtest():
 
     align_cols = valid_tickers + ([benchmark] if bench_valid and benchmark not in valid_tickers else [])
     aligned = close[align_cols].dropna(how="all").ffill()
+
+    # For "Max", clip to the common window so every series starts on the same date
+    # (the latest inception among the holdings/benchmark — i.e. the shortest-history
+    # fund). This keeps the growth-of-$10k comparison apples-to-apples instead of
+    # letting a long-history benchmark dwarf a recently-launched fund.
+    if period == "max" and len(align_cols) > 1:
+        starts = [aligned[c].first_valid_index() for c in align_cols]
+        starts = [s for s in starts if s is not None]
+        if starts:
+            common_start = max(starts)
+            aligned = aligned.loc[aligned.index >= common_start]
+
     step = max(1, len(aligned) // 200)
     sampled = aligned.iloc[::step]
     dates = [d.strftime("%Y-%m-%d") for d in sampled.index]
@@ -24164,6 +26266,37 @@ def portfolio_tester_run():
     include_div = bool(data.get("include_div", True))
     reinvest_div = bool(data.get("reinvest_div", True))
     rebalance = (data.get("rebalance") or "none").lower()
+
+    # Income-mode controls. distribution_policy, when supplied, is the canonical
+    # control and overrides include_div/reinvest_div; otherwise the legacy flags
+    # win so existing callers behave identically.
+    spend_income = bool(data.get("spend_income", False))
+    policy = (data.get("distribution_policy") or "").strip().lower()
+    if policy == "exclude":
+        include_div = False
+    elif policy == "reinvest":
+        include_div, reinvest_div, spend_income = True, True, False
+    elif policy in ("spend", "spend_target"):
+        include_div, reinvest_div, spend_income = True, False, True
+
+    def _as_fraction(v):
+        """Accept either a fraction (0.25) or a percentage (25); clamp to [0,1]."""
+        x = float(v or 0)
+        if x > 1:
+            x = x / 100.0
+        return min(max(x, 0.0), 1.0)
+
+    # Blended distribution tax rate.
+    tax_rate = _as_fraction(data.get("tax_rate", 0))
+
+    # Target-income spending: withdraw_rate (fraction of initial per year) with
+    # surplus reinvested / shortfall sold. 0 = spend all distributions. Only the
+    # spend_target policy turns it on.
+    withdraw_rate = _as_fraction(data.get("withdraw_rate", 0)) if policy == "spend_target" else 0.0
+    withdraw_inflation = _as_fraction(data.get("withdraw_inflation", 0))
+
+    equal_withdrawal = bool(data.get("equal_withdrawal", False))
+
     # Respect explicit include_benchmark=false so the user can compare A vs B only.
     # Default to True for backward compatibility.
     include_benchmark = data.get("include_benchmark", True)
@@ -24181,6 +26314,11 @@ def portfolio_tester_run():
             include_div=include_div,
             reinvest_div=reinvest_div,
             rebalance=rebalance,
+            tax_rate=tax_rate,
+            spend_income=spend_income,
+            equal_withdrawal=equal_withdrawal,
+            withdraw_rate=withdraw_rate,
+            withdraw_inflation=withdraw_inflation,
         )
     except ValueError as e:
         return jsonify(error=str(e)), 400
@@ -26114,6 +28252,230 @@ def _distribution_compare_export_inner():
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
+# ── Distribution-compare shared simulation helpers ─────────────────────────────
+# Used by both the single-ticker compute (_distribution_compare_compute) and the
+# basket simulator (_dc_simulate_basket / portfolio-run endpoint).
+
+def _dc_cash_flow_withdrawal_schedule(data, duration_months, *, historical=False):
+    """Resolve a shared cash-flow plan into withdrawals for Distribution Compare."""
+    plan_id = data.get("cash_flow_plan_id")
+    funding_mode = str(
+        data.get("cash_flow_funding_mode", "net_after_income")
+    ).lower()
+    if funding_mode not in {"gross_expenses", "net_after_income"}:
+        return None, None, "Unknown cash-flow funding target."
+
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    try:
+        plan = _cash_flow_plan_for_scope(conn, plan_id)
+        if not plan:
+            return None, None, "Cash-flow plan not found."
+        start_month = _cash_flow_month_or_current(data.get("cash_flow_start_month"))
+        if historical:
+            # A backtest cannot replay future one-time dates faithfully. Use a
+            # representative twelve-month average in today's dollars.
+            source = _expand_cash_flow_plan(conn, plan["id"], start_month, 12)
+            key = (
+                "expenses"
+                if funding_mode == "gross_expenses"
+                else "portfolio_required"
+            )
+            monthly = sum(float(row[key]) for row in source) / len(source)
+            schedule = [round(monthly, 2)] * max(1, int(duration_months))
+        else:
+            source = _expand_cash_flow_plan(
+                conn, plan["id"], start_month, duration_months
+            )
+            key = (
+                "expenses"
+                if funding_mode == "gross_expenses"
+                else "portfolio_required"
+            )
+            schedule = [round(float(row[key]), 2) for row in source]
+        meta = {
+            "plan_id": plan["id"],
+            "plan_name": plan["name"],
+            "plan_version": plan["version"],
+            "funding_mode": funding_mode,
+            "start_month": start_month,
+            "normalized_monthly_withdrawal": round(
+                sum(schedule) / len(schedule), 2
+            ) if schedule else 0.0,
+        }
+        conn.commit()
+        return schedule, meta, None
+    except (TypeError, ValueError) as exc:
+        return None, None, str(exc)
+    finally:
+        conn.close()
+
+
+def _dc_effective_withdrawal(base_withdrawal, month_index, current_pv, initial_inv, *,
+                             strategy="fixed", withdrawal_pct=4.0,
+                             dynamic_threshold_pct=80.0, dynamic_reduce_pct=25.0,
+                             inflation_rate=None):
+    """Effective monthly withdrawal given the withdrawal strategy + inflation drift."""
+    if strategy == "percentage":
+        eff = current_pv * (withdrawal_pct / 100.0 / 12.0)
+    elif strategy in ("cost_pct_4", "cost_pct_8"):
+        # "4%/8% rule": withdraw a fixed % of the initial cost (investment) per
+        # year, spread monthly. Unlike "percentage" (which floats with current
+        # value), this is anchored to the starting cost and inflation-adjusted
+        # below — the classic safe-withdrawal-rate convention.
+        rule_pct = 4.0 if strategy == "cost_pct_4" else 8.0
+        eff = initial_inv * (rule_pct / 100.0 / 12.0)
+    elif strategy == "dynamic":
+        eff = base_withdrawal
+        threshold = initial_inv * (dynamic_threshold_pct / 100.0)
+        if current_pv < threshold:
+            eff = eff * (1.0 - dynamic_reduce_pct / 100.0)
+    else:
+        eff = base_withdrawal
+    if inflation_rate is not None and inflation_rate != 0:
+        eff *= (1.0 + inflation_rate / 100.0) ** (month_index / 12.0)
+    return eff
+
+
+def _dc_risk_metrics(portfolio_values, monthly_rows):
+    """Max drawdown / ulcer / recovery metrics for a portfolio value series."""
+    from grading import _max_drawdown, _ulcer_index
+    pv_series = pd.Series(portfolio_values)
+    max_dd = _max_drawdown(pv_series) if len(pv_series) > 1 else None
+    ulcer = _ulcer_index(pv_series)
+    worst_month_val = min((r["growth"] for r in monthly_rows), default=0)
+    worst_month_idx = next((i for i, r in enumerate(monthly_rows)
+                            if r["growth"] == worst_month_val), None)
+    recovery_months = None
+    if max_dd is not None and max_dd < 0 and len(pv_series) > 1:
+        running_max = pv_series.cummax()
+        drawdowns = (pv_series - running_max) / running_max
+        trough_idx = drawdowns.idxmin()
+        peak_before = running_max.iloc[trough_idx]
+        for ri in range(trough_idx + 1, len(pv_series)):
+            if pv_series.iloc[ri] >= peak_before:
+                recovery_months = ri - trough_idx
+                break
+    return {
+        "max_drawdown_pct": round(max_dd * 100, 2) if max_dd else None,
+        "ulcer_index": ulcer,
+        "worst_month_value": round(worst_month_val, 2),
+        "worst_month_idx": worst_month_idx,
+        "recovery_months": recovery_months,
+    }
+
+
+def _dc_depletion_month(depleted, monthly_rows):
+    """First month index where the portfolio fully depleted, else None."""
+    if not depleted:
+        return None
+    for di, r in enumerate(monthly_rows):
+        if r["shares"] == 0 and r["portfolio"] == 0:
+            return di
+    return None
+
+
+def _dc_nav_erosion_factor(pct_chg):
+    """Distribution haircut/boost vs. the fund's price drawdown (option-income model)."""
+    if pct_chg >= 10:
+        return min(1.0 + (pct_chg - 10) * 0.02, 1.30)
+    elif pct_chg >= -10:
+        return 1.0
+    elif pct_chg >= -20:
+        return 0.85
+    elif pct_chg >= -30:
+        return 0.70
+    else:
+        return max(0.40, 1.0 + pct_chg * 0.02)
+
+
+def _dc_simulate_price_path(sym, duration_months, market_type):
+    """Monte-Carlo median monthly price path for a ticker over ``duration_months``.
+
+    Returns ``(prices, current_price, ttm_yield_detected, error)`` where ``prices`` has
+    length ``duration_months + 1`` (index 0 is the current price). On failure the first
+    three are None and ``error`` is a message string.
+    """
+    import numpy as np
+    import yfinance as yf
+    import warnings
+    warnings.filterwarnings("ignore")
+
+    bias_map = {"bullish": +0.010, "bearish": -0.015, "neutral": 0.0}
+    vol_mult_map = {"bullish": 0.9, "bearish": 1.2, "neutral": 1.0}
+    bias = bias_map.get(market_type, 0.0)
+    vol_mult = vol_mult_map.get(market_type, 1.0)
+
+    try:
+        hist = yf.Ticker(sym).history(period="1y", auto_adjust=False, actions=True)
+    except Exception as e:
+        return None, None, None, f"Failed to fetch data for {sym}: {str(e)}"
+    if hist is None or hist.empty:
+        return None, None, None, f"No data found for {sym}."
+    close = hist["Close"].dropna()
+    if close.empty:
+        return None, None, None, f"No price data for {sym}."
+    current_price = float(close.iloc[-1])
+    if current_price <= 0:
+        return None, None, None, f"Could not determine current price for {sym}."
+
+    divs = hist["Dividends"] if "Dividends" in hist.columns else pd.Series(0.0, index=hist.index)
+    ttm_divs_sum = float(divs.sum()) if divs is not None else 0.0
+    ttm_yield = ttm_divs_sum / current_price if current_price > 0 else 0.0
+
+    monthly_returns = close.resample("ME").last().pct_change().dropna()
+    hist_sigma = float(monthly_returns.std()) if len(monthly_returns) >= 2 else 0.05
+
+    SIGMA_CAP = 0.25
+    REGIME_MONTHS = 42
+    FADE_MONTHS = 6
+    RALLY_PROB = 0.18
+    RALLY_LEN_LO = 2
+    RALLY_LEN_HI = 4
+    neutral_bias = 0.0
+    neutral_vol = 1.0
+
+    mu_arr = np.empty(duration_months)
+    vmul_arr = np.empty(duration_months)
+    rally_remaining = 0
+    for m in range(duration_months):
+        if m < REGIME_MONTHS:
+            regime_w = 1.0
+        elif m < REGIME_MONTHS + FADE_MONTHS:
+            regime_w = 1.0 - (m - REGIME_MONTHS) / FADE_MONTHS
+        else:
+            regime_w = 0.0
+        m_bias = bias * regime_w + neutral_bias * (1.0 - regime_w)
+        m_vmul = vol_mult * regime_w + neutral_vol * (1.0 - regime_w)
+        if market_type == "bearish" and regime_w > 0:
+            if rally_remaining > 0:
+                m_bias = abs(bias) * 0.6 * regime_w
+                m_vmul = 0.9 * regime_w + neutral_vol * (1.0 - regime_w)
+                rally_remaining -= 1
+            elif np.random.random() < RALLY_PROB:
+                rally_remaining = np.random.randint(RALLY_LEN_LO, RALLY_LEN_HI + 1)
+                m_bias = abs(bias) * 0.6 * regime_w
+                m_vmul = 0.9 * regime_w + neutral_vol * (1.0 - regime_w)
+                rally_remaining -= 1
+        mu_arr[m] = m_bias
+        vmul_arr[m] = m_vmul
+
+    sigma_arr = np.minimum(hist_sigma * vmul_arr, SIGMA_CAP)
+    N_PATHS = 300
+    # Use mu_arr directly as the log-drift (no -0.5*sigma^2 Ito term) so the *median*
+    # path tracks the chosen market bias: Neutral (mu=0) renders flat instead of
+    # decaying by the volatility drag. mu_arr is therefore the per-month median return.
+    drift_arr = mu_arr
+    np.random.seed(None)
+    Z = np.random.normal(0.0, 1.0, (N_PATHS, duration_months))
+    log_rets = drift_arr[np.newaxis, :] + sigma_arr[np.newaxis, :] * Z
+    cum_log = np.cumsum(np.hstack([np.zeros((N_PATHS, 1)), log_rets]), axis=1)
+    price_floor = max(current_price * 0.0001, 1e-10)
+    price_matrix = np.maximum(current_price * np.exp(cum_log), price_floor)
+    prices = [float(v) for v in np.median(price_matrix, axis=0)]
+    return prices, current_price, ttm_yield, None
+
+
 def _distribution_compare_compute():
     """Core computation for distribution comparison. Returns a plain dict."""
     import yfinance as yf
@@ -26130,6 +28492,8 @@ def _distribution_compare_compute():
 
     # Withdrawal strategy parameters
     withdrawal_strategy = data.get("withdrawal_strategy", "fixed")
+    cash_flow_schedule = None
+    cash_flow_meta = None
     withdrawal_pct = float(data.get("withdrawal_pct", 4))
     inflation_rate = data.get("inflation_rate")
     if inflation_rate is not None:
@@ -26203,59 +28567,37 @@ def _distribution_compare_compute():
         # income_vs_income: fund_c stays as income (not in growth_funds)
 
     def _compute_effective_withdrawal(base_withdrawal, month_index, current_pv, initial_inv):
-        """Compute effective withdrawal based on strategy + inflation."""
-        if withdrawal_strategy == "percentage":
-            eff = current_pv * (withdrawal_pct / 100.0 / 12.0)
-        elif withdrawal_strategy == "dynamic":
-            eff = base_withdrawal
-            threshold = initial_inv * (dynamic_threshold_pct / 100.0)
-            if current_pv < threshold:
-                eff = eff * (1.0 - dynamic_reduce_pct / 100.0)
-        else:
-            eff = base_withdrawal
-        # Apply inflation
-        if inflation_rate is not None and inflation_rate != 0:
-            eff *= (1.0 + inflation_rate / 100.0) ** (month_index / 12.0)
-        return eff
+        strategy = withdrawal_strategy
+        applied_inflation = inflation_rate
+        if withdrawal_strategy == "cash_flow":
+            strategy = "fixed"
+            applied_inflation = None
+            if cash_flow_schedule:
+                base_withdrawal = cash_flow_schedule[
+                    min(month_index, len(cash_flow_schedule) - 1)
+                ]
+        return _dc_effective_withdrawal(
+            base_withdrawal, month_index, current_pv, initial_inv,
+            strategy=strategy, withdrawal_pct=withdrawal_pct,
+            dynamic_threshold_pct=dynamic_threshold_pct,
+            dynamic_reduce_pct=dynamic_reduce_pct, inflation_rate=applied_inflation)
 
     def _compute_risk_metrics(portfolio_values, monthly_rows):
-        """Compute risk metrics for a fund's portfolio value series."""
-        pv_series = pd.Series(portfolio_values)
-        max_dd = _max_drawdown(pv_series) if len(pv_series) > 1 else None
-        ulcer = _ulcer_index(pv_series)
-        worst_month_val = min((r["growth"] for r in monthly_rows), default=0)
-        worst_month_idx = next((i for i, r in enumerate(monthly_rows)
-                                if r["growth"] == worst_month_val), None)
-        recovery_months = None
-        if max_dd is not None and max_dd < 0 and len(pv_series) > 1:
-            running_max = pv_series.cummax()
-            drawdowns = (pv_series - running_max) / running_max
-            trough_idx = drawdowns.idxmin()
-            peak_before = running_max.iloc[trough_idx]
-            for ri in range(trough_idx + 1, len(pv_series)):
-                if pv_series.iloc[ri] >= peak_before:
-                    recovery_months = ri - trough_idx
-                    break
-        return {
-            "max_drawdown_pct": round(max_dd * 100, 2) if max_dd else None,
-            "ulcer_index": ulcer,
-            "worst_month_value": round(worst_month_val, 2),
-            "worst_month_idx": worst_month_idx,
-            "recovery_months": recovery_months,
-        }
+        return _dc_risk_metrics(portfolio_values, monthly_rows)
 
     def _compute_depletion_month(depleted, monthly_rows):
-        """Find the first month where depletion occurred."""
-        if not depleted:
-            return None
-        for di, r in enumerate(monthly_rows):
-            if r["shares"] == 0 and r["portfolio"] == 0:
-                return di
-        return None
+        return _dc_depletion_month(depleted, monthly_rows)
 
     # ── HISTORICAL MODE ──
     if mode == "historical":
         duration_str = data.get("duration", "10y")
+        if withdrawal_strategy == "cash_flow":
+            cash_flow_schedule, cash_flow_meta, cash_flow_error = (
+                _dc_cash_flow_withdrawal_schedule(data, 12, historical=True)
+            )
+            if cash_flow_error:
+                return {"error": cash_flow_error}
+            monthly_withdrawal = cash_flow_schedule[0] if cash_flow_schedule else 0.0
 
         all_funds = [fa, fb]
         if fc:
@@ -26520,6 +28862,8 @@ def _distribution_compare_compute():
         results["data_start"] = common_start.strftime("%Y-%m-%d")
         results["cash_wedge_initial"] = cash_wedge_initial
         results["comparison_type"] = comparison_type
+        if cash_flow_meta:
+            results["cash_flow_plan"] = cash_flow_meta
         return results
 
     # ── SIMULATION MODE ──
@@ -26528,6 +28872,13 @@ def _distribution_compare_compute():
         duration_months = int(data.get("duration_months", 120))
         if duration_months < 1 or duration_months > 240:
             return {"error": "Simulation duration must be between 1 and 240 months (20 years max)."}
+        if withdrawal_strategy == "cash_flow":
+            cash_flow_schedule, cash_flow_meta, cash_flow_error = (
+                _dc_cash_flow_withdrawal_schedule(data, duration_months)
+            )
+            if cash_flow_error:
+                return {"error": cash_flow_error}
+            monthly_withdrawal = cash_flow_schedule[0] if cash_flow_schedule else 0.0
 
         bias_map = {"bullish": +0.010, "bearish": -0.015, "neutral": 0.0}
         vol_mult_map = {"bullish": 0.9, "bearish": 1.2, "neutral": 1.0}
@@ -26545,82 +28896,11 @@ def _distribution_compare_compute():
             yo = fund["yield_override"]
             drip = fund["drip"]
 
-            try:
-                hist = yf.Ticker(sym).history(period="1y", auto_adjust=False, actions=True)
-            except Exception as e:
-                return {"error": f"Failed to fetch data for {sym}: {str(e)}"}
-
-            if hist is None or hist.empty:
-                return {"error": f"No data found for {sym}."}
-
-            close = hist["Close"].dropna()
-            if close.empty:
-                return {"error": f"No price data for {sym}."}
-
-            current_price = float(close.iloc[-1])
-            if current_price <= 0:
-                return {"error": f"Could not determine current price for {sym}."}
-
-            divs = hist["Dividends"] if "Dividends" in hist.columns else pd.Series(0.0, index=hist.index)
-            if yo is not None:
-                ttm_yield = yo / 100.0
-            else:
-                ttm_divs_sum = float(divs.sum()) if divs is not None else 0.0
-                ttm_yield = ttm_divs_sum / current_price if current_price > 0 else 0.0
-
-            monthly_returns = close.resample("ME").last().pct_change().dropna()
-            hist_sigma = float(monthly_returns.std()) if len(monthly_returns) >= 2 else 0.05
-
-            SIGMA_CAP = 0.25
-            REGIME_MONTHS = 42
-            FADE_MONTHS = 6
-            RALLY_PROB = 0.18
-            RALLY_LEN_LO = 2
-            RALLY_LEN_HI = 4
-
-            neutral_bias = 0.0
-            neutral_vol = 1.0
-
-            mu_arr = np.empty(duration_months)
-            vmul_arr = np.empty(duration_months)
-            rally_remaining = 0
-
-            for m in range(duration_months):
-                if m < REGIME_MONTHS:
-                    regime_w = 1.0
-                elif m < REGIME_MONTHS + FADE_MONTHS:
-                    regime_w = 1.0 - (m - REGIME_MONTHS) / FADE_MONTHS
-                else:
-                    regime_w = 0.0
-
-                m_bias = bias * regime_w + neutral_bias * (1.0 - regime_w)
-                m_vmul = vol_mult * regime_w + neutral_vol * (1.0 - regime_w)
-
-                if market_type == "bearish" and regime_w > 0:
-                    if rally_remaining > 0:
-                        m_bias = abs(bias) * 0.6 * regime_w
-                        m_vmul = 0.9 * regime_w + neutral_vol * (1.0 - regime_w)
-                        rally_remaining -= 1
-                    elif np.random.random() < RALLY_PROB:
-                        rally_remaining = np.random.randint(RALLY_LEN_LO, RALLY_LEN_HI + 1)
-                        m_bias = abs(bias) * 0.6 * regime_w
-                        m_vmul = 0.9 * regime_w + neutral_vol * (1.0 - regime_w)
-                        rally_remaining -= 1
-
-                mu_arr[m] = m_bias
-                vmul_arr[m] = m_vmul
-
-            sigma_arr = np.minimum(hist_sigma * vmul_arr, SIGMA_CAP)
-
-            N_PATHS = 300
-            drift_arr = mu_arr - 0.5 * sigma_arr ** 2
-            np.random.seed(None)
-            Z = np.random.normal(0.0, 1.0, (N_PATHS, duration_months))
-            log_rets = drift_arr[np.newaxis, :] + sigma_arr[np.newaxis, :] * Z
-            cum_log = np.cumsum(np.hstack([np.zeros((N_PATHS, 1)), log_rets]), axis=1)
-            price_floor = max(current_price * 0.0001, 1e-10)
-            price_matrix = np.maximum(current_price * np.exp(cum_log), price_floor)
-            prices = [float(v) for v in np.median(price_matrix, axis=0)]
+            prices, current_price, ttm_detected, perr = _dc_simulate_price_path(
+                sym, duration_months, market_type)
+            if perr:
+                return {"error": perr}
+            ttm_yield = (yo / 100.0) if yo is not None else ttm_detected
 
             is_growth = label in growth_funds
             wedge = cash_wedge_initial if is_growth else 0.0
@@ -26662,16 +28942,7 @@ def _distribution_compare_compute():
                     continue
 
                 pct_chg = (price - current_price) / current_price * 100
-                if pct_chg >= 10:
-                    factor = min(1.0 + (pct_chg - 10) * 0.02, 1.30)
-                elif pct_chg >= -10:
-                    factor = 1.0
-                elif pct_chg >= -20:
-                    factor = 0.85
-                elif pct_chg >= -30:
-                    factor = 0.70
-                else:
-                    factor = max(0.40, 1.0 + pct_chg * 0.02)
+                factor = _dc_nav_erosion_factor(pct_chg)
 
                 shares_before = shares
                 dist_per_share = (ttm_yield / 12) * price * factor
@@ -26803,9 +29074,669 @@ def _distribution_compare_compute():
         results["months"] = date_labels
         results["cash_wedge_initial"] = cash_wedge_initial
         results["comparison_type"] = comparison_type
+        if cash_flow_meta:
+            results["cash_flow_plan"] = cash_flow_meta
         return results
 
     return {"error": f"Unknown mode: {mode}"}
+
+
+def _dc_simulate_basket(legs, *, duration_months, market_type, monthly_withdrawal,
+                        withdrawal_strategy, withdrawal_pct, inflation_rate,
+                        dynamic_reduce_pct, dynamic_threshold_pct,
+                        cash_wedge_initial, is_growth, drip, name,
+                        price_path_cache=None, monthly_withdrawal_schedule=None):
+    """Simulate a basket of tickers as a single "fund" over ``duration_months``.
+
+    Mirrors the single-ticker simulate loop in ``_distribution_compare_compute`` but
+    pools distributions / withdrawal / cash-wedge at the basket level and spreads
+    share sales proportionally across legs by value. Returns the same ``fund_result``
+    dict shape the single-ticker path produces (plus ``is_basket`` / ``legs``), so the
+    existing results UI renders it unchanged. Returns ``{"error": ...}`` on failure.
+    """
+    if price_path_cache is None:
+        price_path_cache = {}
+
+    leg_states = []
+    for leg in legs:
+        sym = leg["ticker"]
+        try:
+            amount = float(leg["amount"])
+        except (TypeError, ValueError):
+            return {"error": f"{name}: invalid amount for {sym}."}
+        cache_key = (sym, duration_months, market_type)
+        if cache_key not in price_path_cache:
+            price_path_cache[cache_key] = _dc_simulate_price_path(
+                sym, duration_months, market_type)
+        prices, current_price, ttm_yield, perr = price_path_cache[cache_key]
+        if perr:
+            return {"error": perr}
+        leg_states.append({
+            "sym": sym, "prices": prices, "current_price": current_price,
+            "ttm_yield": ttm_yield, "amount": amount,
+            "shares0": amount / current_price, "shares": amount / current_price,
+            "distributions_generated": 0.0,
+            "withdrawals_funded": 0.0,
+            "cash": 0.0,
+        })
+
+    investment = sum(s["amount"] for s in leg_states)
+    if investment <= 0:
+        return {"error": f"{name}: total investment must be greater than 0."}
+
+    wedge = cash_wedge_initial if is_growth else 0.0
+    cum_withdrawals = 0.0
+    cum_distributions = 0.0
+    cum_wedge_drawn = 0.0
+    unfunded_withdrawals = 0.0
+    prev_pv = investment
+
+    portfolio_values, cumulative_withdrawals_list = [], []
+    cumulative_distributions_list, share_counts, total_values, monthly_rows = [], [], [], []
+    depleted = False
+
+    def _basket_value(m_idx):
+        return sum(s["shares"] * s["prices"][m_idx] for s in leg_states)
+
+    def _price_index(m_idx):
+        # gross market-value index (initial shares, ignores flows) for the Price chart
+        return sum(s["shares0"] * s["prices"][m_idx] for s in leg_states)
+
+    def _cash_total():
+        return sum(s["cash"] for s in leg_states)
+
+    def _allocate(amount, weights):
+        weight_total = sum(max(0.0, float(w)) for w in weights)
+        if amount <= 0 or weight_total <= 0:
+            return [0.0 for _ in weights]
+        return [amount * max(0.0, float(w)) / weight_total for w in weights]
+
+    def _record_distribution_withdrawal(amount, leg_dists):
+        for s, allocated in zip(leg_states, _allocate(amount, leg_dists)):
+            s["withdrawals_funded"] += allocated
+
+    def _add_distribution_cash(amount, leg_dists):
+        for s, allocated in zip(leg_states, _allocate(amount, leg_dists)):
+            s["cash"] += allocated
+
+    def _draw_cash(amount_needed):
+        available = _cash_total()
+        amount_drawn = min(max(0.0, amount_needed), available)
+        if amount_drawn <= 0:
+            return 0.0
+        for s, allocated in zip(
+                leg_states, _allocate(amount_drawn, [s["cash"] for s in leg_states])):
+            s["cash"] = max(0.0, s["cash"] - allocated)
+            s["withdrawals_funded"] += allocated
+        return amount_drawn
+
+    def _sell_value(amount_needed, m_idx):
+        nonlocal depleted
+        total_val = _basket_value(m_idx)
+        if total_val <= 0 or amount_needed <= 0:
+            if total_val <= 0:
+                depleted = True
+            return 0.0
+        amount_sold = min(amount_needed, total_val)
+        frac = amount_sold / total_val
+        for s in leg_states:
+            leg_value = s["shares"] * s["prices"][m_idx]
+            sold_value = leg_value * frac
+            s["shares"] *= (1.0 - frac)
+            s["withdrawals_funded"] += sold_value
+        if amount_needed >= total_val:
+            for s in leg_states:
+                s["shares"] = 0.0
+            depleted = True
+        return amount_sold
+
+    def _reinvest(amount_total, leg_dists, basket_income, m_idx):
+        # reinvest leftover distribution back into each leg in proportion to its own payout
+        if amount_total <= 0 or basket_income <= 0:
+            return
+        for s, d in zip(leg_states, leg_dists):
+            price_i = s["prices"][m_idx]
+            if price_i > 0:
+                s["shares"] += (amount_total * (d / basket_income)) / price_i
+
+    for month_index in range(duration_months):
+        m_idx = month_index + 1  # prices index (0 == current price)
+
+        if depleted or sum(s["shares"] for s in leg_states) <= 0:
+            depleted = True
+            cash_accumulated = _cash_total()
+            portfolio_values.append(0.0)
+            cumulative_withdrawals_list.append(round(cum_withdrawals, 2))
+            cumulative_distributions_list.append(round(cum_distributions, 2))
+            share_counts.append(0.0)
+            tv = cum_withdrawals + wedge + cash_accumulated
+            total_values.append(round(tv, 2))
+            base = investment + (cash_wedge_initial if is_growth else 0)
+            row_data = {
+                "price": 0, "shares": 0, "portfolio": 0, "dist_per_share": 0,
+                "income": 0, "withdrawal": 0, "wedge_drawn": 0, "wedge_bal": round(wedge, 2),
+                "excess": 0, "shares_delta": 0, "growth": 0,
+                "cum_income": round(cum_distributions, 2),
+                "roi_dollar": round(cum_withdrawals + wedge + cash_accumulated - base, 2),
+                "roi_pct": round((cum_withdrawals + wedge + cash_accumulated - base) / investment * 100, 2) if investment else 0,
+            }
+            if not drip:
+                row_data["cash_accumulated"] = round(cash_accumulated, 2)
+            monthly_rows.append(row_data)
+            continue
+
+        shares_before_total = sum(s["shares"] for s in leg_states)
+
+        # Distributions this month (per leg, with NAV erosion vs. its own drawdown)
+        leg_dists = []
+        basket_income = 0.0
+        for s in leg_states:
+            price_i = s["prices"][m_idx]
+            pct_chg_i = (price_i - s["current_price"]) / s["current_price"] * 100 if s["current_price"] else 0.0
+            dist_i = (s["ttm_yield"] / 12.0) * price_i * _dc_nav_erosion_factor(pct_chg_i) * s["shares"]
+            s["distributions_generated"] += dist_i
+            leg_dists.append(dist_i)
+            basket_income += dist_i
+        cum_distributions += basket_income
+
+        current_pv = _basket_value(m_idx)
+        withdrawal_base = monthly_withdrawal
+        effective_strategy = withdrawal_strategy
+        effective_inflation = inflation_rate
+        if withdrawal_strategy == "cash_flow" and monthly_withdrawal_schedule:
+            withdrawal_base = monthly_withdrawal_schedule[
+                min(month_index, len(monthly_withdrawal_schedule) - 1)
+            ]
+            effective_strategy = "fixed"
+            effective_inflation = None
+        effective_withdrawal = _dc_effective_withdrawal(
+            withdrawal_base, month_index, current_pv, investment,
+            strategy=effective_strategy, withdrawal_pct=withdrawal_pct,
+            dynamic_threshold_pct=dynamic_threshold_pct,
+            dynamic_reduce_pct=dynamic_reduce_pct, inflation_rate=effective_inflation)
+
+        wedge_drawn = 0.0
+        if is_growth:
+            need = effective_withdrawal
+            cw_draw = min(wedge, need)
+            wedge -= cw_draw
+            wedge_drawn = cw_draw
+            cum_wedge_drawn += cw_draw
+            need -= cw_draw
+            div_used = min(basket_income, need)
+            _record_distribution_withdrawal(div_used, leg_dists)
+            need -= div_used
+            leftover_div = basket_income - div_used
+            if drip:
+                _reinvest(leftover_div, leg_dists, basket_income, m_idx)
+            else:
+                _add_distribution_cash(leftover_div, leg_dists)
+            if need > 0:
+                if not drip and _cash_total() > 0:
+                    cash_draw = _draw_cash(need)
+                    need -= cash_draw
+                if need > 0:
+                    sold = _sell_value(need, m_idx)
+                    need -= sold
+                if need > 0:
+                    unfunded_withdrawals += need
+            cum_withdrawals += effective_withdrawal
+            excess = basket_income + cw_draw - effective_withdrawal
+        else:
+            excess = basket_income - effective_withdrawal
+            if basket_income >= effective_withdrawal:
+                _record_distribution_withdrawal(effective_withdrawal, leg_dists)
+                if drip:
+                    _reinvest(excess, leg_dists, basket_income, m_idx)
+                else:
+                    _add_distribution_cash(excess, leg_dists)
+                cum_withdrawals += effective_withdrawal
+            else:
+                _record_distribution_withdrawal(basket_income, leg_dists)
+                shortfall = -excess
+                if not drip and _cash_total() > 0:
+                    cash_draw = _draw_cash(shortfall)
+                    shortfall -= cash_draw
+                if shortfall > 0:
+                    sold = _sell_value(shortfall, m_idx)
+                    shortfall -= sold
+                if shortfall > 0:
+                    unfunded_withdrawals += shortfall
+                cum_withdrawals += effective_withdrawal
+
+        total_shares_after = sum(s["shares"] for s in leg_states)
+        if total_shares_after <= 1e-9:
+            for s in leg_states:
+                s["shares"] = 0.0
+            total_shares_after = 0.0
+            depleted = True
+
+        pv = _basket_value(m_idx)
+        cash_accumulated = _cash_total()
+        growth = pv - prev_pv
+        shares_delta = total_shares_after - shares_before_total
+        total_basis = investment + (cash_wedge_initial if is_growth else 0)
+        roi_dollar = pv + cum_withdrawals + wedge + cash_accumulated - total_basis
+        roi_pct = roi_dollar / investment * 100 if investment else 0
+
+        portfolio_values.append(round(pv, 2))
+        cumulative_withdrawals_list.append(round(cum_withdrawals, 2))
+        cumulative_distributions_list.append(round(cum_distributions, 2))
+        share_counts.append(round(total_shares_after, 4))
+        total_values.append(round(pv + cum_withdrawals + wedge + cash_accumulated, 2))
+        row_data = {
+            "price": round(_price_index(m_idx), 2),
+            "shares": round(total_shares_after, 4),
+            "portfolio": round(pv, 2),
+            "dist_per_share": 0,
+            "income": round(basket_income, 2),
+            "withdrawal": round(effective_withdrawal, 2),
+            "wedge_drawn": round(wedge_drawn, 2),
+            "wedge_bal": round(wedge, 2),
+            "excess": round(excess, 2),
+            "shares_delta": round(shares_delta, 4),
+            "growth": round(growth, 2),
+            "cum_income": round(cum_distributions, 2),
+            "roi_dollar": round(roi_dollar, 2),
+            "roi_pct": round(roi_pct, 2),
+        }
+        if not drip:
+            row_data["cash_accumulated"] = round(cash_accumulated, 2)
+        monthly_rows.append(row_data)
+        prev_pv = pv
+
+    total_bought = sum(r["shares_delta"] for r in monthly_rows if r["shares_delta"] > 0)
+    total_sold = sum(-r["shares_delta"] for r in monthly_rows if r["shares_delta"] < 0)
+    initial_shares = sum(s["shares0"] for s in leg_states)
+    final_total = total_values[-1] if total_values else 0.0
+
+    ticker_attribution = []
+    for s in leg_states:
+        final_price = s["prices"][-1] if s["prices"] else s["current_price"]
+        final_value = s["shares"] * final_price
+        ending_wealth = final_value + s["withdrawals_funded"] + s["cash"]
+        pnl = ending_wealth - s["amount"]
+        ticker_attribution.append({
+            "ticker": s["sym"],
+            "initial_amount": round(s["amount"], 2),
+            "initial_weight_pct": round(s["amount"] / investment * 100, 2),
+            "initial_shares": round(s["shares0"], 4),
+            "final_shares": round(s["shares"], 4),
+            "final_value": round(final_value, 2),
+            "distributions_generated": round(s["distributions_generated"], 2),
+            "withdrawals_funded": round(s["withdrawals_funded"], 2),
+            "cash_remaining": round(s["cash"], 2),
+            "ending_wealth": round(ending_wealth, 2),
+            "pnl": round(pnl, 2),
+            "return_pct": round(pnl / s["amount"] * 100, 2) if s["amount"] else 0.0,
+            "price_return_pct": round(
+                (final_price / s["current_price"] - 1.0) * 100, 2
+            ) if s["current_price"] else 0.0,
+            "contribution_pct_points": round(pnl / investment * 100, 2) if investment else 0.0,
+        })
+
+    ticker_ending_wealth = sum(r["ending_wealth"] for r in ticker_attribution)
+    wedge_contribution = cash_wedge_initial if is_growth else 0.0
+    reconciled_total = ticker_ending_wealth + wedge_contribution + unfunded_withdrawals
+
+    fund_result = {
+        "ticker": name,
+        "role": "Growth" if is_growth else "Income",
+        "investment": round(investment, 2),
+        "initial_shares": round(initial_shares, 4),
+        "has_cash_wedge": is_growth and cash_wedge_initial > 0,
+        "cash_wedge_remaining": round(wedge, 2) if is_growth else None,
+        "portfolio_values": portfolio_values,
+        "cumulative_withdrawals": cumulative_withdrawals_list,
+        "cumulative_distributions": cumulative_distributions_list,
+        "total_values": total_values,
+        "shares": share_counts,
+        "monthly_rows": monthly_rows,
+        "total_shares_bought": round(total_bought, 4),
+        "total_shares_sold": round(total_sold, 4),
+        "final_portfolio": portfolio_values[-1] if portfolio_values else 0.0,
+        "final_withdrawn": round(cum_withdrawals, 2),
+        "final_distributions": round(cum_distributions, 2),
+        "final_total": final_total,
+        "depleted": depleted,
+        "depletion_month": _dc_depletion_month(depleted, monthly_rows),
+        "risk_metrics": _dc_risk_metrics(portfolio_values, monthly_rows),
+        "drip": drip,
+        "is_basket": True,
+        "legs": [{"ticker": s["sym"], "amount": round(s["amount"], 2)} for s in leg_states],
+        "ticker_attribution": ticker_attribution,
+        "attribution_reconciliation": {
+            "ticker_ending_wealth": round(ticker_ending_wealth, 2),
+            "cash_wedge_contribution": round(wedge_contribution, 2),
+            "cash_wedge_drawn": round(cum_wedge_drawn, 2),
+            "unfunded_withdrawals": round(unfunded_withdrawals, 2),
+            "reconciled_total": round(reconciled_total, 2),
+            "difference": round(final_total - reconciled_total, 2),
+        },
+    }
+    if not drip:
+        fund_result["cash_accumulated"] = round(_cash_total(), 2)
+    return fund_result
+
+
+def _dc_build_comparison_attribution(results):
+    """Compare ticker P/L for the winning basket against the runner-up basket."""
+    funds = [
+        (key, results[key])
+        for key in ("fund_a", "fund_b", "fund_c")
+        if results.get(key)
+    ]
+    eligible = any(len(fund.get("ticker_attribution") or []) > 1 for _, fund in funds)
+    if not eligible or len(funds) < 2:
+        return {"eligible": False}
+
+    ranked = sorted(funds, key=lambda item: item[1].get("final_total", 0), reverse=True)
+    winner_key, winner = ranked[0]
+    runner_up_key, runner_up = ranked[1]
+    winner_total = float(winner.get("final_total", 0) or 0)
+    runner_up_total = float(runner_up.get("final_total", 0) or 0)
+    lead_total = winner_total - runner_up_total
+    is_tie = winner_total <= runner_up_total * 1.02
+
+    winner_rows = {
+        row["ticker"]: row for row in (winner.get("ticker_attribution") or [])
+    }
+    runner_up_rows = {
+        row["ticker"]: row for row in (runner_up.get("ticker_attribution") or [])
+    }
+    tickers = sorted(set(winner_rows) | set(runner_up_rows))
+    driver_rows = []
+    for ticker in tickers:
+        winner_row = winner_rows.get(ticker)
+        runner_up_row = runner_up_rows.get(ticker)
+        winner_pnl = float(winner_row.get("pnl", 0) or 0) if winner_row else 0.0
+        runner_up_pnl = float(runner_up_row.get("pnl", 0) or 0) if runner_up_row else 0.0
+        driver_rows.append({
+            "ticker": ticker,
+            "winner_pnl": round(winner_pnl, 2) if winner_row else None,
+            "runner_up_pnl": round(runner_up_pnl, 2) if runner_up_row else None,
+            "winner_return_pct": winner_row.get("return_pct") if winner_row else None,
+            "runner_up_return_pct": runner_up_row.get("return_pct") if runner_up_row else None,
+            "impact": round(winner_pnl - runner_up_pnl, 2),
+        })
+    driver_rows.sort(key=lambda row: (-row["impact"], row["ticker"]))
+
+    ticker_effect_total = sum(row["impact"] for row in driver_rows)
+    winner_recon = winner.get("attribution_reconciliation") or {}
+    runner_recon = runner_up.get("attribution_reconciliation") or {}
+    winner_basis = (
+        float(winner.get("investment", 0) or 0)
+        + float(winner_recon.get("cash_wedge_contribution", 0) or 0)
+    )
+    runner_up_basis = (
+        float(runner_up.get("investment", 0) or 0)
+        + float(runner_recon.get("cash_wedge_contribution", 0) or 0)
+    )
+    starting_capital_effect = winner_basis - runner_up_basis
+    unfunded_effect = (
+        float(winner_recon.get("unfunded_withdrawals", 0) or 0)
+        - float(runner_recon.get("unfunded_withdrawals", 0) or 0)
+    )
+    explained = ticker_effect_total + starting_capital_effect + unfunded_effect
+    other_effect = lead_total - explained
+
+    best_by_fund = {}
+    worst_by_fund = {}
+    for key, fund in funds:
+        rows = list(fund.get("ticker_attribution") or [])
+        worst_rows = sorted(
+            rows,
+            key=lambda row: (row.get("return_pct", 0), row.get("ticker", "")),
+        )
+        best_rows = sorted(
+            rows,
+            key=lambda row: (-row.get("return_pct", 0), row.get("ticker", "")),
+        )
+        best_by_fund[key] = {
+            "name": fund.get("ticker", key),
+            "rows": best_rows[:3],
+        }
+        worst_by_fund[key] = {
+            "name": fund.get("ticker", key),
+            "rows": worst_rows[:3],
+        }
+
+    return {
+        "eligible": True,
+        "winner_key": winner_key,
+        "runner_up_key": runner_up_key,
+        "winner_name": winner.get("ticker", winner_key),
+        "runner_up_name": runner_up.get("ticker", runner_up_key),
+        "is_tie": is_tie,
+        "lead_total": round(lead_total, 2),
+        "ticker_effect_total": round(ticker_effect_total, 2),
+        "starting_capital_effect": round(starting_capital_effect, 2),
+        "other_effect": round(other_effect, 2),
+        "driver_rows": driver_rows,
+        "best_by_fund": best_by_fund,
+        "worst_by_fund": worst_by_fund,
+    }
+
+
+def _dc_resolve_side_legs(spec, label, exclude_penny=False, penny_threshold=1.0):
+    """Resolve a portfolio-compare side spec into a normalized config with concrete
+    ``legs=[{ticker, amount}]``. Returns ``(side_cfg, error)``.
+
+    When ``exclude_penny`` is set, portfolio-sourced holdings priced below
+    ``penny_threshold`` are dropped before allocation (so an even split spreads
+    across the remaining tickers). Manual tickers are user-entered and not filtered.
+    """
+    if not spec:
+        return None, None
+    name = (str(spec.get("name") or "").strip()) or label
+    role = str(spec.get("role", "income")).lower()
+    drip = bool(spec.get("drip", True))
+    source = str(spec.get("source", "manual")).lower()
+    allocation_mode = str(spec.get("allocation_mode", "actual")).lower()
+    try:
+        total = float(spec.get("total", 0) or 0)
+    except (TypeError, ValueError):
+        total = 0.0
+
+    raw_legs = []
+    if source == "portfolio":
+        try:
+            pid = int(spec.get("profile_id"))
+        except (TypeError, ValueError):
+            return None, f"{name}: select a portfolio."
+        conn = get_connection()
+        rows = conn.execute(
+            """SELECT ticker, current_value, purchase_value, current_price, quantity
+               FROM all_account_info
+               WHERE profile_id = ? AND current_price IS NOT NULL
+               ORDER BY ticker""",
+            (pid,),
+        ).fetchall()
+        conn.close()
+        agg = {}
+        dropped_penny = 0
+        for r in rows:
+            tk = (r[0] or "").strip().upper()
+            if not tk:
+                continue
+            cp = float(r[3] or 0)
+            if exclude_penny and cp < penny_threshold:
+                dropped_penny += 1
+                continue
+            cur_val = float(r[1] or 0)
+            qty = float(r[4] or 0)
+            if cur_val <= 0 and qty > 0 and cp > 0:
+                cur_val = qty * cp
+            a = agg.setdefault(tk, {"current_value": 0.0, "purchase_value": 0.0})
+            a["current_value"] += cur_val
+            a["purchase_value"] += float(r[2] or 0)
+        tickers = list(agg.keys())
+        if not tickers:
+            if dropped_penny:
+                return None, f"{name}: all holdings are below the ${penny_threshold:g} penny-stock threshold."
+            return None, f"{name}: portfolio has no priced holdings."
+        if allocation_mode == "even":
+            if total <= 0:
+                return None, f"{name}: enter a total dollar amount for the even split."
+            per = total / len(tickers)
+            raw_legs = [{"ticker": t, "amount": per} for t in tickers]
+        else:  # actual market value (fall back to purchase value)
+            for t in tickers:
+                amt = agg[t]["current_value"] or agg[t]["purchase_value"]
+                if amt > 0:
+                    raw_legs.append({"ticker": t, "amount": amt})
+            if not raw_legs:
+                return None, f"{name}: portfolio holdings have no dollar value."
+    else:  # manual
+        legs_in = spec.get("legs") or []
+        ordered_tickers = []
+        for l in legs_in:
+            tk = str(l.get("ticker", "")).strip().upper()
+            if tk and tk not in ordered_tickers:
+                ordered_tickers.append(tk)
+        if not ordered_tickers:
+            return None, f"{name}: add at least one ticker."
+        if allocation_mode == "even":
+            if total <= 0:
+                return None, f"{name}: enter a total dollar amount for the even split."
+            per = total / len(ordered_tickers)
+            raw_legs = [{"ticker": t, "amount": per} for t in ordered_tickers]
+        else:  # per-ticker amounts
+            amt_by_ticker = {}
+            for l in legs_in:
+                tk = str(l.get("ticker", "")).strip().upper()
+                if not tk:
+                    continue
+                try:
+                    amt = float(l.get("amount", 0) or 0)
+                except (TypeError, ValueError):
+                    amt = 0.0
+                amt_by_ticker[tk] = amt_by_ticker.get(tk, 0.0) + amt
+            for t in ordered_tickers:
+                if amt_by_ticker.get(t, 0) > 0:
+                    raw_legs.append({"ticker": t, "amount": amt_by_ticker[t]})
+            if not raw_legs:
+                return None, f"{name}: enter a dollar amount for at least one ticker."
+
+    return {"name": name, "role": role, "is_growth": role == "growth",
+            "drip": drip, "legs": raw_legs}, None
+
+
+def _distribution_compare_portfolio_compute():
+    """Core computation for basket-vs-basket distribution comparison (simulation only)."""
+    data = request.get_json(force=True, silent=True) or {}
+
+    try:
+        duration_months = int(data.get("duration_months", 120))
+    except (TypeError, ValueError):
+        return {"error": "Invalid duration."}
+    if duration_months < 1 or duration_months > 240:
+        return {"error": "Simulation duration must be between 1 and 240 months (20 years max)."}
+
+    market_type = data.get("market", "neutral")
+    try:
+        monthly_withdrawal = float(data.get("monthly_withdrawal", 0))
+    except (TypeError, ValueError):
+        monthly_withdrawal = 0.0
+    if monthly_withdrawal < 0:
+        return {"error": "Monthly withdrawal cannot be negative."}
+
+    withdrawal_strategy = data.get("withdrawal_strategy", "fixed")
+    cash_flow_schedule = None
+    cash_flow_meta = None
+    try:
+        withdrawal_pct = float(data.get("withdrawal_pct", 4))
+    except (TypeError, ValueError):
+        withdrawal_pct = 4.0
+    inflation_rate = data.get("inflation_rate")
+    if inflation_rate is not None:
+        try:
+            inflation_rate = float(inflation_rate)
+        except (TypeError, ValueError):
+            inflation_rate = None
+    try:
+        dynamic_reduce_pct = float(data.get("dynamic_reduce_pct", 25))
+    except (TypeError, ValueError):
+        dynamic_reduce_pct = 25.0
+    try:
+        dynamic_threshold_pct = float(data.get("dynamic_threshold_pct", 80))
+    except (TypeError, ValueError):
+        dynamic_threshold_pct = 80.0
+    try:
+        cash_wedge_initial = float(data.get("cash_wedge", 0))
+    except (TypeError, ValueError):
+        cash_wedge_initial = 0.0
+    if cash_wedge_initial < 0:
+        cash_wedge_initial = 0.0
+
+    if withdrawal_strategy == "cash_flow":
+        cash_flow_schedule, cash_flow_meta, cash_flow_error = (
+            _dc_cash_flow_withdrawal_schedule(data, duration_months)
+        )
+        if cash_flow_error:
+            return {"error": cash_flow_error}
+        monthly_withdrawal = cash_flow_schedule[0] if cash_flow_schedule else 0.0
+
+    exclude_penny = bool(data.get("exclude_penny", False))
+    try:
+        penny_threshold = float(data.get("penny_threshold", 1.0) or 0)
+    except (TypeError, ValueError):
+        penny_threshold = 1.0
+    if penny_threshold < 0:
+        penny_threshold = 0.0
+
+    side_a, err = _dc_resolve_side_legs(data.get("side_a"), "Side A", exclude_penny, penny_threshold)
+    if err:
+        return {"error": err}
+    if not side_a:
+        return {"error": "Side A is required."}
+    side_b, err = _dc_resolve_side_legs(data.get("side_b"), "Side B", exclude_penny, penny_threshold)
+    if err:
+        return {"error": err}
+    if not side_b:
+        return {"error": "Side B is required."}
+    side_c, err = _dc_resolve_side_legs(data.get("side_c"), "Side C", exclude_penny, penny_threshold)
+    if err:
+        return {"error": err}
+
+    results = {}
+    price_path_cache = {}
+    pairs = [("fund_a", side_a), ("fund_b", side_b)]
+    if side_c:
+        pairs.append(("fund_c", side_c))
+    for fkey, side in pairs:
+        fr = _dc_simulate_basket(
+            side["legs"], duration_months=duration_months, market_type=market_type,
+            monthly_withdrawal=monthly_withdrawal, withdrawal_strategy=withdrawal_strategy,
+            withdrawal_pct=withdrawal_pct, inflation_rate=inflation_rate,
+            dynamic_reduce_pct=dynamic_reduce_pct, dynamic_threshold_pct=dynamic_threshold_pct,
+            cash_wedge_initial=cash_wedge_initial, is_growth=side["is_growth"],
+            drip=side["drip"], name=side["name"],
+            price_path_cache=price_path_cache,
+            monthly_withdrawal_schedule=cash_flow_schedule)
+        if isinstance(fr, dict) and "error" in fr:
+            return {"error": fr["error"]}
+        results[fkey] = fr
+
+    results["months"] = [f"Month {i + 1}" for i in range(duration_months)]
+    results["cash_wedge_initial"] = cash_wedge_initial
+    results["comparison_type"] = "portfolio"
+    results["attribution"] = _dc_build_comparison_attribution(results)
+    if cash_flow_meta:
+        results["cash_flow_plan"] = cash_flow_meta
+    return results
+
+
+@app.route("/api/distribution-compare/portfolio-run", methods=["POST"])
+def distribution_compare_portfolio_run():
+    import traceback as _tb
+    try:
+        result = _distribution_compare_portfolio_compute()
+        if isinstance(result, dict) and "error" in result:
+            return jsonify(error=result["error"])
+        return jsonify(**result)
+    except Exception as _e:
+        return jsonify(error=f"Server error: {str(_e)}", detail=_tb.format_exc())
 
 
 # ── Consolidation Analysis ─────────────────────────────────────────────────────
@@ -30520,24 +33451,31 @@ def sp500_performance():
         if hist.empty:
             return jsonify({"error": "No S&P 500 data available"}), 502
 
-        # YTD: compare latest close to last close of prior year
-        first_of_year = hist.loc[hist.index >= str(year_start)]
+        # Yahoo can occasionally return rows whose Close is NaN. Treat those
+        # as unavailable instead of returning HTTP 200 with JSON null values.
+        closes = hist["Close"].dropna()
+        closes = closes[closes.map(lambda value: math.isfinite(float(value)))]
+        if closes.empty:
+            return jsonify({"error": "No valid S&P 500 closing prices available"}), 502
+
+        # YTD: compare latest valid close to last valid close of prior year
+        first_of_year = closes.loc[closes.index >= str(year_start)]
         if first_of_year.empty:
             return jsonify({"error": "No YTD data"}), 502
 
         # Use the close before Jan 1 as the baseline
-        prior = hist.loc[hist.index < str(year_start)]
+        prior = closes.loc[closes.index < str(year_start)]
         if not prior.empty:
-            baseline = float(prior["Close"].iloc[-1])
+            baseline = float(prior.iloc[-1])
         else:
-            baseline = float(first_of_year["Close"].iloc[0])
+            baseline = float(first_of_year.iloc[0])
 
-        latest = float(hist["Close"].iloc[-1])
+        latest = float(closes.iloc[-1])
         ytd_pct = ((latest - baseline) / baseline) * 100
 
         # 1-day change
-        if len(hist) >= 2:
-            prev_close = float(hist["Close"].iloc[-2])
+        if len(closes) >= 2:
+            prev_close = float(closes.iloc[-2])
             day_pct = ((latest - prev_close) / prev_close) * 100
         else:
             day_pct = 0.0
@@ -31008,6 +33946,22 @@ _options_income_tickers = set([
     "CHPY", "GPTY", "TSPY", "TDAQ", "TDAX", "TSYX", "SEPI", "QDVO", "OVL",
     "YMAX", "YMAG", "ULTY", "LFGY", "SLTY", "BIGY", "FIVY",
 ]) | set(_get_single_stock_etfs())
+
+_OPTION_INCOME_TEXT_KEYWORDS = (
+    "option income",
+    "covered call",
+    "buy write",
+    "monthly option",
+    "option premium",
+)
+
+
+def _has_option_income_text(info, name=""):
+    """Detect option-income funds from their Yahoo name or description."""
+    summary = _research_info_value(info, "longBusinessSummary") or ""
+    fund_name = name or info.get("longName") or info.get("shortName") or ""
+    text = f"{fund_name} {summary}".lower().replace("-", " ")
+    return any(keyword in text for keyword in _OPTION_INCOME_TEXT_KEYWORDS)
 
 _TICKER_STRATEGY_OVERRIDES = {
     # Options / Covered Call Income
@@ -31986,6 +34940,43 @@ def _etf_peer_history_metrics(tickers):
     return out
 
 
+@app.route("/api/etf-type-overrides", methods=["GET"])
+def get_etf_type_overrides():
+    conn = get_connection()
+    rows = conn.execute("SELECT ticker, fund_kind, note FROM etf_type_overrides ORDER BY ticker").fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/etf-type-overrides/<ticker>", methods=["POST"])
+def set_etf_type_override(ticker):
+    ticker = ticker.upper().strip()
+    data = request.get_json(force=True)
+    fund_kind = data.get("fund_kind", "option_income")
+    note = data.get("note", "")
+    if fund_kind not in ("option_income", "etf", "cef"):
+        return jsonify({"error": "Invalid fund_kind"}), 400
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO etf_type_overrides (ticker, fund_kind, note) VALUES (?,?,?) "
+        "ON CONFLICT(ticker) DO UPDATE SET fund_kind=excluded.fund_kind, note=excluded.note",
+        (ticker, fund_kind, note),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "ticker": ticker, "fund_kind": fund_kind})
+
+
+@app.route("/api/etf-type-overrides/<ticker>", methods=["DELETE"])
+def delete_etf_type_override(ticker):
+    ticker = ticker.upper().strip()
+    conn = get_connection()
+    conn.execute("DELETE FROM etf_type_overrides WHERE ticker=?", (ticker,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/etf-evaluate/<ticker>")
 def etf_evaluate(ticker):
     """Fetch yfinance data for an ETF and return it alongside category peers from the scanner cache."""
@@ -32062,7 +35053,28 @@ def etf_evaluate(ticker):
 
     etf_cat = info.get("category", "")
     etf_category, etf_strategy, etf_cap_size = _classify_etf(etf_cat, ticker)
-    is_option_income = etf_strategy == "Options Income" or ticker in _options_income_tickers
+
+    try:
+        _ov_conn = get_connection()
+        _ov_row = _ov_conn.execute(
+            "SELECT fund_kind FROM etf_type_overrides WHERE ticker=?", (ticker,)
+        ).fetchone()
+        _ov_conn.close()
+        _override_kind = _ov_row["fund_kind"] if _ov_row else None
+    except Exception:
+        _override_kind = None
+
+    is_option_income = (
+        _override_kind == "option_income"
+        or (
+            _override_kind is None
+            and (
+                etf_strategy == "Options Income"
+                or ticker in _options_income_tickers
+                or _has_option_income_text(info)
+            )
+        )
+    )
 
     inception_ts = info.get("fundInceptionDate")
     inception_date = None
@@ -32353,7 +35365,7 @@ _FUND_KIND_LABEL = {
 _FUND_SCAN_SUGGESTION = {
     "cef": "CEF Buying Checklist",
     "option_income": "Option-Income ETF Evaluator",
-    "etf": "ETF Screen",
+    "etf": "Non Income ETF Checklist Evaluator",
     "other": "Stock Buying Checklist",
 }
 
@@ -32398,7 +35410,11 @@ def _classify_fund_kind(ticker, info, name=None, cef_universe=None):
     if fund_kind == "Closed-End Fund":
         return "cef"
     _, strategy, _ = _classify_etf(info.get("category", ""), ticker)
-    if strategy == "Options Income" or ticker in _options_income_tickers:
+    if (
+        strategy == "Options Income"
+        or ticker in _options_income_tickers
+        or _has_option_income_text(info, name)
+    ):
         return "option_income"
     if fund_kind == "ETF":
         return "etf"

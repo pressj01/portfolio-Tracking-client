@@ -54,6 +54,56 @@ jobs:
       - name: Build frontend and Windows installer
         run: npm run build && npx electron-builder --win --publish never
 
+      - name: Smoke test packaged Windows app
+        shell: powershell
+        run: |
+          $releaseRoot = (Resolve-Path "release\win-unpacked").Path
+          $testData = Join-Path $env:RUNNER_TEMP "portfolio-tracking-smoke"
+          New-Item -ItemType Directory -Path $testData -Force | Out-Null
+          $env:PORTFOLIO_DB_DIR = $testData
+          $exe = Join-Path $releaseRoot "Portfolio Tracking Client.exe"
+
+          try {
+            Start-Process -FilePath $exe `
+              -ArgumentList "--user-data-dir=$testData" `
+              -WorkingDirectory $releaseRoot `
+              -WindowStyle Hidden
+
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 120; $attempt++) {
+              try {
+                Invoke-RestMethod -Uri "http://127.0.0.1:5001/api/profiles" -TimeoutSec 2 | Out-Null
+                $ready = $true
+                break
+              }
+              catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+
+            $startupLog = Join-Path $testData "startup.log"
+            if (-not $ready) {
+              if (Test-Path $startupLog) {
+                Get-Content $startupLog
+              }
+              throw "The packaged Windows application did not become ready."
+            }
+            if (-not (Test-Path (Join-Path $testData "portfolio.db"))) {
+              throw "The packaged backend did not create its per-user database."
+            }
+            Get-Content $startupLog
+          }
+          finally {
+            Get-CimInstance Win32_Process |
+              Where-Object {
+                $_.ExecutablePath -and
+                $_.ExecutablePath.StartsWith($releaseRoot, [StringComparison]::OrdinalIgnoreCase)
+              } |
+              ForEach-Object {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+              }
+          }
+
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
@@ -73,7 +123,15 @@ jobs:
 
   build-mac:
     if: ${{ github.event.inputs.platform != 'windows' }}
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout code
@@ -103,15 +161,15 @@ jobs:
         run: npm ci
 
       - name: Build frontend and Mac installer
-        run: npm run build && npx electron-builder --mac --publish never
+        run: npm run build && npx electron-builder --mac dmg --${{ matrix.arch }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Upload Mac installer
         uses: actions/upload-artifact@v4
         with:
-          name: PortfolioTrackingClient-Mac
-          path: |
-            release/*.dmg
-            release/*.zip
+          name: PortfolioTrackingClient-Mac-${{ matrix.arch }}
+          path: release/*.dmg
 
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -119,6 +177,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          files: |
-            release/*.dmg
-            release/*.zip
+          files: release/*.dmg

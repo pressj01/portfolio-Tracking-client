@@ -1,6 +1,6 @@
 ﻿import React, { useState } from 'react'
 
-const APP_VERSION = '1.31.9'
+const APP_VERSION = '1.31.14'
 
 const GROUPS = [
   {
@@ -36,6 +36,7 @@ const GROUPS = [
       { id: 'holdings', label: 'Holdings' },
       { id: 'reinvestment-impact', label: 'Reinvestment Impact' },
       { id: 'categories', label: 'Categories' },
+      { id: 'holding-targets', label: 'Holding Targets' },
       { id: 'growth', label: 'Growth' },
       { id: 'growth-2', label: 'Portfolio Growth 2' },
       { id: 'dividends', label: 'Dividends' },
@@ -55,7 +56,7 @@ const GROUPS = [
     label: 'Checklists',
     sections: [
       { id: 'stock-buying-checklist', label: 'Stock Buying Checklist' },
-      { id: 'etf-buying-checklist-evaluator', label: 'ETF Checklist Evaluator' },
+      { id: 'etf-buying-checklist-evaluator', label: 'Non Income ETF Checklist Evaluator' },
       { id: 'option-income-etf-evaluator', label: 'Option-Income ETF Evaluator' },
     ],
   },
@@ -75,6 +76,7 @@ const GROUPS = [
       { id: 'etf-screen', label: 'Stock & ETF Analysis' },
       { id: 'etf-comparer', label: 'ETF Comparer' },
       { id: 'stock-comparer', label: 'Stock Comparer' },
+      { id: 'stock-valuation', label: 'Stock Valuation (DCF)' },
       { id: 'dist-compare', label: 'Distribution Compare' },
       { type: 'heading', label: 'Screeners & Signals' },
       { id: 'general-scanner', label: 'General Scanner' },
@@ -93,6 +95,8 @@ const GROUPS = [
       { type: 'heading', label: 'Planning & Optimization' },
       { id: 'portfolio-builder', label: 'Portfolio Builder' },
       { id: 'portfolio-tester', label: 'Portfolio Tester' },
+      { id: 'cash-flow', label: 'Cash Flow & Sustainability' },
+      { id: 'retirement-readiness', label: 'Retirement Readiness' },
       { id: 'rebalance-wizard', label: 'Rebalance Wizard' },
     ],
   },
@@ -624,6 +628,7 @@ function DashboardHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li><strong>Portfolio Grade</strong> — composite grade based on yield, growth, and risk metrics.</li>
         <li><strong>Ulcer / Calmar / Omega / Sortino / Sharpe</strong> — risk-adjusted performance ratios.</li>
+        <li><strong>Lifetime Income</strong> — total dividend income received by the selected account across all years.</li>
         <li><strong>YTD Dividends</strong> — total dividends received year-to-date.</li>
         <li><strong>[Month] Income</strong> (e.g. "May Income") — dividends actually received this calendar month from recorded payments, with a subtitle showing the number of recorded payments through today. Estimated only when no payment history exists.</li>
         <li><strong>Est. Monthly Income</strong> — estimated monthly dividend income across all holdings (annual estimate ÷ 12).</li>
@@ -1346,7 +1351,7 @@ function ReinvestmentImpactHelp() {
         The <strong>Reinvestment Impact</strong> page shows how dividend reinvestment (DRIP) is reshaping your
         portfolio over time — decomposing payout growth into share accumulation, distribution-rate changes,
         and price effects — and projects how reinvestment compounds income forward under different market
-        scenarios. It has two modes: <strong>Historical</strong> and <strong>Projection</strong>.
+        scenarios. It has three modes: <strong>Historical</strong>, <strong>Projection</strong>, and <strong>Price Impact</strong>.
       </p>
 
       <p style={{ marginBottom: '1rem' }}>
@@ -1544,6 +1549,133 @@ function ReinvestmentImpactHelp() {
         distributions are largely sustainable (funded by options premiums, not return-of-capital erosion).
         The scenario growth rates (±1–4% / yr) still apply, so projections reflect modestly growing or
         declining distributions rather than holding them flat forever.
+      </div>
+
+      {/* ── Price Impact ───────────────────────────────────────── */}
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Price Impact Tab</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Price Impact</strong> tab answers a different question than Projection:
+        <em> if portfolio prices fell or rose today, how would current income and reinvested future income change?</em>
+        It is a price-shock model, not a market-scenario model. Projection asks how income grows under Bullish,
+        Neutral, or Bearish paths over time; Price Impact holds the selected price change constant and shows how
+        cheaper or more expensive shares affect income, reinvestment, and monthly additions.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/reinvestment-impact/price-impact-top.png" alt="Reinvestment Impact Price Impact tab top section showing controls, summary tiles, math help, break-even panel, and current income by price change chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>Price Impact tab top section: Fund, Horizon, Price Change slider, Reinvest %, Monthly Add, summary tiles, Math help, Break-Even panel, and the Current Income by Portfolio Price Change chart.</p>
+      </div>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Controls</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Fund</strong> — choose a single ticker or leave it on Whole Portfolio. Selecting one fund clears category filters and reveals the Break-Even panel for that holding.</li>
+        <li><strong>Categories</strong> — when viewing the whole portfolio, restrict the model to one or more categories or sub-categories. This lets you test how a price shock affects only one sleeve of the portfolio.</li>
+        <li><strong>Horizon</strong> — 1, 3, 5, 10, or 20 years. This controls the forward reinvestment projection, not the current-income snapshot.</li>
+        <li><strong>Price Change</strong> — the main what-if input. The slider and quick buttons model a portfolio price drop as low as <strong>-60%</strong> or a price rise as high as <strong>+100%</strong>. The number box lets you type an exact percentage.</li>
+        <li><strong>Reinvest %</strong> — how much of each modeled distribution is reinvested in the forward projection. The <strong>Est</strong> and <strong>Actual 3mo</strong> shortcuts work the same way they do on Projection.</li>
+        <li><strong>Monthly Add</strong> — a fixed monthly contribution included in the forward projection. It buys shares at the adjusted price, so lower modeled prices buy more shares and higher modeled prices buy fewer.</li>
+      </ul>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Summary Tiles</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Price Change</strong> — the selected shock and the portfolio value before and after the shock. Example: $552,182 to $607,400 at +10%.</li>
+        <li><strong>Current Monthly</strong> — the modeled current monthly income after applying the price shock and payout-sensitivity model. The small "base" value underneath is today's unshocked monthly income.</li>
+        <li><strong>Current Annual</strong> — the modeled current annual income after the same price shock. The small "base" value underneath is today's unshocked annual income.</li>
+        <li><strong>Monthly in N yr</strong> — the final projected monthly income at the selected horizon after reinvestment and monthly additions are compounded at the adjusted price.</li>
+        <li><strong>Annual in N yr</strong> — the final projected annual income at the selected horizon after reinvestment and monthly additions.</li>
+        <li><strong>Projected Change</strong> — the difference between projected annual income at the selected horizon and the price-adjusted current annual income. This is intentionally compared to the adjusted current income, not the original baseline, so the percentage reflects compounding after the shock.</li>
+      </ul>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Math Help Panel</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Math help</strong> disclosure explains the assumptions used by this tab. The most important point is that
+        income does <strong>not</strong> move one-for-one with price. Each holding gets an <strong>income beta</strong> based on its
+        income strategy, and the model applies only that fraction of the price move to the payout.
+      </p>
+      <p style={{ marginBottom: '0.5rem' }}>The payout formula is:</p>
+      <pre style={{ whiteSpace: 'pre-wrap', background: 'var(--p-0f141c)', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.75rem', marginBottom: '1rem' }}>
+{`adjusted distribution per share =
+latest distribution per share × (1 + price change × income beta)`}
+      </pre>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Covered-call / option-income funds</strong> — use a lower payout beta because their income comes from option premium, volatility, strategy rules, and distribution policy as much as NAV. A price drop does not automatically mean the payout drops by the same percentage.</li>
+        <li><strong>BDCs, CEFs, preferreds, bonds, loans, and fixed-income style holdings</strong> — also use dampened payout betas because income is tied more to portfolio holdings, credit, and distribution policy than to market price alone.</li>
+        <li><strong>Declared-dividend holdings</strong> — use the default lower sensitivity because a stock price move does not automatically change the declared dividend immediately.</li>
+      </ul>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Break-Even Panel in Price Impact</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        When a single fund is selected, the Break-Even panel appears above the charts. It uses the same single-ticker logic as the other tabs:
+        Cost Basis compares current position value to what you paid, while Total Return includes dividends already collected. This helps you
+        interpret the Price Impact model alongside your actual recovery position. For example, a BDC may still be below cost basis on price,
+        but above break-even on total return after years of distributions.
+      </p>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Current Income by Portfolio Price Change</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This chart is the cleanest view of the immediate payout model. It shows how current monthly and current annual income change across
+        the full -60% to +100% price range. The orange dotted vertical line marks the selected price change. The chart is read-only, so dragging
+        on it cannot change the model or reshape the axes.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Current monthly</strong> — modeled monthly income after the price shock and payout beta.</li>
+        <li><strong>Current annual</strong> — modeled annual income after the price shock and payout beta.</li>
+        <li><strong>Selected price</strong> — the vertical reference line showing the price-change setting currently selected in the controls.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        If this line slopes gently instead of sharply, that is expected: the model is intentionally not assuming payout moves one-for-one with price.
+        Covered-call funds, BDCs, CEFs, and similar income funds should generally show dampened current-income movement.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/reinvestment-impact/price-impact-bottom.png" alt="Price Impact bottom section showing projected income after reinvestment chart, chart-specific help, projected monthly income chart, and top contributors table" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>Price Impact bottom section: Projected Income After Reinvestment chart, chart-specific help, Projected Monthly Income chart, and Top Income Contributors table.</p>
+      </div>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Projected Income After Reinvestment by Price Change</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This chart is easy to misunderstand because it is <strong>not</strong> only showing the immediate payout change. It shows the projected result
+        after the selected horizon, reinvestment rate, and monthly additions have compounded. That means lower prices can sometimes produce higher
+        projected income even though current payout is modeled lower.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Projected annual after reinvestment</strong> — the final annual income at the selected horizon after reinvested distributions and monthly additions buy shares at each price-change level.</li>
+        <li><strong>Projected monthly after reinvestment</strong> — the same final-period income expressed monthly.</li>
+        <li><strong>Current annual payout</strong> — dashed reference line showing the modeled current annual payout after the price shock, before compounding. Compare this to the projected line to separate payout pressure from future share accumulation.</li>
+        <li><strong>Selected price</strong> — orange dotted vertical line marking the current price-change setting.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The chart-specific help below the graph explains the key interpretation: if the dashed payout line falls while the projected line rises,
+        the model is saying income is lower today, but reinvestment at cheaper prices may buy enough extra shares to produce more future income
+        by the selected horizon.
+      </p>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Projected Monthly Income at Selected Price Change</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This chart switches from the full price range to the single selected price change. It shows the month-by-month income path through the selected horizon.
+        It is useful for seeing whether the projected income improvement is immediate, gradual, or mostly back-loaded from compounding. A flatter line means
+        the payout and share count are changing slowly; a steeper line means reinvestment and additions are meaningfully increasing shares.
+      </p>
+
+      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Top Income Contributors at Adjusted Price</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The table explains which holdings drive the projected income number. It ranks holdings by projected annual income at the adjusted price and shows:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Ticker / Description</strong> — the holding being modeled.</li>
+        <li><strong>Price</strong> — today's price.</li>
+        <li><strong>Adjusted</strong> — the price after applying the selected price change.</li>
+        <li><strong>Income Model</strong> — the strategy bucket and beta used for the holding, such as Income fund (10%) or Option income (20%). This makes the math auditable.</li>
+        <li><strong>End Shares</strong> — simulated shares after reinvestment and monthly additions.</li>
+        <li><strong>Projected Annual</strong> — final annual income for the holding at the selected horizon.</li>
+        <li><strong>Growth</strong> — percentage growth from adjusted current annual income to projected annual income for that holding.</li>
+      </ul>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.5rem' }}>
+        <strong>How to read this tab:</strong> Use <strong>Current Income by Portfolio Price Change</strong> to understand
+        immediate payout sensitivity. Use <strong>Projected Income After Reinvestment</strong> to understand what compounding
+        might do after reinvestment and monthly additions. If those two charts point in different directions, the model is
+        separating today's payout pressure from future share accumulation at cheaper or more expensive prices.
       </div>
     </div>
   )
@@ -3438,22 +3570,23 @@ function ETFScreenHelp() {
       <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Reading the Panel</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Regime badge</strong> — The current regime (Bull / Bear / Sideways) as of the most recent bar.</li>
-        <li><strong>What usually comes next</strong> — Given today's regime, the historical probability that the next bar is Bull, Sideways, or Bear (the dominant outcome is emphasized). This is a base-rate tendency, <em>not</em> a price prediction.</li>
-        <li><strong>Trend stickiness</strong> — How likely the current regime is to persist (High ≥ 80%, Moderate ≥ 60%, otherwise Low/choppy). High stickiness means trends tend to continue; low means the regime flips often.</li>
+        <li><strong>Smoothed next-bar estimate</strong> — Given today's regime, the estimated probability that the next bar is Bull, Sideways, or Bear. The displayed <strong>n</strong> is the number of observed transitions behind that row; small n means low confidence. This is a base-rate tendency, <em>not</em> a price prediction.</li>
+        <li><strong>Estimated stickiness</strong> — How likely the current regime label is to persist (High ≥ 80%, Moderate ≥ 60%, otherwise Low/choppy). Because consecutive lookback windows overlap, high persistence is partly mechanical and does not mean the next price will be flat.</li>
+        <li><strong>Current log move</strong> — Shows the exact lookback return being compared with the threshold. If it is near the boundary, small lookback or threshold changes can legitimately flip the current classification and switch which matrix row is displayed.</li>
         <li><strong>Regime shading</strong> — The chart background behind the candles is tinted by regime (green Bull, rose Bear, faint grey Sideways) so you can see how regimes line up with price.</li>
       </ul>
 
       <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>How the Labeling Works</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Before the model can estimate probabilities it must first label every bar. For each bar on the chart the
-        model asks one question: <em>"How much has price moved, as a percentage, over the past N bars?"</em> The
+        model asks one question: <em>"What is the log-return over the past N bars?"</em> The
         answer to that one question determines the regime label for that bar. The two controls — Lookback and
         Move Threshold — together define what N is and what "enough of a move" means.
       </p>
 
       <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Move Threshold (%)</h4>
       <p style={{ marginBottom: '0.75rem' }}>
-        The move threshold is the <strong>minimum percentage move that counts as a real directional move</strong>.
+        The move threshold is the <strong>minimum log-return percentage that counts as a real directional move</strong>.
         Think of it as the signal filter sitting between raw price data and the model. Here is the exact rule applied
         to every bar:
       </p>
@@ -3465,6 +3598,12 @@ function ETFScreenHelp() {
       <p style={{ marginBottom: '0.75rem' }}>
         The threshold does not affect the chart directly — it affects how the data going <em>into</em> the model is
         classified, which in turn changes every probability the model produces.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The classification is intentionally a hard boundary. For example, +4.9% is Sideways at a 5% threshold,
+        while +5.1% is Bull. Changing the lookback also changes the historical comparison price, so the current
+        move does not have to rise smoothly as the lookback increases. Use the current log-move readout to see
+        when the model is close to this boundary.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
@@ -3573,10 +3712,12 @@ function ETFScreenHelp() {
 
       <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>Advanced Details</h4>
       <p style={{ marginBottom: '1rem' }}>
-        Click <strong>Advanced</strong> to reveal the full 3×3 <strong>transition matrix</strong> (rows = today's
-        regime, columns = next bar; each row sums to 100% and the diagonal is persistence) and the
+        Click <strong>Advanced</strong> to reveal the full 3×3 <strong>smoothed transition matrix</strong>
+        (rows = today's regime, columns = next bar; each row sums to 100% and the diagonal is persistence) and the
         <strong> long-run base rate</strong> — the share of time price spends in each regime over the long run if
-        these odds hold. The base rate is a backdrop for comparison, not a forecast.
+        these odds hold. Each row shows its observed transition count (n). A small Jeffreys prior adds 0.5 to
+        each possible outcome so rows with little history do not jump to misleading 0% or 100% estimates; n=0
+        is prior-only. The base rate is solved from the smoothed matrix and is a backdrop for comparison, not a forecast.
       </p>
     </div>
   )
@@ -4277,13 +4418,15 @@ function PortfolioTesterHelp() {
       <p style={{ marginBottom: '1rem' }}>
         Portfolio Tester runs a head-to-head historical backtest between <strong>two portfolios</strong>
         (A and B) — up to <strong>75 tickers each</strong> — with an optional benchmark, over any
-        Yahoo Finance date range from <strong>6 months to 25 years</strong>. It produces a full suite of
-        financial metrics, a head-to-head score card that calls out the winner, and interactive
-        growth, drawdown, annual-return, rolling-CAGR, and monthly-income charts.
+        Yahoo Finance date range from <strong>6 months to 25 years</strong>. <strong>Growth</strong> mode
+        compares total return, while <strong>Income</strong> mode models distribution taxes, spending,
+        reinvestment, inflation, and an optional benchmark that sells shares to match the same income.
+        Results include financial metrics, a head-to-head score card, and interactive growth, drawdown,
+        annual-return, rolling-CAGR, residual-principal, and monthly-income charts.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/portfolio-tester/Screenshot 2026-05-09 123458.jpg" alt="Portfolio Tester backtest results" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/portfolio-tester/portfolio-tester-income-summary.png" alt="Portfolio Tester Income mode settings, score card, income summary, total return, and performance summary" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
@@ -4310,7 +4453,8 @@ function PortfolioTesterHelp() {
         Weights must sum to <strong>100%</strong> before you can run. The <strong>Equal</strong> button splits
         weight evenly across all tickers in the portfolio; <strong>Normalize</strong> rescales whatever
         weights you already entered so they sum to 100%. <strong>Clear</strong> empties the portfolio.
-        The row footer shows the running total in green (at 100%) or amber (off).
+        You can edit each row's weight directly with whole numbers or decimals. The row footer shows the
+        running total in green (at 100%) or amber (off).
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Run Settings</h3>
@@ -4319,8 +4463,21 @@ function PortfolioTesterHelp() {
         <li><strong>Initial</strong> — starting investment for the backtest (default $10,000). Applied equally to both portfolios and the benchmark.</li>
         <li><strong>Benchmark checkbox + ticker</strong> — uncheck the <strong>Benchmark</strong> box to run <em>Portfolio A vs Portfolio B only</em> with no benchmark line. Check it to include a reference ticker (default <code>SPY</code>; change to <code>QQQ</code>, <code>VTI</code>, etc. as needed).</li>
         <li><strong>Rebalance</strong> — None, Monthly, Quarterly, or Annually. If set, each portfolio is rebalanced back to its target weights at that frequency.</li>
-        <li><strong>Include dividends</strong> — when off, the backtest runs on pure price-only returns. When on, dividends are paid through the simulation.</li>
-        <li><strong>Reinvest dividends</strong> — only meaningful if Include Dividends is on. When on (DRIP), distributions buy more shares at the pay date; when off, they accumulate as cash drag and are tallied as "total distributions paid."</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Growth and Income Modes</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        The mode buttons change how distributions are handled and which income controls appear:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Growth</strong> — use <strong>Include dividends</strong> to choose total-return or price-only history. When <strong>Reinvest dividends</strong> is on, each distribution buys more shares on its pay date; when off, it remains cash and is reported as distributions paid.</li>
+        <li><strong>Income → Spend all distributions</strong> — takes every after-tax distribution as spendable income instead of reinvesting it.</li>
+        <li><strong>Income → Spend target, reinvest surplus</strong> — targets the annual <strong>Withdraw %/yr</strong> of the initial investment. The target grows by the selected inflation rate; distributions above it are reinvested and any shortfall is funded by selling shares.</li>
+        <li><strong>Income → Reinvest (DRIP)</strong> — reinvests after-tax distributions into the paying holding.</li>
+        <li><strong>Income → Exclude</strong> — runs a price-only comparison without distributions.</li>
+        <li><strong>Dist. tax %</strong> — a blended tax rate applied to every distribution before it is spent or reinvested.</li>
+        <li><strong>Inflation %</strong> — grows a target withdrawal and converts ending principal into start-date purchasing power for the <strong>Real Principal</strong> result.</li>
+        <li><strong>Benchmark = sell to match income</strong> — when income is spent, makes the benchmark deliver the same net cash by selling shares. This turns the ending-principal comparison into an apples-to-apples answer to “would I have been better off just selling the index?”</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Coverage Validation (Hard Stop)</h3>
@@ -4342,7 +4499,7 @@ function PortfolioTesterHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Head-to-Head Score Card</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        At the top of the results, eight key metrics are shown as side-by-side score cards with the
+        At the top of the results, eight core metrics are shown as side-by-side score cards with the
         winning value <strong>bolded in green with a ✓</strong>:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
@@ -4350,11 +4507,23 @@ function PortfolioTesterHelp() {
         <li><strong>Std Dev</strong> — lower (less volatile) wins.</li>
         <li><strong>Max Drawdown</strong> — higher (less negative) wins.</li>
         <li><strong>Sharpe</strong>, <strong>Sortino</strong>, <strong>MAR / Calmar</strong> — higher wins.</li>
+        <li><strong>Total Dividends</strong> — also appears when distributions are included.</li>
       </ul>
       <p style={{ marginBottom: '1rem' }}>
         A header badge calls out the <strong>overall winner</strong> — the portfolio that won the most
         metrics — or "Tied" if they match. The score card is only meaningful when two portfolios are
         present; with one portfolio, it shows its values without a winner concept.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Income Summary</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Income mode adds a table for each portfolio and, when enabled, the sell-to-match benchmark.
+        <strong> Income Taken</strong> is spendable after-tax cash; <strong>Reinvested Surplus</strong> is
+        cash above a spending target that bought more shares; and <strong>Tax Paid</strong> is the modeled
+        distribution tax. <strong>Residual Principal</strong> is the nominal ending balance, while
+        <strong> Real Principal</strong> restates it in start-date dollars. <strong>Total Outcome</strong>
+        combines residual principal and income taken. Yield on Cost and Worst 12-mo Income provide
+        additional income context.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Total Return</h3>
@@ -4384,8 +4553,15 @@ function PortfolioTesterHelp() {
         <li><strong>Growth & Drawdown</strong> — Dual-panel chart. The top panel shows portfolio value over time starting at your Initial amount. The bottom panel shows <strong>drawdown from peak</strong> (% below the running all-time high; 0% = at peak, −20% = 20% below prior peak and not yet recovered). A gray zero-reference line anchors the drawdown panel.</li>
         <li><strong>Annual Returns</strong> — Grouped bar chart by calendar year. <strong>Only complete Jan–Dec years</strong> are shown — partial-year stubs are excluded so short runs don't get misleading bars. If your range doesn't cover a full year, the panel shows a note telling you to extend the range.</li>
         <li><strong>Rolling 1-Year CAGR</strong> — Rolling trailing-12-month return for each portfolio, useful for spotting which regime periods each strategy excelled in.</li>
-        <li><strong>Monthly Dividend Income</strong> — Grouped bars of cash distributions received per month. Only shown when Include Dividends is on. Bars are anchored to the month-start so labels line up cleanly with the calendar. A caption under the chart totals the distributions for each portfolio.</li>
+        <li><strong>Residual Principal</strong> — shown when Income mode spends distributions. Every line delivered the same net income; the remaining balance shows which approach preserved more principal.</li>
+        <li><strong>Monthly Dividend / Net Income</strong> — grouped monthly bars. Growth mode shows distributions received; spend-oriented Income mode shows the cash actually taken. A caption totals the distributions or net income for each portfolio.</li>
       </ul>
+      <div style={{ marginBottom: '1rem' }}>
+        <img src="./help-screenshots/portfolio-tester/portfolio-tester-growth-drawdown.png" alt="Portfolio Tester growth, drawdown, and annual returns charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+      </div>
+      <div style={{ marginBottom: '1rem' }}>
+        <img src="./help-screenshots/portfolio-tester/portfolio-tester-income-charts.png" alt="Portfolio Tester rolling CAGR, residual principal, and monthly net income charts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+      </div>
       <p style={{ marginBottom: '1rem', color: 'var(--text-dim)', fontSize: '0.88rem' }}>
         All chart values are formatted to two decimal places on both hover tooltips and axis ticks.
       </p>
@@ -5063,6 +5239,141 @@ function RetirementReadinessHelp() {
   )
 }
 
+function CashFlowHelp() {
+  return (
+    <div>
+      <h2>Cash Flow &amp; Sustainability</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Cash Flow &amp; Sustainability is the monthly planning page for matching your bills against portfolio
+        distributions and any additional income you save in the app. It lets you track when bills are due,
+        when you want to pay them, what has already been paid, and whether the selected portfolio can keep
+        covering those bills over time.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/cash-flow/cash-flow-overview.png"
+          alt="Cash Flow and Sustainability page showing monthly summary cards, expenses table with due date and pay by columns, and additional income section"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>What the top section shows</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>View month</strong> - choose the month you want to review. Totals, due dates, pay-by dates, and paid status all reflect that month.</li>
+        <li><strong>Expenses This Month</strong> - total of active bills scheduled for the selected month.</li>
+        <li><strong>Portfolio Income (Gross / After Tax)</strong> - the selected account or aggregate portfolio's current monthly distributions before and after the portfolio-income tax assumption.</li>
+        <li><strong>Additional Income</strong> - non-portfolio income you entered here, such as Social Security, pension, or rental income.</li>
+        <li><strong>Leftover cards</strong> - how much remains after bills, first before tax and then after the portfolio tax setting.</li>
+        <li><strong>Status banner</strong> - quickly tells you whether the selected month's bills are covered and how much portfolio-only funding is needed.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Managing expenses</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Add expense</strong> - enter the bill name, amount, frequency, and optional category, then open the dates and notes area for the schedule details.</li>
+        <li><strong>Active from</strong> - the first month the bill should begin appearing.</li>
+        <li><strong>Due date</strong> - the date the bill is due. This is fully editable.</li>
+        <li><strong>Pay by</strong> - defaults to 2 days before the due date, but you can edit it to whatever reminder date you prefer.</li>
+        <li><strong>Stop after</strong> - optional end date if the bill should stop automatically after a specific month.</li>
+        <li><strong>Paid checkbox</strong> - tracks whether that bill occurrence has been paid. It follows the bill's due occurrence instead of blindly clearing at every month change.</li>
+      </ul>
+
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each expense row also includes actions for <strong>Edit</strong>, <strong>Move</strong>, <strong>Save off</strong>, and
+        <strong> Delete</strong>. <strong>Move</strong> transfers the saved item to another individual account or an aggregate account.
+        <strong> Save off</strong> keeps the bill in history but removes it from active monthly totals until you restore it.
+      </p>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+        <strong>Why pay dates matter:</strong> some bills are due at the beginning of a month but get paid near the end of the prior month.
+        The separate <strong>Due date</strong> and <strong>Pay by</strong> fields are there so you can track both the real bill deadline and
+        your own payment timing.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Managing additional income</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Add income</strong> - save outside income sources like Social Security, pension, salary, or rent.</li>
+        <li><strong>Tax %</strong> - each income item can carry its own tax treatment, separate from the portfolio-income tax assumption.</li>
+        <li><strong>Move</strong> - transfers the saved income source to another account or aggregate when you want that income tied somewhere else.</li>
+        <li><strong>Save off</strong> - archives the income source without deleting it so it can be restored later.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Running the sustainability test</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The Forward Stress Test section projects whether the selected portfolio can continue paying your bills for the chosen horizon.
+        You can save assumptions and run scenarios both <strong>with</strong> and <strong>without</strong> your additional income.
+      </p>
+
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Horizon</strong> - number of years to project.</li>
+        <li><strong>Expense inflation</strong> - how quickly bills grow over time.</li>
+        <li><strong>Portfolio income tax</strong> - tax rate applied to portfolio distributions in the cash-flow model.</li>
+        <li><strong>Starting cash reserve</strong> - extra cash available before the model would ever need to sell shares.</li>
+        <li><strong>Unused income after bills</strong> - controls what the model does with surplus cash, such as reinvesting it into more shares.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/cash-flow/cash-flow-sustainability-results.png"
+          alt="Cash Flow and Sustainability forward stress test showing the assumptions area, explanation panel, and bull neutral bear scenario results"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to read the scenario table</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Bull / Neutral / Bear</strong> - the model tests positive, moderate, and negative market paths.</li>
+        <li><strong>Portfolio + Additional Income</strong> - includes the saved outside-income entries.</li>
+        <li><strong>Portfolio Distributions Only</strong> - excludes all additional-income entries so you can see what the portfolio alone can support.</li>
+        <li><strong>All bills covered by income</strong> - distributions and allowed income covered every projected bill without selling shares.</li>
+        <li><strong>Some shares must be sold</strong> - bills were larger than available income and reserve cash in that scenario, so the model had to draw on principal.</li>
+        <li><strong>Portfolio value after X years</strong> - projected ending account value.</li>
+        <li><strong>Portfolio growth</strong> - dollar change between the starting and ending portfolio value.</li>
+        <li><strong>Final distributions</strong> - projected monthly and yearly gross income being generated at the end of the test.</li>
+      </ul>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+        <strong>How this model works:</strong> it uses the selected portfolio's current distribution yield as the income starting point, changes
+        distributions separately from market value, and reinvests surplus cash when you choose a reinvestment option. That is why the final
+        income can rise even when the market path is uneven.
+      </div>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/cash-flow/cash-flow-projected-balance-chart.png"
+          alt="Projected Portfolio Balance chart comparing bull neutral and bear scenarios with and without additional income"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Projected balance chart</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The line chart shows the portfolio path over time for all six scenario combinations: bull, neutral, and bear, each with and without
+        additional income. Solid lines include additional income. Dotted lines show portfolio-only results. Hover any year to compare the
+        projected balances side by side.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Saved-off items and transfers</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Saved expenses</strong> and <strong>Saved additional income</strong> sections keep archived items out of the active monthly plan.</li>
+        <li><strong>Restore</strong> brings a saved-off item back into the current plan.</li>
+        <li><strong>Delete</strong> permanently removes it.</li>
+        <li><strong>Move</strong> preserves the same saved item while changing which account or aggregate owns it.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Suggested workflow</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Pick the month you want to plan.</li>
+        <li>Add or update all recurring bills, including due date and pay-by date.</li>
+        <li>Mark bills paid as you work through the month.</li>
+        <li>Add outside income sources that should count toward bill coverage.</li>
+        <li>Set your stress assumptions and choose what to do with leftover income.</li>
+        <li>Run the sustainability test and compare the with-income and portfolio-only columns.</li>
+      </ol>
+    </div>
+  )
+}
+
 function DividendCalculatorHelp() {
   return (
     <div>
@@ -5086,7 +5397,8 @@ function DividendCalculatorHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Years to Invest</strong> — Length of the projection (1–50 years).</li>
         <li><strong>Initial Investment Per Ticker</strong> — Starting dollar amount applied to each ticker. Updating this value re-derives the share count for any already-loaded tickers.</li>
-        <li><strong>Annual Investment (split equally)</strong> — Total dollars added each year, divided evenly across all loaded tickers and contributed at the end of each compounding period.</li>
+        <li><strong>Annual Investment Total</strong> — Total new dollars added each year and contributed at the end of each compounding period.</li>
+        <li><strong>Annual Contribution Split</strong> — Allocates the annual investment equally, by each ticker's current or starting value, or by custom per-ticker amounts. It does not change the initial investment.</li>
         <li><strong>Dividend Tax Rate</strong> — Applied to taxable dividends each period. The Return of Capital % on each ticker reduces the taxable portion.</li>
         <li><strong>Stock Price Growth (All Tickers)</strong> — Default annual price appreciation applied to every ticker. You can override this per ticker after it loads.</li>
         <li><strong>Dividends Reinvested (DRIP)</strong> — Percentage of net dividends reinvested each period (0–100%). Anything not reinvested is tracked as cash dividends.</li>
@@ -5097,7 +5409,7 @@ function DividendCalculatorHelp() {
         Type a symbol (e.g. <code>SCHD</code>, <code>JEPI</code>, <code>AAPL</code>) into the ticker bar and click
         <strong> Add Ticker</strong>. The app fetches current price, dividend yield, dividend growth rate, and
         payout frequency from Yahoo Finance, then auto-fills the row. Add as many tickers as you like — the
-        annual contribution is split equally across them and final results are aggregated.
+        selected annual contribution split is applied across them and final results are aggregated.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
         Each ticker becomes its own card with editable fields. Click the <strong>x</strong> on a chip or the
@@ -5748,7 +6060,27 @@ function BlendedYieldHelp() {
         If not found, you'll be prompted to enter the yield manually (saves to your browser).
       </p>
 
-      <h4 style={{ marginBottom: '0.5rem' }}>Step 3: Configure Each Fund</h4>
+      <h4 style={{ marginBottom: '0.5rem' }}>Step 3: Load Tickers From Your Portfolio</h4>
+      <p style={{ marginBottom: '1rem' }}>
+        Click <strong>From Portfolio</strong> to open a picker with your current holdings. Use search to narrow the list,
+        check any combination of tickers, or use <strong>Select All</strong> and <strong>Deselect All</strong> to quickly
+        choose the full portfolio or clear the selection. Click <strong>Add Tickers</strong> to add the selected holdings
+        with their current values as allocations.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        You can still add tickers that are not in your portfolio with the manual ticker box. Portfolio-loaded tickers and
+        manually added tickers can be mixed in the same blended-yield scenario.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
+        <img
+          src="./help-screenshots/blended-yield/04-portfolio-picker.png"
+          alt="Blended Yield Calculator portfolio picker with search, Select All, Deselect All, and Add Tickers controls"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
+
+      <h4 style={{ marginBottom: '0.5rem' }}>Step 4: Configure Each Fund</h4>
       <p style={{ marginBottom: '1rem' }}>
         For each fund card, enter:
       </p>
@@ -5769,7 +6101,7 @@ function BlendedYieldHelp() {
         />
       </div>
 
-      <h4 style={{ marginBottom: '0.5rem' }}>Step 4: Review Portfolio Summary</h4>
+      <h4 style={{ marginBottom: '0.5rem' }}>Step 5: Review Portfolio Summary</h4>
       <p style={{ marginBottom: '1rem' }}>
         The <strong>Portfolio Summary</strong> shows your blended yield (TEY), after-tax yield, annual and monthly income.
         A color-coded allocation bar shows fund weights. A detailed breakdown table lists every fund with yields,
@@ -5828,9 +6160,160 @@ function BlendedYieldHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Compare Allocations:</strong> Adjust allocation % or $ in any card to test different portfolio mixes. Find the best after-tax income for your goals.</li>
         <li><strong>Verify Tax Classifications:</strong> Wrong tax type = wrong after-tax yield. Double-check corporate bonds (Fully Taxable), Treasuries (State Exempt), national munis (Fed Exempt), and option funds (ROC).</li>
+        <li><strong>Load a Partial Portfolio:</strong> Use From Portfolio to select only the holdings you want to compare, or Select All to model the whole portfolio.</li>
         <li><strong>Save Custom Brackets Once:</strong> If rates change, edit and save custom brackets once. They persist until you click Restore 2025 Defaults.</li>
         <li><strong>Manual Fund Lookup:</strong> If a ticker doesn't auto-populate, search your broker for the current yield and enter it manually. It saves with a blue ★ badge for next time.</li>
       </ul>
+    </div>
+  )
+}
+
+function StockValuationHelp() {
+  const imgStyle = { maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }
+  const h3 = { color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }
+  return (
+    <div>
+      <h2>Stock Valuation (DCF)</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Stock Valuation screen estimates what a stock is <strong>worth</strong> and tells you whether
+        today's price is <strong>undervalued, fairly valued, or overvalued</strong>. Type a ticker and it
+        builds an intrinsic value from a discounted cash flow blended with several fair-value models, shows a
+        plain over/under verdict, and lays out a full ratio scorecard. It is built for operating companies;
+        funds (ETFs, CEFs, mutual funds, BDCs) are turned away because a company DCF doesn't apply to them.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/stock-valuation/verdict-and-intrinsic-value.jpg" alt="Stock Valuation verdict banner, intrinsic-value method table, implied-price chart, and editable DCF assumptions" style={imgStyle} />
+      </div>
+
+      <h3 style={h3}>The Verdict Banner</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The banner compares the current price to the blended fair value and reads <strong>Undervalued</strong>{' '}
+        (more than 15% below fair value), <strong>Fairly Valued</strong> (within ±15%), or{' '}
+        <strong>Overvalued</strong>. <strong>Margin of safety</strong> is the discount to fair value — positive
+        is a cushion, negative means you're paying a premium. <strong>Confidence</strong> (high / medium / low)
+        tells you how much to trust the number — see the accuracy section below.
+      </p>
+
+      <h3 style={h3}>How Fair Value Is Estimated</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Up to five methods are computed where the data allows, then blended into one intrinsic value (the
+        surviving low–high range is shown beside it):
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '0.75rem' }}>
+        <li><strong>Discounted cash flow (≈45% weight)</strong> — projects free cash flow forward, with the
+          growth rate <em>fading</em> from the stage-1 rate down to the terminal rate over the horizon, adds a
+          Gordon-growth terminal value, discounts it all to today, and bridges to equity value with net cash.
+          Carries the most weight when free cash flow is positive; for banks and no-cash-flow names it drops
+          out and the multiples carry the estimate.</li>
+        <li><strong>Fair forward P/E, P/B, P/S</strong> — a conservative sector "fair" multiple applied to
+          forward EPS, book value per share, and sales per share.</li>
+        <li><strong>Dividend discount model</strong> — for dividend payers, the present value of the growing
+          future dividend stream (Gordon model).</li>
+      </ul>
+
+      <h3 style={h3}>Editable DCF Assumptions</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The DCF is pre-filled with automatic defaults — growth from analyst/historical figures (capped 3–20%),
+        a discount rate from the CAPM cost of equity (using beta), 2.5% terminal growth, and a 10-year horizon.
+        These are <em>starting points, not gospel</em>. Edit any of the four inputs and press{' '}
+        <strong>Recompute</strong> to run bull/bear scenarios; the blended value and verdict update live. This
+        is the single most useful habit on this screen — see how far the fair value moves when you nudge the
+        growth or discount rate, because that swing <em>is</em> the uncertainty.
+      </p>
+
+      <h3 style={h3}>Outlier Exclusion &amp; Confidence</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The methods don't always agree. A method that lands wildly out of line with the others — e.g. a sector
+        price/sales multiple applied to a very-low-margin company — is flagged <strong>"excluded — outlier"</strong>{' '}
+        and dropped from the blend so one wild estimate can't drag the result. The{' '}
+        <strong>Confidence</strong> label then reflects how tightly the <em>surviving</em> methods agree:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '0.75rem' }}>
+        <li><strong>High</strong> — the methods cluster tightly; the fair value is relatively trustworthy.</li>
+        <li><strong>Medium</strong> — the methods show meaningful spread; sanity-check before acting.</li>
+        <li><strong>Low</strong> — the methods disagree a lot; treat the fair value as a rough signal only and
+          lean on the ratio scorecard and your own judgment.</li>
+      </ul>
+
+      <h3 style={h3}>The Ratio Scorecard</h3>
+      <div style={{ marginBottom: '1rem' }}>
+        <img src="./help-screenshots/stock-valuation/ratio-scorecard.jpg" alt="Stock Valuation ratio scorecard: valuation multiples, profitability, financial health, and risk-adjusted returns with section grades and per-metric badges" style={imgStyle} />
+      </div>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Separate from the valuation verdict (is it <em>cheap</em>?), the scorecard grades whether it's a{' '}
+        <em>good</em> business (and a safe one). Any ratio Yahoo omits but that can be derived from the
+        financial statements is computed (FCF yield, debt ratio, interest coverage, payout/PEG/ROE/ROA
+        fallbacks). Each metric is colour-graded against a sector benchmark or standard threshold, and each
+        section gets its own score:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '0.75rem' }}>
+        <li><strong>Valuation multiples</strong> — forward P/E, PEG, P/B, P/S, FCF yield, dividend payout vs. the sector.</li>
+        <li><strong>Profitability &amp; returns</strong> — ROE, ROA, and operating/net/gross margins.</li>
+        <li><strong>Financial health</strong> — debt/equity, debt ratio, interest coverage, current ratio.</li>
+        <li><strong>Risk-adjusted returns</strong> — Sharpe, Sortino, Calmar, and Omega ratios over ~3 years of daily prices.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each metric has its own <strong>"How to read these"</strong> drop-down on the screen with plain-English
+        explanations.
+      </p>
+
+      <h3 style={h3}>How Accurate Is This? (Please read)</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Be honest with yourself about what this is: a <strong>model</strong>, not a price target. It is only as
+        good as the data it's fed and the assumptions behind it, and small assumption changes move the answer a
+        lot. Specifically:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '0.75rem' }}>
+        <li><strong>Garbage in, garbage out.</strong> Everything comes live from Yahoo Finance. Stale, missing,
+          or quirky figures flow straight through. If a number on the page looks wrong, it probably is.</li>
+        <li><strong>The DCF is assumption-sensitive.</strong> The fair value can swing 30–50% from a couple of
+          points of growth or discount rate. The auto-filled growth (capped at 20%) is often too optimistic for
+          mature companies whose near-term growth is elevated off a depressed base — always Recompute with a
+          rate you actually believe.</li>
+        <li><strong>Accounting quirks break individual methods.</strong> Companies with negative book equity
+          (heavy buybacks/leverage) produce a negative or meaningless Price/Book and ROE; thin-margin firms
+          break Price/Sales. The model excludes gross outliers, but it can't repair distorted inputs.</li>
+        <li><strong>It's a snapshot, not a forecast of the business.</strong> It doesn't know about lawsuits,
+          a pipeline, a turnaround, or a secular decline — only the trailing numbers.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Worked example — Altria (MO), above.</strong> The screen shows a fair value of about $180 vs a
+        $73 price — a tempting "59% undervalued." But notice the warning signs working together: Confidence is
+        only <strong>Medium</strong>, the methods span roughly $18 to $230, Return on Equity reads −198% and
+        Price/Book is negative (Altria has <em>negative shareholder equity</em> from years of buybacks and
+        debt), and the headline is dominated by a DCF running a 20% growth rate — implausible for a company
+        with declining cigarette volumes. Drop the growth to something realistic (say 2–4%) and Recompute, and
+        that $180 falls sharply. The model isn't lying to you — the Medium-confidence flag and the red
+        profitability rows are it telling you <em>not</em> to take the headline at face value.
+      </p>
+
+      <h3 style={h3}>How Confidence Affects Accuracy</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Treat Confidence as the screen's own honesty meter about the fair value:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '0.75rem' }}>
+        <li><strong>High confidence</strong> — independent methods landed close together. The fair value is
+          worth taking seriously, though it's still an estimate.</li>
+        <li><strong>Medium confidence</strong> — the methods spread out. Use the fair value as a ballpark, not a
+          number; cross-check the scorecard and Recompute with your own assumptions.</li>
+        <li><strong>Low confidence</strong> — the methods badly disagree (often with one already excluded as an
+          outlier). The single fair-value figure is close to meaningless on its own — lean on the scorecard, the
+          per-method range, and your own read of the business instead.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A useful rule of thumb: the wider the per-method range and the lower the confidence, the more the
+        verdict is a <em>conversation starter</em> rather than an answer. A confident verdict that lines up with
+        a strong scorecard is the strongest signal this screen produces; a low-confidence verdict that conflicts
+        with the scorecard is a flag to dig deeper, not a green light.
+      </p>
+
+      <p style={{ marginBottom: '0.75rem', color: 'var(--p-9aa7b8)', fontSize: '0.9rem' }}>
+        Data is fetched live from Yahoo Finance. The DCF treats free cash flow as firm-level and the discount
+        rate as a CAPM cost of equity (not a full WACC) — pragmatic simplifications you can override. This is
+        decision support and an educational tool, <strong>not investment advice</strong>. Always do your own
+        research before buying or selling.
+      </p>
     </div>
   )
 }
@@ -5875,7 +6358,7 @@ function StockBuyingChecklistHelp() {
         can be graded as stocks.
       </p>
       <p style={{ marginBottom: '0.75rem', color: 'var(--p-9aa7b8)', fontSize: '0.9rem' }}>
-        For skipped tickers, use the dedicated evaluators: <strong>ETF Buying Checklist</strong> for broad
+        For skipped tickers, use the dedicated evaluators: <strong>Non Income ETF Checklist Evaluator</strong> for broad
         ETFs, <strong>Option-Income ETF Evaluator</strong> for covered-call/put-write funds, and
         <strong>CEF Buying Checklist</strong> for closed-end funds and BDCs.
       </p>
@@ -5913,9 +6396,9 @@ function StockBuyingChecklistHelp() {
 function ETFBuyingChecklistHelp() {
   return (
     <div>
-      <h2>ETF Buying Checklist Evaluator</h2>
+      <h2>Non Income ETF Checklist Evaluator</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The ETF Buying Checklist Evaluator grades any broad-market, sector, dividend, or specialty ETF across
+        The Non Income ETF Checklist Evaluator grades any broad-market, sector, dividend, or specialty ETF across
         seven structured criteria. It fetches live data for the ticker, scores each criterion Pass / Warn / Fail,
         rolls them up into a composite verdict, and suggests smarter alternatives when the fund falls short.
         It is designed for standard (non-option-income) ETFs — use the Option-Income ETF Evaluator for
@@ -5938,7 +6421,7 @@ function ETFBuyingChecklistHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf_checklist_top.jpg" alt="ETF Buying Checklist Evaluator top — ticker lookup, verdict card, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf_checklist_top.jpg" alt="Non Income ETF Checklist Evaluator top — ticker lookup, verdict card, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Seven Criteria</h3>
@@ -6020,7 +6503,7 @@ function ETFBuyingChecklistHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf-buy-checklist-bottom.jpg" alt="ETF Buying Checklist Evaluator bottom — smart alternatives and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/etf-buying-checklist-evaluator/etf-buy-checklist-bottom.jpg" alt="Non Income ETF Checklist Evaluator bottom — smart alternatives and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Smart Alternatives</h3>
@@ -6213,7 +6696,7 @@ function OptionIncomeETFHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When to Use It</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>Use this evaluator for any ETF that primarily generates income from selling options (covered calls, puts, collars).</li>
-        <li>Use the <strong>ETF Buying Checklist Evaluator</strong> for standard index, sector, or dividend ETFs without an option-overlay strategy.</li>
+        <li>Use the <strong>Non Income ETF Checklist Evaluator</strong> for standard index, sector, or dividend ETFs without an option-overlay strategy.</li>
         <li>Use the <strong>CEF Buying Checklist Evaluator</strong> (CEF's menu) for closed-end funds, which add discount/premium and leverage dimensions.</li>
       </ul>
     </div>
@@ -6390,6 +6873,171 @@ function CEFBuyingChecklistHelp() {
   )
 }
 
+function HoldingTargetsHelp() {
+  return (
+    <div>
+      <h2>Holding Targets</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Holding Targets</strong> is the ticker-level planning layer that sits between Categories and the Rebalance Wizard.
+        Plan buys and sales for each holding, preview how trades would change your income and allocation, and distribute
+        reallocation cash without leaving the page. Changes are what-if only — nothing executes until you act in your broker.
+      </p>
+
+      <figure style={{ margin: '0 0 1.5rem' }}>
+        <img
+          src="./help-screenshots/holding-targets/holding-targets-overview-plan.png"
+          alt="Holding Targets overview with a loaded plan, summary cards, Reallocation Cash Pool, and Category and Pillar Breakdown"
+          loading="lazy"
+          decoding="async"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+        <figcaption style={{ color: 'var(--text-dim)', fontSize: '.78rem', lineHeight: 1.5, marginTop: '.4rem' }}>
+          Overview: plan controls and status, scenario totals, the Reallocation Cash Pool, and the Category / Pillar Breakdown.
+        </figcaption>
+      </figure>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Quick-Set Controls</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Set every holding to X% of portfolio</strong> — type a percentage and click <strong>Apply</strong> to bulk-assign that weight to every holding at once. Use this as a starting point, then fine-tune individual rows in the table below.</li>
+        <li><strong>Enter amounts as % / $ / Shares</strong> — sets the default unit for every Buy / Sell box and Reinvest allocation. A trade can be entered as a percentage of the whole portfolio, a dollar amount, or a number of shares. You can switch units inside an individual trade box without changing the global default.</li>
+        <li><strong>Adjust all categories to a 100% portfolio</strong> — when checked, the adjusted scenario rescales all requested targets proportionally so they sum to exactly 100%, regardless of what you entered. Uncheck to keep your raw requested weights as-is.</li>
+        <li><strong>Save adjusted targets</strong> — copies the currently adjusted weights into the saved plan, making the adjusted scenario the plan you see when it is loaded again.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Saved Plan Status</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Plan loaded</strong> — the tables and totals are showing your saved targets and their proposed trades.</li>
+        <li><strong>Show current weights</strong> — temporarily returns the page to the live, trade-free portfolio without deleting the saved plan.</li>
+        <li><strong>Load plan</strong> — reapplies a saved plan after you have switched back to current weights.</li>
+        <li><strong>Discard plan</strong> — permanently removes the saved ticker targets for this portfolio view.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Portfolio / # holdings</strong> — active portfolio name and how many holdings are covered by this scenario.</li>
+        <li><strong>Requested Total</strong> — sum of all your requested target weights. Shown in amber when over 100%, red when significantly over.</li>
+        <li><strong>Adjusted Scenario</strong> — what the targets become after the auto-adjust rescaling (if enabled). "Every requested target × X.XXXX" shows the scaling factor applied.</li>
+        <li><strong>Net Trade</strong> — estimated net cash flow if all proposed trades executed. Positive = net buy (requires new cash); zero = cash-neutral rebalance.</li>
+        <li><strong>Monthly Income After</strong> — projected monthly income after all proposed trades, with the monthly and annual change vs. today.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Reallocation Cash Pool</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The cash pool lets you plan how to deploy proceeds from proposed sales into holdings you want to grow.
+        It activates when a proposed sale generates proceeds and you check <strong>Reinvest</strong> beside a recipient holding in the table below.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Manual Pool Cash Available</strong> — total proceeds available to distribute after covering planned buys.</li>
+        <li><strong>Allocation Entered / Cash Remaining</strong> — how much of the pool you've assigned so far and what's left.</li>
+        <li><strong>Selected Recipients</strong> — count of holdings marked Reinvest that will receive distributed cash.</li>
+        <li><strong>Projected Monthly / Annual Income Gain</strong> — estimated additional income from the planned cash distribution.</li>
+        <li><strong>Enter the amount on each row</strong> — once a holding is checked as a recipient, an inline box appears right on that row in the table below. Type the amount you want to send it directly there — in portfolio percent, dollars, or shares depending on the global <strong>Enter amounts as</strong> toggle. A small <em>+$X/mo</em> hint shows the income that allocation would add.</li>
+        <li><strong>Auto-fill</strong> — three shortcuts that populate the per-row amounts for you, so you don't have to type each one:
+          <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginTop: '0.4rem' }}>
+            <li><em>Equal</em> — splits the available pool evenly across all selected recipients.</li>
+            <li><em>By Gap</em> — sends more to categories furthest below their target %.</li>
+            <li><em>By Yield</em> — weights by distribution yield to maximize added monthly income.</li>
+          </ul>
+          You can fine-tune any individual row by hand after running an auto-fill.
+        </li>
+        <li><strong>Apply Allocation</strong> — commits the entered per-row amounts to the requested targets and refreshes the income projections.</li>
+        <li><strong>Clear Selections</strong> — removes all Reinvest checkmarks and resets allocations.</li>
+        <li><strong>Cash Pool ↑ / ↓</strong> — collapses or expands the cash pool panel.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Category / Pillar Breakdown Table</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The main table groups all holdings by category (and subcategory). Each category row shows a summary,
+        and each holding row provides Buy and Sell controls for planning its target.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Category Plan</strong> — the category's target % from the Categories page.</li>
+        <li><strong>Requested</strong> — the sum of all requested ticker weights within that category.</li>
+        <li><strong>Coverage</strong> — how the requested sum compares to the Category Plan. Shown in amber/red when significantly over.</li>
+        <li><strong>Adjusted</strong> — the ticker weights after the auto-adjust scaling factor is applied.</li>
+        <li><strong>Current</strong> — actual current allocation % in the live portfolio.</li>
+        <li><strong>Monthly Income Now / After</strong> — current monthly income and projected monthly income after proposed trades.</li>
+        <li><strong>Current Value / Target Value / To Target</strong> — dollar value today, dollar value at the target weight, and the difference (red = need to sell, green = need to buy).</li>
+        <li><strong>Reinvest checkbox</strong> — marks a holding as a recipient for cash-pool distribution.</li>
+        <li><strong>Equal weight / Keep current buttons</strong> (category footer) — shortcuts to split the category plan equally among its holdings, or reset all holdings in the category to their current actual weights.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Per-Holding Tables</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Below the breakdown, each category (Anchors, Boosters, Growth, etc.) expands into its own table where you review positions and plan trades ticker by ticker.
+      </p>
+
+      <figure style={{ margin: '0 0 1.5rem' }}>
+        <img
+          src="./help-screenshots/holding-targets/holding-targets-category-holdings.png"
+          alt="Anchors and Boosters holding tables showing shares held, requested targets, Buy and Sell controls, and projected income"
+          loading="lazy"
+          decoding="async"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+        <figcaption style={{ color: 'var(--text-dim)', fontSize: '.78rem', lineHeight: 1.5, marginTop: '.4rem' }}>
+          Category tables: compare current shares and weights with requested targets, then open Buy or Sell for the holding you want to change.
+        </figcaption>
+      </figure>
+
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Shares Held / Price</strong> — current shares held and the latest price per share.</li>
+        <li><strong>Yield</strong> — the holding's projected forward yield (annualized distribution ÷ price). Use it as a quick reference when deciding which holdings to reallocate <em>toward</em> — higher-yield names add more monthly income per dollar moved.</li>
+        <li><strong>% of category / Current %</strong> — the holding's share of its category today, and its share of the whole portfolio today.</li>
+        <li><strong>Requested Target</strong> — a read-only summary of the planned position shown in portfolio percent, dollars, and total shares. Use the separate Buy / Sell controls to change it.</li>
+        <li><strong>Plan Trade</strong> — click <strong>Buy</strong> or <strong>Sell</strong> to open the focused trade box beneath that holding.</li>
+        <li><strong>Adjusted %</strong> — the target after the auto-adjust scaling factor is applied.</li>
+        <li><strong>Buy / Sell $ &amp; Buy / Sell Shares</strong> — the trade implied by the gap between current and target, shown in both dollars and shares.</li>
+        <li><strong>Monthly Income Now / +/-</strong> — current monthly income from the holding and how it would change under the proposed target.</li>
+        <li><strong>Reinvest / Alloc</strong> — check to make the holding a cash-pool recipient; an inline amount box then appears for you to type its share of the pool.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Buy / Sell Trade Box</h3>
+      <figure style={{ margin: '0 0 1.25rem' }}>
+        <img
+          src="./help-screenshots/holding-targets/holding-targets-buy-plan-editor.png"
+          alt="Loaded Buy trade box for a comparison holding with the planned share amount restored"
+          loading="lazy"
+          decoding="async"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+        <figcaption style={{ color: 'var(--text-dim)', fontSize: '.78rem', lineHeight: 1.5, marginTop: '.4rem' }}>
+          A loaded Buy plan: the existing amount is restored, the requested target and projected trade remain visible, and the result can be reviewed before applying changes.
+        </figcaption>
+      </figure>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Click <strong>Buy</strong> or <strong>Sell</strong> on the holding row. The action can also be changed inside the box.</li>
+        <li>Choose <strong>Portfolio %</strong>, <strong>Dollars</strong>, or <strong>Shares</strong>, then enter the amount. Switching units converts the current amount rather than clearing it.</li>
+        <li>Review <strong>Planned Buy / Sell</strong> and <strong>Position After Trade</strong>. A sale larger than the position is blocked.</li>
+        <li>Click <strong>Apply Buy to Plan</strong> or <strong>Apply Sale to Plan</strong>. Reopening the same planned trade restores its amount and displays <strong>Current plan loaded</strong>.</li>
+      </ol>
+      <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>Requested vs. adjusted trade:</strong> when automatic 100% adjustment is enabled, the final adjusted dollar and share trade shown on the row can be proportionally different from the amount entered in the trade box.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Uncategorized Holdings</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Any holding that hasn't been assigned to a category on the <strong>Categories</strong> page appears in an
+        <strong> Uncategorized</strong> group at the bottom. You can still set targets and use the cash pool for
+        uncategorized holdings — assign them to categories later on the Categories page to track them within a pillar.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Workflow Tips</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Use <strong>Set every holding to X%</strong> to seed all weights, then use each row's <strong>Buy</strong> or <strong>Sell</strong> box to refine individual holdings.</li>
+        <li>Enable <strong>Adjust all categories to 100%</strong> so the scaled scenario always sums cleanly — watch the Coverage column to see where you're over or under within each category.</li>
+        <li>When a category is over its plan, use the <strong>Equal weight</strong> shortcut in that category's header to redistribute evenly among its members.</li>
+        <li>To redeploy sale proceeds, plan a <strong>Sell</strong>, then check <strong>Reinvest</strong> on destination holdings and either type each allocation inline or use an <strong>Auto-fill</strong> shortcut (Equal, By Gap, By Yield) before clicking <strong>Apply Allocation</strong>.</li>
+        <li>Click <strong>Save adjusted targets</strong> when you want the proportionally adjusted scenario to replace the requested values in your saved plan.</li>
+      </ol>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
+        <strong>No trades execute here.</strong> Holding Targets is a planning and preview tool. To generate actual broker trade instructions, use the <strong>Rebalance Wizard</strong> (button in the top-right corner or the Analysis → Planning menu).
+      </div>
+    </div>
+  )
+}
+
 const CONTENT_MAP = {
   overview: Overview,
   'action-center': ActionCenterHelp,
@@ -6405,6 +7053,7 @@ const CONTENT_MAP = {
   holdings: HoldingsHelp,
   'reinvestment-impact': ReinvestmentImpactHelp,
   categories: CategoriesHelp,
+  'holding-targets': HoldingTargetsHelp,
   growth: GrowthHelp,
   'growth-2': PortfolioGrowth2Help,
   dividends: DividendsHelp,
@@ -6421,6 +7070,7 @@ const CONTENT_MAP = {
   'etf-screen': ETFScreenHelp,
   'etf-comparer': ETFComparerHelp,
   'stock-comparer': StockComparerHelp,
+  'stock-valuation': StockValuationHelp,
   'stock-buying-checklist': StockBuyingChecklistHelp,
   'etf-buying-checklist-evaluator': ETFBuyingChecklistHelp,
   'option-income-etf-evaluator': OptionIncomeETFHelp,
@@ -6435,6 +7085,7 @@ const CONTENT_MAP = {
   analytics: AnalyticsHelp,
   'portfolio-builder': PortfolioBuilderHelp,
   'portfolio-tester': PortfolioTesterHelp,
+  'cash-flow': CashFlowHelp,
   'dist-compare': DistCompareHelp,
   consolidation: ConsolidationHelp,
   'macro-dashboard': MacroDashboardHelp,
