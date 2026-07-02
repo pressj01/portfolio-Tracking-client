@@ -93,6 +93,7 @@ const GROUPS = [
       { id: 'consolidation', label: 'Consolidation Analysis' },
       { id: 'macro-dashboard', label: 'Macro Regime Dashboard' },
       { type: 'heading', label: 'Planning & Optimization' },
+      { id: 'growth-income-freedom', label: 'Growth & Income Freedom' },
       { id: 'portfolio-builder', label: 'Portfolio Builder' },
       { id: 'portfolio-tester', label: 'Portfolio Tester' },
       { id: 'cash-flow', label: 'Cash Flow & Sustainability' },
@@ -5239,6 +5240,182 @@ function RetirementReadinessHelp() {
   )
 }
 
+function GrowthIncomeFreedomHelp() {
+  return (
+    <div>
+      <h2>Growth &amp; Income Freedom Simulator</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Growth &amp; Income Freedom Simulator compares two accumulation strategies while both receive
+        the same starting capital, monthly contributions, simulation length, and market shocks. It can
+        compare Income vs Income, Growth vs Growth, Income vs Growth, Custom vs Custom, or any mixture
+        of those styles. Its purpose is to show which approach may build the most wealth, produce the
+        most distribution income, withstand poor markets, or reach a financial-freedom target.
+      </p>
+
+      <div className="alert alert-info" style={{ marginBottom: '1.25rem' }}>
+        <strong>Accumulation-phase rule:</strong> the simulation makes no withdrawals. Every dividend
+        and distribution is reinvested into the security that paid it, including distributions paid
+        by holdings inside a Growth strategy.
+      </div>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/growth-income-freedom/01-strategy-setup-and-assumptions.png"
+          alt="Growth and Income Freedom Simulator showing the simulation length, two strategy builders, portfolio holdings, shared assumptions, and Run comparison button"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>1. Choose the Simulation Length</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Simulation length</strong> selector is in the blue simulation-method bar above the
+        strategy cards. Choose any whole year from 1 through 25. The text beneath the selector confirms
+        the equivalent number of modeled months. Changing the length makes existing results stale; run
+        the comparison again to calculate the new horizon.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>2. Build Strategy A and Strategy B</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Strategy name</strong> — Defaults to the imported portfolio name, but it can be edited so the result cards are easy to identify.</li>
+        <li><strong>Strategy style</strong> — Labels the strategy as Income, Growth, or Custom / mixed. This label organizes the comparison; it does not suppress income, force a return, or override the behavior of the actual holdings.</li>
+        <li><strong>Saved portfolio</strong> — The dropdown is divided into <strong>Individual accounts</strong> and <strong>Aggregate accounts</strong>. It imports the selected account's tickers and current proportional weights.</li>
+        <li><strong>Aggregate account</strong> — Combines the holdings of every member portfolio configured for that aggregate on the budgeting/Cash Flow page. Duplicate tickers are merged, and their values and annual income are summed before portfolio weights and yields are calculated.</li>
+        <li><strong>Imported current value</strong> — The value displayed beside the dropdown is a reference only. The simulation starts each side with the shared <strong>Starting capital per strategy</strong>, not the imported individual or aggregate account value.</li>
+        <li><strong>Entire portfolio</strong> — Includes every imported holding. The active weights are normalized to 100% for the simulation.</li>
+        <li><strong>Choose individual holdings</strong> — Opens a searchable checklist. Search by ticker or security name, clear the selection, and check only the stocks or ETFs to test. The selected subset is automatically normalized to 100% while preserving its relative portfolio weights.</li>
+        <li><strong>Build from tickers</strong> — Lets you assemble a strategy manually. Enter a supported ticker and select <strong>Add ticker</strong>. The lookup imports the security description, current price, current distribution yield, classification, and simulation behavior.</li>
+        <li><strong>Check all / Uncheck all</strong> — Enables or disables every ticker in the strategy at once. Disabled rows remain available to recheck and are excluded from the run.</li>
+        <li><strong>Equal weight</strong> — Assigns the same percentage to every enabled holding.</li>
+        <li><strong>Normalize to 100%</strong> — Scales enabled weights proportionally until their total is exactly 100%.</li>
+        <li><strong>Clear</strong> — Removes every holding from that side and returns it to manual ticker-building mode.</li>
+        <li><strong>Row checkbox</strong> — Includes or excludes one holding without deleting it. The × button permanently removes that ticker from the strategy list.</li>
+        <li><strong>Weight</strong> — Controls how much of the strategy is assigned to that holding. Only enabled holdings with positive weights enter the simulation.</li>
+        <li><strong>Current yield</strong> — Shows the security's current annualized distribution yield. Forward payout stress and yield ceilings may prevent an unusually high current yield from compounding indefinitely.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>3. Enter the Shared Comparison Assumptions</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        These settings are deliberately shared so neither strategy receives a capital or contribution
+        advantage.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Starting capital per strategy</strong> — The amount invested in each strategy at month zero. If it is $100,000, both Strategy A and Strategy B start with $100,000.</li>
+        <li><strong>Monthly contribution per strategy</strong> — New money added separately to each strategy every month. Contributions follow the strategy's target weights and include growth holdings that pay no distributions.</li>
+        <li><strong>Inflation</strong> — The assumed annual inflation rate. It converts nominal future dollars into real, today's-dollar results.</li>
+        <li><strong>Freedom target</strong> — The desired monthly income or spending capacity in today's dollars. A $5,000 target means $60,000 per year of real purchasing power.</li>
+        <li><strong>Estimated annual spending rate</strong> — Converts the real ending balance into an estimated annual spending capacity. For example, a 4% rate on a $1,000,000 real balance equals $40,000 per year, or about $3,333 per month. This is a reporting metric; no shares are sold and no money is withdrawn during the run.</li>
+        <li><strong>Monte Carlo paths</strong> — The number of simulated market paths per scenario. 300 is faster, 500 is the standard setting, and 1,000 gives steadier percentile and probability estimates at the cost of additional run time.</li>
+        <li><strong>Add a combined strategy</strong> — Adds a third result made by blending Strategies A and B. The slider controls the percentage assigned to each side, and the combined holdings are normalized before simulation.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>4. Run the Comparison</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The line above <strong>Run comparison</strong> confirms the selected years, number of competing
+        strategies, and three market scenarios. The button remains unavailable until both main
+        strategies contain at least one enabled ticker with a positive weight. Selecting it calibrates
+        the holdings and runs Bull, Neutral, and Bear simulations.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Ticker capacity</strong> — Each strategy supports up to 250 unique tickers, allowing large aggregate accounts and blended portfolios.</li>
+        <li><strong>Large-run protection</strong> — Memory use grows with unique tickers × simulation months × Monte Carlo paths. If that combination is too large, the page asks you to shorten the horizon, reduce the path count, or select fewer tickers instead of risking an out-of-memory failure.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How the Simulation Works</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Every run generates correlated monthly return paths. All competing strategies receive the same
+        broad-market shock in a given path and month, which keeps the contest fair, while each holding
+        retains its own expected return, volatility, market sensitivity, payout behavior, and
+        classification. Available historical market data is blended with longer-term assumptions so a
+        short or unusually strong history does not dominate a long projection.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Neutral</strong> — Blends historical market behavior with forward strategy assumptions and represents the central long-run case.</li>
+        <li><strong>Bull</strong> — Applies expansionary early conditions and then gradually fades toward the neutral assumptions.</li>
+        <li><strong>Bear</strong> — Applies an early negative shock and elevated volatility, followed by recovery and a gradual return toward neutral conditions.</li>
+        <li><strong>100% DRIP</strong> — Every distribution buys more shares of the security that paid it. This applies equally to Income, Growth, Custom, and blended strategies.</li>
+        <li><strong>Growth holdings can produce income</strong> — Strategy style never discards a dividend. If a growth ETF or stock pays a distribution, the model records it as income and reinvests it.</li>
+        <li><strong>No double counting</strong> — Total return already contains the economic value of distributions. The engine separates price movement from the cash payout, reinvests that payout, and tracks it without adding the same return twice.</li>
+        <li><strong>Contributions</strong> — Monthly deposits are invested after that month's return and distribution processing, following the target weights.</li>
+        <li><strong>Payout realism</strong> — Distribution growth, payout stress, and strategy-specific sustainable-yield ceilings keep extreme current yields from creating an unrealistic share-count spiral.</li>
+        <li><strong>Common random conditions</strong> — Both sides experience the same simulated market environment, so differences come from their holdings and weights rather than one side receiving luckier random paths.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/growth-income-freedom/02-winners-income-and-metrics.png"
+          alt="Growth and Income Freedom results showing Bull Neutral and Bear winner cards, selected scenario winner, projected distribution income, and detailed strategy metrics"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>5. Read the Bull, Neutral, and Bear Winner Cards</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Each top card names that scenario's winner and shows every strategy's median real ending portfolio value and real monthly distribution income.</li>
+        <li>Values are in today's dollars after inflation. They are medians across the simulated paths, not guaranteed outcomes.</li>
+        <li>Select a Bull, Neutral, or Bear card to open that scenario in the detailed results below.</li>
+        <li>The winner cards use the current <strong>Winner determined by</strong> goal. Changing that goal can change the named winner without rerunning the simulation because all four comparison metrics are already calculated.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How “Winner Determined By” Works</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Financial-freedom probability</strong> — Uses the percentage of paths whose ending organic income or estimated spending capacity reaches the monthly Freedom target. Either route can satisfy the target.</li>
+        <li><strong>Real ending wealth</strong> — Selects the strategy with the highest median inflation-adjusted ending portfolio value.</li>
+        <li><strong>Real monthly income</strong> — Selects the strategy with the highest median inflation-adjusted monthly distribution run rate at the final year.</li>
+        <li><strong>Downside resilience</strong> — Selects the strategy with the highest 10th-percentile real ending value. This emphasizes the weaker simulated outcomes rather than the median.</li>
+        <li><strong>Ties</strong> — Probabilities within 0.5 percentage point, or dollar results within approximately 0.5%, are declared an effective tie instead of forcing a false winner.</li>
+        <li><strong>Overall scenario lead</strong> — Reports how many of the three market scenarios each strategy wins under the selected goal.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>6. Read the Projected Income and Strategy Cards</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Projected monthly and annual income</strong> — Median distribution run rates at the selected final year, shown in today's purchasing power.</li>
+        <li><strong>P10–P90 monthly income range</strong> — The middle 80% planning range: 10% of paths finish below P10 and 10% finish above P90.</li>
+        <li><strong>Nominal income</strong> — The future-dollar amount before removing inflation. Real income is lower because it reflects future purchasing power in today's dollars.</li>
+        <li><strong>Real ending value · P10–P90</strong> — Shows the median real ending balance prominently, with the downside P10 and upside P90 values beneath it.</li>
+        <li><strong>Real monthly income</strong> — The distribution income the ending shares could be producing each month. It is measured while DRIP remains on; it is not withdrawn.</li>
+        <li><strong>Real spending capacity</strong> — Real ending value × annual spending rate ÷ 12. It is a comparison estimate only and does not reduce the simulated portfolio.</li>
+        <li><strong>Median max drawdown</strong> — The median of each path's worst flow-adjusted peak-to-trough decline. Contributions are removed from the drawdown calculation so deposits cannot hide market losses.</li>
+        <li><strong>Distributions reinvested</strong> — Cumulative cash distributions generated and reinvested during the run. It can be large because it totals every payout over time; it is not added on top of total return a second time.</li>
+        <li><strong>Organic income target</strong> — The percentage of paths whose final real annual distribution income is at least 12 times the monthly Freedom target. It requires no spending-rate calculation or share sales.</li>
+        <li><strong>Spending target</strong> — The percentage of paths whose final real balance, multiplied by the selected spending rate, can support the annual Freedom target.</li>
+        <li><strong>Not reached by the median path</strong> — The P50 income or spending-capacity path does not reach the target within the selected years. A probability can still be above zero because some stronger paths succeeded.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/growth-income-freedom/03-projections-and-scenario-table.png"
+          alt="Growth and Income Freedom projection charts for real portfolio value and real monthly distribution income followed by the all-scenarios finish-line table"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>7. Read the Charts and Finish-Line Table</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Real portfolio value chart</strong> — Plots each strategy's median inflation-adjusted value from Year 0 through the selected final year. The shaded band is the 10th-to-90th percentile range.</li>
+        <li><strong>Real monthly distribution income chart</strong> — Plots the median monthly income run rate in today's dollars at each year-end while all distributions continue to be reinvested.</li>
+        <li><strong>All scenarios at the finish line</strong> — Places Bull, Neutral, and Bear medians in one table for direct comparison of ending value, monthly income, monthly spending capacity, drawdown, and organic-income target probability.</li>
+        <li><strong>Scenario colors</strong> — Green identifies Bull, amber identifies Neutral, and red identifies Bear. Strategy name colors match the strategy cards and chart lines.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Quality and Holding Assumptions</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Data quality and fallback notes</strong> — Appears when a ticker has limited history or requires a classification-based fallback. Review these warnings before relying heavily on a comparison.</li>
+        <li><strong>Holding assumptions used in this run</strong> — Expands into an audit table containing the modeled behavior, current yield, expected total return, volatility, beta, sustainable yield ceiling, history length, and assumption source for every ticker.</li>
+        <li>A ticker with little or no history can still run using its security classification, but its estimate contains more model uncertainty than a holding with a long history.</li>
+        <li>Current yields and prices are starting inputs, not promises that distributions or market values will remain unchanged.</li>
+      </ul>
+
+      <div className="alert alert-info">
+        <strong>Important:</strong> these are hypothetical planning ranges, not forecasts, tax advice,
+        or guarantees. Monte Carlo probabilities describe the model under its assumptions. A strategy
+        can lead on income while another leads on median wealth or downside resilience, and changing
+        the horizon, contribution, inflation, target, spending rate, holdings, or weights can change
+        the result materially.
+      </div>
+    </div>
+  )
+}
+
 function CashFlowHelp() {
   return (
     <div>
@@ -7090,6 +7267,7 @@ const CONTENT_MAP = {
   consolidation: ConsolidationHelp,
   'macro-dashboard': MacroDashboardHelp,
   'income-growth': IncomeGrowthHelp,
+  'growth-income-freedom': GrowthIncomeFreedomHelp,
   'retirement-readiness': RetirementReadinessHelp,
   'rebalance-wizard': RebalanceWizardHelp,
 }

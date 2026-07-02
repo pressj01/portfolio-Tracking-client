@@ -42,6 +42,7 @@ class NanSafeJSONProvider(DefaultJSONProvider):
 from config import get_connection, FRED_API_KEY, DB_PATH
 from database import ensure_tables_exist
 from cash_flow import (
+    HOLDING_SCENARIO_PROFILES,
     classify_holding_scenario_type as _classify_cash_flow_holding,
     expand_plan as _expand_cash_flow_plan,
     get_or_create_default_plan as _get_or_create_default_cash_flow_plan,
@@ -79,6 +80,7 @@ from dividend_safety import (
     get_dividend_safety_for_holdings,
     summarize_dividend_safety,
 )
+from accumulation_sim import run_accumulation_comparison
 
 def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     """Drop-in replacement for yf.download that batches large ticker lists.
@@ -18324,6 +18326,140 @@ def income_growth_sim():
 
 
 # ── Total Return ──────────────────────────────────────────────────────────────
+
+# ── Growth & Income Freedom Simulator ─────────────────────────────────────────
+
+def _accumulation_compare_snapshot_payload(source_id, name, snapshot, source_type):
+    """Convert a profile or aggregate snapshot into an editable strategy."""
+    total_value = float(snapshot.get("value") or 0)
+    if total_value <= 0:
+        return None
+
+    holdings = []
+    for row in snapshot.get("holdings") or []:
+        value = max(0.0, float(row.get("value") or 0))
+        if value <= 0:
+            continue
+        annual_income = max(0.0, float(row.get("annual_income") or 0))
+        scenario_type = row.get("scenario_type") or "other"
+        holdings.append({
+            "ticker": row.get("ticker"),
+            "description": row.get("description") or row.get("ticker"),
+            "weight": round(value / total_value * 100.0, 6),
+            "current_value": round(value, 2),
+            "current_yield_pct": round(annual_income / value * 100.0, 4),
+            "scenario_type": scenario_type,
+            "scenario_label": HOLDING_SCENARIO_PROFILES.get(
+                scenario_type,
+                HOLDING_SCENARIO_PROFILES["other"],
+            ).get("label", "Other / unclassified"),
+        })
+    holdings.sort(key=lambda item: (-item["weight"], item["ticker"]))
+    return {
+        "id": source_id,
+        "name": name,
+        "source_type": source_type,
+        "current_value": round(total_value, 2),
+        "annual_income": round(float(snapshot.get("annual_income") or 0), 2),
+        "member_count": int(snapshot.get("profile_count") or 0),
+        "holdings": holdings,
+    }
+
+
+@app.route("/api/accumulation-compare/portfolio/<int:profile_id>", methods=["GET"])
+def accumulation_compare_portfolio(profile_id):
+    """Return one saved portfolio as an editable, weight-based strategy."""
+    conn = get_connection()
+    try:
+        profile = conn.execute(
+            "SELECT id, name FROM profiles WHERE id = ?",
+            (profile_id,),
+        ).fetchone()
+        if not profile:
+            return jsonify(error="Portfolio not found."), 404
+        snapshot = _cash_flow_portfolio_snapshot(conn, [profile_id])
+    finally:
+        conn.close()
+
+    payload = _accumulation_compare_snapshot_payload(
+        profile["id"],
+        profile["name"],
+        snapshot,
+        "profile",
+    )
+    if payload is None:
+        return jsonify(error="This portfolio has no priced holdings."), 400
+    return jsonify(**payload)
+
+
+@app.route("/api/accumulation-compare/aggregate/<int:aggregate_id>", methods=["GET"])
+def accumulation_compare_aggregate(aggregate_id):
+    """Return one aggregate account as an editable, weight-based strategy."""
+    conn = get_connection()
+    try:
+        aggregate = conn.execute(
+            "SELECT id, name FROM aggregates WHERE id = ?",
+            (aggregate_id,),
+        ).fetchone()
+        if not aggregate:
+            return jsonify(error="Aggregate account not found."), 404
+        member_ids = _get_aggregate_member_profile_ids(conn, aggregate_id)
+        if not member_ids:
+            return jsonify(error="This aggregate account has no member portfolios."), 400
+        snapshot = _cash_flow_portfolio_snapshot(conn, member_ids)
+    finally:
+        conn.close()
+
+    payload = _accumulation_compare_snapshot_payload(
+        aggregate["id"],
+        aggregate["name"],
+        snapshot,
+        "aggregate",
+    )
+    if payload is None:
+        return jsonify(error="This aggregate account has no priced holdings."), 400
+    return jsonify(**payload)
+
+
+@app.route("/api/accumulation-compare/run", methods=["POST"])
+def accumulation_compare_run():
+    """Compare two accumulation strategies and an optional blend."""
+    import traceback as _tb
+
+    payload = request.get_json(force=True, silent=True) or {}
+    # Classify manually-entered tickers before handing the request to the
+    # Flask-free simulation module. Saved portfolio holdings already carry the
+    # richer classification from the portfolio snapshot.
+    for strategy in payload.get("strategies") or []:
+        for holding in strategy.get("holdings") or []:
+            scenario_type = str(holding.get("scenario_type") or "").strip()
+            if scenario_type in HOLDING_SCENARIO_PROFILES and scenario_type != "other":
+                continue
+            current_yield_pct = max(
+                0.0, float(holding.get("current_yield_pct") or 0)
+            )
+            holding["scenario_type"] = _classify_cash_flow_holding({
+                "ticker": holding.get("ticker"),
+                "description": holding.get("description"),
+                "classification_type": holding.get("classification_type"),
+                "etf_category": holding.get("etf_category"),
+                "etf_strategy": holding.get("etf_strategy"),
+                "fund_kind": holding.get("fund_kind"),
+                "income_bucket": holding.get("income_bucket"),
+                "annual_income": current_yield_pct,
+                "value": 100.0,
+            })
+    try:
+        result = run_accumulation_comparison(payload)
+        return jsonify(**result)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    except Exception as exc:
+        return jsonify(
+            error=f"Simulation failed: {str(exc)}",
+            detail=_tb.format_exc(),
+        ), 500
+
 
 @app.route("/api/total-return/summary", methods=["GET"])
 def total_return_summary():

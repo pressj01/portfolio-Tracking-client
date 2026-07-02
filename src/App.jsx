@@ -33,6 +33,7 @@ import DividendCompare from './pages/DividendCompare'
 import ConsolidationAnalysis from './pages/ConsolidationAnalysis'
 import MacroRegimeDashboard from './pages/MacroRegimeDashboard'
 import IncomeGrowthSim from './pages/IncomeGrowthSim'
+import GrowthIncomeFreedom from './pages/GrowthIncomeFreedom'
 import RetirementReadiness from './pages/RetirementReadiness'
 import CashFlowSustainability from './pages/CashFlowSustainability'
 import DividendHistory from './pages/DividendHistory'
@@ -185,6 +186,7 @@ function App() {
         <Route path="/nav-erosion-portfolio" element={<NavErosionPortfolio />} />
         <Route path="/income-sim" element={<PortfolioIncomeSim />} />
         <Route path="/income-growth" element={<IncomeGrowthSim />} />
+        <Route path="/growth-income-freedom" element={<GrowthIncomeFreedom />} />
         <Route path="/retirement-readiness" element={<RetirementReadiness />} />
         <Route path="/cash-flow" element={<CashFlowSustainability />} />
         <Route path="/correlation" element={<Correlation />} />
@@ -335,6 +337,7 @@ function Nav() {
           <NavLink to="/macro-dashboard">Macro Regime Dashboard</NavLink>
         </NavMenuGroup>
         <NavMenuGroup title="Planning & Optimization">
+          <NavLink to="/growth-income-freedom">Growth &amp; Income Freedom</NavLink>
           <NavLink to="/portfolio-builder">Portfolio Builder</NavLink>
           <NavLink to="/portfolio-tester">Portfolio Tester</NavLink>
           <NavLink to="/rebalance-wizard">Rebalance Wizard</NavLink>
