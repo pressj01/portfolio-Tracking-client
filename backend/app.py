@@ -18349,6 +18349,14 @@ def _accumulation_compare_snapshot_payload(source_id, name, snapshot, source_typ
             "current_value": round(value, 2),
             "current_yield_pct": round(annual_income / value * 100.0, 4),
             "scenario_type": scenario_type,
+            "scenario_type_override": "",
+            "classification_type": row.get("classification_type") or "",
+            "etf_category": row.get("etf_category") or "",
+            "etf_strategy": row.get("etf_strategy") or "",
+            "fund_kind": row.get("fund_kind") or "",
+            "income_bucket": row.get("income_bucket") or "",
+            "option_strategy": "auto",
+            "correlation_group": "auto",
             "scenario_label": HOLDING_SCENARIO_PROFILES.get(
                 scenario_type,
                 HOLDING_SCENARIO_PROFILES["other"],
@@ -18427,18 +18435,33 @@ def accumulation_compare_run():
     import traceback as _tb
 
     payload = request.get_json(force=True, silent=True) or {}
-    # Classify manually-entered tickers before handing the request to the
-    # Flask-free simulation module. Saved portfolio holdings already carry the
-    # richer classification from the portfolio snapshot.
+    # Apply explicit per-holding overrides first, otherwise classify from the
+    # richest metadata available. A low-yield broad equity in a Growth strategy
+    # should not become "equity income" merely because it pays a small dividend.
     for strategy in payload.get("strategies") or []:
+        strategy_style = str(strategy.get("style") or "custom").strip().lower()
         for holding in strategy.get("holdings") or []:
+            explicit_override = str(
+                holding.get("scenario_type_override") or ""
+            ).strip().lower()
+            if (
+                explicit_override in HOLDING_SCENARIO_PROFILES
+                and explicit_override != "other"
+            ):
+                holding["scenario_type"] = explicit_override
+                continue
             scenario_type = str(holding.get("scenario_type") or "").strip()
-            if scenario_type in HOLDING_SCENARIO_PROFILES and scenario_type != "other":
+            override_field_present = "scenario_type_override" in holding
+            if (
+                not override_field_present
+                and scenario_type in HOLDING_SCENARIO_PROFILES
+                and scenario_type != "other"
+            ):
                 continue
             current_yield_pct = max(
                 0.0, float(holding.get("current_yield_pct") or 0)
             )
-            holding["scenario_type"] = _classify_cash_flow_holding({
+            classified = _classify_cash_flow_holding({
                 "ticker": holding.get("ticker"),
                 "description": holding.get("description"),
                 "classification_type": holding.get("classification_type"),
@@ -18449,6 +18472,13 @@ def accumulation_compare_run():
                 "annual_income": current_yield_pct,
                 "value": 100.0,
             })
+            if (
+                strategy_style == "growth"
+                and classified == "equity_income"
+                and current_yield_pct < 3.0
+            ):
+                classified = "non_income_equity"
+            holding["scenario_type"] = classified
     try:
         result = run_accumulation_comparison(payload)
         return jsonify(**result)

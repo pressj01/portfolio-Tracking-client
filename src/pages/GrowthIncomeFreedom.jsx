@@ -10,6 +10,7 @@ const SCENARIOS = [
   { key: 'bearish', label: 'Bear', color: '#e05555', detail: 'Early shock, elevated volatility, then recovery' },
 ]
 const WINNER_CARDS = [
+  { key: 'freedomFirst', label: 'Reaches FI first' },
   { key: 'wealth', label: 'Wealth' },
   { key: 'income', label: 'Income' },
   { key: 'sustainableFreedom', label: 'Sustainable Freedom' },
@@ -29,6 +30,56 @@ const FREQUENCY_MULTIPLIERS = {
   A: 1,
   Annual: 1,
 }
+
+const BEHAVIOR_OPTIONS = [
+  ['', 'Auto classify'],
+  ['option_income', 'Diversified option income'],
+  ['high_distribution_option', 'High-distribution options'],
+  ['fixed_income', 'Bonds / fixed income'],
+  ['cash', 'Cash / money market'],
+  ['preferred_credit', 'Preferred / credit'],
+  ['bdc', 'BDC'],
+  ['cef', 'Closed-end fund'],
+  ['reit', 'REIT / real estate'],
+  ['dividend_growth', 'Dividend growth'],
+  ['equity_income', 'Equity income'],
+  ['commodities', 'Commodities'],
+  ['non_income_equity', 'Growth / non-income equity'],
+  ['other', 'Other'],
+]
+
+const OPTION_STRATEGY_OPTIONS = [
+  ['auto', 'Auto detect'],
+  ['none', 'No option overlay'],
+  ['covered_call', 'Covered calls'],
+  ['short_put', 'Short / cash-secured puts'],
+  ['put_spread', 'Put spread · unspecified'],
+  ['short_put_spread', 'Short put credit spreads'],
+  ['protective_put_spread', 'Protective put spreads'],
+  ['collar_buffer', 'Collar / buffer'],
+  ['mixed_options', 'Mixed / other options'],
+]
+
+const CORRELATION_GROUP_OPTIONS = [
+  ['auto', 'Auto detect'],
+  ['us_equity', 'U.S. equities'],
+  ['sp500', 'S&P 500'],
+  ['nasdaq', 'Nasdaq'],
+  ['small_cap', 'Small cap'],
+  ['technology', 'Technology'],
+  ['semiconductors', 'Semiconductors'],
+  ['international', 'International'],
+  ['option_income', 'Option-income funds'],
+  ['fixed_income', 'Fixed income'],
+  ['cash', 'Cash'],
+  ['preferred_credit', 'Preferred / credit'],
+  ['real_estate', 'Real estate'],
+  ['commodities', 'Commodities'],
+  ['precious_metals', 'Gold / precious metals'],
+  ['crypto', 'Crypto'],
+  ['single_stock', 'Single stock'],
+  ['other', 'Other'],
+]
 
 function money(value) {
   return formatMoney(value, { zeroIfInvalid: true, digits: 0 })
@@ -101,6 +152,13 @@ function suggestPortfolioName(strategy, holdings) {
 
 function winnerValue(strategy, goal, targetEnabled) {
   const summary = strategy?.summary || {}
+  if (goal === 'freedomFirst') {
+    // Earliest retirement year whose withdrawals last the full horizon wins;
+    // Infinity => never reached, sorts last. Guard against Number(null) === 0.
+    const raw = summary.fi_year_lasts
+    const year = raw == null ? Infinity : Number(raw)
+    return Number.isFinite(year) && year > 0 ? year : Infinity
+  }
   if (goal === 'sustainableFreedom' && targetEnabled) {
     const combined = Number(summary.sustainable_freedom_probability)
     if (Number.isFinite(combined)) return combined
@@ -112,6 +170,7 @@ function winnerValue(strategy, goal, targetEnabled) {
 }
 
 function winnerMetricLabel(goal, targetEnabled) {
+  if (goal === 'freedomFirst') return 'to reach FI (withdrawals last the full horizon)'
   if (goal === 'sustainableFreedom' && targetEnabled) {
     return 'chance of meeting the freedom target with the enabled sustainability tests applied'
   }
@@ -121,6 +180,7 @@ function winnerMetricLabel(goal, targetEnabled) {
 }
 
 function winnerMetricValue(value, goal, targetEnabled) {
+  if (goal === 'freedomFirst') return Number.isFinite(value) ? `year ${value}` : 'no year (not reached)'
   if (goal === 'sustainableFreedom' && targetEnabled) return pct(value)
   if (goal === 'income') return `${money(value)}/month`
   return money(value)
@@ -128,15 +188,20 @@ function winnerMetricValue(value, goal, targetEnabled) {
 
 function rankStrategies(strategyResults, goal, targetEnabled) {
   if (!strategyResults?.length) return null
+  const ascending = goal === 'freedomFirst'  // lower FI year is better
   const ranked = strategyResults
     .map((strategy, index) => ({
       strategy,
       index,
       value: winnerValue(strategy, goal, targetEnabled),
     }))
-    .sort((left, right) => right.value - left.value)
+    .sort((left, right) => (ascending ? left.value - right.value : right.value - left.value))
   const top = ranked[0]
-  const tolerance = goal === 'sustainableFreedom' && targetEnabled
+  if (ascending && !Number.isFinite(top.value)) {
+    // No strategy reached FI within the horizon — treat as an all-way tie.
+    return { ...top, leaders: ranked, tied: ranked.length > 1 }
+  }
+  const tolerance = goal === 'freedomFirst' || (goal === 'sustainableFreedom' && targetEnabled)
     ? 0.5
     : Math.max(Math.abs(top.value) * 0.005, 1)
   const leaders = ranked.filter(row => Math.abs(top.value - row.value) <= tolerance)
@@ -332,6 +397,9 @@ function StrategyBuilder({
             current_yield_pct: currentYield,
             classification_type: info.classification_type || '',
             scenario_type: 'other',
+            scenario_type_override: '',
+            option_strategy: 'auto',
+            correlation_group: 'auto',
             imported: false,
           }],
         })
@@ -535,6 +603,9 @@ function StrategyBuilder({
                 <th>Ticker</th>
                 <th>Weight</th>
                 <th>Current yield</th>
+                <th>Behavior override</th>
+                <th>Option structure</th>
+                <th>Correlation group</th>
                 <th></th>
               </tr>
             </thead>
@@ -571,6 +642,51 @@ function StrategyBuilder({
                     </div>
                   </td>
                   <td>{pct(row.current_yield_pct || 0, 2)}</td>
+                  <td>
+                    <select
+                      className="gif-holding-select"
+                      value={row.scenario_type_override || ''}
+                      disabled={row.enabled === false}
+                      onChange={event => updateHolding(row.ticker, {
+                        scenario_type_override: event.target.value,
+                      })}
+                      aria-label={`${row.ticker} behavior override`}
+                    >
+                      {BEHAVIOR_OPTIONS.map(([value, label]) => (
+                        <option key={value || 'auto'} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <select
+                      className="gif-holding-select"
+                      value={row.option_strategy || 'auto'}
+                      disabled={row.enabled === false}
+                      onChange={event => updateHolding(row.ticker, {
+                        option_strategy: event.target.value,
+                      })}
+                      aria-label={`${row.ticker} option structure`}
+                    >
+                      {OPTION_STRATEGY_OPTIONS.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <select
+                      className="gif-holding-select"
+                      value={row.correlation_group || 'auto'}
+                      disabled={row.enabled === false}
+                      onChange={event => updateHolding(row.ticker, {
+                        correlation_group: event.target.value,
+                      })}
+                      aria-label={`${row.ticker} correlation group`}
+                    >
+                      {CORRELATION_GROUP_OPTIONS.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </td>
                   <td>
                     <button
                       className="gif-remove-ticker"
@@ -624,9 +740,9 @@ function StrategyResultCard({ result, index, targetEnabled }) {
           sub={`${money(summary.final_monthly_income.p50)} nominal`}
         />
         <Metric
-          label="Real spending capacity"
+          label="Spending capacity (4% reference)"
           value={money(summary.spending_capacity.p50 / 12)}
-          sub="Reported only; no withdrawals modeled"
+          sub="Value × reference rate · informational, not the FI test"
         />
         <Metric
           label="Median max drawdown"
@@ -641,14 +757,23 @@ function StrategyResultCard({ result, index, targetEnabled }) {
         {targetEnabled && (
           <>
             <Metric
-              label="Organic income target"
-              value={pct(summary.income_target_probability)}
-              sub={summary.freedom_year_income ? `Median reaches in year ${summary.freedom_year_income}` : 'Not reached by the median path'}
+              label={`FI · money lasts ${summary.money_lasts_years}y`}
+              value={pct(summary.fi_lasts_probability)}
+              sub={summary.fi_year_lasts
+                ? `Reaches FI in year ${summary.fi_year_lasts} (sells shares as needed)`
+                : `Not reached at ${pct(summary.fi_confidence_pct, 0)} confidence`}
             />
             <Metric
-              label="Spending target"
-              value={pct(summary.spending_target_probability)}
-              sub={summary.freedom_year_spending ? `Median reaches in year ${summary.freedom_year_spending}` : 'Not reached by the median path'}
+              label="FI · preserves principal"
+              value={pct(summary.fi_principal_probability)}
+              sub={summary.fi_year_principal
+                ? `Reaches FI in year ${summary.fi_year_principal} (real principal intact)`
+                : `Not reached at ${pct(summary.fi_confidence_pct, 0)} confidence`}
+            />
+            <Metric
+              label="Distribution income only"
+              value={pct(summary.income_target_probability)}
+              sub={summary.freedom_year_income ? `Payouts alone cover it in year ${summary.freedom_year_income}` : 'Payouts alone never cover it'}
             />
             <Metric
               label="Sustainable freedom"
@@ -746,7 +871,7 @@ function WinnerPanel({ scenario, strategies, allScenarios, years, targetEnabled 
   if (!strategies?.length) return null
   return (
     <section className="gif-winner-grid">
-      {WINNER_CARDS.map(card => (
+      {WINNER_CARDS.filter(card => card.key !== 'freedomFirst' || targetEnabled).map(card => (
         <WinnerCard
           key={card.key}
           cardKey={card.key}
@@ -784,7 +909,7 @@ function ScenarioOverviewCards({
       <div className="gif-scenario-overview-grid">
         {SCENARIOS.map(scenario => {
           const strategies = allScenarios?.[scenario.key]?.strategies || []
-          const leaderLines = WINNER_CARDS.map(card => {
+          const leaderLines = WINNER_CARDS.filter(card => card.key !== 'freedomFirst' || targetEnabled).map(card => {
             const winner = rankStrategies(strategies, card.key, targetEnabled)
             const text = winner?.tied
               ? `Tie: ${winner.leaders.map(row => row.strategy.name).join(' / ')}`
@@ -896,6 +1021,8 @@ export default function GrowthIncomeFreedom() {
   const [inflationRate, setInflationRate] = useState(2.5)
   const [freedomTarget, setFreedomTarget] = useState(5000)
   const [spendingRate, setSpendingRate] = useState(4)
+  const [fiConfidence, setFiConfidence] = useState(85)
+  const [moneyLastsYears, setMoneyLastsYears] = useState(25)
   const [paths, setPaths] = useState(500)
   const [blendEnabled, setBlendEnabled] = useState(false)
   const [blendA, setBlendA] = useState(50)
@@ -904,8 +1031,6 @@ export default function GrowthIncomeFreedom() {
   const [taxRatePct, setTaxRatePct] = useState(15)
   const [capPayout, setCapPayout] = useState(false)
   const [checkDripStop, setCheckDripStop] = useState(false)
-  const [runWithdrawalPhase, setRunWithdrawalPhase] = useState(false)
-  const [withdrawalYears, setWithdrawalYears] = useState(20)
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -1004,6 +1129,8 @@ export default function GrowthIncomeFreedom() {
         inflation_rate: inflationRate,
         freedom_monthly_target: freedomTarget,
         spending_rate: spendingRate,
+        fi_confidence_pct: fiConfidence,
+        money_lasts_years: moneyLastsYears,
         paths,
         strategies: requestStrategies,
         sustainability: {
@@ -1011,13 +1138,27 @@ export default function GrowthIncomeFreedom() {
           tax_rate_pct: taxRatePct,
           cap_payout_to_total_return: capPayout,
           check_drip_stop_stability: checkDripStop,
-          run_withdrawal_phase: runWithdrawalPhase,
-          withdrawal_years: withdrawalYears,
         },
       }),
     })
       .then(async response => {
-        const body = await response.json()
+        const rawBody = await response.text()
+        if (!rawBody.trim()) {
+          throw new Error(
+            'The simulation service disconnected before returning results. '
+            + 'The portfolio settings are still here; wait a moment and run the comparison again.'
+          )
+        }
+        let body
+        try {
+          body = JSON.parse(rawBody)
+        } catch {
+          throw new Error(
+            response.ok
+              ? 'The simulation completed without a readable result. Please run it again.'
+              : `The simulation service returned an unreadable error (HTTP ${response.status}). Please retry.`
+          )
+        }
         if (!response.ok || body.error) throw new Error(body.error || 'Simulation failed.')
         return body
       })
@@ -1201,7 +1342,29 @@ export default function GrowthIncomeFreedom() {
             </div>
           </div>
           <div className="gif-field">
-            <label>Estimated annual spending rate</label>
+            <label>FI confidence · share of paths that must last</label>
+            <div className="gif-percent-input">
+              <input type="number" min="50" max="99" step="1" value={fiConfidence}
+                onChange={event => {
+                  setFiConfidence(Math.min(99, Math.max(50, Number(event.target.value) || 50)))
+                  setDirty(true)
+                }} />
+              <span>%</span>
+            </div>
+          </div>
+          <div className="gif-field">
+            <label>Money must last · years of withdrawals</label>
+            <div className="gif-percent-input">
+              <input type="number" min="1" max="40" step="1" value={moneyLastsYears}
+                onChange={event => {
+                  setMoneyLastsYears(Math.min(40, Math.max(1, Number(event.target.value) || 1)))
+                  setDirty(true)
+                }} />
+              <span>yrs</span>
+            </div>
+          </div>
+          <div className="gif-field">
+            <label>Reference spending rate · informational only</label>
             <div className="gif-percent-input">
               <input type="number" min="0.1" max="20" step="0.1" value={spendingRate}
                 onChange={event => {
@@ -1227,7 +1390,7 @@ export default function GrowthIncomeFreedom() {
         <div className="gif-sustainability-control">
           <div className="gif-sustainability-title">
             <strong>Sustainability tests</strong>
-            <span>Gate the Sustainable Freedom winner on realistic income. Toggle any combination.</span>
+            <span>Taxes and payout caps also flow into the FI funding test. Leave taxes off for Roth or other tax-free accounts.</span>
           </div>
           <div className="gif-sustainability-grid">
             <div className="gif-sustainability-item">
@@ -1238,6 +1401,7 @@ export default function GrowthIncomeFreedom() {
                 }} />
                 Income after estimated taxes
               </label>
+              <small className="gif-sustainability-hint">Leave off for Roth / tax-advantaged accounts (no tax on withdrawals).</small>
               {applyTax && (
                 <div className="gif-percent-input gif-sustainability-subinput">
                   <input type="number" min="0" max="100" step="1" value={taxRatePct}
@@ -1267,29 +1431,11 @@ export default function GrowthIncomeFreedom() {
                 Capital stays stable after stopping DRIP
               </label>
             </div>
-            <div className="gif-sustainability-item">
-              <label>
-                <input type="checkbox" checked={runWithdrawalPhase} onChange={event => {
-                  setRunWithdrawalPhase(event.target.checked)
-                  setDirty(true)
-                }} />
-                Dedicated withdrawal-phase simulation
-              </label>
-              {runWithdrawalPhase && (
-                <div className="gif-sustainability-subinput">
-                  <input type="number" min="1" max="40" step="1" value={withdrawalYears}
-                    onChange={event => {
-                      setWithdrawalYears(Math.min(40, Math.max(1, Number(event.target.value) || 1)))
-                      setDirty(true)
-                    }} />
-                  <span>years of withdrawals after the horizon</span>
-                </div>
-              )}
-            </div>
           </div>
           <small className="gif-sustainability-note">
-            These tests evaluate whether the projected income would hold up in practice — they don&apos;t
-            change the value/income lines above, which always assume 100% DRIP and no withdrawals.
+            The FI dates below actively sell shares to fund the target and require the money to last the
+            “Money must last” horizon. These toggles refine that test and the Sustainable Freedom winner;
+            the value/income lines above still assume 100% DRIP and no withdrawals.
           </small>
         </div>
 
@@ -1488,6 +1634,36 @@ export default function GrowthIncomeFreedom() {
             </details>
           )}
 
+          {result.correlation_model && (
+            <details className="gif-quality-panel">
+              <summary>
+                Correlation model · average {pct(result.correlation_model.average_correlation * 100, 0)}
+                {' '}→ bear {pct(result.correlation_model.bear_average_correlation * 100, 0)}
+              </summary>
+              <div className="gif-correlation-summary">
+                <p>
+                  {result.correlation_model.historical_pair_count} pairs use overlapping market history;
+                  {' '}{result.correlation_model.fallback_pair_count} use conservative group fallbacks.
+                  Bear-market correlations are stressed upward for risk assets.
+                </p>
+                {(result.correlation_model.strongest_pairs || []).length > 0 && (
+                  <div className="gif-correlation-pairs">
+                    {result.correlation_model.strongest_pairs.map(row => (
+                      <span key={`${row.left}-${row.right}`}>
+                        <strong>{row.left} / {row.right}</strong>
+                        {pct(row.correlation * 100, 0)}
+                        <small>
+                          {row.source}
+                          {row.overlap_months > 0 ? ` · ${row.overlap_months} months` : ''}
+                        </small>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </details>
+          )}
+
           <details className="gif-quality-panel">
             <summary>Holding assumptions used in this run</summary>
             <div className="gif-table-scroll">
@@ -1496,9 +1672,12 @@ export default function GrowthIncomeFreedom() {
                   <tr>
                     <th>Ticker</th>
                     <th>Behavior</th>
+                    <th>Option structure</th>
+                    <th>Correlation group</th>
                     <th>Current yield</th>
                     <th>Expected total return</th>
-                    <th>Volatility</th>
+                    <th>Forecast volatility</th>
+                    <th>Avg. correlation</th>
                     <th>Beta</th>
                     <th>Yield ceiling</th>
                     <th>History</th>
@@ -1509,12 +1688,27 @@ export default function GrowthIncomeFreedom() {
                     <tr key={row.ticker}>
                       <td><strong>{row.ticker}</strong></td>
                       <td>{row.scenario_label}</td>
+                      <td>{OPTION_STRATEGY_OPTIONS.find(([value]) => value === row.option_strategy)?.[1] || row.option_strategy}</td>
+                      <td>{CORRELATION_GROUP_OPTIONS.find(([value]) => value === row.correlation_group)?.[1] || row.correlation_group}</td>
                       <td>{pct(row.current_yield * 100, 2)}</td>
                       <td>{pct(row.expected_total_return * 100, 2)}</td>
-                      <td>{pct(row.annual_volatility * 100, 1)}</td>
+                      <td>
+                        {pct((row.forecast_annual_volatility ?? row.annual_volatility) * 100, 1)}
+                        {row.history_confidence_pct < 100 && (
+                          <small className="gif-table-sub">
+                            {pct(row.annual_volatility * 100, 1)} base
+                          </small>
+                        )}
+                      </td>
+                      <td>{pct((row.average_correlation || 0) * 100, 0)}</td>
                       <td>{Number(row.beta).toFixed(2)}</td>
                       <td>{pct(row.sustainable_yield_cap * 100, 1)}</td>
-                      <td>{row.history_years > 0 ? `${row.history_years} years` : 'Class fallback'}</td>
+                      <td>
+                        {row.history_years > 0 ? `${row.history_years} years` : 'Class fallback'}
+                        <small className="gif-table-sub">
+                          {pct(row.history_confidence_pct || 0, 0)} confidence
+                        </small>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1523,12 +1717,13 @@ export default function GrowthIncomeFreedom() {
           </details>
 
           <div className="gif-disclaimer">
-            These are hypothetical planning ranges, not forecasts or guarantees. “Spending capacity”
-            is an end-of-horizon comparison metric only; the simulation makes no withdrawals. With no
-            sustainability tests enabled, “Sustainable Freedom” is identical to a simple income-or-spending
-            target check; enabling tests narrows it to strategies that hold up under estimated taxes, a
-            payout capped at sustainable total return, DRIP-free capital stability, or an actual
-            withdrawal-phase simulation.
+            These are hypothetical planning ranges, not forecasts or guarantees. The “Reaches FI” dates
+            retire at each year and fund the freedom target from distributions plus share sales, requiring
+            the money to last the “Money must last” horizon at your chosen confidence; “preserves principal”
+            additionally keeps real starting value intact. “Spending capacity (4% reference)” is an
+            informational value × rate figure only and does not drive the FI dates. The value/income charts
+            still assume 100% DRIP and no withdrawals. Estimated taxes apply only when enabled — leave them
+            off for Roth or other tax-free accounts.
           </div>
         </section>
       )}

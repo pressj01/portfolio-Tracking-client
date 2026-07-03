@@ -1,12 +1,19 @@
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from accumulation_sim import (
+    _release_return_paths,
+    _scenario_month_parameters,
+    build_market_assumptions,
     generate_return_paths,
     normalize_strategy,
     run_accumulation_comparison,
@@ -83,22 +90,23 @@ class AccumulationSimulationTest(unittest.TestCase):
                 ],
             })
 
-    def test_oversized_ticker_path_workload_is_rejected_before_simulation(self):
-        holdings = [
-            {"ticker": f"T{i:03d}", "weight": 1}
-            for i in range(250)
-        ]
+    def test_large_return_cube_uses_disk_backed_storage_and_cleans_up(self):
         payload = self.base_payload()
-        payload.update({
-            "years": 25,
-            "paths": 1000,
-            "strategies": [
-                {"name": "Large A", "style": "custom", "holdings": holdings},
-                {"name": "Large B", "style": "custom", "holdings": holdings},
-            ],
-        })
-        with self.assertRaisesRegex(ValueError, "ticker-path-months"):
-            run_accumulation_comparison(payload, assumptions_override={})
+        settings = validate_settings(payload)
+        assumptions = {
+            "AAA": assumption("AAA", total_return=0.07),
+            "BBB": assumption("BBB", total_return=0.07),
+        }
+        with patch("accumulation_sim.IN_MEMORY_RETURN_PATH_CELLS", 1):
+            paths = generate_return_paths(assumptions, "neutral", settings)
+        storage = paths["__storage__"]
+        storage_path = storage["path"]
+        self.assertEqual(storage["mode"], "temporary_disk")
+        self.assertIsNotNone(storage_path)
+        self.assertTrue(os.path.exists(storage_path))
+        self.assertEqual(storage["matrix"].dtype, np.float32)
+        _release_return_paths(paths)
+        self.assertFalse(os.path.exists(storage_path))
 
     def test_zero_return_reconciles_starting_capital_and_contributions(self):
         payload = self.base_payload()
@@ -399,23 +407,311 @@ class AccumulationSimulationTest(unittest.TestCase):
         self.assertIsNotNone(adjusted)
         self.assertLessEqual(adjusted["p50"], gross["p50"])
 
-    def test_oversized_workload_with_withdrawal_phase_is_rejected(self):
-        holdings = [{"ticker": f"T{i:03d}", "weight": 1} for i in range(200)]
+    def test_withdrawal_extension_can_use_disk_backed_paths(self):
         payload = self.base_payload()
         payload.update({
-            "years": 4,
-            "paths": 2000,
-            "strategies": [
-                {"name": "Large A", "style": "custom", "holdings": holdings},
-                {"name": "Large B", "style": "custom", "holdings": holdings},
-            ],
             "sustainability": {"run_withdrawal_phase": True, "withdrawal_years": 1},
         })
-        # Accumulation-only cell count (200 * 2000 * 48 = 19.2M) is under the
-        # 20M guard; adding the withdrawal months (12 more) pushes it over,
-        # so the guard must account for withdrawal months to catch this.
-        with self.assertRaisesRegex(ValueError, "ticker-path-months"):
-            run_accumulation_comparison(payload, assumptions_override={})
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch("accumulation_sim.IN_MEMORY_RETURN_PATH_CELLS", 1),
+                patch("accumulation_sim.tempfile.tempdir", temp_dir),
+            ):
+                result = run_accumulation_comparison(
+                    payload,
+                    assumptions_override={
+                        "AAA": assumption("AAA", total_return=0.05),
+                        "BBB": assumption("BBB", total_return=0.05),
+                    },
+                )
+            self.assertEqual(os.listdir(temp_dir), [])
+        self.assertEqual(result["settings"]["return_path_storage"], "temporary_disk")
+        self.assertEqual(result["settings"]["return_path_cells"], 4800)
+
+
+    def test_distributions_covering_target_reach_fi_immediately(self):
+        payload = self.base_payload()
+        payload.update({
+            "years": 3,
+            "monthly_contribution": 0,
+            "inflation_rate": 0,
+            "freedom_monthly_target": 100,  # $1,200/yr, far below the payout
+            "paths": 100,
+        })
+        # 10% total return delivered entirely as a 10% distribution: retiring in
+        # any year, the payout dwarfs the target, so no shares are sold and the
+        # pile grows -> FI reached in year 1 for both "lasts" and "preserves".
+        cover = dict(total_return=0.10, yield_rate=0.10)
+        result = run_accumulation_comparison(
+            payload,
+            assumptions_override={
+                "AAA": assumption("AAA", **cover),
+                "BBB": assumption("BBB", **cover),
+            },
+        )
+        summary = result["scenarios"]["neutral"]["strategies"][0]["summary"]
+        self.assertEqual(summary["fi_year_lasts"], 1)
+        self.assertEqual(summary["fi_year_principal"], 1)
+        self.assertEqual(summary["fi_lasts_probability"], 100.0)
+        self.assertEqual(summary["fi_principal_probability"], 100.0)
+        self.assertEqual(summary["fi_confidence_pct"], 85.0)
+        self.assertEqual(summary["money_lasts_years"], 25)
+
+    def test_growth_pile_lasts_when_large_and_depletes_when_small(self):
+        # Large pile, tiny withdrawal: growth holding funds the target purely by
+        # selling shares and still lasts -> FI in year 1.
+        big = self.base_payload()
+        big.update({
+            "years": 3,
+            "monthly_contribution": 0,
+            "inflation_rate": 0,
+            "freedom_monthly_target": 100,  # $1,200/yr from $100k
+            "starting_capital": 100000,
+            "paths": 100,
+        })
+        big_result = run_accumulation_comparison(
+            big,
+            assumptions_override={
+                "AAA": assumption("AAA", total_return=0.06, yield_rate=0.0,
+                                  scenario_type="non_income_equity"),
+                "BBB": assumption("BBB", total_return=0.06, yield_rate=0.0,
+                                  scenario_type="non_income_equity"),
+            },
+        )
+        big_summary = big_result["scenarios"]["neutral"]["strategies"][0]["summary"]
+        self.assertEqual(big_summary["fi_year_lasts"], 1)
+        self.assertIsNotNone(big_summary["fi_year_principal"])
+
+        # Tiny pile, huge withdrawal: depletes almost immediately -> never FI.
+        small = self.base_payload()
+        small.update({
+            "years": 2,
+            "monthly_contribution": 0,
+            "inflation_rate": 0,
+            "freedom_monthly_target": 2000,  # $24,000/yr from ~$2k
+            "starting_capital": 2000,
+            "paths": 100,
+        })
+        small_result = run_accumulation_comparison(
+            small,
+            assumptions_override={
+                "AAA": assumption("AAA", total_return=0.05, yield_rate=0.0,
+                                  scenario_type="non_income_equity"),
+                "BBB": assumption("BBB", total_return=0.05, yield_rate=0.0,
+                                  scenario_type="non_income_equity"),
+            },
+        )
+        small_summary = small_result["scenarios"]["neutral"]["strategies"][0]["summary"]
+        self.assertIsNone(small_summary["fi_year_lasts"])
+        self.assertIsNone(small_summary["fi_year_principal"])
+        self.assertIsNotNone(small_summary["fi_lasts_probability"])
+        self.assertLess(small_summary["fi_lasts_probability"], 50.0)
+
+    def test_lower_fi_confidence_reaches_freedom_no_later(self):
+        def run(confidence_pct):
+            payload = self.base_payload()
+            payload.update({
+                "years": 10,
+                "monthly_contribution": 0,
+                "inflation_rate": 0,
+                "freedom_monthly_target": 500,
+                "starting_capital": 100000,
+                "paths": 200,
+                "fi_confidence_pct": confidence_pct,
+            })
+            volatile = assumption("AAA", total_return=0.07, yield_rate=0.04,
+                                  scenario_type="equity_income")
+            volatile["annual_volatility"] = 0.16
+            volatile["beta"] = 0.6
+            other = dict(volatile)
+            other["ticker"] = "BBB"
+            result = run_accumulation_comparison(
+                payload,
+                assumptions_override={"AAA": volatile, "BBB": other},
+            )
+            return result["scenarios"]["neutral"]["strategies"][0]["summary"]
+
+        lenient = run(50)
+        strict = run(90)
+        rank = lambda year: year if year is not None else 999
+        # A lower confidence bar can only be cleared the same year or earlier.
+        self.assertLessEqual(rank(lenient["fi_year_lasts"]), rank(strict["fi_year_lasts"]))
+        # Preserving principal is stricter than merely lasting, so its FI year is
+        # never earlier than the "lasts" year at the same confidence.
+        self.assertGreaterEqual(rank(strict["fi_year_principal"]), rank(strict["fi_year_lasts"]))
+
+    def test_no_freedom_target_leaves_fi_fields_none(self):
+        payload = self.base_payload()  # freedom_monthly_target == 0
+        result = run_accumulation_comparison(
+            payload,
+            assumptions_override={
+                "AAA": assumption("AAA", total_return=0.08, yield_rate=0.03),
+                "BBB": assumption("BBB", total_return=0.08, yield_rate=0.03),
+            },
+        )
+        summary = result["scenarios"]["neutral"]["strategies"][0]["summary"]
+        for key in (
+            "fi_year_lasts",
+            "fi_year_principal",
+            "fi_lasts_probability",
+            "fi_principal_probability",
+            "fi_confidence_pct",
+            "money_lasts_years",
+        ):
+            self.assertIsNone(summary[key], key)
+
+    def test_variance_correction_keeps_expected_return_stable_across_volatility(self):
+        payload = self.base_payload()
+        payload.update({"years": 1, "paths": 2000, "monthly_contribution": 0})
+        settings = validate_settings(payload)
+        low = assumption("LOW", total_return=0.08)
+        low["annual_volatility"] = 0.05
+        high = assumption("HIGH", total_return=0.08)
+        high["annual_volatility"] = 0.35
+        paths = generate_return_paths({"LOW": low, "HIGH": high}, "neutral", settings)
+
+        low_gross = np.exp(paths["LOW"]["log_returns"]).prod(axis=1)
+        high_gross = np.exp(paths["HIGH"]["log_returns"]).prod(axis=1)
+        self.assertAlmostEqual(float(low_gross.mean()), 1.08, delta=0.015)
+        self.assertAlmostEqual(float(high_gross.mean()), 1.08, delta=0.025)
+        self.assertLess(abs(float(high_gross.mean() - low_gross.mean())), 0.025)
+
+    def test_similar_option_funds_receive_conservative_fallback_correlation(self):
+        payload = self.base_payload()
+        payload.update({"years": 2, "paths": 1000})
+        settings = validate_settings(payload)
+        left = assumption(
+            "AAA", total_return=0.07, scenario_type="option_income"
+        )
+        right = assumption(
+            "BBB", total_return=0.07, scenario_type="option_income"
+        )
+        left["annual_volatility"] = right["annual_volatility"] = 0.20
+        left["correlation_group"] = right["correlation_group"] = "option_income"
+        paths = generate_return_paths({"AAA": left, "BBB": right}, "neutral", settings)
+        realized = float(np.corrcoef(
+            paths["AAA"]["log_returns"].ravel(),
+            paths["BBB"]["log_returns"].ravel(),
+        )[0, 1])
+        self.assertGreater(realized, 0.65)
+
+    def test_bear_scenario_raises_risk_asset_correlation(self):
+        payload = self.base_payload()
+        payload.update({"years": 2, "paths": 1000})
+        settings = validate_settings(payload)
+        left = assumption(
+            "AAA", total_return=0.07, scenario_type="non_income_equity"
+        )
+        right = assumption(
+            "BBB", total_return=0.07, scenario_type="non_income_equity"
+        )
+        for row, other in ((left, "BBB"), (right, "AAA")):
+            row["annual_volatility"] = 0.20
+            row["correlation_group"] = "us_equity"
+            row["correlations"] = {row["ticker"]: 1.0, other: 0.30}
+        assumptions = {"AAA": left, "BBB": right}
+        neutral = generate_return_paths(assumptions, "neutral", settings)
+        bearish = generate_return_paths(assumptions, "bearish", settings)
+        neutral_corr = float(np.corrcoef(
+            neutral["AAA"]["log_returns"][:, :12].ravel(),
+            neutral["BBB"]["log_returns"][:, :12].ravel(),
+        )[0, 1])
+        bear_corr = float(np.corrcoef(
+            bearish["AAA"]["log_returns"][:, :12].ravel(),
+            bearish["BBB"]["log_returns"][:, :12].ravel(),
+        )[0, 1])
+        self.assertGreater(bear_corr, neutral_corr + 0.15)
+
+    def test_market_history_builds_pair_correlation_and_widens_short_history(self):
+        def frame_from_returns(monthly_returns):
+            dates = pd.date_range("2020-01-31", periods=len(monthly_returns) + 1, freq="ME")
+            closes = [100.0]
+            for monthly_return in monthly_returns:
+                closes.append(closes[-1] * (1.0 + monthly_return))
+            return pd.DataFrame(
+                {"Close": closes, "Dividends": np.zeros(len(closes))},
+                index=dates,
+            )
+
+        long_returns = np.array(
+            [0.015, -0.010, 0.020, 0.005, -0.012, 0.018] * 10,
+            dtype=float,
+        )
+        short_returns = np.array(
+            [0.020, -0.015, 0.010, 0.005, -0.010, 0.012] * 2,
+            dtype=float,
+        )
+        histories = {
+            "AAA": frame_from_returns(long_returns),
+            "BBB": frame_from_returns(long_returns * 0.9),
+            "NEW": frame_from_returns(short_returns),
+            "SPY": frame_from_returns(long_returns * 0.8),
+        }
+        holdings = [
+            {
+                "ticker": "AAA", "weight": 1, "scenario_type": "non_income_equity",
+                "correlation_group": "us_equity",
+            },
+            {
+                "ticker": "BBB", "weight": 1, "scenario_type": "fixed_income",
+                "correlation_group": "fixed_income",
+            },
+            {
+                "ticker": "NEW", "weight": 1, "scenario_type": "option_income",
+                "correlation_group": "option_income",
+            },
+        ]
+        assumptions, warnings = build_market_assumptions(
+            holdings, history_loader=lambda _tickers: histories
+        )
+        self.assertGreater(assumptions["AAA"]["correlations"]["BBB"], 0.70)
+        self.assertEqual(
+            assumptions["AAA"]["correlation_history_months"]["BBB"], 60
+        )
+        self.assertGreater(
+            assumptions["NEW"]["forecast_annual_volatility"],
+            assumptions["NEW"]["annual_volatility"],
+        )
+        self.assertTrue(any("NEW: limited price history" in warning for warning in warnings))
+
+    def test_option_structure_changes_tail_behavior_only_when_specified(self):
+        covered = assumption(
+            "COVERED", total_return=0.07, scenario_type="option_income"
+        )
+        covered["option_strategy"] = "covered_call"
+        protective = assumption(
+            "PROTECT", total_return=0.07, scenario_type="option_income"
+        )
+        protective["option_strategy"] = "protective_put_spread"
+        unspecified = assumption(
+            "UNSPEC", total_return=0.07, scenario_type="option_income"
+        )
+        unspecified["option_strategy"] = "put_spread"
+
+        covered_bull = _scenario_month_parameters(covered, "bullish", 0)[0]
+        unspecified_bull = _scenario_month_parameters(unspecified, "bullish", 0)[0]
+        covered_bear = _scenario_month_parameters(covered, "bearish", 0)[0]
+        protective_bear = _scenario_month_parameters(protective, "bearish", 0)[0]
+        self.assertLess(covered_bull, unspecified_bull)
+        self.assertGreater(protective_bear, covered_bear)
+
+    def test_strategy_normalization_preserves_model_overrides(self):
+        strategy = normalize_strategy({
+            "name": "Overrides",
+            "style": "custom",
+            "holdings": [{
+                "ticker": "AAA",
+                "weight": 100,
+                "scenario_type": "option_income",
+                "scenario_type_override": "option_income",
+                "option_strategy": "short_put_spread",
+                "correlation_group": "sp500",
+            }],
+        })
+        holding = strategy["holdings"][0]
+        self.assertEqual(holding["scenario_type_override"], "option_income")
+        self.assertEqual(holding["option_strategy"], "short_put_spread")
+        self.assertEqual(holding["correlation_group"], "sp500")
 
 
 if __name__ == "__main__":

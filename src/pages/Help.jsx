@@ -5278,7 +5278,7 @@ function GrowthIncomeFreedomHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>2. Build Strategy A and Strategy B</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Strategy name</strong> — Defaults to the imported portfolio name, but it can be edited so the result cards are easy to identify.</li>
-        <li><strong>Strategy style</strong> — Labels the strategy as Income, Growth, or Custom / mixed. This label organizes the comparison; it does not suppress income, force a return, or override the behavior of the actual holdings.</li>
+        <li><strong>Strategy style</strong> — Labels the strategy as Income, Growth, or Custom / mixed. It never suppresses dividends or forces one portfolio-level return. When holding behavior remains on Auto, Growth style also prevents a low-yield broad equity from being treated as an income security merely because it pays a small dividend.</li>
         <li><strong>Saved portfolio</strong> — The dropdown is divided into <strong>Individual accounts</strong> and <strong>Aggregate accounts</strong>. It imports the selected account's tickers and current proportional weights.</li>
         <li><strong>Aggregate account</strong> — Combines the holdings of every member portfolio configured for that aggregate on the budgeting/Cash Flow page. Duplicate tickers are merged, and their values and annual income are summed before portfolio weights and yields are calculated.</li>
         <li><strong>Imported current value</strong> — The value displayed beside the dropdown is a reference only. The simulation starts each side with the shared <strong>Starting capital per strategy</strong>, not the imported individual or aggregate account value.</li>
@@ -5292,6 +5292,9 @@ function GrowthIncomeFreedomHelp() {
         <li><strong>Row checkbox</strong> — Includes or excludes one holding without deleting it. The × button permanently removes that ticker from the strategy list.</li>
         <li><strong>Weight</strong> — Controls how much of the strategy is assigned to that holding. Only enabled holdings with positive weights enter the simulation.</li>
         <li><strong>Current yield</strong> — Shows the security's current annualized distribution yield. Forward payout stress and yield ceilings may prevent an unusually high current yield from compounding indefinitely.</li>
+        <li><strong>Behavior override</strong> — Replaces automatic classification for a holding when you know its role more accurately, such as Growth / non-income equity, diversified option income, bonds, or commodities.</li>
+        <li><strong>Option structure</strong> — Identifies covered calls, short puts, short put spreads, protective put spreads, collars/buffers, or mixed options. Auto uses available fund metadata and name clues; an unspecified put spread deliberately receives no directional tail adjustment.</li>
+        <li><strong>Correlation group</strong> — Identifies the shared underlying exposure used when market history is short, such as S&amp;P 500, Nasdaq, semiconductors, bonds, gold, or crypto. Auto uses the holding's metadata and description.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>3. Enter the Shared Comparison Assumptions</h3>
@@ -5334,16 +5337,18 @@ function GrowthIncomeFreedomHelp() {
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker capacity</strong> — Each strategy supports up to 250 unique tickers, allowing large aggregate accounts and blended portfolios.</li>
-        <li><strong>Large-run protection</strong> — Memory use grows with unique tickers × simulation months × Monte Carlo paths. If that combination is too large, the page asks you to shorten the horizon, reduce the path count, or select fewer tickers instead of risking an out-of-memory failure.</li>
+        <li><strong>Large-run handling</strong> — Memory use grows with unique tickers × simulation months × Monte Carlo paths. Normal runs stay in memory; larger runs automatically use a temporary disk-backed return matrix and clean it up after each market scenario. Large portfolios can therefore run without an arbitrary ticker-path ceiling, although they may take longer.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How the Simulation Works</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Every run generates correlated monthly return paths. All competing strategies receive the same
-        broad-market shock in a given path and month, which keeps the contest fair, while each holding
-        retains its own expected return, volatility, market sensitivity, payout behavior, and
-        classification. Available historical market data is blended with longer-term assumptions so a
-        short or unusually strong history does not dominate a long projection.
+        Every run generates correlated monthly return paths. Pairwise correlations are estimated from
+        overlapping total-return history, then blended with conservative underlying-group fallbacks when
+        history is short. Bear scenarios raise correlations among risk assets to reflect the way
+        diversification often weakens during stress. Each holding retains its own expected return,
+        volatility, payout behavior, classification, option structure, and underlying group. Available
+        history is blended with longer-term assumptions so a short or unusually strong record does not
+        dominate a long projection.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Neutral</strong> — Blends historical market behavior with forward strategy assumptions and represents the central long-run case.</li>
@@ -5355,6 +5360,8 @@ function GrowthIncomeFreedomHelp() {
         <li><strong>Contributions</strong> — Monthly deposits are invested after that month's return and distribution processing, following the target weights.</li>
         <li><strong>Payout realism</strong> — Distribution growth, payout stress, and strategy-specific sustainable-yield ceilings keep extreme current yields from creating an unrealistic share-count spiral.</li>
         <li><strong>Common random conditions</strong> — Both sides experience the same simulated market environment, so differences come from their holdings and weights rather than one side receiving luckier random paths.</li>
+        <li><strong>No volatility return bonus</strong> — Expected total return is treated as an arithmetic expectation. The lognormal path drift includes the variance correction, so higher volatility widens the result range instead of manufacturing additional average return.</li>
+        <li><strong>Limited-history uncertainty</strong> — Holdings with less than five years of history receive progressively wider forecast volatility. The Data quality panel flags short records, and the assumptions table shows both base and forecast volatility plus history confidence.</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -5429,7 +5436,8 @@ function GrowthIncomeFreedomHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Quality and Holding Assumptions</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Data quality and fallback notes</strong> — Appears when a ticker has limited history or requires a classification-based fallback. Review these warnings before relying heavily on a comparison.</li>
-        <li><strong>Holding assumptions used in this run</strong> — Expands into an audit table containing the modeled behavior, current yield, expected total return, volatility, beta, sustainable yield ceiling, history length, and assumption source for every ticker.</li>
+        <li><strong>Correlation model</strong> — Reports average normal and bear-stressed correlation, how many ticker pairs use overlapping history versus conservative fallbacks, and the strongest modeled relationships.</li>
+        <li><strong>Holding assumptions used in this run</strong> — Expands into an audit table containing modeled behavior, option structure, correlation group, current yield, expected total return, forecast volatility, average correlation, beta, sustainable yield ceiling, and history confidence for every ticker.</li>
         <li>A ticker with little or no history can still run using its security classification, but its estimate contains more model uncertainty than a holding with a long history.</li>
         <li>Current yields and prices are starting inputs, not promises that distributions or market values will remain unchanged.</li>
       </ul>

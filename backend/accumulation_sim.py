@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -89,8 +91,80 @@ SUSTAINABLE_YIELD_CAPS = {
     "other": 0.18,
 }
 
+OPTION_STRATEGIES = {
+    "auto",
+    "none",
+    "covered_call",
+    "short_put",
+    "put_spread",
+    "short_put_spread",
+    "protective_put_spread",
+    "collar_buffer",
+    "mixed_options",
+}
+
+CORRELATION_GROUPS = {
+    "auto",
+    "us_equity",
+    "sp500",
+    "nasdaq",
+    "small_cap",
+    "technology",
+    "semiconductors",
+    "international",
+    "option_income",
+    "fixed_income",
+    "cash",
+    "preferred_credit",
+    "real_estate",
+    "commodities",
+    "precious_metals",
+    "crypto",
+    "single_stock",
+    "other",
+}
+
+# These are deliberately modest planning adjustments, not claims about any
+# particular fund.  They only apply when the user or fund metadata identifies
+# the option structure; "put_spread" remains neutral because the direction of
+# an unspecified put spread cannot be inferred safely.
+OPTION_STRATEGY_PHASE_ADJUSTMENTS = {
+    "covered_call": {
+        "neutral": (-0.003, 0.90),
+        "bull": (-0.015, 0.90),
+        "bear_shock": (0.030, 0.90),
+        "recovery": (-0.005, 0.90),
+    },
+    "short_put": {
+        "neutral": (0.000, 1.05),
+        "bull": (0.000, 1.05),
+        "bear_shock": (-0.040, 1.10),
+        "recovery": (0.000, 1.05),
+    },
+    "short_put_spread": {
+        "neutral": (-0.002, 0.95),
+        "bull": (-0.003, 0.95),
+        "bear_shock": (-0.015, 1.00),
+        "recovery": (-0.002, 0.95),
+    },
+    "protective_put_spread": {
+        "neutral": (-0.005, 0.80),
+        "bull": (-0.010, 0.80),
+        "bear_shock": (0.080, 0.70),
+        "recovery": (-0.005, 0.80),
+    },
+    "collar_buffer": {
+        "neutral": (-0.006, 0.75),
+        "bull": (-0.018, 0.75),
+        "bear_shock": (0.100, 0.65),
+        "recovery": (-0.006, 0.75),
+    },
+}
+
 MAX_TICKERS_PER_STRATEGY = 250
-MAX_RETURN_PATH_CELLS = 20_000_000
+# Larger path cubes transparently spill to a temporary float32 memory map.
+# This threshold is a performance choice, not a user-facing workload limit.
+IN_MEMORY_RETURN_PATH_CELLS = 20_000_000
 
 _ASSUMPTION_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _ASSUMPTION_TTL_SECONDS = 60 * 60
@@ -106,6 +180,8 @@ class SimulationSettings:
     spending_rate: float
     paths: int
     seed: int
+    fi_confidence: float = 0.85
+    money_lasts_years: int = 25
 
 
 @dataclass(frozen=True)
@@ -162,6 +238,11 @@ def _stable_seed(base_seed: int, *parts: str) -> int:
     return int.from_bytes(hashlib.sha256(material).digest()[:8], "big") % (2**32)
 
 
+def _choice(value: Any, allowed: set[str], default: str) -> str:
+    normalized = str(value or default).strip().lower().replace("-", "_").replace(" ", "_")
+    return normalized if normalized in allowed else default
+
+
 def normalize_strategy(strategy: dict[str, Any]) -> dict[str, Any]:
     """Validate one strategy and normalize positive holding weights to 100%."""
     name = str(strategy.get("name") or "Strategy").strip()[:80] or "Strategy"
@@ -183,7 +264,38 @@ def normalize_strategy(strategy: dict[str, Any]) -> dict[str, Any]:
                 "scenario_type": str(raw.get("scenario_type") or "other"),
                 "current_yield_pct": max(0.0, _finite(raw.get("current_yield_pct"), 0.0)),
                 "current_price": max(0.0, _finite(raw.get("current_price"), 0.0)),
+                "classification_type": str(raw.get("classification_type") or "")[:80],
+                "etf_category": str(raw.get("etf_category") or "")[:120],
+                "etf_strategy": str(raw.get("etf_strategy") or "")[:120],
+                "fund_kind": str(raw.get("fund_kind") or "")[:80],
+                "income_bucket": str(raw.get("income_bucket") or "")[:120],
+                "scenario_type_override": str(
+                    raw.get("scenario_type_override") or ""
+                ).strip().lower(),
+                "option_strategy": _choice(
+                    raw.get("option_strategy"), OPTION_STRATEGIES, "auto"
+                ),
+                "correlation_group": _choice(
+                    raw.get("correlation_group"), CORRELATION_GROUPS, "auto"
+                ),
             }
+        else:
+            existing = combined[ticker]
+            for field in (
+                "classification_type",
+                "etf_category",
+                "etf_strategy",
+                "fund_kind",
+                "income_bucket",
+            ):
+                if not existing.get(field) and raw.get(field):
+                    existing[field] = str(raw.get(field))[:120]
+            raw_option = _choice(raw.get("option_strategy"), OPTION_STRATEGIES, "auto")
+            raw_group = _choice(raw.get("correlation_group"), CORRELATION_GROUPS, "auto")
+            if existing.get("option_strategy") == "auto" and raw_option != "auto":
+                existing["option_strategy"] = raw_option
+            if existing.get("correlation_group") == "auto" and raw_group != "auto":
+                existing["correlation_group"] = raw_group
         combined[ticker]["weight"] += weight
 
     if not combined:
@@ -227,6 +339,14 @@ def validate_settings(payload: dict[str, Any]) -> SimulationSettings:
     if paths < 100 or paths > 2000:
         raise ValueError("Monte Carlo paths must be between 100 and 2,000.")
     seed = int(_finite(payload.get("seed"), 73129))
+    fi_confidence_pct = _clip(_finite(payload.get("fi_confidence_pct"), 85.0), 50.0, 99.0)
+    # "Money must last (years)" is a shared assumption; fall back to the legacy
+    # sustainability.withdrawal_years when the newer field is not supplied.
+    sustainability_block = payload.get("sustainability") or {}
+    money_default = 25.0
+    if payload.get("money_lasts_years") is None and sustainability_block.get("withdrawal_years") is not None:
+        money_default = _finite(sustainability_block.get("withdrawal_years"), 25.0)
+    money_lasts_years = int(round(_clip(_finite(payload.get("money_lasts_years"), money_default), 1.0, 40.0)))
     return SimulationSettings(
         years=years,
         starting_capital=starting_capital,
@@ -236,6 +356,8 @@ def validate_settings(payload: dict[str, Any]) -> SimulationSettings:
         spending_rate=spending_rate / 100.0,
         paths=paths,
         seed=seed,
+        fi_confidence=fi_confidence_pct / 100.0,
+        money_lasts_years=money_lasts_years,
     )
 
 
@@ -321,6 +443,207 @@ def _annual_distribution_growth(monthly_dividends: pd.Series) -> float | None:
     return _clip(float(growth.median()), -0.50, 0.25)
 
 
+def _holding_text(holding: dict[str, Any]) -> str:
+    return " ".join(
+        str(holding.get(field) or "")
+        for field in (
+            "ticker",
+            "description",
+            "classification_type",
+            "etf_category",
+            "etf_strategy",
+            "fund_kind",
+            "income_bucket",
+        )
+    ).lower().replace("-", " ").replace("_", " ")
+
+
+def _infer_option_strategy(holding: dict[str, Any]) -> str:
+    explicit = _choice(holding.get("option_strategy"), OPTION_STRATEGIES, "auto")
+    if explicit != "auto":
+        return explicit
+    text = _holding_text(holding)
+    if any(phrase in text for phrase in ("collar", "buffer etf", "defined outcome")):
+        return "collar_buffer"
+    if "put spread" in text:
+        if any(phrase in text for phrase in ("protective", "hedge", "downside protection")):
+            return "protective_put_spread"
+        if any(phrase in text for phrase in ("credit spread", "short put spread", "put credit")):
+            return "short_put_spread"
+        return "put_spread"
+    if any(
+        phrase in text
+        for phrase in ("cash secured put", "cash-secured put", "putwrite", "put write")
+    ):
+        return "short_put"
+    if any(phrase in text for phrase in ("covered call", "buy write", "buywrite")):
+        return "covered_call"
+    if holding.get("scenario_type") in {"option_income", "high_distribution_option"}:
+        return "mixed_options"
+    return "none"
+
+
+def _infer_correlation_group(holding: dict[str, Any]) -> str:
+    explicit = _choice(holding.get("correlation_group"), CORRELATION_GROUPS, "auto")
+    if explicit != "auto":
+        return explicit
+    text = _holding_text(holding)
+    ticker = str(holding.get("ticker") or "").upper()
+    scenario_type = str(holding.get("scenario_type") or "other")
+
+    if scenario_type == "cash":
+        return "cash"
+    if scenario_type == "fixed_income":
+        return "fixed_income"
+    if scenario_type == "preferred_credit":
+        return "preferred_credit"
+    if scenario_type == "reit":
+        return "real_estate"
+    if any(phrase in text for phrase in ("bitcoin", "ethereum", "crypto")):
+        return "crypto"
+    if any(phrase in text for phrase in ("gold", "silver", "precious metal")):
+        return "precious_metals"
+    if scenario_type == "commodities" or any(
+        phrase in text for phrase in ("commodity", "natural resources", "midstream")
+    ):
+        return "commodities"
+    if any(phrase in text for phrase in ("semiconductor", "semiconductors")):
+        return "semiconductors"
+    if any(phrase in text for phrase in ("nasdaq", "qqq")):
+        return "nasdaq"
+    if any(phrase in text for phrase in ("s&p 500", "s & p 500", "sp 500")) or ticker in {
+        "SPY", "SPYM", "VOO", "IVV", "RSP",
+    }:
+        return "sp500"
+    if any(phrase in text for phrase in ("russell 2000", "small cap")):
+        return "small_cap"
+    if any(phrase in text for phrase in ("technology", "software", "innovation", "ai etf")):
+        return "technology"
+    if any(phrase in text for phrase in ("international", "overseas", "emerging market")):
+        return "international"
+    if scenario_type in {"option_income", "high_distribution_option"}:
+        return "option_income"
+    if scenario_type in {"dividend_growth", "equity_income", "non_income_equity", "bdc"}:
+        return "us_equity"
+    return "other"
+
+
+def _fallback_correlation(left: dict[str, Any], right: dict[str, Any]) -> float:
+    """Conservative correlation prior used when history is short or missing."""
+    left_group = left.get("correlation_group") or _infer_correlation_group(left)
+    right_group = right.get("correlation_group") or _infer_correlation_group(right)
+    left_type = left.get("scenario_type", "other")
+    right_type = right.get("scenario_type", "other")
+
+    if left_group == right_group:
+        return {
+            "cash": 0.20,
+            "fixed_income": 0.65,
+            "preferred_credit": 0.65,
+            "precious_metals": 0.65,
+            "commodities": 0.55,
+            "crypto": 0.72,
+            "option_income": 0.72,
+            "single_stock": 0.55,
+            "other": 0.45,
+        }.get(left_group, 0.78)
+
+    defensive = {"cash", "fixed_income"}
+    equity_like = {
+        "us_equity", "sp500", "nasdaq", "small_cap", "technology",
+        "semiconductors", "international", "option_income", "single_stock",
+        "real_estate", "preferred_credit",
+    }
+    commodity_like = {"commodities", "precious_metals", "crypto"}
+    if left_group in defensive and right_group in defensive:
+        return 0.40
+    if (left_group in defensive) != (right_group in defensive):
+        return 0.10 if "cash" not in {left_group, right_group} else 0.03
+    if left_group in equity_like and right_group in equity_like:
+        correlation = 0.58
+        if "option_income" in {left_group, right_group}:
+            correlation = 0.65
+        return correlation
+    if left_group in commodity_like and right_group in commodity_like:
+        return 0.35
+    if (
+        left_group in equity_like and right_group in commodity_like
+    ) or (
+        right_group in equity_like and left_group in commodity_like
+    ):
+        return 0.25
+    if left_type == right_type:
+        return 0.50
+    return 0.30
+
+
+def _correlation_floor(left: dict[str, Any], right: dict[str, Any]) -> float:
+    left_group = left.get("correlation_group") or _infer_correlation_group(left)
+    right_group = right.get("correlation_group") or _infer_correlation_group(right)
+    if left_group != right_group:
+        return -0.25
+    return {
+        "option_income": 0.60,
+        "sp500": 0.70,
+        "nasdaq": 0.70,
+        "technology": 0.65,
+        "semiconductors": 0.65,
+        "us_equity": 0.60,
+        "fixed_income": 0.45,
+        "crypto": 0.55,
+    }.get(left_group, 0.35)
+
+
+def _attach_correlation_assumptions(
+    assumptions: dict[str, dict[str, Any]],
+    returns_by_ticker: dict[str, pd.Series],
+) -> None:
+    """Blend pairwise history with conservative similarity-based priors."""
+    tickers = sorted(assumptions)
+    correlations = {ticker: {ticker: 1.0} for ticker in tickers}
+    correlation_months = {ticker: {ticker: 0} for ticker in tickers}
+    for left_index, left_ticker in enumerate(tickers):
+        left = assumptions[left_ticker]
+        for right_ticker in tickers[left_index + 1:]:
+            right = assumptions[right_ticker]
+            fallback = _fallback_correlation(left, right)
+            overlap_months = 0
+            correlation = fallback
+            left_returns = returns_by_ticker.get(left_ticker)
+            right_returns = returns_by_ticker.get(right_ticker)
+            if left_returns is not None and right_returns is not None:
+                aligned = pd.concat(
+                    [left_returns.rename("left"), right_returns.rename("right")],
+                    axis=1,
+                ).dropna()
+                overlap_months = len(aligned)
+                if overlap_months >= 18:
+                    historical = float(aligned["left"].corr(aligned["right"]))
+                    if math.isfinite(historical):
+                        history_weight = min(0.85, max(0.10, (overlap_months - 12) / 60.0))
+                        correlation = (
+                            historical * history_weight
+                            + fallback * (1.0 - history_weight)
+                        )
+            correlation = max(correlation, _correlation_floor(left, right))
+            correlation = _clip(correlation, -0.35, 0.95)
+            correlations[left_ticker][right_ticker] = round(correlation, 6)
+            correlations[right_ticker][left_ticker] = round(correlation, 6)
+            correlation_months[left_ticker][right_ticker] = overlap_months
+            correlation_months[right_ticker][left_ticker] = overlap_months
+
+    for ticker in tickers:
+        others = [
+            value for other, value in correlations[ticker].items() if other != ticker
+        ]
+        assumptions[ticker]["correlations"] = correlations[ticker]
+        assumptions[ticker]["correlation_history_months"] = correlation_months[ticker]
+        assumptions[ticker]["average_correlation"] = round(
+            float(np.mean(others)) if others else 1.0,
+            4,
+        )
+
+
 def build_market_assumptions(
     holdings: list[dict[str, Any]],
     *,
@@ -337,12 +660,18 @@ def build_market_assumptions(
         histories = {}
         warnings.append(f"Market history download failed; class assumptions were used ({exc}).")
 
-    spy_frame = histories.get("SPY")
-    _, _, spy_returns = _monthly_total_returns(spy_frame) if spy_frame is not None else (
-        pd.Series(dtype=float),
-        pd.Series(dtype=float),
-        pd.Series(dtype=float),
+    history_metrics: dict[str, tuple[pd.Series, pd.Series, pd.Series]] = {}
+    for ticker, frame in histories.items():
+        history_metrics[ticker] = _monthly_total_returns(frame)
+    empty_series = pd.Series(dtype=float)
+    _, _, spy_returns = history_metrics.get(
+        "SPY", (empty_series, empty_series, empty_series)
     )
+    returns_by_ticker = {
+        ticker: metrics[2]
+        for ticker, metrics in history_metrics.items()
+        if ticker in by_ticker and not metrics[2].empty
+    }
     market_var = float(spy_returns.var()) if len(spy_returns) >= 24 else 0.0
 
     assumptions: dict[str, dict[str, Any]] = {}
@@ -352,12 +681,47 @@ def build_market_assumptions(
         scenario_type = raw_holding.get("scenario_type", "other")
         if scenario_type not in HOLDING_SCENARIO_PROFILES:
             scenario_type = "other"
-        cache_key = f"{ticker}|{scenario_type}"
+        option_strategy = _infer_option_strategy({
+            **raw_holding,
+            "scenario_type": scenario_type,
+        })
+        correlation_group = _infer_correlation_group({
+            **raw_holding,
+            "scenario_type": scenario_type,
+        })
+        cache_key = f"{ticker}|{scenario_type}|{option_strategy}|{correlation_group}"
         cached = _ASSUMPTION_CACHE.get(cache_key)
         if history_loader is None and cached and now - cached[0] < _ASSUMPTION_TTL_SECONDS:
             row = dict(cached[1])
             row["scenario_type"] = scenario_type
+            row["option_strategy"] = option_strategy
+            row["correlation_group"] = correlation_group
+            row.pop("correlations", None)
+            row.pop("correlation_history_months", None)
+            history_confidence = _clip(
+                _finite(row.get("history_years"), 0.0) / 5.0, 0.0, 1.0
+            )
+            row["history_confidence_pct"] = round(history_confidence * 100.0, 1)
+            row["forecast_annual_volatility"] = round(
+                _clip(
+                    _finite(row.get("annual_volatility"), VOLATILITY_PRIORS[scenario_type])
+                    * (1.0 + (1.0 - history_confidence) * 0.25),
+                    0.01,
+                    0.80,
+                ),
+                8,
+            )
             assumptions[ticker] = row
+            if _finite(row.get("history_years"), 0.0) < 3:
+                warnings.append(
+                    f"{ticker}: limited price history; forecast uncertainty was widened "
+                    "and conservative correlation assumptions were used."
+                )
+            if _finite(row.get("current_yield"), 0.0) > 0.20:
+                warnings.append(
+                    f"{ticker}: current distribution rate is above 20%; payout stress "
+                    "assumptions materially affect results."
+                )
             continue
 
         prior_return = RETURN_PRIORS[scenario_type]
@@ -379,12 +743,17 @@ def build_market_assumptions(
         div_growth = neutral_div_growth
 
         if frame is not None:
-            monthly_close, monthly_dividends, returns = _monthly_total_returns(frame)
+            monthly_close, monthly_dividends, returns = history_metrics.get(
+                ticker, (empty_series, empty_series, empty_series)
+            )
             if len(returns) >= 12:
                 source = "market history + class assumption"
                 history_years = len(returns) / 12.0
-                log_returns = np.log1p(returns.clip(lower=-0.95))
-                historical_return = float(np.expm1(log_returns.mean() * 12.0))
+                # The path generator treats expected total return as an
+                # arithmetic expectation, so calibrate history on the same
+                # basis before applying the lognormal variance correction.
+                mean_monthly_return = float(returns.mean())
+                historical_return = float((1.0 + mean_monthly_return) ** 12.0 - 1.0)
                 history_weight = min(0.35, history_years / 10.0 * 0.35)
                 expected_return = (
                     prior_return * (1.0 - history_weight)
@@ -410,9 +779,14 @@ def build_market_assumptions(
                     if historical_div_growth is not None:
                         div_growth = neutral_div_growth * 0.70 + historical_div_growth * 0.30
 
-        if history_years < 2:
+        history_confidence = _clip(history_years / 5.0, 0.0, 1.0)
+        uncertainty_multiplier = 1.0 + (1.0 - history_confidence) * 0.25
+        forecast_volatility = _clip(volatility * uncertainty_multiplier, 0.01, 0.80)
+
+        if history_years < 3:
             warnings.append(
-                f"{ticker}: limited price history; long-term class assumptions carry most of the forecast."
+                f"{ticker}: limited price history; forecast uncertainty was widened "
+                "and conservative correlation assumptions were used."
             )
         if current_yield > 0.20:
             warnings.append(
@@ -424,10 +798,14 @@ def build_market_assumptions(
             "description": raw_holding.get("description") or ticker,
             "scenario_type": scenario_type,
             "scenario_label": profile["label"],
+            "option_strategy": option_strategy,
+            "correlation_group": correlation_group,
             "current_price": round(current_price, 6),
             "current_yield": round(_clip(current_yield, 0.0, 0.80), 8),
             "expected_total_return": round(_clip(expected_return, -0.10, 0.20), 8),
             "annual_volatility": round(volatility, 8),
+            "forecast_annual_volatility": round(forecast_volatility, 8),
+            "history_confidence_pct": round(history_confidence * 100.0, 1),
             "beta": round(beta, 6),
             "neutral_distribution_growth": round(_clip(div_growth, -0.25, 0.15), 8),
             "sustainable_yield_cap": SUSTAINABLE_YIELD_CAPS[scenario_type],
@@ -437,7 +815,23 @@ def build_market_assumptions(
         assumptions[ticker] = row
         if history_loader is None:
             _ASSUMPTION_CACHE[cache_key] = (now, dict(row))
+    _attach_correlation_assumptions(assumptions, returns_by_ticker)
     return assumptions, list(dict.fromkeys(warnings))
+
+
+def _apply_option_adjustment(
+    assumption: dict[str, Any],
+    phase: str,
+    annual_return: float,
+    volatility_multiplier: float,
+) -> tuple[float, float]:
+    option_strategy = _choice(
+        assumption.get("option_strategy"), OPTION_STRATEGIES, "auto"
+    )
+    adjustment = OPTION_STRATEGY_PHASE_ADJUSTMENTS.get(option_strategy, {}).get(phase)
+    if adjustment is None:
+        return annual_return, volatility_multiplier
+    return annual_return + adjustment[0], volatility_multiplier * adjustment[1]
 
 
 def _scenario_month_parameters(
@@ -462,7 +856,10 @@ def _scenario_month_parameters(
             )
             annual_return = neutral_return + uplift
             income_growth = _finite(profile["bullish"].get("income_growth"), neutral_income_growth)
-            return annual_return, 0.90, income_growth
+            annual_return, vol_multiplier = _apply_option_adjustment(
+                assumption, "bull", annual_return, 0.90
+            )
+            return annual_return, vol_multiplier, income_growth
         if month_index < 48:
             fade = 1.0 - (month_index - 36) / 12.0
             uplift = (
@@ -470,9 +867,15 @@ def _scenario_month_parameters(
                 - _finite(profile["neutral"].get("total_return"), neutral_return)
             )
             bull_income = _finite(profile["bullish"].get("income_growth"), neutral_income_growth)
-            return (
+            annual_return, vol_multiplier = _apply_option_adjustment(
+                assumption,
+                "bull",
                 neutral_return + uplift * fade,
                 0.90 + 0.10 * (1.0 - fade),
+            )
+            return (
+                annual_return,
+                vol_multiplier,
                 neutral_income_growth + (bull_income - neutral_income_growth) * fade,
             )
     elif scenario == "bearish":
@@ -480,24 +883,42 @@ def _scenario_month_parameters(
         if month_index < 12:
             annual_return = _finite(bear.get("total_return"), -0.20)
             annual_income_factor = max(0.05, 1.0 + _finite(bear.get("income_shock"), -0.10))
-            return annual_return, 1.50, annual_income_factor - 1.0
+            annual_return, vol_multiplier = _apply_option_adjustment(
+                assumption, "bear_shock", annual_return, 1.50
+            )
+            return annual_return, vol_multiplier, annual_income_factor - 1.0
         if month_index < 36:
-            return (
+            annual_return, vol_multiplier = _apply_option_adjustment(
+                assumption,
+                "recovery",
                 _finite(bear.get("recovery_total_return"), neutral_return),
                 1.15,
+            )
+            return (
+                annual_return,
+                vol_multiplier,
                 _finite(bear.get("recovery_income_growth"), neutral_income_growth),
             )
         if month_index < 48:
             fade = 1.0 - (month_index - 36) / 12.0
             recovery_return = _finite(bear.get("recovery_total_return"), neutral_return)
             recovery_income = _finite(bear.get("recovery_income_growth"), neutral_income_growth)
-            return (
+            annual_return, vol_multiplier = _apply_option_adjustment(
+                assumption,
+                "recovery",
                 neutral_return + (recovery_return - neutral_return) * fade,
                 1.0 + 0.15 * fade,
+            )
+            return (
+                annual_return,
+                vol_multiplier,
                 neutral_income_growth + (recovery_income - neutral_income_growth) * fade,
             )
 
-    return neutral_return, 1.0, neutral_income_growth
+    annual_return, vol_multiplier = _apply_option_adjustment(
+        assumption, "neutral", neutral_return, 1.0
+    )
+    return annual_return, vol_multiplier, neutral_income_growth
 
 
 def _draw_normal_blocks(
@@ -518,13 +939,211 @@ def _draw_normal_blocks(
     return np.concatenate([accumulation_block, withdrawal_block], axis=1)
 
 
+def _nearest_correlation_matrix(matrix: np.ndarray) -> np.ndarray:
+    """Return a positive-semidefinite, unit-diagonal correlation matrix."""
+    symmetric = (matrix + matrix.T) / 2.0
+    eigenvalues, eigenvectors = np.linalg.eigh(symmetric)
+    eigenvalues = np.maximum(eigenvalues, 1e-8)
+    positive = (eigenvectors * eigenvalues) @ eigenvectors.T
+    scale = np.sqrt(np.maximum(np.diag(positive), 1e-12))
+    correlation = positive / np.outer(scale, scale)
+    np.fill_diagonal(correlation, 1.0)
+    return np.clip(correlation, -0.99, 0.99) + np.eye(len(matrix)) * 0.01
+
+
+def _correlation_matrix(
+    assumptions: dict[str, dict[str, Any]],
+    tickers: list[str],
+) -> np.ndarray:
+    matrix = np.eye(len(tickers), dtype=np.float64)
+    for left_index, left_ticker in enumerate(tickers):
+        left = assumptions[left_ticker]
+        for right_index in range(left_index + 1, len(tickers)):
+            right_ticker = tickers[right_index]
+            right = assumptions[right_ticker]
+            stored = (left.get("correlations") or {}).get(right_ticker)
+            correlation = (
+                _finite(stored, _fallback_correlation(left, right))
+                if stored is not None
+                else _fallback_correlation(left, right)
+            )
+            matrix[left_index, right_index] = correlation
+            matrix[right_index, left_index] = correlation
+    return _nearest_correlation_matrix(matrix)
+
+
+def _bear_stressed_correlation_matrix(
+    base: np.ndarray,
+    assumptions: dict[str, dict[str, Any]],
+    tickers: list[str],
+) -> np.ndarray:
+    """Raise dependence during the bear shock, especially among risk assets."""
+    stressed = base.copy()
+    defensive = {"cash", "fixed_income"}
+    for left_index, left_ticker in enumerate(tickers):
+        left_group = assumptions[left_ticker].get("correlation_group") or _infer_correlation_group(
+            assumptions[left_ticker]
+        )
+        for right_index in range(left_index + 1, len(tickers)):
+            right_ticker = tickers[right_index]
+            right_group = assumptions[right_ticker].get(
+                "correlation_group"
+            ) or _infer_correlation_group(assumptions[right_ticker])
+            current = stressed[left_index, right_index]
+            if left_group in defensive or right_group in defensive:
+                stress_share = 0.08
+            else:
+                stress_share = 0.30
+            correlation = current + (1.0 - current) * stress_share
+            stressed[left_index, right_index] = correlation
+            stressed[right_index, left_index] = correlation
+    return _nearest_correlation_matrix(stressed)
+
+
+def _cholesky_factor(correlation: np.ndarray) -> np.ndarray:
+    try:
+        return np.linalg.cholesky(correlation)
+    except np.linalg.LinAlgError:
+        jittered = correlation + np.eye(len(correlation)) * 1e-6
+        return np.linalg.cholesky(_nearest_correlation_matrix(jittered))
+
+
+def _correlation_model_summary(
+    assumptions: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    tickers = sorted(assumptions)
+    if len(tickers) < 2:
+        return {
+            "average_correlation": 0.0,
+            "bear_average_correlation": 0.0,
+            "historical_pair_count": 0,
+            "fallback_pair_count": 0,
+            "strongest_pairs": [],
+        }
+    base = _correlation_matrix(assumptions, tickers)
+    bear = _bear_stressed_correlation_matrix(base, assumptions, tickers)
+    pairs = []
+    historical_count = 0
+    for left_index, left_ticker in enumerate(tickers):
+        for right_index in range(left_index + 1, len(tickers)):
+            right_ticker = tickers[right_index]
+            overlap = int(
+                (assumptions[left_ticker].get("correlation_history_months") or {}).get(
+                    right_ticker, 0
+                )
+            )
+            if overlap >= 18:
+                historical_count += 1
+            pairs.append({
+                "left": left_ticker,
+                "right": right_ticker,
+                "correlation": round(float(base[left_index, right_index]), 3),
+                "bear_correlation": round(float(bear[left_index, right_index]), 3),
+                "overlap_months": overlap,
+                "source": "history + fallback" if overlap >= 18 else "conservative fallback",
+            })
+    upper = np.triu_indices(len(tickers), 1)
+    pairs.sort(key=lambda row: row["correlation"], reverse=True)
+    return {
+        "average_correlation": round(float(np.mean(base[upper])), 3),
+        "bear_average_correlation": round(float(np.mean(bear[upper])), 3),
+        "historical_pair_count": historical_count,
+        "fallback_pair_count": len(pairs) - historical_count,
+        "strongest_pairs": pairs[:12],
+    }
+
+
+def _allocate_return_path_matrix(
+    shape: tuple[int, int, int],
+) -> tuple[np.ndarray, str | None]:
+    cells = math.prod(shape)
+    if cells <= IN_MEMORY_RETURN_PATH_CELLS:
+        return np.empty(shape, dtype=np.float32), None
+
+    try:
+        _cleanup_stale_return_path_files()
+        handle = tempfile.NamedTemporaryFile(
+            prefix="portfolio-return-paths-",
+            suffix=".bin",
+            delete=False,
+        )
+        storage_path = handle.name
+        handle.close()
+        matrix = np.memmap(
+            storage_path,
+            mode="w+",
+            dtype=np.float32,
+            shape=shape,
+        )
+        return matrix, storage_path
+    except OSError as exc:
+        if "storage_path" in locals():
+            try:
+                os.remove(storage_path)
+            except OSError:
+                pass
+        required_gb = cells * np.dtype(np.float32).itemsize / (1024**3)
+        raise ValueError(
+            "This large simulation needs temporary working storage "
+            f"(about {required_gb:.1f} GB), but it could not be allocated: {exc}"
+        ) from exc
+
+
+def _cleanup_stale_return_path_files(max_age_hours: float = 24.0) -> None:
+    """Remove orphaned path stores left by an interrupted backend process."""
+    cutoff = time.time() - max_age_hours * 60.0 * 60.0
+    try:
+        entries = os.scandir(tempfile.gettempdir())
+    except OSError:
+        return
+    with entries:
+        for entry in entries:
+            if (
+                not entry.is_file()
+                or not entry.name.startswith("portfolio-return-paths-")
+                or not entry.name.endswith(".bin")
+            ):
+                continue
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    os.remove(entry.path)
+            except OSError:
+                # Another live simulation may still own the map.
+                continue
+
+
+def _release_return_paths(paths_by_ticker: dict[str, Any] | None) -> None:
+    if not paths_by_ticker:
+        return
+    storage = paths_by_ticker.pop("__storage__", None)
+    for ticker_path in paths_by_ticker.values():
+        if isinstance(ticker_path, dict):
+            ticker_path.pop("log_returns", None)
+    if not isinstance(storage, dict):
+        return
+    matrix = storage.pop("matrix", None)
+    storage_path = storage.get("path")
+    if isinstance(matrix, np.memmap):
+        try:
+            matrix.flush()
+        finally:
+            mmap_handle = getattr(matrix, "_mmap", None)
+            if mmap_handle is not None:
+                mmap_handle.close()
+    if storage_path:
+        try:
+            os.remove(storage_path)
+        except FileNotFoundError:
+            pass
+
+
 def generate_return_paths(
     assumptions: dict[str, dict[str, Any]],
     scenario: str,
     settings: SimulationSettings,
     *,
     withdrawal_months: int = 0,
-) -> dict[str, dict[str, np.ndarray]]:
+) -> dict[str, Any]:
     """Generate shared, correlated monthly return and DPS-growth paths.
 
     ``withdrawal_months`` optionally extends the path beyond the accumulation
@@ -535,55 +1154,184 @@ def generate_return_paths(
         raise ValueError(f"Unknown market scenario: {scenario}")
     accumulation_months = settings.years * 12
     months = accumulation_months + max(0, withdrawal_months)
-    common_rng = np.random.default_rng(_stable_seed(settings.seed, scenario, "market"))
-    common_z = _draw_normal_blocks(common_rng, settings.paths, accumulation_months, withdrawal_months)
-    market_sigma = 0.16
-    output: dict[str, dict[str, np.ndarray]] = {}
-
-    for ticker, assumption in sorted(assumptions.items()):
-        ticker_rng = np.random.default_rng(_stable_seed(settings.seed, scenario, ticker))
-        idiosyncratic_z = _draw_normal_blocks(
-            ticker_rng, settings.paths, accumulation_months, withdrawal_months
+    tickers = sorted(assumptions)
+    base_correlation = _correlation_matrix(assumptions, tickers)
+    base_factor = _cholesky_factor(base_correlation)
+    stressed_factor = (
+        _cholesky_factor(
+            _bear_stressed_correlation_matrix(base_correlation, assumptions, tickers)
         )
-        beta = _finite(assumption["beta"], 0.8)
-        annual_vol = max(0.0, _finite(assumption["annual_volatility"], 0.18))
-        systematic_vol = min(annual_vol * 0.95, abs(beta) * market_sigma)
-        residual_vol = math.sqrt(max(annual_vol**2 - systematic_vol**2, (annual_vol * 0.20) ** 2))
+        if scenario == "bearish"
+        else base_factor
+    )
 
-        log_returns = np.empty((settings.paths, months), dtype=np.float64)
-        dps_growth = np.empty(months, dtype=np.float64)
-        for month in range(months):
-            annual_return, vol_multiplier, annual_income_growth = _scenario_month_parameters(
-                assumption, scenario, month
+    # One independent source per ticker is transformed by the reviewed
+    # correlation matrix. Drawing each source in accumulation/withdrawal blocks
+    # preserves the existing path prefix when a withdrawal horizon is added.
+    shocks, storage_path = _allocate_return_path_matrix(
+        (settings.paths, months, len(tickers))
+    )
+    output: dict[str, Any] = {
+        "__storage__": {
+            "matrix": shocks,
+            "path": storage_path,
+            "ticker_index": {ticker: index for index, ticker in enumerate(tickers)},
+            "mode": "temporary_disk" if storage_path else "memory",
+        }
+    }
+    try:
+        for ticker_index, ticker in enumerate(tickers):
+            shocks[:, :, ticker_index] = _draw_normal_blocks(
+                np.random.default_rng(
+                    _stable_seed(settings.seed, scenario, "correlation", ticker)
+                ),
+                settings.paths,
+                accumulation_months,
+                withdrawal_months,
             )
-            annual_return = max(-0.95, annual_return)
-            median_log_return = math.log1p(annual_return) / 12.0
-            monthly_systematic = systematic_vol * vol_multiplier / math.sqrt(12.0)
-            monthly_residual = residual_vol * vol_multiplier / math.sqrt(12.0)
-            log_returns[:, month] = (
-                median_log_return
-                + monthly_systematic * common_z[:, month] * (1.0 if beta >= 0 else -1.0)
-                + monthly_residual * idiosyncratic_z[:, month]
+        path_chunk = 64
+        stress_months = min(48, months) if scenario == "bearish" else 0
+        for start in range(0, settings.paths, path_chunk):
+            stop = min(settings.paths, start + path_chunk)
+            block = shocks[start:stop]
+            if stress_months > 0:
+                block[:, :stress_months, :] = (
+                    block[:, :stress_months, :] @ stressed_factor.T
+                )
+                if stress_months < months:
+                    block[:, stress_months:, :] = (
+                        block[:, stress_months:, :] @ base_factor.T
+                    )
+            else:
+                block[:] = block @ base_factor.T
+
+        for ticker_index, ticker in enumerate(tickers):
+            assumption = assumptions[ticker]
+            annual_vol = max(
+                0.0,
+                _finite(
+                    assumption.get("forecast_annual_volatility"),
+                    assumption.get("annual_volatility", 0.18),
+                ),
             )
-            dps_growth[month] = max(0.01, 1.0 + annual_income_growth) ** (1.0 / 12.0)
-        output[ticker] = {"log_returns": log_returns, "dps_growth": dps_growth}
-    return output
+            annual_returns = np.empty(months, dtype=np.float64)
+            volatility_multipliers = np.empty(months, dtype=np.float64)
+            dps_growth = np.empty(months, dtype=np.float64)
+            for month in range(months):
+                annual_return, vol_multiplier, annual_income_growth = _scenario_month_parameters(
+                    assumption, scenario, month
+                )
+                annual_returns[month] = max(-0.95, annual_return)
+                volatility_multipliers[month] = max(0.0, vol_multiplier)
+                dps_growth[month] = max(
+                    0.01, 1.0 + annual_income_growth
+                ) ** (1.0 / 12.0)
+
+            monthly_sigma = annual_vol * volatility_multipliers / math.sqrt(12.0)
+            # ``expected_total_return`` is an arithmetic expectation. A
+            # lognormal draw therefore needs the -½ variance term; omitting it
+            # gives volatile funds a free return uplift.
+            log_drift = np.log1p(annual_returns) / 12.0 - 0.5 * monthly_sigma**2
+            log_returns = shocks[:, :, ticker_index]
+            log_returns *= monthly_sigma[np.newaxis, :]
+            log_returns += log_drift[np.newaxis, :]
+            output[ticker] = {
+                "log_returns": log_returns,
+                "dps_growth": dps_growth,
+            }
+        if isinstance(shocks, np.memmap):
+            shocks.flush()
+        return output
+    except Exception:
+        _release_return_paths(output)
+        raise
+
+
+def _simulate_withdrawal_window(
+    shares0: np.ndarray,
+    price0: np.ndarray,
+    dps0: np.ndarray,
+    log_returns: np.ndarray,
+    return_ticker_indices: np.ndarray,
+    dps_growth: np.ndarray,
+    yield_caps: np.ndarray,
+    start_month: int,
+    withdrawal_months: int,
+    settings: SimulationSettings,
+    tax_factor: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Retire at ``start_month`` and fund the freedom target by selling shares.
+
+    Fully vectorized across tickers: state arrays are shaped ``(paths, tickers)``.
+    ``log_returns`` keeps the shared universe layout ``(paths, months,
+    universe_tickers)`` and ``return_ticker_indices`` selects this strategy's
+    columns one month at a time, avoiding a large per-strategy copy.
+    ``dps_growth`` is ``(tickers, months)`` and ``yield_caps`` is ``(tickers,)``.
+    Distributions cover the inflation-adjusted target first; any shortfall sells
+    shares pro-rata by value and any surplus buys shares.
+
+    Returns ``(survived_mask, end_value, retire_value)`` per path, where
+    ``survived_mask`` is True on paths that never fully depleted, ``end_value`` is
+    the nominal portfolio value at the end of the window, and ``retire_value`` is
+    the nominal value at ``start_month`` (for real-principal comparisons).
+    """
+    shares = shares0.copy()
+    price = price0.copy()
+    dps = dps0.copy()
+    n_paths = shares.shape[0]
+    retire_value = (shares * price).sum(axis=1)
+    depleted = np.zeros(n_paths, dtype=bool)
+
+    for offset in range(withdrawal_months):
+        month = start_month + offset
+        total_return = np.expm1(log_returns[:, month, return_ticker_indices])
+        payout_per_share = np.minimum(dps / 12.0, price * yield_caps / 12.0)
+        distribution = shares * payout_per_share
+        price_end = np.maximum(price * (1.0 + total_return) - payout_per_share, price * 0.01)
+
+        net_distribution = (distribution * tax_factor).sum(axis=1)
+        target = settings.freedom_monthly_target * (
+            (1.0 + settings.inflation_rate) ** ((month + 1) / 12.0)
+        )
+        shortfall = np.maximum(target - net_distribution, 0.0)
+        surplus = np.maximum(net_distribution - target, 0.0)
+
+        value = shares * price_end
+        total_value = value.sum(axis=1)
+        depleted |= total_value <= 1e-6
+
+        safe_total = np.where(total_value > 1e-9, total_value, 1.0)
+        weight_frac = value / safe_total[:, None]
+        safe_price = np.where(price_end > 1e-9, price_end, 1.0)
+        sell_shares = shortfall[:, None] * weight_frac / safe_price
+        buy_shares = surplus[:, None] * weight_frac / safe_price
+
+        shares = np.maximum(shares - sell_shares + buy_shares, 0.0)
+        price = price_end
+        dps = np.minimum(dps * dps_growth[:, month], price * yield_caps)
+
+    end_value = (shares * price).sum(axis=1)
+    return ~depleted, end_value, retire_value
 
 
 def _simulate_strategy(
     strategy: dict[str, Any],
     assumptions: dict[str, dict[str, Any]],
-    paths_by_ticker: dict[str, dict[str, np.ndarray]],
+    paths_by_ticker: dict[str, Any],
     settings: SimulationSettings,
     sustainability: SustainabilityOptions = _DEFAULT_SUSTAINABILITY,
 ) -> dict[str, Any]:
     months = settings.years * 12
+    annual_target = settings.freedom_monthly_target * 12.0
     portfolio_values = np.zeros((settings.paths, months + 1), dtype=np.float64)
     flow_adjusted_index = np.full((settings.paths, months + 1), 100.0, dtype=np.float64)
     annual_income = np.zeros((settings.paths, months + 1), dtype=np.float64)
     cumulative_distributions = np.zeros(settings.paths, dtype=np.float64)
     portfolio_values[:, 0] = settings.starting_capital
     no_drip_cash_collected = np.zeros(settings.paths, dtype=np.float64)
+    # Year-end snapshots (shares/price/dps per ticker) feed the per-year FI
+    # survival scan below; only captured when a freedom target is set.
+    year_snapshots: dict[int, dict[str, dict[str, Any]]] = {}
 
     weights = {row["ticker"]: row["weight"] for row in strategy["holdings"]}
     weighted_yield = 0.0
@@ -616,6 +1364,10 @@ def _simulate_strategy(
         blended_expected_total_return += holding["weight"] * _finite(
             assumption["expected_total_return"], 0.0
         )
+
+    # Stable ticker order shared by the year-end snapshots and the stacked
+    # market inputs, so the vectorized withdrawal window lines them up correctly.
+    ticker_order = list(ticker_states.keys())
 
     for month in range(months):
         month_total = np.zeros(settings.paths, dtype=np.float64)
@@ -669,6 +1421,13 @@ def _simulate_strategy(
         )
         annual_income[:, month + 1] = month_income
 
+        if annual_target > 0 and (month + 1) % 12 == 0:
+            year_snapshots[(month + 1) // 12] = {
+                "shares": np.stack([ticker_states[t]["shares"] for t in ticker_order], axis=1),
+                "price": np.stack([ticker_states[t]["price"] for t in ticker_order], axis=1),
+                "dps": np.stack([ticker_states[t]["dps"] for t in ticker_order], axis=1),
+            }
+
     if sustainability.check_drip_stop_stability:
         no_drip_final_value = np.zeros(settings.paths, dtype=np.float64)
         for state in ticker_states.values():
@@ -680,70 +1439,88 @@ def _simulate_strategy(
         capital_ok = np.ones(settings.paths, dtype=bool)
         capital_stability_probability = None
 
-    depleted = np.zeros(settings.paths, dtype=bool)
-    if sustainability.run_withdrawal_phase:
-        withdrawal_months = sustainability.withdrawal_years * 12
-        for offset in range(withdrawal_months):
-            month = months + offset
-            ticker_price_end: dict[str, np.ndarray] = {}
-            total_distribution = np.zeros(settings.paths, dtype=np.float64)
-            for ticker, state in ticker_states.items():
-                path = paths_by_ticker[ticker]
-                payout_per_share = np.minimum(
-                    state["dps"] / 12.0,
-                    state["price"] * state["yield_cap"] / 12.0,
-                )
-                distribution = state["shares"] * payout_per_share
-                total_return = np.expm1(path["log_returns"][:, month])
-                price_end = state["price"] * (1.0 + total_return) - payout_per_share
-                price_end = np.maximum(price_end, state["price"] * 0.01)
-                ticker_price_end[ticker] = price_end
-                total_distribution += distribution
-
-            target = settings.freedom_monthly_target * (
-                (1.0 + settings.inflation_rate) ** ((month + 1) / 12.0)
+    # Reuse the shared universe matrix for withdrawal scans. Selecting only one
+    # month's strategy columns avoids copying every ticker/path/month into a
+    # second, strategy-specific cube.
+    if annual_target > 0:
+        storage = paths_by_ticker.get("__storage__") or {}
+        return_path_matrix = storage.get("matrix")
+        universe_ticker_index = storage.get("ticker_index") or {}
+        if return_path_matrix is not None and all(
+            ticker in universe_ticker_index for ticker in ticker_order
+        ):
+            return_ticker_indices = np.array(
+                [universe_ticker_index[ticker] for ticker in ticker_order],
+                dtype=np.intp,
             )
-            shortfall = np.maximum(target - total_distribution, 0.0)
-            surplus = np.maximum(total_distribution - target, 0.0)
+        else:
+            return_path_matrix = np.stack(
+                [paths_by_ticker[t]["log_returns"] for t in ticker_order],
+                axis=2,
+            )
+            return_ticker_indices = np.arange(len(ticker_order), dtype=np.intp)
+        stacked_dps_growth = np.stack(
+            [paths_by_ticker[t]["dps_growth"] for t in ticker_order], axis=0
+        )  # (tickers, months)
+        yield_caps = np.array(
+            [ticker_states[t]["yield_cap"] for t in ticker_order], dtype=np.float64
+        )
+        withdrawal_tax_factor = (1.0 - sustainability.tax_rate) if sustainability.apply_tax else 1.0
 
-            total_value = np.zeros(settings.paths, dtype=np.float64)
-            ticker_value: dict[str, np.ndarray] = {}
-            for ticker, state in ticker_states.items():
-                value = state["shares"] * ticker_price_end[ticker]
-                ticker_value[ticker] = value
-                total_value += value
-            depleted |= total_value <= 1e-6
-
-            for ticker, state in ticker_states.items():
-                price_end = ticker_price_end[ticker]
-                weight_frac = np.divide(
-                    ticker_value[ticker],
-                    total_value,
-                    out=np.zeros(settings.paths, dtype=np.float64),
-                    where=total_value > 1e-9,
-                )
-                sell_shares = np.divide(
-                    shortfall * weight_frac,
-                    price_end,
-                    out=np.zeros(settings.paths, dtype=np.float64),
-                    where=price_end > 1e-9,
-                )
-                buy_shares = np.divide(
-                    surplus * weight_frac,
-                    price_end,
-                    out=np.zeros(settings.paths, dtype=np.float64),
-                    where=price_end > 1e-9,
-                )
-                state["shares"] = np.maximum(state["shares"] - sell_shares + buy_shares, 0.0)
-                state["price"] = price_end
-                state["dps"] = np.minimum(
-                    state["dps"] * paths_by_ticker[ticker]["dps_growth"][month],
-                    state["price"] * state["yield_cap"],
-                )
-
-        withdrawal_survival_probability = round(float(np.mean(~depleted) * 100.0), 1)
+    depleted = np.zeros(settings.paths, dtype=bool)
+    if sustainability.run_withdrawal_phase and annual_target > 0 and settings.years in year_snapshots:
+        snap = year_snapshots[settings.years]
+        survived, _end_value, _retire_value = _simulate_withdrawal_window(
+            snap["shares"], snap["price"], snap["dps"],
+            return_path_matrix, return_ticker_indices, stacked_dps_growth, yield_caps,
+            months, sustainability.withdrawal_years * 12, settings, withdrawal_tax_factor,
+        )
+        depleted = ~survived
+        withdrawal_survival_probability = round(float(np.mean(survived) * 100.0), 1)
     else:
         withdrawal_survival_probability = None
+
+    # Realistic "reaches FI first": for each candidate retirement year, retire
+    # then and fund the inflation-adjusted target by selling shares whenever
+    # distributions fall short, requiring the money to last ``money_lasts_years``
+    # (fi_year_lasts) and, more strictly, to also preserve real starting
+    # principal (fi_year_principal). A year counts once the survival share of
+    # paths clears the confidence bar. This replaces the old 4%-rule proxy.
+    fi_year_lasts: int | None = None
+    fi_year_principal: int | None = None
+    fi_lasts_probability: float | None = None
+    fi_principal_probability: float | None = None
+    fi_horizon_months = settings.money_lasts_years * 12
+    if annual_target > 0 and fi_horizon_months > 0:
+        confidence_pct = settings.fi_confidence * 100.0
+        for year in range(1, settings.years + 1):
+            # Early-stop: once both FI years are known, only the final year is
+            # still needed (its probabilities feed the winner ranking).
+            both_found = fi_year_lasts is not None and fi_year_principal is not None
+            if both_found and year != settings.years:
+                continue
+            snapshot = year_snapshots.get(year)
+            if snapshot is None:
+                continue
+            survived, end_value, retire_value = _simulate_withdrawal_window(
+                snapshot["shares"], snapshot["price"], snapshot["dps"],
+                return_path_matrix, return_ticker_indices, stacked_dps_growth, yield_caps,
+                year * 12, fi_horizon_months, settings, withdrawal_tax_factor,
+            )
+            lasts_prob = round(float(np.mean(survived) * 100.0), 1)
+            infl_start = (1.0 + settings.inflation_rate) ** year
+            infl_end = (1.0 + settings.inflation_rate) ** (
+                (year * 12 + fi_horizon_months) / 12.0
+            )
+            preserved = survived & ((end_value / infl_end) >= (retire_value / infl_start))
+            principal_prob = round(float(np.mean(preserved) * 100.0), 1)
+            if fi_year_lasts is None and lasts_prob >= confidence_pct:
+                fi_year_lasts = year
+            if fi_year_principal is None and principal_prob >= confidence_pct:
+                fi_year_principal = year
+            if year == settings.years:
+                fi_lasts_probability = lasts_prob
+                fi_principal_probability = principal_prob
 
     inflation_factors = np.power(
         1.0 + settings.inflation_rate,
@@ -755,7 +1532,6 @@ def _simulate_strategy(
     yearly_series = []
     freedom_year_income = None
     freedom_year_spending = None
-    annual_target = settings.freedom_monthly_target * 12.0
     for year in range(settings.years + 1):
         idx = year * 12
         value_pct = _percentiles(portfolio_values[:, idx])
@@ -900,6 +1676,12 @@ def _simulate_strategy(
         "freedom_year_income": freedom_year_income,
         "freedom_year_spending": freedom_year_spending,
         "sustainable_freedom_probability": sustainable_freedom_probability,
+        "fi_year_lasts": fi_year_lasts,
+        "fi_year_principal": fi_year_principal,
+        "fi_lasts_probability": fi_lasts_probability,
+        "fi_principal_probability": fi_principal_probability,
+        "fi_confidence_pct": round(settings.fi_confidence * 100.0, 1) if annual_target > 0 else None,
+        "money_lasts_years": settings.money_lasts_years if annual_target > 0 else None,
         "sustainability_detail": sustainability_detail,
     }
     return {
@@ -933,6 +1715,26 @@ def run_accumulation_comparison(
             else:
                 if existing.get("scenario_type") == "other" and holding.get("scenario_type") != "other":
                     existing["scenario_type"] = holding["scenario_type"]
+                for field in (
+                    "classification_type",
+                    "etf_category",
+                    "etf_strategy",
+                    "fund_kind",
+                    "income_bucket",
+                    "scenario_type_override",
+                ):
+                    if not existing.get(field) and holding.get(field):
+                        existing[field] = holding[field]
+                if (
+                    existing.get("option_strategy", "auto") == "auto"
+                    and holding.get("option_strategy", "auto") != "auto"
+                ):
+                    existing["option_strategy"] = holding["option_strategy"]
+                if (
+                    existing.get("correlation_group", "auto") == "auto"
+                    and holding.get("correlation_group", "auto") != "auto"
+                ):
+                    existing["correlation_group"] = holding["correlation_group"]
                 existing["current_yield_pct"] = max(
                     existing.get("current_yield_pct", 0.0),
                     holding.get("current_yield_pct", 0.0),
@@ -942,21 +1744,25 @@ def run_accumulation_comparison(
                     holding.get("current_price", 0.0),
                 )
 
-    withdrawal_months = (
+    # The per-year FI survival scan needs return paths that extend past the
+    # accumulation horizon by the "money must last" window, so generate that
+    # extension whenever a freedom target is set (not only for the legacy
+    # withdrawal-phase test). Use the larger of the two horizons.
+    fi_horizon_months = settings.money_lasts_years * 12 if settings.freedom_monthly_target > 0 else 0
+    legacy_withdrawal_months = (
         sustainability.withdrawal_years * 12 if sustainability.run_withdrawal_phase else 0
     )
+    withdrawal_months = max(fi_horizon_months, legacy_withdrawal_months)
     return_path_cells = (
         len(holdings_by_ticker)
         * settings.paths
         * (settings.years * 12 + withdrawal_months)
     )
-    if return_path_cells > MAX_RETURN_PATH_CELLS:
-        max_cells = f"{MAX_RETURN_PATH_CELLS:,}"
-        raise ValueError(
-            "This ticker, timeframe, and Monte Carlo path combination is too large "
-            f"for one run (limit {max_cells} ticker-path-months). Reduce the "
-            "simulation length, reduce Monte Carlo paths, or select fewer tickers."
-        )
+    return_path_storage = (
+        "temporary_disk"
+        if return_path_cells > IN_MEMORY_RETURN_PATH_CELLS
+        else "memory"
+    )
 
     if assumptions_override is None:
         assumptions, warnings = build_market_assumptions(
@@ -972,15 +1778,21 @@ def run_accumulation_comparison(
 
     scenario_results: dict[str, Any] = {}
     for scenario in SCENARIOS:
-        return_paths = generate_return_paths(
-            assumptions, scenario, settings, withdrawal_months=withdrawal_months
-        )
-        scenario_results[scenario] = {
-            "strategies": [
-                _simulate_strategy(strategy, assumptions, return_paths, settings, sustainability)
-                for strategy in strategies
-            ]
-        }
+        return_paths = None
+        try:
+            return_paths = generate_return_paths(
+                assumptions, scenario, settings, withdrawal_months=withdrawal_months
+            )
+            scenario_results[scenario] = {
+                "strategies": [
+                    _simulate_strategy(
+                        strategy, assumptions, return_paths, settings, sustainability
+                    )
+                    for strategy in strategies
+                ]
+            }
+        finally:
+            _release_return_paths(return_paths)
 
     return {
         "method": "forward_monte_carlo",
@@ -992,8 +1804,12 @@ def run_accumulation_comparison(
             "inflation_rate_pct": round(settings.inflation_rate * 100.0, 2),
             "freedom_monthly_target": settings.freedom_monthly_target,
             "spending_rate_pct": round(settings.spending_rate * 100.0, 2),
+            "fi_confidence_pct": round(settings.fi_confidence * 100.0, 1),
+            "money_lasts_years": settings.money_lasts_years,
             "paths": settings.paths,
             "seed": settings.seed,
+            "return_path_cells": return_path_cells,
+            "return_path_storage": return_path_storage,
             "reinvest_distributions_pct": 100,
             "withdrawals": 0,
             "sustainability": {
@@ -1006,7 +1822,15 @@ def run_accumulation_comparison(
             },
         },
         "strategies": strategies,
-        "assumptions": [assumptions[ticker] for ticker in sorted(assumptions)],
+        "assumptions": [
+            {
+                key: value
+                for key, value in assumptions[ticker].items()
+                if key not in {"correlations", "correlation_history_months"}
+            }
+            for ticker in sorted(assumptions)
+        ],
+        "correlation_model": _correlation_model_summary(assumptions),
         "data_quality_warnings": warnings,
         "scenarios": scenario_results,
     }
