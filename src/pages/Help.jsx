@@ -5374,7 +5374,7 @@ function GrowthIncomeFreedomHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>5. Read the Bull, Neutral, and Bear Winner Cards</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Each scenario card shows three leader lines at once — <strong>Wealth</strong>, <strong>Income</strong>, and <strong>Sustainable Freedom</strong> — plus every strategy's median real ending portfolio value and real monthly distribution income.</li>
+        <li>Each scenario card uses plain-language sentences to explain retirement readiness, the highest ending portfolio value, the highest monthly income, and sustainable-retirement success. When no strategy qualifies, the card says so directly instead of displaying a misleading tie. The rows below still show each strategy's median real ending value and real monthly distribution income.</li>
         <li>Values are in today's dollars after inflation. They are medians across the simulated paths, not guaranteed outcomes.</li>
         <li>Select a Bull, Neutral, or Bear card to open that scenario in the detailed results below.</li>
       </ul>

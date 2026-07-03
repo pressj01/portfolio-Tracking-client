@@ -10,10 +10,10 @@ const SCENARIOS = [
   { key: 'bearish', label: 'Bear', color: '#e05555', detail: 'Early shock, elevated volatility, then recovery' },
 ]
 const WINNER_CARDS = [
-  { key: 'freedomFirst', label: 'Reaches FI first' },
-  { key: 'wealth', label: 'Wealth' },
-  { key: 'income', label: 'Income' },
-  { key: 'sustainableFreedom', label: 'Sustainable Freedom' },
+  { key: 'freedomFirst', label: 'Retirement readiness' },
+  { key: 'wealth', label: 'Ending wealth' },
+  { key: 'income', label: 'Monthly income' },
+  { key: 'sustainableFreedom', label: 'Sustainable retirement' },
 ]
 
 const FREQUENCY_MULTIPLIERS = {
@@ -844,24 +844,41 @@ function WinnerCard({ cardKey, label, scenario, strategies, allScenarios, years,
   const highestCount = Math.max(0, ...winCounts.values())
   const overallLeaders = [...winCounts.entries()].filter(([, count]) => count === highestCount)
   let overallText = 'All three scenarios are effectively tied.'
-  if (highestCount > 0 && overallLeaders.length === 1) {
+  const noRetirementResult = cardKey === 'freedomFirst' && !Number.isFinite(winner.value)
+  const noSustainableResult = cardKey === 'sustainableFreedom' && targetEnabled && winner.value <= 0
+  if (cardKey === 'freedomFirst' && scenarioRanks.every(rank => !Number.isFinite(rank.value))) {
+    overallText = 'No strategy reaches retirement readiness in any market scenario.'
+  } else if (
+    cardKey === 'sustainableFreedom'
+    && targetEnabled
+    && scenarioRanks.every(rank => rank.value <= 0)
+  ) {
+    overallText = 'No strategy meets the sustainable retirement target in any scenario.'
+  } else if (highestCount > 0 && overallLeaders.length === 1) {
     overallText = `Leads ${highestCount} of 3 market scenarios.`
   } else if (highestCount > 0) {
     overallText = `Split between ${overallLeaders.map(([name]) => name).join(' and ')}.`
   }
 
+  let title = winner.tied ? `Tie: ${names.join(' and ')}` : winner.strategy.name
+  let description = winner.tied
+    ? `${names.join(' and ')} finish within the tie range at ${winnerMetricValue(winner.value, cardKey, targetEnabled)} ${metricLabel}.`
+    : `Leads with ${winnerMetricValue(winner.value, cardKey, targetEnabled)} ${metricLabel}.`
+  if (noRetirementResult) {
+    title = 'No strategy is retirement-ready yet'
+    description = `None can begin retirement within this ${years}-year buildup and fund the target for the full withdrawal horizon at the selected confidence.`
+  } else if (noSustainableResult) {
+    title = 'No strategy meets the sustainable target'
+    description = 'None of the simulated paths passes the enabled income, spending, and sustainability requirements.'
+  } else if (cardKey === 'sustainableFreedom' && !targetEnabled) {
+    description += ' No retirement target is set, so this comparison uses real ending wealth.'
+  }
+
   return (
     <article className="gif-winner-card" style={{ '--scenario-color': SCENARIOS.find(row => row.key === scenario)?.color }}>
       <span className="gif-winner-kicker">{label} winner · {scenarioLabel} · {years}-year run</span>
-      <h3>
-        {winner.tied ? `Tie: ${names.join(' and ')}` : winner.strategy.name}
-      </h3>
-      <p>
-        {winner.tied
-          ? `${names.join(' and ')} finish within the tie range at ${winnerMetricValue(winner.value, cardKey, targetEnabled)} ${metricLabel}.`
-          : `Leads with ${winnerMetricValue(winner.value, cardKey, targetEnabled)} ${metricLabel}.`}
-        {cardKey === 'sustainableFreedom' && !targetEnabled && ' No freedom target is set, so real ending wealth is used.'}
-      </p>
+      <h3>{title}</h3>
+      <p>{description}</p>
       <strong className="gif-winner-overall">{overallText}</strong>
     </article>
   )
@@ -887,6 +904,51 @@ function WinnerPanel({ scenario, strategies, allScenarios, years, targetEnabled 
   )
 }
 
+function overviewWinnerSentence(cardKey, winner, strategies, years, targetEnabled) {
+  if (!winner) return 'Result unavailable.'
+  const names = winner.leaders.map(row => row.strategy.name)
+  const allStrategiesTied = winner.tied && names.length === strategies.length
+
+  if (cardKey === 'freedomFirst') {
+    if (!Number.isFinite(winner.value)) {
+      return `No strategy reaches retirement readiness within ${years} years.`
+    }
+    if (winner.tied) {
+      return `${names.join(' and ')} reach retirement readiness in the same year (${winner.value}).`
+    }
+    return `${winner.strategy.name} reaches retirement readiness first, in year ${winner.value}.`
+  }
+
+  if (cardKey === 'wealth') {
+    if (winner.tied) {
+      return allStrategiesTied
+        ? 'Ending portfolio values are effectively tied.'
+        : `${names.join(' and ')} are effectively tied for the highest ending value.`
+    }
+    return `${winner.strategy.name} has the highest ending portfolio value.`
+  }
+
+  if (cardKey === 'income') {
+    if (winner.tied) {
+      return allStrategiesTied
+        ? 'Projected monthly income is effectively tied.'
+        : `${names.join(' and ')} are effectively tied for the highest monthly income.`
+    }
+    return `${winner.strategy.name} produces the highest monthly income.`
+  }
+
+  if (!targetEnabled) {
+    return 'No retirement target is set; ending wealth is used instead.'
+  }
+  if (winner.value <= 0) {
+    return 'No strategy meets the sustainable retirement target.'
+  }
+  if (winner.tied) {
+    return `${names.join(' and ')} share the best sustainable-target success rate (${pct(winner.value)}).`
+  }
+  return `${winner.strategy.name} has the best chance of meeting the sustainable retirement target (${pct(winner.value)}).`
+}
+
 function ScenarioOverviewCards({
   allScenarios,
   years,
@@ -899,11 +961,11 @@ function ScenarioOverviewCards({
       <div className="gif-scenario-overview-heading">
         <div>
           <span className="gif-eyebrow">Results at a glance</span>
-          <h2>Bull, neutral and bear winners</h2>
+          <h2>What wins in each market scenario</h2>
         </div>
         <p>
           Projected outcomes after {years} year{years === 1 ? '' : 's'} · wealth, income, and
-          sustainable-freedom winners per scenario
+          sustainability
         </p>
       </div>
       <div className="gif-scenario-overview-grid">
@@ -911,10 +973,16 @@ function ScenarioOverviewCards({
           const strategies = allScenarios?.[scenario.key]?.strategies || []
           const leaderLines = WINNER_CARDS.filter(card => card.key !== 'freedomFirst' || targetEnabled).map(card => {
             const winner = rankStrategies(strategies, card.key, targetEnabled)
-            const text = winner?.tied
-              ? `Tie: ${winner.leaders.map(row => row.strategy.name).join(' / ')}`
-              : winner?.strategy.name || 'Unavailable'
-            return { key: card.key, label: card.label, text }
+            return {
+              key: card.key,
+              text: overviewWinnerSentence(
+                card.key,
+                winner,
+                strategies,
+                years,
+                targetEnabled,
+              ),
+            }
           })
           return (
             <button
@@ -929,7 +997,7 @@ function ScenarioOverviewCards({
                   <span>{scenario.label} market</span>
                   <div className="gif-scenario-overview-leaders">
                     {leaderLines.map(item => (
-                      <strong key={item.key}>{item.label}: {item.text}</strong>
+                      <strong key={item.key}>{item.text}</strong>
                     ))}
                   </div>
                 </div>
