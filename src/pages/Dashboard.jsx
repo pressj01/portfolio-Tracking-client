@@ -628,6 +628,7 @@ export default function Dashboard() {
   const [upcomingDivs, setUpcomingDivs] = useState([])
   const [incomeSummary, setIncomeSummary] = useState(null)
   const [portfolioValue, setPortfolioValue] = useState(null)
+  const [brokerImportStatus, setBrokerImportStatus] = useState(null)
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
   const [rvyMode, setRvyMode] = useState('cur')
@@ -748,6 +749,12 @@ export default function Dashboard() {
             .then(safeJson)
             .then(d => { if (!stale) setPortfolioValue(d) })
             .catch(() => {})
+          // Fetched fresh (never cached) so it hides as soon as a re-import
+          // updates the account's import date.
+          pf('/api/broker-import-status')
+            .then(safeJson)
+            .then(d => { if (!stale) setBrokerImportStatus(d) })
+            .catch(() => { if (!stale) setBrokerImportStatus(null) })
           pf('/api/nav/history')
             .then(safeJson)
             .then(d => { if (!stale && Array.isArray(d)) setNavHistory(d) })
@@ -1527,6 +1534,46 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {brokerImportStatus?.stale_accounts?.length > 0 && (() => {
+        const accts = brokerImportStatus.stale_accounts
+        const single = accts.length === 1
+        return (
+          <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+            <strong>Broker positions are out of date — tracked share counts are drifting.</strong>
+            {single ? (
+              <p style={{ margin: '0.4rem 0 0' }}>
+                <strong>{accts[0].name}</strong> hasn't been imported in {accts[0].days_since_import} days. It is a
+                broker-managed account with dividend reinvestment (DRIP) on, so shares reinvested since the last
+                import aren't captured — the tracked quantities are falling below your broker's actual holdings,
+                which understates share counts and value.
+              </p>
+            ) : (
+              <>
+                <p style={{ margin: '0.4rem 0 0' }}>
+                  These broker-managed accounts have dividend reinvestment (DRIP) on but haven't been imported in
+                  over a month, so shares reinvested since the last import aren't captured — their tracked quantities
+                  are falling below your broker's actual holdings, which understates share counts and value. The
+                  following need a re-import:
+                </p>
+                <ul style={{ margin: '0.35rem 0 0', paddingLeft: '1.4rem' }}>
+                  {accts.map(a => (
+                    <li key={a.profile_id}>
+                      <strong>{a.name}</strong> — last imported {a.days_since_import} days ago
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <p style={{ margin: '0.4rem 0 0' }}>
+              To resync, re-import {single ? 'this account' : 'each account'}'s <strong>positions (holdings) file</strong> —
+              the share-count snapshot. A <strong>transactions-only import will not fix the quantities</strong>; only a
+              positions import resets them. Import transactions too if you also want reinvestment history and cost basis
+              kept current. <NavLink to="/import" style={{ fontWeight: 600 }}>Go to Import →</NavLink>
+            </p>
+          </div>
+        )
+      })()}
 
       {actionCenter?.items?.length > 0 && (
         <div className="card" style={{ padding: '0.85rem 1rem', marginBottom: '1rem' }}>

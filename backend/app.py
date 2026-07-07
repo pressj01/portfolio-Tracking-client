@@ -4747,6 +4747,90 @@ def api_portfolio_value():
         conn.close()
 
 
+# Broker-managed accounts don't grow share counts on refresh — reinvested (DRIP)
+# shares only arrive on the next positions import. Once an import ages past this
+# many days, the tracked quantities start drifting below the broker's real
+# holdings, so the Dashboard warns the user to re-import.
+BROKER_IMPORT_STALE_DAYS = 30
+
+
+@app.route("/api/broker-import-status", methods=["GET"])
+def api_broker_import_status():
+    """Flag broker-managed accounts with DRIP holdings that are overdue for an import.
+
+    Only broker/position-managed accounts that have at least one dividend-
+    reinvesting holding are considered, since those are the only accounts whose
+    share counts silently drift when imports stop.
+    """
+    from datetime import datetime as _dt, date as _date
+
+    def _parse_import_date(value):
+        if not value:
+            return None
+        for fmt in ("%Y-%m-%d", "%m/%d/%y", "%m/%d/%Y"):
+            try:
+                return _dt.strptime(str(value).strip(), fmt).date()
+            except Exception:
+                pass
+        return None
+
+    conn = get_connection()
+    try:
+        info = _get_refresh_target_info(conn)
+        source_pids = info["source_profile_ids"]
+        if not source_pids:
+            return jsonify({"stale": False, "stale_accounts": []})
+
+        placeholders = ",".join("?" * len(source_pids))
+        managed_rows = conn.execute(
+            f"SELECT id, name FROM profiles "
+            f"WHERE positions_managed = 1 AND id IN ({placeholders})",
+            source_pids,
+        ).fetchall()
+
+        today = _date.today()
+        stale_accounts = []
+        for row in managed_rows:
+            pid = row["id"] if isinstance(row, dict) else row[0]
+            name = row["name"] if isinstance(row, dict) else row[1]
+            # Only accounts with at least one DRIP-enabled holding can drift.
+            drip_row = conn.execute(
+                """SELECT COUNT(*), MAX(import_date)
+                   FROM all_account_info
+                   WHERE profile_id = ? AND quantity > 0
+                     AND UPPER(COALESCE(reinvest, '')) = 'Y'""",
+                (pid,),
+            ).fetchone()
+            drip_count = (drip_row[0] if drip_row else 0) or 0
+            if drip_count <= 0:
+                continue
+            last_import = _parse_import_date(drip_row[1] if drip_row else None)
+            if last_import is None:
+                continue
+            days = (today - last_import).days
+            if days >= BROKER_IMPORT_STALE_DAYS:
+                stale_accounts.append({
+                    "profile_id": pid,
+                    "name": name or f"Profile {pid}",
+                    "days_since_import": days,
+                    "drip_holdings": int(drip_count),
+                    "last_import": last_import.isoformat(),
+                })
+
+        stale_accounts.sort(key=lambda a: a["days_since_import"], reverse=True)
+        return jsonify({
+            "stale": bool(stale_accounts),
+            "stale_days": BROKER_IMPORT_STALE_DAYS,
+            # Quantities are only reset by a positions/holdings snapshot import.
+            # A transactions import leaves broker-managed share counts frozen, so
+            # it cannot correct the drift on its own.
+            "resync_import_type": "positions",
+            "stale_accounts": stale_accounts,
+        })
+    finally:
+        conn.close()
+
+
 def _trim_incompatible_position_nav_history(rows, profile_id, conn):
     """Hide transaction-replay NAV history when current broker positions supersede it."""
     if not rows or len(rows) < 2:
