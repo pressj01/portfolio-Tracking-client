@@ -10,6 +10,7 @@ import MarketRefreshProvider from './context/MarketRefreshContext'
 import Dashboard from './pages/Dashboard'
 import Import from './pages/Import'
 import ManageHoldings from './pages/ManageHoldings'
+import CommonInfo from './pages/CommonInfo'
 import Settings from './pages/Settings'
 import Categories from './pages/Categories'
 import Growth from './pages/Growth'
@@ -170,6 +171,7 @@ function App() {
         <Route path="/action-center" element={<ActionCenter />} />
         <Route path="/import" element={<Import />} />
         <Route path="/holdings" element={<ManageHoldings />} />
+        <Route path="/common-info" element={<CommonInfo />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/categories" element={<Categories />} />
         <Route path="/growth" element={<Growth />} />
@@ -287,6 +289,7 @@ function Nav() {
       <NavLink to="/action-center">Action Center</NavLink>
       <NavDropdown label="Portfolio">
         <NavLink to="/holdings">Holdings</NavLink>
+        <NavLink to="/common-info">CommonInfo</NavLink>
         <NavLink to="/categories">Categories</NavLink>
         <NavLink to="/holding-targets">Holding Targets</NavLink>
         <NavLink to="/growth">Growth</NavLink>

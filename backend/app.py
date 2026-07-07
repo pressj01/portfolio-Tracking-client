@@ -150,8 +150,10 @@ _PORTFOLIO_SUMMARY_TTL_SEC = 30 * 60
 _UPCOMING_DIVIDENDS_CACHE = {}
 _DIVIDEND_CALENDAR_CACHE = {}
 _EARNINGS_CALENDAR_CACHE = {}
+_DIVIDEND_GROWTH_CACHE = {}
 _DIVIDEND_EVENT_TTL_SEC = 60 * 60
 _EARNINGS_EVENT_TTL_SEC = 6 * 60 * 60
+_DIVIDEND_GROWTH_TTL_SEC = 12 * 60 * 60
 _CEFCONNECT_CACHE = {}
 _CEFCONNECT_TTL_SEC = 30 * 60
 _CEFCONNECT_BASE_URL = "https://www.cefconnect.com"
@@ -1715,6 +1717,76 @@ def _set_profile_cash_value(conn, profile_id, cash_value, source="positions_impo
     )
 
 
+def _large_unsold_position_drop_guard(conn, profile_id, ticker, pos, existing):
+    """Keep prior broker quantity when a positions row looks like a bad partial lot.
+
+    Positions imports normally own current share counts. This guard is deliberately
+    narrow: it only protects an existing, transaction-backed holding from a large
+    imported quantity collapse when no recent SELL transaction explains the drop.
+    """
+    if not existing:
+        return None
+    existing_qty = _num_or_zero(existing["quantity"] if isinstance(existing, dict) else existing[0])
+    incoming_qty = _num_or_zero(pos.get("quantity"))
+    if existing_qty <= 0 or incoming_qty <= 0:
+        return None
+    reduction = existing_qty - incoming_qty
+    if reduction <= max(5.0, existing_qty * 0.25):
+        return None
+
+    txn_row = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM transactions WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    txn_count = int((txn_row["cnt"] if isinstance(txn_row, dict) else txn_row[0]) or 0)
+    if txn_count <= 0:
+        return None
+
+    import_date = existing["import_date"] if isinstance(existing, dict) else existing[4]
+    params = [ticker, profile_id]
+    date_clause = ""
+    if import_date:
+        date_clause = "AND transaction_date >= ?"
+        params.append(import_date)
+    sell_row = conn.execute(
+        f"""SELECT COALESCE(SUM(shares), 0) AS shares
+            FROM transactions
+            WHERE ticker = ? AND profile_id = ?
+              AND UPPER(COALESCE(transaction_type, '')) = 'SELL'
+              AND NOT (LOWER(COALESCE(notes, '')) LIKE '%transfer%')
+              {date_clause}""",
+        params,
+    ).fetchone()
+    recent_sell_shares = _num_or_zero(sell_row["shares"] if isinstance(sell_row, dict) else sell_row[0])
+    if recent_sell_shares >= reduction - _basis_share_tolerance(existing_qty):
+        return None
+
+    corrected = dict(pos)
+    broker_price = _num_or_zero(existing["broker_price_paid"] if isinstance(existing, dict) else existing[5])
+    price_paid = _num_or_zero(existing["price_paid"] if isinstance(existing, dict) else existing[1])
+    broker_total = _num_or_zero(existing["broker_purchase_value"] if isinstance(existing, dict) else existing[6])
+    purchase_total = _num_or_zero(existing["purchase_value"] if isinstance(existing, dict) else existing[2])
+    current_price = _num_or_zero(pos.get("current_price"))
+    corrected["quantity"] = existing_qty
+    corrected["cost_per_share"] = broker_price or price_paid
+    corrected["purchase_value"] = round(broker_total or purchase_total, 2)
+    if current_price > 0:
+        corrected["current_value"] = round(existing_qty * current_price, 2)
+    else:
+        corrected["current_value"] = _num_or_zero(existing["current_value"] if isinstance(existing, dict) else existing[3])
+    corrected["gain_or_loss"] = round(
+        corrected["current_value"] - corrected["purchase_value"],
+        2,
+    )
+    corrected["_quantity_preserved"] = {
+        "ticker": ticker,
+        "imported_quantity": round(incoming_qty, 6),
+        "kept_quantity": round(existing_qty, 6),
+        "unexplained_drop": round(reduction, 6),
+    }
+    return corrected
+
+
 def _cash_profile_ids_for_read(conn, is_aggregate, profile_ids):
     """Resolve the source profiles whose cash belongs in the active view."""
     ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or [1])))
@@ -2491,6 +2563,64 @@ def _calc_dividend_growth_batch(tickers):
             continue
 
     return result
+
+
+@app.route("/api/holdings/dividend-growth", methods=["GET"])
+def holdings_dividend_growth():
+    """Return cached 3-year and 5-year dividend growth for requested holdings."""
+    raw_tickers = request.args.get("tickers", "")
+    if raw_tickers:
+        tickers = sorted({
+            t.strip().upper()
+            for t in raw_tickers.split(",")
+            if t and t.strip()
+        })
+    else:
+        _, pids = get_profile_filter()
+        conn = get_connection()
+        try:
+            placeholders = ",".join("?" * len(pids))
+            rows = conn.execute(
+                f"""SELECT DISTINCT ticker
+                    FROM all_account_info
+                    WHERE profile_id IN ({placeholders})
+                      AND COALESCE(quantity, 0) > 1e-9
+                    ORDER BY ticker""",
+                pids,
+            ).fetchall()
+            tickers = []
+            for row in rows:
+                ticker = row["ticker"] if isinstance(row, dict) else row[0]
+                ticker = (ticker or "").strip().upper()
+                if ticker:
+                    tickers.append(ticker)
+        finally:
+            conn.close()
+
+    tickers = [t for t in tickers if t][:250]
+    now = time.time()
+    growth = {}
+    missing = []
+    yahoo_to_ticker = {}
+
+    for ticker in tickers:
+        cached = _DIVIDEND_GROWTH_CACHE.get(ticker)
+        if cached and now - cached.get("ts", 0) < _DIVIDEND_GROWTH_TTL_SEC:
+            growth[ticker] = cached.get("value") or {"div_growth_3y": None, "div_growth_5y": None}
+            continue
+        yahoo_symbol = _yahoo_symbol_for_ticker(ticker)
+        yahoo_to_ticker[yahoo_symbol] = ticker
+        missing.append(yahoo_symbol)
+
+    if missing:
+        fetched = _calc_dividend_growth_batch(missing)
+        for yahoo_symbol in missing:
+            ticker = yahoo_to_ticker.get(yahoo_symbol, yahoo_symbol)
+            value = fetched.get(yahoo_symbol) or {"div_growth_3y": None, "div_growth_5y": None}
+            _DIVIDEND_GROWTH_CACHE[ticker] = {"ts": now, "value": value}
+            growth[ticker] = value
+
+    return jsonify({"growth": growth})
 
 
 def _auto_reconcile_owner():
@@ -3923,6 +4053,7 @@ def _import_positions(parsed, profile_id, nav_date=None):
     imported_tickers = set()
     updated = 0
     inserted = 0
+    preserved_quantity = []
 
     try:
         _set_profile_positions_managed(profile_id, True, conn)
@@ -3932,9 +4063,21 @@ def _import_positions(parsed, profile_id, nav_date=None):
             imported_tickers.add(ticker)
 
             existing = conn.execute(
-                "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+                """SELECT quantity, price_paid, purchase_value, current_value,
+                          import_date, broker_price_paid, broker_purchase_value
+                   FROM all_account_info WHERE ticker = ? AND profile_id = ?""",
                 (ticker, profile_id),
             ).fetchone()
+            corrected_pos = _large_unsold_position_drop_guard(
+                conn,
+                profile_id,
+                ticker,
+                pos,
+                existing,
+            )
+            if corrected_pos:
+                preserved_quantity.append(corrected_pos["_quantity_preserved"])
+                pos = corrected_pos
 
             if existing:
                 update_sets = [
@@ -4084,8 +4227,22 @@ def _import_positions(parsed, profile_id, nav_date=None):
         msg = f"Imported {updated + inserted} positions ({updated} updated, {inserted} new)."
         if removed:
             msg += f" Removed {removed} stale holdings."
+        if preserved_quantity:
+            kept = ", ".join(item["ticker"] for item in preserved_quantity[:5])
+            more = len(preserved_quantity) - 5
+            msg += (
+                f" Preserved existing quantity for {len(preserved_quantity)} holding"
+                f"{'' if len(preserved_quantity) == 1 else 's'} with an unexplained large "
+                f"drop in the import: {kept}{f', +{more} more' if more > 0 else ''}."
+            )
         _snapshot_nav_after_profile_update(profile_id, nav_date=nav_date)
-        return jsonify({"message": msg, "updated": updated, "inserted": inserted, "removed": removed})
+        return jsonify({
+            "message": msg,
+            "updated": updated,
+            "inserted": inserted,
+            "removed": removed,
+            "preserved_quantity": preserved_quantity,
+        })
 
     except Exception as e:
         conn.rollback()
@@ -10566,6 +10723,71 @@ def _basis_share_tolerance(expected_shares):
     return max(0.01, abs(float(expected_shares or 0)) * 0.001)
 
 
+def _infer_reinvested_share_gap_basis(conn, ticker, profile_id, share_delta, holding_shares, fallback_price=0.0):
+    """Infer cost for small broker-share gaps caused by unlogged DRIP buys.
+
+    Some broker transaction exports record the cash dividend but omit the paired
+    reinvestment BUY, while the positions export already includes the fractional
+    shares. If the gap is small and recorded dividend cash can fund it, treat it
+    as reinvested basis instead of leaving the whole original basis stale.
+    """
+    try:
+        gap_shares = float(share_delta or 0)
+        expected_shares = float(holding_shares or 0)
+    except (TypeError, ValueError):
+        return None
+    if gap_shares <= 1e-9 or expected_shares <= 1e-9:
+        return None
+    if gap_shares > max(0.5, expected_shares * 0.02):
+        return None
+
+    holding = conn.execute(
+        """SELECT reinvest, current_price, price_paid, broker_price_paid,
+                  total_divs_received, total_cash_reinvested
+           FROM all_account_info
+           WHERE ticker = ? AND profile_id = ?""",
+        (ticker, profile_id),
+    ).fetchone()
+    if not holding:
+        return None
+    reinvest = holding["reinvest"] if isinstance(holding, dict) else holding[0]
+    if (reinvest or "").upper() != "Y":
+        return None
+
+    payment_row = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS cash FROM dividend_payments "
+        "WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    payment_cash = _num_or_zero(payment_row["cash"] if isinstance(payment_row, dict) else payment_row[0])
+    dividend_cash = max(
+        payment_cash,
+        _num_or_zero(holding["total_divs_received"] if isinstance(holding, dict) else holding[4]),
+        _num_or_zero(holding["total_cash_reinvested"] if isinstance(holding, dict) else holding[5]),
+    )
+    if dividend_cash <= 1e-9:
+        return None
+
+    price = (
+        _num_or_zero(holding["current_price"] if isinstance(holding, dict) else holding[1])
+        or _num_or_zero(holding["broker_price_paid"] if isinstance(holding, dict) else holding[3])
+        or _num_or_zero(holding["price_paid"] if isinstance(holding, dict) else holding[2])
+        or _num_or_zero(fallback_price)
+    )
+    if price <= 1e-9:
+        return None
+
+    inferred_cost = gap_shares * price
+    if inferred_cost > (dividend_cash * 1.5) + 1.0:
+        return None
+    return {
+        "shares": gap_shares,
+        "cost": inferred_cost,
+        "price": price,
+        "dividend_cash": dividend_cash,
+    }
+
+
 def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
     """Update original basis from transaction lots when they reconcile to broker shares."""
     _ensure_basis_columns(conn)
@@ -10647,20 +10869,36 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
     avg_price = total_cost / total_shares if total_shares > 1e-9 else 0
     share_delta = round(total_shares - holding_shares, 6)
     if abs(share_delta) > _basis_share_tolerance(holding_shares):
-        conn.execute(
-            """UPDATE all_account_info
-               SET realized_gains = ?,
-                   purchase_date = COALESCE(purchase_date, ?)
-               WHERE ticker = ? AND profile_id = ?""",
-            (round(total_realized, 2), earliest_buy, ticker, profile_id),
+        inferred_gap = _infer_reinvested_share_gap_basis(
+            conn,
+            ticker,
+            profile_id,
+            holding_shares - total_shares,
+            holding_shares,
+            fallback_price=avg_price,
         )
-        return {
-            "status": "share_mismatch",
-            "ticker": ticker,
-            "holding_shares": round(holding_shares, 6),
-            "transaction_shares": round(total_shares, 6),
-            "share_delta": share_delta,
-        }
+        if inferred_gap:
+            total_shares = holding_shares
+            total_cost += inferred_gap["cost"]
+            avg_price = total_cost / total_shares if total_shares > 1e-9 else 0
+            share_delta = 0.0
+        else:
+            conn.execute(
+                """UPDATE all_account_info
+                   SET realized_gains = ?,
+                       purchase_date = COALESCE(purchase_date, ?)
+                   WHERE ticker = ? AND profile_id = ?""",
+                (round(total_realized, 2), earliest_buy, ticker, profile_id),
+            )
+            return {
+                "status": "share_mismatch",
+                "ticker": ticker,
+                "holding_shares": round(holding_shares, 6),
+                "transaction_shares": round(total_shares, 6),
+                "share_delta": share_delta,
+            }
+    else:
+        inferred_gap = None
 
     conn.execute(
         """UPDATE all_account_info
@@ -10686,6 +10924,9 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
         "original_price_paid": round(avg_price, 4) if total_shares > 1e-9 else 0,
         "original_purchase_value": round(total_cost, 2) if total_shares > 1e-9 else 0,
         "purchase_date": earliest_buy,
+        "inferred_reinvestment_shares": (
+            round(inferred_gap["shares"], 6) if inferred_gap else 0.0
+        ),
     }
 
 
