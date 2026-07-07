@@ -4,7 +4,7 @@ import { formatMoney, formatMoneyWhole } from '../utils/money'
 
 const VIEW_COLUMNS = {
   common: [
-    'holding', 'shares', 'costBasis', 'currentValue', 'dividends',
+    'holding', 'shares', 'avgCost', 'currentPrice', 'category', 'subcategory', 'costBasis', 'currentValue', 'dividends',
     'dividendYield', 'estimatedYield', 'dividendGrowth', 'totalProfit', 'shareOfPortfolio',
   ],
   general: [
@@ -12,11 +12,11 @@ const VIEW_COLUMNS = {
     'avgCost', 'currentPrice', 'costBasis', 'currentValue', 'shareOfPortfolio',
   ],
   dividends: [
-    'holding', 'shares', 'currentValue', 'dividends', 'dividendYield',
+    'holding', 'shares', 'category', 'subcategory', 'currentValue', 'dividends', 'dividendYield',
     'estimatedYield', 'dividendGrowth', 'nextPayment', 'exDividend', 'frequency',
   ],
   returns: [
-    'holding', 'costBasis', 'currentValue', 'divsReceived',
+    'holding', 'category', 'subcategory', 'costBasis', 'currentValue', 'divsReceived',
     'capitalGain', 'realizedProfit', 'totalProfit', 'shareOfPortfolio',
   ],
 }
@@ -52,7 +52,7 @@ const COLUMN_HELP = {
   avgCost: 'Column: average price paid per share.',
   currentValue: 'Column: current market value of the open position. The lower line is current price per share.',
   currentPrice: 'Column: current market price per share.',
-  dividends: 'Column: estimated dividends for the next 12 months. The lower line is the estimate per share.',
+  dividends: 'Column: estimated dividends for the next 12 months. The lower line is the annualized dividend per share, not the next single payment.',
   dividendYield: 'Column: upper value is current yield. Lower value is yield on cost.',
   estimatedYield: 'Column: forward yield estimate based on next-12-month dividends and current value.',
   dividendGrowth: 'Column: five-year dividend growth when available from the source data.',
@@ -73,6 +73,8 @@ const HELP_ITEMS = [
   { kind: 'Table column', label: 'Holding', body: COLUMN_HELP.holding.replace('Column: ', '') },
   { kind: 'Table column', label: 'Status', body: COLUMN_HELP.status.replace('Column: ', '') },
   { kind: 'Table column', label: 'Shares', body: COLUMN_HELP.shares.replace('Column: ', '') },
+  { kind: 'Table column', label: 'Average price paid', body: COLUMN_HELP.avgCost.replace('Column: ', '') },
+  { kind: 'Table column', label: 'Current share price', body: COLUMN_HELP.currentPrice.replace('Column: ', '') },
   { kind: 'Table column', label: 'Category', body: COLUMN_HELP.category.replace('Column: ', '') },
   { kind: 'Table column', label: 'Sub category', body: COLUMN_HELP.subcategory.replace('Column: ', '') },
   { kind: 'Table column', label: 'Cost basis', body: COLUMN_HELP.costBasis.replace('Column: ', '') },
@@ -154,9 +156,21 @@ function valueTone(value) {
   return n > 0 ? 'ci-positive' : 'ci-negative'
 }
 
-function StackValue({ primary, secondary, tone }) {
+function hasDefinedCategory(row) {
+  const name = String(row.categoryName || '').trim()
+  if (row.categoryId !== null && row.categoryId !== undefined && row.categoryId !== '') return true
+  return Boolean(name && name !== 'Uncategorized' && name !== 'Sold')
+}
+
+function hasDefinedSubcategory(row) {
+  const name = String(row.subcategoryName || '').trim()
+  if (row.subcategoryId !== null && row.subcategoryId !== undefined && row.subcategoryId !== '') return true
+  return Boolean(name)
+}
+
+function StackValue({ primary, secondary, tone, title }) {
   return (
-    <div className="ci-stack">
+    <div className="ci-stack" title={title}>
       <strong className={tone || ''}>{primary}</strong>
       <span>{secondary}</span>
     </div>
@@ -184,7 +198,7 @@ function FieldHelp() {
     ['Category / Sub category', 'Portfolio category assignment from the Categories page. Sold rows only show a category when the app can still match an assignment for that ticker.'],
     ['Cost basis', 'Amount invested in the open position. The lower line is average price per share.'],
     ['Current value', 'Current market value of the open position. The lower line is current price per share.'],
-    ['Dividends', 'Estimated dividends for the next 12 months. The lower line is the estimate per share.'],
+    ['Dividends', 'Estimated dividends for the next 12 months. The lower line is the annualized dividend per share, not the next single payment.'],
     ['Dividend yield', 'Upper value is current yield. Lower value is yield on cost.'],
     ['Estimated yield', 'Forward yield estimate based on next-12-month dividends and current value.'],
     ['Dividend growth (5Y)', 'Five-year dividend growth when available from the source data.'],
@@ -430,12 +444,12 @@ const COLUMN_DEFS = {
   category: {
     label: 'Category',
     sortValue: row => row.categoryName,
-    render: row => text(row.categoryName),
+    render: row => hasDefinedCategory(row) ? text(row.categoryName) : '',
   },
   subcategory: {
     label: 'Sub category',
     sortValue: row => row.subcategoryName,
-    render: row => text(row.subcategoryName),
+    render: row => hasDefinedSubcategory(row) ? text(row.subcategoryName) : '',
   },
   costBasis: {
     label: 'Cost basis',
@@ -449,7 +463,7 @@ const COLUMN_DEFS = {
     ),
   },
   avgCost: {
-    label: 'Avg price',
+    label: 'Average price paid',
     align: 'right',
     sortValue: row => row.avgCost,
     render: row => money(row.avgCost, { digits: 4 }),
@@ -466,7 +480,7 @@ const COLUMN_DEFS = {
     ),
   },
   currentPrice: {
-    label: 'Current price',
+    label: 'Current share price',
     align: 'right',
     sortValue: row => row.currentPrice,
     render: row => money(row.currentPrice, { digits: 4 }),
@@ -479,6 +493,7 @@ const COLUMN_DEFS = {
       <StackValue
         primary={money(row.annualDividends)}
         secondary={`${money(row.dividendPerShare, { digits: 4 })}/share`}
+        title="Estimated dividends for the next 12 months. The lower value is annualized dividend per share, not the next single payment."
       />
     ),
   },
@@ -679,7 +694,14 @@ export default function CommonInfo() {
     })
   }, [allRows, categoryId, subcategoryId, search])
 
-  const visibleColumns = VIEW_COLUMNS[view].map(key => COLUMN_DEFS[key])
+  const visibleColumns = useMemo(() => {
+    const hasCategory = filteredRows.some(hasDefinedCategory)
+    const hasSubcategory = filteredRows.some(hasDefinedSubcategory)
+    return VIEW_COLUMNS[view]
+      .filter(key => key !== 'category' || hasCategory)
+      .filter(key => key !== 'subcategory' || hasSubcategory)
+      .map(key => COLUMN_DEFS[key])
+  }, [filteredRows, view])
 
   const sortedRows = useMemo(() => {
     const column = COLUMN_DEFS[sortKey] || COLUMN_DEFS.holding

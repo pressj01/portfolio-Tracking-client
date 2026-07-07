@@ -8906,6 +8906,28 @@ def refresh_market_data():
                 pass
         return None
 
+    def _refresh_frequency_multiplier(freq):
+        return {'W': 52, '52': 52, 'M': 12, 'Q': 4, 'SA': 2, 'A': 1}.get(
+            (freq or 'Q').upper(),
+            4,
+        )
+
+    def _refresh_annual_income_from_rate(div, quantity, freq):
+        try:
+            div = float(div or 0)
+            quantity = float(quantity or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        if div <= 0 or quantity <= 0:
+            return 0.0
+        return div * quantity * _refresh_frequency_multiplier(freq)
+
+    def _refresh_income_matches_rate(income, div, quantity, freq):
+        expected = _refresh_annual_income_from_rate(div, quantity, freq)
+        if expected <= 0:
+            return False
+        return not _refresh_num_changed(income, expected, tolerance=max(1.0, expected * 0.03))
+
     def _refresh_expected_pay_date(ex_div_date, pay_date, freq):
         parsed_pay = _refresh_parse_date(pay_date)
         if parsed_pay:
@@ -9024,10 +9046,16 @@ def refresh_market_data():
                 parsed_import_date is not None
                 and (refresh_date - parsed_import_date).days <= 30
             )
+            existing_income_is_run_rate = _refresh_income_matches_rate(
+                existing_estim_annual,
+                h.get("div"),
+                qty,
+                old_freq,
+            )
             preserve_income_estimate = existing_estim_annual > 0 and (
                 (pid in positions_managed_ids and broker_data_fresh)
                 or not (fresh_div and float(fresh_div) > 0)
-            )
+            ) and not (fresh_div and float(fresh_div) > 0 and existing_income_is_run_rate)
             sets = []
             vals = []
             dividend_row_updated = False
@@ -9135,9 +9163,8 @@ def refresh_market_data():
                         pass
 
                 if new_div:
-                    freq_mult = {'W': 52, '52': 52, 'M': 12, 'Q': 4, 'SA': 2, 'A': 1}
                     cur_freq = (new_freq or 'Q').upper()
-                    mult = freq_mult.get(cur_freq, 4)
+                    mult = _refresh_frequency_multiplier(cur_freq)
                     annual_div = new_div * mult
                     if preserve_income_estimate:
                         estim_annual = float(h.get("estim_payment_per_year") or 0)
