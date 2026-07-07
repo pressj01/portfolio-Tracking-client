@@ -700,6 +700,41 @@ function DashboardHelp() {
         the DRIP Matrix to manage DRIP across all accounts at once.
       </p>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Automatic DRIP Share Growth on Refresh</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        When prices &amp; dividends are refreshed, a holding with DRIP enabled can have its <strong>share count grow
+        automatically</strong> — but whether that happens depends on the account type. This refresh runs <strong>every time
+        you open the Dashboard</strong> (whenever you hold at least one position), so the update can happen on its own without
+        pressing the Refresh button.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Self-tracked accounts</strong> — the refresh simulates reinvestment of every dividend paid since the
+          holding's import/purchase date, buying fractional shares at each dividend's price, and <em>writes the grown share
+          count back</em>. The total is always recomputed from the original base share count forward, so refreshing
+          repeatedly never double-counts. Turning DRIP off rolls the quantity back down to the base share count.</li>
+        <li><strong>Broker-managed accounts</strong> (portfolios flagged as broker / position-managed) — the refresh{' '}
+          <em>deliberately does not grow the share count</em>. Your broker's imported position feed owns the share count, and
+          reinvested shares/cash are rebuilt from the imported <code>[DRIP]</code> buy transactions instead. Prices,
+          dividend-per-share, ex-div/pay dates, and income estimates still update from the market; only the share count is
+          left to the broker feed (so it is never double-counted against your import).</li>
+      </ul>
+      <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>How an account becomes broker-managed:</strong> importing a broker <em>positions / holdings</em> file — a
+        current share-count snapshot such as a Schwab, Fidelity, or E*Trade positions export (or a Snowball holdings export)
+        — flags the account as broker-managed automatically. Importing a <em>transactions</em> file (a buy/sell/dividend
+        history) or the Owner Excel does <strong>not</strong>. Once set, the flag stays on — there is intentionally no toggle
+        to switch an account back to self-tracked, because the broker's imported share count already includes every
+        reinvested share, so re-simulating DRIP on top of it would double-count.
+      </div>
+      <div className="alert alert-warning" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>Keep broker-managed accounts imported.</strong> Because refresh will not grow shares for a broker-managed
+        account, if you stop importing from your broker for a while the share count <strong>freezes</strong> at the last
+        import. Real DRIP purchases happening at your broker won't appear until you import again, so those holdings will
+        progressively <em>understate</em> your true shares and value. Import on a regular cadence (e.g. weekly or monthly) to
+        stay accurate. On these accounts the reinvested shares / cash figures are only a breakdown of the already-known
+        share count — they never add to it.
+      </div>
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The main table lists all holdings with sortable columns. Click any column header to sort.
