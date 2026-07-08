@@ -8180,6 +8180,20 @@ def _fetch_goldman_distribution_snapshot(ticker):
     }
 
 
+_TUTTLE_INCOME_BLAST_TICKERS = {"DRMP", "SPCI", "MEMY", "MAGO", "BITK"}
+
+
+def _is_tuttle_capital_fund(ticker, description=""):
+    """Identify Tuttle Capital / Income Blast funds with official holdings pages."""
+    ticker = (ticker or "").strip().upper()
+    description_l = (description or "").lower()
+    return (
+        ticker in _TUTTLE_INCOME_BLAST_TICKERS
+        or "tuttle capital" in description_l
+        or "income blast" in description_l
+    )
+
+
 _FUND_FAMILY_REGISTRY = [
     # (keywords_in_description, extra_condition_fn_or_None, fetcher)
     # Checked in order; first match wins.  Keywords are matched against a
@@ -8236,6 +8250,11 @@ _FUND_FAMILY_REGISTRY = [
         "keywords": ["goldman sachs", "gsam"],
         "fetcher": "_fetch_goldman_distribution_snapshot",
         "legacy": _is_goldman_sachs_fund,
+    },
+    {
+        "keywords": ["tuttle capital", "income blast"],
+        "fetcher": "_fetch_income_blast_distribution_snapshot",
+        "legacy": _is_tuttle_capital_fund,
     },
 ]
 
@@ -13261,6 +13280,7 @@ def upcoming_dividends():
         amount = r["div"] or 0
         stored_pay = _date_from_value(r["div_pay_date"])
         official_pay = None
+        official_lag = None
         official = official_snapshot_for(ticker, description)
         if official and official.get("has_dividend"):
             official_freq = (official.get("freq") or "").strip().upper()
@@ -13276,6 +13296,12 @@ def upcoming_dividends():
             official_pay = _date_from_value(official.get("div_pay_date"))
             if official_pay is not None:
                 stored_pay = official_pay
+            lag_val = official.get("pay_lag_days")
+            if lag_val is not None:
+                try:
+                    official_lag = int(lag_val)
+                except (TypeError, ValueError):
+                    official_lag = None
         else:
             ex = None
 
@@ -13297,6 +13323,8 @@ def upcoming_dividends():
         while True:
             if stored_pay and cycle_steps == 0:
                 pay = stored_pay
+            elif official_lag is not None:
+                pay = next_biz(nxt + timedelta(days=official_lag))
             elif freq in ("W", "52"):
                 pay = next_biz(nxt + timedelta(days=1))
             elif freq == "M":
@@ -14128,20 +14156,6 @@ def _fetch_neos_top_holdings(ticker, limit=25):
     return rows
 
 
-_TUTTLE_INCOME_BLAST_TICKERS = {"DRMP", "SPCI", "MEMY", "MAGO", "BITK"}
-
-
-def _is_tuttle_capital_fund(ticker, description=""):
-    """Identify Tuttle Capital / Income Blast funds with official holdings pages."""
-    ticker = (ticker or "").strip().upper()
-    description_l = (description or "").lower()
-    return (
-        ticker in _TUTTLE_INCOME_BLAST_TICKERS
-        or "tuttle capital" in description_l
-        or "income blast" in description_l
-    )
-
-
 def _income_blast_number(value):
     text = str(value or "").strip()
     if not text or text.lower() in {"null", "nan", "n/a", "--", "-"}:
@@ -14275,6 +14289,122 @@ def _fetch_income_blast_top_holdings(ticker, limit=25):
     if rows:
         return rows
     return _fetch_income_blast_table_holdings(html_text, limit=limit)
+
+
+# Distributions table token: an issuer date ("Jul 2, 2026") or a per-share amount.
+_INCOME_BLAST_DIST_TOKEN_RE = re.compile(
+    r"(?P<date>[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})|(?P<amt>\d+\.\d{2,6})"
+)
+
+
+def _fetch_income_blast_distribution_snapshot(ticker):
+    """Fetch official Tuttle Capital distribution data from incomeblastetfs.com.
+
+    Each fund page publishes a Distributions table with Declaration / Record /
+    Ex-Date / Pay Date / Amount columns.  Parsing the declared rows lets the
+    dashboard dividend calendar use the issuer's real ex/pay dates and amount
+    instead of a Yahoo-based estimate, which mis-dates the weekly pay by weeks.
+    Returns None so callers transparently fall back to Yahoo when the page is
+    unavailable or its layout has changed.
+    """
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return None
+
+    html_text, _url = _income_blast_page(ticker)
+    if not html_text:
+        return None
+
+    text = _income_blast_text_from_html(html_text)
+    if not _is_tuttle_capital_fund(ticker, text):
+        return None
+
+    header = re.search(r"Ex-Date\s*\n\s*Pay Date\s*\n\s*Amount\b", text, re.S)
+    if not header:
+        return None
+
+    rest = text[header.end():]
+    tail = re.search(
+        r"(The Fund currently expects|Distributions include a return of capital|\nHoldings\b)",
+        rest,
+        re.S,
+    )
+    region = rest[: tail.start()] if tail else rest
+
+    # Distribution frequency straight from the issuer's distribution-policy text.
+    freq = None
+    disc = rest.lower()
+    if "weekly basis" in disc or "on a weekly" in disc:
+        freq = "W"
+    elif "monthly basis" in disc or "on a monthly" in disc:
+        freq = "M"
+    elif "quarterly basis" in disc or "on a quarterly" in disc:
+        freq = "Q"
+
+    # Each declared row is 4 dates (Declaration, Record, Ex, Pay) then the amount.
+    rows = []
+    dates = []
+    for match in _INCOME_BLAST_DIST_TOKEN_RE.finditer(region):
+        if match.group("date"):
+            ts = pd.to_datetime(match.group("date"), format="%b %d, %Y", errors="coerce")
+            if pd.isna(ts):
+                continue
+            dates.append(ts.normalize())
+            if len(dates) > 4:
+                dates = dates[-4:]
+        else:
+            if len(dates) >= 4:
+                _decl, _record, ex_ts, pay_ts = dates[-4:]
+                rows.append((ex_ts, float(match.group("amt")), pay_ts))
+            dates = []
+
+    if not rows:
+        return None
+
+    rows.sort(key=lambda item: item[0])
+    history = pd.Series(
+        [amount for _ex, amount, _pay in rows],
+        index=pd.DatetimeIndex([ex for ex, _amount, _pay in rows]),
+    )
+    history = history[~history.index.duplicated(keep="last")].sort_index()
+    pay_map = {ex.normalize(): pay for ex, _amount, pay in rows}
+
+    # Median declared ex->pay lag so projected (future) pay dates follow the
+    # fund's real cadence (e.g. DRMP pays the Monday after a Thu/Fri ex-date)
+    # instead of the generic "next business day" weekly assumption.
+    lags = sorted(
+        int((pay.normalize() - ex.normalize()).days)
+        for ex, _amount, pay in rows
+        if pay is not None and pay.normalize() >= ex.normalize()
+        and 0 <= int((pay.normalize() - ex.normalize()).days) <= 14
+    )
+    pay_lag_days = None
+    if lags:
+        mid = len(lags) // 2
+        pay_lag_days = lags[mid] if len(lags) % 2 else round((lags[mid - 1] + lags[mid]) / 2)
+
+    # Surface the nearest upcoming declared row when one exists, else the latest.
+    today = pd.Timestamp.now().normalize()
+    chosen_ex = history.index[-1]
+    upcoming = sorted(ex for ex in history.index if ex >= today)
+    if upcoming:
+        chosen_ex = upcoming[0]
+    chosen_pay = pay_map.get(chosen_ex.normalize())
+
+    if not freq:
+        freq = _infer_dividend_frequency_from_history(history)
+
+    return {
+        "known": True,
+        "has_dividend": True,
+        "div": float(history.loc[chosen_ex]),
+        "ex_div_date": chosen_ex.strftime("%m/%d/%y"),
+        "div_pay_date": chosen_pay.strftime("%m/%d/%y") if chosen_pay is not None else None,
+        "freq": freq or "W",
+        "history": history,
+        "pay_lag_days": pay_lag_days,
+        "source": "Income Blast (Tuttle Capital)",
+    }
 
 
 def _strip_html_text(value):
@@ -21406,6 +21536,7 @@ def _build_cal_events():
         ex_value = row["ex_div_date"]
         pay_value = row.get("div_pay_date")
         official_pay_ts = None
+        official_lag = None
 
         official = official_snapshot_for(ticker, description)
         if official and official.get("has_dividend"):
@@ -21423,6 +21554,12 @@ def _build_cal_events():
             if official.get("div_pay_date"):
                 pay_value = official.get("div_pay_date")
                 official_pay_ts = _parse_timestamp_value(pay_value)
+            lag_val = official.get("pay_lag_days")
+            if lag_val is not None:
+                try:
+                    official_lag = int(lag_val)
+                except (TypeError, ValueError):
+                    official_lag = None
 
         dt_ts = _parse_timestamp_value(ex_value)
         if dt_ts is None:
@@ -21451,6 +21588,9 @@ def _build_cal_events():
             # Issuer-published pay dates supersede Yahoo calendar values.
             pay_dt = official_pay_ts
             pay_estimated = False
+        elif official_lag is not None:
+            # Project a future pay date using the issuer's real ex->pay lag.
+            pay_dt = _next_business_day(pd.Timestamp(dt) + pd.Timedelta(days=official_lag))
         elif freq in ("52", "W"):
             # Weekly: pay 1 business day after ex-div
             pay_dt = _estimate_dividend_pay_timestamp(dt, freq)
