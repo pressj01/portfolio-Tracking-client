@@ -1398,11 +1398,15 @@ def _estimate_drip_tracking_from_dividend_history(ticker, profile_id, conn):
         (ticker, profile_id),
     ).fetchone()
     payment_cash = _num_or_zero(payment_row[0] if payment_row else 0)
+    # Only estimate reinvestment from dividends that have actually been
+    # received. dividend_paid is a current-period accrual set on the ex-date
+    # (before the cash is paid), so counting it here fabricated DRIP shares for
+    # holdings whose latest distribution has not yet paid. Use cumulative
+    # received figures instead.
     fallback_cash = max(
         payment_cash,
         _num_or_zero(holding["total_divs_received"] if isinstance(holding, dict) else holding[7]),
         _num_or_zero(holding["ytd_divs"] if isinstance(holding, dict) else holding[6]),
-        _num_or_zero(holding["dividend_paid"] if isinstance(holding, dict) else holding[8]),
     )
     if fallback_cash <= 1e-9:
         return False
@@ -7313,8 +7317,12 @@ def _fetch_kurv_distribution_snapshot(ticker):
     entries = []
     scheduled = []
     for row in rows:
+        # Kurv wraps each cell value in an element carrying the "u-cms-text"
+        # class. That class used to sit on the <span>; the site now nests it on
+        # a <div> inside the span (<span><div class="u-cms-text">…</div></span>).
+        # Match either tag so a future markup tweak doesn't silently zero us out.
         cells = re.findall(
-            r"<span[^>]*class=\"[^\"]*u-cms-text[^\"]*\"[^>]*>(.*?)</span>",
+            r"<(?:span|div)[^>]*class=\"[^\"]*u-cms-text[^\"]*\"[^>]*>(.*?)</(?:span|div)>",
             row,
             flags=re.IGNORECASE | re.S,
         )
@@ -7915,6 +7923,7 @@ def _is_kurv_fund(ticker, description=""):
     explicit_family = {
         "KQQQ", "KYLD", "KGLD", "KSLV", "KCOP",
         "AMZP", "AAPY", "GOOP", "MSFY", "NFLP", "TSLP",
+        "XSHP",  # Kurv SpaceX Enhanced Income ETF
     }
     return ticker in explicit_family
 
@@ -9180,6 +9189,24 @@ def refresh_market_data():
             ytd_divs = 0.0
             current_month_income = 0.0
             div_series = snapshot.get("history")
+            # Only recognize distributions that have actually been PAID. A fund
+            # can trade ex-dividend a few days before it pays; until the pay
+            # date arrives no cash has been received, so a gone-ex-but-unpaid
+            # distribution must not count toward income (ytd / current month) or
+            # DRIP share growth. Drop that pending event here so the whole
+            # simulation below excludes it; it re-enters once the pay date lands.
+            if div_series is not None and not div_series.empty:
+                _pending_ex = _refresh_parse_date(snapshot.get("ex_div_date"))
+                _pending_pay = _refresh_parse_date(snapshot.get("div_pay_date"))
+                if (
+                    _pending_ex is not None
+                    and _pending_pay is not None
+                    and _pending_pay > refresh_date
+                ):
+                    # Normalize the index first: Yahoo history can be tz-aware,
+                    # which would otherwise raise when compared to a naive stamp.
+                    div_series = _ensure_naive_datetime_index(div_series)
+                    div_series = div_series[div_series.index < pd.Timestamp(_pending_ex)]
             close_series = close_history.get(t)
             has_dividend_history = div_series is not None and not div_series.empty
 
@@ -9381,17 +9408,27 @@ def refresh_market_data():
                 purchase_date,
                 effective_exdiv,
             )
-            next_dividend_paid = raw_dividend_paid if eligible_for_current_dividend else 0.0
-            if _refresh_num_changed(h["dividend_paid"], next_dividend_paid):
-                dividend_row_updated = True
-            sets.append("dividend_paid = ?")
-            vals.append(next_dividend_paid)
-
             expected_pay_date = _refresh_expected_pay_date(
                 effective_exdiv,
                 new_pay_date if snapshot_known else old_pay_date,
                 new_freq if snapshot_known else old_freq,
             )
+            # dividend_paid is cash actually received for the current
+            # distribution, so it stays $0 until the pay date arrives — a fund
+            # can trade ex-dividend several days before it pays. When neither a
+            # pay nor ex date is known we can't gate, so fall back to the prior
+            # ex-date eligibility rather than zeroing a holding of unknown timing.
+            pay_date_reached = expected_pay_date is None or expected_pay_date <= refresh_date
+            next_dividend_paid = (
+                raw_dividend_paid
+                if (eligible_for_current_dividend and pay_date_reached)
+                else 0.0
+            )
+            if _refresh_num_changed(h["dividend_paid"], next_dividend_paid):
+                dividend_row_updated = True
+            sets.append("dividend_paid = ?")
+            vals.append(next_dividend_paid)
+
             if (
                 expected_pay_date is not None
                 and refresh_month_start <= expected_pay_date <= refresh_date
