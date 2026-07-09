@@ -10,6 +10,7 @@ import MarketRefreshProvider from './context/MarketRefreshContext'
 import Dashboard from './pages/Dashboard'
 import Import from './pages/Import'
 import ManageHoldings from './pages/ManageHoldings'
+import CommonInfo from './pages/CommonInfo'
 import Settings from './pages/Settings'
 import Categories from './pages/Categories'
 import Growth from './pages/Growth'
@@ -33,7 +34,9 @@ import DividendCompare from './pages/DividendCompare'
 import ConsolidationAnalysis from './pages/ConsolidationAnalysis'
 import MacroRegimeDashboard from './pages/MacroRegimeDashboard'
 import IncomeGrowthSim from './pages/IncomeGrowthSim'
+import GrowthIncomeFreedom from './pages/GrowthIncomeFreedom'
 import RetirementReadiness from './pages/RetirementReadiness'
+import CashFlowSustainability from './pages/CashFlowSustainability'
 import DividendHistory from './pages/DividendHistory'
 import ReinvestmentImpact from './pages/ReinvestmentImpact'
 import GainsLosses from './pages/GainsLosses'
@@ -51,7 +54,9 @@ import PortfolioGrowth2 from './pages/PortfolioGrowth2'
 import ETFProviderUpdate from './pages/ETFProviderUpdate'
 import ETFComparer from './pages/ETFComparer'
 import StockComparer from './pages/StockComparer'
+import StockValuation from './pages/StockValuation'
 import RebalanceWizard from './pages/RebalanceWizard'
+import HoldingTargets from './pages/HoldingTargets'
 import ActionCenter from './pages/ActionCenter'
 import ClosedCEFInformation from './pages/ClosedCEFInformation'
 import CEFBuyingGuide from './pages/CEFBuyingGuide'
@@ -166,6 +171,7 @@ function App() {
         <Route path="/action-center" element={<ActionCenter />} />
         <Route path="/import" element={<Import />} />
         <Route path="/holdings" element={<ManageHoldings />} />
+        <Route path="/common-info" element={<CommonInfo />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/categories" element={<Categories />} />
         <Route path="/growth" element={<Growth />} />
@@ -182,7 +188,9 @@ function App() {
         <Route path="/nav-erosion-portfolio" element={<NavErosionPortfolio />} />
         <Route path="/income-sim" element={<PortfolioIncomeSim />} />
         <Route path="/income-growth" element={<IncomeGrowthSim />} />
+        <Route path="/growth-income-freedom" element={<GrowthIncomeFreedom />} />
         <Route path="/retirement-readiness" element={<RetirementReadiness />} />
+        <Route path="/cash-flow" element={<CashFlowSustainability />} />
         <Route path="/correlation" element={<Correlation />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/portfolio-builder" element={<PortfolioBuilder />} />
@@ -203,7 +211,9 @@ function App() {
         <Route path="/etf-provider-update" element={<ETFProviderUpdate />} />
         <Route path="/etf-comparer" element={<ETFComparer />} />
         <Route path="/stock-comparer" element={<StockComparer />} />
+        <Route path="/stock-valuation" element={<StockValuation />} />
         <Route path="/rebalance-wizard" element={<RebalanceWizard />} />
+        <Route path="/holding-targets" element={<HoldingTargets />} />
         <Route path="/tax-report" element={<AnnualTaxReport />} />
         <Route path="/tax-loss" element={<TaxLossHarvest />} />
         <Route path="/blended-yield" element={<BlendedYield />} />
@@ -279,10 +289,13 @@ function Nav() {
       <NavLink to="/action-center">Action Center</NavLink>
       <NavDropdown label="Portfolio">
         <NavLink to="/holdings">Holdings</NavLink>
+        <NavLink to="/common-info">CommonInfo</NavLink>
         <NavLink to="/categories">Categories</NavLink>
+        <NavLink to="/holding-targets">Holding Targets</NavLink>
         <NavLink to="/growth">Growth</NavLink>
         <NavLink to="/growth-2">Portfolio Growth 2</NavLink>
         <NavLink to="/retirement-readiness">Retirement Readiness</NavLink>
+        <NavLink to="/cash-flow">Cash Flow &amp; Sustainability</NavLink>
         <NavLink to="/dividends">Dividends</NavLink>
         <NavLink to="/div-calendar">Dividend Calendar</NavLink>
         <NavLink to="/earnings-calendar">Earnings Calendar</NavLink>
@@ -297,7 +310,7 @@ function Nav() {
       </NavDropdown>
       <NavDropdown label="Checklists">
         <NavLink to="/stock-buying-checklist">Stock Buying Checklist</NavLink>
-        <NavLink to="/etf-buying-checklist-evaluator">ETF Buying Checklist Evaluator</NavLink>
+        <NavLink to="/etf-buying-checklist-evaluator">Non Income ETF Checklist Evaluator</NavLink>
         <NavLink to="/option-income-etf-evaluator">Option-Income ETF Evaluator</NavLink>
       </NavDropdown>
       <NavDropdown label="Analysis">
@@ -306,6 +319,7 @@ function Nav() {
           <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>
           <NavLink to="/etf-comparer">ETF Comparer</NavLink>
           <NavLink to="/stock-comparer">Stock Comparer</NavLink>
+          <NavLink to="/stock-valuation">Stock Valuation (DCF)</NavLink>
           <NavLink to="/dist-compare">Distribution Compare</NavLink>
         </NavMenuGroup>
         <NavMenuGroup title="Screeners & Signals">
@@ -326,6 +340,7 @@ function Nav() {
           <NavLink to="/macro-dashboard">Macro Regime Dashboard</NavLink>
         </NavMenuGroup>
         <NavMenuGroup title="Planning & Optimization">
+          <NavLink to="/growth-income-freedom">Growth &amp; Income Freedom</NavLink>
           <NavLink to="/portfolio-builder">Portfolio Builder</NavLink>
           <NavLink to="/portfolio-tester">Portfolio Tester</NavLink>
           <NavLink to="/rebalance-wizard">Rebalance Wizard</NavLink>

@@ -20,6 +20,7 @@ const PERIODS = [
   { value: '5y', label: '5Y' },
   { value: '10y', label: '10Y' },
   { value: 'max', label: 'MAX' },
+  { value: 'all', label: 'ALL' },
 ]
 
 const RETURN_MODES = [
@@ -32,6 +33,7 @@ const RETURN_MODES = [
 ]
 
 const COLORS = ['#2f7df6', '#ef7426', '#26a69a', '#b39ddb', '#ffb74d', '#4dd0e1', '#f06292']
+const DIMMED_COLOR = '#7c8595'
 
 const TRACE_STYLES = {
   price: { dash: 'dot', width: 2, label: 'Price' },
@@ -44,7 +46,7 @@ const TRACE_STYLES = {
 const COLUMNS = [
   { key: 'symbol', label: 'Symbol', locked: true },
   { key: 'name', label: 'Fund Name', locked: true },
-  { key: 'price', label: 'Stock Price' },
+  { key: 'price', label: 'ETF Price' },
   { key: 'change_pct', label: '% Change' },
   { key: 'assets', label: 'Assets' },
   { key: 'expense_ratio', label: 'Exp. Ratio' },
@@ -160,6 +162,7 @@ export default function ETFComparer() {
   const pf = useProfileFetch()
   const { isDark } = useTheme()
   const [tickers, setTickers] = useState([])
+  const [highlightedSymbol, setHighlightedSymbol] = useState('')
   const [input, setInput] = useState('')
   const inputRef = useRef(null)
   const [period, setPeriod] = useState('6mo')
@@ -214,10 +217,21 @@ export default function ETFComparer() {
 
   const dataDateBounds = useMemo(() => {
     if (!data?.series) return [null, null]
-    const allDates = Object.values(data.series).flatMap(s => s.dates || [])
+    const dateSeries = Object.values(data.series)
+      .map(s => (s.dates || []).map(dateKey).filter(Boolean))
+      .filter(dates => dates.length)
+    const allDates = dateSeries.flat()
     if (!allDates.length) return [null, null]
-    return [dateKey(allDates.reduce((a, b) => a < b ? a : b)), dateKey(allDates.reduce((a, b) => a > b ? a : b))]
-  }, [data])
+    const earliestDate = allDates.reduce((a, b) => a < b ? a : b)
+    // MAX is most useful as an apples-to-apples comparison: begin at the
+    // newest first observation (the selected ETF with the shortest history)
+    // so every fund is present and rebased over the same window.
+    const commonStart = dateSeries
+      .map(dates => dates.reduce((a, b) => a < b ? a : b))
+      .reduce((a, b) => a > b ? a : b)
+    const startDate = period === 'max' && !fetchRange ? commonStart : earliestDate
+    return [startDate, allDates.reduce((a, b) => a > b ? a : b)]
+  }, [data, period, fetchRange])
 
   const rangeStart = returnXRange[0] || dataDateBounds[0] || ''
   const rangeEnd = returnXRange[1] || dataDateBounds[1] || ''
@@ -255,7 +269,10 @@ export default function ETFComparer() {
     const [primary, ...extra] = symbols
     const fr = normalizeReturnRange(fetchRange)
     const rangeParam = fr ? `&start=${fr[0]}&end=${fr[1]}` : ''
-    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${period}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}${rangeParam}`)
+    // MAX and ALL both fetch the complete histories. Their chart windows
+    // differ below: MAX uses common history, while ALL shows every observation.
+    const requestPeriod = period === 'all' ? 'max' : period
+    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${requestPeriod}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}${rangeParam}`)
       .then(r => r.json())
       .then(d => {
         if (loadSeqRef.current !== loadSeq) return
@@ -350,8 +367,13 @@ export default function ETFComparer() {
 
   const removeTicker = (sym) => {
     setTickers(prev => prev.filter(t => t !== sym))
+    setHighlightedSymbol(prev => prev === sym ? '' : prev)
     setTimeout(() => inputRef.current?.focus(), 0)
   }
+
+  const toggleHighlight = useCallback((sym) => {
+    setHighlightedSymbol(prev => prev === sym ? '' : sym)
+  }, [])
 
   const symbols = useMemo(() => tickers.map(normalize).filter(Boolean), [tickers])
 
@@ -391,14 +413,21 @@ export default function ETFComparer() {
     const effectiveReturnRange = activeReturnRange || fallbackRange
     // Rebasing, end labels and y-scaling always follow the active window (typed
     // dates or slider) so the chart visually aligns with the date set.
-    const [visibleStart, visibleEnd] = visibleDateRange(data, returnXRange, true)
+    const [visibleStart, visibleEnd] = visibleDateRange(data, effectiveReturnRange, true)
     const titleWindow = activeReturnRange || normalizeReturnRange(fetchRange)
 
-    symbols.forEach((sym, idx) => {
+    // When a symbol is highlighted, draw it last so its line sits on top of
+    // the dimmed ones instead of being covered by them.
+    const orderedSymbols = highlightedSymbol && symbols.includes(highlightedSymbol)
+      ? [...symbols.filter(s => s !== highlightedSymbol), highlightedSymbol]
+      : symbols
+    orderedSymbols.forEach((sym) => {
+      const idx = symbols.indexOf(sym)
       const dates = data.series[sym]?.dates || []
       const traceMap = data.series[sym]?.traces || {}
       Object.entries(traceMap).forEach(([key, values]) => {
-        const color = COLORS[idx % COLORS.length]
+        const isDimmed = highlightedSymbol && highlightedSymbol !== sym
+        const color = isDimmed ? DIMMED_COLOR : COLORS[idx % COLORS.length]
         const style = TRACE_STYLES[key] || TRACE_STYLES.total
         const baseIdx = firstVisibleIndex(dates, visibleStart, visibleEnd)
         const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
@@ -529,7 +558,7 @@ export default function ETFComparer() {
         annotations,
       },
     }
-  }, [data, symbols, reinvest, returnPctMode, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange])
+  }, [data, symbols, reinvest, returnPctMode, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange, highlightedSymbol])
 
   const rows = useMemo(() => {
     const profiles = data?.profiles || {}
@@ -676,9 +705,20 @@ export default function ETFComparer() {
       <div className="etfc-toolbar">
         <div className="etfc-chip-input" onClick={() => inputRef.current?.focus()}>
           {tickers.map((sym, idx) => (
-            <span key={sym} className="etfc-chip" style={{ borderColor: COLORS[idx % COLORS.length] }}>
-              {sym}
-              <button onClick={() => removeTicker(sym)}>×</button>
+            <span
+              key={sym}
+              className={`etfc-chip${highlightedSymbol === sym ? ' etfc-chip-highlighted' : ''}`}
+              style={{ borderColor: COLORS[idx % COLORS.length] }}
+            >
+              <button
+                type="button"
+                className="etfc-chip-symbol"
+                onClick={(e) => { e.stopPropagation(); toggleHighlight(sym) }}
+                title={highlightedSymbol === sym ? 'Click to show all tickers' : 'Click to highlight this ticker on the chart'}
+              >
+                {sym}
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); removeTicker(sym) }}>×</button>
             </span>
           ))}
           <input
@@ -957,6 +997,7 @@ export default function ETFComparer() {
           {symbols.map(sym => (
             <div key={sym} className="etfc-holdings-card">
               <h3>{sym} - {(rows.find(r => r.symbol === sym)?.name || sym)}</h3>
+              <div className="etfc-holdings-table-wrap">
               <table>
                 <thead>
                   <tr><th>No.</th><th>Symbol</th><th>Name</th><th>Weight</th></tr>
@@ -975,6 +1016,7 @@ export default function ETFComparer() {
                   )}
                 </tbody>
               </table>
+              </div>
             </div>
           ))}
         </div>

@@ -335,6 +335,47 @@ class HoldingsTransactionTest(unittest.TestCase):
         self.assertEqual(row["original_purchase_value"], 80)
         self.assertEqual(row["realized_gains"], 10)
 
+    def test_original_basis_refresh_infers_small_reinvested_share_gap(self):
+        app_module._ensure_basis_columns(self.conn)
+        self.conn.execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, purchase_value, original_price_paid, "
+            "original_purchase_value, broker_price_paid, broker_purchase_value, current_price, "
+            "reinvest, total_divs_received) "
+            "VALUES ('TDAX', 1, 88.3206, 25.21, 2226.56, 25.3159, "
+            "1721.48, 25.21, 2226.56, 25, 'Y', 7.91)"
+        )
+        self.conn.executemany(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('TDAX', 1, 'BUY', ?, ?, ?, 0, '')",
+            [
+                ("2026-06-22", 30, 25.83),
+                ("2026-06-23", 38, 24.91),
+                ("2026-06-29", 20, 24.862),
+            ],
+        )
+        self.conn.execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source) "
+            "VALUES ('TDAX', 1, '2026-06-25', 7.91, 'schwab_transactions')"
+        )
+
+        result = app_module._refresh_original_basis_from_transactions("TDAX", 1, self.conn)
+
+        expected_cost = (30 * 25.83) + (38 * 24.91) + (20 * 24.862) + (0.3206 * 25)
+        self.assertEqual(result["status"], "updated")
+        self.assertAlmostEqual(result["inferred_reinvestment_shares"], 0.3206, places=6)
+        row = self.conn.execute(
+            "SELECT quantity, original_price_paid, original_purchase_value, "
+            "broker_price_paid, broker_purchase_value "
+            "FROM all_account_info WHERE ticker = 'TDAX'"
+        ).fetchone()
+        self.assertAlmostEqual(row["quantity"], 88.3206, places=6)
+        self.assertAlmostEqual(row["original_purchase_value"], expected_cost, places=2)
+        self.assertAlmostEqual(row["original_price_paid"], expected_cost / 88.3206, places=4)
+        self.assertEqual(row["broker_price_paid"], 25.21)
+        self.assertEqual(row["broker_purchase_value"], 2226.56)
+
     def test_original_basis_refresh_skips_when_transaction_shares_do_not_match(self):
         app_module._ensure_basis_columns(self.conn)
         self.conn.execute(
@@ -359,6 +400,75 @@ class HoldingsTransactionTest(unittest.TestCase):
         self.assertEqual(row["original_purchase_value"], 160)
         self.assertEqual(row["broker_price_paid"], 20)
         self.assertEqual(row["broker_purchase_value"], 160)
+
+    def test_positions_import_guard_preserves_unexplained_large_quantity_drop(self):
+        app_module._ensure_basis_columns(self.conn)
+        self.conn.execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, purchase_value, current_price, current_value, "
+            "original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value, import_date) "
+            "VALUES ('TDAQ', 1, 157.7269, 25.3, 3990.49, 27.52, 4340.64, "
+            "25.9034, 4085.67, 25.3, 3990.49, '2026-06-25')"
+        )
+        self.conn.execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('TDAQ', 1, 'BUY', '2025-09-04', 40, 24.96, 0, '')"
+        )
+        existing = self.conn.execute(
+            "SELECT quantity, price_paid, purchase_value, current_value, import_date, "
+            "broker_price_paid, broker_purchase_value FROM all_account_info WHERE ticker = 'TDAQ'"
+        ).fetchone()
+
+        corrected = app_module._large_unsold_position_drop_guard(
+            self.conn,
+            1,
+            "TDAQ",
+            {
+                "ticker": "TDAQ",
+                "quantity": 10.2801,
+                "cost_per_share": 25.3,
+                "purchase_value": 260.09,
+                "current_price": 27.81,
+                "current_value": 285.89,
+                "gain_or_loss": 25.8,
+            },
+            existing,
+        )
+
+        self.assertIsNotNone(corrected)
+        self.assertAlmostEqual(corrected["quantity"], 157.7269, places=6)
+        self.assertAlmostEqual(corrected["purchase_value"], 3990.49, places=2)
+        self.assertAlmostEqual(corrected["current_value"], round(157.7269 * 27.81, 2), places=2)
+        self.assertEqual(corrected["_quantity_preserved"]["imported_quantity"], 10.2801)
+
+    def test_positions_import_guard_allows_drop_with_matching_sell(self):
+        app_module._ensure_basis_columns(self.conn)
+        self.conn.execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, purchase_value, current_value, "
+            "broker_price_paid, broker_purchase_value, import_date) "
+            "VALUES ('DIVO', 1, 61.6212, 40.5, 2495.66, 2809.00, 40.5, 2495.66, '2026-06-25')"
+        )
+        self.conn.execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('DIVO', 1, 'SELL', '2026-06-29', 20, 45.5712, 0, '')"
+        )
+        existing = self.conn.execute(
+            "SELECT quantity, price_paid, purchase_value, current_value, import_date, "
+            "broker_price_paid, broker_purchase_value FROM all_account_info WHERE ticker = 'DIVO'"
+        ).fetchone()
+
+        corrected = app_module._large_unsold_position_drop_guard(
+            self.conn,
+            1,
+            "DIVO",
+            {"ticker": "DIVO", "quantity": 41.6212, "current_price": 45.57},
+            existing,
+        )
+
+        self.assertIsNone(corrected)
 
     def test_yahoo_symbol_normalizes_common_broker_spellings(self):
         self.assertEqual(_yahoo_symbol_for_ticker("BRKB"), "BRK-B")

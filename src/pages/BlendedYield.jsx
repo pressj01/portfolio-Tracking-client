@@ -488,6 +488,10 @@ export default function BlendedYield() {
   const [funds, setFunds] = useState([])
   const [tickerInput, setTickerInput] = useState('')
   const [loadingPortfolio, setLoadingPortfolio] = useState(false)
+  const [showPortfolioPicker, setShowPortfolioPicker] = useState(false)
+  const [portfolioHoldings, setPortfolioHoldings] = useState([])
+  const [portfolioSearch, setPortfolioSearch] = useState('')
+  const [portfolioSelected, setPortfolioSelected] = useState(() => new Set())
 
   // Bracket data (loaded from localStorage or defaults)
   const [bracketData, setBracketData] = useState(() => loadSavedBrackets() || defaultBracketData())
@@ -560,45 +564,115 @@ export default function BlendedYield() {
     }])
   }, [funds, stateCode])
 
-  // Seed the calculator with the user's actual current holdings (respects the
-  // selected profile/aggregate) so they can add/remove funds from there.
-  const loadCurrentPortfolio = useCallback(async () => {
-    if (funds.length > 0 && !window.confirm('Replace the current funds with your live portfolio holdings?')) return
+  const loadPortfolioHoldings = useCallback(async () => {
+    setShowPortfolioPicker(true)
     setLoadingPortfolio(true)
     try {
       const res = await pf('/api/portfolio-tester/holdings')
       const data = await res.json()
       const rows = (data.holdings || []).filter(h => (h.current_value || 0) > 0)
       if (!rows.length) {
+        setPortfolioHoldings([])
+        setPortfolioSelected(new Set())
         window.alert('No current holdings found for the selected portfolio.')
+        setLoadingPortfolio(false)
         return
       }
-      const total = rows.reduce((s, h) => s + (h.current_value || 0), 0)
-      const resolved = await Promise.all(
-        rows.map(h => resolveFundData((h.ticker || '').toUpperCase(), stateCode))
-      )
-      const newFunds = rows.map((h, i) => {
-        const dollars = Math.round(h.current_value || 0)
-        return {
-          id: nextFundId++,
-          ticker: (h.ticker || '').toUpperCase(),
-          name: resolved[i].name,
-          yieldPct: resolved[i].yieldPct,
-          taxType: resolved[i].taxType,
-          price: resolved[i].price,
-          allocDollar: dollars,
-          allocPct: total > 0 ? Number((dollars / total * 100).toFixed(2)) : 0,
-          color: ALLOC_COLORS[i % ALLOC_COLORS.length],
-        }
-      })
-      setTotalInvestment(Math.round(total))
-      setFunds(newFunds)
+      const normalized = rows.map(h => ({
+        ...h,
+        ticker: (h.ticker || '').toUpperCase(),
+        current_value: Number(h.current_value || 0),
+      })).filter(h => h.ticker)
+      setPortfolioHoldings(normalized)
+      setPortfolioSelected(new Set(normalized.map(h => h.ticker)))
+      setShowPortfolioPicker(true)
     } catch (e) {
       console.error(e)
       window.alert('Failed to load current portfolio.')
     }
     setLoadingPortfolio(false)
-  }, [funds.length, pf, stateCode])
+  }, [pf])
+
+  const togglePortfolioPicker = useCallback(() => {
+    if (showPortfolioPicker) {
+      setShowPortfolioPicker(false)
+      return
+    }
+    loadPortfolioHoldings()
+  }, [loadPortfolioHoldings, showPortfolioPicker])
+
+  const visiblePortfolioHoldings = useMemo(() => {
+    const q = portfolioSearch.trim().toUpperCase()
+    if (!q) return portfolioHoldings
+    return portfolioHoldings.filter(h => {
+      const categories = (h.categories || []).join(' ')
+      const dbName = FUND_DB[h.ticker]?.name || ''
+      return `${h.ticker} ${dbName} ${categories}`.toUpperCase().includes(q)
+    })
+  }, [portfolioHoldings, portfolioSearch])
+
+  const portfolioSelectedCount = portfolioSelected.size
+
+  const togglePortfolioTicker = useCallback((ticker) => {
+    setPortfolioSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(ticker)) next.delete(ticker)
+      else next.add(ticker)
+      return next
+    })
+  }, [])
+
+  const selectAllPortfolioTickers = useCallback(() => {
+    setPortfolioSelected(new Set(portfolioHoldings.map(h => h.ticker)))
+  }, [portfolioHoldings])
+
+  const deselectAllPortfolioTickers = useCallback(() => {
+    setPortfolioSelected(new Set())
+  }, [])
+
+  const addSelectedPortfolioTickers = useCallback(async () => {
+    const existing = new Set(funds.map(f => f.ticker))
+    const selectedRows = portfolioHoldings.filter(h => portfolioSelected.has(h.ticker) && !existing.has(h.ticker))
+    if (!selectedRows.length) {
+      window.alert(portfolioSelected.size ? 'The selected portfolio tickers are already in the calculator.' : 'Select at least one portfolio ticker to add.')
+      return
+    }
+
+    setLoadingPortfolio(true)
+    try {
+      const resolved = await Promise.all(
+        selectedRows.map(h => resolveFundData(h.ticker, stateCode))
+      )
+      const existingRows = funds.map(f => ({ ...f, allocDollar: Math.round(Number(f.allocDollar) || 0) }))
+      const addedRows = selectedRows.map((h, i) => {
+        const dollars = Math.round(h.current_value || 0)
+        return {
+          id: nextFundId++,
+          ticker: h.ticker,
+          name: resolved[i].name,
+          yieldPct: resolved[i].yieldPct,
+          taxType: resolved[i].taxType,
+          price: resolved[i].price,
+          allocDollar: dollars,
+          allocPct: 0,
+          color: ALLOC_COLORS[(existingRows.length + i) % ALLOC_COLORS.length],
+        }
+      })
+      const combined = [...existingRows, ...addedRows]
+      const total = combined.reduce((s, f) => s + (Number(f.allocDollar) || 0), 0)
+      setTotalInvestment(Math.round(total))
+      setFunds(combined.map((f, i) => ({
+        ...f,
+        allocPct: total > 0 ? Number(((Number(f.allocDollar) || 0) / total * 100).toFixed(2)) : f.allocPct,
+        color: f.color || ALLOC_COLORS[i % ALLOC_COLORS.length],
+      })))
+      setShowPortfolioPicker(false)
+    } catch (e) {
+      console.error(e)
+      window.alert('Failed to add selected portfolio tickers.')
+    }
+    setLoadingPortfolio(false)
+  }, [funds, portfolioHoldings, portfolioSelected, stateCode])
 
   const removeFund = useCallback((id) => {
     setFunds(prev => prev.filter(f => f.id !== id))
@@ -624,7 +698,7 @@ export default function BlendedYield() {
     })))
   }, [funds.length, totalInvestment])
 
-  const resetAll = useCallback(() => { setFunds([]); setTickerInput('') }, [])
+  const resetAll = useCallback(() => { setFunds([]); setTickerInput(''); setPortfolioSelected(new Set()) }, [])
 
   const updateTotalInvestment = useCallback((val) => {
     const v = Number(val) || 0
@@ -796,8 +870,8 @@ export default function BlendedYield() {
           onChange={e => setTickerInput(e.target.value.toUpperCase())}
           placeholder="Enter ticker (e.g. SGOV, JEPI, MUB)" />
         <button type="submit" className="btn btn-secondary">Add Fund</button>
-        <button type="button" className="btn btn-primary" onClick={loadCurrentPortfolio} disabled={loadingPortfolio}>
-          {loadingPortfolio ? 'Loading…' : 'Load My Portfolio'}
+        <button type="button" className="btn btn-primary" onClick={togglePortfolioPicker} disabled={loadingPortfolio}>
+          {loadingPortfolio ? 'Loading...' : `From Portfolio ${showPortfolioPicker ? '^' : 'v'}`}
         </button>
         {funds.length > 1 && (
           <button type="button" className="btn btn-secondary" onClick={splitEqually}>Split Equally</button>
@@ -808,6 +882,84 @@ export default function BlendedYield() {
       </form>
 
       {/* ── Fund Cards ── */}
+      {showPortfolioPicker && (
+        <div className="by-portfolio-picker">
+          <div className="by-portfolio-picker-head">
+            <div className="by-muted">
+              Portfolio holdings ({portfolioHoldings.length} total):
+            </div>
+            <div className="by-portfolio-picker-tools">
+              <input
+                type="text"
+                className="by-input by-portfolio-search"
+                value={portfolioSearch}
+                onChange={e => setPortfolioSearch(e.target.value)}
+                placeholder="Search ticker..."
+              />
+              <button type="button" className="btn btn-sm" onClick={selectAllPortfolioTickers} disabled={loadingPortfolio || portfolioHoldings.length === 0}>Select All</button>
+              <button type="button" className="btn btn-sm" onClick={deselectAllPortfolioTickers} disabled={loadingPortfolio || portfolioSelectedCount === 0}>Deselect All</button>
+            </div>
+          </div>
+
+          <div className="by-portfolio-table-wrap">
+            <table className="by-portfolio-table">
+              <thead>
+                <tr>
+                  <th className="by-portfolio-check-col" aria-label="Selected"></th>
+                  <th>Ticker</th>
+                  <th>Description</th>
+                  <th>Current Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loadingPortfolio && !visiblePortfolioHoldings.length && (
+                  <tr>
+                    <td colSpan={4} className="by-portfolio-empty">Loading portfolio holdings...</td>
+                  </tr>
+                )}
+                {!loadingPortfolio && visiblePortfolioHoldings.map(h => {
+                  const description = FUND_DB[h.ticker]?.name || (h.categories || []).join(', ') || 'Current portfolio holding'
+                  return (
+                    <tr key={h.ticker} onClick={() => togglePortfolioTicker(h.ticker)}>
+                      <td className="by-portfolio-check-col">
+                        <input
+                          type="checkbox"
+                          checked={portfolioSelected.has(h.ticker)}
+                          onChange={() => togglePortfolioTicker(h.ticker)}
+                          onClick={e => e.stopPropagation()}
+                        />
+                      </td>
+                      <td><strong>{h.ticker}</strong></td>
+                      <td className="by-portfolio-description">{description}</td>
+                      <td>{fmtMoney(h.current_value)}</td>
+                    </tr>
+                  )
+                })}
+                {!loadingPortfolio && !visiblePortfolioHoldings.length && (
+                  <tr>
+                    <td colSpan={4} className="by-portfolio-empty">No holdings match that search.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="by-portfolio-picker-foot">
+            <span className="by-muted">{portfolioSelectedCount} selected</span>
+            <div className="by-portfolio-picker-actions">
+              <button type="button" className="btn btn-secondary" onClick={() => setShowPortfolioPicker(false)}>Cancel</button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={addSelectedPortfolioTickers}
+                disabled={loadingPortfolio || portfolioSelectedCount === 0}>
+                Add Tickers
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {fundMetrics.map(f => (
         <div className="by-fund-card" key={f.id} style={{ borderLeftColor: f.color }}>
           <div className="by-fund-head">

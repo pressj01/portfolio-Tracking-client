@@ -343,7 +343,7 @@ export default function ETFBuyingChecklistEvaluator() {
     <div className="page cef-page stock-check-page">
       <div className="cef-title-row stock-check-title-row">
         <div>
-          <h1>ETF Buying Checklist Evaluator</h1>
+          <h1>Non Income ETF Checklist Evaluator</h1>
           <p>Enter an ETF ticker. Six criteria are scored against editable thresholds, and better alternatives in the same strategy group are surfaced.</p>
         </div>
       </div>
