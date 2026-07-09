@@ -7389,6 +7389,121 @@ def _fetch_kurv_distribution_snapshot(ticker):
     }
 
 
+def _fetch_infracap_distribution_snapshot(ticker):
+    """Fetch official distribution history from InfraCap fund pages (infracapfund.com).
+
+    The fund page renders a "DISTRIBUTION DETAIL" table with columns
+    EX-DATE | RECORD DATE | (amount, e.g. "$1.04") | PAYABLE DATE. Each row also
+    carries a commented-out raw amount cell (``<!--<td>1.04000000</td>-->``) which
+    we strip out before parsing so it can't be mistaken for a visible column.
+    """
+    import html
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return None
+
+    url = f"https://www.infracapfund.com/{ticker.lower()}"
+    try:
+        resp = requests.get(
+            url,
+            timeout=10,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        resp.raise_for_status()
+    except Exception:
+        return None
+
+    body = resp.text or ""
+    start = body.upper().find("DISTRIBUTION DETAIL")
+    if start < 0:
+        return None
+
+    end = body.find("</table>", start)
+    region = body[start:end] if end > start else body[start:]
+    # Drop HTML comments so the commented-out raw amount cell is ignored.
+    region = re.sub(r"<!--.*?-->", "", region, flags=re.S)
+
+    entries = []
+    scheduled = []
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", region, flags=re.IGNORECASE | re.S):
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, flags=re.IGNORECASE | re.S)
+        cells = [
+            html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", c))).strip()
+            for c in cells
+        ]
+        if len(cells) < 4:
+            continue
+
+        ex_date, _record_date, amount_raw, pay_date = cells[:4]
+        ex_ts = pd.to_datetime(ex_date, errors="coerce")
+        pay_ts = pd.to_datetime(pay_date, errors="coerce")
+        if pd.isna(ex_ts):
+            continue
+        ex_ts = ex_ts.normalize()
+        pay_ts = pay_ts.normalize() if not pd.isna(pay_ts) else None
+        scheduled.append((ex_ts, pay_ts))
+
+        amount_clean = str(amount_raw or "").replace("$", "").replace(",", "").strip()
+        if not amount_clean or amount_clean in {"--", "-"}:
+            continue
+        try:
+            amount_value = float(amount_clean)
+        except (TypeError, ValueError):
+            continue
+        if amount_value > 0:
+            entries.append((ex_ts, amount_value, pay_ts))
+
+    if not entries:
+        return None
+
+    entries.sort(key=lambda item: item[0])
+    history = pd.Series(
+        [item[1] for item in entries],
+        index=pd.DatetimeIndex([item[0] for item in entries]),
+    )
+    history = history[~history.index.duplicated(keep="last")]
+    history = history.sort_index()
+
+    pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
+    latest_actual_ex = history.index[-1]
+    chosen_ex = latest_actual_ex
+    chosen_pay = pay_map.get(latest_actual_ex)
+
+    # InfraCap may publish a future ex/pay row before the amount is announced.
+    # Surface the next known date while keeping the latest actual amount.
+    today = pd.Timestamp.now().normalize()
+    upcoming_rows = [
+        (ex_ts, pay_ts)
+        for ex_ts, pay_ts in scheduled
+        if ex_ts is not None and ex_ts >= today
+    ]
+    if upcoming_rows:
+        upcoming_rows.sort(key=lambda item: item[0])
+        chosen_ex, chosen_pay = upcoming_rows[0]
+
+    inferred = _infer_dividend_frequency_from_history(history)
+    freq = "W" if inferred == "W" else "M"
+    return {
+        "known": True,
+        "has_dividend": True,
+        "div": float(history.iloc[-1]),
+        "ex_div_date": chosen_ex.strftime("%m/%d/%y"),
+        "div_pay_date": chosen_pay.strftime("%m/%d/%y") if chosen_pay is not None else None,
+        "freq": freq,
+        "history": history,
+    }
+
+
 def _fetch_globalx_distribution_snapshot(ticker):
     """Fetch recent official distribution history from Global X fund pages when available."""
     import requests
@@ -7928,6 +8043,18 @@ def _is_kurv_fund(ticker, description=""):
     return ticker in explicit_family
 
 
+def _is_infracap_fund(ticker, description=""):
+    """Identify InfraCap ETFs that publish a DISTRIBUTION DETAIL table on infracapfund.com."""
+    ticker = (ticker or "").strip().upper()
+    description_l = (description or "").lower()
+    if "infracap" in description_l or "infrastructure capital" in description_l:
+        return True
+    explicit_family = {
+        "QVOL",  # InfraCap Equity Income Fund ETF
+    }
+    return ticker in explicit_family
+
+
 def _is_globalx_fund(ticker, description=""):
     """Identify Global X income ETFs with issuer distribution history pages."""
     ticker = (ticker or "").strip().upper()
@@ -8233,6 +8360,11 @@ _FUND_FAMILY_REGISTRY = [
         "keywords": ["kurv"],
         "fetcher": "_fetch_kurv_distribution_snapshot",
         "legacy": _is_kurv_fund,
+    },
+    {
+        "keywords": ["infracap", "infrastructure capital"],
+        "fetcher": "_fetch_infracap_distribution_snapshot",
+        "legacy": _is_infracap_fund,
     },
     {
         "keywords": ["global x", "globalx"],
