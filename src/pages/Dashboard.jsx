@@ -688,6 +688,19 @@ export default function Dashboard() {
     return () => clearInterval(interval)
   }, [])
 
+  // Reload the NAV chart when the automatic end-of-day capture records a point
+  // while the dashboard is open, so the new close appears without a manual reload.
+  useEffect(() => {
+    const reload = () => {
+      pf('/api/nav/history')
+        .then(safeJson)
+        .then(d => { if (Array.isArray(d)) setNavHistory(d) })
+        .catch(() => {})
+    }
+    window.addEventListener('nav-auto-captured', reload)
+    return () => window.removeEventListener('nav-auto-captured', reload)
+  }, [pf])
+
   useEffect(() => {
     let stale = false
     const cached = readDashboardCache(dashboardCacheKey)

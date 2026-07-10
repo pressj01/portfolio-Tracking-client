@@ -145,8 +145,14 @@ def populate_income_tracking(profile_id=1):
     return row_count, f"Income tracking: {row_count} rows inserted."
 
 
-def snapshot_nav(profile_id=1, nav_date=None):
-    """Upsert a holdings-plus-cash account value snapshot into portfolio_nav."""
+def snapshot_nav(profile_id=1, nav_date=None, source="snapshot"):
+    """Upsert a holdings-plus-cash account value snapshot into portfolio_nav.
+
+    ``source`` tags the row: 'snapshot' for a manually recorded value and
+    'close' for the automatic end-of-day capture. Both are authoritative (the
+    chart-repair logic protects either), so a later capture cleanly overwrites
+    an earlier intraday value for the same day.
+    """
     snapshot_date = nav_date or date.today().isoformat()
     conn = get_connection()
     try:
@@ -190,10 +196,10 @@ def snapshot_nav(profile_id=1, nav_date=None):
             return 0.0
         conn.execute(
             """INSERT INTO portfolio_nav (profile_id, nav_date, total_value, source)
-               VALUES (?, ?, ?, 'snapshot')
+               VALUES (?, ?, ?, ?)
                ON CONFLICT(profile_id, nav_date) DO UPDATE SET
-                   total_value = excluded.total_value, source = 'snapshot'""",
-            (profile_id, snapshot_date, round(total_value, 2)),
+                   total_value = excluded.total_value, source = excluded.source""",
+            (profile_id, snapshot_date, round(total_value, 2), source),
         )
         conn.commit()
         return round(total_value, 2)

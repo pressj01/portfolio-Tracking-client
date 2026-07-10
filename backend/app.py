@@ -74,7 +74,12 @@ import tax_report
 import tax_loss
 from options_api import register_routes as register_options_routes
 from market_symbols import yahoo_symbol_for_ticker as _yahoo_symbol_for_ticker
-from market_calendar import is_nyse_trading_day, nyse_closure_reason
+from market_calendar import (
+    is_nyse_trading_day,
+    nyse_closure_reason,
+    eastern_now,
+    market_has_closed,
+)
 from dividend_safety import (
     apply_nav_coverage_overlay,
     get_dividend_safety_for_holdings,
@@ -4914,6 +4919,84 @@ def api_nav_snapshot():
     })
 
 
+@app.route("/api/nav/auto-capture", methods=["POST"])
+def api_nav_auto_capture():
+    """Record the official closing NAV once the market has closed for the day.
+
+    Polled by the frontend on a timer and at app launch. It is a cheap no-op
+    until the regular NYSE session has ended (16:00 ET + settle buffer) on a
+    trading day; then it refreshes prices to the settled close and upserts a NAV
+    snapshot tagged 'close'. Because the snapshot is keyed on
+    (profile_id, nav_date), it cleanly overwrites any intraday value recorded
+    earlier the same day. Once today's close is captured it skips until the next
+    trading day, so the heavy price refresh runs at most once per day.
+    """
+    profile_id = get_profile_id()
+    now_et = eastern_now()
+    market_date = now_et.date()
+    market_date_str = market_date.isoformat()
+
+    if not is_nyse_trading_day(market_date):
+        return jsonify({
+            "captured": False,
+            "skipped": True,
+            "reason": f"{market_date_str} is not a trading day.",
+            "nav_date": market_date_str,
+        })
+
+    if not market_has_closed(now_et):
+        return jsonify({
+            "captured": False,
+            "skipped": True,
+            "reason": "The market has not closed yet.",
+            "nav_date": market_date_str,
+        })
+
+    conn = get_connection()
+    try:
+        already_captured = conn.execute(
+            "SELECT 1 FROM portfolio_nav "
+            "WHERE profile_id = ? AND nav_date = ? AND source = 'close'",
+            (profile_id, market_date_str),
+        ).fetchone()
+        profile_ids = _nav_snapshot_profile_ids(conn, profile_id)
+    finally:
+        conn.close()
+
+    if already_captured:
+        return jsonify({
+            "captured": False,
+            "skipped": True,
+            "reason": "Today's closing NAV was already captured.",
+            "nav_date": market_date_str,
+        })
+
+    # Pull the settled closing prices before snapshotting, so 'close' matches
+    # "refresh, then Record NAV" exactly rather than reusing a stale intraday
+    # price. Reuses the same refresh the manual button runs.
+    try:
+        refresh_market_data()
+    except Exception as exc:  # noqa: BLE001 - never let a refresh hiccup 500 the poll
+        return jsonify({
+            "captured": False,
+            "skipped": True,
+            "reason": f"Price refresh failed: {exc}",
+            "nav_date": market_date_str,
+        })
+
+    values = {}
+    for pid in dict.fromkeys(profile_ids):
+        values[str(pid)] = snapshot_nav(pid, nav_date=market_date_str, source="close")
+
+    return jsonify({
+        "captured": True,
+        "profile_id": profile_id,
+        "value": values.get(str(profile_id)),
+        "values": values,
+        "nav_date": market_date_str,
+    })
+
+
 def _compute_backfill_nav_rows(profile_id, existing_nav, anchor_to_current=False):
     """Replay BUY/SELL transactions against actual (unadjusted) closing prices.
 
@@ -5190,7 +5273,7 @@ def api_nav_repair():
         protected = set(
             r[0] for r in conn.execute(
                 "SELECT nav_date FROM portfolio_nav WHERE profile_id = ? "
-                "AND (source = 'snapshot' OR nav_date >= ?)",
+                "AND (source IN ('snapshot', 'close') OR nav_date >= ?)",
                 (profile_id, today_str),
             ).fetchall()
         )

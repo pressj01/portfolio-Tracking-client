@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 
 def _coerce_date(value):
@@ -89,3 +89,43 @@ def nyse_closure_reason(value):
 
 def is_nyse_trading_day(value):
     return nyse_closure_reason(value) is None
+
+
+# US Eastern is UTC-5 (EST) or UTC-4 (EDT). DST runs from the 2nd Sunday of
+# March through the 1st Sunday of November. We derive the offset ourselves so
+# the app never depends on the platform IANA tz database (absent on stock
+# Windows) and so an odd machine clock/timezone can't mis-time the capture.
+def _us_eastern_is_dst(day):
+    year = day.year
+    dst_start = _nth_weekday(year, 3, 6, 2)   # 2nd Sunday of March
+    dst_end = _nth_weekday(year, 11, 6, 1)    # 1st Sunday of November
+    return dst_start <= day < dst_end
+
+
+def eastern_now(now_utc=None):
+    """Return the current instant as a US/Eastern-aware datetime."""
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    elif now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    offset = -4 if _us_eastern_is_dst(now_utc.date()) else -5
+    return now_utc.astimezone(timezone(timedelta(hours=offset)))
+
+
+# The regular NYSE session ends at 16:00 ET. A short buffer lets the settled
+# closing print post to the data provider before we capture it as the close.
+NYSE_CLOSE_HOUR = 16
+NYSE_CLOSE_BUFFER_MINUTES = 15
+
+
+def market_has_closed(now_et=None):
+    """True once 16:00 ET plus the settle buffer has passed (in Eastern time)."""
+    if now_et is None:
+        now_et = eastern_now()
+    cutoff = now_et.replace(
+        hour=NYSE_CLOSE_HOUR,
+        minute=NYSE_CLOSE_BUFFER_MINUTES,
+        second=0,
+        microsecond=0,
+    )
+    return now_et >= cutoff
