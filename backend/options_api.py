@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import math
 import time
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Any
 
 import yfinance as yf
@@ -75,8 +75,23 @@ def _year_frac(exp_str: str, eval_d: date | None = None) -> float:
     except ValueError:
         return 0.0
     days = (exp_d - eval_d).days
-    # Option expires at close on expiration date -> use max(days, 0) with a small floor for same-day
-    return max(days, 0) / 365.0
+    # Same-day contracts still have intraday time value before the close. Use a
+    # small quarter-day floor for live-chain Greeks; explicit expiration payoff
+    # calculations pass T=0 directly and remain intrinsic-only.
+    return max(days, 0.25) / 365.0
+
+
+def _analysis_year_frac(exp_str: str, eval_d: date) -> float:
+    """Date-only time remaining for risk scenarios.
+
+    Unlike live-chain Greeks, an analysis point on expiration day is the
+    expiration payoff and therefore has no residual intraday time value.
+    """
+    try:
+        exp_d = datetime.strptime(exp_str, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return 0.0
+    return max((exp_d - eval_d).days, 0) / 365.0
 
 
 def _fetch_quote(ticker: str) -> dict:
@@ -197,14 +212,14 @@ def _fetch_chain(ticker: str, expiration: str) -> dict:
         oi = _safe(df_row.get('openInterest'), 0)
         mid = (bid + ask) / 2.0 if (bid and ask) else last
 
-        delta = None
+        greeks = {'delta': None, 'gamma': None, 'theta': None, 'vega': None, 'rho': None}
         prob_otm = None
         if iv > 0 and T > 0 and spot > 0:
             try:
                 g = black_scholes(spot, strike, T, r, q, iv, opt_type)
-                delta = g['delta']
+                greeks = {name: g.get(name) for name in greeks}
                 # Prob OTM ≈ 1 - |delta| (first-order approximation used by TOS display)
-                prob_otm = max(0.0, min(1.0, 1.0 - abs(delta)))
+                prob_otm = max(0.0, min(1.0, 1.0 - abs(greeks['delta'])))
             except Exception:
                 pass
 
@@ -217,7 +232,7 @@ def _fetch_chain(ticker: str, expiration: str) -> dict:
             'iv': iv,
             'volume': int(vol) if vol is not None else 0,
             'open_interest': int(oi) if oi is not None else 0,
-            'delta': delta,
+            **greeks,
             'prob_otm': prob_otm,
         }
 
@@ -324,7 +339,7 @@ def register_routes(app):
         q = float(payload.get('div_yield') if payload.get('div_yield') is not None else (quote.get('div_yield') or 0.0))
 
         eval_date_str = payload.get('eval_date')
-        eval_d = datetime.strptime(eval_date_str, '%Y-%m-%d').date() if eval_date_str else date.today()
+        requested_eval_d = datetime.strptime(eval_date_str, '%Y-%m-%d').date() if eval_date_str else date.today()
 
         # Price range
         pr = payload.get('price_range') or {}
@@ -338,10 +353,18 @@ def register_routes(app):
         if high <= low:
             high = low + 1.0
 
-        # Precompute per-leg T for today (eval_date) and expiration
+        # A one-dimensional risk curve is only path-independent until the first
+        # active expiration. Past that date an expired leg's realized value
+        # depends on the underlying price at its own expiration, not the later
+        # scenario price. Clamp the analysis horizon accordingly.
         legs: list[dict] = []
+        expiration_dates: list[date] = []
         for leg in legs_in:
             exp = leg.get('expiration')
+            try:
+                expiration_dates.append(datetime.strptime(exp, '%Y-%m-%d').date())
+            except (TypeError, ValueError):
+                pass
             iv = float(leg.get('iv') if leg.get('iv') is not None else (leg.get('iv_override') or 0.0))
             entry = float(leg.get('entry_price') if leg.get('entry_price') is not None else 0.0)
             legs.append({
@@ -352,9 +375,13 @@ def register_routes(app):
                 'expiration': exp,
                 'iv': iv,
                 'entry_price': entry,
-                'T_today': _year_frac(exp, eval_d),
-                'T_exp': 0.0,
             })
+
+        horizon_d = min(expiration_dates) if expiration_dates else requested_eval_d
+        eval_d = min(requested_eval_d, horizon_d)
+        for leg in legs:
+            leg['T_today'] = _analysis_year_frac(leg['expiration'], eval_d)
+            leg['T_horizon'] = _analysis_year_frac(leg['expiration'], horizon_d)
 
         # Scenario price grid
         dx = (high - low) / (steps - 1)
@@ -369,10 +396,37 @@ def register_routes(app):
             for leg in legs:
                 pnl_t, _ = _leg_pnl_at(S, leg, leg['T_today'], r, q, model)
                 pnl_today += leg['qty'] * pnl_t
-                pnl_e, _ = _leg_pnl_at(S, leg, leg['T_exp'], r, q, model)
+                # At the first expiration, later-dated legs remain live and
+                # retain their modeled time value.
+                pnl_e, _ = _leg_pnl_at(S, leg, leg['T_horizon'], r, q, model)
                 pnl_exp += leg['qty'] * pnl_e
             today_curve.append({'s': round(S, 4), 'pnl': round(pnl_today, 2)})
             exp_curve.append({'s': round(S, 4), 'pnl': round(pnl_exp, 2)})
+
+        # Optional intermediate curves let the client show how the same trade
+        # evolves in fixed day increments. Stop at the earliest leg expiration
+        # so every displayed step still represents a live multi-leg position.
+        requested_day_step = max(0, int(payload.get('day_step') or 0))
+        effective_day_step = requested_day_step
+        day_step_curves = []
+        if requested_day_step > 0:
+            step_end = horizon_d
+            days_to_step_end = max(0, (step_end - eval_d).days)
+            effective_day_step = max(requested_day_step, math.ceil(days_to_step_end / 40))
+            step_date = eval_d + timedelta(days=effective_day_step)
+            # Protect the endpoint from producing hundreds of Plotly traces for
+            # long-dated contracts while retaining normal daily/weekly studies.
+            while step_date < step_end and len(day_step_curves) < 40:
+                curve = []
+                for S in prices:
+                    pnl = 0.0
+                    for leg in legs:
+                        remaining = _analysis_year_frac(leg['expiration'], step_date)
+                        leg_pnl, _ = _leg_pnl_at(S, leg, remaining, r, q, model)
+                        pnl += leg['qty'] * leg_pnl
+                    curve.append({'s': round(S, 4), 'pnl': round(pnl, 2)})
+                day_step_curves.append({'date': step_date.isoformat(), 'curve': curve})
+                step_date += timedelta(days=effective_day_step)
 
         # Portfolio Greeks at current spot (today)
         port_greeks = {'delta': 0.0, 'gamma': 0.0, 'theta': 0.0, 'vega': 0.0, 'rho': 0.0}
@@ -446,13 +500,21 @@ def register_routes(app):
             'underlying': underlying,
             'spot': spot,
             'eval_date': eval_d.isoformat(),
+            'requested_eval_date': requested_eval_d.isoformat(),
+            'analysis_date_adjusted': eval_d != requested_eval_d,
+            'analysis_horizon': horizon_d.isoformat(),
+            'mixed_expirations': len(set(expiration_dates)) > 1,
             'model': model,
             'rate': r,
             'div_yield': q,
             'curves': {
                 'today': today_curve,
                 'expiration': exp_curve,
+                'expiration_date': horizon_d.isoformat(),
+                'day_steps': day_step_curves,
             },
+            'day_step': effective_day_step,
+            'requested_day_step': requested_day_step,
             'portfolio_greeks': {k: round(v, 4) for k, v in port_greeks.items()},
             'per_leg': per_leg,
             'breakevens': breakevens,
