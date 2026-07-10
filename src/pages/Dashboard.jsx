@@ -241,14 +241,14 @@ const DONUT_COLORS = [
   '#90a4ae', '#a1887f',
 ]
 
-function PortfolioOverview({ groups, categories, totalValue }) {
+function PortfolioOverview({ groups, categories, totalValue, categoryId, subcategoryId, onFilterChange }) {
   const chartRef = React.useRef(null)
   const { isDark } = useTheme()
-  const [catId, setCatId] = useState(null)   // null = all categories
-  const [subId, setSubId] = useState(null)    // null = all sub-categories
+  const catId = categoryId ?? null
+  const subId = subcategoryId ?? null
 
   const selectedCat = useMemo(
-    () => (categories && catId != null ? categories.find(c => c.id === catId) : null),
+    () => (categories && catId != null ? categories.find(c => String(c.id) === String(catId)) : null),
     [categories, catId]
   )
 
@@ -261,7 +261,7 @@ function PortfolioOverview({ groups, categories, totalValue }) {
 
     if (subId != null) {
       return selectedCat.tickers
-        .filter(t => t.subcategory_id === subId)
+        .filter(t => String(t.subcategory_id ?? '') === String(subId))
         .map(t => ({ name: t.ticker, value: t.value, invested: t.invested, count: 1 }))
         .sort((a, b) => b.value - a.value)
     }
@@ -387,7 +387,7 @@ function PortfolioOverview({ groups, categories, totalValue }) {
           <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Category:</span>
           <select
             value={catId ?? ''}
-            onChange={e => { const v = e.target.value; setCatId(v === '' ? null : Number(v)); setSubId(null) }}
+            onChange={e => { const v = e.target.value; onFilterChange?.(v === '' ? null : Number(v), null) }}
             style={selectStyle}
           >
             <option value="">All categories</option>
@@ -398,7 +398,7 @@ function PortfolioOverview({ groups, categories, totalValue }) {
               <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Sub-category:</span>
               <select
                 value={subId ?? ''}
-                onChange={e => { const v = e.target.value; setSubId(v === '' ? null : Number(v)) }}
+                onChange={e => { const v = e.target.value; onFilterChange?.(catId, v === '' ? null : Number(v)) }}
                 style={selectStyle}
               >
                 <option value="">All sub-categories</option>
@@ -413,7 +413,7 @@ function PortfolioOverview({ groups, categories, totalValue }) {
           )}
           {catId != null && (
             <button
-              onClick={() => { setCatId(null); setSubId(null) }}
+              onClick={() => onFilterChange?.(null, null)}
               style={{ ...selectStyle, cursor: 'pointer', color: 'var(--accent-2)' }}
             >
               Clear
@@ -639,6 +639,8 @@ export default function Dashboard() {
   const [tickerCoverageMeta, setTickerCoverageMeta] = useState({})
   const [overviewGroups, setOverviewGroups] = useState(null)
   const [overviewCategories, setOverviewCategories] = useState(null)
+  const [overviewCategoryId, setOverviewCategoryId] = useState(null)
+  const [overviewSubcategoryId, setOverviewSubcategoryId] = useState(null)
   const [sp500, setSp500] = useState(null)
   const [dailyChange, setDailyChange] = useState(null)
   const [navHistory, setNavHistory] = useState([])
@@ -961,6 +963,33 @@ export default function Dashboard() {
     dailyChange,
   ])
 
+  useEffect(() => {
+    setOverviewCategoryId(null)
+    setOverviewSubcategoryId(null)
+  }, [selection, basisMode])
+
+  useEffect(() => {
+    if (overviewCategoryId == null || !overviewCategories) return
+    const category = overviewCategories.find(item => String(item.id) === String(overviewCategoryId))
+    if (!category) {
+      setOverviewCategoryId(null)
+      setOverviewSubcategoryId(null)
+      return
+    }
+    if (overviewSubcategoryId != null && !(category.subcategories || []).some(item => String(item.id) === String(overviewSubcategoryId))) {
+      setOverviewSubcategoryId(null)
+    }
+  }, [overviewCategories, overviewCategoryId, overviewSubcategoryId])
+
+  const filteredTickerSet = useMemo(() => {
+    if (overviewCategoryId == null || !overviewCategories) return null
+    const category = overviewCategories.find(item => String(item.id) === String(overviewCategoryId))
+    if (!category) return null
+    return new Set((category.tickers || [])
+      .filter(item => overviewSubcategoryId == null || String(item.subcategory_id ?? '') === String(overviewSubcategoryId))
+      .map(item => String(item.ticker || '').toUpperCase()))
+  }, [overviewCategories, overviewCategoryId, overviewSubcategoryId])
+
   // Derived totals
   const totals = useMemo(() => {
     if (!holdings.length) return {}
@@ -1095,10 +1124,15 @@ export default function Dashboard() {
     ? `Price move from the previous market close. Based on ${dailyChange.holdings_covered} of ${dailyChange.holdings_total} holdings with available prices.`
     : 'Price move from the previous market close, based on current share counts.'
 
+  const filteredEnrichedHoldings = useMemo(() => {
+    if (!filteredTickerSet) return enrichedHoldings
+    return enrichedHoldings.filter(holding => filteredTickerSet.has(String(holding.ticker || '').toUpperCase()))
+  }, [enrichedHoldings, filteredTickerSet])
+
   // Sorting
   const sorted = useMemo(() => {
-    if (!sortCol) return enrichedHoldings
-    return [...enrichedHoldings].sort((a, b) => {
+    if (!sortCol) return filteredEnrichedHoldings
+    return [...filteredEnrichedHoldings].sort((a, b) => {
       let av = a[sortCol], bv = b[sortCol]
       if (typeof av === 'string') {
         av = (av || '').toLowerCase()
@@ -1109,12 +1143,66 @@ export default function Dashboard() {
       bv = bv || 0
       return sortAsc ? av - bv : bv - av
     })
-  }, [enrichedHoldings, sortCol, sortAsc])
+  }, [filteredEnrichedHoldings, sortCol, sortAsc])
+
+  const calculatedTableTotals = useMemo(() => {
+    const rows = filteredEnrichedHoldings
+    const sum = key => rows.reduce((total, holding) => total + (Number(holding[key]) || 0), 0)
+    const purchaseValue = sum('purchase_value')
+    const currentValue = sum('current_value')
+    const gainLoss = sum('gain_or_loss')
+    const lifetimeIncome = sum('total_divs_received')
+    const annualIncome = sum('estim_payment_per_year')
+    const totalReturnBasis = rows.reduce((total, holding) => total + (Number(holding.total_return_basis || holding.purchase_value) || 0), 0)
+    const totalReturnValue = rows.reduce((total, holding) => total
+      + (Number(holding.gain_or_loss) || 0)
+      + (Number(holding.total_return_divs_component ?? holding.total_divs_received) || 0)
+      + (Number(holding.total_return_realized_component) || 0), 0)
+    const yieldRows = rows.filter(holding => Number(holding.purchase_value) > 0 && holding.annual_yield_on_cost != null)
+    const yieldBasis = yieldRows.reduce((total, holding) => total + Number(holding.purchase_value || 0), 0)
+    const avgYoc = yieldBasis
+      ? yieldRows.reduce((total, holding) => total + Number(holding.annual_yield_on_cost || 0) * Number(holding.purchase_value || 0), 0) / yieldBasis
+      : 0
+
+    return {
+      priceReturn: purchaseValue ? gainLoss / purchaseValue : 0,
+      totalReturn: totalReturnBasis ? totalReturnValue / totalReturnBasis : 0,
+      currentYield: currentValue ? annualIncome / currentValue : 0,
+      avgYoc,
+      ytdDivs: sum('ytd_divs'),
+      currentMonthIncome: sum('current_month_income'),
+      monthlyIncome: sum('approx_monthly_income'),
+      dripSharesMonthly: sum('drip_shares_monthly'),
+      monthlyReinvested: sum('monthly_income_reinvested'),
+      monthlyNotReinvested: sum('monthly_income_not_reinvested'),
+      annualIncome,
+      dripSharesYearly: sum('drip_shares_yearly'),
+      purchaseValue,
+      currentValue,
+      gainLoss,
+      dividendPaid: sum('dividend_paid'),
+      withdraw8Annual: sum('withdraw_8pct_cost_annually'),
+      withdraw8Monthly: sum('withdraw_8pct_per_month'),
+      cashNotReinvested: sum('cash_not_reinvested'),
+      totalCashReinvested: sum('total_cash_reinvested'),
+      sharesBoughtFromDividend: sum('shares_bought_from_dividend'),
+      sharesBoughtInYear: sum('shares_bought_in_year'),
+      sharesInMonth: sum('shares_in_month'),
+      lifetimeIncome,
+      currentMonthIncomeDelta: sum('current_month_income_delta'),
+    }
+  }, [filteredEnrichedHoldings])
+  const isHoldingsFiltered = overviewCategoryId != null
+  const tableTotals = isHoldingsFiltered ? calculatedTableTotals : totals
+  const tablePctOfAccount = useMemo(
+    () => filteredEnrichedHoldings.reduce((total, holding) => total + (Number(holding.pct_of_account) || 0), 0),
+    [filteredEnrichedHoldings],
+  )
 
   const handleSort = useCallback((col) => {
-    setSortAsc(prev => sortCol === col ? !prev : (typeof enrichedHoldings[0]?.[col] === 'string'))
+    setSortAsc(prev => sortCol === col ? !prev : (typeof filteredEnrichedHoldings[0]?.[col] === 'string'))
     setSortCol(col)
-  }, [sortCol, enrichedHoldings])
+  }, [sortCol, filteredEnrichedHoldings])
 
   const refreshPortfolioCoverage = useCallback(() => {
     return pf('/api/portfolio-coverage')
@@ -1302,7 +1390,9 @@ export default function Dashboard() {
       </td>
     )
   }
-  const holdingsColumns = [
+  const holdingsColumns = (() => {
+    const totals = tableTotals
+    return [
     { id: 'ticker', label: 'Ticker', name: 'Ticker', sortKey: 'ticker', group: 'Current', defaultVisible: true, render: h => (
       <td>
         <a href="#" onClick={(e) => { e.preventDefault(); setModalTicker(h.ticker) }} style={{ color: 'var(--accent-bright)', fontWeight: 600 }}>
@@ -1319,7 +1409,7 @@ export default function Dashboard() {
     { id: 'quantity', label: 'Qty', name: 'Quantity', sortKey: 'quantity', group: 'Current', defaultVisible: true, align: 'right', tip: 'Number of shares held', render: h => <td style={{ textAlign: 'right' }}>{quantityOrDash(h.quantity)}</td> },
     { id: 'price_paid', label: 'Paid', name: 'Price Paid', sortKey: 'price_paid', group: 'Current', defaultVisible: true, align: 'right', tip: 'Price paid per share', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.price_paid, 4)}</td> },
     { id: 'current_price', label: 'Price', name: 'Current Price', sortKey: 'current_price', group: 'Current', defaultVisible: true, align: 'right', tip: 'Current market price per share', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.current_price)}</td> },
-    { id: 'pct_of_account', label: '%Acct', name: 'Percent of Account', sortKey: 'pct_of_account', group: 'Current', defaultVisible: true, align: 'right', tip: 'Percent of total account value', render: h => <td style={{ textAlign: 'right' }}>{pct(h.pct_of_account)}</td> },
+    { id: 'pct_of_account', label: '%Acct', name: 'Percent of Account', sortKey: 'pct_of_account', group: 'Current', defaultVisible: true, align: 'right', tip: 'Percent of total account value', render: h => <td style={{ textAlign: 'right' }}>{pct(h.pct_of_account)}</td>, footer: () => pct(tablePctOfAccount) },
     { id: 'price_return_pct', label: 'PrRtn', name: 'Price Return', sortKey: 'price_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: 'Price-only return (excludes dividends)', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.price_return_pct) }}>{pct(h.price_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.priceReturn) }}>{pct(totals.priceReturn)}</span> },
     { id: 'total_return_pct', label: 'TotRtn', name: 'Total Return', sortKey: 'total_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: 'Total return including dividends', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.total_return_pct) }}>{pct(h.total_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.totalReturn) }}>{pct(totals.totalReturn)}</span> },
     { id: 'beta', label: 'Beta', name: 'Benchmark Beta', sortKey: '_beta_sort', group: 'Current', defaultVisible: true, align: 'right', tip: "Price-return beta versus the ticker's best-fitting benchmark, usually SPY or QQQ", render: h => {
@@ -1374,7 +1464,8 @@ export default function Dashboard() {
     { id: 'shares_in_month', label: 'Calc MoShr', name: 'Calculated Shares/Month', sortKey: 'shares_in_month', group: 'Calculated Additions', align: 'right', tip: 'Calculated monthly shares from dividend reinvestment', render: h => <td style={{ textAlign: 'right' }}>{numberOrDash(h.shares_in_month, 3)}</td>, footer: () => numberOrDash(totals.sharesInMonth, 3) },
     { id: 'total_divs_received', label: 'Tot Divs', name: 'Total Dividends Received', sortKey: 'total_divs_received', group: 'Calculated Additions', align: 'right', tip: 'Lifetime dividends received', render: h => <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{moneyOrDash(h.total_divs_received)}</td>, footer: () => <span style={{ color: 'var(--pos)' }}>{moneyOrDash(totals.lifetimeIncome)}</span> },
     { id: 'current_month_income_delta', label: `${currentMonth} Δ`, name: `${currentMonth} Income Difference`, sortKey: 'current_month_income_delta', group: 'Calculated Additions', align: 'right', tip: `${currentMonth} income minus estimated monthly income`, render: h => <td style={{ textAlign: 'right', color: gradeColor(h.current_month_income_delta || 0) }}>{moneyOrDash(h.current_month_income_delta)}</td>, footer: () => <span style={{ color: gradeColor(totals.currentMonthIncomeDelta || 0) }}>{moneyOrDash(totals.currentMonthIncomeDelta)}</span> },
-  ]
+    ]
+  })()
   const validHoldingColumnIds = new Set(holdingsColumns.map(column => column.id))
   const selectedHoldingColumnSet = new Set(visibleHoldingColumnIds.filter(id => validHoldingColumnIds.has(id)))
   const visibleHoldingColumns = holdingsColumns.filter(column => selectedHoldingColumnSet.has(column.id))
@@ -1878,13 +1969,27 @@ export default function Dashboard() {
       <UpcomingDividends events={upcomingDivs} />
 
       {/* Portfolio Overview — Donut + Category Table */}
-      {overviewGroups && <PortfolioOverview groups={overviewGroups} categories={overviewCategories} totalValue={totals.currentValue} />}
+      {overviewGroups && (
+        <PortfolioOverview
+          groups={overviewGroups}
+          categories={overviewCategories}
+          totalValue={totals.currentValue}
+          categoryId={overviewCategoryId}
+          subcategoryId={overviewSubcategoryId}
+          onFilterChange={(categoryId, subcategoryId) => {
+            setOverviewCategoryId(categoryId)
+            setOverviewSubcategoryId(subcategoryId)
+          }}
+        />
+      )}
 
       {/* Holdings Table */}
       <div className="holdings-toolbar">
         <div>
           <div className="holdings-toolbar-title">Holdings Columns</div>
-          <div className="holdings-toolbar-sub">{visibleColumnCount} of {holdingsColumns.length} visible</div>
+          <div className="holdings-toolbar-sub">
+            {visibleColumnCount} of {holdingsColumns.length} columns · {sorted.length} of {enrichedHoldings.length} holdings
+          </div>
         </div>
         <details className="column-picker">
           <summary>
@@ -1959,7 +2064,7 @@ export default function Dashboard() {
             <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
               {effectiveVisibleHoldingColumns.map((column, index) => (
                 <td key={column.id} style={holdingCellStyle(column)}>
-                  {index === 0 ? 'Totals' : column.footer ? column.footer() : ''}
+                  {index === 0 ? (isHoldingsFiltered ? 'Filtered Totals' : 'Totals') : column.footer ? column.footer() : ''}
                 </td>
               ))}
             </tr>
