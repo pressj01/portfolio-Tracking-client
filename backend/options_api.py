@@ -17,6 +17,7 @@ from __future__ import annotations
 import math
 import time
 from datetime import datetime, date, timedelta
+from statistics import NormalDist
 from typing import Any
 
 import yfinance as yf
@@ -259,16 +260,21 @@ def _fetch_chain(ticker: str, expiration: str) -> dict:
 
 def _leg_pnl_at(S: float, leg: dict, eval_T_years: float, r: float, q: float,
                 model: str) -> tuple[float, dict]:
-    """Return (per-contract P/L at spot S, Greeks) for a single leg.
+    """Return (per-position-unit P/L at spot S, Greeks) for a single leg.
 
-    P/L per contract = 100 * (current_theo - entry_price) * sign
-    Total leg P/L    = qty * per-contract-pl
+    Option units are contracts (100 shares); stock units are individual shares.
+    Total leg P/L = qty * per-position-unit P/L.
     """
     sign = 1.0 if leg['side'].upper() == 'BUY' else -1.0
-    K = float(leg['strike'])
-    sigma = float(leg['iv'])
     opt_type = leg['opt_type'].lower()
     entry = float(leg.get('entry_price') or 0.0)
+
+    if opt_type == 'stock':
+        greeks = {'delta': 1.0, 'gamma': 0.0, 'theta': 0.0, 'vega': 0.0, 'rho': 0.0}
+        return (S - entry) * sign, greeks
+
+    K = float(leg['strike'])
+    sigma = float(leg['iv'])
 
     if eval_T_years <= 1e-8:
         theo = max(S - K, 0.0) if opt_type == 'call' else max(K - S, 0.0)
@@ -280,6 +286,81 @@ def _leg_pnl_at(S: float, leg: dict, eval_T_years: float, r: float, q: float,
 
     pnl_per_contract = 100.0 * (theo - entry) * sign
     return pnl_per_contract, greeks
+
+
+def _leg_greek_multiplier(leg: dict) -> float:
+    """Convert per-share Greeks to one saved leg unit."""
+    return 1.0 if leg['opt_type'].lower() == 'stock' else 100.0
+
+
+def _lognormal_cdf(spot: float, price: float, sigma: float, T: float,
+                   r: float, q: float) -> float:
+    """Risk-neutral probability that the horizon price finishes below price."""
+    if spot <= 0:
+        return 0.0
+    if price <= 0:
+        return 0.0
+    if T <= 1e-8:
+        return 1.0 if spot <= price else 0.0
+    sigma = max(float(sigma), 1e-4)
+    mu = math.log(spot) + (r - q - 0.5 * sigma * sigma) * T
+    scale = sigma * math.sqrt(T)
+    return NormalDist().cdf((math.log(price) - mu) / scale)
+
+
+def _lognormal_quantile(spot: float, probability: float, sigma: float, T: float,
+                        r: float, q: float) -> float:
+    """Return a horizon-price quantile for the risk-neutral lognormal model."""
+    if spot <= 0:
+        return 0.0
+    if T <= 1e-8:
+        return spot
+    sigma = max(float(sigma), 1e-4)
+    probability = min(max(float(probability), 1e-8), 1.0 - 1e-8)
+    mu = math.log(spot) + (r - q - 0.5 * sigma * sigma) * T
+    scale = sigma * math.sqrt(T)
+    return math.exp(mu + scale * NormalDist().inv_cdf(probability))
+
+
+def _probability_touch(spot: float, barrier: float, sigma: float, T: float,
+                       r: float, q: float) -> float:
+    """Probability that a geometric-Brownian price touches a barrier by T."""
+    if spot <= 0 or barrier <= 0 or T <= 1e-8:
+        return 0.0
+    if math.isclose(spot, barrier, rel_tol=1e-12, abs_tol=1e-12):
+        return 1.0
+
+    sigma = max(float(sigma), 1e-4)
+    log_distance = abs(math.log(barrier / spot))
+    log_drift = r - q - 0.5 * sigma * sigma
+    directional_drift = log_drift if barrier > spot else -log_drift
+    scale = sigma * math.sqrt(T)
+    normal = NormalDist()
+    probability = (
+        normal.cdf((directional_drift * T - log_distance) / scale)
+        + math.exp(2.0 * directional_drift * log_distance / (sigma * sigma))
+        * normal.cdf((-directional_drift * T - log_distance) / scale)
+    )
+    return min(max(probability, 0.0), 1.0)
+
+
+def _probability_range(spot: float, low: float, high: float, sigma: float,
+                       T: float, r: float, q: float) -> dict:
+    """Return lognormal probabilities below, inside, and above two prices."""
+    low, high = sorted((max(0.0, low), max(0.0, high)))
+    sigma = max(float(sigma), 1e-4)
+    below = _lognormal_cdf(spot, low, sigma, T, r, q)
+    inside = max(0.0, _lognormal_cdf(spot, high, sigma, T, r, q) - below)
+    above = max(0.0, 1.0 - below - inside)
+
+    return {
+        'low': round(low, 4),
+        'high': round(high, 4),
+        'iv': round(sigma, 6),
+        'below_pct': round(below * 100.0, 2),
+        'inside_pct': round(inside * 100.0, 2),
+        'above_pct': round(above * 100.0, 2),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -360,17 +441,19 @@ def register_routes(app):
         legs: list[dict] = []
         expiration_dates: list[date] = []
         for leg in legs_in:
+            opt_type = (leg.get('opt_type') or leg.get('type') or 'CALL').lower()
             exp = leg.get('expiration')
-            try:
-                expiration_dates.append(datetime.strptime(exp, '%Y-%m-%d').date())
-            except (TypeError, ValueError):
-                pass
+            if opt_type != 'stock':
+                try:
+                    expiration_dates.append(datetime.strptime(exp, '%Y-%m-%d').date())
+                except (TypeError, ValueError):
+                    pass
             iv = float(leg.get('iv') if leg.get('iv') is not None else (leg.get('iv_override') or 0.0))
             entry = float(leg.get('entry_price') if leg.get('entry_price') is not None else 0.0)
             legs.append({
                 'side': leg.get('side', 'BUY').upper(),
                 'qty': int(leg.get('qty') or 1),
-                'opt_type': (leg.get('opt_type') or leg.get('type') or 'CALL').lower(),
+                'opt_type': opt_type,
                 'strike': float(leg.get('strike') or 0.0),
                 'expiration': exp,
                 'iv': iv,
@@ -382,6 +465,71 @@ def register_routes(app):
         for leg in legs:
             leg['T_today'] = _analysis_year_frac(leg['expiration'], eval_d)
             leg['T_horizon'] = _analysis_year_frac(leg['expiration'], horizon_d)
+
+        probability_out = None
+        probability_in = payload.get('probability_range') or {}
+        if probability_in.get('enabled'):
+            option_ivs = [leg['iv'] for leg in legs if leg['opt_type'] != 'stock' and leg['iv'] > 0]
+            probability_iv = float(probability_in.get('iv') or (sum(option_ivs) / len(option_ivs) if option_ivs else 0.20))
+            probability_T = max((horizon_d - date.today()).days, 0) / 365.0
+            range_mode = str(probability_in.get('range_mode') or 'moneyness').lower()
+            probability_mode = str(probability_in.get('probability_mode') or 'ITM').upper()
+            if probability_mode not in ('ITM', 'OTM', 'TOUCH'):
+                probability_mode = 'ITM'
+            range_pct = min(max(float(probability_in.get('range_pct') or 68.27), 1.0), 99.9)
+            range_low = float(probability_in.get('low') or 0.0)
+            range_high = float(probability_in.get('high') or 0.0)
+            lower_label = str(probability_in.get('lower_label') or '')
+            upper_label = str(probability_in.get('upper_label') or '')
+            if range_mode == 'probability':
+                tail_probability = (1.0 - range_pct / 100.0) / 2.0
+                range_low = _lognormal_quantile(
+                    spot, tail_probability, probability_iv, probability_T, r, q,
+                )
+                range_high = _lognormal_quantile(
+                    spot, 1.0 - tail_probability, probability_iv, probability_T, r, q,
+                )
+                lower_label = f'{tail_probability * 100.0:.1f}% lower tail'
+                upper_label = f'{tail_probability * 100.0:.1f}% upper tail'
+            else:
+                range_mode = 'moneyness'
+            probability_out = _probability_range(
+                spot,
+                range_low,
+                range_high,
+                probability_iv,
+                probability_T,
+                r,
+                q,
+            )
+            probability_out.update({
+                'date': horizon_d.isoformat(),
+                'anchor_strike': float(probability_in.get('anchor_strike') or 0.0),
+                'opt_type': (probability_in.get('opt_type') or 'CALL').upper(),
+                'itm_pct': float(probability_in.get('itm_pct') or 0.0),
+                'otm_pct': float(probability_in.get('otm_pct') or 0.0),
+                'lower_label': lower_label,
+                'upper_label': upper_label,
+                'range_mode': range_mode,
+                'probability_mode': probability_mode,
+                'range_pct': range_pct,
+            })
+            anchor_strike = probability_out['anchor_strike']
+            anchor_type = probability_out['opt_type']
+            strike_cdf = _lognormal_cdf(spot, anchor_strike, probability_iv, probability_T, r, q)
+            probability_otm = strike_cdf if anchor_type == 'CALL' else 1.0 - strike_cdf
+            currently_itm = (
+                (anchor_type == 'CALL' and spot >= anchor_strike)
+                or (anchor_type == 'PUT' and spot <= anchor_strike)
+            )
+            probability_touch = 1.0 if currently_itm else _probability_touch(
+                spot, anchor_strike, probability_iv, probability_T, r, q,
+            )
+            probability_out.update({
+                'probability_otm_pct': round(probability_otm * 100.0, 2),
+                'probability_itm_pct': round((1.0 - probability_otm) * 100.0, 2),
+                'probability_touch_pct': round(probability_touch * 100.0, 2),
+            })
 
         # Scenario price grid
         dx = (high - low) / (steps - 1)
@@ -434,8 +582,9 @@ def register_routes(app):
         for leg in legs:
             pnl_t, g = _leg_pnl_at(spot, leg, leg['T_today'], r, q, model)
             sign = 1.0 if leg['side'] == 'BUY' else -1.0
+            greek_multiplier = _leg_greek_multiplier(leg)
             for k in port_greeks:
-                port_greeks[k] += sign * leg['qty'] * g[k] * 100.0
+                port_greeks[k] += sign * leg['qty'] * g[k] * greek_multiplier
             per_leg.append({
                 'side': leg['side'],
                 'qty': leg['qty'],
@@ -483,9 +632,10 @@ def register_routes(app):
             for leg in legs:
                 pnl_t, g = _leg_pnl_at(S_, leg, leg['T_today'], r, q, model)
                 sign = 1.0 if leg['side'] == 'BUY' else -1.0
+                greek_multiplier = _leg_greek_multiplier(leg)
                 pnl_today += leg['qty'] * pnl_t
                 for k in port:
-                    port[k] += sign * leg['qty'] * g[k] * 100.0
+                    port[k] += sign * leg['qty'] * g[k] * greek_multiplier
             slices_out.append({
                 's': round(S_, 2),
                 'delta': round(port['delta'], 4),
@@ -498,6 +648,7 @@ def register_routes(app):
 
         return jsonify({
             'underlying': underlying,
+            'supported_leg_types': ['call', 'put', 'stock'],
             'spot': spot,
             'eval_date': eval_d.isoformat(),
             'requested_eval_date': requested_eval_d.isoformat(),
@@ -521,6 +672,7 @@ def register_routes(app):
             'max_profit': round(max_profit, 2),
             'max_loss': round(max_loss, 2),
             'price_slices': slices_out,
+            'probability_range': probability_out,
         })
 
     # ────────────────────────────────────────────────────────────────

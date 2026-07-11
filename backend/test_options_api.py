@@ -78,6 +78,7 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
     def test_same_day_contracts_keep_intraday_time_value(self):
         self.assertGreater(options_api._year_frac(self.today.isoformat(), self.today), 0)
 
+
     @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
     def test_mixed_expiration_analysis_stops_at_first_expiration(self, _quote):
         first_expiration = self.today + timedelta(days=10)
@@ -117,6 +118,130 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
         # At the first expiration the call is intrinsic-only, while the later
         # put still has 20 days of time value at the money.
         self.assertGreater(data["curves"]["expiration"][30]["pnl"], 0)
+
+    @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
+    def test_stock_leg_uses_share_quantity_and_cost_basis(self, _quote):
+        payload = self.payload(self.today)
+        payload["price_range"] = {"low": 90, "high": 110, "steps": 3}
+        payload["day_step"] = 0
+        payload["legs"] = [{
+            "side": "BUY",
+            "qty": 100,
+            "opt_type": "STOCK",
+            "strike": 0,
+            "expiration": "",
+            "entry_price": 100,
+        }]
+
+        response = self.client.post("/api/options/risk-graph", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(
+            [point["pnl"] for point in data["curves"]["expiration"]],
+            [-1000.0, -500.0, 0.0, 500.0, 1000.0],
+        )
+        self.assertEqual(data["portfolio_greeks"]["delta"], 100.0)
+        self.assertEqual(data["per_leg"][0]["opt_type"], "stock")
+        self.assertIn("stock", data["supported_leg_types"])
+
+    @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
+    def test_covered_call_combines_stock_and_option_payoffs(self, _quote):
+        expiration = self.today + timedelta(days=30)
+        payload = self.payload(expiration)
+        payload["price_range"] = {"low": 90, "high": 130, "steps": 5}
+        payload["day_step"] = 0
+        payload["probability_range"] = {
+            "enabled": True,
+            "low": 99,
+            "high": 121,
+            "iv": 0.25,
+            "anchor_strike": 110,
+            "opt_type": "CALL",
+            "itm_pct": 10,
+            "otm_pct": 10,
+            "lower_label": "10% OTM",
+            "upper_label": "10% ITM",
+        }
+        payload["legs"] = [
+            {
+                "side": "BUY",
+                "qty": 100,
+                "opt_type": "STOCK",
+                "strike": 0,
+                "expiration": "",
+                "entry_price": 95,
+            },
+            {
+                "side": "SELL",
+                "qty": 1,
+                "opt_type": "CALL",
+                "strike": 110,
+                "expiration": expiration.isoformat(),
+                "entry_price": 2,
+                "iv": 0.25,
+            },
+        ]
+
+        response = self.client.post("/api/options/risk-graph", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(
+            [point["pnl"] for point in data["curves"]["expiration"]],
+            [-300.0, 700.0, 1700.0, 1700.0, 1700.0],
+        )
+        self.assertIn(93.0, data["breakevens"])
+        self.assertEqual(data["max_profit"], 1700.0)
+        probability = data["probability_range"]
+        self.assertEqual(probability["low"], 99.0)
+        self.assertEqual(probability["high"], 121.0)
+        self.assertEqual(probability["lower_label"], "10% OTM")
+        self.assertEqual(probability["upper_label"], "10% ITM")
+        self.assertAlmostEqual(
+            probability["below_pct"] + probability["inside_pct"] + probability["above_pct"],
+            100.0,
+            places=1,
+        )
+        self.assertAlmostEqual(
+            probability["probability_otm_pct"] + probability["probability_itm_pct"],
+            100.0,
+            places=1,
+        )
+
+    def test_probability_otm_changes_with_volatility(self):
+        low_vol = options_api._lognormal_cdf(100, 110, 0.10, 30 / 365, 0.04, 0.01)
+        high_vol = options_api._lognormal_cdf(100, 110, 0.50, 30 / 365, 0.04, 0.01)
+
+        self.assertGreater(low_vol, high_vol)
+
+    @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
+    def test_probability_mode_returns_adjustable_band_and_touch_probability(self, _quote):
+        expiration = self.today + timedelta(days=45)
+        payload = self.payload(expiration)
+        payload["probability_range"] = {
+            "enabled": True,
+            "range_mode": "probability",
+            "probability_mode": "TOUCH",
+            "range_pct": 68.27,
+            "iv": 0.25,
+            "anchor_strike": 110,
+            "opt_type": "CALL",
+        }
+
+        response = self.client.post("/api/options/risk-graph", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        probability = response.get_json()["probability_range"]
+        self.assertEqual(probability["range_mode"], "probability")
+        self.assertEqual(probability["probability_mode"], "TOUCH")
+        self.assertAlmostEqual(probability["inside_pct"], 68.27, places=1)
+        self.assertGreater(probability["high"], probability["low"])
+        self.assertGreaterEqual(
+            probability["probability_touch_pct"],
+            probability["probability_itm_pct"],
+        )
+        self.assertLessEqual(probability["probability_touch_pct"], 100.0)
 
     @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
     def test_chain_contracts_include_configurable_greek_columns(self, _quote):
