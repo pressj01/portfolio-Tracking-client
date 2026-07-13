@@ -6928,11 +6928,8 @@ def _family_dividend_lag_days(ticker=None, description=None, freq=None):
     if "kurv" in text:
         return 1
     if freq == "M" and "neos" in text:
-        one_day_neos = {"kqqq", "kgld"}
         two_day_neos = {"qqqi"}
         ticker_norm = (ticker or "").strip().lower()
-        if ticker_norm in one_day_neos:
-            return 1
         if ticker_norm in two_day_neos:
             return 2
     return None
@@ -7141,7 +7138,7 @@ def _fetch_neos_distribution_snapshot(ticker):
         return None
 
     entries = []
-    future_pay_map = {}
+    scheduled = []
     for declared, ex_date, _record, pay_date, amount in rows:
         ex_ts = pd.to_datetime(ex_date, format="%m/%d/%Y", errors="coerce")
         pay_ts = pd.to_datetime(pay_date, format="%m/%d/%Y", errors="coerce")
@@ -7149,11 +7146,10 @@ def _fetch_neos_distribution_snapshot(ticker):
             continue
         ex_ts = ex_ts.normalize()
         pay_ts = pay_ts.normalize() if not pd.isna(pay_ts) else None
+        scheduled.append((ex_ts, pay_ts))
         amount = (amount or "").strip()
         if amount:
             entries.append((ex_ts, float(amount), pay_ts))
-        elif pay_ts is not None:
-            future_pay_map[ex_ts] = pay_ts
 
     if not entries:
         return None
@@ -7164,15 +7160,29 @@ def _fetch_neos_distribution_snapshot(ticker):
     history = history.sort_index()
 
     pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
-    latest_ex = history.index[-1]
-    latest_pay = future_pay_map.get(latest_ex) or pay_map.get(latest_ex)
+    latest_actual_ex = history.index[-1]
+    chosen_ex = latest_actual_ex
+    chosen_pay = pay_map.get(latest_actual_ex)
+
+    # NEOS publishes forward-looking ex/pay rows before the distribution amount
+    # is announced. Surface the next scheduled ex/pay date while keeping the
+    # most recent actual amount (mirrors the InfraCap handling).
+    today = pd.Timestamp.now().normalize()
+    upcoming_rows = [
+        (ex_ts, pay_ts)
+        for ex_ts, pay_ts in scheduled
+        if ex_ts is not None and ex_ts >= today
+    ]
+    if upcoming_rows:
+        upcoming_rows.sort(key=lambda item: item[0])
+        chosen_ex, chosen_pay = upcoming_rows[0]
 
     return {
         "known": True,
         "has_dividend": True,
         "div": float(history.iloc[-1]),
-        "ex_div_date": latest_ex.strftime("%m/%d/%y"),
-        "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
+        "ex_div_date": chosen_ex.strftime("%m/%d/%y"),
+        "div_pay_date": chosen_pay.strftime("%m/%d/%y") if chosen_pay is not None else None,
         "freq": page_freq or _infer_dividend_frequency_from_history(history),
         "history": history,
     }
