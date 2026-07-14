@@ -13838,6 +13838,141 @@ def portfolio_coverage():
     return jsonify(_build_nav_coverage_payload(ticker_info, coverage_cache_key))
 
 
+def _closure_risk_money(v):
+    """Compact money label for closure-risk reason strings ($18.2M, $1.2B, $63k)."""
+    if v is None:
+        return "n/a"
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "n/a"
+    if v >= 1e9:
+        return f"${v / 1e9:.1f}B"
+    if v >= 1e6:
+        return f"${v / 1e6:.1f}M"
+    if v >= 1e3:
+        return f"${v / 1e3:.0f}k"
+    return f"${v:.0f}"
+
+
+def _closure_risk_reason(tier, aum, er, est_revenue, fund_age_years, softened):
+    """Plain-English tooltip explaining an ETF's closure-risk tier."""
+    parts = [f"{_closure_risk_money(aum)} AUM"]
+    if er is not None:
+        parts.append(f"{er * 100:.2f}% ER")
+    if est_revenue is not None:
+        parts.append(f"~{_closure_risk_money(est_revenue)}/yr est. fee revenue")
+    facts = " · ".join(parts)
+    tail = {
+        "high": "Well below the ~$500k a fund typically needs to cover its running costs — elevated chance the issuer closes it.",
+        "elevated": "Below the fee revenue most funds need to stay profitable — worth watching for a closure notice.",
+        "watch": "On the small side; comfortably profitable territory starts around $50M / ~$500k in annual fees.",
+        "ok": "Comfortably above the size at which funds are usually shut down.",
+    }.get(tier, "")
+    age = ""
+    if fund_age_years is not None:
+        if fund_age_years < 1:
+            age = f" Fund launched ~{max(1, int(round(fund_age_years * 12)))} months ago"
+        else:
+            age = f" Fund is ~{fund_age_years:.1f} years old"
+        if softened:
+            age += " — a small size is normal this early, so the rating is capped at Watch."
+        else:
+            age += "."
+    return f"{facts} — {tail}{age}".strip()
+
+
+def _assess_etf_closure_risk(info):
+    """Estimate an ETF's closure risk from AUM, expense ratio, and fund age.
+
+    ETF issuers earn roughly (AUM × expense ratio) per year; a fund becomes a
+    closure candidate when that fee revenue can't cover its running costs
+    (~$250k–$500k/yr for a small fund). Raw AUM alone is misleading — a cheap
+    fund needs far more assets to break even than an expensive one — so we
+    combine an estimated-revenue test with AUM floors, and grant newly launched
+    funds a grace period (they're seeded small on purpose).
+
+    Returns None for anything that is not an ETF (individual stocks don't get
+    liquidated for being small). Otherwise a dict with the tier
+    ('ok' | 'watch' | 'elevated' | 'high' | 'unknown'), the inputs, and a
+    plain-English reason for the dashboard tooltip.
+    """
+    if not isinstance(info, dict):
+        return None
+    quote_type = (info.get("quoteType") or "").upper()
+    if quote_type != "ETF":
+        return None
+
+    aum = info.get("totalAssets") or info.get("totalNetAssets")
+    try:
+        aum = float(aum) if aum is not None else None
+    except (TypeError, ValueError):
+        aum = None
+
+    er = info.get("annualReportExpenseRatio")
+    if er is None:
+        er = info.get("netExpenseRatio")
+    try:
+        er = float(er) if er is not None else None
+    except (TypeError, ValueError):
+        er = None
+    # Yahoo sometimes returns the expense ratio as a percent (0.35) instead of a
+    # fraction (0.0035). Anything above ~5% is certainly a percent-scaled value.
+    if er is not None and er > 0.05:
+        er = er / 100.0
+
+    inception = info.get("fundInceptionDate")
+    fund_age_years = None
+    try:
+        if inception:
+            fund_age_years = max(0.0, (time.time() - float(inception)) / (365.25 * 86400))
+    except (TypeError, ValueError):
+        fund_age_years = None
+    is_new = fund_age_years is not None and fund_age_years < 1.5
+
+    est_revenue = aum * er if (aum is not None and er is not None) else None
+
+    if aum is None:
+        return {
+            "tier": "unknown", "aum": None, "expense_ratio": er,
+            "est_revenue": None, "fund_age_years": fund_age_years,
+            "is_new": is_new, "quote_type": quote_type,
+            "reason": "Fund size (AUM) unavailable from the data provider — closure risk can't be estimated.",
+        }
+
+    # Break-even style thresholds. Estimated annual fee revenue drives the call
+    # when we can compute it; the AUM floors act as a fallback and hard floor.
+    watch_rev, elev_rev, high_rev = 500_000, 350_000, 150_000
+    watch_aum, elev_aum, high_aum = 50_000_000, 25_000_000, 10_000_000
+
+    def _hit(rev_threshold, aum_threshold):
+        rev_hit = est_revenue is not None and est_revenue < rev_threshold
+        return rev_hit or aum < aum_threshold
+
+    if _hit(high_rev, high_aum):
+        tier = "high"
+    elif _hit(elev_rev, elev_aum):
+        tier = "elevated"
+    elif _hit(watch_rev, watch_aum):
+        tier = "watch"
+    else:
+        tier = "ok"
+
+    # New funds are seeded small on purpose — don't sound the alarm on a fund
+    # that simply launched recently. Cap the severity at 'watch'.
+    softened = False
+    if is_new and tier in ("elevated", "high"):
+        tier = "watch"
+        softened = True
+
+    return {
+        "tier": tier, "aum": aum, "expense_ratio": er,
+        "est_revenue": est_revenue, "fund_age_years": fund_age_years,
+        "is_new": is_new, "quote_type": quote_type,
+        "reason": _closure_risk_reason(tier, aum, er, est_revenue, fund_age_years, softened),
+    }
+
+
 @app.route("/api/portfolio-summary/data", methods=["GET"])
 def portfolio_summary_data():
     """Compute per-ticker grades and portfolio-level grade via yfinance."""
@@ -13879,8 +14014,11 @@ def portfolio_summary_data():
     benchmark_symbols = {"sp500": "SPY", "nasdaq": "QQQ"}
     all_dl = list(set(tickers + list(benchmark_symbols.values())))
 
-    # Detect renamed tickers and include both old and new in download
+    # Detect renamed tickers and include both old and new in download. The same
+    # per-ticker .info fetch also feeds the ETF closure-risk assessment, so it
+    # rides along for free here rather than costing a second network round-trip.
     rename_map = {}
+    ticker_closure_risk = {}
     for t in tickers:
         try:
             _info = yf.Ticker(t).info or {}
@@ -13889,6 +14027,9 @@ def portfolio_summary_data():
                 rename_map[t] = _new
                 if _new not in all_dl:
                     all_dl.append(_new)
+            _closure = _assess_etf_closure_risk(_info)
+            if _closure is not None:
+                ticker_closure_risk[t] = _closure
         except Exception:
             pass
 
@@ -13897,11 +14038,11 @@ def portfolio_summary_data():
         if raw.empty:
             if cached:
                 return jsonify(cached)
-            return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={})
+            return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, ticker_closure_risk=ticker_closure_risk)
     except Exception as e:
         if cached:
             return jsonify(cached)
-        return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, warning=str(e))
+        return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, ticker_closure_risk=ticker_closure_risk, warning=str(e))
 
     if isinstance(raw.columns, pd.MultiIndex):
         close = raw["Close"].dropna(how="all") if "Close" in raw.columns.get_level_values(0) else pd.DataFrame()
@@ -14048,7 +14189,7 @@ def portfolio_summary_data():
     if not portfolio_grade_info and cached:
         portfolio_grade_info = cached.get("portfolio_grade", {}) or {}
 
-    response = {"ticker_grades": ticker_grades, "ticker_risk": ticker_risk, "portfolio_grade": portfolio_grade_info}
+    response = {"ticker_grades": ticker_grades, "ticker_risk": ticker_risk, "portfolio_grade": portfolio_grade_info, "ticker_closure_risk": ticker_closure_risk}
     # Only cache a usable result. Caching an empty grade from a transient/partial
     # yfinance download would pin blank tiles for the full 30-min TTL, so the
     # grades would "stick" blank across account switches and chart refreshes until

@@ -12,6 +12,8 @@ import { formatMoney } from '../utils/money'
 const DASHBOARD_CACHE_TTL_MS = 60 * 60 * 1000
 const SP500_CACHE_KEY = 'portfolio_dashboard_sp500'
 const HOLDINGS_COLUMN_PREF_KEY = 'dashboard_holdings_visible_columns_v1'
+const CLOSURE_DISMISS_KEY = 'dashboard_closure_warning_dismissed_v1'
+const IMPORT_DISMISS_KEY = 'dashboard_import_warning_dismissed_v1'
 const validSp500 = value => value?.price != null && Number.isFinite(Number(value.price))
 
 const DEFAULT_HOLDINGS_COLUMN_IDS = [
@@ -45,6 +47,7 @@ const DEFAULT_HOLDINGS_COLUMN_IDS = [
   'drip_shares_yearly',
   'paid_for_itself',
   'nav',
+  'closure_risk',
   'grade',
 ]
 
@@ -119,6 +122,93 @@ const navSeverityFromRatio = (v) => v == null ? null : v > 0.75 ? 'High' : v > 0
 const navSeverityColor = (severity) => severity === 'High' ? 'var(--neg)' : severity === 'Medium' ? 'var(--warning-money)' : severity === 'Low' ? 'var(--pos)' : 'var(--text-dim)'
 const navSeverityBg = (severity) => severity === 'High' ? 'color-mix(in srgb, var(--neg) 14%, transparent)' : severity === 'Medium' ? 'color-mix(in srgb, var(--warning-money) 14%, transparent)' : 'color-mix(in srgb, var(--pos) 14%, transparent)'
 const navSeverityText = (severity) => severity === 'High' ? 'High Benchmark-Adjusted NAV Erosion' : severity === 'Medium' ? 'Moderate Benchmark-Adjusted NAV Erosion' : 'Low Benchmark-Adjusted NAV Erosion'
+
+// ── ETF closure risk (fund too small to be profitable for the issuer) ──────────
+const CLOSURE_TIER = {
+  high: { rank: 3, label: 'High', color: 'var(--neg)' },
+  elevated: { rank: 2, label: 'Elevated', color: 'var(--warning-money)' },
+  watch: { rank: 1, label: 'Watch', color: 'var(--warning-text)' },
+  ok: { rank: 0, label: 'OK', color: 'var(--pos)' },
+  unknown: { rank: -1, label: '?', color: 'var(--text-dim)' },
+}
+const closureRank = (info) => CLOSURE_TIER[info?.tier]?.rank ?? -2
+const isAtClosureRisk = (info) => ['watch', 'elevated', 'high'].includes(info?.tier)
+
+function ClosureRiskBadge({ info }) {
+  if (!info) return <span style={{ color: 'var(--text-dim)' }} title="Not an ETF — individual stocks aren't rated for closure risk.">—</span>
+  const tier = CLOSURE_TIER[info.tier] || CLOSURE_TIER.unknown
+  if (info.tier === 'ok' || info.tier === 'unknown') {
+    return <span style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }} title={info.reason || ''}>{tier.label}</span>
+  }
+  return (
+    <span
+      title={info.reason || ''}
+      style={{
+        display: 'inline-block',
+        padding: '1px 7px',
+        borderRadius: 10,
+        fontSize: '0.68rem',
+        fontWeight: 700,
+        color: tier.color,
+        background: `color-mix(in srgb, ${tier.color} 16%, transparent)`,
+        border: `1px solid color-mix(in srgb, ${tier.color} 45%, transparent)`,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {tier.label}
+    </span>
+  )
+}
+
+// A warning banner the user can hide and re-open. `signature` identifies the
+// current situation (e.g. the set of at-risk tickers or stale accounts): the
+// banner collapses to a slim "…— warning hidden. Show" bar while a dismissal
+// matches it, and re-alerts on its own if the situation later changes. The
+// dismissal persists in localStorage under `storageKey`.
+function DismissibleBanner({ storageKey, signature, collapsedContent, children }) {
+  const [dismissedSig, setDismissedSig] = useState(() => {
+    if (typeof window === 'undefined') return null
+    try { return window.localStorage.getItem(storageKey) } catch { return null }
+  })
+  const hide = () => {
+    try { window.localStorage.setItem(storageKey, signature) } catch {}
+    setDismissedSig(signature)
+  }
+  const show = () => {
+    try { window.localStorage.removeItem(storageKey) } catch {}
+    setDismissedSig(null)
+  }
+  if (signature && signature === dismissedSig) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', padding: '0.35rem 0.7rem', fontSize: '0.8rem', color: 'var(--text-dim)', border: '1px solid var(--border)', borderRadius: 6 }}>
+        {collapsedContent}
+        <button
+          type="button"
+          onClick={show}
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--accent-bright)', fontWeight: 600, textDecoration: 'underline', padding: 0, fontSize: '0.8rem' }}
+        >
+          Show
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div className="alert alert-warning" style={{ marginBottom: '1rem', position: 'relative' }}>
+      <button
+        type="button"
+        onClick={hide}
+        title="Hide this warning (it returns on its own if the situation changes)"
+        aria-label="Hide warning"
+        style={{ position: 'absolute', top: '0.5rem', right: '0.6rem', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: '1.1rem', lineHeight: 1, padding: '0.15rem 0.35rem' }}
+      >
+        ✕
+      </button>
+      <div style={{ paddingRight: '1.5rem' }}>
+        {children}
+      </div>
+    </div>
+  )
+}
 
 function SummaryCard({ label, value, sub, color, className, title }) {
   return (
@@ -622,6 +712,7 @@ export default function Dashboard() {
   const [gradeStatus, setGradeStatus] = useState(null)
   const [tickerGrades, setTickerGrades] = useState({})
   const [tickerRisk, setTickerRisk] = useState({})
+  const [tickerClosureRisk, setTickerClosureRisk] = useState({})
   const [tickerRiskLoading, setTickerRiskLoading] = useState(false)
   const [portfolioGrade, setPortfolioGrade] = useState({})
   const [betaBenchmark, setBetaBenchmark] = useState('sp500')
@@ -653,7 +744,15 @@ export default function Dashboard() {
     try {
       const raw = window.localStorage.getItem(HOLDINGS_COLUMN_PREF_KEY)
       const parsed = raw ? JSON.parse(raw) : null
-      return Array.isArray(parsed) && parsed.length ? parsed : DEFAULT_HOLDINGS_COLUMN_IDS
+      if (!Array.isArray(parsed) || !parsed.length) return DEFAULT_HOLDINGS_COLUMN_IDS
+      // One-time migration: surface the new Closure Risk column for users whose
+      // saved column set predates it (insert next to NAV/Grade, not at the end).
+      if (!parsed.includes('closure_risk')) {
+        const anchor = parsed.indexOf('grade')
+        const at = anchor >= 0 ? anchor : (parsed.indexOf('nav') >= 0 ? parsed.indexOf('nav') + 1 : parsed.length)
+        parsed.splice(at, 0, 'closure_risk')
+      }
+      return parsed
     } catch {
       return DEFAULT_HOLDINGS_COLUMN_IDS
     }
@@ -713,6 +812,7 @@ export default function Dashboard() {
       setUpcomingDivs(cached.upcomingDivs || [])
       setTickerGrades(cached.tickerGrades || {})
       setTickerRisk(cached.tickerRisk || {})
+      setTickerClosureRisk(cached.tickerClosureRisk || {})
       setTickerRiskLoading(false)
       setPortfolioGrade(cached.portfolioGrade || {})
       setPortfolioCoverage(cached.portfolioCoverage ?? null)
@@ -730,6 +830,7 @@ export default function Dashboard() {
       setUpcomingDivs([])
       setTickerGrades({})
       setTickerRisk({})
+      setTickerClosureRisk({})
       setTickerRiskLoading(false)
       setPortfolioGrade({})
       setPortfolioCoverage(null)
@@ -870,6 +971,7 @@ export default function Dashboard() {
               if (stale || !g) return
               if (g.ticker_grades) setTickerGrades(g.ticker_grades)
               if (g.ticker_risk) setTickerRisk(g.ticker_risk)
+              if (g.ticker_closure_risk) setTickerClosureRisk(g.ticker_closure_risk)
               // {} is truthy — only overwrite when grades were actually computed,
               // so an empty/failed response never blanks good grade tiles.
               if (g.portfolio_grade && Object.keys(g.portfolio_grade).length) setPortfolioGrade(g.portfolio_grade)
@@ -904,6 +1006,7 @@ export default function Dashboard() {
                   if (stale || !g) return
                   if (g.ticker_grades) setTickerGrades(g.ticker_grades)
                   if (g.ticker_risk) setTickerRisk(g.ticker_risk)
+                  if (g.ticker_closure_risk) setTickerClosureRisk(g.ticker_closure_risk)
                   // {} is truthy — only overwrite when grades were actually
                   // computed, so the post-refresh fetch can't clobber the good
                   // grades the first fetch already set with an empty response.
@@ -935,6 +1038,7 @@ export default function Dashboard() {
       upcomingDivs,
       tickerGrades,
       tickerRisk,
+      tickerClosureRisk,
       portfolioGrade,
       portfolioCoverage,
       portfolioCoverageSeverity,
@@ -953,6 +1057,7 @@ export default function Dashboard() {
     upcomingDivs,
     tickerGrades,
     tickerRisk,
+    tickerClosureRisk,
     portfolioGrade,
     portfolioCoverage,
     portfolioCoverageSeverity,
@@ -1091,6 +1196,8 @@ export default function Dashboard() {
           _coverage: tickerCoverage[h.ticker] ?? null,
           _coverage_meta: tickerCoverageMeta[h.ticker] || null,
           _risk: tickerRisk[h.ticker] || null,
+          _closure: tickerClosureRisk[h.ticker] || null,
+          _closure_sort: closureRank(tickerClosureRisk[h.ticker]),
           _beta_sort: tickerRisk[h.ticker]?.beta ?? -999,
           _delta_up_sort: tickerRisk[h.ticker]?.delta_up ?? -999,
           _delta_down_sort: tickerRisk[h.ticker]?.delta_down ?? -999,
@@ -1099,7 +1206,7 @@ export default function Dashboard() {
           _grade_sort: ({ 'A+': 13, 'A': 12, 'A-': 11, 'B+': 10, 'B': 9, 'B-': 8, 'C+': 7, 'C': 6, 'C-': 5, 'D+': 4, 'D': 3, 'D-': 2, 'F': 1 })[tickerGrades[h.ticker]?.grade] || 0,
         }
       })
-  }, [holdings, totals, tickerCoverage, tickerCoverageMeta, tickerGrades, tickerRisk, rvyMode])
+  }, [holdings, totals, tickerCoverage, tickerCoverageMeta, tickerGrades, tickerRisk, tickerClosureRisk, rvyMode])
   const portfolioNavSeverity = portfolioCoverageSeverity || navSeverityFromRatio(portfolioCoverage)
   const portfolioNavColor = navSeverityColor(portfolioNavSeverity)
   const dailyChangeAmount = Number(dailyChange?.amount)
@@ -1448,6 +1555,7 @@ export default function Dashboard() {
     { id: 'drip_shares_yearly', label: 'YrShr', name: 'Estimated Yearly DRIP Shares', sortKey: 'drip_shares_yearly', group: 'Current', defaultVisible: true, align: 'right', tip: 'Estimated shares bought per year if 100% of annual dividend income is reinvested at the current price', render: h => <td style={{ textAlign: 'right', color: 'var(--accent-soft)' }}>{fmtShares(h.drip_shares_yearly)}</td>, footer: () => <span style={{ color: 'var(--accent-soft)' }}>{fmtShares(totals.dripSharesYearly)}</span> },
     { id: 'paid_for_itself', label: 'PFI%', name: 'Paid For Itself', sortKey: 'paid_for_itself', group: 'Current', defaultVisible: true, align: 'right', tip: 'Percentage of original cost recovered through dividends', render: h => <td style={{ textAlign: 'right', color: pfiColor(h.paid_for_itself), fontWeight: pfiVal(h.paid_for_itself) >= 100 ? 700 : 400 }}>{h.paid_for_itself == null ? '—' : (h.paid_for_itself * 100).toFixed(2) + '%'}</td> },
     { id: 'nav', label: 'NAV', name: 'NAV Erosion', sortKey: '_coverage', group: 'Current', defaultVisible: true, align: 'right', tip: 'NAV severity uses the benchmark-adjusted ratio, and is forced High for a 50%+ price decline or a 5%+ ending share deficit.', render: renderNavCell },
+    { id: 'closure_risk', label: 'Close?', name: 'Closure Risk', sortKey: '_closure_sort', group: 'Current', defaultVisible: true, align: 'center', tip: 'Risk the ETF issuer shuts the fund down for being too small to be profitable. Estimated from AUM × expense ratio (annual fee revenue) with AUM floors and a grace period for newly launched funds. Individual stocks are not rated.', render: h => <td style={{ textAlign: 'center' }}><ClosureRiskBadge info={h._closure} /></td> },
     { id: 'grade', label: 'Grd', name: 'Composite Grade', sortKey: '_grade_sort', group: 'Current', defaultVisible: true, align: 'center', tip: 'Composite grade based on yield, growth, and risk metrics', render: h => <td style={{ textAlign: 'center' }}>{tickerGrades[h.ticker] ? <GradeBadge grade={tickerGrades[h.ticker].grade} /> : '—'}</td> },
     { id: 'percent_change', label: '% Chg', name: 'Daily Percent Change', sortKey: 'percent_change', group: 'Calculated Additions', align: 'right', tip: 'Daily percent change calculated from the current holding data', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.percent_change || 0) }}>{pct(h.percent_change)}</td> },
     { id: 'purchase_value', label: 'Invested', name: 'Purchase Value', sortKey: 'purchase_value', group: 'Calculated Additions', align: 'right', tip: 'Cost basis / purchase value', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.purchase_value)}</td>, footer: () => moneyOrDash(totals.purchaseValue) },
@@ -1642,9 +1750,21 @@ export default function Dashboard() {
       {brokerImportStatus?.stale_accounts?.length > 0 && (() => {
         const accts = brokerImportStatus.stale_accounts
         const single = accts.length === 1
+        const sig = accts.map(a => a.profile_id ?? a.name).sort().join(',')
         return (
-          <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
-            <strong>Broker positions are out of date — tracked share counts are drifting.</strong>
+          <DismissibleBanner
+            storageKey={IMPORT_DISMISS_KEY}
+            signature={sig}
+            collapsedContent={
+              <>
+                <span style={{ color: 'var(--warning-money)' }}>⚠</span>
+                <span>
+                  {accts.length} broker account{accts.length !== 1 ? 's' : ''} out of date — re-import needed. Warning hidden.
+                </span>
+              </>
+            }
+          >
+            <strong style={{ display: 'block' }}>Broker positions are out of date — tracked share counts are drifting.</strong>
             {single ? (
               <p style={{ margin: '0.4rem 0 0' }}>
                 <strong>{accts[0].name}</strong> hasn't been imported in {accts[0].days_since_import} days. It is a
@@ -1675,7 +1795,75 @@ export default function Dashboard() {
               positions import resets them. Import transactions too if you also want reinvestment history and cost basis
               kept current. <NavLink to="/import" style={{ fontWeight: 600 }}>Go to Import →</NavLink>
             </p>
-          </div>
+          </DismissibleBanner>
+        )
+      })()}
+
+      {(() => {
+        const atRisk = enrichedHoldings
+          .filter(h => isAtClosureRisk(h._closure))
+          .sort((a, b) => (b._closure_sort || 0) - (a._closure_sort || 0) || (a._closure.aum || 0) - (b._closure.aum || 0))
+        if (!atRisk.length) return null
+        const sig = atRisk.map(h => h.ticker).sort().join(',')
+        const highCount = atRisk.filter(h => h._closure.tier === 'high').length
+        // Serious cases (established funds actually below break-even) get full
+        // detail; the watch tier — mostly newly launched funds in their grace
+        // period — is collapsed to a compact ticker list so the banner stays short.
+        const serious = atRisk.filter(h => h._closure.tier === 'high' || h._closure.tier === 'elevated')
+        const watch = atRisk.filter(h => h._closure.tier === 'watch')
+        return (
+          <DismissibleBanner
+            storageKey={CLOSURE_DISMISS_KEY}
+            signature={sig}
+            collapsedContent={
+              <>
+                <span style={{ color: highCount ? 'var(--neg)' : 'var(--warning-money)' }}>⚠</span>
+                <span>
+                  {atRisk.length} ETF{atRisk.length !== 1 ? 's' : ''} flagged for possible closure
+                  {highCount ? ` (${highCount} high risk)` : ''} — warning hidden.
+                </span>
+              </>
+            }
+          >
+            <strong style={{ display: 'block' }}>
+              {atRisk.length} ETF{atRisk.length !== 1 ? 's' : ''} in this portfolio {atRisk.length !== 1 ? 'are' : 'is'} small
+              enough to carry closure risk{highCount ? ` — ${highCount} at high risk` : ''}.
+            </strong>
+            <p style={{ margin: '0.4rem 0 0.35rem' }}>
+              ETF issuers earn roughly <em>assets × expense ratio</em> per year, so a fund that stays too
+              small to cover its running costs is a candidate for liquidation — which would force a sale
+              (a possible taxable event) and reinvestment.
+            </p>
+            {serious.length > 0 && (
+              <ul style={{ margin: '0 0 0.35rem', paddingLeft: '1.4rem' }}>
+                {serious.map(h => {
+                  const tier = CLOSURE_TIER[h._closure.tier] || CLOSURE_TIER.unknown
+                  return (
+                    <li key={h.ticker} style={{ marginBottom: '0.2rem' }}>
+                      <strong>{h.ticker}</strong>{' '}
+                      <span style={{ color: tier.color, fontWeight: 700 }}>{tier.label}</span>
+                      {' — '}
+                      <span style={{ color: 'var(--text-dim)' }}>{h._closure.reason}</span>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+            {watch.length > 0 && (
+              <p style={{ margin: '0 0 0.15rem' }}>
+                <span style={{ color: CLOSURE_TIER.watch.color, fontWeight: 700 }}>Watch</span>{' '}
+                <span style={{ color: 'var(--text-dim)' }}>
+                  (small, most newly launched — a low size is normal early on):{' '}
+                  {watch.map(h => h.ticker).join(', ')}
+                </span>
+              </p>
+            )}
+            <p style={{ margin: '0.45rem 0 0', color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+              Estimated from fund size and fees, not a closure announcement — confirm on the issuer's
+              site. See the <strong>Close?</strong> column for a per-holding rating. Informational only,
+              not investment advice.
+            </p>
+          </DismissibleBanner>
         )
       })()}
 
