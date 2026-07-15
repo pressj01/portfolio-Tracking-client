@@ -6,6 +6,11 @@ import { themedPlotlyLayout } from '../utils/chartTheme'
 import MarkovPanel from '../components/MarkovPanel'
 import { computeMarkov, REGIME_COLORS } from '../utils/markov'
 import { formatMoney } from '../utils/money'
+import {
+  comparerStatsForMode,
+  selectComparerTraces,
+  shouldUseComparerLogScale,
+} from '../utils/comparerTraces'
 
 // ── Indicator helpers ────────────────────────────────────────────────────────
 
@@ -2294,6 +2299,7 @@ export default function ETFScreen() {
   const [showReturnLabels, setShowReturnLabels] = useState(true)
   const [returnHoverMode, setReturnHoverMode] = useState('x unified')
   const [returnPctMode, setReturnPctMode] = useState(true)
+  const [returnScalePreference, setReturnScalePreference] = useState('auto')
   const [showRangeSlider, setShowRangeSlider] = useState(false)
   const [returnXRange, setReturnXRange] = useState([null, null])
   const [highlightedSymbol, setHighlightedSymbol] = useState('')
@@ -2332,6 +2338,9 @@ export default function ETFScreen() {
   useEffect(() => () => {
     if (returnRelayoutTimerRef.current) clearTimeout(returnRelayoutTimerRef.current)
     if (returnRangeGuardTimerRef.current) clearTimeout(returnRangeGuardTimerRef.current)
+    const activeController = returnAbortRef.current
+    returnAbortRef.current = null
+    if (activeController) activeController.abort()
   }, [])
 
   useEffect(() => {
@@ -2485,10 +2494,11 @@ export default function ETFScreen() {
     const fr = normalizeReturnRange(fetchRangeRef.current)
     const rangeParam = fr ? `&start=${fr[0]}&end=${fr[1]}` : ''
     const requestPeriod = period === 'all' ? 'max' : period
-    const url = `/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${requestPeriod}&mode=${returnMode}&reinvest=${debouncedReinvest}&extra=${encodeURIComponent(extra)}${rangeParam}`
+    const url = `/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${requestPeriod}&mode=all4&reinvest=${debouncedReinvest}&extra=${encodeURIComponent(extra)}&defer_details=1${rangeParam}`
     pf(url, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
+        if (returnAbortRef.current !== controller) return
         if (d.error) {
           if (returnAbortRef.current === controller) returnRangeLoadGuardRef.current = null
           setError(d.error)
@@ -2504,17 +2514,23 @@ export default function ETFScreen() {
           setError(e.message)
         }
       })
-      .finally(() => setReturnLoading(false))
-  }, [ticker, period, returnMode, debouncedReinvest, compareTickers])
+      .finally(() => {
+        if (returnAbortRef.current === controller) {
+          returnAbortRef.current = null
+          setReturnLoading(false)
+        }
+      })
+  }, [ticker, period, debouncedReinvest, compareTickers])
 
   // Keep a stable handle to the latest loadReturns so date-input handlers can
   // trigger a re-fetch without capturing a stale closure.
   loadReturnsRef.current = loadReturns
 
-  // Auto-reload returns chart when mode/reinvest changes (only if already loaded)
+  // The complete trace bundle makes mode changes local. Only a custom
+  // reinvestment percentage needs the server to recompute the blend trace.
   useEffect(() => {
     if (tab === 'returns' && returnData) loadReturns()
-  }, [returnMode, debouncedReinvest]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [debouncedReinvest]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-reload chart when period or interval changes (only if data already loaded)
   useEffect(() => {
@@ -2824,8 +2840,8 @@ export default function ETFScreen() {
 
   // ── Return chart traces ────────────────────────────────────────────────────
 
-  const { data: returnPlotData, layout: returnPlotLayout } = useMemo(() => {
-    if (!returnData?.series) return { data: [], layout: {} }
+  const { data: returnPlotData, layout: returnPlotLayout, logScaleActive: returnLogScaleActive } = useMemo(() => {
+    if (!returnData?.series) return { data: [], layout: {}, logScaleActive: false }
     const traces = []
     const annotations = []
     const labelCandidates = []
@@ -2847,6 +2863,15 @@ export default function ETFScreen() {
     // Rebasing, end labels and y-scaling always follow the active date window
     // (typed dates or slider), so the chart visually aligns with the date set.
     const [visibleStart, visibleEnd] = getVisibleDateRange(returnData, effectiveReturnRange, true)
+    const autoLogScale = shouldUseComparerLogScale(
+      returnData.series,
+      allSymbols,
+      returnMode,
+      visibleStart,
+      visibleEnd,
+    )
+    const logScaleActive = returnScalePreference === 'log'
+      || (returnScalePreference === 'auto' && autoLogScale)
 
     // When a symbol is highlighted, draw it last so its line sits on top of
     // the dimmed ones instead of being covered by them.
@@ -2859,7 +2884,7 @@ export default function ETFScreen() {
       const isPrimary = si === 0
       const isDimmed = highlightedSymbol && highlightedSymbol !== sym
 
-      Object.entries(traceMap).forEach(([key, values]) => {
+      selectComparerTraces(traceMap, returnMode).forEach(([key, values]) => {
         const style = TRACE_STYLES[key] || { dash: 'solid', color: '#7ecfff', width: 2.5, label: key }
 
         let color, dash, width, name
@@ -2893,9 +2918,11 @@ export default function ETFScreen() {
         const baseIdx = firstVisibleIndex(dates, visibleStart, visibleEnd)
         const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
         const baseVal = baseIdx >= 0 ? values[baseIdx] : values[0]
-        const yVals = baseVal
-          ? values.map(v => returnPctMode ? (v / baseVal - 1) * 100 : (v / baseVal) * 100)
-          : values
+        const normalizedValues = baseVal ? values.map(v => (v / baseVal) * 100) : values
+        const returnValues = normalizedValues.map(v => Number(v) - 100)
+        const yVals = logScaleActive
+          ? normalizedValues
+          : (returnPctMode ? returnValues : normalizedValues)
         dates.forEach((date, i) => {
           const value = Number(yVals[i])
           if (!Number.isFinite(value)) return
@@ -2906,16 +2933,19 @@ export default function ETFScreen() {
         })
         traces.push({
           x: dates, y: yVals, type: 'scatter', mode: 'lines', name,
+          customdata: returnValues,
           line: { color, dash, width },
-          hovertemplate: returnPctMode
-            ? `<b>%{x|%b %d, %Y}</b><br>${lineLabel}: %{y:.2f}%<extra></extra>`
+          hovertemplate: logScaleActive && returnPctMode
+            ? `<b>%{x|%b %d, %Y}</b><br>${lineLabel}: %{customdata:+,.2f}%<br>Growth of $100: %{y:,.2f}<extra></extra>`
+            : returnPctMode
+              ? `<b>%{x|%b %d, %Y}</b><br>${lineLabel}: %{y:.2f}%<extra></extra>`
             : `<b>%{x|%b %d, %Y}</b><br>${lineLabel}: %{y:.2f}<extra></extra>`,
         })
 
         // Visible-window annotation: percent labels in percent mode, line names in normal mode.
         if (showReturnLabels && labelIdx >= 0) {
           const labelVal = yVals[labelIdx]
-          const retNum = returnPctMode ? labelVal : labelVal - 100
+          const retNum = returnValues[labelIdx]
           const retPct = retNum.toFixed(2)
           if (Number.isFinite(Number(labelVal))) {
             labelCandidates.push({
@@ -2934,7 +2964,7 @@ export default function ETFScreen() {
       const allDates = Object.values(returnData.series).flatMap(s => s.dates)
       const minDate = allDates.reduce((a, b) => a < b ? a : b)
       const maxDate = allDates.reduce((a, b) => a > b ? a : b)
-      const baseY = returnPctMode ? 0 : 100
+      const baseY = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
       traces.push({
         x: [minDate, maxDate], y: [baseY, baseY], type: 'scatter', mode: 'lines',
         name: 'Baseline', line: { color: '#555', dash: 'dash', width: 1 }, showlegend: false,
@@ -2943,34 +2973,39 @@ export default function ETFScreen() {
 
     // Build title like web version. When a custom date window is active, show
     // the actual span instead of the (now stale) period button label.
-    const modeInfo = RETURN_MODES.find(m => m.value === returnData.mode) || {}
+    const modeInfo = RETURN_MODES.find(m => m.value === returnMode) || {}
     const periodLabel = activeReturnRange
       ? `${activeReturnRange[0]} → ${activeReturnRange[1]}`
       : (RETURN_PERIODS.find(p => p.value === period)?.label || period)
-    const titleSymbol = Object.keys(returnData.series)[0] || ticker.toUpperCase()
+    const titleSymbol = allSymbols[0] || ticker.toUpperCase()
     let titleText = `${titleSymbol} — ${periodLabel}`
-    if (returnData.mode === 'all3') {
+    if (returnMode === 'all3') {
       titleText += ` — Price vs Custom vs DRIP (${returnData.reinvest_pct}% reinvest)`
-    } else if (returnData.mode === 'all4') {
+    } else if (returnMode === 'all4') {
       titleText += ` — Price vs Custom vs DRIP (${returnData.reinvest_pct}% reinvest)`
-    } else if (returnData.mode === 'both') {
+    } else if (returnMode === 'both') {
       titleText += ' — Total Return & Price'
     } else {
-      titleText += ` — ${modeInfo.label || returnData.mode}`
+      titleText += ` — ${modeInfo.label || returnMode}`
     }
+    if (logScaleActive) titleText += ' — Log Scale'
 
     if (showReturnLabels && labelCandidates.length) {
-      const axisBase = returnPctMode ? 0 : 100
-      const yMin = Math.min(axisBase, ...visibleYValues, ...labelCandidates.map(label => label.y))
-      const yMax = Math.max(axisBase, ...visibleYValues, ...labelCandidates.map(label => label.y))
-      const ySpan = Math.max(1, yMax - yMin)
-      const minLabelGap = Math.max(ySpan * 0.04, returnPctMode ? 0.45 : 1.5)
-      const sortedLabels = [...labelCandidates].sort((a, b) => a.y - b.y)
+      const axisBase = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
+      const scaleY = value => logScaleActive ? Math.log10(Math.max(Number(value), Number.MIN_VALUE)) : Number(value)
+      const unscaleY = value => logScaleActive ? 10 ** value : value
+      const yMin = Math.min(scaleY(axisBase), ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
+      const yMax = Math.max(scaleY(axisBase), ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
+      const ySpan = Math.max(logScaleActive ? 0.01 : 1, yMax - yMin)
+      const minLabelGap = Math.max(ySpan * 0.04, logScaleActive ? 0.035 : (returnPctMode ? 0.45 : 1.5))
+      const sortedLabels = [...labelCandidates]
+        .map(label => ({ ...label, scaledY: scaleY(label.y) }))
+        .sort((a, b) => a.scaledY - b.scaledY)
 
       sortedLabels.forEach((label, index) => {
         label.displayY = index === 0
-          ? label.y
-          : Math.max(label.y, sortedLabels[index - 1].displayY + minLabelGap)
+          ? label.scaledY
+          : Math.max(label.scaledY, sortedLabels[index - 1].displayY + minLabelGap)
       })
 
       const overflow = sortedLabels[sortedLabels.length - 1].displayY - yMax
@@ -2987,7 +3022,7 @@ export default function ETFScreen() {
         annotations.push({
           x: 1,
           xref: 'paper',
-          y: label.displayY,
+          y: unscaleY(label.displayY),
           text: label.text,
           showarrow: false,
           xanchor: 'left',
@@ -3002,12 +3037,19 @@ export default function ETFScreen() {
     // stays scaled to the full series and looks misaligned after zooming.
     let yAxisRange = null
     if (visibleYValues.length) {
-      const axisBase = returnPctMode ? 0 : 100
+      const axisBase = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
       const labelYs = labelCandidates.map(l => l.y)
       const yLo = Math.min(axisBase, ...visibleYValues, ...labelYs)
       const yHi = Math.max(axisBase, ...visibleYValues, ...labelYs)
-      const pad = Math.max((yHi - yLo) * 0.08, 1)
-      yAxisRange = [yLo - pad, yHi + pad]
+      if (logScaleActive) {
+        const logLo = Math.log10(Math.max(yLo, Number.MIN_VALUE))
+        const logHi = Math.log10(Math.max(yHi, Number.MIN_VALUE))
+        const pad = Math.max((logHi - logLo) * 0.08, 0.04)
+        yAxisRange = [logLo - pad, logHi + pad]
+      } else {
+        const pad = Math.max((yHi - yLo) * 0.08, 1)
+        yAxisRange = [yLo - pad, yHi + pad]
+      }
     }
 
     const layout = {
@@ -3015,7 +3057,7 @@ export default function ETFScreen() {
       // Preserve Plotly's interactive range across unrelated renders (such as
       // typing a ticker). Period and range-slider visibility changes are the
       // intentional reset boundaries.
-      uirevision: `returns-${period}-${showRangeSlider ? 'slider' : 'plain'}`,
+      uirevision: `returns-${period}-${showRangeSlider ? 'slider' : 'plain'}-${logScaleActive ? 'log' : 'linear'}`,
       font: { color: '#e0e0e0', size: 12 },
       margin: { l: 60, r: 90, t: 70, b: 40 },
       height: 520,
@@ -3027,8 +3069,14 @@ export default function ETFScreen() {
         gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot',
       },
       yaxis: {
-        title: returnPctMode ? 'Total Return (%)' : 'Normalized Return (100 = start)',
-        ...(returnPctMode && { ticksuffix: '%', tickformat: '+.2f' }),
+        type: logScaleActive ? 'log' : 'linear',
+        title: logScaleActive
+          ? 'Growth of $100 (log scale)'
+          : returnPctMode
+            ? `${RETURN_MODES.find(mode => mode.value === returnMode)?.label || 'Return'} (%)`
+            : 'Normalized Return (100 = start)',
+        ...(!logScaleActive && returnPctMode && { ticksuffix: '%', tickformat: '+.2f' }),
+        ...(logScaleActive && { tickformat: ',.0f' }),
         ...(yAxisRange ? { range: yAxisRange, autorange: false } : {}),
         gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot',
       },
@@ -3036,8 +3084,21 @@ export default function ETFScreen() {
       hovermode: returnHoverMode,
       annotations,
     }
-    return { data: traces, layout }
-  }, [returnData, ticker, period, showReturnLabels, returnHoverMode, returnPctMode, showRangeSlider, returnXRange, returnDataDateBounds, highlightedSymbol])
+    return { data: traces, layout, logScaleActive }
+  }, [returnData, ticker, period, returnMode, returnScalePreference, showReturnLabels, returnHoverMode, returnPctMode, showRangeSlider, returnXRange, returnDataDateBounds, highlightedSymbol])
+
+  const displayedReturnStats = useMemo(() => {
+    if (!returnData?.series) return null
+    const seriesSymbols = Object.keys(returnData.series)
+    const orderedSymbols = [
+      ...(returnData.requested_symbols || []).filter(sym => seriesSymbols.includes(sym)),
+      ...seriesSymbols.filter(sym => !(returnData.requested_symbols || []).includes(sym)),
+    ]
+    return Object.fromEntries(orderedSymbols.map(sym => [
+      sym,
+      comparerStatsForMode(returnData.series[sym], returnData.stats?.[sym] || {}, returnMode),
+    ]))
+  }, [returnData, returnMode])
 
 
   const handleReturnRelayout = useCallback((eventData) => {
@@ -3342,6 +3403,11 @@ export default function ETFScreen() {
           <div className="etf-chart-options">
             <span className="etf-control-label">Chart</span>
             <button className={`btn btn-sm${returnPctMode ? ' btn-active' : ''}`} onClick={() => setReturnPctMode(v => !v)}>Return %</button>
+            <button
+              className={`btn btn-sm${returnLogScaleActive ? ' btn-active' : ''}`}
+              onClick={() => setReturnScalePreference(returnLogScaleActive ? 'linear' : 'log')}
+              title={returnScalePreference === 'auto' && returnLogScaleActive ? 'Automatically enabled because the visible return range is extreme' : 'Use a logarithmic growth scale'}
+            >Log Scale{returnLogScaleActive && returnScalePreference === 'auto' ? ' (Auto)' : ''}</button>
             <button className={`btn btn-sm${showReturnLabels ? ' btn-active' : ''}`} onClick={() => setShowReturnLabels(v => !v)}>End Labels</button>
             <button className={`btn btn-sm${returnHoverMode === 'x unified' ? ' btn-active' : ''}`} onClick={() => setReturnHoverMode(m => m === 'x unified' ? 'closest' : 'x unified')}>Unified Hover</button>
             <button className={`btn btn-sm${showRangeSlider ? ' btn-active' : ''}`} onClick={() => { setShowRangeSlider(v => !v); resetReturnRange() }}>Range Slider</button>
@@ -3489,10 +3555,10 @@ export default function ETFScreen() {
           ) : (
             <>
               <h3>Statistics</h3>
-              {returnData?.stats && Object.entries(returnData.stats).map(([sym, st]) => (
+              {displayedReturnStats && Object.entries(displayedReturnStats).map(([sym, st]) => (
                 <div key={sym} className="stat-card">
                   <h4>{sym}</h4>
-                  <div className="stat-row"><span>Total Return</span><span style={{ color: pctColor(st.total_ret) }}>{pct(st.total_ret)}</span></div>
+                  <div className="stat-row"><span>{RETURN_MODES.find(mode => mode.value === returnMode)?.label || 'Return'}</span><span style={{ color: pctColor(st.total_ret) }}>{pct(st.total_ret)}</span></div>
                   <div className="stat-row"><span>Price Return</span><span style={{ color: pctColor(st.price_ret) }}>{pct(st.price_ret)}</span></div>
                   <div className="stat-row"><span>Div Contrib</span><span style={{ color: pctColor(st.div_contrib) }}>{pct(st.div_contrib)}</span></div>
                   <div className="stat-row"><span>Annualised</span><span style={{ color: st.annualized != null ? pctColor(st.annualized) : 'var(--p-888)' }}>{pct(st.annualized)}</span></div>
@@ -3512,9 +3578,9 @@ export default function ETFScreen() {
         {/* Chart area */}
         <div className="etf-chart-area">
           {/* Summary cards strip (Returns tab) */}
-          {tab === 'returns' && returnData?.stats && (() => {
-            const primarySym = Object.keys(returnData.stats)[0]
-            const st = returnData.stats[primarySym]
+          {tab === 'returns' && displayedReturnStats && (() => {
+            const primarySym = Object.keys(displayedReturnStats)[0]
+            const st = displayedReturnStats[primarySym]
             if (!st) return null
             const customWin = normalizeReturnRange(returnXRange)
             const periodLabel = customWin
@@ -3530,7 +3596,15 @@ export default function ETFScreen() {
                 <div className="return-summary-card">
                   <div className="rsc-label">{primarySym} RETURN</div>
                   <div className="rsc-value" style={{ color: pctColor(st.total_ret) }}>{pct(st.total_ret)}</div>
-                  <div className="rsc-sub">{returnData.mode === 'price' ? 'price only' : returnData.reinvest_pct + '% DRIP'}</div>
+                  <div className="rsc-sub">{
+                    returnMode === 'price'
+                      ? 'price only'
+                      : returnMode === 'pricediv'
+                        ? 'price + cash dividends'
+                        : returnMode === 'all3' || returnMode === 'all4'
+                          ? returnData.reinvest_pct + '% custom reinvest'
+                          : '100% DRIP'
+                  }</div>
                 </div>
                 <div className="return-summary-card">
                   <div className="rsc-label">{primarySym} PRICE</div>
@@ -3637,7 +3711,7 @@ export default function ETFScreen() {
           ) : (
             returnData?.series ? (
               <>
-                {(returnData.mode === 'all3' || returnData.mode === 'all4') && returnData.reinvest_pct === 100 && (
+                {(returnMode === 'all3' || returnMode === 'all4') && returnData.reinvest_pct === 100 && (
                   <div style={{ background: 'rgba(255,152,0,0.1)', border: '1px solid rgba(255,152,0,0.3)', borderRadius: 6, padding: '0.4rem 0.75rem', marginBottom: '0.5rem', fontSize: '0.8rem', color: 'var(--p-ff9800)' }}>
                     Reinvest is 100% — the Custom and DRIP lines are identical and overlap. Adjust the slider below 100% to see them diverge.
                   </div>

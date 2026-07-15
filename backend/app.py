@@ -176,10 +176,18 @@ _REINVEST_HISTORY_TTL_SEC = 6 * 60 * 60
 # button bumps a nonce in the query string, which busts the response cache.
 _ETF_SCREEN_DATA_CACHE = {}
 _ETF_SCREEN_DATA_TTL_SEC = 10 * 60
+_ETF_SCREEN_MARKET_CACHE = {}
+_ETF_SCREEN_MARKET_TTL_SEC = 10 * 60
 _ETF_SCREEN_BENCH_CACHE = {}
 _ETF_SCREEN_BENCH_TTL_SEC = 10 * 60
 _YF_INFO_CACHE = {}
 _YF_INFO_TTL_SEC = 30 * 60
+_YF_DIVIDENDS_CACHE = {}
+_YF_DIVIDENDS_TTL_SEC = 30 * 60
+_OFFICIAL_DISTRIBUTION_CACHE = {}
+_OFFICIAL_DISTRIBUTION_TTL_SEC = 30 * 60
+_RESEARCH_RETURN_SERIES_CACHE = {}
+_RESEARCH_RETURN_SERIES_TTL_SEC = 30 * 60
 
 
 def _cached_yf_info(yf_ticker_obj, symbol):
@@ -194,6 +202,21 @@ def _cached_yf_info(yf_ticker_obj, symbol):
     if info:
         _cache_set(_YF_INFO_CACHE, symbol, info)
     return info
+
+
+def _cached_yf_dividends(yf_ticker_obj, symbol):
+    """Return a ticker's full dividend history without repeating slow calls."""
+    cached = _cache_get(_YF_DIVIDENDS_CACHE, symbol, _YF_DIVIDENDS_TTL_SEC)
+    if cached is not None:
+        return cached
+    try:
+        dividends = yf_ticker_obj.dividends
+    except Exception:
+        dividends = pd.Series(dtype=float)
+    if dividends is None:
+        dividends = pd.Series(dtype=float)
+    _cache_set(_YF_DIVIDENDS_CACHE, symbol, dividends)
+    return dividends
 
 
 def _cache_value(value):
@@ -8517,10 +8540,24 @@ def _fetch_official_distribution_snapshot(ticker, description=None):
     entry = _match_fund_family(ticker, description)
     if entry is None:
         return None
+    cache_key = (ticker, entry["fetcher"])
+    cached = _cache_get(
+        _OFFICIAL_DISTRIBUTION_CACHE,
+        cache_key,
+        _OFFICIAL_DISTRIBUTION_TTL_SEC,
+    )
+    if cached is False:
+        return None
+    if cached is not None:
+        return cached
     fetcher = globals().get(entry["fetcher"])
     if fetcher is None:
         return None
-    return fetcher(ticker)
+    result = fetcher(ticker)
+    # Cache misses too. Unsupported/new tickers otherwise repeatedly wait on
+    # the same issuer page every time the return mode changes.
+    _cache_set(_OFFICIAL_DISTRIBUTION_CACHE, cache_key, result if result is not None else False)
+    return result
 
 
 def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
@@ -14961,7 +14998,7 @@ def _research_weight_map(value):
     return sorted(rows, key=lambda r: r["weight_pct"], reverse=True)
 
 
-def _research_adjusted_close_series(ticker):
+def _research_adjusted_close_series(ticker, force_refresh=False):
     """Load a split/dividend-adjusted close series for a single ticker."""
     import warnings
     import yfinance as yf
@@ -14972,10 +15009,20 @@ def _research_adjusted_close_series(ticker):
     if not symbol:
         return None, symbol
 
+    if not force_refresh:
+        cached = _cache_get(
+            _RESEARCH_RETURN_SERIES_CACHE,
+            symbol,
+            _RESEARCH_RETURN_SERIES_TTL_SEC,
+        )
+        if cached is not None:
+            return cached
+
     dl_symbol = _yahoo_symbol_for_ticker(symbol)
     description = symbol
     try:
-        info = yf.Ticker(dl_symbol).info or {}
+        yf_ticker = yf.Ticker(dl_symbol)
+        info = _cached_yf_info(yf_ticker, dl_symbol)
         description = info.get("longName") or info.get("shortName") or info.get("displayName") or symbol
         info_symbol = (info.get("symbol") or "").upper()
         if info_symbol and info_symbol != dl_symbol:
@@ -15007,7 +15054,9 @@ def _research_adjusted_close_series(ticker):
         series = pd.Series(series)
     series = series.dropna()
     series.index = pd.to_datetime(series.index)
-    return series, description
+    result = (series, description)
+    _cache_set(_RESEARCH_RETURN_SERIES_CACHE, symbol, result)
+    return result
 
 
 def _research_window_return(series, start_dt, annualize=False):
@@ -15526,12 +15575,12 @@ def security_research(kind, ticker):
 
     try:
         yf_ticker = yf.Ticker(lookup_symbol)
-        info = yf_ticker.info or {}
+        info = _cached_yf_info(yf_ticker, lookup_symbol)
         info_symbol = (info.get("symbol") or "").upper()
         if info_symbol and info_symbol != lookup_symbol:
             lookup_symbol = info_symbol
             yf_ticker = yf.Ticker(lookup_symbol)
-            info = yf_ticker.info or {}
+            info = _cached_yf_info(yf_ticker, lookup_symbol)
     except Exception as exc:
         return jsonify({"error": f"Could not load {ticker}: {exc}"}), 404
 
@@ -15539,10 +15588,7 @@ def security_research(kind, ticker):
     quote_type = (_research_info_value(info, "quoteType") or "").upper()
     summary = _research_info_value(info, "longBusinessSummary") or ""
 
-    try:
-        dividends = yf_ticker.dividends
-    except Exception:
-        dividends = pd.Series(dtype=float)
+    dividends = _cached_yf_dividends(yf_ticker, lookup_symbol)
 
     dividend_frequency = _research_dividend_frequency(dividends)
     ttm_dividend = None
@@ -15813,8 +15859,9 @@ def security_research_average_return(kind, ticker):
     if not benchmark:
         benchmark = "SPY"
 
-    primary_series, primary_name = _research_adjusted_close_series(ticker)
-    benchmark_series, benchmark_name = _research_adjusted_close_series(benchmark)
+    force_refresh = request.args.get("refresh", "0") not in ("", "0")
+    primary_series, primary_name = _research_adjusted_close_series(ticker, force_refresh=force_refresh)
+    benchmark_series, benchmark_name = _research_adjusted_close_series(benchmark, force_refresh=force_refresh)
 
     if primary_series is None or primary_series.empty:
         return jsonify({"error": f"No return data for {ticker}"}), 404
@@ -15857,11 +15904,12 @@ def security_research_average_returns(kind):
     if not symbols:
         return jsonify({"error": "tickers are required"}), 400
 
+    force_refresh = request.args.get("refresh", "0") not in ("", "0")
     series_by_symbol = {}
     names = {}
     errors = {}
     for symbol in symbols:
-        series, name = _research_adjusted_close_series(symbol)
+        series, name = _research_adjusted_close_series(symbol, force_refresh=force_refresh)
         if series is None or series.empty:
             errors[symbol] = f"No return data for {symbol}"
             continue
@@ -21231,7 +21279,7 @@ def etf_screen_data():
     ticker = request.args.get("ticker", "").strip().upper()
     extra = request.args.get("extra", "").strip()
     period = request.args.get("period", "1y")
-    mode = request.args.get("mode", "ohlcv")  # ohlcv | total | price | pricediv | both | all3 | all4
+    mode = request.args.get("mode", "ohlcv")  # ohlcv | total | price | pricediv | both | all3 | all4 | bundle
     reinvest_pct = min(100, max(0, int(request.args.get("reinvest", 100))))
     interval = request.args.get("interval", "")
     # Optional explicit date window. When both are present they override `period`
@@ -21239,6 +21287,9 @@ def etf_screen_data():
     start = request.args.get("start", "").strip()
     end = request.args.get("end", "").strip()
     use_range = bool(start and end)
+    # Comparers can prioritize the visible chart/table, then enrich full
+    # distribution histories and issuer data through Security Research.
+    defer_details = request.args.get("defer_details", "0").lower() in {"1", "true", "yes"}
 
     # yfinance's `period` only accepts a fixed set of strings (1mo/3mo/6mo/ytd/
     # 1y/2y/5y/10y/max). 3Y and 4Y aren't supported, so translate them into an
@@ -21381,16 +21432,33 @@ def etf_screen_data():
     # ---------- Return modes ----------
     frac = reinvest_pct / 100.0
     try:
-        # Download daily data with dividends for return calcs.
-        div_df = _chunked_yf_download(yahoo_symbols, interval="1d", auto_adjust=False, actions=True, progress=False, **_range_kwargs())
+        # Return-mode and reinvestment changes use the same market history.
+        # Cache that raw download independently of the rendered response so
+        # toggles only recompute traces instead of going back to Yahoo.
+        _market_key = (
+            tuple(sorted(yahoo_symbols)),
+            interval,
+            tuple(sorted(_range_kwargs().items())),
+            request.args.get("refresh", "0"),
+        )
+        market_frames = _cache_get(
+            _ETF_SCREEN_MARKET_CACHE,
+            _market_key,
+            _ETF_SCREEN_MARKET_TTL_SEC,
+        )
+        if market_frames is None:
+            # Download daily data with dividends for return calcs.
+            div_df = _chunked_yf_download(yahoo_symbols, interval="1d", auto_adjust=False, actions=True, progress=False, **_range_kwargs())
 
-        # Unadjusted price frame. For daily intervals it's the same download as
-        # div_df (which already carries OHLCV alongside Dividends), so reuse it
-        # instead of fetching the same data twice.
-        if interval == "1d":
-            price_df = div_df
+            # Unadjusted price frame. For daily intervals it's the same download
+            # as div_df, so reuse it instead of fetching identical data twice.
+            if interval == "1d":
+                price_df = div_df
+            else:
+                price_df = _chunked_yf_download(yahoo_symbols, interval=interval, auto_adjust=False, progress=False, **_range_kwargs())
+            _cache_set(_ETF_SCREEN_MARKET_CACHE, _market_key, (div_df, price_df))
         else:
-            price_df = _chunked_yf_download(yahoo_symbols, interval=interval, auto_adjust=False, progress=False, **_range_kwargs())
+            div_df, price_df = market_frames
         if price_df.empty:
             return jsonify(error="No price data found"), 404
 
@@ -21557,7 +21625,7 @@ def etf_screen_data():
                 traces["blend"] = [round(v, 4) for v in blend.tolist()]
                 drip = _blend_price_drip(div_close, divs, 1.0, track_cash=True)
                 traces["drip"] = [round(v, 4) for v in drip.tolist()]
-            elif mode == "all4":
+            elif mode in ("all4", "bundle"):
                 traces["price"] = norm_price
                 pdiv = _blend_price_drip(div_close, divs, 0.0, track_cash=True)
                 traces["pricediv"] = [round(v, 4) for v in pdiv.tolist()]
@@ -21572,6 +21640,11 @@ def etf_screen_data():
             if "total" in traces:
                 total_ret = _series_return(traces["total"], price_ret)
                 drawdown_basis = traces["total"]
+            elif mode == "bundle" and "drip" in traces:
+                # A bundle is shared by every display mode, so its comparison
+                # statistics consistently represent canonical total return.
+                total_ret = _series_return(traces["drip"], price_ret)
+                drawdown_basis = traces["drip"]
             elif "blend" in traces:
                 total_ret = _series_return(traces["blend"], price_ret)
                 drawdown_basis = traces["blend"]
@@ -21681,10 +21754,11 @@ def etf_screen_data():
                 info.get("shortName"), info.get("fundFamily"), sym,
             ))
             official_snapshot = None
-            try:
-                official_snapshot = _fetch_official_distribution_snapshot(dl_sym, description_text)
-            except Exception:
-                official_snapshot = None
+            if not defer_details:
+                try:
+                    official_snapshot = _fetch_official_distribution_snapshot(dl_sym, description_text)
+                except Exception:
+                    official_snapshot = None
             if official_snapshot and official_snapshot.get("has_dividend"):
                 official_source = official_snapshot.get("source") or "Fund Site"
                 official_history = official_snapshot.get("history")
@@ -21712,7 +21786,7 @@ def etf_screen_data():
                     except Exception:
                         pass
 
-            if expected_dividend_yield is None:
+            if expected_dividend_yield is None and not defer_details:
                 try:
                     provider_profile = _fetch_provider_etf_profile(dl_sym, {
                         "name": saved.get("fund_name") or saved.get("name") or info.get("longName") or info.get("shortName") or sym,
@@ -21730,10 +21804,11 @@ def etf_screen_data():
             _set_expected_yield(annual_dividend=saved.get("annual_div"), source=saved.get("provider"))
             _set_expected_yield(saved.get("div_yield"), source=saved.get("provider"))
 
-            try:
-                history_divs = tk_obj.dividends if tk_obj is not None else pd.Series(dtype=float)
-            except Exception:
-                history_divs = pd.Series(dtype=float)
+            history_divs = (
+                divs_raw
+                if defer_details
+                else (_cached_yf_dividends(tk_obj, dl_sym) if tk_obj is not None else pd.Series(dtype=float))
+            )
             if history_divs is None or history_divs.empty:
                 history_divs = divs_raw
             freq_code = None

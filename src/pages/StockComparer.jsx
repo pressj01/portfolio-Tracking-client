@@ -6,6 +6,7 @@ import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
+import { selectComparerTraces, shouldUseComparerLogScale } from '../utils/comparerTraces'
 
 const PERIODS = [
   { value: '1mo', label: '1M' },
@@ -168,7 +169,7 @@ function yearsAgoDateKey(endDate, years) {
 
 function totalReturnForYears(series, years) {
   const dates = series?.dates || []
-  const values = series?.traces?.total || series?.traces?.blend || series?.traces?.pricediv || series?.traces?.price || []
+  const values = series?.traces?.total || series?.traces?.drip || series?.traces?.blend || series?.traces?.pricediv || series?.traces?.price || []
   if (dates.length < 2 || values.length < 2) return null
   const endIdx = values.length - 1
   const startKey = yearsAgoDateKey(dates[endIdx], years)
@@ -239,9 +240,11 @@ export default function StockComparer() {
   const [period, setPeriod] = useState('6mo')
   const [returnMode, setReturnMode] = useState('total')
   const [reinvest, setReinvest] = useState(100)
+  const [debouncedReinvest, setDebouncedReinvest] = useState(100)
   const [showReturnLabels, setShowReturnLabels] = useState(true)
   const [returnHoverMode, setReturnHoverMode] = useState('x unified')
   const [returnPctMode, setReturnPctMode] = useState(true)
+  const [returnScalePreference, setReturnScalePreference] = useState('auto')
   const [showRangeSlider, setShowRangeSlider] = useState(true)
   const [returnXRange, setReturnXRange] = useState([null, null])
   // Committed custom data window from the date inputs (overrides `period` on the
@@ -320,6 +323,11 @@ export default function StockComparer() {
     reinvestRef.current = reinvest
   }, [reinvest])
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedReinvest(reinvest), 180)
+    return () => window.clearTimeout(timer)
+  }, [reinvest])
+
   const load = useCallback(() => {
     const symbols = tickers.map(normalize).filter(Boolean)
     const loadSeq = loadSeqRef.current + 1
@@ -337,7 +345,7 @@ export default function StockComparer() {
     const fr = normalizeReturnRange(fetchRange)
     const rangeParam = fr ? `&start=${fr[0]}&end=${fr[1]}` : ''
     const requestPeriod = period === 'all' ? 'max' : period
-    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${requestPeriod}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}${rangeParam}`)
+    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${requestPeriod}&mode=all4&reinvest=${debouncedReinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}&defer_details=1${rangeParam}`)
       .then(r => r.json())
       .then(d => {
         if (loadSeqRef.current !== loadSeq) return
@@ -352,7 +360,7 @@ export default function StockComparer() {
       .finally(() => {
         if (loadSeqRef.current === loadSeq) setLoading(false)
       })
-  }, [pf, tickers, period, returnMode, reinvest, refreshNonce, fetchRange])
+  }, [pf, tickers, period, debouncedReinvest, refreshNonce, fetchRange])
 
   useEffect(() => { load() }, [load])
 
@@ -362,15 +370,17 @@ export default function StockComparer() {
 
   useEffect(() => {
     const symbols = tickers.map(normalize).filter(Boolean)
+    const readySymbols = symbols.filter(sym => data?.series?.[sym])
+    if (!readySymbols.length) return
     // Track in-flight/loaded symbols in a ref (not `stockData` state) so this
     // effect does NOT re-run every time a sibling symbol resolves. Depending on
     // `stockData` here would re-fire a duplicate request for every symbol still
     // in flight each time another one lands. The ref is cleared on failure so a
     // later ticker change can retry.
-    symbols.forEach(sym => {
-      if (stockDataLoadedRef.current[sym]) return
-      stockDataLoadedRef.current[sym] = true
-      pf(`/api/security-research/stock/${encodeURIComponent(sym)}`)
+    readySymbols.forEach(sym => {
+      if (stockDataLoadedRef.current[sym] === refreshNonce) return
+      stockDataLoadedRef.current[sym] = refreshNonce
+      pf(`/api/security-research/stock/${encodeURIComponent(sym)}?refresh=${refreshNonce}`)
         .then(r => r.json())
         .then(d => {
           if (!d.error) setStockData(prev => ({ ...prev, [sym]: d }))
@@ -378,7 +388,7 @@ export default function StockComparer() {
         })
         .catch(() => { delete stockDataLoadedRef.current[sym] })
     })
-  }, [tickers, pf])
+  }, [tickers, pf, refreshNonce, data])
 
   useEffect(() => {
     const requestedSymbols = tickers.map(normalize).filter(Boolean)
@@ -386,6 +396,7 @@ export default function StockComparer() {
       setAverageData(null)
       return
     }
+    if (requestedSymbols.some(sym => !data?.series?.[sym])) return
 
     let cancelled = false
     setAverageData(null)
@@ -404,7 +415,7 @@ export default function StockComparer() {
         let periods = (result.periods || []).filter(period => period.label !== 'Inception')
         const hasLongPeriods = periods.some(period => period.label === '15 Years') && periods.some(period => period.label === '20 Years')
         if (!hasLongPeriods) {
-          const historyResp = await pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=max&mode=total&reinvest=100&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}`)
+          const historyResp = await pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=max&mode=all4&reinvest=100&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}&defer_details=1`)
           const history = await historyResp.json()
           if (cancelled) return
           if (!history.error) {
@@ -429,7 +440,7 @@ export default function StockComparer() {
     loadAverageReturns()
 
     return () => { cancelled = true }
-  }, [pf, tickers, refreshNonce])
+  }, [pf, tickers, refreshNonce, data])
 
   const addTickers = () => {
     const symbols = input.split(/[\s,]+/).map(normalize).filter(Boolean)
@@ -468,7 +479,7 @@ export default function StockComparer() {
   }, [symbols])
 
   const chart = useMemo(() => {
-    if (!data?.series) return { data: [], layout: {} }
+    if (!data?.series) return { data: [], layout: {}, logScaleActive: false }
     const traces = []
     const annotations = []
     const labelCandidates = []
@@ -483,6 +494,15 @@ export default function StockComparer() {
     // dates or slider) so the chart visually aligns with the date set.
     const [visibleStart, visibleEnd] = visibleDateRange(data, effectiveReturnRange, true)
     const titleWindow = activeReturnRange || normalizeReturnRange(fetchRange)
+    const autoLogScale = shouldUseComparerLogScale(
+      data.series,
+      symbols,
+      returnMode,
+      visibleStart,
+      visibleEnd,
+    )
+    const logScaleActive = returnScalePreference === 'log'
+      || (returnScalePreference === 'auto' && autoLogScale)
 
     // When a symbol is highlighted, draw it last so its line sits on top of
     // the dimmed ones instead of being covered by them.
@@ -493,14 +513,16 @@ export default function StockComparer() {
       const idx = symbols.indexOf(sym)
       const dates = data.series[sym]?.dates || []
       const traceMap = data.series[sym]?.traces || {}
-      Object.entries(traceMap).forEach(([key, values]) => {
+      selectComparerTraces(traceMap, returnMode).forEach(([key, values]) => {
         const isDimmed = highlightedSymbol && highlightedSymbol !== sym
         const color = isDimmed ? DIMMED_COLOR : COLORS[idx % COLORS.length]
         const style = TRACE_STYLES[key] || TRACE_STYLES.total
         const baseIdx = firstVisibleIndex(dates, visibleStart, visibleEnd)
         const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
         const base = Number(baseIdx >= 0 ? values?.[baseIdx] : values?.[0])
-        const y = base ? values.map(v => returnPctMode ? (v / base - 1) * 100 : v / base * 100) : values
+        const normalized = base ? values.map(v => v / base * 100) : values
+        const returnValues = normalized.map(v => Number(v) - 100)
+        const y = logScaleActive ? normalized : (returnPctMode ? returnValues : normalized)
         dates.forEach((date, i) => {
           const value = Number(y[i])
           if (!Number.isFinite(value)) return
@@ -509,7 +531,7 @@ export default function StockComparer() {
             visibleYValues.push(value)
           }
         })
-        const label = key === 'blend' ? `${reinvest}%` : style.label
+        const label = key === 'blend' ? `${data.reinvest_pct ?? debouncedReinvest}%` : style.label
         const name = label ? `${sym} (${label})` : sym
         traces.push({
           x: dates,
@@ -517,13 +539,17 @@ export default function StockComparer() {
           type: 'scatter',
           mode: 'lines',
           name,
+          customdata: returnValues,
           line: { color, width: style.width, dash: style.dash },
-          hovertemplate: returnPctMode
-            ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:+,.2f}%<extra></extra>`
+          hovertemplate: logScaleActive && returnPctMode
+            ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{customdata:+,.2f}%<br>Growth of $100: %{y:,.2f}<extra></extra>`
+            : returnPctMode
+              ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:+,.2f}%<extra></extra>`
             : `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:,.2f}<extra></extra>`,
         })
         if (showReturnLabels && labelIdx >= 0) {
           const last = y[labelIdx]
+          const lastReturn = returnValues[labelIdx]
           if (Number.isFinite(Number(last))) {
             const visibleBaseIdx = baseIdx >= 0 ? baseIdx : 0
             const startDate = new Date(`${dateKey(dates[visibleBaseIdx])}T00:00:00Z`)
@@ -543,7 +569,7 @@ export default function StockComparer() {
             labelCandidates.push({
               y: Number(last),
               text: returnPctMode
-                ? `${pct(last)}${cagr == null ? '' : `<br>${pct(cagr)} CAGR`}`
+                ? `${pct(lastReturn)}${cagr == null ? '' : `<br>${pct(cagr)} CAGR`}`
                 : number(last),
               color,
             })
@@ -552,17 +578,21 @@ export default function StockComparer() {
       })
     })
     if (showReturnLabels && labelCandidates.length) {
-      const axisBase = returnPctMode ? 0 : 100
-      const yMin = Math.min(axisBase, ...visibleYValues, ...labelCandidates.map(label => label.y))
-      const yMax = Math.max(axisBase, ...visibleYValues, ...labelCandidates.map(label => label.y))
-      const ySpan = Math.max(1, yMax - yMin)
-      const minLabelGap = Math.max(ySpan * 0.04, returnPctMode ? 0.45 : 1.5)
-      const sortedLabels = [...labelCandidates].sort((a, b) => a.y - b.y)
+      const axisBase = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
+      const scaleY = value => logScaleActive ? Math.log10(Math.max(Number(value), Number.MIN_VALUE)) : Number(value)
+      const unscaleY = value => logScaleActive ? 10 ** value : value
+      const yMin = Math.min(scaleY(axisBase), ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
+      const yMax = Math.max(scaleY(axisBase), ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
+      const ySpan = Math.max(logScaleActive ? 0.01 : 1, yMax - yMin)
+      const minLabelGap = Math.max(ySpan * 0.04, logScaleActive ? 0.035 : (returnPctMode ? 0.45 : 1.5))
+      const sortedLabels = [...labelCandidates]
+        .map(label => ({ ...label, scaledY: scaleY(label.y) }))
+        .sort((a, b) => a.scaledY - b.scaledY)
 
       sortedLabels.forEach((label, index) => {
         label.displayY = index === 0
-          ? label.y
-          : Math.max(label.y, sortedLabels[index - 1].displayY + minLabelGap)
+          ? label.scaledY
+          : Math.max(label.scaledY, sortedLabels[index - 1].displayY + minLabelGap)
       })
 
       const overflow = sortedLabels[sortedLabels.length - 1].displayY - yMax
@@ -579,7 +609,7 @@ export default function StockComparer() {
         annotations.push({
           x: 1,
           xref: 'paper',
-          y: label.displayY,
+          y: unscaleY(label.displayY),
           text: label.text,
           showarrow: false,
           xanchor: 'left',
@@ -588,9 +618,10 @@ export default function StockComparer() {
         })
       })
     }
+    const baselineY = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
     traces.push({
       x: [minDate, maxDate],
-      y: [returnPctMode ? 0 : 100, returnPctMode ? 0 : 100],
+      y: [baselineY, baselineY],
       type: 'scatter',
       mode: 'lines',
       name: 'Baseline',
@@ -604,20 +635,29 @@ export default function StockComparer() {
     let yAxisRange = null
     let visibleAbsMax = 0
     if (visibleYValues.length) {
-      const axisBase = returnPctMode ? 0 : 100
+      const axisBase = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
       const labelYs = labelCandidates.map(l => l.y)
       const yLo = Math.min(axisBase, ...visibleYValues, ...labelYs)
       const yHi = Math.max(axisBase, ...visibleYValues, ...labelYs)
-      visibleAbsMax = Math.max(Math.abs(yLo), Math.abs(yHi))
-      const pad = Math.max((yHi - yLo) * 0.08, 1)
-      yAxisRange = [yLo - pad, yHi + pad]
+      if (logScaleActive) {
+        const logLo = Math.log10(Math.max(yLo, Number.MIN_VALUE))
+        const logHi = Math.log10(Math.max(yHi, Number.MIN_VALUE))
+        const pad = Math.max((logHi - logLo) * 0.08, 0.04)
+        yAxisRange = [logLo - pad, logHi + pad]
+      } else {
+        visibleAbsMax = Math.max(Math.abs(yLo), Math.abs(yHi))
+        const pad = Math.max((yHi - yLo) * 0.08, 1)
+        yAxisRange = [yLo - pad, yHi + pad]
+      }
     }
-    const titleText = titleWindow
+    const baseTitle = titleWindow
       ? `Cumulative Total Return — ${titleWindow[0]} → ${titleWindow[1]}`
       : 'Cumulative Total Return (%)'
-    const largeReturnDisplay = returnPctMode && visibleAbsMax >= 1000
+    const titleText = `${baseTitle}${logScaleActive ? ' — Log Scale' : ''}`
+    const largeReturnDisplay = !logScaleActive && returnPctMode && visibleAbsMax >= 1000
     return {
       data: traces,
+      logScaleActive,
       layout: {
         template: 'plotly_dark',
         paper_bgcolor: '#1e1e2f',
@@ -634,9 +674,12 @@ export default function StockComparer() {
         hovermode: returnHoverMode,
         legend: { orientation: 'h', x: 0, y: 1.08 },
         yaxis: {
-          title: returnPctMode ? 'Cumulative Total Return (%)' : 'Normalized Return (100 = start)',
-          ticksuffix: returnPctMode ? '%' : '',
-          tickformat: returnPctMode ? (largeReturnDisplay ? ',.0f' : ',.2f') : ',.2f',
+          type: logScaleActive ? 'log' : 'linear',
+          title: logScaleActive
+            ? 'Growth of $100 (log scale)'
+            : (returnPctMode ? 'Cumulative Total Return (%)' : 'Normalized Return (100 = start)'),
+          ticksuffix: !logScaleActive && returnPctMode ? '%' : '',
+          tickformat: logScaleActive ? ',.0f' : (returnPctMode ? (largeReturnDisplay ? ',.0f' : ',.2f') : ',.2f'),
           separatethousands: true,
           gridcolor: '#333',
           zerolinecolor: '#555',
@@ -655,7 +698,7 @@ export default function StockComparer() {
         annotations,
       },
     }
-  }, [data, symbols, period, reinvest, returnPctMode, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange, highlightedSymbol])
+  }, [data, symbols, period, debouncedReinvest, returnMode, returnPctMode, returnScalePreference, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange, highlightedSymbol])
 
   const rows = useMemo(() => {
     const profiles = data?.profiles || {}
@@ -838,6 +881,11 @@ export default function StockComparer() {
           <span>Chart</span>
           <button type="button" className="btn btn-sm" onClick={refreshComparison} disabled={!symbols.length || loading}>{loading ? 'Refreshing...' : 'Refresh'}</button>
           <button className={`btn btn-sm${returnPctMode ? ' btn-active' : ''}`} onClick={() => setReturnPctMode(v => !v)}>Return %</button>
+          <button
+            className={`btn btn-sm${chart.logScaleActive ? ' btn-active' : ''}`}
+            onClick={() => setReturnScalePreference(chart.logScaleActive ? 'linear' : 'log')}
+            title={returnScalePreference === 'auto' && chart.logScaleActive ? 'Automatically enabled because the visible return range is extreme' : 'Use a logarithmic growth scale'}
+          >Log Scale{chart.logScaleActive && returnScalePreference === 'auto' ? ' (Auto)' : ''}</button>
           <button className={`btn btn-sm${showReturnLabels ? ' btn-active' : ''}`} onClick={() => setShowReturnLabels(v => !v)}>End Labels</button>
           <button className={`btn btn-sm${returnHoverMode === 'x unified' ? ' btn-active' : ''}`} onClick={() => setReturnHoverMode(m => m === 'x unified' ? 'closest' : 'x unified')}>Unified Hover</button>
           <button className={`btn btn-sm${showRangeSlider ? ' btn-active' : ''}`} onClick={() => { setShowRangeSlider(v => !v); resetReturnRange() }}>Range Slider</button>
