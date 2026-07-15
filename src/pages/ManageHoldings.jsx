@@ -987,6 +987,11 @@ const PREVIEW_SOURCE_COLUMNS = [
 
 const normalizeDivSource = (source) => {
   const value = (source || 'none').toString().toLowerCase()
+  if (value.startsWith('schwab')) return 'schwab'
+  if (value.startsWith('fidelity')) return 'fidelity'
+  if (value.startsWith('etrade') || value.startsWith('e*trade')) return 'etrade'
+  if (value.startsWith('robinhood')) return 'robinhood'
+  if (value.startsWith('snowball')) return 'snowball'
   if (value.startsWith('shear_group') || value.startsWith('shear group')) return 'shear_group'
   return value
 }
@@ -1487,7 +1492,21 @@ export default function ManageHoldings() {
     const meta = DIV_SOURCE_META[value]
     const label = meta ? meta.label : value
     const color = meta ? meta.color : DIV_SOURCE_META.none.color
-    return <span title={`Dividend actuals source: ${value}`} style={{ color, fontWeight: value === 'none' ? 400 : 700 }}>{label}</span>
+    return (
+      <span
+        title={`Dividend actuals source: ${value}`}
+        style={{
+          color,
+          display: 'block',
+          fontWeight: value === 'none' ? 400 : 700,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {label}
+      </span>
+    )
   }
 
   const sortArrow = (key) => {
@@ -1862,7 +1881,7 @@ export default function ManageHoldings() {
                   <td>{fmtPct(h.current_annual_yield)}</td>
                   <td>{fmtM(h.dividend_paid)}</td>
                   <td>{fmtM(h.ytd_divs)}</td>
-                  <td>{fmtM(h.total_divs_received)}</td>
+                  <td>{formatMoney(h.total_divs_received, { zeroIfInvalid: true })}</td>
                   <td>{fmtPct(h.paid_for_itself)}</td>
                   <td>{sourceBadge(h.dividend_actuals_source)}</td>
                   <td>

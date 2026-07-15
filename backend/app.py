@@ -6236,6 +6236,19 @@ def _infer_dividend_frequency_from_dates(dates):
         return None
 
 
+def _resolve_refresh_dividend_frequency(ticker, snapshot_frequency, weekly_tickers):
+    """Use fresh distribution cadence unless a curated weekly override applies.
+
+    A stored frequency is passed to provider fallbacks only when fresh data is
+    unavailable. It must not overrule a newer cadence inferred from dividend
+    history: doing so can annualize a monthly distribution 52 times per year.
+    """
+    if (ticker or "").strip().upper() in weekly_tickers:
+        return "W"
+    frequency = (snapshot_frequency or "").strip().upper()
+    return frequency or None
+
+
 def _fetch_yahoo_dividend_history_for_tickers(tickers):
     """Return ticker -> per-share dividend Series for the last year."""
     import yfinance as yf
@@ -9197,8 +9210,10 @@ def refresh_market_data():
     except Exception:
         pass
 
-    # Resolve effective frequency per ticker (once, shared across profiles)
-    freq_rank = {'W': 6, '52': 6, 'M': 5, 'Q': 4, 'SA': 3, 'A': 2, None: 0}
+    # Resolve effective frequency per ticker (once, shared across profiles).
+    # Fresh provider/issuer history takes precedence over the database's
+    # fallback frequency; otherwise a stale weekly marker can make a monthly
+    # payout appear to yield more than four times its real annual rate.
     effective_freq = {}
     for t in tickers:
         if t in div_history and div_map.get(t) is not None:
@@ -9285,15 +9300,11 @@ def refresh_market_data():
 
         snapshot = div_snapshot_map[t]
         if snapshot.get("has_dividend"):
-            nf = snapshot.get("freq")
-            if t in weekly_set:
-                nf = 'W'
-            else:
-                db_rank = freq_rank.get(db_freq_map.get(t), 0)
-                new_rank = freq_rank.get(nf, 0)
-                if new_rank < db_rank:
-                    nf = db_freq_map.get(t)
-            effective_freq[t] = nf
+            effective_freq[t] = _resolve_refresh_dividend_frequency(
+                t,
+                snapshot.get("freq"),
+                weekly_set,
+            )
         else:
             effective_freq[t] = None
 
