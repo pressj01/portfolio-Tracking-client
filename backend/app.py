@@ -15355,8 +15355,8 @@ def _research_return_summary(ticker, benchmark, rows, yield_info=None):
         relation = "slightly lower than" if diff > -2 else "lower than"
 
     return (
-        f"{period_label}, {ticker} returned a total of {t_ret:.2f}%, "
-        f"which is {relation} {benchmark}'s {b_ret:.2f}% return{yield_suffix}."
+        f"{period_label}, {ticker} returned a total of {t_ret:.2f}%{yield_suffix}, "
+        f"which is {relation} {benchmark}'s {b_ret:.2f}% return."
     )
 
 
