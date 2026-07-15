@@ -14047,6 +14047,40 @@ def _assess_etf_closure_risk(info):
     }
 
 
+def _assess_etf_closure_risk_with_fallback(info, response):
+    """Closure risk that backfills AUM/expense/inception from an official
+    provider profile (e.g. NEOS Net Assets) when the market feed didn't supply
+    them, so a fund with a blank Yahoo AUM can still be rated.
+
+    Only engages for funds the market feed already classifies as an ETF, so a
+    stock or CEF is never coerced into an ETF rating. Otherwise defers to
+    _assess_etf_closure_risk unchanged.
+    """
+    risk = _assess_etf_closure_risk(info)
+    quote_type = (info.get("quoteType") or "").upper() if isinstance(info, dict) else ""
+    total_assets = response.get("total_assets") if isinstance(response, dict) else None
+    # Only step in when Yahoo classified it as an ETF but couldn't size it.
+    if quote_type != "ETF" or not total_assets:
+        return risk
+    if risk is not None and risk.get("tier") != "unknown":
+        return risk
+
+    synthetic = dict(info)
+    synthetic["totalAssets"] = total_assets
+    if response.get("expense_ratio_pct") is not None:
+        # response ER is a percent (0.99); the assessor de-scales values >0.05.
+        synthetic["annualReportExpenseRatio"] = response["expense_ratio_pct"]
+    if not synthetic.get("fundInceptionDate") and response.get("inception_date"):
+        try:
+            synthetic["fundInceptionDate"] = pd.Timestamp(response["inception_date"]).timestamp()
+        except Exception:
+            pass
+    retry = _assess_etf_closure_risk(synthetic)
+    if retry is not None and retry.get("tier") != "unknown":
+        return retry
+    return risk
+
+
 @app.route("/api/portfolio-summary/data", methods=["GET"])
 def portfolio_summary_data():
     """Compute per-ticker grades and portfolio-level grade via yfinance."""
@@ -15560,6 +15594,115 @@ def _fetch_income_blast_etf_profile(ticker):
     }
 
 
+def _neos_detail_value(html, label):
+    """Value cell for a label row in the neosfunds.com fund-details table."""
+    m = re.search(
+        r">\s*" + re.escape(label) + r"\s*</td>\s*"
+        r"<td class=\"fund-details-table-sizing\"[^>]*>\s*(.*?)\s*</td>",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return None
+    value = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip()
+    return value or None
+
+
+def _neos_stat_value(html, title):
+    """Headline <div class=\"stat\"> value that follows a popover <small> title."""
+    m = re.search(
+        r"title=\"" + re.escape(title) + r"\"[^>]*>.*?</small>\s*"
+        r"<div class=\"stat\">\s*([^<]+?)\s*</div>",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return m.group(1).strip() if m else None
+
+
+def _fetch_neos_etf_profile(ticker):
+    """Official fund profile from neosfunds.com for NEOS funds.
+
+    Returns a partial profile dict; any field the page no longer exposes comes
+    back as None, so the caller keeps the Yahoo value for that field. Returns
+    None entirely when the page can't be fetched or no longer looks like a NEOS
+    fund page (site redesign / soft 404) — the caller then uses Yahoo for
+    everything. This is the "fall back to Yahoo if the HTML changes" guarantee.
+    """
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return None
+
+    url = f"https://neosfunds.com/{ticker.lower()}/"
+    try:
+        resp = requests.get(url, timeout=10, headers={"User-Agent": "PortfolioTrackingClient/1.0"})
+        resp.raise_for_status()
+    except Exception:
+        return None
+
+    # neosfunds.com is UTF-8; decode explicitly so smart quotes in the objective
+    # survive (requests' charset guess otherwise mangles them to U+FFFD).
+    html = resp.content.decode("utf-8", errors="replace")
+
+    # Bail to Yahoo if this no longer looks like a NEOS fund page.
+    if "fund-details-table-sizing" not in html and "NEOS" not in html.upper():
+        return None
+
+    net_assets = _neos_detail_value(html, "Net Assets")
+    expense = (_neos_detail_value(html, "Total Annual Fund Operating Expenses")
+               or _neos_detail_value(html, "Management Fee"))
+    frequency = _neos_detail_value(html, "Distribution Frequency")
+    dist_rate = _neos_stat_value(html, "Distribution Rate")
+    sec_yield = _neos_stat_value(html, "30-Day SEC Yield")
+
+    inception_raw = _neos_detail_value(html, "Fund Inception")
+    inception_iso = None
+    if inception_raw:
+        # The 4-column row can leak the next label, so pull just the date.
+        dm = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", inception_raw)
+        inception_iso = (
+            f"{dm.group(3)}-{int(dm.group(1)):02d}-{int(dm.group(2)):02d}" if dm else inception_raw
+        )
+
+    objective = None
+    mo = re.search(r"Investment Objective:\s*</h3>\s*<p[^>]*>(.*?)</p>", html, flags=re.IGNORECASE | re.DOTALL)
+    if mo:
+        objective = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", mo.group(1))).strip()
+        objective = (objective.replace("“", '"').replace("”", '"')
+                     .replace("‘", "'").replace("’", "'")) or None
+
+    name = None
+    if objective:
+        nm = re.search(r"The\s+(NEOS\b.*?ETF)\b", objective)
+        if nm:
+            name = nm.group(1).strip()
+
+    # If nothing meaningful parsed, treat as a miss so Yahoo stays authoritative.
+    if not any((net_assets, expense, frequency, dist_rate, sec_yield, inception_iso, objective)):
+        return None
+
+    return {
+        "name": name,
+        "fund_type": "ETF",
+        "description": objective,
+        "objective": objective,
+        "issuer": "NEOS Investments",
+        "legal_type": "Exchange Traded Fund",
+        "expense_ratio_pct": _research_expense_pct(expense),
+        "total_assets": _vistashares_money(net_assets),
+        "total_assets_label": "Net Assets",
+        "inception_date": inception_iso,
+        "dividend_frequency": frequency.title() if frequency else None,
+        "estimated_yield_pct": _research_pct(dist_rate),
+        "distribution_rate_pct": _research_pct(dist_rate),
+        "sec_30_day_yield_pct": _research_pct(sec_yield),
+        "target_yield_label": "Distribution Rate",
+        "source_url": url,
+        "data_source": "NEOS Investments",
+    }
+
+
 def _research_has_value(value):
     return value not in (None, "", [])
 
@@ -15579,6 +15722,8 @@ def _fetch_provider_etf_profile(ticker, response):
     """Try official issuer/provider pages when the market-data feed is sparse."""
     provider_hints = " ".join(str(response.get(k) or "") for k in ("name", "issuer", "data_source"))
     fetchers = []
+    if _is_neos_fund(ticker, provider_hints):
+        fetchers.append(_fetch_neos_etf_profile)
     if _is_tuttle_capital_fund(ticker, provider_hints):
         fetchers.append(_fetch_income_blast_etf_profile)
     if "vistashares" in provider_hints.lower():
@@ -15736,14 +15881,21 @@ def security_research(kind, ticker):
             "top_holdings": _research_top_holdings(fund_data, ticker=lookup_symbol, description=f"{name} {summary}"),
             "sector_weightings": _research_weight_map(getattr(fund_data, "sector_weightings", None)) if fund_data is not None else [],
             "asset_classes": _research_weight_map(getattr(fund_data, "asset_classes", None)) if fund_data is not None else [],
-            "closure_risk": _assess_etf_closure_risk(info),
             "data_source": "Yahoo Finance",
         }
-        official_profile = _fetch_provider_etf_profile(lookup_symbol, response) if _research_needs_provider_fallback(response) else None
-        if official_profile:
-            for key, value in official_profile.items():
-                if value not in (None, "", []):
-                    response[key] = value
+        # NEOS funds are always sourced from neosfunds.com (per-field fallback to
+        # Yahoo happens automatically below since only non-empty values override).
+        is_neos = _is_neos_fund(lookup_symbol, f"{name} {summary}")
+        if _research_needs_provider_fallback(response) or is_neos:
+            official_profile = _fetch_provider_etf_profile(lookup_symbol, response)
+            if official_profile:
+                for key, value in official_profile.items():
+                    if value not in (None, "", []):
+                        response[key] = value
+
+        # Rate closure risk last so it can use official AUM (e.g. NEOS Net
+        # Assets) when the market feed left it blank. Age softening still applies.
+        response["closure_risk"] = _assess_etf_closure_risk_with_fallback(info, response)
 
         # ── Official fund-site yield & distribution history ──────────────
         description_text = f"{name} {summary}"
