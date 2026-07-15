@@ -13909,7 +13909,8 @@ def _closure_risk_reason(tier, aum, er, est_revenue, fund_age_years, softened):
     age = ""
     if fund_age_years is not None:
         if fund_age_years < 1:
-            age = f" Fund launched ~{max(1, int(round(fund_age_years * 12)))} months ago"
+            months = max(1, int(round(fund_age_years * 12)))
+            age = f" Fund launched ~{months} month{'s' if months != 1 else ''} ago"
         else:
             age = f" Fund is ~{fund_age_years:.1f} years old"
         if softened:
@@ -15699,6 +15700,7 @@ def security_research(kind, ticker):
             "top_holdings": _research_top_holdings(fund_data, ticker=lookup_symbol, description=f"{name} {summary}"),
             "sector_weightings": _research_weight_map(getattr(fund_data, "sector_weightings", None)) if fund_data is not None else [],
             "asset_classes": _research_weight_map(getattr(fund_data, "asset_classes", None)) if fund_data is not None else [],
+            "closure_risk": _assess_etf_closure_risk(info),
             "data_source": "Yahoo Finance",
         }
         official_profile = _fetch_provider_etf_profile(lookup_symbol, response) if _research_needs_provider_fallback(response) else None

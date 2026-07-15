@@ -41,6 +41,52 @@ const pctClass = (v) => {
   return v >= 0 ? 'pct-up' : 'pct-down'
 }
 
+// ── ETF closure / small-AUM risk (fund too small to be profitable for the issuer) ──
+// Mirrors the dashboard's tiers so a warning reads the same across the app.
+const CLOSURE_TIER = {
+  high: { rank: 3, label: 'High', color: 'var(--neg)' },
+  elevated: { rank: 2, label: 'Elevated', color: 'var(--warning-money)' },
+  watch: { rank: 1, label: 'Watch', color: 'var(--warning-text)' },
+  ok: { rank: 0, label: 'OK', color: 'var(--pos)' },
+  unknown: { rank: -1, label: '?', color: 'var(--text-dim)' },
+}
+const isAtClosureRisk = (info) => ['watch', 'elevated', 'high'].includes(info?.tier)
+
+// Full closure-risk warning for the ETF lookup detail view. The backend already
+// factored in fund size × expense ratio (fee revenue), AUM floors, and a grace
+// period for newly launched funds, so we just render its verdict.
+function ClosureRiskWarning({ info }) {
+  if (!isAtClosureRisk(info)) return null
+  const tier = CLOSURE_TIER[info.tier] || CLOSURE_TIER.unknown
+  return (
+    <div
+      className="alert alert-warning"
+      role="alert"
+      style={{
+        display: 'flex',
+        gap: '0.7rem',
+        alignItems: 'flex-start',
+        borderColor: `color-mix(in srgb, ${tier.color} 55%, transparent)`,
+        background: `color-mix(in srgb, ${tier.color} 12%, transparent)`,
+      }}
+    >
+      <span style={{ color: tier.color, fontSize: '1.15rem', lineHeight: 1 }}>⚠</span>
+      <div>
+        <strong style={{ color: tier.color }}>
+          {tier.label} closure risk — this fund's assets are small for its running costs.
+        </strong>
+        <p style={{ margin: '0.3rem 0 0' }}>{info.reason}</p>
+        <p style={{ margin: '0.4rem 0 0', color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+          ETF issuers earn roughly <em>assets × expense ratio</em> per year, so a fund that stays too
+          small to cover its costs is a candidate for liquidation — which would force a sale (a
+          possible taxable event) and reinvestment. Estimated from fund size and fees, not a closure
+          announcement — confirm on the issuer's site. Informational only, not investment advice.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 function Field({ label, value }) {
   return (
     <div className="research-field">
@@ -266,6 +312,8 @@ function ETFResult({ data, onOpenChart, return1y }) {
         </div>
         <button type="button" className="btn btn-primary" onClick={onOpenChart}>Open Annual Chart</button>
       </div>
+
+      <ClosureRiskWarning info={data.closure_risk} />
 
       <section className="research-section">
         <h3>Name & Description</h3>
