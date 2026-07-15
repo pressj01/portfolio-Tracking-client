@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE } from '../config'
 import { useTheme } from '../context/ThemeContext'
+import { assignBrokerImportSides, parseBrokerOptionDescriptor } from '../utils/brokerOptions'
 import { chartTheme } from '../utils/chartTheme'
 import { resizeOptionStructure } from '../utils/optionsStrategy'
+import GreekSurfaceExplorer from '../components/GreekSurfaceExplorer'
 
 const TODAY = () => {
   const now = new Date()
@@ -111,54 +113,9 @@ const INDEX_PROXY_MAP = {
   NASDAQ: { ticker: 'QQQ', divisor: 40 },
   NQ: { ticker: 'QQQ', divisor: 40 },
 }
-const BROKER_IMPORT_EXAMPLE = 'SPX US 08/21/26 C7645\nSPX US 08/21/26 C7735'
+const BROKER_IMPORT_EXAMPLE = 'NDX 260821C31250000\nNDX 260821P26800000\nNDX 260821P28775000'
 const mapBrokerUnderlying = symbol => INDEX_PROXY_MAP[String(symbol).toUpperCase()]
   || { ticker: String(symbol).toUpperCase(), divisor: 1 }
-const normalizeOptionDate = (yy, mm, dd) => {
-  let year = Number(yy)
-  if (!Number.isFinite(year)) return ''
-  if (year < 100) year += 2000
-  return `${year}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
-}
-// Parse a broker option description into a leg. Handles the human-readable
-// "SPX US 08/21/26 C7645" form and the OCC-style "SPX 260821C07645000" form,
-// with an optional signed quantity prefix (negative = short).
-const parseBrokerOptionDescriptor = (raw, defaultSide = 'BUY') => {
-  if (!raw) return null
-  let body = String(raw).trim().toUpperCase()
-  if (!body) return null
-  let qty = 1
-  let side = defaultSide === 'SELL' ? 'SELL' : 'BUY'
-  const qtyMatch = body.match(/^([+-]?\d+)\s+(.+)$/)
-  if (qtyMatch && Number(qtyMatch[1]) !== 0) {
-    qty = Math.abs(Number(qtyMatch[1]))
-    side = Number(qtyMatch[1]) < 0 ? 'SELL' : 'BUY'
-    body = qtyMatch[2].trim()
-  }
-  const human = body.match(/^([A-Z]{1,6})(?:\s+[A-Z]{2})?\s+(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+([CP])\s*([\d.]+)$/)
-  if (human) {
-    return {
-      underlying: human[1],
-      expiration: normalizeOptionDate(human[4], human[2], human[3]),
-      optType: human[5] === 'P' ? 'PUT' : 'CALL',
-      strike: Number(human[6]),
-      qty,
-      side,
-    }
-  }
-  const occ = body.match(/^([A-Z]{1,6})\s+(\d{2})(\d{2})(\d{2})([CP])(\d{6,8})$/)
-  if (occ) {
-    return {
-      underlying: occ[1],
-      expiration: normalizeOptionDate(occ[2], occ[3], occ[4]),
-      optType: occ[5] === 'P' ? 'PUT' : 'CALL',
-      strike: Number(occ[6]) / 1000,
-      qty,
-      side,
-    }
-  }
-  return null
-}
 
 async function fetchJson(path, options) {
   const response = await fetch(`${API_BASE}${path}`, options)
@@ -259,7 +216,7 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
         x: probability.anchor_strike,
         y: 1.02,
         yref: 'paper',
-        text: `<b>ATM</b> · $${fmt(probability.anchor_strike)}`,
+        text: `<b>Reference strike</b> · $${fmt(probability.anchor_strike)}`,
         xanchor: 'center',
         yanchor: 'bottom',
         ...annotationTag('#7ecfff'),
@@ -577,7 +534,7 @@ function BrokerMoneynessChart({ ticker, spot, legs, records, chartType }) {
       type: 'scatter',
       mode: 'lines',
       name: `${ticker} current ${money(spot)}`,
-      line: { color: '#f0b429', width: 2, dash: 'dot' },
+      line: { color: '#7ecfff', width: 2.5, dash: 'solid' },
       hovertemplate: `<b>${ticker} current</b><br>${money(spot)}<extra></extra>`,
     }
     const values = [
@@ -752,16 +709,18 @@ export default function OptionTradingTools() {
   const [itmRangePct, setItmRangePct] = useState(10)
   const [otmRangePct, setOtmRangePct] = useState(10)
   const [priceRangePct, setPriceRangePct] = useState(35)
-  const [dayStep, setDayStep] = useState(5)
+  const [dayStep, setDayStep] = useState(0)
   const [sliceOffsets, setSliceOffsets] = useState([-15, 0, 15])
   const [risk, setRisk] = useState(null)
   const [riskLoading, setRiskLoading] = useState(false)
   const [riskError, setRiskError] = useState('')
   const riskRequestId = useRef(0)
   const chainCardRef = useRef(null)
+  const expirationBrowserRef = useRef(null)
+  const expandedChainWrapRef = useRef(null)
 
   const [brokerImportText, setBrokerImportText] = useState('')
-  const [brokerImportMode, setBrokerImportMode] = useState('covered-call')
+  const [brokerImportMode, setBrokerImportMode] = useState('covered-call-protection')
   const [brokerImportBusy, setBrokerImportBusy] = useState(false)
   const [brokerImportError, setBrokerImportError] = useState('')
   const [brokerImportSummary, setBrokerImportSummary] = useState('')
@@ -774,7 +733,7 @@ export default function OptionTradingTools() {
   const [brokerChartRefresh, setBrokerChartRefresh] = useState(0)
 
   const loadSavedStrategies = useCallback(() => {
-    fetchJson('/api/options/strategies')
+    return fetchJson('/api/options/strategies')
       .then(setSavedStrategies)
       .catch(error => setSaveStatus(error.message))
   }, [])
@@ -867,6 +826,38 @@ export default function OptionTradingTools() {
     return rows.filter(row => row.strike >= chain.spot * (1 - band) && row.strike <= chain.spot * (1 + band))
   }, [chain, strikeRange])
 
+  useEffect(() => {
+    if (!expandedTradeExpiration || chainLoading || !chainRows.length) return undefined
+
+    const frameId = window.requestAnimationFrame(() => {
+      const browser = expirationBrowserRef.current
+      const chainWrap = expandedChainWrapRef.current
+      if (!browser || !chainWrap) return
+
+      // Changing the strike filter can add many rows above the browser's
+      // current scroll anchor. Keep the expanded expiration fully visible.
+      const expirationRow = chainWrap.closest('.opt-expiration-series')?.querySelector('.opt-expiration-row')
+      if (expirationRow) {
+        const browserRect = browser.getBoundingClientRect()
+        const rowRect = expirationRow.getBoundingClientRect()
+        browser.scrollTop += rowRect.top - browserRect.top
+      }
+
+      // A broad range should still open around the actionable part of the
+      // chain rather than jumping to the lowest listed strike.
+      const atmRow = chainWrap.querySelector('.opt-atm-row')
+      if (atmRow) {
+        const chainRect = chainWrap.getBoundingClientRect()
+        const atmRect = atmRow.getBoundingClientRect()
+        chainWrap.scrollTop += atmRect.top - chainRect.top - ((chainWrap.clientHeight - atmRect.height) / 2)
+      } else {
+        chainWrap.scrollTop = 0
+      }
+    })
+
+    return () => window.cancelAnimationFrame(frameId)
+  }, [chainLoading, chainRows.length, expandedTradeExpiration, strikeRange])
+
   const spot = Number(quote?.last || chain?.spot || 0)
   const activeLegs = useMemo(() => legs.filter(leg => (
     leg.included
@@ -874,6 +865,24 @@ export default function OptionTradingTools() {
     && (isStockLeg(leg) || (leg.expiration && Number(leg.strike) > 0))
   )), [legs])
   const activeOptionLegs = useMemo(() => activeLegs.filter(leg => !isStockLeg(leg)), [activeLegs])
+  const greekPositionLegs = useMemo(() => activeLegs.map(leg => ({
+    id: leg.local_id,
+    side: leg.side,
+    qty: Math.max(1, Number(leg.qty) || 1),
+    opt_type: leg.opt_type,
+    strike: isStockLeg(leg) ? 0 : Number(leg.strike),
+    expiration: isStockLeg(leg) ? '' : leg.expiration,
+    entry_price: Number(leg.entry_price) || 0,
+    iv: isStockLeg(leg) ? 0 : modeledLegIv(leg, volatilityShift),
+  })), [activeLegs, volatilityShift])
+  const greekPositionStrikeChoices = useMemo(() => Object.fromEntries(activeOptionLegs.map(leg => {
+    const legChain = monthChains[leg.expiration]
+      || (chain?.expiration === leg.expiration ? chain : null)
+    const source = String(leg.opt_type).toUpperCase() === 'PUT' ? legChain?.puts : legChain?.calls
+    const strikes = [...new Set((source || []).map(contract => Number(contract.strike)).filter(value => value > 0))]
+      .sort((a, b) => a - b)
+    return [leg.local_id, strikes]
+  })), [activeOptionLegs, monthChains, chain])
   const chainTargetLeg = useMemo(() => legs.find(leg => leg.local_id === chainTargetLegId) || null, [legs, chainTargetLegId])
   useEffect(() => {
     if (workspace !== 'moneyness' || !ticker || !activeOptionLegs.length) return undefined
@@ -911,14 +920,10 @@ export default function OptionTradingTools() {
     const itmPct = Math.max(1, Number(itmRangePct) || 1)
     const otmPct = Math.max(1, Number(otmRangePct) || 1)
     const isCall = String(probabilityAnchor.opt_type).toUpperCase() === 'CALL'
-    const lowestStrike = positionStrikes[0] || strike
-    const highestStrike = positionStrikes.at(-1) || strike
     return {
-      low: lowestStrike * (1 - (isCall ? otmPct : itmPct) / 100),
-      high: highestStrike * (1 + (isCall ? itmPct : otmPct) / 100),
+      low: strike * (1 - (isCall ? otmPct : itmPct) / 100),
+      high: strike * (1 + (isCall ? itmPct : otmPct) / 100),
       anchor_strike: strike,
-      lower_anchor_strike: lowestStrike,
-      upper_anchor_strike: highestStrike,
       opt_type: isCall ? 'CALL' : 'PUT',
       itm_pct: itmPct,
       otm_pct: otmPct,
@@ -929,7 +934,7 @@ export default function OptionTradingTools() {
       probability_mode: probabilityMode,
       range_pct: Math.min(99.9, Math.max(1, Number(probabilityMassPct) || 68.27)),
     }
-  }, [probabilityAnchor, positionStrikes, itmRangePct, otmRangePct, volatilityShift, probabilityRangeMode, probabilityMode, probabilityMassPct])
+  }, [probabilityAnchor, itmRangePct, otmRangePct, volatilityShift, probabilityRangeMode, probabilityMode, probabilityMassPct])
   const strikeStructure = useMemo(() => {
     const strikes = [...new Set(activeLegs.filter(leg => !isStockLeg(leg)).map(leg => Number(leg.strike)).filter(Number.isFinite))].sort((a, b) => a - b)
     if (strikes.length < 2) return null
@@ -1177,9 +1182,8 @@ export default function OptionTradingTools() {
   }, [chain, selectedExpiration])
 
   const adjustProbabilityBoundary = useCallback((edge, proposedPrice) => {
-    const lowestStrike = positionStrikes[0]
-    const highestStrike = positionStrikes.at(-1)
-    if (!lowestStrike || !highestStrike || !Number.isFinite(proposedPrice)) return
+    const anchorStrike = Number(probabilityAnchor?.strike)
+    if (!anchorStrike || !Number.isFinite(proposedPrice)) return
     if (probabilityRangeMode === 'probability') {
       const probability = risk?.probability_range
       const horizonYears = daysBetween(TODAY(), probability?.date) / 365
@@ -1194,12 +1198,12 @@ export default function OptionTradingTools() {
     }
     const isCall = String(probabilityAnchor.opt_type).toUpperCase() === 'CALL'
     const percentFromStrike = edge === 'low'
-      ? (1 - proposedPrice / lowestStrike) * 100
-      : (proposedPrice / highestStrike - 1) * 100
+      ? (1 - proposedPrice / anchorStrike) * 100
+      : (proposedPrice / anchorStrike - 1) * 100
     const nextPercent = Math.max(1, Math.round(percentFromStrike * 10) / 10)
     if ((edge === 'low' && isCall) || (edge === 'high' && !isCall)) setOtmRangePct(nextPercent)
     else setItmRangePct(nextPercent)
-  }, [probabilityAnchor, positionStrikes, probabilityRangeMode, risk, spot, ratePct, quote?.div_yield])
+  }, [probabilityAnchor, probabilityRangeMode, risk, spot, ratePct, quote?.div_yield])
 
   const setAnalysisIvPct = value => {
     if (!probabilityAnchor) return
@@ -1236,6 +1240,16 @@ export default function OptionTradingTools() {
     } else if (type === 'straddle' && atmCall && atmPut) {
       next = [makeLeg(atmCall, 'CALL', 'BUY'), makeLeg(atmPut, 'PUT', 'BUY')]
       name = `${ticker} long straddle`
+    } else if (type === 'bull-put-credit' && atmPut) {
+      const shortPut = nearestContract('PUT', spot, -2)
+      const longPut = nearestContract('PUT', spot, -4)
+      next = [makeLeg(longPut, 'PUT', 'BUY'), makeLeg(shortPut, 'PUT', 'SELL')]
+      name = `${ticker} bull put credit spread`
+    } else if (type === 'bear-call-credit' && atmCall) {
+      const shortCall = nearestContract('CALL', spot, 2)
+      const longCall = nearestContract('CALL', spot, 4)
+      next = [makeLeg(shortCall, 'CALL', 'SELL'), makeLeg(longCall, 'CALL', 'BUY')]
+      name = `${ticker} bear call credit spread`
     } else if (type === 'iron-condor' && atmCall && atmPut) {
       const shortPut = nearestContract('PUT', spot, -2)
       const longPut = nearestContract('PUT', spot, -4)
@@ -1268,14 +1282,17 @@ export default function OptionTradingTools() {
     const defaultSide = brokerImportMode === 'buy' ? 'BUY' : 'SELL'
     const parsedLines = lines.map(line => ({ line, parsed: parseBrokerOptionDescriptor(line, defaultSide) }))
     const unparsed = parsedLines.filter(item => !item.parsed)
-    const parsed = parsedLines.filter(item => item.parsed)
+    const parsed = assignBrokerImportSides(
+      parsedLines.filter(item => item.parsed).map(item => item.parsed),
+      brokerImportMode,
+    )
     if (!parsed.length) {
       setBrokerImportError('Could not read any lines. Example: SPX US 08/21/26 C7645')
       setBrokerImportSummary('')
       setBrokerImportPreview([])
       return
     }
-    const mapped = parsed.map(({ parsed: leg }) => {
+    const mapped = parsed.map(leg => {
       const proxy = mapBrokerUnderlying(leg.underlying)
       return {
         leg,
@@ -1333,7 +1350,7 @@ export default function OptionTradingTools() {
           delta: nearest?.delta ?? null,
         }
       })
-      const coveringShares = brokerImportMode === 'covered-call'
+      const coveringShares = ['covered-call', 'covered-call-protection'].includes(brokerImportMode)
         ? builtOptionLegs.reduce((total, leg) => (
             leg.side === 'SELL' && leg.opt_type === 'CALL'
               ? total + Math.max(1, Number(leg.qty) || 1) * 100
@@ -1354,7 +1371,9 @@ export default function OptionTradingTools() {
       setTicker(proxyTicker)
       setTickerInput(proxyTicker)
       setStrategyId(null)
-      setStrategyName(`${mapped[0].mappedFrom || proxyTicker} broker import`)
+      setStrategyName(brokerImportMode === 'covered-call-protection'
+        ? `${mapped[0].mappedFrom || proxyTicker} covered call + put protection`
+        : `${mapped[0].mappedFrom || proxyTicker} broker import`)
       setChainTargetLegId(null)
       setBrokerImportPreview(preview)
       const notes = []
@@ -1395,18 +1414,19 @@ export default function OptionTradingTools() {
     try {
       if (strategyId) {
         await fetchJson(`/api/options/strategies/${strategyId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        setSaveStatus(`Updated ${payload.name}`)
       } else {
         const created = await fetchJson('/api/options/strategies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
         setStrategyId(created.id)
+        setSaveStatus(`Saved ${payload.name}`)
       }
-      setSaveStatus('Saved')
-      loadSavedStrategies()
+      await loadSavedStrategies()
     } catch (error) {
       setSaveStatus(error.message)
     }
   }
 
-  const loadStrategy = strategy => {
+  const loadStrategy = (strategy, targetWorkspace = 'risk') => {
     setStrategyId(strategy.id)
     setStrategyName(strategy.name)
     setTicker(strategy.underlying)
@@ -1422,7 +1442,7 @@ export default function OptionTradingTools() {
     setEvaluationDate(TODAY())
     setVolatilityShift(0)
     setChainTargetLegId(null)
-    setWorkspace('risk')
+    setWorkspace(targetWorkspace)
     setSaveStatus(`Loaded ${strategy.name}`)
   }
 
@@ -1431,7 +1451,8 @@ export default function OptionTradingTools() {
     try {
       await fetchJson(`/api/options/strategies/${strategy.id}`, { method: 'DELETE' })
       if (strategy.id === strategyId) setStrategyId(null)
-      loadSavedStrategies()
+      setSaveStatus(`Deleted ${strategy.name}`)
+      await loadSavedStrategies()
     } catch (error) {
       setSaveStatus(error.message)
     }
@@ -1488,31 +1509,59 @@ export default function OptionTradingTools() {
           <button type="button" className={workspace === 'trades' ? 'active' : ''} onClick={() => setWorkspace('trades')}>Simulated Trade</button>
           <button type="button" className={workspace === 'risk' ? 'active' : ''} onClick={() => setWorkspace('risk')}>Risk Profile</button>
           <button type="button" className={workspace === 'moneyness' ? 'active' : ''} onClick={() => setWorkspace('moneyness')}>Price &amp; Moneyness</button>
+          <button type="button" className={workspace === 'greeks' ? 'active' : ''} onClick={() => setWorkspace('greeks')}>Greek Surfaces</button>
         </div>
-        <div className="opt-save-actions">
+        {workspace !== 'greeks' && <div className="opt-save-actions">
           <button type="button" className="btn btn-secondary" onClick={newStrategy}>New</button>
-          <button type="button" className="btn btn-primary" onClick={saveStrategy} disabled={!legs.length}>Save strategy</button>
+          <button type="button" className="btn btn-primary" onClick={saveStrategy} disabled={!legs.length}>{strategyId ? 'Update strategy' : 'Save strategy'}</button>
           {saveStatus && <span>{saveStatus}</span>}
-        </div>
+        </div>}
       </div>
 
-      <section className="opt-strategy-meta card">
+      {workspace !== 'greeks' && <section className="opt-strategy-meta card">
         <label className="opt-name-field"><span>Strategy name</span><input value={strategyName} onChange={event => setStrategyName(event.target.value)} /></label>
         <label><span>Pricing model</span><select value={model} onChange={event => setModel(event.target.value)}><option value="black-scholes">Black–Scholes</option><option value="bjerksund-stensland">Bjerksund–Stensland</option></select></label>
         <label><span>Rate</span><div className="opt-suffix-input"><input type="number" step="0.05" value={ratePct} onChange={event => setRatePct(event.target.value)} /><b>%</b></div></label>
         <label className="opt-notes-field"><span>Learning notes</span><input value={notes} onChange={event => setNotes(event.target.value)} placeholder="What are you testing?" /></label>
-        <label><span>Saved scenarios</span><select value="" onChange={event => { const saved = savedStrategies.find(item => String(item.id) === event.target.value); if (saved) loadStrategy(saved) }}><option value="">Load a strategy…</option>{savedStrategies.map(item => <option key={item.id} value={item.id}>{item.name} · {item.underlying}</option>)}</select></label>
-        {strategyId && <button type="button" className="opt-delete-saved" onClick={() => { const saved = savedStrategies.find(item => item.id === strategyId); if (saved) deleteStrategy(saved) }}>Delete saved</button>}
-      </section>
+        <label><span>Saved scenarios</span><select aria-label="Saved strategy" value={strategyId == null ? '' : String(strategyId)} onChange={event => { const saved = savedStrategies.find(item => String(item.id) === event.target.value); if (saved) loadStrategy(saved) }}><option value="" disabled>Select a saved strategy…</option>{savedStrategies.map(item => <option key={item.id} value={item.id}>{item.name} · {item.underlying}</option>)}</select></label>
+        {strategyId && <button type="button" className="opt-delete-saved" onClick={() => { const saved = savedStrategies.find(item => item.id === strategyId); if (saved) deleteStrategy(saved) }}>Delete strategy</button>}
+      </section>}
 
-      {workspace === 'trades' ? (
+      {workspace === 'greeks' ? (
+        <GreekSurfaceExplorer
+          ticker={ticker}
+          quote={quote}
+          chain={chain}
+          expirations={expirations}
+          selectedExpiration={selectedExpiration}
+          onSelectExpiration={setSelectedExpiration}
+          chainLoading={chainLoading}
+          marketLoading={marketLoading}
+          model={model}
+          onModelChange={setModel}
+          ratePct={ratePct}
+          onRateChange={setRatePct}
+          positionLegs={greekPositionLegs}
+          positionStrikeChoices={greekPositionStrikeChoices}
+          positionName={strategyName}
+          savedPositions={savedStrategies}
+          selectedPositionId={strategyId}
+          onLoadSavedPosition={strategy => loadStrategy(strategy, 'greeks')}
+          onBuildPositionTemplate={template => { applyTemplate(template); setWorkspace('greeks') }}
+          onPositionStrikeChange={(id, strikeValue) => {
+            const leg = legs.find(item => item.local_id === id)
+            if (leg) changeLegStrike(leg, strikeValue)
+          }}
+          onEditPosition={() => setWorkspace('trades')}
+        />
+      ) : workspace === 'trades' ? (
         <>
           <section className="card opt-broker-import">
             <div className="opt-section-heading">
-              <div><span>Broker trade import</span><h2>Paste option lines to build a risk graph</h2></div>
+              <div><span>Broker trade import</span><h2>Paste calls and puts to build both charts</h2></div>
             </div>
             <p className="opt-broker-help">
-              One trade per line, e.g. <code>SPX US 08/21/26 C7645</code>. Choose how unsigned lines should be treated below. Covered-call mode sells the calls and adds 100 long proxy shares per contract. Cash-settled index options map to liquid ETF proxies — <strong>SPX→SPY</strong>, <strong>RUT→IWM</strong>, <strong>NDX→QQQ</strong> — and strikes scale to the proxy. A signed quantity overrides the default for that line: <code>+2</code> buys two and <code>-2</code> sells two.
+              One trade per line, e.g. <code>NDX 260821C31250000</code>. In covered call + put protection mode, unsigned calls are sold and covered with 100 long proxy shares per contract; the highest put is bought and the lower put is sold as a debit spread. Cash-settled index options map to liquid ETF proxies — <strong>SPX→SPY</strong>, <strong>RUT→IWM</strong>, <strong>NDX→QQQ</strong> — and strikes scale to the proxy. A signed quantity always overrides the inferred side: <code>+2</code> buys two and <code>-2</code> sells two.
             </p>
             <textarea
               className="opt-broker-input"
@@ -1527,17 +1576,18 @@ export default function OptionTradingTools() {
               <label className="opt-broker-mode">
                 <span>Import unsigned lines as</span>
                 <select value={brokerImportMode} onChange={event => setBrokerImportMode(event.target.value)} aria-label="Broker option position type">
+                  <option value="covered-call-protection">Covered call + put protection</option>
                   <option value="covered-call">Sold covered calls</option>
                   <option value="sell">Sold options — no shares</option>
                   <option value="buy">Bought options</option>
                 </select>
               </label>
-              <button type="button" className="btn btn-secondary" onClick={() => { setBrokerImportText(BROKER_IMPORT_EXAMPLE); setBrokerImportError('') }} disabled={brokerImportBusy}>Use two-call example</button>
+              <button type="button" className="btn btn-secondary" onClick={() => { setBrokerImportText(BROKER_IMPORT_EXAMPLE); setBrokerImportMode('covered-call-protection'); setBrokerImportError('') }} disabled={brokerImportBusy}>Use covered + put example</button>
               <button type="button" className="btn btn-primary" onClick={() => importBrokerTrades('risk')} disabled={brokerImportBusy}>
                 {brokerImportBusy ? 'Building…' : 'Build risk graph'}
               </button>
-              <button type="button" className="btn btn-secondary" onClick={() => activeOptionLegs.length ? setWorkspace('moneyness') : importBrokerTrades('moneyness')} disabled={brokerImportBusy}>
-                {activeOptionLegs.length ? 'Open Price & Moneyness' : 'Build & open price chart'}
+              <button type="button" className="btn btn-secondary" onClick={() => brokerImportText.trim() ? importBrokerTrades('moneyness') : setWorkspace('moneyness')} disabled={brokerImportBusy || (!brokerImportText.trim() && !activeOptionLegs.length)}>
+                {brokerImportText.trim() ? 'Build & open price chart' : 'Open Price & Moneyness'}
               </button>
               {brokerImportSummary && <span className="opt-broker-summary">{brokerImportSummary}</span>}
             </div>
@@ -1576,7 +1626,7 @@ export default function OptionTradingTools() {
               </div>
             </div>
             {chainTargetLeg && <div className="opt-chain-target"><span>Replacing <strong>{chainTargetLeg.side} {chainTargetLeg.qty} {ticker} {formatExpiration(chainTargetLeg.expiration)} {fmt(chainTargetLeg.strike)} {chainTargetLeg.opt_type}</strong>. Click a bid or ask in the opened chain.</span><button type="button" onClick={() => setChainTargetLegId(null)}>Cancel</button></div>}
-            <div className="opt-expiration-browser">
+            <div className="opt-expiration-browser" ref={expirationBrowserRef}>
               {expirations.map(expiration => {
                 const expanded = expandedTradeExpiration === expiration
                 const dte = daysBetween(TODAY(), expiration)
@@ -1589,7 +1639,7 @@ export default function OptionTradingTools() {
                   </button>
                   {expanded && <div className="opt-expiration-chain">
                     <div className="opt-chain-help"><span className="opt-buy-dot" /> Click an ask to buy <span className="opt-sell-dot" /> Click a bid to sell</div>
-                    {chainLoading ? <div className="opt-loading-line"><span /> Loading {formatExpiration(expiration)} chain…</div> : <div className="opt-chain-wrap">
+                    {chainLoading ? <div className="opt-loading-line"><span /> Loading {formatExpiration(expiration)} chain…</div> : <div className="opt-chain-wrap" ref={expandedChainWrapRef}>
                       <table className="opt-chain-table">
                         <thead><tr><th colSpan={visibleChainColumns.length} className="opt-call-head">Calls</th><th className="opt-strike-head">Strike</th><th colSpan={visibleChainColumns.length} className="opt-put-head">Puts</th></tr><tr>{visibleChainColumns.map(column => <th key={`call-${column.id}`} title={column.tip}>{column.label}</th>)}<th className="opt-strike-head">Price</th>{mirroredPutColumns.map(column => <th key={`put-${column.id}`} title={column.tip}>{column.label}</th>)}</tr></thead>
                         <tbody>
@@ -1679,7 +1729,7 @@ export default function OptionTradingTools() {
             </div>
             {risk?.probability_range && <div className="opt-moneyness-key">
               <span className={risk.probability_range.range_mode === 'probability' ? 'tail' : String(risk.probability_range.lower_label).endsWith('ITM') ? 'itm' : 'otm'}><strong>{risk.probability_range.lower_label}</strong>{money(risk.probability_range.low)}</span>
-              <span className="atm"><strong>ATM</strong>{money(risk.probability_range.anchor_strike)}</span>
+              <span className="atm"><strong>Reference strike</strong>{money(risk.probability_range.anchor_strike)}</span>
               <span className={risk.probability_range.range_mode === 'probability' ? 'tail' : String(risk.probability_range.upper_label).endsWith('ITM') ? 'itm' : 'otm'}><strong>{risk.probability_range.upper_label}</strong>{money(risk.probability_range.high)}</span>
             </div>}
           </div>
@@ -1690,8 +1740,18 @@ export default function OptionTradingTools() {
             <>
               <div className="opt-summary-grid">
                 <SummaryMetric label="Entry" value={netDebit >= 0 ? `${money(netDebit)} debit` : `${money(Math.abs(netDebit))} credit`} />
-                <SummaryMetric label="Range max profit" value={money(risk.max_profit)} tone="positive" helper="Within displayed prices" />
-                <SummaryMetric label="Range max loss" value={money(risk.max_loss)} tone="negative" helper="Within displayed prices" />
+                <SummaryMetric
+                  label={risk.max_profit_unlimited || risk.theoretical_max_profit != null ? 'Max profit' : 'Range max profit'}
+                  value={risk.max_profit_unlimited ? 'Unlimited' : money(risk.theoretical_max_profit ?? risk.max_profit)}
+                  tone="positive"
+                  helper={risk.max_profit_unlimited || risk.theoretical_max_profit != null ? 'At expiration' : 'Within displayed prices'}
+                />
+                <SummaryMetric
+                  label={risk.max_loss_unlimited || risk.theoretical_max_loss != null ? 'Max loss' : 'Range max loss'}
+                  value={risk.max_loss_unlimited ? 'Unlimited' : money(risk.theoretical_max_loss ?? risk.max_loss)}
+                  tone="negative"
+                  helper={risk.max_loss_unlimited || risk.theoretical_max_loss != null ? 'At expiration' : 'Within displayed prices'}
+                />
                 <SummaryMetric label="Breakeven" value={(risk.breakevens || []).length ? risk.breakevens.map(value => fmt(value)).join(' · ') : 'None in range'} />
                 <SummaryMetric label="Delta" value={fmt(risk.portfolio_greeks?.delta, 2)} />
                 <SummaryMetric label="Theta / day" value={fmt(risk.portfolio_greeks?.theta, 2)} tone={Number(risk.portfolio_greeks?.theta) >= 0 ? 'positive' : 'negative'} />
@@ -1707,10 +1767,10 @@ export default function OptionTradingTools() {
         </section>
       )}
 
-      <section className="card opt-legs-card">
+      {workspace !== 'greeks' && <section className="card opt-legs-card">
         <div className="opt-section-heading">
           <div><span>Positions and simulated trades</span><h2>{legs.length ? `${activeLegs.length} of ${legs.length} active · ${ticker}` : 'No simulated trades'}</h2></div>
-          <div className="opt-leg-actions"><button type="button" onClick={addStockLeg} disabled={!spot}>+ Add stock</button><button type="button" onClick={() => { const contract = nearestContract('CALL', spot); if (contract) addLeg(contract, 'CALL', 'BUY') }}>+ Add ATM call</button><button type="button" onClick={() => setWorkspace('risk')} disabled={!legs.length}>Analyze risk</button></div>
+          <div className="opt-leg-actions"><button type="button" onClick={addStockLeg} disabled={!spot}>+ Add stock</button><button type="button" onClick={() => { const contract = nearestContract('CALL', spot); if (contract) addLeg(contract, 'CALL', 'BUY') }}>+ Add ATM call</button><button type="button" onClick={() => { const contract = nearestContract('PUT', spot); if (contract) addLeg(contract, 'PUT', 'BUY') }}>+ Add ATM put</button><button type="button" onClick={() => setWorkspace('risk')} disabled={!legs.length}>Analyze risk</button></div>
         </div>
         <div className="opt-table-wrap">
           <table className="opt-legs-table"><thead><tr><th>Use</th><th>Side</th><th>Qty</th><th>Symbol</th><th>Expiration</th><th>Strike</th><th>Type</th><th>Entry / basis</th><th>Market IV</th><th>Vol Adj</th><th>Modeled IV</th><th>Delta</th><th /></tr></thead><tbody>
@@ -1738,7 +1798,7 @@ export default function OptionTradingTools() {
             {!legs.length && <tr><td colSpan="13" className="opt-empty-row">Add stock, click a bid or ask in the chain, or start with a learning template.</td></tr>}
           </tbody><tfoot><tr><td colSpan="7">Net entry</td><td className={netDebit <= 0 ? 'opt-positive' : ''}>{netDebit >= 0 ? `${money(netDebit)} debit` : `${money(Math.abs(netDebit))} credit`}</td><td colSpan="5" /></tr></tfoot></table>
         </div>
-      </section>
+      </section>}
 
       <div className="opt-disclaimer"><strong>Educational modeling only.</strong> Quotes can be delayed or incomplete. Greeks and theoretical values are estimates, exclude commissions and assignment effects, and are not investment advice.</div>
     </div>

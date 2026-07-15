@@ -139,7 +139,43 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
 
     if not frames:
         return pd.DataFrame()
-    return pd.concat(frames, axis=1)
+    combined = pd.concat(frames, axis=1)
+    # Yahoo can occasionally repeat a date or ticker column in one of the
+    # chunks.  A repeated label makes scalar lookups such as
+    # frame.loc[first_valid_date, ticker] return a Series instead of a number.
+    # Keep one observation for each axis before handing the frame to callers.
+    if combined.index.has_duplicates:
+        combined = combined.loc[~combined.index.duplicated(keep="last")]
+    if combined.columns.has_duplicates:
+        combined = combined.loc[:, ~combined.columns.duplicated(keep="first")]
+    return combined
+
+
+def _normalize_prices_to_100(close):
+    """Return price history normalized to 100 at each ticker's first value."""
+    if close is None or close.empty:
+        return pd.DataFrame()
+
+    norm = close.copy()
+    # Be defensive for direct/small yfinance downloads too; those bypass the
+    # multi-chunk cleanup above and may still contain duplicate labels.
+    if norm.index.has_duplicates:
+        norm = norm.loc[~norm.index.duplicated(keep="last")]
+    if norm.columns.has_duplicates:
+        norm = norm.loc[:, ~norm.columns.duplicated(keep="first")]
+
+    for col in norm.columns:
+        values = pd.to_numeric(norm[col], errors="coerce")
+        valid = values.dropna()
+        if valid.empty:
+            norm[col] = float("nan")
+            continue
+        base = float(valid.iloc[0])
+        if not math.isfinite(base) or base == 0:
+            norm[col] = float("nan")
+            continue
+        norm[col] = (values / base) * 100
+    return norm
 
 
 app = Flask(__name__)
@@ -19746,13 +19782,9 @@ def total_return_charts():
             close = raw[["Close"]]
             close.columns = [all_dl[0]]
 
-        # Normalize to 100
-        norm = close.copy()
-        for col in norm.columns:
-            first_valid = norm[col].first_valid_index()
-            if first_valid is not None:
-                base = norm.loc[first_valid, col]
-                norm[col] = (norm[col] / base) * 100 if base and base != 0 else None
+        # Normalize to 100. Yahoo occasionally returns duplicate labels, so
+        # normalization must not rely on a label lookup being scalar.
+        norm = _normalize_prices_to_100(close)
 
         # Period return per ticker
         returns = {}
@@ -36945,7 +36977,7 @@ def growth_2_data():
         return v
 
     profile_id = get_profile_id()
-    period_param = request.args.get("period", "1y")
+    period_param = request.args.get("period", "1y").strip().lower()
     tickers_param = request.args.get("tickers", "")
     group_by = request.args.get("group_by", "none")
     show_cost_basis = request.args.get("show_cost_basis", "true") == "true"
@@ -36960,6 +36992,7 @@ def growth_2_data():
     }
     yf_period = "1y"
     start_date = None
+    end_date = None
     if period_param in period_map:
         val = period_map[period_param]
         if val == "ytd":
@@ -36981,15 +37014,22 @@ def growth_2_data():
                 yf_period = "1y"
             else:
                 yf_period = "max"
+    elif period_param == "custom":
+        custom_start = request.args.get("start_date", "").strip()
+        custom_end = request.args.get("end_date", "").strip()
+        if not custom_start or not custom_end:
+            return jsonify({"error": "Choose both a custom start date and end date"}), 400
+        try:
+            start_date = datetime.strptime(custom_start, "%Y-%m-%d")
+            end_date = datetime.strptime(custom_end, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "Custom dates must use YYYY-MM-DD format"}), 400
+        if start_date > end_date:
+            return jsonify({"error": "Custom start date must be on or before the end date"}), 400
+        if end_date.date() > datetime.now().date():
+            return jsonify({"error": "Custom end date cannot be in the future"}), 400
     else:
-        custom_start = request.args.get("start_date", "")
-        custom_end = request.args.get("end_date", "")
-        if custom_start:
-            try:
-                start_date = datetime.strptime(custom_start, "%Y-%m-%d")
-            except ValueError:
-                pass
-        yf_period = "max"
+        return jsonify({"error": f"Unsupported period: {period_param}"}), 400
 
     conn = get_connection()
 
@@ -37059,19 +37099,84 @@ def growth_2_data():
     if not active_rows:
         return jsonify({"error": "No holdings after filter", "categories": categories, "tickers": all_tickers}), 400
 
-    active_tickers = [r["ticker"] for r in active_rows]
-    quantities = {r["ticker"]: float(r["quantity"] or 0) for r in active_rows}
-    cost_basis = {r["ticker"]: float(r["purchase_value"] or 0) for r in active_rows}
-    current_values = {r["ticker"]: float(r["current_value"] or 0) for r in active_rows}
+    active_tickers = sorted(set(r["ticker"] for r in active_rows))
+    quantities = {
+        t: sum(float(r["quantity"] or 0) for r in active_rows if r["ticker"] == t)
+        for t in active_tickers
+    }
+    cost_basis = {
+        t: sum(float(r["purchase_value"] or 0) for r in active_rows if r["ticker"] == t)
+        for t in active_tickers
+    }
+    current_values = {
+        t: sum(float(r["current_value"] or 0) for r in active_rows if r["ticker"] == t)
+        for t in active_tickers
+    }
+
+    # Build the transaction list before constructing the value timeline so a
+    # ticker is never backfilled into dates before the portfolio owned it.
+    txn_tickers = set(dict(tx)["ticker"] for tx in txn_rows)
+    synthetic_txns = []
+    for r in active_rows:
+        t = r["ticker"]
+        if t not in txn_tickers and r["purchase_date"]:
+            synthetic_txns.append({
+                "ticker": t,
+                "transaction_type": "BUY",
+                "transaction_date": r["purchase_date"],
+                "shares": float(r["quantity"] or 0),
+                "price_per_share": float(r["price_paid"] or 0),
+                "fees": 0,
+                "realized_gain": None,
+            })
+    all_txns = [dict(tx) for tx in txn_rows] + synthetic_txns
+
+    ownership_starts = {}
+
+    def _record_ownership_start(ticker, value):
+        if ticker not in active_tickers or not value:
+            return
+        try:
+            ts = pd.Timestamp(value)
+            if ts.tzinfo is not None:
+                ts = ts.tz_localize(None)
+            ts = ts.normalize()
+        except Exception:
+            return
+        current = ownership_starts.get(ticker)
+        if current is None or ts < current:
+            ownership_starts[ticker] = ts
+
+    for r in active_rows:
+        _record_ownership_start(r["ticker"], r["purchase_date"])
+    # Any recorded trade is a safer ownership boundary than inventing history
+    # back to a ticker's inception. This covers legacy holdings whose purchase
+    # date was not imported.
+    for tx in all_txns:
+        _record_ownership_start(tx.get("ticker"), tx.get("transaction_date"))
+
+    known_portfolio_start = min(ownership_starts.values()) if ownership_starts else None
+    if known_portfolio_start is not None:
+        for t in active_tickers:
+            ownership_starts.setdefault(t, known_portfolio_start)
+
     yahoo_by_ticker = {t: _yahoo_symbol_for_ticker(t) for t in active_tickers}
     ticker_by_yahoo = {yf_t: t for t, yf_t in yahoo_by_ticker.items()}
     yahoo_tickers = list(dict.fromkeys(yahoo_by_ticker.values()))
 
     try:
-        raw = _chunked_yf_download(
-            " ".join(yahoo_tickers), period=yf_period, auto_adjust=True,
-            actions=True, progress=False
-        )
+        download_kwargs = {
+            "auto_adjust": True,
+            "actions": True,
+            "progress": False,
+        }
+        if period_param == "custom":
+            download_kwargs["start"] = start_date.strftime("%Y-%m-%d")
+            # Yahoo treats end as exclusive, so include the user's end date.
+            download_kwargs["end"] = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
+        else:
+            download_kwargs["period"] = yf_period
+        raw = _chunked_yf_download(" ".join(yahoo_tickers), **download_kwargs)
         if raw.empty:
             return jsonify({"error": "No price data", "tickers": all_tickers}), 500
     except Exception as e:
@@ -37088,19 +37193,40 @@ def growth_2_data():
 
     close = close.rename(columns=ticker_by_yahoo)
     divs_raw = divs_raw.rename(columns=ticker_by_yahoo)
+    # yfinance (esp. when rate-limited across chunked downloads) can return the
+    # same symbol as duplicate columns. That makes close[t] a DataFrame instead
+    # of a Series, which later blows up float(series.iloc[-1]) with
+    # "float() argument must be ... not 'Series'". Collapse dupes to one column.
+    if close.columns.duplicated().any():
+        close = close.loc[:, ~close.columns.duplicated()]
+    if divs_raw.columns.duplicated().any():
+        divs_raw = divs_raw.loc[:, ~divs_raw.columns.duplicated()]
+    if close.index.has_duplicates:
+        close = close.loc[~close.index.duplicated(keep="last")]
+    if divs_raw.index.has_duplicates:
+        divs_raw = divs_raw.loc[~divs_raw.index.duplicated(keep="last")]
     avail = [t for t in active_tickers if t in close.columns and not close[t].dropna().empty]
     if not avail:
         return jsonify({"error": "No price data for selected holdings", "tickers": all_tickers}), 500
 
     first_valid = close[avail].dropna(how="all").index[0]
-    close_a = close[avail].loc[first_valid:].ffill().bfill()
-    divs_a = divs_raw[avail].loc[first_valid:].fillna(0) if set(avail).issubset(divs_raw.columns) else pd.DataFrame(0, index=close_a.index, columns=avail)
+    close_a = close[avail].loc[first_valid:].ffill()
+    divs_a = divs_raw.reindex(index=close_a.index, columns=avail).fillna(0)
 
+    lower_bounds = []
     if start_date is not None:
-        start_ts = pd.Timestamp(start_date)
-        if start_ts > close_a.index[0]:
-            close_a = close_a.loc[close_a.index >= start_ts]
-            divs_a = divs_a.loc[divs_a.index >= start_ts]
+        lower_bounds.append(pd.Timestamp(start_date))
+    owned_dates = [ownership_starts[t] for t in avail if t in ownership_starts]
+    if owned_dates:
+        lower_bounds.append(min(owned_dates))
+    if lower_bounds:
+        effective_start = max(lower_bounds)
+        close_a = close_a.loc[close_a.index >= effective_start]
+        divs_a = divs_a.loc[divs_a.index >= effective_start]
+    if end_date is not None:
+        end_ts = pd.Timestamp(end_date)
+        close_a = close_a.loc[close_a.index <= end_ts]
+        divs_a = divs_a.loc[divs_a.index <= end_ts]
 
     if close_a.empty:
         return jsonify({"error": "No data for selected period", "tickers": all_tickers}), 500
@@ -37108,39 +37234,36 @@ def growth_2_data():
     # ── Portfolio value timeline (current shares * historical prices) ──
     port_value = pd.Series(0.0, index=close_a.index)
     value_scale = {}
+    position_values = {}
+    use_current_value_scale = end_date is None or end_date.date() >= datetime.now().date()
     for t in avail:
         q = quantities.get(t, 0)
         series = close_a[t] * q
         latest_market_value = float(series.dropna().iloc[-1]) if not series.dropna().empty else 0
         stored_current_value = current_values.get(t, 0)
-        scale = stored_current_value / latest_market_value if latest_market_value > 0 and stored_current_value > 0 else 1.0
+        scale = (
+            stored_current_value / latest_market_value
+            if use_current_value_scale and latest_market_value > 0 and stored_current_value > 0
+            else 1.0
+        )
         value_scale[t] = scale
-        port_value += series * scale
+        owned_from = ownership_starts.get(t)
+        owned_mask = close_a.index >= owned_from if owned_from is not None else series.notna()
+        ticker_value = (series * scale).where(owned_mask, 0).fillna(0)
+        position_values[t] = ticker_value
+        port_value += ticker_value
 
     total_invested = sum(cost_basis.get(t, 0) for t in avail)
-    invested_series = pd.Series(total_invested, index=close_a.index)
+    invested_series = pd.Series(0.0, index=close_a.index)
+    for t in avail:
+        owned_from = ownership_starts.get(t)
+        if owned_from is None:
+            invested_series += cost_basis.get(t, 0)
+        else:
+            invested_series.loc[invested_series.index >= owned_from] += cost_basis.get(t, 0)
 
     # ── Build transaction timeline for trades overlay ──
     # Tickers that have explicit transaction records
-    txn_tickers = set(dict(tx)["ticker"] for tx in txn_rows)
-
-    # For tickers with no transaction records, synthesize a BUY from all_account_info
-    synthetic_txns = []
-    for r in active_rows:
-        t = r["ticker"]
-        if t not in txn_tickers and r["purchase_date"]:
-            synthetic_txns.append({
-                "ticker": t,
-                "transaction_type": "BUY",
-                "transaction_date": r["purchase_date"],
-                "shares": float(r["quantity"] or 0),
-                "price_per_share": float(r["price_paid"] or 0),
-                "fees": 0,
-                "realized_gain": None,
-            })
-
-    all_txns = [dict(tx) for tx in txn_rows] + synthetic_txns
-
     trade_points = []
     if show_trades:
         for tx in all_txns:
@@ -37173,8 +37296,13 @@ def growth_2_data():
 
     # Cumulative dividends within the period (from yfinance per-share data)
     cum_divs_dollar = pd.Series(0.0, index=dates_idx)
+    ticker_dividends = {}
     for t in avail:
-        cum_divs_dollar += divs_a[t].cumsum() * quantities.get(t, 0)
+        owned_from = ownership_starts.get(t)
+        owned_mask = dates_idx >= owned_from if owned_from is not None else pd.Series(True, index=dates_idx)
+        ticker_div = divs_a[t].where(owned_mask, 0).cumsum() * quantities.get(t, 0)
+        ticker_dividends[t] = ticker_div
+        cum_divs_dollar += ticker_div
 
     # Realized P&L from transactions
     realized_cum = pd.Series(0.0, index=dates_idx)
@@ -37249,9 +37377,8 @@ def growth_2_data():
     if group_by == "ticker":
         per_ticker = {}
         for t in avail:
-            q = quantities.get(t, 0)
-            tv = close_a[t] * q * value_scale.get(t, 1.0)
-            td_div = divs_a[t].cumsum() * q
+            tv = position_values[t]
+            td_div = ticker_dividends[t]
             if pl_basis == "first_trade":
                 t_cg = tv - cost_basis.get(t, 0)
             else:
@@ -37279,13 +37406,12 @@ def growth_2_data():
             cat_name = cat_map.get(t, "Other")
             if cat_name not in per_cat:
                 per_cat[cat_name] = {"value": np.zeros(len(dates_idx)), "cg": np.zeros(len(dates_idx)), "div": np.zeros(len(dates_idx)), "cost": 0.0, "start_val": 0.0}
-            q = quantities.get(t, 0)
-            tv = (close_a[t] * q * value_scale.get(t, 1.0)).values
-            td_div = (divs_a[t].cumsum() * q).values
+            tv = position_values[t].values
+            td_div = ticker_dividends[t].values
             per_cat[cat_name]["value"] += tv
             per_cat[cat_name]["div"] += td_div
             per_cat[cat_name]["cost"] += cost_basis.get(t, 0)
-            per_cat[cat_name]["start_val"] += float(close_a[t].iloc[0]) * q
+            per_cat[cat_name]["start_val"] += float(position_values[t].iloc[0])
 
         grouped = {}
         for cat_name, d in per_cat.items():

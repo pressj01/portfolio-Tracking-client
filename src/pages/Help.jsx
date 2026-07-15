@@ -2319,8 +2319,9 @@ function PortfolioGrowth2Help() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Controls</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
-          <strong>Period</strong> - Eight buttons covering 7d, 1m, 3m, 6m, YTD, 1y, 5y, and all. Controls
-          the date range used by both charts, and changing it triggers a fresh data fetch.
+          <strong>Period</strong> - Preset buttons cover 7d, 1m, 3m, 6m, YTD, 1y, 5y, and all. Choose
+          <strong> Custom</strong> to enter your own inclusive start and end dates. The selected range
+          controls both charts, and changing it triggers a fresh data fetch.
         </li>
         <li>
           <strong>Tickers</strong> - A multi-select dropdown listing every ticker in the active portfolio.
@@ -2333,8 +2334,9 @@ function PortfolioGrowth2Help() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart 1 - Portfolio Value</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Shows the total dollar value of your portfolio over the selected period, calculated as current
-        share quantities multiplied by historical daily closing prices. This is not a simulated backtest -
-        it uses your actual holdings and shows what those shares were worth each day.
+        share quantities multiplied by historical daily closing prices. A holding contributes only from
+        its first known purchase or transaction date; the chart does not backfill recently acquired
+        holdings into years before you owned them. This is not a simulated backtest.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
@@ -2343,8 +2345,9 @@ function PortfolioGrowth2Help() {
         </li>
         <li>
           <strong>Show cost basis</strong> - Toggle the orange dashed line showing your total invested
-          amount (sum of purchase values across all active tickers). When the portfolio line is above this
-          line you are in unrealized profit; below it you are at a loss.
+          amount (sum of purchase values across active tickers). Cost basis enters the timeline on each
+          holding's first known ownership date. When the portfolio line is above this line you are in
+          unrealized profit; below it you are at a loss.
         </li>
         <li>
           <strong>Show trades</strong> - Overlay buy and sell markers on the portfolio value line.
@@ -3081,9 +3084,31 @@ function TotalReturnHelp() {
         </li>
       </ul>
       <p style={{ marginBottom: '1rem' }}>
-        All lines are normalized to 100 at the start of the selected period so that different-priced
-        securities can be directly compared. A dashed gray baseline at 100 marks the starting point.
-        Hover over the chart for a unified tooltip showing all values at a given date.
+        All lines are normalized to 100 so that securities with different share prices can be
+        directly compared. A dashed gray baseline at 100 marks the starting value. Hover over the
+        chart for a unified tooltip showing all values at a given date.
+      </p>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Where the Measurement Starts and What the Scale Means</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each ticker is measured from its <strong>first available Yahoo Finance trading value within
+        the selected period</strong>. That value is reset to 100. The chart is therefore a relative
+        performance index—not dollars, a score, your purchase price or cost basis, or an annualized return.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>100</strong> — unchanged from the ticker's starting value.</li>
+        <li><strong>120</strong> — a cumulative gain of 20% over the displayed period.</li>
+        <li><strong>140</strong> — a cumulative gain of 40% over the displayed period.</li>
+        <li><strong>80</strong> — a cumulative loss of 20% over the displayed period.</li>
+        <li><strong>50</strong> — a cumulative loss of 50% over the displayed period.</li>
+        <li><strong>0</strong> — an effective loss of 100%.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
+        The baseline is the beginning of the selected chart period, not the date you purchased the
+        holding. A newer ticker may begin at 100 later because it does not have history for the full
+        period. In <strong>Total Return</strong> mode, Yahoo's adjusted-close history accounts for
+        distributions as though reinvested; <strong>Price</strong> mode shows price movement without
+        distributions. Extreme drops or jumps can sometimes reflect Yahoo data or corporate actions.
       </p>
 
       {/* ── Scatter Chart ───────────────────────────────────────── */}

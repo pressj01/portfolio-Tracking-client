@@ -78,6 +78,170 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
     def test_same_day_contracts_keep_intraday_time_value(self):
         self.assertGreater(options_api._year_frac(self.today.isoformat(), self.today), 0)
 
+    def test_dividend_yield_normalization_uses_trailing_yield_to_resolve_units(self):
+        self.assertAlmostEqual(options_api._normalize_dividend_yield(0.41, 0.00245), 0.0041)
+        self.assertAlmostEqual(options_api._normalize_dividend_yield(1.5, 0.015), 0.015)
+        self.assertAlmostEqual(options_api._normalize_dividend_yield(0.015, 0.014), 0.015)
+
+    def test_greek_surface_returns_primary_and_higher_order_grids(self):
+        response = self.client.post("/api/options/greek-surface", json={
+            "underlying": "SPY",
+            "spot_override": 100,
+            "strike": 100,
+            "dte": 45,
+            "iv": 0.24,
+            "rate": 0.04,
+            "div_yield": 0.01,
+            "opt_type": "call",
+            "model": "black-scholes",
+            "price_range_pct": 15,
+        })
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(len(data["profile"]["spots"]), 61)
+        self.assertEqual(len(data["surface"]["spots"]), 31)
+        self.assertEqual(len(data["surface"]["dtes"]), 24)
+        self.assertGreater(data["selected_point"]["gamma"], 0)
+        # Theoretical mark powers the current-value P/L curve; an ATM call has
+        # positive extrinsic value and the per-share value profile rises with spot.
+        self.assertEqual(len(data["profile"]["value"]), 61)
+        self.assertGreater(data["selected_point"]["value"], 0)
+        self.assertGreater(data["profile"]["value"][-1], data["profile"]["value"][0])
+        # Surface value grid lets the risk graph slice the value curve at any DTE.
+        self.assertEqual(len(data["surface"]["value"]), 24)
+        self.assertEqual(len(data["surface"]["value"][0]), 31)
+        for greek in (
+            "delta", "gamma", "theta", "vega", "rho",
+            "vanna", "vomma", "charm", "speed", "color", "zomma",
+        ):
+            self.assertIn(greek, data["metrics"])
+            self.assertEqual(len(data["profile"]["values"][greek]), 61)
+            self.assertEqual(len(data["surface"]["values"][greek]), 24)
+            self.assertEqual(len(data["surface"]["values"][greek][0]), 31)
+
+    def test_greek_surface_rejects_invalid_contract_inputs(self):
+        response = self.client.post("/api/options/greek-surface", json={
+            "spot_override": 100,
+            "strike": 0,
+            "dte": 30,
+            "iv": 0.2,
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("strike", response.get_json()["error"])
+
+    def test_greek_relationship_returns_projected_and_exact_first_order_values(self):
+        response = self.client.post("/api/options/greek-surface", json={
+            "underlying": "SPY",
+            "spot_override": 100,
+            "strike": 100,
+            "dte": 45,
+            "iv": 0.24,
+            "rate": 0.04,
+            "div_yield": 0.01,
+            "opt_type": "call",
+            "model": "black-scholes",
+            "price_range_pct": 15,
+            "relationship": "gamma",
+            "relationship_shock": 1,
+        })
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        relationship = data["relationship"]
+        self.assertEqual(relationship["driver"], "gamma")
+        self.assertEqual(relationship["target"], "delta")
+        self.assertEqual(relationship["shock_kind"], "price")
+        self.assertEqual(len(relationship["profile"]["base"]), 61)
+        self.assertEqual(len(relationship["surface"]["projected_change"]), 24)
+        self.assertEqual(len(relationship["surface"]["projected_change"][0]), 31)
+        self.assertIsNotNone(relationship["selected"]["driver"])
+        self.assertIsNotNone(relationship["selected"]["projected_change"])
+        midpoint = 30
+        self.assertAlmostEqual(
+            relationship["profile"]["projected_change"][midpoint],
+            relationship["profile"]["driver"][midpoint],
+            places=8,
+        )
+        self.assertIsNotNone(relationship["profile"]["exact"][midpoint])
+
+    def test_greek_surface_rejects_unknown_relationship(self):
+        response = self.client.post("/api/options/greek-surface", json={
+            "spot_override": 100,
+            "strike": 100,
+            "dte": 30,
+            "iv": 0.2,
+            "relationship": "not-a-greek",
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("relationship", response.get_json()["error"].lower())
+
+    def test_every_supported_greek_relationship_returns_a_selected_impact(self):
+        expected_targets = {
+            "gamma": "delta",
+            "vanna": "delta",
+            "charm": "delta",
+            "vomma": "vega",
+            "speed": "gamma",
+            "color": "gamma",
+            "zomma": "gamma",
+        }
+        for relationship_id, target in expected_targets.items():
+            with self.subTest(relationship=relationship_id):
+                response = self.client.post("/api/options/greek-surface", json={
+                    "spot_override": 100,
+                    "strike": 100,
+                    "dte": 45,
+                    "iv": 0.24,
+                    "rate": 0.04,
+                    "opt_type": "call",
+                    "relationship": relationship_id,
+                    "relationship_shock": 1,
+                })
+
+                self.assertEqual(response.status_code, 200)
+                relationship = response.get_json()["relationship"]
+                self.assertEqual(relationship["target"], target)
+                self.assertIsNotNone(relationship["selected"]["driver"])
+                self.assertIsNotNone(relationship["selected"]["exact_change"])
+
+    def test_greek_surface_aggregates_an_iron_condor_position(self):
+        expiration = (self.today + timedelta(days=45)).isoformat()
+        response = self.client.post("/api/options/greek-surface", json={
+            "underlying": "SPY",
+            "spot_override": 100,
+            "rate": 0.04,
+            "div_yield": 0.01,
+            "model": "black-scholes",
+            "price_range_pct": 20,
+            "relationship": "vanna",
+            "relationship_shock": 1,
+            "legs": [
+                {"side": "BUY", "qty": 1, "opt_type": "PUT", "strike": 90, "expiration": expiration, "iv": 0.24},
+                {"side": "SELL", "qty": 1, "opt_type": "PUT", "strike": 95, "expiration": expiration, "iv": 0.24},
+                {"side": "SELL", "qty": 1, "opt_type": "CALL", "strike": 105, "expiration": expiration, "iv": 0.24},
+                {"side": "BUY", "qty": 1, "opt_type": "CALL", "strike": 110, "expiration": expiration, "iv": 0.24},
+            ],
+        })
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data["assumptions"]["position_mode"])
+        self.assertEqual(data["assumptions"]["position_leg_count"], 4)
+        self.assertEqual(data["assumptions"]["position_strikes"], [90, 95, 105, 110])
+        self.assertEqual(data["selected_point"]["dte"], 45)
+        self.assertIsNotNone(data["selected_point"]["gamma"])
+        self.assertEqual(len(data["profile"]["values"]["delta"]), 61)
+        self.assertEqual(len(data["surface"]["values"]["theta"]), 24)
+        # Net position mark is signed dollars across every leg (defined debit/credit condor).
+        self.assertEqual(len(data["profile"]["value"]), 61)
+        self.assertIsNotNone(data["selected_point"]["value"])
+        self.assertEqual(data["relationship"]["driver"], "vanna")
+        self.assertEqual(data["relationship"]["target"], "delta")
+        self.assertEqual(len(data["relationship"]["profile"]["projected"]), 61)
+
 
     @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
     def test_mixed_expiration_analysis_stops_at_first_expiration(self, _quote):
@@ -208,6 +372,41 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
             100.0,
             places=1,
         )
+
+    @patch("options_api._fetch_quote", return_value={"last": 725.51, "div_yield": 0.0041})
+    def test_covered_call_with_put_spread_reports_whole_domain_bounds(self, _quote):
+        expiration = self.today + timedelta(days=40)
+        payload = {
+            "underlying": "QQQ",
+            "spot_override": 725.51,
+            "eval_date": self.today.isoformat(),
+            "model": "black-scholes",
+            "rate": 0.0375,
+            "div_yield": 0.0041,
+            "price_range": {"low": 416.075, "high": 1033.925, "steps": 241},
+            "day_step": 0,
+            "legs": [
+                {"side": "BUY", "qty": 100, "opt_type": "STOCK", "strike": 0,
+                 "expiration": "", "entry_price": 725.51},
+                {"side": "SELL", "qty": 1, "opt_type": "CALL", "strike": 780,
+                 "expiration": expiration.isoformat(), "entry_price": 3.86, "iv": 0.206},
+                {"side": "SELL", "qty": 1, "opt_type": "PUT", "strike": 670,
+                 "expiration": expiration.isoformat(), "entry_price": 6.55, "iv": 0.271},
+                {"side": "BUY", "qty": 1, "opt_type": "PUT", "strike": 720,
+                 "expiration": expiration.isoformat(), "entry_price": 18.58, "iv": 0.220},
+            ],
+        }
+
+        response = self.client.post("/api/options/risk-graph", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["theoretical_max_profit"], 4632.0)
+        self.assertEqual(data["theoretical_max_loss"], -68368.0)
+        self.assertFalse(data["max_profit_unlimited"])
+        self.assertFalse(data["max_loss_unlimited"])
+        self.assertIn(733.68, data["breakevens"])
+        self.assertAlmostEqual(data["div_yield"], 0.0041)
 
     def test_probability_otm_changes_with_volatility(self):
         low_vol = options_api._lognormal_cdf(100, 110, 0.10, 30 / 365, 0.04, 0.01)

@@ -4,6 +4,7 @@ Endpoints:
   GET  /api/options/quote?ticker=SPY
   GET  /api/options/expirations?ticker=SPY
   GET  /api/options/chain?ticker=SPY&expiration=2026-06-19
+  POST /api/options/greek-surface
   POST /api/options/risk-graph
   GET  /api/options/strategies
   GET  /api/options/strategies/<id>
@@ -67,6 +68,24 @@ def _safe(v, default=None):
         return v
     except Exception:
         return default
+
+
+def _normalize_dividend_yield(value, reference=None) -> float:
+    """Normalize yfinance's inconsistent percent/decimal dividend yields.
+
+    `dividendYield` may arrive as either 0.015 (1.5%) or 1.5 (also 1.5%).
+    When available, the decimal `trailingAnnualDividendYield` disambiguates
+    values below 1, such as QQQ's 0.41 meaning 0.41%, not 41%.
+    """
+    raw = _safe(value)
+    trailing = _safe(reference)
+    if raw is None:
+        return max(0.0, float(trailing or 0.0))
+    raw = max(0.0, float(raw))
+    if trailing is not None and float(trailing) > 0:
+        trailing = float(trailing)
+        return min((raw, raw / 100.0), key=lambda candidate: abs(candidate - trailing))
+    return raw / 100.0 if raw >= 0.20 else raw
 
 
 def _year_frac(exp_str: str, eval_d: date | None = None) -> float:
@@ -149,10 +168,8 @@ def _fetch_quote(ticker: str) -> dict:
         slow = t.info or {}
         name = slow.get('shortName') or slow.get('longName')
         dy = _safe(slow.get('dividendYield'))
-        if dy is not None:
-            dy = float(dy)
-            # yfinance inconsistency: sometimes 0.0150 (decimal), sometimes 1.50 (percent)
-            div_yield = dy / 100.0 if dy > 1.0 else dy
+        trailing_yield = _safe(slow.get('trailingAnnualDividendYield'))
+        div_yield = _normalize_dividend_yield(dy, trailing_yield)
     except Exception:
         pass
 
@@ -255,6 +272,476 @@ def _fetch_chain(ticker: str, expiration: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Greek surface math
+# ---------------------------------------------------------------------------
+
+GREEK_SURFACE_METRICS = {
+    'delta': {
+        'label': 'Delta',
+        'family': 'Primary Greeks',
+        'unit': 'option value / $1 underlying',
+        'description': 'Estimated option-price change for a $1 move in the underlying.',
+    },
+    'gamma': {
+        'label': 'Gamma',
+        'family': 'Primary Greeks',
+        'unit': 'delta / $1 underlying',
+        'description': 'Estimated delta change for a $1 move in the underlying.',
+    },
+    'theta': {
+        'label': 'Theta',
+        'family': 'Primary Greeks',
+        'unit': '$ / calendar day',
+        'description': 'Estimated option-price change from one calendar day of time decay.',
+    },
+    'vega': {
+        'label': 'Vega',
+        'family': 'Primary Greeks',
+        'unit': '$ / volatility point',
+        'description': 'Estimated option-price change for a one-point increase in implied volatility.',
+    },
+    'rho': {
+        'label': 'Rho',
+        'family': 'Primary Greeks',
+        'unit': '$ / rate point',
+        'description': 'Estimated option-price change for a one-point increase in the risk-free rate.',
+    },
+    'vanna': {
+        'label': 'Vanna',
+        'family': 'Second-order & higher',
+        'unit': 'delta / volatility point',
+        'description': 'Estimated delta change for a one-point increase in implied volatility.',
+    },
+    'vomma': {
+        'label': 'Vomma (Volga)',
+        'family': 'Second-order & higher',
+        'unit': '$ / volatility point²',
+        'description': 'Estimated vega change for a one-point increase in implied volatility.',
+    },
+    'charm': {
+        'label': 'Charm',
+        'family': 'Second-order & higher',
+        'unit': 'delta / calendar day',
+        'description': 'Estimated delta change caused by one calendar day of time decay.',
+    },
+    'speed': {
+        'label': 'Speed',
+        'family': 'Second-order & higher',
+        'unit': 'gamma / $1 underlying',
+        'description': 'Estimated gamma change for a $1 move in the underlying.',
+    },
+    'color': {
+        'label': 'Color',
+        'family': 'Second-order & higher',
+        'unit': 'gamma / calendar day',
+        'description': 'Estimated gamma change caused by one calendar day of time decay.',
+    },
+    'zomma': {
+        'label': 'Zomma',
+        'family': 'Second-order & higher',
+        'unit': 'gamma / volatility point',
+        'description': 'Estimated gamma change for a one-point increase in implied volatility.',
+    },
+}
+
+GREEK_RELATIONSHIPS = {
+    'gamma': {
+        'label': 'Gamma → Delta',
+        'driver': 'gamma',
+        'target': 'delta',
+        'shock_kind': 'price',
+        'shock_unit': '$ underlying move',
+    },
+    'vanna': {
+        'label': 'Vanna → Delta',
+        'driver': 'vanna',
+        'target': 'delta',
+        'shock_kind': 'volatility',
+        'shock_unit': 'IV points',
+    },
+    'charm': {
+        'label': 'Charm → Delta',
+        'driver': 'charm',
+        'target': 'delta',
+        'shock_kind': 'time',
+        'shock_unit': 'calendar days elapsed',
+    },
+    'vomma': {
+        'label': 'Vomma → Vega',
+        'driver': 'vomma',
+        'target': 'vega',
+        'shock_kind': 'volatility',
+        'shock_unit': 'IV points',
+    },
+    'speed': {
+        'label': 'Speed → Gamma',
+        'driver': 'speed',
+        'target': 'gamma',
+        'shock_kind': 'price',
+        'shock_unit': '$ underlying move',
+    },
+    'color': {
+        'label': 'Color → Gamma',
+        'driver': 'color',
+        'target': 'gamma',
+        'shock_kind': 'time',
+        'shock_unit': 'calendar days elapsed',
+    },
+    'zomma': {
+        'label': 'Zomma → Gamma',
+        'driver': 'zomma',
+        'target': 'gamma',
+        'shock_kind': 'volatility',
+        'shock_unit': 'IV points',
+    },
+}
+
+
+def _linspace(low: float, high: float, count: int) -> list[float]:
+    if count <= 1 or math.isclose(low, high):
+        return [float(low)]
+    step = (high - low) / (count - 1)
+    return [low + step * index for index in range(count)]
+
+
+def _extended_greeks(
+    S: float,
+    K: float,
+    T: float,
+    r: float,
+    q: float,
+    sigma: float,
+    opt_type: str,
+    model: str,
+) -> dict[str, float]:
+    """Primary and higher-order Greeks with app-wide per-day/per-point units.
+
+    Higher-order values use stable central differences of the same pricing model
+    used for the primary Greeks. Charm and color follow the trader convention:
+    the change observed after one calendar day passes (time-to-expiry falls).
+    """
+    T = max(float(T), 1e-8)
+    sigma = max(float(sigma), 1e-5)
+
+    def value(spot: float, years: float, vol: float) -> dict:
+        return price_option(
+            max(float(spot), 1e-8), K, max(float(years), 1e-8),
+            r, q, max(float(vol), 1e-5), opt_type, model,
+        )
+
+    base = value(S, T, sigma)
+
+    spot_step = max(S * 0.001, 0.01)
+    spot_up = value(S + spot_step, T, sigma)
+    spot_down = value(max(S - spot_step, 1e-8), T, sigma)
+
+    vol_step = min(max(sigma * 0.01, 0.0005), 0.005)
+    vol_up = value(S, T, sigma + vol_step)
+    vol_down_sigma = max(sigma - vol_step, 1e-5)
+    vol_down = value(S, T, vol_down_sigma)
+    vol_span = (sigma + vol_step) - vol_down_sigma
+
+    time_step = min(1.0 / 365.0, T * 0.5)
+    later = value(S, max(T - time_step, 1e-8), sigma)
+    elapsed_days = max(time_step * 365.0, 1e-8)
+
+    return {
+        # Theoretical mark used to build the current-value P/L curve; not a Greek
+        # metric, so callers read it explicitly rather than through metric_ids.
+        'price': base['price'],
+        'delta': base['delta'],
+        'gamma': base['gamma'],
+        'theta': base['theta'],
+        'vega': base['vega'],
+        'rho': base['rho'],
+        # Per one volatility point (one percentage point), not per 100% vol.
+        'vanna': ((vol_up['delta'] - vol_down['delta']) / vol_span) / 100.0,
+        'vomma': ((vol_up['vega'] - vol_down['vega']) / vol_span) / 100.0,
+        'charm': (later['delta'] - base['delta']) / elapsed_days,
+        'speed': (spot_up['gamma'] - spot_down['gamma']) / (2.0 * spot_step),
+        'color': (later['gamma'] - base['gamma']) / elapsed_days,
+        'zomma': ((vol_up['gamma'] - vol_down['gamma']) / vol_span) / 100.0,
+    }
+
+
+def _finite_or_none(value: Any, digits: int = 10):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(number, digits) if math.isfinite(number) else None
+
+
+def _normalize_surface_position_legs(legs_in: list[dict]) -> list[dict]:
+    normalized = []
+    for index, raw_leg in enumerate(legs_in):
+        opt_type = str(raw_leg.get('opt_type') or '').strip().lower()
+        if opt_type not in {'call', 'put', 'stock'}:
+            raise ValueError(f'leg {index + 1} opt_type must be call, put, or stock')
+        side = str(raw_leg.get('side') or 'BUY').strip().upper()
+        if side not in {'BUY', 'SELL'}:
+            raise ValueError(f'leg {index + 1} side must be BUY or SELL')
+        qty = max(0.0, float(raw_leg.get('qty') or 0.0))
+        if qty <= 0:
+            continue
+
+        if opt_type == 'stock':
+            normalized.append({
+                'opt_type': opt_type,
+                'side': side,
+                'qty': qty,
+                'strike': 0.0,
+                'iv': 0.0,
+                'dte': None,
+                'expiration': '',
+            })
+            continue
+
+        strike = float(raw_leg.get('strike') or 0.0)
+        if strike <= 0:
+            raise ValueError(f'leg {index + 1} requires a positive strike')
+        sigma = min(5.0, max(0.01, float(raw_leg.get('iv') or 0.20)))
+        expiration = str(raw_leg.get('expiration') or '').strip()
+        if expiration:
+            try:
+                expiration_date = datetime.strptime(expiration, '%Y-%m-%d').date()
+            except ValueError as exc:
+                raise ValueError(f'leg {index + 1} has an invalid expiration') from exc
+            leg_dte = max((expiration_date - date.today()).days, 0.25)
+        else:
+            leg_dte = min(1095.0, max(0.25, float(raw_leg.get('dte') or 0.0)))
+        normalized.append({
+            'opt_type': opt_type,
+            'side': side,
+            'qty': qty,
+            'strike': strike,
+            'iv': sigma,
+            'dte': leg_dte,
+            'expiration': expiration,
+        })
+    return normalized
+
+
+def _build_greek_surface(payload: dict) -> dict:
+    underlying = (payload.get('underlying') or '').strip().upper()
+    spot = float(payload.get('spot_override') or 0.0)
+    if spot <= 0:
+        if not underlying:
+            raise ValueError('underlying or spot_override required')
+        quote = _fetch_quote(underlying)
+        spot = float(quote.get('last') or quote.get('ask') or 0.0)
+    if spot <= 0:
+        raise ValueError('a positive underlying price is required')
+
+    relationship_id = str(payload.get('relationship') or '').strip().lower()
+    relationship_meta = GREEK_RELATIONSHIPS.get(relationship_id) if relationship_id else None
+    if relationship_id and relationship_meta is None:
+        raise ValueError('unsupported Greek relationship')
+    relationship_shock = None
+    if relationship_meta:
+        relationship_shock = float(payload.get('relationship_shock') or 1.0)
+        if not math.isfinite(relationship_shock) or math.isclose(relationship_shock, 0.0):
+            raise ValueError('relationship shock must be a non-zero number')
+        if relationship_meta['shock_kind'] == 'time':
+            relationship_shock = min(30.0, max(0.25, relationship_shock))
+        elif relationship_meta['shock_kind'] == 'volatility':
+            relationship_shock = min(25.0, max(-25.0, relationship_shock))
+        else:
+            price_limit = max(1.0, spot * 0.25)
+            relationship_shock = min(price_limit, max(-price_limit, relationship_shock))
+
+    rate = float(payload.get('rate') if payload.get('rate') is not None else 0.0375)
+    div_yield = max(0.0, float(payload.get('div_yield') or 0.0))
+    model = str(payload.get('model') or 'black-scholes').strip().lower()
+    if model not in {'black-scholes', 'bjerksund-stensland'}:
+        raise ValueError('unsupported pricing model')
+
+    position_legs = _normalize_surface_position_legs(payload.get('legs') or [])
+    position_mode = bool(position_legs)
+    if position_mode:
+        option_dtes = [leg['dte'] for leg in position_legs if leg['opt_type'] != 'stock']
+        if not option_dtes:
+            raise ValueError('an active position requires at least one option leg')
+        dte = min(option_dtes)
+        strike = None
+        sigma = None
+        opt_type = 'position'
+    else:
+        strike = float(payload.get('strike') or 0.0)
+        if strike <= 0:
+            raise ValueError('a positive strike is required')
+        dte = min(1095.0, max(0.25, float(payload.get('dte') or 30.0)))
+        sigma = min(5.0, max(0.01, float(payload.get('iv') or 0.20)))
+        opt_type = str(payload.get('opt_type') or 'call').strip().lower()
+        if opt_type not in {'call', 'put'}:
+            raise ValueError('opt_type must be call or put')
+
+    range_pct = min(80.0, max(2.0, float(payload.get('price_range_pct') or 20.0)))
+    low = max(0.01, spot * (1.0 - range_pct / 100.0))
+    high = spot * (1.0 + range_pct / 100.0)
+    profile_spots = _linspace(low, high, 61)
+    surface_spots = _linspace(low, high, 31)
+    earliest_dte = min(1.0, dte * 0.25)
+    surface_dtes = _linspace(earliest_dte, dte, 24)
+    if len(surface_dtes) == 1:
+        surface_dtes = [max(0.25, dte * 0.5), dte]
+
+    metric_ids = list(GREEK_SURFACE_METRICS)
+
+    def compute(point_spot: float, point_dte: float, vol_shift_points: float = 0.0) -> dict:
+        if not position_mode:
+            adjusted_sigma = min(5.0, max(0.01, sigma + vol_shift_points / 100.0))
+            values = _extended_greeks(
+                point_spot, strike, point_dte / 365.0,
+                rate, div_yield, adjusted_sigma, opt_type, model,
+            )
+            result = {metric: _finite_or_none(values[metric]) for metric in metric_ids}
+            result['value'] = _finite_or_none(values['price'])
+            return result
+
+        elapsed_days = max(0.0, dte - point_dte)
+        totals = {metric: 0.0 for metric in metric_ids}
+        value_total = 0.0
+        for leg in position_legs:
+            sign = 1.0 if leg['side'] == 'BUY' else -1.0
+            if leg['opt_type'] == 'stock':
+                totals['delta'] += sign * leg['qty']
+                value_total += sign * leg['qty'] * point_spot
+                continue
+            remaining_dte = leg['dte'] - elapsed_days
+            if remaining_dte <= 0:
+                # Leg has expired within the horizon: its mark collapses to intrinsic.
+                intrinsic = (max(leg['strike'] - point_spot, 0.0) if leg['opt_type'] == 'put'
+                             else max(point_spot - leg['strike'], 0.0))
+                value_total += sign * leg['qty'] * 100.0 * intrinsic
+                continue
+            adjusted_sigma = min(5.0, max(0.01, leg['iv'] + vol_shift_points / 100.0))
+            values = _extended_greeks(
+                point_spot, leg['strike'], remaining_dte / 365.0,
+                rate, div_yield, adjusted_sigma, leg['opt_type'], model,
+            )
+            multiplier = sign * leg['qty'] * 100.0
+            for metric in metric_ids:
+                totals[metric] += values[metric] * multiplier
+            value_total += values['price'] * multiplier
+        result = {metric: _finite_or_none(totals[metric]) for metric in metric_ids}
+        result['value'] = _finite_or_none(value_total)
+        return result
+
+    def relationship_values(point: dict, point_spot: float, point_dte: float) -> dict | None:
+        if not relationship_meta:
+            return None
+        driver = point[relationship_meta['driver']]
+        base = point[relationship_meta['target']]
+        if driver is None or base is None:
+            return {'driver': None, 'base': base, 'projected': None, 'exact': None, 'projected_change': None, 'exact_change': None}
+
+        shock_kind = relationship_meta['shock_kind']
+        if shock_kind == 'price':
+            shocked = compute(max(0.01, point_spot + relationship_shock), point_dte)
+        elif shock_kind == 'time':
+            shocked = compute(point_spot, max(0.0, point_dte - relationship_shock))
+        else:
+            shocked = compute(point_spot, point_dte, relationship_shock)
+
+        exact = shocked[relationship_meta['target']]
+        projected_change = driver * relationship_shock
+        return {
+            'driver': _finite_or_none(driver),
+            'base': _finite_or_none(base),
+            'projected': _finite_or_none(base + projected_change),
+            'exact': _finite_or_none(exact),
+            'projected_change': _finite_or_none(projected_change),
+            'exact_change': _finite_or_none(exact - base) if exact is not None else None,
+        }
+
+    profile_values = {metric: [] for metric in metric_ids}
+    profile_value = []
+    relationship_profile = {key: [] for key in ('driver', 'base', 'projected', 'exact', 'projected_change', 'exact_change')} if relationship_meta else None
+    for point_spot in profile_spots:
+        point = compute(point_spot, dte)
+        for metric in metric_ids:
+            profile_values[metric].append(point[metric])
+        profile_value.append(point['value'])
+        if relationship_profile is not None:
+            related = relationship_values(point, point_spot, dte)
+            for key in relationship_profile:
+                relationship_profile[key].append(related[key])
+
+    surface_values = {metric: [] for metric in metric_ids}
+    surface_value = []
+    relationship_surface = {key: [] for key in ('driver', 'projected_change', 'exact_change')} if relationship_meta else None
+    for point_dte in surface_dtes:
+        row_values = {metric: [] for metric in metric_ids}
+        row_value = []
+        relationship_row = {key: [] for key in relationship_surface} if relationship_surface is not None else None
+        for point_spot in surface_spots:
+            point = compute(point_spot, point_dte)
+            for metric in metric_ids:
+                row_values[metric].append(point[metric])
+            row_value.append(point['value'])
+            if relationship_row is not None:
+                related = relationship_values(point, point_spot, point_dte)
+                for key in relationship_row:
+                    relationship_row[key].append(related[key])
+        for metric in metric_ids:
+            surface_values[metric].append(row_values[metric])
+        surface_value.append(row_value)
+        if relationship_surface is not None:
+            for key in relationship_surface:
+                relationship_surface[key].append(relationship_row[key])
+
+    selected_point = compute(spot, dte)
+    relationship_selected = relationship_values(selected_point, spot, dte) if relationship_meta else None
+
+    return {
+        'underlying': underlying,
+        'metrics': GREEK_SURFACE_METRICS,
+        'profile': {
+            'spots': [_finite_or_none(value, 6) for value in profile_spots],
+            'values': profile_values,
+            # Theoretical mark-to-market value along the profile spots, used to
+            # draw the current-value P/L curve and its delta tangent / gamma bend.
+            'value': profile_value,
+        },
+        'surface': {
+            'spots': [_finite_or_none(value, 6) for value in surface_spots],
+            'dtes': [_finite_or_none(value, 4) for value in surface_dtes],
+            'values': surface_values,
+            # Mark-to-market value across the price/time grid so the risk graph can
+            # slice the current-value P/L curve at any chosen days-to-expiration.
+            'value': surface_value,
+        },
+        'selected_point': {
+            'spot': _finite_or_none(spot, 6),
+            'dte': _finite_or_none(dte, 4),
+            **selected_point,
+        },
+        'assumptions': {
+            'strike': strike,
+            'iv': sigma,
+            'rate': rate,
+            'div_yield': div_yield,
+            'opt_type': opt_type,
+            'model': model,
+            'price_range_pct': range_pct,
+            'position_mode': position_mode,
+            'position_leg_count': len(position_legs),
+            'position_strikes': sorted({leg['strike'] for leg in position_legs if leg['opt_type'] != 'stock'}),
+            'position_expirations': sorted({leg['expiration'] for leg in position_legs if leg['expiration']}),
+        },
+        **({'relationship': {
+            'id': relationship_id,
+            **relationship_meta,
+            'shock': _finite_or_none(relationship_shock, 6),
+            'selected': relationship_selected,
+            'profile': relationship_profile,
+            'surface': relationship_surface,
+        }} if relationship_meta else {}),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Risk graph math
 # ---------------------------------------------------------------------------
 
@@ -291,6 +778,51 @@ def _leg_pnl_at(S: float, leg: dict, eval_T_years: float, r: float, q: float,
 def _leg_greek_multiplier(leg: dict) -> float:
     """Convert per-share Greeks to one saved leg unit."""
     return 1.0 if leg['opt_type'].lower() == 'stock' else 100.0
+
+
+def _expiration_payoff_bounds(legs: list[dict]) -> dict:
+    """Return whole-domain expiration P/L bounds for one-expiration trades."""
+    expirations = {
+        leg.get('expiration') for leg in legs
+        if leg.get('opt_type', '').lower() != 'stock' and leg.get('expiration')
+    }
+    if len(expirations) > 1:
+        return {
+            'theoretical_max_profit': None,
+            'theoretical_max_loss': None,
+            'max_profit_unlimited': False,
+            'max_loss_unlimited': False,
+        }
+
+    strikes = {
+        float(leg.get('strike') or 0.0) for leg in legs
+        if leg.get('opt_type', '').lower() != 'stock' and float(leg.get('strike') or 0.0) > 0
+    }
+    candidates = sorted({0.0, *strikes})
+    candidate_pnls = []
+    for price in candidates:
+        total = 0.0
+        for leg in legs:
+            leg_pnl, _ = _leg_pnl_at(price, leg, 0.0, 0.0, 0.0, 'black-scholes')
+            total += int(leg.get('qty') or 1) * leg_pnl
+        candidate_pnls.append(total)
+
+    high_price_slope = 0.0
+    for leg in legs:
+        direction = 1.0 if str(leg.get('side')).upper() == 'BUY' else -1.0
+        qty = int(leg.get('qty') or 1)
+        opt_type = str(leg.get('opt_type') or '').lower()
+        if opt_type == 'stock':
+            high_price_slope += direction * qty
+        elif opt_type == 'call':
+            high_price_slope += direction * qty * 100.0
+
+    return {
+        'theoretical_max_profit': None if high_price_slope > 1e-9 else round(max(candidate_pnls), 2),
+        'theoretical_max_loss': None if high_price_slope < -1e-9 else round(min(candidate_pnls), 2),
+        'max_profit_unlimited': high_price_slope > 1e-9,
+        'max_loss_unlimited': high_price_slope < -1e-9,
+    }
 
 
 def _lognormal_cdf(spot: float, price: float, sigma: float, T: float,
@@ -398,6 +930,16 @@ def register_routes(app):
             return jsonify(error='ticker and expiration required'), 400
         try:
             return jsonify(_fetch_chain(ticker, expiration))
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+
+    @app.route('/api/options/greek-surface', methods=['POST'])
+    def options_greek_surface():
+        payload = request.get_json(force=True) or {}
+        try:
+            return jsonify(_build_greek_surface(payload))
+        except (TypeError, ValueError) as e:
+            return jsonify(error=str(e)), 400
         except Exception as e:
             return jsonify(error=str(e)), 500
 
@@ -616,6 +1158,7 @@ def register_routes(app):
 
         max_profit = max(p['pnl'] for p in exp_curve)
         max_loss = min(p['pnl'] for p in exp_curve)
+        payoff_bounds = _expiration_payoff_bounds(legs)
 
         # Price slices: 3 scenarios (-10%, 0%, +10%) by default; user can override on client
         slice_requests = payload.get('price_slices') or [
@@ -671,6 +1214,7 @@ def register_routes(app):
             'breakevens': breakevens,
             'max_profit': round(max_profit, 2),
             'max_loss': round(max_loss, 2),
+            **payoff_bounds,
             'price_slices': slices_out,
             'probability_range': probability_out,
         })
