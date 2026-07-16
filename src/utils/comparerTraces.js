@@ -1,6 +1,50 @@
+// In Total Return / Both, a partial reinvest is drawn as a solid line just
+// like full DRIP, but tinted so it still reads as a variant of the fund's own
+// line. The tint lifts the fund color toward white in proportion to how far
+// below 100% the reinvest sits — full DRIP is unchanged, lower % is lighter.
+export function shiftColorForReinvest(hex, reinvestPct = 100) {
+  const pct = Number(reinvestPct)
+  if (!Number.isFinite(pct) || pct >= 100) return hex
+  const match = /^#?([0-9a-fA-F]{6})$/.exec(String(hex))
+  if (!match) return hex
+  const int = parseInt(match[1], 16)
+  const r = (int >> 16) & 255
+  const g = (int >> 8) & 255
+  const b = int & 255
+  const t = Math.max(0, Math.min(1, (100 - pct) / 100)) * 0.4
+  const mix = c => Math.round(c + (255 - c) * t)
+  const out = (mix(r) << 16) | (mix(g) << 8) | mix(b)
+  return `#${out.toString(16).padStart(6, '0')}`
+}
+
+// Rebuild the blended reinvestment line for an arbitrary reinvest fraction from
+// the normalized price trace and the per-point dividend/price ratio the backend
+// ships alongside it. This is an exact reproduction of the server's
+// _blend_price_drip walk, so moving the Reinvest slider is a local recompute
+// (no refetch, no chart blink) instead of another market-data round-trip.
+export function computeBlendTrace(priceTrace = [], divRatio = [], frac = 1) {
+  const f = Math.max(0, Math.min(1, Number(frac)))
+  if (!Array.isArray(priceTrace) || !priceTrace.length || !Array.isArray(divRatio) || !divRatio.length) {
+    return null
+  }
+  let shares = 1
+  let cash = 0
+  const out = new Array(priceTrace.length)
+  for (let i = 0; i < priceTrace.length; i += 1) {
+    const p = Number(priceTrace[i])
+    const y = Number(divRatio[i]) || 0
+    if (y > 0 && Number.isFinite(p)) {
+      cash += y * p * shares * (1 - f)
+      shares += y * shares * f
+    }
+    out[i] = Number((shares * p + cash).toFixed(4))
+  }
+  return out
+}
+
 // The comparer fetches one complete trace bundle so switching return modes is
 // a local display operation instead of another market-data request.
-export function selectComparerTraces(traceMap = {}, mode = 'total') {
+export function selectComparerTraces(traceMap = {}, mode = 'total', reinvestPct = 100) {
   const total = traceMap.total ?? traceMap.drip
   const entries = {
     price: traceMap.price,
@@ -10,11 +54,15 @@ export function selectComparerTraces(traceMap = {}, mode = 'total') {
     total,
   }
 
+  // A partial reinvest % points the Total Return line at the blended trace,
+  // so Total Return/Both honor the slider instead of always assuming full DRIP.
+  const totalKey = Number(reinvestPct) < 100 && entries.blend != null ? 'blend' : 'total'
+
   const keysByMode = {
-    total: ['total'],
+    total: [totalKey],
     price: ['price'],
     pricediv: ['pricediv'],
-    both: ['total', 'price'],
+    both: [totalKey, 'price'],
     all3: ['price', 'blend', 'drip'],
     all4: ['price', 'pricediv', 'blend', 'drip'],
   }
@@ -33,6 +81,7 @@ export function shouldUseComparerLogScale(
   mode = 'total',
   visibleStart = null,
   visibleEnd = null,
+  reinvestPct = 100,
   ratioThreshold = 50,
 ) {
   let minWealth = Infinity
@@ -42,7 +91,7 @@ export function shouldUseComparerLogScale(
   symbols.forEach(sym => {
     const series = seriesBySymbol[sym]
     const dates = series?.dates || []
-    selectComparerTraces(series?.traces || {}, mode).forEach(([, values]) => {
+    selectComparerTraces(series?.traces || {}, mode, reinvestPct).forEach(([, values]) => {
       let baseIdx = -1
       for (let i = 0; i < values.length; i += 1) {
         const day = String(dates[i] || '').slice(0, 10)
@@ -76,21 +125,25 @@ function rounded(value) {
   return Number.isFinite(value) ? Number(value.toFixed(2)) : null
 }
 
-export function comparerStatsForMode(series = {}, fallback = {}, mode = 'total') {
+export function comparerStatsForMode(series = {}, fallback = {}, mode = 'total', reinvestPct = 100) {
   const traceMap = series.traces || {}
   // The multi-line modes historically report the blended return as their
-  // headline statistic even though the price line is drawn first.
+  // headline statistic even though the price line is drawn first. A partial
+  // reinvest % moves the Total Return headline onto the blended trace too.
+  const totalStatsKey = Number(reinvestPct) < 100 && traceMap.blend != null
+    ? 'blend'
+    : (traceMap.total != null ? 'total' : 'drip')
   const statsKeyByMode = {
-    total: traceMap.total != null ? 'total' : 'drip',
+    total: totalStatsKey,
     price: 'price',
     pricediv: 'pricediv',
-    both: traceMap.total != null ? 'total' : 'drip',
+    both: totalStatsKey,
     all3: 'blend',
     all4: 'blend',
   }
   const statsKey = statsKeyByMode[mode]
   const selectedValues = traceMap[statsKey]
-    || selectComparerTraces(traceMap, mode)[0]?.[1]
+    || selectComparerTraces(traceMap, mode, reinvestPct)[0]?.[1]
     || []
   const priceValues = traceMap.price || []
   const traceReturn = values => {

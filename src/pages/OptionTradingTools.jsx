@@ -5,6 +5,7 @@ import { assignBrokerImportSides, parseBrokerOptionDescriptor } from '../utils/b
 import { chartTheme } from '../utils/chartTheme'
 import { resizeOptionStructure } from '../utils/optionsStrategy'
 import GreekSurfaceExplorer from '../components/GreekSurfaceExplorer'
+import OptionBacktest from '../components/OptionBacktest'
 
 const TODAY = () => {
   const now = new Date()
@@ -1510,15 +1511,16 @@ export default function OptionTradingTools() {
           <button type="button" className={workspace === 'risk' ? 'active' : ''} onClick={() => setWorkspace('risk')}>Risk Profile</button>
           <button type="button" className={workspace === 'moneyness' ? 'active' : ''} onClick={() => setWorkspace('moneyness')}>Price &amp; Moneyness</button>
           <button type="button" className={workspace === 'greeks' ? 'active' : ''} onClick={() => setWorkspace('greeks')}>Greek Surfaces</button>
+          <button type="button" className={workspace === 'backtest' ? 'active' : ''} onClick={() => setWorkspace('backtest')}>Backtest</button>
         </div>
-        {workspace !== 'greeks' && <div className="opt-save-actions">
+        {!['greeks', 'backtest'].includes(workspace) && <div className="opt-save-actions">
           <button type="button" className="btn btn-secondary" onClick={newStrategy}>New</button>
           <button type="button" className="btn btn-primary" onClick={saveStrategy} disabled={!legs.length}>{strategyId ? 'Update strategy' : 'Save strategy'}</button>
           {saveStatus && <span>{saveStatus}</span>}
         </div>}
       </div>
 
-      {workspace !== 'greeks' && <section className="opt-strategy-meta card">
+      {!['greeks', 'backtest'].includes(workspace) && <section className="opt-strategy-meta card">
         <label className="opt-name-field"><span>Strategy name</span><input value={strategyName} onChange={event => setStrategyName(event.target.value)} /></label>
         <label><span>Pricing model</span><select value={model} onChange={event => setModel(event.target.value)}><option value="black-scholes">Black–Scholes</option><option value="bjerksund-stensland">Bjerksund–Stensland</option></select></label>
         <label><span>Rate</span><div className="opt-suffix-input"><input type="number" step="0.05" value={ratePct} onChange={event => setRatePct(event.target.value)} /><b>%</b></div></label>
@@ -1553,6 +1555,16 @@ export default function OptionTradingTools() {
             if (leg) changeLegStrike(leg, strikeValue)
           }}
           onEditPosition={() => setWorkspace('trades')}
+        />
+      ) : workspace === 'backtest' ? (
+        <OptionBacktest
+          ticker={ticker}
+          spot={spot}
+          savedStrategies={savedStrategies}
+          onTickerChange={nextTicker => {
+            setTicker(nextTicker)
+            setTickerInput(nextTicker)
+          }}
         />
       ) : workspace === 'trades' ? (
         <>
@@ -1767,7 +1779,7 @@ export default function OptionTradingTools() {
         </section>
       )}
 
-      {workspace !== 'greeks' && <section className="card opt-legs-card">
+      {!['greeks', 'backtest'].includes(workspace) && <section className="card opt-legs-card">
         <div className="opt-section-heading">
           <div><span>Positions and simulated trades</span><h2>{legs.length ? `${activeLegs.length} of ${legs.length} active · ${ticker}` : 'No simulated trades'}</h2></div>
           <div className="opt-leg-actions"><button type="button" onClick={addStockLeg} disabled={!spot}>+ Add stock</button><button type="button" onClick={() => { const contract = nearestContract('CALL', spot); if (contract) addLeg(contract, 'CALL', 'BUY') }}>+ Add ATM call</button><button type="button" onClick={() => { const contract = nearestContract('PUT', spot); if (contract) addLeg(contract, 'PUT', 'BUY') }}>+ Add ATM put</button><button type="button" onClick={() => setWorkspace('risk')} disabled={!legs.length}>Analyze risk</button></div>

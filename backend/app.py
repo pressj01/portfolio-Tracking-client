@@ -21356,6 +21356,21 @@ def _blend_price_drip(close_series, divs_series, frac, track_cash=True):
     return pd.Series(vals, index=close_series.index)
 
 
+def _download_has_dividend_actions(df):
+    """True when an actions=True download actually honored the request.
+
+    A healthy actions frame always carries a Dividends column (all zeros for
+    non-payers). A rate-limited/flaky Yahoo response can silently ignore
+    auto_adjust/actions and hand back adjusted closes with no Dividends at
+    all — dividend math built on that frame collapses every return trace to
+    the same price line, so callers must treat it as a failed download.
+    """
+    if df is None or getattr(df, "empty", True):
+        return False
+    cols = df.columns.get_level_values(0) if hasattr(df.columns, "get_level_values") else df.columns
+    return "Dividends" in set(cols)
+
+
 def _series_return(values, default=None):
     if not values:
         return default
@@ -21477,7 +21492,10 @@ def etf_screen_data():
     extra = request.args.get("extra", "").strip()
     period = request.args.get("period", "1y")
     mode = request.args.get("mode", "ohlcv")  # ohlcv | total | price | pricediv | both | all3 | all4 | bundle
-    reinvest_pct = min(100, max(0, int(request.args.get("reinvest", 100))))
+    try:
+        reinvest_pct = min(100, max(0, int(round(float(request.args.get("reinvest", 100))))))
+    except (TypeError, ValueError):
+        reinvest_pct = 100
     interval = request.args.get("interval", "")
     # Optional explicit date window. When both are present they override `period`
     # so the chart/returns are computed over exactly the requested span.
@@ -21653,7 +21671,10 @@ def etf_screen_data():
                 price_df = div_df
             else:
                 price_df = _chunked_yf_download(yahoo_symbols, interval=interval, auto_adjust=False, progress=False, **_range_kwargs())
-            _cache_set(_ETF_SCREEN_MARKET_CACHE, _market_key, (div_df, price_df))
+            # Never cache a frame that ignored actions=True — it would pin
+            # dividend-less (price-only) return traces for the whole TTL.
+            if _download_has_dividend_actions(div_df):
+                _cache_set(_ETF_SCREEN_MARKET_CACHE, _market_key, (div_df, price_df))
         else:
             div_df, price_df = market_frames
         if price_df.empty:
@@ -21780,7 +21801,9 @@ def etf_screen_data():
             divs_raw = _extract_col(div_df, "Dividends", dl_sym)
             divs = divs_raw.reindex(div_close.index, fill_value=0.0) if not divs_raw.empty else pd.Series(0.0, index=div_close.index)
 
-            if close.empty and div_close.empty:
+            # Also re-fetch per ticker when the batch download ignored
+            # actions=True, otherwise every return trace degrades to price-only.
+            if (close.empty and div_close.empty) or not _download_has_dividend_actions(div_df):
                 try:
                     fallback = yf.Ticker(dl_sym).history(interval="1d", auto_adjust=False, actions=True, **_range_kwargs())
                 except Exception:
@@ -21801,6 +21824,17 @@ def etf_screen_data():
             base = div_close if not div_close.empty else close
             dates = [d.strftime("%Y-%m-%d") for d in base.index]
             norm_price = [round(float(v), 4) for v in (base / float(base.iloc[0]) * 100)]
+
+            # Per-point dividend/price ratio so the client can rebuild the
+            # blended reinvestment line for any slider % locally — moving the
+            # Reinvest slider then needs no refetch (no chart blink/shake).
+            # Mirrors _blend_price_drip's per-step math exactly.
+            div_on_base = divs.reindex(base.index, fill_value=0.0)
+            div_ratio = []
+            for _i in range(len(base)):
+                _px = float(base.iloc[_i])
+                _dv = float(div_on_base.iloc[_i])
+                div_ratio.append(round(_dv / _px, 8) if _px > 0 and _dv > 0 else 0.0)
 
             # Compute return series based on mode
             traces = {}
@@ -21881,7 +21915,7 @@ def etf_screen_data():
                 if _bclose is not None:
                     delta_up, delta_down = _capture_deltas(base, _bclose)
 
-            result["series"][sym] = {"dates": dates, "traces": traces}
+            result["series"][sym] = {"dates": dates, "traces": traces, "div_ratio": div_ratio}
             result["stats"][sym] = {
                 "total_ret": total_ret,
                 "price_ret": price_ret,

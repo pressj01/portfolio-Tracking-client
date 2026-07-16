@@ -6,7 +6,7 @@ import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
-import { selectComparerTraces, shouldUseComparerLogScale } from '../utils/comparerTraces'
+import { selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
 
 const PERIODS = [
   { value: '1mo', label: '1M' },
@@ -240,7 +240,6 @@ export default function StockComparer() {
   const [period, setPeriod] = useState('6mo')
   const [returnMode, setReturnMode] = useState('total')
   const [reinvest, setReinvest] = useState(100)
-  const [debouncedReinvest, setDebouncedReinvest] = useState(100)
   const [showReturnLabels, setShowReturnLabels] = useState(true)
   const [returnHoverMode, setReturnHoverMode] = useState('x unified')
   const [returnPctMode, setReturnPctMode] = useState(true)
@@ -323,11 +322,6 @@ export default function StockComparer() {
     reinvestRef.current = reinvest
   }, [reinvest])
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedReinvest(reinvest), 180)
-    return () => window.clearTimeout(timer)
-  }, [reinvest])
-
   const load = useCallback(() => {
     const symbols = tickers.map(normalize).filter(Boolean)
     const loadSeq = loadSeqRef.current + 1
@@ -345,7 +339,9 @@ export default function StockComparer() {
     const fr = normalizeReturnRange(fetchRange)
     const rangeParam = fr ? `&start=${fr[0]}&end=${fr[1]}` : ''
     const requestPeriod = period === 'all' ? 'max' : period
-    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${requestPeriod}&mode=all4&reinvest=${debouncedReinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}&defer_details=1${rangeParam}`)
+    // Reinvest is fixed here — the blend line is rebuilt client-side from the
+    // per-point dividend ratios, so the slider never triggers a refetch.
+    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${requestPeriod}&mode=all4&reinvest=100&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}&defer_details=1${rangeParam}`)
       .then(r => r.json())
       .then(d => {
         if (loadSeqRef.current !== loadSeq) return
@@ -360,7 +356,7 @@ export default function StockComparer() {
       .finally(() => {
         if (loadSeqRef.current === loadSeq) setLoading(false)
       })
-  }, [pf, tickers, period, debouncedReinvest, refreshNonce, fetchRange])
+  }, [pf, tickers, period, refreshNonce, fetchRange])
 
   useEffect(() => { load() }, [load])
 
@@ -464,7 +460,9 @@ export default function StockComparer() {
   }, [])
 
   const symbols = useMemo(() => tickers.map(normalize).filter(Boolean), [tickers])
-  const reinvestDisabled = !['all3', 'all4'].includes(returnMode)
+  // Price-only style modes ignore reinvestment; every mode that draws a
+  // Total Return line honors the slider via the bundled blend trace.
+  const reinvestDisabled = ['price', 'pricediv'].includes(returnMode)
   const refreshComparison = useCallback(() => {
     if (!symbols.length) return
     const currentReinvest = reinvestRef.current
@@ -494,12 +492,16 @@ export default function StockComparer() {
     // dates or slider) so the chart visually aligns with the date set.
     const [visibleStart, visibleEnd] = visibleDateRange(data, effectiveReturnRange, true)
     const titleWindow = activeReturnRange || normalizeReturnRange(fetchRange)
+    // The blend line is rebuilt locally from the live slider value, so the
+    // chart tracks the Reinvest % instantly without another data fetch.
+    const effectiveReinvest = Number(reinvest)
     const autoLogScale = shouldUseComparerLogScale(
       data.series,
       symbols,
       returnMode,
       visibleStart,
       visibleEnd,
+      effectiveReinvest,
     )
     const logScaleActive = returnScalePreference === 'log'
       || (returnScalePreference === 'auto' && autoLogScale)
@@ -513,10 +515,23 @@ export default function StockComparer() {
       const idx = symbols.indexOf(sym)
       const dates = data.series[sym]?.dates || []
       const traceMap = data.series[sym]?.traces || {}
-      selectComparerTraces(traceMap, returnMode).forEach(([key, values]) => {
+      const divRatio = data.series[sym]?.div_ratio
+      selectComparerTraces(traceMap, returnMode, effectiveReinvest).forEach(([key, rawValues]) => {
         const isDimmed = highlightedSymbol && highlightedSymbol !== sym
-        const color = isDimmed ? DIMMED_COLOR : COLORS[idx % COLORS.length]
-        const style = TRACE_STYLES[key] || TRACE_STYLES.total
+        // Rebuild the blend line locally for the live slider % (exact, not an
+        // approximation) so dragging Reinvest never refetches the chart.
+        const values = key === 'blend'
+          ? (computeBlendTrace(traceMap.price, divRatio, effectiveReinvest / 100) || rawValues)
+          : rawValues
+        // In Total Return / Both, a partial reinvest shows the blend as the
+        // headline line — render it solid like full DRIP (no dashes) and only
+        // tint the color so it still reads as this fund's line.
+        const blendAsTotal = key === 'blend' && ['total', 'both'].includes(returnMode)
+        const baseColor = isDimmed ? DIMMED_COLOR : COLORS[idx % COLORS.length]
+        const color = blendAsTotal && !isDimmed
+          ? shiftColorForReinvest(baseColor, effectiveReinvest)
+          : baseColor
+        const style = blendAsTotal ? TRACE_STYLES.total : (TRACE_STYLES[key] || TRACE_STYLES.total)
         const baseIdx = firstVisibleIndex(dates, visibleStart, visibleEnd)
         const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
         const base = Number(baseIdx >= 0 ? values?.[baseIdx] : values?.[0])
@@ -531,7 +546,7 @@ export default function StockComparer() {
             visibleYValues.push(value)
           }
         })
-        const label = key === 'blend' ? `${data.reinvest_pct ?? debouncedReinvest}%` : style.label
+        const label = key === 'blend' ? `${effectiveReinvest}% Reinvest` : style.label
         const name = label ? `${sym} (${label})` : sym
         traces.push({
           x: dates,
@@ -698,7 +713,7 @@ export default function StockComparer() {
         annotations,
       },
     }
-  }, [data, symbols, period, debouncedReinvest, returnMode, returnPctMode, returnScalePreference, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange, highlightedSymbol])
+  }, [data, symbols, period, reinvest, returnMode, returnPctMode, returnScalePreference, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange, highlightedSymbol])
 
   const rows = useMemo(() => {
     const profiles = data?.profiles || {}

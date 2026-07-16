@@ -25,6 +25,7 @@ import yfinance as yf
 from flask import jsonify, request
 
 from config import get_connection
+from options_backtest import run_options_backtest
 from options_pricing import price_option, black_scholes
 
 # ---------------------------------------------------------------------------
@@ -930,6 +931,16 @@ def register_routes(app):
             return jsonify(error='ticker and expiration required'), 400
         try:
             return jsonify(_fetch_chain(ticker, expiration))
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+
+    @app.route('/api/options/backtest', methods=['POST'])
+    def options_backtest():
+        payload = request.get_json(force=True, silent=True) or {}
+        try:
+            return jsonify(run_options_backtest(payload))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
         except Exception as e:
             return jsonify(error=str(e)), 500
 
