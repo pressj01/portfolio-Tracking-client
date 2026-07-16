@@ -5658,6 +5658,19 @@ function DividendCalculatorHelp() {
         the Dividend Calculator works from any tickers you enter — useful for evaluating new positions, comparing
         funds side-by-side, or modeling what-if scenarios before you buy.
       </p>
+      <p style={{ marginBottom: '1rem' }}>
+        After at least one ticker loads, the <strong>Current payout</strong> bubble at the top of the page shows
+        the selected tickers' present gross monthly and annual distribution run-rate. It updates with current
+        value, shares, price, and yield edits, and does not include taxes, DRIP, growth, or future contributions.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        After you click <strong>Calculate</strong> or <strong>Recalculate</strong>, four result bubbles appear at
+        the top: <strong>Total Income</strong> is cumulative gross dividend income over the full projection,
+        while <strong>Monthly Income</strong> and <strong>Annual Income</strong> are the combined income run-rates
+        at the final projection year. <strong>Portfolio Value</strong> is the combined value of invested holdings
+        at the final year and excludes cash dividends that are included separately in Ending Wealth. If inputs
+        change, the bubbles are marked as last-calculated values until the next recalculation.
+      </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="./help-screenshots/dividend-calculator/Screenshot 2026-05-09 102110.jpg" alt="Dividend Calculator projections interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
@@ -5671,19 +5684,34 @@ function DividendCalculatorHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Years to Invest</strong> — Length of the projection (1–50 years).</li>
         <li><strong>Initial Investment Per Ticker</strong> — Starting dollar amount applied to each ticker. Updating this value re-derives the share count for any already-loaded tickers.</li>
-        <li><strong>Annual Investment Total</strong> — Total new dollars added each year and contributed at the end of each compounding period.</li>
-        <li><strong>Annual Contribution Split</strong> — Allocates the annual investment equally, by each ticker's current or starting value, or by custom per-ticker amounts. It does not change the initial investment.</li>
+        <li><strong>Contribution Schedule</strong> — Choose Annual or Monthly. The choices are mutually exclusive, so the calculator never applies both contribution schedules at once. Annual totals are divided across each ticker's payout periods, while monthly contributions are deposited at each month-end. Switching schedules converts the current total to its equivalent annual or monthly amount.</li>
+        <li><strong>Contribution Total</strong> — Total new dollars added per selected period. This is also the dollar base used for every ticker's allocation percentage.</li>
+        <li><strong>Contribution Window</strong> — Choose Full period to contribute throughout the projection, or Limited to stop new contributions after the first X years or months. For example, $300 monthly for 2 years in a 10-year projection contributes $7,200 during the first 24 months, then projects the remaining 8 years using DRIP and growth without additional cash deposits.</li>
+        <li><strong>Contribution Allocation</strong> — Allocates the selected contribution total by an even percentage split, by each ticker's current or starting value, or by custom per-ticker percentages. It does not change the initial investment.</li>
         <li><strong>Dividend Tax Rate</strong> — Applied to taxable dividends each period. The Return of Capital % on each ticker reduces the taxable portion.</li>
         <li><strong>Stock Price Growth (All Tickers)</strong> — Default annual price appreciation applied to every ticker. You can override this per ticker after it loads.</li>
         <li><strong>Dividends Reinvested (DRIP)</strong> — Percentage of net dividends reinvested each period (0–100%). Anything not reinvested is tracked as cash dividends.</li>
       </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        In custom allocation mode, every ticker can have a different percentage. The percentages refer to the
+        selected annual or monthly contribution total, not to the starting portfolio value. The dollar contribution
+        and percentage fields stay synchronized, and an even split assigns <strong>100% ÷ ticker count</strong> to
+        each ticker automatically. In <strong>Custom percentages</strong> mode, use <strong>Split percentages
+        evenly</strong> to create an editable equal-percentage starting point. When the contribution total is $0,
+        every Contribution Allocation % displays 0% and percentage editing is disabled. This does not change the
+        separate DRIP percentage, which controls dividend reinvestment. Changing one ticker's custom percentage
+        automatically redistributes the remaining percentage proportionally across the other tickers so the total
+        allocation remains 100%. Removing a ticker also renormalizes the remaining allocations to 100%. After an
+        edit, the Allocation Adjustment Summary shows the edited ticker, confirms Total allocation: 100.00%, and
+        provides an expandable list of every ticker's before-and-after percentage.
+      </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Type a symbol (e.g. <code>SCHD</code>, <code>JEPI</code>, <code>AAPL</code>) into the ticker bar and click
         <strong> Add Ticker</strong>. The app fetches current price, dividend yield, dividend growth rate, and
         payout frequency from Yahoo Finance, then auto-fills the row. Add as many tickers as you like — the
-        selected annual contribution split is applied across them and final results are aggregated.
+        selected contribution allocation is applied across them and final results are aggregated.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
         Each ticker becomes its own card with editable fields. Click the <strong>x</strong> on a chip or the
@@ -5698,7 +5726,7 @@ function DividendCalculatorHelp() {
         <li><strong>Dividend Growth</strong> — Annual percentage increase applied to the dividend per share each year. Auto-filled from Yahoo's historical growth rate; override based on your own expectations.</li>
         <li><strong>Return of Capital</strong> — Percentage of distributions that aren't taxable income (common for covered-call ETFs and some MLPs). Reduces the dividend tax drag without affecting cash flow.</li>
         <li><strong>Stock Price Growth</strong> — Per-ticker price appreciation. Defaults to the global setting but can be tuned individually.</li>
-        <li><strong>Payout Frequency</strong> — Weekly, Monthly, Quarterly, Semi-Annually, or Annually. Higher frequencies compound faster when DRIP is on.</li>
+        <li><strong>Payout Frequency</strong> — 0, Weekly, Monthly, Quarterly, Semi-Annually, or Annually. AOTS defaults to 0 payouts because it currently has no dividend, but its frequency remains editable. Other tickers retain their detected/default frequency. Selecting another AOTS frequency does not create dividend income while its yield is still 0%. Annual or monthly cash contributions continue buying shares independently of dividend payouts.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Running the Calculation</h3>
@@ -5714,8 +5742,8 @@ function DividendCalculatorHelp() {
         <li><strong>Summary Stats</strong> — Ending Wealth (final portfolio value plus uncollected cash dividends), Annual / Monthly Dividend Income at the final year, Yield on Cost, and total Estimated Dividend Taxes after Return of Capital adjustments.</li>
         <li><strong>Portfolio &amp; Income Chart</strong> — Combined view of portfolio value (filled area), cumulative dividends, and annual income on a secondary axis.</li>
         <li><strong>Shares Over Time</strong> — One line per ticker when multiple are loaded, or a single line for one ticker. Shows how DRIP grows your share count year by year.</li>
-        <li><strong>Year-by-Year Breakdown</strong> — Detailed table with shares, portfolio value, gross/net dividends, taxes, reinvested vs. cash dividends, and cumulative contributions per year.</li>
-        <li><strong>Per-Ticker Final Values</strong> — When two or more tickers are loaded, an additional table compares each ticker's final shares, portfolio value, income, taxes, and dividends. Useful for picking between candidates.</li>
+        <li><strong>Year-by-Year Breakdown</strong> — Detailed table with shares, portfolio value, gross/net dividends, taxes, reinvested vs. cash dividends, and cumulative contributions per year. With a limited contribution window, cumulative contributions stop increasing after the selected final contribution month.</li>
+        <li><strong>Per-Ticker Final Values</strong> — When two or more tickers are loaded, an additional table places Initial Shares immediately before Final Shares and shows Share Delta as Final Shares minus Initial Shares. It then compares portfolio value, income, taxes, and dividends. Useful for seeing share growth and picking between candidates.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How DRIP Compounds</h3>

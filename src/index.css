@@ -4978,7 +4978,111 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 /* Dividend Calculator */
 .dc-page { padding: 1.5rem 2rem; max-width: 1400px; margin: 0 auto; }
 .dc-title-row h1 { margin: 0 0 0.25rem 0; font-size: 1.75rem; }
-.dc-title-row { border-bottom: 1px solid var(--p-1a4480); padding-bottom: 0.75rem; margin-bottom: 1rem; }
+.dc-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--p-1a4480);
+  padding-bottom: 0.75rem;
+  margin-bottom: 1rem;
+}
+.dc-title-row > div:first-child { min-width: 0; }
+.dc-payout-bubble {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 265px;
+  padding: 0.6rem 0.85rem;
+  background: linear-gradient(135deg, rgba(126, 207, 255, 0.14), rgba(77, 255, 145, 0.08));
+  border: 1px solid rgba(126, 207, 255, 0.38);
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(5, 14, 30, 0.16);
+}
+.dc-payout-label {
+  color: var(--p-9bb4d6);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  line-height: 1;
+  text-align: center;
+  text-transform: uppercase;
+}
+.dc-payout-values {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dc-payout-values > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.18rem;
+}
+.dc-payout-values strong { color: var(--accent-bright); font-size: 1rem; }
+.dc-payout-values small { color: var(--text-faint-2); font-size: 0.7rem; }
+.dc-payout-values i {
+  width: 1px;
+  height: 18px;
+  background: rgba(126, 207, 255, 0.28);
+}
+.dc-income-bubbles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin: 0 0 1rem;
+}
+.dc-income-bubble {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 0.75rem 1rem;
+  background: linear-gradient(135deg, rgba(77, 255, 145, 0.09), rgba(126, 207, 255, 0.11));
+  border: 1px solid rgba(126, 207, 255, 0.32);
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(5, 14, 30, 0.13);
+  text-align: center;
+}
+.dc-income-bubble > span {
+  color: var(--p-9bb4d6);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+.dc-income-bubble > strong {
+  max-width: 100%;
+  margin-top: 0.15rem;
+  color: var(--pos);
+  font-size: 1.18rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.dc-income-bubble > small {
+  margin-top: 0.1rem;
+  color: var(--text-faint-2);
+  font-size: 0.68rem;
+}
+.dc-income-bubbles.is-stale .dc-income-bubble { opacity: 0.7; }
+.dc-income-bubbles-status {
+  grid-column: 1 / -1;
+  color: var(--p-ffd27a);
+  font-size: 0.72rem;
+  text-align: right;
+}
+@media (max-width: 1100px) {
+  .dc-income-bubbles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .dc-income-bubbles { grid-template-columns: 1fr; }
+  .dc-income-bubbles-status { text-align: left; }
+}
 .dc-muted { color: var(--text-faint-2); }
 
 .dc-ticker-bar {
@@ -5073,6 +5177,14 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 
 @media (max-width: 560px) {
   .dc-page { padding: 1rem; }
+  .dc-title-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .dc-payout-bubble {
+    min-width: 0;
+    width: 100%;
+  }
   .dc-ticker-actions {
     grid-template-columns: 1fr;
   }
@@ -5150,6 +5262,89 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   line-height: 1.35;
   margin-top: 0.1rem;
 }
+.dc-inline-action {
+  display: block;
+  width: fit-content;
+  margin-top: 0.35rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-bright);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.dc-inline-action:hover { color: var(--accent); }
+.dc-inline-action:disabled {
+  color: var(--text-faint-2);
+  cursor: not-allowed;
+  text-decoration: none;
+}
+.dc-allocation-summary {
+  grid-column: 1 / -1;
+  padding: 0.7rem 0.85rem;
+  background: rgba(77, 255, 145, 0.06);
+  border: 1px solid rgba(77, 255, 145, 0.24);
+  border-radius: 6px;
+}
+.dc-allocation-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.dc-allocation-summary-head > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.65rem;
+  min-width: 0;
+}
+.dc-allocation-summary-head strong { color: var(--text-strong); font-size: 0.8rem; }
+.dc-allocation-summary-head span { color: var(--p-9bb0cc); font-size: 0.76rem; }
+.dc-allocation-summary .dc-allocation-total {
+  flex: 0 0 auto;
+  color: var(--pos);
+  font-weight: 800;
+  white-space: nowrap;
+}
+.dc-allocation-details { margin-top: 0.45rem; }
+.dc-allocation-details > summary {
+  width: fit-content;
+  color: var(--accent-bright);
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+.dc-allocation-change-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+.dc-allocation-change-grid > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.45rem;
+  background: rgba(15, 28, 51, 0.62);
+  border: 1px solid rgba(126, 207, 255, 0.12);
+  border-radius: 4px;
+}
+.dc-allocation-change-grid strong { color: var(--text-strong); font-size: 0.72rem; }
+.dc-allocation-change-grid span {
+  color: var(--p-9bb0cc);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (max-width: 560px) {
+  .dc-allocation-summary-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
 .dc-portfolio-summary {
   color: var(--accent-bright);
   font-size: 0.92rem;
@@ -5160,6 +5355,41 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   border-radius: 6px;
   line-height: 1.4;
 }
+.dc-frequency-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.3rem;
+  padding: 0.25rem;
+  background: var(--p-0f1c33);
+  border: 1px solid var(--p-1a4480);
+  border-radius: 5px;
+}
+.dc-frequency-options button {
+  min-height: 32px;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.dc-frequency-options button:hover {
+  color: var(--text-strong);
+  background: rgba(126, 207, 255, 0.08);
+}
+.dc-frequency-options button.active {
+  color: var(--p-08111f);
+  background: var(--accent-bright);
+  border-color: var(--accent-bright);
+}
+.dc-duration-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 105px;
+  gap: 0.4rem;
+}
 .dc-field-toggle { justify-content: flex-end; }
 
 .dc-input-wrap { position: relative; display: flex; align-items: center; }
@@ -5169,6 +5399,10 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   font-size: 0.92rem; outline: none;
 }
 .dc-input:focus { border-color: var(--accent); }
+.dc-input:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
 .dc-input.dc-input-with-prefix { padding-left: 1.9rem; }
 .dc-input.dc-input-with-suffix { padding-right: 1.9rem; }
 .dc-input-affix {
@@ -5260,6 +5494,9 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   border-bottom: 1px solid var(--p-1a2a4d);
 }
 .dc-table th:first-child, .dc-table td:first-child { text-align: left; }
+.dc-table .dc-share-delta { font-weight: 700; }
+.dc-table .dc-share-delta.pos { color: var(--pos); }
+.dc-table .dc-share-delta.neg { color: var(--neg); }
 .dc-table thead th {
   background: var(--p-0f1c33); color: var(--text-faint-2);
   font-weight: 600; font-size: 0.75rem; text-transform: uppercase;
