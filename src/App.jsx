@@ -66,8 +66,8 @@ import ETFBuyingChecklistEvaluator from './pages/ETFBuyingChecklistEvaluator'
 import OptionIncomeETFEvaluator from './pages/OptionIncomeETFEvaluator'
 import StockBuyingChecklist from './pages/StockBuyingChecklist'
 import OptionTradingTools from './pages/OptionTradingTools'
-// Option Education remains in development and is excluded from deployment.
-// import OptionEducation from './pages/OptionEducation'
+import OptionEducation from './pages/OptionEducation'
+import GreeksGuide from './pages/GreeksGuide'
 
 function PlotlyThemeBridge() {
   const { isDark } = useTheme()
@@ -225,7 +225,8 @@ function App() {
         <Route path="/option-income-etf-evaluator" element={<OptionIncomeETFEvaluator />} />
         <Route path="/stock-buying-checklist" element={<StockBuyingChecklist />} />
         <Route path="/options" element={<OptionTradingTools />} />
-        {/* Option Education remains excluded from deployment. */}
+        <Route path="/option-education" element={<OptionEducation />} />
+        <Route path="/option-greeks" element={<GreeksGuide />} />
         <Route path="/help" element={<Help />} />
       </Routes>
     </Router>
@@ -287,7 +288,11 @@ function Nav() {
     <nav className="nav-bar">
       <NavLink to="/">Dashboard</NavLink>
       <NavLink to="/action-center">Action Center</NavLink>
-      <NavLink to="/options">Options</NavLink>
+      <NavDropdown label="Options">
+        <NavLink to="/options">Strategy Lab</NavLink>
+        <NavLink to="/option-education">Option Strategy Education</NavLink>
+        <NavLink to="/option-greeks">Understanding the Greeks</NavLink>
+      </NavDropdown>
       <NavDropdown label="Portfolio">
         <NavLink to="/holdings">Holdings</NavLink>
         <NavLink to="/common-info">CommonInfo</NavLink>

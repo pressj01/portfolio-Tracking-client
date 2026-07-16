@@ -1313,6 +1313,40 @@ export default function OptionTradingTools() {
       const shortCall = nearestContract('CALL', spot, 2) || atmCall
       next = [makeStockLeg('BUY', 100), makeLeg(shortCall, 'CALL', 'SELL')]
       name = `${ticker} covered call`
+    } else if (type === 'cash-secured-put' && atmPut) {
+      const shortPut = nearestContract('PUT', spot, -2) || atmPut
+      next = [makeLeg(shortPut, 'PUT', 'SELL')]
+      name = `${ticker} cash-secured put`
+    } else if (type === 'protective-put' && atmPut) {
+      const longPut = nearestContract('PUT', spot, -2) || atmPut
+      next = [makeStockLeg('BUY', 100), makeLeg(longPut, 'PUT', 'BUY')]
+      name = `${ticker} protective put`
+    } else if (type === 'collar' && atmPut && atmCall) {
+      const longPut = nearestContract('PUT', spot, -2) || atmPut
+      const shortCall = nearestContract('CALL', spot, 2) || atmCall
+      next = [makeStockLeg('BUY', 100), makeLeg(longPut, 'PUT', 'BUY'), makeLeg(shortCall, 'CALL', 'SELL')]
+      name = `${ticker} collar`
+    } else if (type === 'iron-butterfly' && atmCall && atmPut) {
+      const wingCall = nearestContract('CALL', spot, 4)
+      const wingPut = nearestContract('PUT', spot, -4)
+      next = [
+        makeLeg(wingPut, 'PUT', 'BUY'), makeLeg(atmPut, 'PUT', 'SELL'),
+        makeLeg(atmCall, 'CALL', 'SELL'), makeLeg(wingCall, 'CALL', 'BUY'),
+      ]
+      name = `${ticker} iron butterfly`
+    } else if (type === 'long-strangle' && atmCall && atmPut) {
+      const otmCall = nearestContract('CALL', spot, 3)
+      const otmPut = nearestContract('PUT', spot, -3)
+      next = [makeLeg(otmPut, 'PUT', 'BUY'), makeLeg(otmCall, 'CALL', 'BUY')]
+      name = `${ticker} long strangle`
+    } else if (type === 'short-straddle' && atmCall && atmPut) {
+      next = [makeLeg(atmPut, 'PUT', 'SELL'), makeLeg(atmCall, 'CALL', 'SELL')]
+      name = `${ticker} short straddle`
+    } else if (type === 'short-strangle' && atmCall && atmPut) {
+      const otmCall = nearestContract('CALL', spot, 3)
+      const otmPut = nearestContract('PUT', spot, -3)
+      next = [makeLeg(otmPut, 'PUT', 'SELL'), makeLeg(otmCall, 'CALL', 'SELL')]
+      name = `${ticker} short strangle`
     }
     setLegs(next.filter(Boolean))
     setStrategyName(name)
@@ -1717,7 +1751,23 @@ export default function OptionTradingTools() {
 
           <section className="card opt-templates">
             <div><span>Quick learning templates</span><small>Templates replace the simulated legs below using contracts near the current price.</small></div>
-            <div><button onClick={() => applyTemplate('covered-call')}>Covered call</button><button onClick={() => applyTemplate('long-call')}>Long call</button><button onClick={() => applyTemplate('bull-call')}>Bull call spread</button><button onClick={() => applyTemplate('bear-put')}>Bear put spread</button><button onClick={() => applyTemplate('straddle')}>Long straddle</button><button onClick={() => applyTemplate('iron-condor')}>Iron condor</button></div>
+            <div>
+              <button onClick={() => applyTemplate('covered-call')}>Covered call</button>
+              <button onClick={() => applyTemplate('cash-secured-put')}>Cash-secured put</button>
+              <button onClick={() => applyTemplate('protective-put')}>Protective put</button>
+              <button onClick={() => applyTemplate('collar')}>Collar</button>
+              <button onClick={() => applyTemplate('long-call')}>Long call</button>
+              <button onClick={() => applyTemplate('bull-call')}>Bull call spread</button>
+              <button onClick={() => applyTemplate('bear-put')}>Bear put spread</button>
+              <button onClick={() => applyTemplate('bull-put-credit')}>Bull put credit spread</button>
+              <button onClick={() => applyTemplate('bear-call-credit')}>Bear call credit spread</button>
+              <button onClick={() => applyTemplate('iron-condor')}>Iron condor</button>
+              <button onClick={() => applyTemplate('iron-butterfly')}>Iron butterfly</button>
+              <button onClick={() => applyTemplate('straddle')}>Long straddle</button>
+              <button onClick={() => applyTemplate('long-strangle')}>Long strangle</button>
+              <button onClick={() => applyTemplate('short-straddle')}>Short straddle</button>
+              <button onClick={() => applyTemplate('short-strangle')}>Short strangle</button>
+            </div>
           </section>
         </>
       ) : workspace === 'moneyness' ? (
