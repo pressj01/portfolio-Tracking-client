@@ -1,6 +1,6 @@
 ﻿import React, { useState } from 'react'
 
-const APP_VERSION = '1.31.14'
+const APP_VERSION = '1.31.15'
 
 const GROUPS = [
   {
@@ -15,6 +15,13 @@ const GROUPS = [
     label: 'Action Center',
     sections: [
       { id: 'action-center', label: 'Action Center' },
+    ],
+  },
+  {
+    id: 'options-group',
+    label: 'Options',
+    sections: [
+      { id: 'options', label: 'Options' },
     ],
   },
   {
@@ -128,6 +135,7 @@ function Overview() {
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
         <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation. Includes an Action Center preview panel showing the top follow-up items.</li>
         <li><strong>Action Center</strong> — Automatically generated follow-up items drawn from your portfolio data, categorized by priority (Needs Review, Watch, Clear) and kind (Allocation, Dividend, Income, Rebalance, Tax, etc.).</li>
+        <li><strong>Options</strong> — Build simulated multi-leg trades, graph risk and moneyness, explore first- and higher-order Greeks, and run modeled historical strategy backtests.</li>
         <li><strong>Dividends</strong> — Dividend analysis, calendar view, dividend history, dividend compare, and dividend calculator.</li>
         <li><strong>Growth</strong> — Portfolio growth charts, total return tracking, gains &amp; losses breakdown, and safe withdrawal rate analysis.</li>
         <li><strong>Watchlist</strong> — Track tickers outside your portfolio with live price and dividend data.</li>
@@ -5673,7 +5681,7 @@ function DividendCalculatorHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/dividend-calculator/Screenshot 2026-05-09 102110.jpg" alt="Dividend Calculator projections interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/dividend-calculator/dividend-calculator-overview.png" alt="Dividend Calculator current payout, final-year income bubbles, monthly contribution schedule, limited contribution window, and custom allocation settings" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calculation Settings</h3>
@@ -5705,6 +5713,10 @@ function DividendCalculatorHelp() {
         edit, the Allocation Adjustment Summary shows the edited ticker, confirms Total allocation: 100.00%, and
         provides an expandable list of every ticker's before-and-after percentage.
       </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/dividend-calculator/dividend-calculator-contributions.png" alt="Dividend Calculator ticker cards showing a custom 60 percent and 40 percent monthly contribution allocation" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -5746,6 +5758,10 @@ function DividendCalculatorHelp() {
         <li><strong>Per-Ticker Final Values</strong> — When two or more tickers are loaded, an additional table places Initial Shares immediately before Final Shares and shows Share Delta as Final Shares minus Initial Shares. It then compares portfolio value, income, taxes, and dividends. Useful for seeing share growth and picking between candidates.</li>
       </ul>
 
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/dividend-calculator/dividend-calculator-results.png" alt="Dividend Calculator results summary with ending wealth, final income, yield on cost, portfolio and income chart, and shares over time" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+      </div>
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How DRIP Compounds</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Each period the model: (1) pays the gross dividend on current shares, (2) subtracts taxes on the taxable
@@ -5762,6 +5778,101 @@ function DividendCalculatorHelp() {
         <li>Bump the Dividend Tax Rate to 0% to preview tax-advantaged accounts (IRA, Roth, HSA) and back to your marginal rate for taxable accounts.</li>
         <li>For high-yield covered-call ETFs (JEPI, JEPQ, QQQI, SPYI, etc.), check the fund's distribution classification — many report a meaningful ROC %, which substantially lowers the projected tax drag.</li>
       </ul>
+    </div>
+  )
+}
+
+function OptionsHelp() {
+  const imageStyle = {
+    maxWidth: '100%',
+    height: 'auto',
+    borderRadius: '4px',
+    border: '1px solid var(--p-333)',
+  }
+
+  return (
+    <div>
+      <h2>Options Strategy Laboratory</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Options page is an educational modeling workspace for building simulated positions and studying how
+        price, time, volatility, and strike selection affect an options strategy. It uses live or delayed market
+        data for the underlying and available option chains, but it does not place or route orders.
+      </p>
+      <div className="alert alert-warning" style={{ marginBottom: '1.25rem' }}>
+        <strong>Modeled results only:</strong> quotes can be delayed or incomplete, and theoretical values exclude
+        some real-world effects such as commissions unless entered, early assignment behavior, taxes, and execution
+        differences. Treat every result as an educational estimate rather than investment advice.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Simulated Trade</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Enter an underlying symbol and load its option chain. Expand an expiration, then click an ask to model a buy
+        or a bid to model a sale. The column picker can show basic pricing, Greeks, liquidity, or all available
+        columns. You can also paste broker option descriptions, use quick learning templates, add stock coverage,
+        edit quantities and strikes, and save a scenario for later analysis.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/options/options-simulated-trade.png" alt="Options Simulated Trade workspace with SPY quote, broker trade import, expiration browser, and option-chain controls" style={imageStyle} />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Risk Profile</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Risk Profile combines every active stock, call, and put leg into one profit-and-loss graph. Move the analysis
+        date forward, adjust volatility, widen the displayed price range, and compare the open-position curve with
+        expiration payoff. Summary cards show entry debit or credit, theoretical maximum profit and loss,
+        breakevens, and portfolio Greeks. Probability shading and draggable strike handles make it easier to test
+        how the structure changes.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/options/options-risk-profile.png" alt="Options Risk Profile showing probability controls, strategy metrics, strike markers, and profit-and-loss graph" style={imageStyle} />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Price &amp; Moneyness</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This view places every active option strike over the underlying's recent price history. The cards identify
+        each leg as in, at, or out of the money and show its distance from the current price. Switch between line
+        and candlestick charts or change the lookback period to see how close the position has been to its strikes.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/options/options-price-moneyness-staggered.png" alt="SPY candlestick chart with staggered option strike labels, moneyness lines, and the simulated position table" style={imageStyle} />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Greek Surfaces</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Greek Surfaces graphs a single contract or the signed exposure of an entire multi-leg position. Choose a
+        first- or higher-order Greek, then compare its 2D price or time profile with the 3D price-and-time surface.
+        The relationship view shows how second-order Greeks such as Gamma, Vanna, Charm, Vomma, Speed, Color, and
+        Zomma change a linked first-order Greek. The linked risk graph uses the same traced price and elapsed-time
+        scenario.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/options/options-greek-surfaces.png" alt="Options Greek Surfaces showing the signed Gamma profile, 3D price-and-time surface, and linked risk graph for an iron condor" style={imageStyle} />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Backtest</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Backtest runs a modeled historical replay of continuously rolled same-expiration strategies. Choose a
+        built-in or saved strategy, date range, capital allocation, target DTE, strike rules, pricing model,
+        volatility index, commissions, and slippage. Results compare the strategy with dividend-reinvested buy and
+        hold, provide lower- and higher-volatility sensitivity cases, and retain a cycle-level audit trail.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Historical option quotes are not used. The model reconstructs contracts from underlying history,
+        volatility assumptions, a listed-style strike grid, and the configured fills, so the comparison is useful
+        for learning and sensitivity testing rather than proof of executable historical performance.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/options/options-backtest.png" alt="Options Backtest results comparing an SPY iron condor with buy and hold, including metrics, equity curve, sensitivity tabs, and cycle audit trail" style={imageStyle} />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Suggested Workflow</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Load the underlying and build a simulated position from the chain, broker text, or a template.</li>
+        <li>Confirm every leg's side, quantity, expiration, strike, entry price, IV, and active checkbox.</li>
+        <li>Use Risk Profile to inspect payoff, breakevens, probabilities, and changes through time.</li>
+        <li>Use Price &amp; Moneyness and Greek Surfaces to understand where the position is sensitive.</li>
+        <li>Use Backtest for a modeled historical comparison, then review the assumptions and cycle audit trail.</li>
+      </ol>
     </div>
   )
 }
@@ -7343,6 +7454,7 @@ function HoldingTargetsHelp() {
 const CONTENT_MAP = {
   overview: Overview,
   'action-center': ActionCenterHelp,
+  options: OptionsHelp,
   import: ImportHelp,
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,

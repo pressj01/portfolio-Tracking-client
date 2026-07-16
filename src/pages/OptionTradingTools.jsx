@@ -471,6 +471,44 @@ const optionMoneyness = (leg, spot) => {
   }
 }
 
+function spreadMoneynessLabelOffsets(rows, axisLow, axisHigh) {
+  if (!rows.length || !(axisHigh > axisLow)) return []
+
+  const plotHeight = 430
+  const axisSpan = axisHigh - axisLow
+  const desiredGap = axisSpan * (28 / plotHeight)
+  const availableGap = rows.length > 1 ? axisSpan / (rows.length - 1) : desiredGap
+  const minimumGap = Math.min(desiredGap, availableGap)
+  const sorted = rows
+    .map((row, index) => ({ index, strike: Number(row.value.strike) }))
+    .sort((a, b) => a.strike - b.strike)
+  const positions = sorted.map(item => item.strike)
+
+  for (let index = 1; index < positions.length; index += 1) {
+    positions[index] = Math.max(positions[index], positions[index - 1] + minimumGap)
+  }
+
+  if (positions.at(-1) > axisHigh) {
+    positions[positions.length - 1] = axisHigh
+    for (let index = positions.length - 2; index >= 0; index -= 1) {
+      positions[index] = Math.min(positions[index], positions[index + 1] - minimumGap)
+    }
+  }
+
+  if (positions[0] < axisLow) {
+    positions[0] = axisLow
+    for (let index = 1; index < positions.length; index += 1) {
+      positions[index] = Math.max(positions[index], positions[index - 1] + minimumGap)
+    }
+  }
+
+  const offsets = Array(rows.length).fill(0)
+  sorted.forEach((item, sortedIndex) => {
+    offsets[item.index] = -((positions[sortedIndex] - item.strike) / axisSpan) * plotHeight
+  })
+  return offsets
+}
+
 function BrokerMoneynessChart({ ticker, spot, legs, records, chartType }) {
   const ref = useRef(null)
   const { isDark } = useTheme()
@@ -546,15 +584,25 @@ function BrokerMoneynessChart({ ticker, spot, legs, records, chartType }) {
     const yLow = Math.min(...values)
     const yHigh = Math.max(...values)
     const yPad = Math.max((yHigh - yLow) * 0.08, 1)
-    const annotations = moneynessRows.map(({ leg, value }) => {
+    const axisLow = yLow - yPad
+    const axisHigh = yHigh + yPad
+    const annotationOffsets = spreadMoneynessLabelOffsets(moneynessRows, axisLow, axisHigh)
+    const annotations = moneynessRows.map(({ leg, value }, index) => {
       const color = statusColors[value.status]
+      const verticalOffset = annotationOffsets[index]
       return {
         x: 1.01,
         xref: 'paper',
         y: value.strike,
         yref: 'y',
         text: `<b>${fmt(value.strike)} ${value.optType}</b> · ${fmt(value.percentDistance, 1)}% ${value.status}`,
-        showarrow: false,
+        showarrow: Math.abs(verticalOffset) >= 1,
+        ax: 0,
+        ay: verticalOffset,
+        arrowhead: 0,
+        arrowsize: 0.5,
+        arrowwidth: 1,
+        arrowcolor: color,
         xanchor: 'left',
         yanchor: 'middle',
         bgcolor: ct.surface,
@@ -591,7 +639,7 @@ function BrokerMoneynessChart({ ticker, spot, legs, records, chartType }) {
       yaxis: {
         title: `${ticker} price`,
         tickprefix: '$',
-        range: [yLow - yPad, yHigh + yPad],
+        range: [axisLow, axisHigh],
         gridcolor: ct.grid,
         zerolinecolor: ct.zeroline,
         showspikes: true,
