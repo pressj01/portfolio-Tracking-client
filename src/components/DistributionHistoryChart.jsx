@@ -93,15 +93,18 @@ export function buildDistributionChart(history, ticker, price, pctMode = false, 
   const priceNum = Number(price) || 0
   const dollarValues = monthly.map(item => item.amount)
   const showPct = pctMode && priceNum > 0
-  const annualMult = annual ? 12 : 1
+  const periodLabel = distributionYieldPeriodLabel(sortedMonths.map(([key]) => key))
+  const periodsPerYear = periodLabel === 'Quarterly' ? 4 : 12
+  const annualMult = annual ? periodsPerYear : 1
   const values = showPct ? dollarValues.map(v => (v / priceNum) * 100 * annualMult) : dollarValues
   const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
-  const pctLabel = annual ? 'Annual Yield %' : `${distributionYieldPeriodLabel(sortedMonths.map(([key]) => key))} Yield %`
+  const pctLabel = annual ? 'Annual Yield %' : `${periodLabel} Yield %`
   const titleSuffix = showPct ? ` (${pctLabel})` : ''
 
   return {
     hasData: values.length > 0,
     canShowPct: priceNum > 0,
+    periodLabel,
     layout: {
       template: theme.template,
       paper_bgcolor: theme.surface,
@@ -197,7 +200,7 @@ export default function DistributionHistoryChart({
               className={`btn btn-sm${annual ? ' btn-active' : ''}`}
               onClick={onToggleAnnual}
             >
-              {annual ? 'Monthly' : 'Annual'}
+              {annual ? chart.periodLabel : 'Annual'}
             </button>
           )}
           {source && <span className={sourceClassName}>Source: {source}</span>}
@@ -219,4 +222,3 @@ export default function DistributionHistoryChart({
     </>
   )
 }
-

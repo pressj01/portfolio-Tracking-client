@@ -261,8 +261,12 @@ export default function ETFComparer() {
     const commonStart = dateSeries
       .map(dates => dates.reduce((a, b) => a < b ? a : b))
       .reduce((a, b) => a > b ? a : b)
-    const startDate = period === 'max' && !fetchRange ? commonStart : earliestDate
-    return [startDate, allDates.reduce((a, b) => a > b ? a : b)]
+    const latestDate = allDates.reduce((a, b) => a > b ? a : b)
+    // A fund whose series has a single observation (transient Yahoo failure,
+    // or a fund that listed today) makes the common window zero-width, which
+    // collapses the date axis — fall back to full history in that case.
+    const useCommonStart = period === 'max' && !fetchRange && commonStart < latestDate
+    return [useCommonStart ? commonStart : earliestDate, latestDate]
   }, [data, period, fetchRange])
 
   const rangeStart = returnXRange[0] || dataDateBounds[0] || ''

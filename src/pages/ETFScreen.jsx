@@ -2363,7 +2363,10 @@ export default function ETFScreen() {
     const commonStart = dateSeries
       .map(dates => dates.reduce((a, b) => a < b ? a : b))
       .reduce((a, b) => a > b ? a : b)
+    // Guard against a zero-width common window (a series with a single
+    // observation would collapse the date axis to one instant).
     const useCommonHistory = period === 'max' && !normalizeReturnRange(fetchRangeRef.current)
+      && commonStart < returnRawDataDateBounds[1]
     return [
       useCommonHistory ? commonStart : returnRawDataDateBounds[0],
       returnRawDataDateBounds[1],

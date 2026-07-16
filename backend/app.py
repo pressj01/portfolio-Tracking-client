@@ -21802,20 +21802,31 @@ def etf_screen_data():
             divs = divs_raw.reindex(div_close.index, fill_value=0.0) if not divs_raw.empty else pd.Series(0.0, index=div_close.index)
 
             # Also re-fetch per ticker when the batch download ignored
-            # actions=True, otherwise every return trace degrades to price-only.
-            if (close.empty and div_close.empty) or not _download_has_dividend_actions(div_df):
+            # actions=True (otherwise every return trace degrades to
+            # price-only) or collapsed this symbol to a single row — Yahoo
+            # transiently returns just the live-quote date for one ticker in
+            # a batch, which would pin a broken one-point series in the
+            # caches and rebase MAX comparisons to a zero-width window.
+            if len(div_close) <= 1 or not _download_has_dividend_actions(div_df):
                 try:
                     fallback = yf.Ticker(dl_sym).history(interval="1d", auto_adjust=False, actions=True, **_range_kwargs())
                 except Exception:
                     fallback = pd.DataFrame()
-                if fallback is not None and not fallback.empty and "Close" in fallback.columns:
-                    close = fallback["Close"].dropna()
+                fallback_close = (
+                    fallback["Close"].dropna()
+                    if fallback is not None and not fallback.empty and "Close" in fallback.columns
+                    else pd.Series(dtype=float)
+                )
+                if len(fallback_close) >= max(len(div_close), 1):
+                    close = fallback_close
                     div_close = close
                     divs_raw = fallback["Dividends"].dropna() if "Dividends" in fallback.columns else pd.Series(dtype=float)
                     divs = divs_raw.reindex(div_close.index, fill_value=0.0) if not divs_raw.empty else pd.Series(0.0, index=div_close.index)
-                else:
+                elif div_close.empty:
                     result["warnings"].append(f"{sym}: no data available")
                     continue
+                # A shorter or failed re-fetch keeps the batch series rather
+                # than replacing or dropping real history.
 
             # Use div_close (daily) for dates and price normalization so all
             # traces share the same x-axis.  close (from price_df) may use a
