@@ -408,6 +408,38 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
         self.assertIn(733.68, data["breakevens"])
         self.assertAlmostEqual(data["div_yield"], 0.0041)
 
+    @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
+    def test_risk_strategy_is_independent_of_leg_addition_order(self, _quote):
+        payload = self.payload(self.today)
+        payload["day_step"] = 5
+        payload["price_slices"] = [{"s": 90}, {"s": 100}, {"s": 110}]
+        payload["legs"] = [
+            {"side": "BUY", "qty": 1, "opt_type": "PUT", "strike": 85,
+             "expiration": self.expiration.isoformat(), "entry_price": 0.65, "iv": 0.28},
+            {"side": "SELL", "qty": 1, "opt_type": "PUT", "strike": 90,
+             "expiration": self.expiration.isoformat(), "entry_price": 1.25, "iv": 0.26},
+            {"side": "SELL", "qty": 1, "opt_type": "CALL", "strike": 110,
+             "expiration": self.expiration.isoformat(), "entry_price": 1.15, "iv": 0.24},
+            {"side": "BUY", "qty": 1, "opt_type": "CALL", "strike": 115,
+             "expiration": self.expiration.isoformat(), "entry_price": 0.55, "iv": 0.25},
+        ]
+
+        original = self.client.post("/api/options/risk-graph", json=payload)
+        reversed_payload = {**payload, "legs": list(reversed(payload["legs"]))}
+        reversed_response = self.client.post("/api/options/risk-graph", json=reversed_payload)
+
+        self.assertEqual(original.status_code, 200)
+        self.assertEqual(reversed_response.status_code, 200)
+        original_data = original.get_json()
+        reversed_data = reversed_response.get_json()
+        for field in (
+            "curves", "breakevens", "max_profit", "max_loss",
+            "theoretical_max_profit", "theoretical_max_loss",
+            "max_profit_unlimited", "max_loss_unlimited",
+            "portfolio_greeks", "price_slices",
+        ):
+            self.assertEqual(original_data[field], reversed_data[field], field)
+
     def test_probability_otm_changes_with_volatility(self):
         low_vol = options_api._lognormal_cdf(100, 110, 0.10, 30 / 365, 0.04, 0.01)
         high_vol = options_api._lognormal_cdf(100, 110, 0.50, 30 / 365, 0.04, 0.01)

@@ -5808,8 +5808,10 @@ function OptionsHelp() {
       <p style={{ marginBottom: '0.75rem' }}>
         Enter an underlying symbol and load its option chain. Expand an expiration, then click an ask to model a buy
         or a bid to model a sale. The column picker can show basic pricing, Greeks, liquidity, or all available
-        columns. You can also paste broker option descriptions, use quick learning templates, add stock coverage,
-        edit quantities and strikes, and save a scenario for later analysis.
+        columns. Each selection immediately appears in the Selected strikes box and in the position table below.
+        With broker text entered, <strong>Build risk graph</strong> imports those lines; with selected chain legs and
+        no broker text, <strong>Open risk graph</strong> uses the current position directly. You can also use quick
+        learning templates, add stock coverage, edit quantities and strikes, and save a scenario for later analysis.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="./help-screenshots/options/options-simulated-trade.png" alt="Options Simulated Trade workspace with SPY quote, broker trade import, expiration browser, and option-chain controls" style={imageStyle} />
@@ -5823,8 +5825,21 @@ function OptionsHelp() {
         breakevens, and portfolio Greeks. Probability shading and draggable strike handles make it easier to test
         how the structure changes.
       </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Use <strong>Zoom</strong> and drag over the graph to inspect a narrower underlying-price region, or choose
+        <strong> Pan</strong> and drag the plot left or right through the visible prices. The mouse wheel and the
+        <strong> +</strong>/<strong>−</strong> buttons change only the price axis; the profit/loss height stays locked so
+        the upper and lower curves remain visible. <strong>Fit</strong> or a double-click restores the full price range.
+        <strong> Expand</strong> opens a larger
+        window-level graph; choose <strong>Contract</strong> or press Escape to return it to the page. These view
+        controls do not change the position or its calculations. Moving the analysis-date slider keeps the current
+        graph visible while every leg is repriced, then updates the curves in place without blanking the chart. The
+        full profit/loss range stays fixed while time moves so the plot does not jump vertically; <strong>Fit</strong>
+        restores that complete fixed range after manual zooming or panning. Opening the expanded view also restores
+        safe padding above the highest payoff and below the lowest loss so neither edge is clipped by an earlier zoom.
+      </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/options/options-risk-profile.png" alt="Options Risk Profile showing probability controls, strategy metrics, strike markers, and profit-and-loss graph" style={imageStyle} />
+        <img src="./help-screenshots/options/options-risk-profile.png" alt="Expanded Options Risk Profile showing zoom, pan, Fit, Contract, strike markers, and the complete profit-and-loss graph" style={imageStyle} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Price &amp; Moneyness</h3>

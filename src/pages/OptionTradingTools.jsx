@@ -88,6 +88,21 @@ const expirationSeriesLabel = expiration => {
   return value.getDay() === 5 && day >= 15 && day <= 21 ? 'Monthly' : 'Weekly'
 }
 const isStockLeg = leg => String(leg?.opt_type || '').toUpperCase() === 'STOCK'
+const compareRiskLegs = (a, b) => {
+  const stockOrder = Number(isStockLeg(b)) - Number(isStockLeg(a))
+  if (stockOrder) return stockOrder
+  const expirationOrder = String(a?.expiration || '').localeCompare(String(b?.expiration || ''))
+  if (expirationOrder) return expirationOrder
+  const strikeOrder = Number(a?.strike || 0) - Number(b?.strike || 0)
+  if (strikeOrder) return strikeOrder
+  const typeOrder = String(a?.opt_type || '').localeCompare(String(b?.opt_type || ''))
+  if (typeOrder) return typeOrder
+  const sideOrder = String(a?.side || '').localeCompare(String(b?.side || ''))
+  if (sideOrder) return sideOrder
+  const quantityOrder = Number(a?.qty || 0) - Number(b?.qty || 0)
+  if (quantityOrder) return quantityOrder
+  return Number(a?.entry_price || 0) - Number(b?.entry_price || 0)
+}
 const modeledLegIv = (leg, globalAdjustment = 0) => Math.max(
   0.0001,
   (Number(leg.iv) || 0.2)
@@ -115,6 +130,7 @@ const INDEX_PROXY_MAP = {
   NQ: { ticker: 'QQQ', divisor: 40 },
 }
 const BROKER_IMPORT_EXAMPLE = 'NDX 260821C31250000\nNDX 260821P26800000\nNDX 260821P28775000'
+const RISK_VIEW_REVISION = 'risk-profile-view-v3'
 const mapBrokerUnderlying = symbol => INDEX_PROXY_MAP[String(symbol).toUpperCase()]
   || { ticker: String(symbol).toUpperCase(), divisor: 1 }
 
@@ -130,10 +146,110 @@ async function fetchJson(path, options) {
   return data
 }
 
+function riskPnlRange(result) {
+  const curveGroups = [
+    result?.curves?.today || [],
+    result?.curves?.expiration || [],
+    ...(result?.curves?.day_steps || []).map(step => step.curve || []),
+  ]
+  const values = curveGroups
+    .flatMap(curve => curve)
+    .map(point => Number(point.pnl))
+    .filter(Number.isFinite)
+  for (const bound of [result?.max_loss, result?.max_profit]) {
+    const value = Number(bound)
+    if (Number.isFinite(value)) values.push(value)
+  }
+  if (!values.length) return [-1, 1]
+
+  let lower = Math.min(0, ...values)
+  let upper = Math.max(0, ...values)
+  let span = upper - lower
+  if (span < 1) {
+    const center = (lower + upper) / 2
+    lower = center - 0.5
+    upper = center + 0.5
+    span = 1
+  }
+  const padding = Math.max(span * 0.08, 1)
+  return [lower - padding, upper + padding]
+}
+
 function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, onResizeStructure, onAdjustProbabilityBoundary }) {
   const ref = useRef(null)
+  const shellRef = useRef(null)
   const { isDark } = useTheme()
   const [hover, setHover] = useState(null)
+  const [dragMode, setDragMode] = useState('zoom')
+  const [isExpanded, setIsExpanded] = useState(false)
+
+  const scaleView = useCallback(factor => {
+    const chartElement = ref.current
+    const xRange = chartElement?._fullLayout?.xaxis?.range?.map(Number)
+    if (!window.Plotly || xRange?.length !== 2) return
+    const scaleRange = range => {
+      const center = (range[0] + range[1]) / 2
+      const halfSpan = Math.max(Math.abs(range[1] - range[0]) * factor / 2, Number.EPSILON)
+      return [center - halfSpan, center + halfSpan]
+    }
+    window.Plotly.relayout(chartElement, {
+      'xaxis.autorange': false,
+      'xaxis.range': scaleRange(xRange),
+    })
+  }, [])
+
+  const fitView = useCallback(() => {
+    const evaluation = result?.curves?.today || []
+    if (!window.Plotly || !ref.current || !evaluation.length) return
+    const yRange = riskPnlRange(result)
+    window.Plotly.relayout(ref.current, {
+      'xaxis.autorange': false,
+      'xaxis.range': [evaluation[0].s, evaluation[evaluation.length - 1].s],
+      'yaxis.autorange': false,
+      'yaxis.range': yRange,
+    })
+  }, [result])
+
+  useEffect(() => {
+    if (!window.Plotly || !ref.current?._fullLayout) return
+    window.Plotly.relayout(ref.current, { dragmode: dragMode })
+  }, [dragMode])
+
+  useEffect(() => {
+    const chartElement = ref.current
+    if (!chartElement?._fullLayout || !window.Plotly) return undefined
+    const resizeChart = () => {
+      const shell = shellRef.current
+      const frameHeight = shell?.querySelector('.opt-risk-chart-frame')?.clientHeight || 0
+      const height = isExpanded
+        ? Math.max(260, frameHeight - 2)
+        : 520
+      if (isExpanded && shell) shell.scrollTop = 0
+      Promise.resolve(window.Plotly.relayout(chartElement, { height })).then(() => {
+        window.Plotly.Plots?.resize(chartElement)
+      })
+    }
+    const frame = window.requestAnimationFrame(resizeChart)
+    if (isExpanded) window.addEventListener('resize', resizeChart)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('resize', resizeChart)
+    }
+  }, [isExpanded])
+
+  useEffect(() => {
+    if (!isExpanded) return undefined
+    const previousOverflow = document.body.style.overflow
+    const closeOnEscape = event => {
+      if (event.key === 'Escape') setIsExpanded(false)
+    }
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [isExpanded])
 
   useEffect(() => {
     if (!ref.current || !window.Plotly || !result?.curves?.today?.length) return undefined
@@ -148,8 +264,24 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
     const displayEvaluationDate = result.eval_date || evaluationDate
     const evaluationShortDate = formatShortDate(displayEvaluationDate)
     const horizonShortDate = formatShortDate(horizonDate)
-    const allPnlValues = [...evaluation, ...expiration].map(point => Number(point.pnl)).filter(Number.isFinite)
-    const pnlSpan = allPnlValues.length ? Math.max(...allPnlValues) - Math.min(...allPnlValues) : 1
+    const viewLegs = (result.per_leg || []).map(leg => [
+      leg.side,
+      leg.qty,
+      leg.opt_type,
+      leg.strike,
+      leg.expiration,
+      leg.entry_price,
+      leg.iv,
+    ]).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+    const strategyViewRevision = JSON.stringify({
+      version: RISK_VIEW_REVISION,
+      underlying: result.underlying,
+      horizonDate,
+      priceRange: [evaluation[0]?.s, evaluation[evaluation.length - 1]?.s],
+      legs: viewLegs,
+    })
+    const fixedPnlRange = riskPnlRange(result)
+    const pnlSpan = fixedPnlRange[1] - fixedPnlRange[0]
     const strikeTickHalfHeight = Math.max(pnlSpan * 0.018, 1)
     const dayStepTraces = daySteps.map((step, index) => ({
       x: step.curve.map(point => point.s),
@@ -296,8 +428,26 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
     ]
     const chartElement = ref.current
     let mounted = true
+    let restoringYAxis = false
     const handleRelayout = update => {
-      const shapeKey = Object.keys(update || {}).find(key => /^shapes\[(\d+)\](?:\.x[01])?$/.test(key))
+      const updateKeys = Object.keys(update || {})
+      const changedYAxis = updateKeys.some(key => key === 'yaxis.autorange' || key.startsWith('yaxis.range'))
+      if (changedYAxis && !restoringYAxis) {
+        const visibleRange = chartElement?._fullLayout?.yaxis?.range?.map(Number)
+        const tolerance = Math.max((fixedPnlRange[1] - fixedPnlRange[0]) * 0.001, 0.01)
+        const isOutsideFixedRange = visibleRange?.length === 2 && (
+          Math.abs(Math.min(...visibleRange) - fixedPnlRange[0]) > tolerance
+          || Math.abs(Math.max(...visibleRange) - fixedPnlRange[1]) > tolerance
+        )
+        if (isOutsideFixedRange) {
+          restoringYAxis = true
+          Promise.resolve(window.Plotly.relayout(chartElement, {
+            'yaxis.autorange': false,
+            'yaxis.range': fixedPnlRange,
+          })).finally(() => { restoringYAxis = false })
+        }
+      }
+      const shapeKey = updateKeys.find(key => /^shapes\[(\d+)\](?:\.x[01])?$/.test(key))
       if (!shapeKey) return
       const match = shapeKey.match(/^shapes\[(\d+)\]/)
       const shapeIndex = Number(match?.[1])
@@ -366,13 +516,15 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
       })
     }
     const handlePointerLeave = () => setHover(null)
+    const frameHeight = shellRef.current?.querySelector('.opt-risk-chart-frame')?.clientHeight || 0
+    const chartHeight = isExpanded ? Math.max(260, frameHeight - 2) : 520
     const plotPromise = window.Plotly.react(chartElement, traces, {
       template: ct.template,
       paper_bgcolor: ct.surface,
       plot_bgcolor: ct.plot,
       font: { color: ct.font, family: 'Inter, system-ui, sans-serif' },
       margin: { l: 70, r: 25, t: 130, b: 55 },
-      height: 520,
+      height: chartHeight,
       hovermode: 'x unified',
       hoverdistance: -1,
       spikedistance: -1,
@@ -383,23 +535,46 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
         align: 'left',
       },
       legend: { orientation: 'h', x: 0, y: 1.34 },
+      dragmode: 'zoom',
+      uirevision: strategyViewRevision,
       xaxis: {
         title: 'Underlying price', gridcolor: ct.grid, tickprefix: '$', zerolinecolor: ct.zeroline,
         autorange: false,
         range: [evaluation[0].s, evaluation[evaluation.length - 1].s],
+        uirevision: strategyViewRevision,
       },
-      yaxis: { title: 'Profit / Loss', gridcolor: ct.grid, tickprefix: '$', zerolinecolor: ct.zeroline },
+      yaxis: {
+        title: 'Profit / Loss', gridcolor: ct.grid, tickprefix: '$', zerolinecolor: ct.zeroline,
+        autorange: false,
+        fixedrange: true,
+        range: fixedPnlRange,
+        uirevision: `${strategyViewRevision}:${displayEvaluationDate}:${isExpanded ? 'expanded' : 'embedded'}`,
+      },
       shapes,
       annotations,
     }, {
       responsive: true,
       displaylogo: false,
+      scrollZoom: true,
+      doubleClick: 'reset',
       // Per-shape `editable` keeps only boundary lines draggable. Plotly's
       // global shapePosition edit mode also captures the shaded rectangle and
       // prevents P/L hover events from reaching the traces beneath it.
       modeBarButtonsToRemove: ['lasso2d', 'select2d'],
     })
-    Promise.resolve(plotPromise).then(() => {
+    Promise.resolve(plotPromise).then(async () => {
+      if (!mounted) return
+      const visibleRange = chartElement?._fullLayout?.yaxis?.range?.map(Number)
+      const tolerance = Math.max((fixedPnlRange[1] - fixedPnlRange[0]) * 0.001, 0.01)
+      if (visibleRange?.length === 2 && (
+        Math.min(...visibleRange) > fixedPnlRange[0] + tolerance
+        || Math.max(...visibleRange) < fixedPnlRange[1] - tolerance
+      )) {
+        await window.Plotly.relayout(chartElement, {
+          'yaxis.autorange': false,
+          'yaxis.range': fixedPnlRange,
+        })
+      }
       if (!mounted) return
       if (chartElement?.on) chartElement.on('plotly_relayout', handleRelayout)
       chartElement?.addEventListener('mousemove', handlePointerMove)
@@ -411,15 +586,32 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
       chartElement?.removeEventListener('mousemove', handlePointerMove)
       chartElement?.removeEventListener('mouseleave', handlePointerLeave)
       setHover(null)
-      if (chartElement) window.Plotly.purge(chartElement)
     }
-  }, [result, evaluationDate, isDark, strikeStructure, positionStrikes, onResizeStructure, onAdjustProbabilityBoundary])
+  }, [result, evaluationDate, isDark, isExpanded, strikeStructure, positionStrikes, onResizeStructure, onAdjustProbabilityBoundary])
+
+  useEffect(() => () => {
+    const chartElement = ref.current
+    if (chartElement && window.Plotly) window.Plotly.purge(chartElement)
+  }, [])
 
   const evaluationLabel = formatShortDate(result?.eval_date || evaluationDate)
   const horizonLabel = formatShortDate(result?.curves?.expiration_date || result?.analysis_horizon)
 
   return (
-    <div className="opt-risk-chart-shell">
+    <div ref={shellRef} className={`opt-risk-chart-shell${isExpanded ? ' is-expanded' : ''}`}>
+      <div className="opt-risk-chart-tools" role="toolbar" aria-label="Risk graph view controls">
+        <span className="opt-risk-chart-tool-group">
+          <button type="button" className={dragMode === 'zoom' ? 'active' : ''} onClick={() => setDragMode('zoom')} aria-pressed={dragMode === 'zoom'} title="Drag over the plot to zoom the underlying-price axis">Zoom</button>
+          <button type="button" className={dragMode === 'pan' ? 'active' : ''} onClick={() => setDragMode('pan')} aria-pressed={dragMode === 'pan'} title="Drag the plot left or right through the visible price range">Pan</button>
+        </span>
+        <span className="opt-risk-chart-tool-group">
+          <button type="button" onClick={() => scaleView(0.75)} aria-label="Zoom risk graph in" title="Zoom in on the underlying-price axis">+</button>
+          <button type="button" onClick={() => scaleView(1.35)} aria-label="Zoom risk graph out" title="Zoom out on the underlying-price axis">−</button>
+          <button type="button" onClick={fitView} title="Restore the full modeled price and profit/loss range">Fit</button>
+        </span>
+        <span className="opt-risk-chart-mouse-hint">Drag to {dragMode === 'zoom' ? 'zoom' : 'pan'} price · mouse wheel changes price scale · P/L height stays fixed</span>
+        <button type="button" className="opt-risk-chart-expand" onClick={() => setIsExpanded(value => !value)} aria-pressed={isExpanded} title={isExpanded ? 'Return the graph to the page' : 'Expand the graph to the window'}>{isExpanded ? 'Contract' : 'Expand'}</button>
+      </div>
       <div className="opt-risk-readout" aria-hidden="true">
         <span className="opt-risk-readout-price opt-risk-readout-current"><small>{result?.underlying || 'Underlying'} current</small><strong>{fmt(result?.spot)}</strong></span>
         {hover && <span className="opt-risk-readout-price opt-risk-readout-hover"><small>Cursor</small><strong>{hover.price}</strong></span>}
@@ -435,8 +627,8 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
         </span>
         {!hover && <span className="opt-risk-readout-hint">Move across the graph to read the price and P/L</span>}
       </div>
-      <div className="opt-risk-chart-frame">
-        <div ref={ref} className="opt-risk-chart" role="img" aria-label="Option strategy profit and loss graph with draggable probability and strike handles" />
+      <div className={`opt-risk-chart-frame is-${dragMode}`}>
+        <div ref={ref} className="opt-risk-chart" role="img" aria-label="Interactive option strategy profit and loss graph. Drag or use the mouse wheel to adjust the underlying-price axis while the profit-and-loss height stays fixed, and drag probability or strike handles to adjust the strategy." />
         {hover && (
           <div className="opt-risk-crosshair" aria-hidden="true">
             <span className="opt-risk-crosshair-line" style={{ left: `${hover.x}px`, top: `${hover.top}px`, height: `${hover.bottom - hover.top}px` }} />
@@ -912,7 +1104,7 @@ export default function OptionTradingTools() {
     leg.included
     && Number(leg.qty) > 0
     && (isStockLeg(leg) || (leg.expiration && Number(leg.strike) > 0))
-  )), [legs])
+  )).sort(compareRiskLegs), [legs])
   const activeOptionLegs = useMemo(() => activeLegs.filter(leg => !isStockLeg(leg)), [activeLegs])
   const greekPositionLegs = useMemo(() => activeLegs.map(leg => ({
     id: leg.local_id,
@@ -955,10 +1147,14 @@ export default function OptionTradingTools() {
       loadMonthChain(expiration).catch(error => setMarketError(error.message))
     })
   }, [activeOptionLegs, monthChains, loadMonthChain])
-  const probabilityAnchor = useMemo(
-    () => activeOptionLegs.find(leg => leg.local_id === probabilityAnchorId) || activeOptionLegs[0] || null,
-    [activeOptionLegs, probabilityAnchorId],
-  )
+  const probabilityAnchor = useMemo(() => {
+    const selected = activeOptionLegs.find(leg => leg.local_id === probabilityAnchorId)
+    if (selected) return selected
+    return [...activeOptionLegs].sort((a, b) => (
+      Math.abs(Number(a.strike) - spot) - Math.abs(Number(b.strike) - spot)
+      || compareRiskLegs(a, b)
+    ))[0] || null
+  }, [activeOptionLegs, probabilityAnchorId, spot])
   const positionStrikes = useMemo(
     () => [...new Set(activeOptionLegs.map(leg => Number(leg.strike)).filter(Number.isFinite))].sort((a, b) => a - b),
     [activeOptionLegs],
@@ -1022,7 +1218,6 @@ export default function OptionTradingTools() {
       return undefined
     }
     const controller = new AbortController()
-    setRisk(null)
     setRiskLoading(true)
     setRiskError('')
     const timer = setTimeout(() => {
@@ -1677,8 +1872,8 @@ export default function OptionTradingTools() {
                 </select>
               </label>
               <button type="button" className="btn btn-secondary" onClick={() => { setBrokerImportText(BROKER_IMPORT_EXAMPLE); setBrokerImportMode('covered-call-protection'); setBrokerImportError('') }} disabled={brokerImportBusy}>Use covered + put example</button>
-              <button type="button" className="btn btn-primary" onClick={() => importBrokerTrades('risk')} disabled={brokerImportBusy}>
-                {brokerImportBusy ? 'Building…' : 'Build risk graph'}
+              <button type="button" className="btn btn-primary" onClick={() => brokerImportText.trim() ? importBrokerTrades('risk') : setWorkspace('risk')} disabled={brokerImportBusy || (!brokerImportText.trim() && !activeLegs.length)}>
+                {brokerImportBusy ? 'Building…' : brokerImportText.trim() ? 'Build risk graph' : 'Open risk graph'}
               </button>
               <button type="button" className="btn btn-secondary" onClick={() => brokerImportText.trim() ? importBrokerTrades('moneyness') : setWorkspace('moneyness')} disabled={brokerImportBusy || (!brokerImportText.trim() && !activeOptionLegs.length)}>
                 {brokerImportText.trim() ? 'Build & open price chart' : 'Open Price & Moneyness'}
@@ -1692,6 +1887,13 @@ export default function OptionTradingTools() {
                   <li key={index}><code>{row.source}</code><span aria-hidden="true">→</span><strong>{row.proxy}</strong></li>
                 ))}
               </ul>
+            )}
+            {!!activeOptionLegs.length && (
+              <div className="opt-selected-strikes" aria-live="polite">
+                <strong>Selected strikes</strong>
+                <div>{activeOptionLegs.map(leg => <span key={leg.local_id} className={leg.side === 'BUY' ? 'buy' : 'sell'}>{leg.side} {leg.qty} {formatExpiration(leg.expiration)} {fmt(leg.strike)} {leg.opt_type}</span>)}</div>
+                <small>The active position below and the Risk Profile graph use these same legs.</small>
+              </div>
             )}
           </section>
 
@@ -1808,7 +2010,7 @@ export default function OptionTradingTools() {
           )}
         </section>
       ) : (
-        <section className="card opt-risk-workspace">
+        <section className={`card opt-risk-workspace${riskLoading && risk ? ' is-repricing' : ''}`} aria-busy={riskLoading}>
           <div className="opt-risk-controls">
             <label><span>Analysis date</span><input type="date" min={TODAY()} max={analysisHorizon} value={evaluationDate} onInput={event => setBoundedEvaluationDate(event.target.value)} onChange={event => setBoundedEvaluationDate(event.target.value)} /></label>
             <label className="opt-time-slider"><span>Move through time · day {evaluationOffset} of {evolutionDays}</span><input type="range" min="0" max={evolutionDays} value={evaluationOffset} onInput={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} onChange={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} /></label>
@@ -1844,7 +2046,7 @@ export default function OptionTradingTools() {
             </div>}
           </div>
           {hasMixedExpirations && <div className="opt-horizon-note"><strong>Mixed expirations:</strong> analysis ends at the first expiration, {formatExpiration(analysisHorizon)}. Later-dated legs retain their remaining modeled time value.</div>}
-          {riskLoading && <div className="opt-calculating">Repricing every leg…</div>}
+          {riskLoading && <div className="opt-calculating">Updating the risk graph…</div>}
           {riskError && <div className="opt-error">{riskError}</div>}
           {!activeLegs.length ? <div className="opt-risk-empty"><strong>{legs.length ? 'No legs are included in the risk graph.' : 'Add positions to build a risk profile.'}</strong><span>{legs.length ? 'Check Use for each leg you want included in the graph and risk totals.' : 'Add stock, use the option chain, or choose a learning template, then return here.'}</span>{!legs.length && <button className="btn btn-primary" onClick={() => setWorkspace('trades')}>Open simulated trade</button>}</div> : risk && (
             <>
