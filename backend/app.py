@@ -7333,61 +7333,106 @@ def _fetch_tappalpha_distribution_snapshot(ticker):
     }
 
 
+_XFUNDS_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def _xfunds_headers(accept="text/html,*/*"):
+    return {
+        "User-Agent": _XFUNDS_BROWSER_UA,
+        "Accept": accept,
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+
 def _fetch_xfunds_distribution_snapshot(ticker):
-    """Fetch recent official distribution history from XFunds (Nicholas Wealth) when available.
+    """Fetch official X Funds distributions, with support for both site formats.
 
-    XFunds publishes a static per-ticker CSV at a predictable path:
-        https://nicholasx.com/wp-content/uploads/data/TidalFG_Distribution_<TICKER>.csv
-
-    Columns: ``EX Date, Record Date, Payable Date, Fund Total`` (ISO dates).
-    Frequency varies per fund (BLOX/GIAX are weekly, FIAX is monthly) so we
-    infer it from the recent cadence rather than hardcoding a single value.
+    Older pages publish a static ``TidalFG_Distribution_<TICKER>.csv`` file.
+    Newer pages, including DRMY, publish a nonce-protected download URL in the
+    page. Both official paths are attempted before the caller falls back to
+    Yahoo Finance.
     """
+    import csv
+    import html as html_lib
     import requests
+    from io import StringIO
 
     ticker = (ticker or "").strip().upper()
     if not ticker:
         return None
 
-    url = (
+    page_url = f"https://nicholasx.com/{ticker}/"
+    static_url = (
         "https://nicholasx.com/wp-content/uploads/data/"
         f"TidalFG_Distribution_{ticker}.csv"
     )
+    session = requests.Session()
+    body = ""
     try:
-        resp = requests.get(
-            url,
+        resp = session.get(
+            static_url,
             timeout=10,
-            headers={
-                # Cloudflare blocks generic UAs on nicholasx.com — use a
-                # realistic browser UA to get through the WAF.
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/csv,*/*",
-            },
+            headers=_xfunds_headers("text/csv,*/*"),
         )
         resp.raise_for_status()
+        body = (resp.text or "").strip()
+    except Exception:
+        body = ""
+
+    if not body or "ex date" not in body.splitlines()[0].lower():
+        try:
+            page_resp = session.get(page_url, timeout=10, headers=_xfunds_headers())
+            page_resp.raise_for_status()
+            page_html = page_resp.content.decode("utf-8", errors="replace")
+            match = re.search(r'distributionCsvUrl\s*=\s*"([^"]+)"', page_html, flags=re.I)
+            if not match:
+                return None
+            download_url = html_lib.unescape(match.group(1))
+            download_url = download_url.replace("\\/", "/").replace("\\u0026", "&")
+            resp = session.get(
+                download_url,
+                timeout=10,
+                headers={**_xfunds_headers("text/csv,*/*"), "Referer": page_url},
+            )
+            resp.raise_for_status()
+            body = (resp.text or "").strip()
+        except Exception:
+            return None
+
+    if not body:
+        return None
+
+    try:
+        reader = csv.DictReader(StringIO(body))
     except Exception:
         return None
 
-    body = (resp.text or "").strip()
-    if not body or not body.lower().startswith("ex date"):
-        return None
+    def _csv_value(row, *keys):
+        normalized = {
+            re.sub(r"[^a-z0-9]", "", str(key or "").lower()): value
+            for key, value in row.items()
+        }
+        for key in keys:
+            value = normalized.get(key)
+            if value not in (None, ""):
+                return str(value).strip()
+        return ""
 
     entries = []
-    for line in body.splitlines()[1:]:
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) < 4:
-            continue
-        ex_date, _record_date, pay_date, amount = parts[0], parts[1], parts[2], parts[3]
+    for row in reader:
+        ex_date = _csv_value(row, "exdate", "exdividenddate")
+        pay_date = _csv_value(row, "payabledate", "paydate", "paymentdate")
+        amount = _csv_value(row, "fundtotal", "distributionamount", "distribution", "amount")
         ex_ts = pd.to_datetime(ex_date, errors="coerce")
         pay_ts = pd.to_datetime(pay_date, errors="coerce")
         if pd.isna(ex_ts):
             continue
         try:
-            amt = float(amount)
+            amt = float(re.sub(r"[^0-9.\-]", "", amount))
         except (TypeError, ValueError):
             continue
         ex_ts = ex_ts.normalize()
@@ -7402,16 +7447,12 @@ def _fetch_xfunds_distribution_snapshot(ticker):
         [item[1] for item in entries],
         index=pd.DatetimeIndex([item[0] for item in entries]),
     )
-    history = history[~history.index.duplicated(keep="last")]
-    history = history.sort_index()
+    history = history[~history.index.duplicated(keep="last")].sort_index()
 
     pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
     latest_ex = history.index[-1]
     latest_pay = pay_map.get(latest_ex)
 
-    # Infer frequency from the cadence of distributions over the last year.
-    # BLOX and GIAX are weekly, FIAX is monthly; the CSV doesn't include an
-    # explicit frequency label so we derive it from median gap in days.
     one_year_ago = pd.Timestamp.now().normalize() - pd.Timedelta(days=365)
     recent = history[history.index >= one_year_ago]
     if len(recent) >= 2:
@@ -7439,6 +7480,8 @@ def _fetch_xfunds_distribution_snapshot(ticker):
         "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
         "freq": freq,
         "history": history,
+        "source": "X Funds",
+        "source_url": page_url,
     }
 
 
@@ -8190,7 +8233,7 @@ def _is_xfunds_fund(ticker, description=""):
         or "nicholasx" in description_l
     ):
         return True
-    explicit_family = {"GIAX", "BLOX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX"}
+    explicit_family = {"DRMY", "GIAX", "BLOX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX"}
     return ticker in explicit_family
 
 
@@ -15439,6 +15482,235 @@ def _derive_fund_type(legal_type, quote_type):
     return "Fund"
 
 
+def _xfunds_clean_html(fragment):
+    """Turn a small official X Funds HTML fragment into normalized text."""
+    import html as html_lib
+
+    text = str(fragment or "")
+    text = re.sub(r"(?is)<(script|style).*?</\1>", " ", text)
+    text = re.sub(r"(?is)<!--.*?-->", " ", text)
+    text = re.sub(r"(?i)<br\s*/?>", " ", text)
+    text = re.sub(r"(?i)</(?:p|div|li|tr|td|th|h[1-6]|section)>", " ", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = html_lib.unescape(text).replace("\ufffd", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _xfunds_table_values(table_html):
+    values = {}
+    for row in re.findall(r"(?is)<tr\b[^>]*>(.*?)</tr>", table_html or ""):
+        cells = re.findall(r"(?is)<t[dh]\b[^>]*>(.*?)</t[dh]>", row)
+        if len(cells) < 2:
+            continue
+        label = _xfunds_clean_html(cells[0])
+        value = _xfunds_clean_html(cells[1])
+        if label:
+            values[label] = value
+    return values
+
+
+def _xfunds_table_value(values, prefix):
+    prefix = str(prefix or "").lower()
+    for label, value in (values or {}).items():
+        if label.lower().startswith(prefix):
+            return value
+    return None
+
+
+def _xfunds_page_section(page_html, heading):
+    headings = list(re.finditer(r"(?is)<h2\b[^>]*>(.*?)</h2>", page_html or ""))
+    wanted = str(heading or "").strip().lower()
+    for index, match in enumerate(headings):
+        if _xfunds_clean_html(match.group(1)).lower() != wanted:
+            continue
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(page_html or "")
+        return _xfunds_clean_html((page_html or "")[match.end():end])
+    return None
+
+
+def _xfunds_money(value):
+    text = str(value or "").strip().lower().replace(",", "")
+    match = re.search(r"-?[0-9]+(?:\.[0-9]+)?", text)
+    if not match:
+        return None
+    amount = float(match.group(0))
+    if re.search(r"(?:b|bn|billion)\b", text):
+        amount *= 1_000_000_000
+    elif re.search(r"(?:m|mm|million)\b", text):
+        amount *= 1_000_000
+    elif re.search(r"(?:k|thousand)\b", text):
+        amount *= 1_000
+    return round(amount, 2)
+
+
+def _xfunds_iso_date(value):
+    parsed = pd.to_datetime(value, errors="coerce")
+    return None if pd.isna(parsed) else parsed.strftime("%Y-%m-%d")
+
+
+def _xfunds_pct(value, expense=False):
+    if not re.search(r"\d", str(value or "")):
+        return None
+    return _research_expense_pct(value) if expense else _research_pct(value)
+
+
+def _xfunds_holdings_from_csv(csv_text, limit=25):
+    import csv
+    from io import StringIO
+
+    try:
+        reader = csv.DictReader(StringIO(csv_text or ""))
+    except Exception:
+        return [], None, None
+
+    rows = []
+    net_assets = None
+    as_of = None
+    for row in reader:
+        symbol = str(row.get("StockTicker") or "").strip()
+        name = str(row.get("SecurityName") or symbol).strip()
+        if not symbol and not name:
+            continue
+        try:
+            weight = round(float(str(row.get("Weightings") or "").replace("%", "").strip()), 2)
+        except (TypeError, ValueError):
+            weight = None
+        if net_assets is None:
+            net_assets = _xfunds_money(row.get("NetAssets"))
+        if as_of is None:
+            as_of = _xfunds_iso_date(row.get("Date"))
+        rows.append({
+            "symbol": symbol,
+            "name": name or symbol,
+            "weight_pct": weight,
+        })
+        if len(rows) >= limit:
+            break
+    return rows, net_assets, as_of
+
+
+def _parse_xfunds_etf_profile(ticker, page_html, fund_info_html, nav_html, holdings_csv, source_url):
+    """Build a Security Research profile from X Funds' official page payloads."""
+    ticker = (ticker or "").strip().upper()
+    fund_values = _xfunds_table_values(fund_info_html)
+    nav_values = _xfunds_table_values(nav_html)
+    holdings, holdings_assets, holdings_as_of = _xfunds_holdings_from_csv(holdings_csv)
+
+    headings = [
+        _xfunds_clean_html(match.group(1))
+        for match in re.finditer(r"(?is)<h2\b[^>]*>(.*?)</h2>", page_html or "")
+    ]
+    name = next((value for value in headings if "etf" in value.lower() and not value.lower().startswith("fund")), None)
+    summary = _xfunds_page_section(page_html, "Fund Summary")
+    objective = _xfunds_page_section(page_html, "Fund Objective")
+
+    inception = _xfunds_iso_date(_xfunds_table_value(fund_values, "fund inception"))
+    expense = _xfunds_pct(_xfunds_table_value(fund_values, "expense ratio"), expense=True)
+    sec_yield = _xfunds_pct(_xfunds_table_value(fund_values, "30 day sec yield"))
+    nav_price = _xfunds_money(_xfunds_table_value(nav_values, "nav"))
+    closing_price = _xfunds_money(_xfunds_table_value(nav_values, "closing price"))
+    total_assets = holdings_assets or _xfunds_money(_xfunds_table_value(nav_values, "net assets"))
+
+    profile = {
+        "name": name,
+        "fund_type": "ETF",
+        "description": summary or objective,
+        "objective": objective or summary,
+        "issuer": "X Funds",
+        "legal_type": "Exchange Traded Fund",
+        "expense_ratio_pct": expense,
+        "total_assets": total_assets,
+        "total_assets_label": "Net Assets",
+        "price": closing_price,
+        "nav_price": nav_price,
+        "nav_label": "NAV",
+        "inception_date": inception,
+        "sec_30_day_yield_pct": sec_yield,
+        "top_holdings": holdings,
+        "primary_exchange": _xfunds_table_value(fund_values, "primary exchange"),
+        "cusip": _xfunds_table_value(fund_values, "cusip"),
+        "provider_data_as_of": holdings_as_of,
+        "source_url": source_url,
+        "data_source": "X Funds",
+        "fallback_data_source": "Yahoo Finance",
+    }
+    meaningful = (name, summary, objective, inception, expense, total_assets, nav_price, closing_price, holdings)
+    return profile if any(value not in (None, "", []) for value in meaningful) else None
+
+
+def _fetch_xfunds_etf_profile(ticker):
+    """Fetch an X Funds profile first; callers retain Yahoo as field fallback."""
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return None
+
+    page_url = f"https://nicholasx.com/{ticker}/"
+    session = requests.Session()
+    try:
+        page_resp = session.get(page_url, timeout=12, headers=_xfunds_headers())
+        page_resp.raise_for_status()
+        page_html = page_resp.content.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+    if ticker.lower() not in page_html.lower() or "xfunds" not in page_html.lower():
+        return None
+
+    post_match = re.search(
+        r'data-twm-type=["\']fund-info-table["\'][^>]*data-post-id=["\'](\d+)["\']',
+        page_html,
+        flags=re.I,
+    )
+    if not post_match:
+        post_match = re.search(r'\bpage-id-(\d+)\b', page_html, flags=re.I)
+    if not post_match:
+        return None
+    post_id = post_match.group(1)
+
+    rest_url = "https://nicholasx.com/wp-json/twm/v1/data"
+    live_headers = {**_xfunds_headers("application/json,*/*"), "Referer": page_url}
+
+    def _live_html(data_type):
+        try:
+            response = session.get(
+                rest_url,
+                params={"type": data_type, "post_id": post_id},
+                timeout=12,
+                headers=live_headers,
+            )
+            response.raise_for_status()
+            return str((response.json() or {}).get("html") or "")
+        except Exception:
+            return ""
+
+    holdings_url = (
+        "https://nicholasx.com/wp-content/uploads/data/"
+        f"TidalFG_Holdings_{ticker}.csv"
+    )
+    holdings_csv = ""
+    try:
+        holdings_resp = session.get(
+            holdings_url,
+            timeout=12,
+            headers={**_xfunds_headers("text/csv,*/*"), "Referer": page_url},
+        )
+        holdings_resp.raise_for_status()
+        holdings_csv = holdings_resp.text or ""
+    except Exception:
+        pass
+
+    return _parse_xfunds_etf_profile(
+        ticker,
+        page_html,
+        _live_html("fund-info-table"),
+        _live_html("daily-nav-table"),
+        holdings_csv,
+        page_url,
+    )
+
+
 def _vistashares_page_text(ticker):
     try:
         from html import unescape
@@ -15733,6 +16005,8 @@ def _fetch_provider_etf_profile(ticker, response):
     """Try official issuer/provider pages when the market-data feed is sparse."""
     provider_hints = " ".join(str(response.get(k) or "") for k in ("name", "issuer", "data_source"))
     fetchers = []
+    if _is_xfunds_fund(ticker, provider_hints):
+        fetchers.append(_fetch_xfunds_etf_profile)
     if _is_neos_fund(ticker, provider_hints):
         fetchers.append(_fetch_neos_etf_profile)
     if _is_tuttle_capital_fund(ticker, provider_hints):
@@ -15766,6 +16040,19 @@ def security_research(kind, ticker):
     if not ticker:
         return jsonify({"error": "ticker is required"}), 400
 
+    # DRMY and other X Funds ETFs are issuer-first. Fetch the official profile
+    # before touching Yahoo so a complete Yahoo response can never prevent the
+    # provider data from winning. Yahoo is still used below for missing fields
+    # and remains the full fallback when Nicholas X is unavailable.
+    preferred_official_profile = None
+    if kind == "etf" and _is_xfunds_fund(ticker):
+        try:
+            preferred_official_profile = _fetch_xfunds_etf_profile(ticker)
+        except Exception:
+            preferred_official_profile = None
+
+    yf_ticker = None
+    info = {}
     try:
         yf_ticker = yf.Ticker(lookup_symbol)
         info = _cached_yf_info(yf_ticker, lookup_symbol)
@@ -15775,13 +16062,22 @@ def security_research(kind, ticker):
             yf_ticker = yf.Ticker(lookup_symbol)
             info = _cached_yf_info(yf_ticker, lookup_symbol)
     except Exception as exc:
-        return jsonify({"error": f"Could not load {ticker}: {exc}"}), 404
+        if not preferred_official_profile:
+            return jsonify({"error": f"Could not load {ticker}: {exc}"}), 404
 
-    name = _research_info_value(info, "longName", "shortName", "displayName") or ticker
+    name = (
+        (preferred_official_profile or {}).get("name")
+        or _research_info_value(info, "longName", "shortName", "displayName")
+        or ticker
+    )
     quote_type = (_research_info_value(info, "quoteType") or "").upper()
     summary = _research_info_value(info, "longBusinessSummary") or ""
 
-    dividends = _cached_yf_dividends(yf_ticker, lookup_symbol)
+    dividends = (
+        _cached_yf_dividends(yf_ticker, lookup_symbol)
+        if yf_ticker is not None
+        else pd.Series(dtype=float)
+    )
 
     dividend_frequency = _research_dividend_frequency(dividends)
     ttm_dividend = None
@@ -15889,16 +16185,21 @@ def security_research(kind, ticker):
             "ttm_dividend_per_share": ttm_dividend,
             "estimated_yield_pct": _research_pct(_research_info_value(info, "yield", "dividendYield", "trailingAnnualDividendYield")),
             "target_yield_label": "Estimated forward yield",
-            "top_holdings": _research_top_holdings(fund_data, ticker=lookup_symbol, description=f"{name} {summary}"),
+            "top_holdings": (
+                (preferred_official_profile or {}).get("top_holdings")
+                or _research_top_holdings(fund_data, ticker=lookup_symbol, description=f"{name} {summary}")
+            ),
             "sector_weightings": _research_weight_map(getattr(fund_data, "sector_weightings", None)) if fund_data is not None else [],
             "asset_classes": _research_weight_map(getattr(fund_data, "asset_classes", None)) if fund_data is not None else [],
             "data_source": "Yahoo Finance",
         }
-        # NEOS funds are always sourced from neosfunds.com (per-field fallback to
-        # Yahoo happens automatically below since only non-empty values override).
+        # Supported issuer-first funds always use their official profile;
+        # non-empty Yahoo fields remain in place only where the provider omitted
+        # a value. Sparse unknown funds still use the general provider fallback.
         is_neos = _is_neos_fund(lookup_symbol, f"{name} {summary}")
-        if _research_needs_provider_fallback(response) or is_neos:
-            official_profile = _fetch_provider_etf_profile(lookup_symbol, response)
+        is_xfunds = _is_xfunds_fund(lookup_symbol, f"{name} {summary}")
+        if preferred_official_profile or _research_needs_provider_fallback(response) or is_neos or is_xfunds:
+            official_profile = preferred_official_profile or _fetch_provider_etf_profile(lookup_symbol, response)
             if official_profile:
                 for key, value in official_profile.items():
                     if value not in (None, "", []):
@@ -15953,7 +16254,7 @@ def security_research(kind, ticker):
                 })
 
         inception = _research_info_value(info, "fundInceptionDate")
-        if inception:
+        if not response.get("inception_date") and inception:
             try:
                 response["inception_date"] = pd.to_datetime(int(inception), unit="s").strftime("%Y-%m-%d")
             except Exception:

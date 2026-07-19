@@ -88,12 +88,13 @@ function statusCopy(status) {
   return { label: 'Portfolio runs out', tone: 'bad' }
 }
 
-function SummaryTile({ label, value, sub, tone = '' }) {
+function SummaryTile({ label, value, sub, detail, tone = '' }) {
   return (
     <div className={`cf-summary-tile ${tone ? `cf-tone-${tone}` : ''}`}>
       <span>{label}</span>
       <strong>{value}</strong>
       {sub && <small>{sub}</small>}
+      {detail && <small className="cf-summary-detail">{detail}</small>}
     </div>
   )
 }
@@ -752,6 +753,10 @@ export default function CashFlowSustainability() {
     + (summary?.additional_income_gross || 0)
     - (summary?.expenses || 0)
   const grossLeftoverTone = grossLeftover >= 0 ? 'good' : 'bad'
+  const scheduledExpenseCount = (summary?.items || []).filter(item => item.kind === 'expense').length
+  const coverageLabel = summary?.coverage_ratio == null
+    ? 'No expenses entered'
+    : `${(summary.coverage_ratio * 100).toFixed(0)}% of expenses covered`
 
   return (
     <div className="page cf-page">
@@ -783,31 +788,50 @@ export default function CashFlowSustainability() {
 
       {error && <div className="cf-error">{error}</div>}
 
+      <div className="cf-summary-guide" role="note">
+        <strong>How to read these totals</strong>
+        <span><b>Income</b> cards are before expenses. <b>Leftover</b> cards subtract this month's expenses. Gross amounts are before tax; after-tax amounts are the estimated spendable amounts.</span>
+      </div>
+
       <section className="cf-summary">
-        <SummaryTile label="Expenses this month" value={money(summary?.expenses)} sub={`${expenses.length} saved expense${expenses.length === 1 ? '' : 's'}`} />
+        <SummaryTile
+          label="Expenses this month"
+          value={money(summary?.expenses)}
+          sub="Bills scheduled in the selected month"
+          detail={`${scheduledExpenseCount} scheduled expense${scheduledExpenseCount === 1 ? '' : 's'}`}
+        />
         <SummaryTile
           label="Portfolio income (gross)"
           value={money(summary?.portfolio_monthly_income_gross)}
-          sub={summary?.portfolio_profile_count > 1 ? `${summary.portfolio_profile_count} linked accounts` : 'Before tax'}
+          sub="Before tax; expenses not deducted"
+          detail={summary?.portfolio_profile_count > 1 ? `${summary.portfolio_profile_count} linked accounts` : 'Portfolio income only'}
         />
         <SummaryTile
           label="Portfolio income (after tax)"
           value={money(summary?.portfolio_monthly_income_net)}
-          sub={`After ${Number(settings?.portfolio_tax_pct || 0).toFixed(0)}% tax`}
+          sub={`After ${Number(settings?.portfolio_tax_pct || 0).toFixed(0)}% tax; expenses not deducted`}
+          detail="Portfolio income only"
         />
         <SummaryTile
           label={grossLeftover >= 0 ? 'Gross leftover' : 'Gross shortfall'}
           value={money(Math.abs(grossLeftover))}
-          sub="Before tax"
+          sub="Before tax; after expenses"
+          detail="Gross portfolio + gross other income − expenses"
           tone={grossLeftoverTone}
         />
         <SummaryTile
           label={gap >= 0 ? 'After-tax leftover' : 'After-tax shortfall'}
           value={money(Math.abs(gap))}
-          sub={summary?.coverage_ratio == null ? 'No expenses entered' : `${(summary.coverage_ratio * 100).toFixed(0)}% covered`}
+          sub="Spendable income after expenses"
+          detail={coverageLabel}
           tone={coverageTone}
         />
-        <SummaryTile label="Additional income" value={money(summary?.additional_income_net)} sub={incomes.length ? 'After item-level taxes' : 'Optional'} />
+        <SummaryTile
+          label="Other income (after tax)"
+          value={money(summary?.additional_income_net)}
+          sub="Non-portfolio income only"
+          detail={incomes.length ? 'After each source’s tax rate' : 'No other income entered'}
+        />
       </section>
 
       <div className={`cf-answer cf-answer-${coverageTone}`}>

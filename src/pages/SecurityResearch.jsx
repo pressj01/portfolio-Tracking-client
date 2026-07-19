@@ -26,7 +26,7 @@ const fmtAssets = (v) => {
   const n = Number(convertMoneyValue(v))
   if (!Number.isFinite(n)) return '-'
   const abs = Math.abs(n)
-  const compact = (value) => value.toLocaleString(undefined, { maximumSignificantDigits: 4 })
+  const compact = (value) => value.toLocaleString(undefined, { maximumFractionDigits: 2 })
   if (abs >= 1e9) return `${getCurrencySymbol()}${compact(n / 1e9)} Billion`
   if (abs >= 1e6) return `${getCurrencySymbol()}${compact(n / 1e6)} Million`
   return getCurrencySymbol() + compact(n)
@@ -287,7 +287,7 @@ function ETFResult({ data, onOpenChart, return1y }) {
     ['Category', data.category],
     ['Legal Type', data.legal_type],
     ['Expense Ratio', fmtPct(data.expense_ratio_pct)],
-    [data.total_assets_label || 'Total Assets', fmtMoney(data.total_assets)],
+    [data.total_assets_label || 'Total Assets', fmtAssets(data.total_assets)],
     [data.nav_label || 'NAV', fmtMoney(data.nav_price)],
     ['Inception', fmtDate(data.inception_date)],
     ['Dividend Frequency', data.dividend_frequency || '-'],
@@ -298,8 +298,15 @@ function ETFResult({ data, onOpenChart, return1y }) {
     ['Last Dividend', data.last_dividend ? `${fmtMoney(data.last_dividend.amount)} on ${data.last_dividend.date}` : '-'],
     ['Source', (() => {
       const base = data.source_url ? <a href={data.source_url} target="_blank" rel="noreferrer">{data.data_source || 'Source'}</a> : (data.data_source || '-')
-      if (data.yield_source && data.yield_source !== data.data_source) return <>{base} + {data.yield_source}</>
-      return base
+      const fallback = data.fallback_data_source && data.fallback_data_source !== data.data_source
+        ? data.fallback_data_source
+        : null
+      const extraYieldSource = data.yield_source
+        && data.yield_source !== data.data_source
+        && data.yield_source !== fallback
+        ? data.yield_source
+        : null
+      return <>{base}{fallback ? ` (primary) + ${fallback} (fallback)` : ''}{extraYieldSource ? ` + ${extraYieldSource}` : ''}</>
     })()],
   ]
 
@@ -748,7 +755,7 @@ export default function SecurityResearch() {
     setError('')
     setData(null)
     setChartTicker('')
-    pf(`/api/security-research/${kind}/${encodeURIComponent(normalizedTicker)}`)
+    pf(`/api/security-research/${kind}/${encodeURIComponent(normalizedTicker)}?_=${Date.now()}`, { cache: 'no-store' })
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)
