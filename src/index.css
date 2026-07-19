@@ -4316,7 +4316,7 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 .nep-tbl-wrap {
   max-height: 600px; overflow: auto; border: 1px solid var(--border); border-radius: 6px;
 }
-.nep-tbl-wrap .sst { min-width: 1600px; }
+.nep-tbl-wrap .sst { min-width: 2100px; }
 .nep-tbl-wrap .sst tfoot td {
   background: var(--surface-sunken); border-top: 2px solid var(--border); font-weight: 700;
   color: var(--text-strong); position: sticky; bottom: 0;

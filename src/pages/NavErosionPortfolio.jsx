@@ -290,10 +290,10 @@ export default function NavErosionPortfolio() {
   }, [pf, selection])
 
   // Sorting results
-  const colKeys = ['ticker', 'amount', 'reinvest_pct', 'start_price', 'end_price',
-    'price_delta_pct', 'total_dist', 'total_reinvested', 'final_value',
-    'gain_loss_dollar', 'gain_loss_pct', 'total_return_dollar', 'total_return_pct',
-    'has_erosion', 'final_deficit', 'coverage_ratio', 'warning']
+  const colKeys = ['ticker', 'benchmark', 'amount', 'reinvest_pct', 'start_price', 'end_price',
+    'price_delta_pct', 'benchmark_return_pct', 'total_dist', 'total_reinvested', 'cash_taken',
+    'final_value', 'ending_wealth', 'gain_loss_dollar', 'gain_loss_pct', 'total_return_dollar',
+    'total_return_pct', 'has_erosion', 'confirmed_erosion_months', 'final_deficit', 'coverage_ratio', 'warning']
 
   const sortedResults = useMemo(() => {
     if (!results) return []
@@ -320,56 +320,67 @@ export default function NavErosionPortfolio() {
   // Summary
   const summary = useMemo(() => {
     if (!results || results.length === 0) return null
-    let totAmount = 0, totDist = 0, totReinv = 0, totFinal = 0, totGL = 0, totTR = 0
-    let erosionCount = 0, validCount = 0, errorCount = 0
+    let totAmount = 0, totDist = 0, totReinv = 0, totCash = 0, totFinal = 0, totWealth = 0, totGL = 0, totTR = 0
+    let erosionCount = 0, deficitCount = 0, validCount = 0, errorCount = 0
+    let benchmarkReturnWeighted = 0, relativeDragWeighted = 0, returnWeight = 0
     let best = null, worst = null
-    let covWeightedSum = 0, covWeightTotal = 0
+    let confirmedLossDollars = 0, distributionDollars = 0
     results.forEach(r => {
       if (r.error && !r.start_price) { errorCount++; return }
       validCount++
       totAmount += r.amount || 0
       totDist += r.total_dist || 0
       totReinv += r.total_reinvested || 0
+      totCash += r.cash_taken || 0
       totFinal += r.final_value || 0
+      totWealth += r.ending_wealth ?? ((r.final_value || 0) + (r.cash_taken || 0))
       totGL += r.gain_loss_dollar || 0
       totTR += r.total_return_dollar || 0
       if (r.has_erosion) erosionCount++
-      if (r.coverage_ratio != null) {
-        covWeightedSum += r.coverage_ratio * (r.amount || 0)
-        covWeightTotal += r.amount || 0
+      if (r.has_price_deficit) deficitCount++
+      if (r.benchmark_return_pct != null) {
+        benchmarkReturnWeighted += r.benchmark_return_pct * (r.amount || 0)
+        relativeDragWeighted += (r.relative_drag_pct || 0) * (r.amount || 0)
+        returnWeight += r.amount || 0
       }
+      confirmedLossDollars += r.confirmed_erosion_dollar || 0
+      distributionDollars += r.period_distributions_dollar || 0
       if (best === null || r.total_return_pct > best.total_return_pct) best = r
       if (worst === null || r.total_return_pct < worst.total_return_pct) worst = r
     })
     const totGLPct = totAmount > 0 ? totGL / totAmount * 100 : 0
-    const aggCoverage = covWeightTotal > 0 ? covWeightedSum / covWeightTotal : null
+    const aggCoverage = distributionDollars > 0 ? confirmedLossDollars / distributionDollars : null
     const aggSeverity = navSeverityFromRatio(aggCoverage)
+    const benchmarkReturnPct = returnWeight > 0 ? benchmarkReturnWeighted / returnWeight : null
+    const relativeDragPct = returnWeight > 0 ? relativeDragWeighted / returnWeight : null
     return {
-      totAmount, totDist, totReinv, totFinal, totGL, totTR, totGLPct,
-      erosionCount, validCount, errorCount, best, worst, aggCoverage, aggSeverity,
+      totAmount, totDist, totReinv, totCash, totFinal, totWealth, totGL, totTR, totGLPct,
+      erosionCount, deficitCount, validCount, errorCount, best, worst, aggCoverage, aggSeverity,
+      benchmarkReturnPct, relativeDragPct,
     }
   }, [results])
 
-  const headers = ['Ticker', 'Amount', 'Reinvest %', 'Start Price', 'End Price',
-    'Price \u0394%', 'Total Distributions', 'Total Reinvested', 'Final Value',
-    'Gain/Loss $', 'Gain/Loss %', 'Total Return $', 'Total Return %',
-    'NAV Erosion', 'Shares Needed / Extra To Breakeven', 'NAV Ratio', 'Note']
+  const headers = ['Ticker', 'Benchmark', 'Amount', 'Reinvest %', 'Start Price', 'End Price',
+    'Price \u0394%', 'Benchmark Return %', 'Total Distributions', 'Total Reinvested', 'Cash Taken',
+    'Ending Shares Value', 'Ending Wealth', 'Gain/Loss $', 'Gain/Loss %', 'Total Return $',
+    'Total Return %', 'Confirmed Erosion', 'Months', 'Shares Needed / Extra To Breakeven',
+    'Confirmed Erosion Ratio', 'Note']
 
   return (
     <div className="nep-page">
-      <h1 style={{ marginBottom: '0.3rem' }}>NAV Erosion Portfolio Screener</h1>
+      <h1 style={{ marginBottom: '0.3rem' }}>Benchmark-Adjusted NAV Erosion Portfolio Screener</h1>
       <p className="ne-desc">
         Compare up to {MAX_ROWS} ETFs side-by-side using the same NAV erosion calculation. Each ETF can have
         its own starting dollar amount and reinvestment percentage. Your list is saved to the database
         and will persist between sessions.
         <br />
-        <span style={{ color: 'var(--neg-3)', fontWeight: 600 }}>NAV Erosion = Yes</span> means the ETF's share-price
-        decline has outpaced distributions — you'd need more shares than you hold to recover your principal
-        at the ending price.
+        <span style={{ color: 'var(--neg-3)', fontWeight: 600 }}>Confirmed Erosion = Yes</span> means at least one
+        month had a fund price loss while its mapped underlying benchmark was flat or rising. This isolates
+        fund-specific price decay instead of treating a broad market sell-off as NAV erosion.
         <br />
         <span style={{ color: 'var(--neg-3)', fontWeight: 600 }}>Red needed</span> means shares still needed to breakeven.
         <span style={{ color: 'var(--pos-strong)', fontWeight: 600 }}> Green extra</span> means shares above breakeven.
-        The percent is the gap as a share of break-even shares.
+        The benchmark and benchmark return are shown in the results so the comparison is auditable.
       </p>
 
       {/* Collapsed-by-default help: how the numbers are computed */}
@@ -377,60 +388,53 @@ export default function NavErosionPortfolio() {
         <summary>How NAV erosion &amp; total return are computed</summary>
         <div className="nep-help-body">
           <section>
-            <h4>NAV Erosion (Yes / No)</h4>
+            <h4>Confirmed price erosion (Yes / No)</h4>
             <p>
-              This is a share-count break-even test. For each ETF we buy{' '}
-              <em>starting shares = your dollar amount ÷ the first available month's price</em>. Each month
-              the fund's distributions are paid per share; the reinvest % you set is used to buy more shares
-              at that month's price (the rest is treated as cash). At the end we compute{' '}
-              <em>break-even shares = your dollar amount ÷ the ending price</em> — the number of shares you
-              would need at the closing price to be worth your original principal.
+              The screener maps each ETF to an underlying benchmark (for example, BTCI → BTC-USD and QQQI → QQQ).
+              The mapping is displayed in the Benchmark column. Each month is tested independently: erosion is
+              counted only when the fund price is down and the benchmark is flat or up over the same interval.
             </p>
             <p>
-              <strong style={{ color: 'var(--neg-3)' }}>NAV Erosion = Yes</strong> when the shares you actually
-              accumulated (including everything reinvested) are <em>fewer</em> than those break-even shares —
-              the share-price decline outran the distributions. The{' '}
-              <strong>Shares Needed / Extra To Breakeven</strong> column shows that gap, and its percent is
-              the gap as a share of break-even shares.
+              <strong style={{ color: 'var(--neg-3)' }}>Confirmed Erosion = Yes</strong> when at least one such
+              month exists. A separate <strong>Shares Needed / Extra To Breakeven</strong> column remains as an
+              end-of-period solvency diagnostic; it is not used to label benchmark-confirmed erosion.
             </p>
           </section>
 
           <section>
             <h4>NAV Ratio (benchmark-adjusted severity)</h4>
             <p>
-              The <strong>NAV Ratio</strong> column measures destructive price decay relative to the income
-              the fund actually pays, and it is gated by the market so a broad sell-off is not mistaken for
-              structural erosion:
+              The <strong>Confirmed Erosion Ratio</strong> measures benchmark-confirmed price loss against
+              distributions over the same backtest window:
             </p>
             <p className="nep-formula">
-              NAV Ratio = fund&apos;s own price decline ÷ trailing-12-month distribution yield
+              Confirmed Erosion Ratio = confirmed price-loss dollars per share ÷ distributions per share
             </p>
             <ul>
               <li>
-                The price decline only counts when the fund&apos;s best-fit benchmark (a market index) was{' '}
-                <em>flat or up</em> over the same window. If the whole market fell, the drop is treated as
-                market beta, not NAV erosion, and the numerator is 0.
+                A month contributes to the numerator only when the fund is down and its benchmark is{' '}
+                <em>flat or up</em>. If the benchmark is down, that month is treated as market beta and contributes 0.
               </li>
-              <li>Distribution yield is the trailing-12-month distributions per share ÷ the ending price.</li>
+              <li>The denominator is all distributions per share in the selected window, not a mismatched trailing yield.</li>
               <li>
                 <strong>Lower is better.</strong> ≤ 0.25 = Low, 0.25–0.75 = Moderate, &gt; 0.75 = High.
-                A fund is also forced to <strong>High</strong> if its price fell ≥ 50% or you would need
-                ≥ 5% more shares to break even.
               </li>
             </ul>
             <p>
-              The <strong>Portfolio NAV Erosion Ratio</strong> tile is the dollar-weighted average of each
-              fund&apos;s ratio across the holdings that have one.
+              The <strong>Portfolio NAV Erosion Ratio</strong> tile is total confirmed price-loss dollars divided
+              by total distributions across the holdings that have distributions.
             </p>
           </section>
 
           <section>
             <h4>Total Return vs. Gain / Loss</h4>
             <p>
-              <strong>Final Value</strong> = the shares you accumulated × the ending price.
+              <strong>Ending Shares Value</strong> = the shares you accumulated × the ending price.
             </p>
             <p className="nep-formula">
-              Total Return $ = Final Value + cash distributions taken − amount invested
+              Ending Wealth = Ending Shares Value + cash distributions taken
+              <br />
+              Total Return $ = Ending Wealth − amount invested
               <br />
               Total Return % = Total Return $ ÷ amount invested
             </p>
@@ -438,7 +442,7 @@ export default function NavErosionPortfolio() {
               &quot;Cash distributions taken&quot; is the portion of distributions you did{' '}
               <em>not</em> reinvest. <strong>Gain / Loss $</strong> is narrower — just Final Value − amount invested — so it
               reflects only the position&apos;s value and excludes any cash you pocketed. Total Return therefore
-              exceeds Gain / Loss by exactly the cash distributions taken.
+              differs from Gain / Loss by exactly the cash distributions taken.
             </p>
           </section>
 
@@ -626,22 +630,30 @@ export default function NavErosionPortfolio() {
           {summary && (
             <div className="nep-summary">
               <StatTile label="Total Invested" value={fmt$(summary.totAmount)} color="#7ecfff" />
-              <StatTile label="Total Final Value" value={fmt$(summary.totFinal)} color="#7ecfff" />
+              <StatTile label="Ending Shares Value" value={fmt$(summary.totFinal)} color="#7ecfff" />
+              <StatTile label="Ending Wealth" value={fmt$(summary.totWealth)} color="#7ecfff" sub="shares value + cash taken" />
               <StatTile label="Total Gain / Loss" value={fmt$(summary.totGL)} color={summary.totGL >= 0 ? '#00c853' : '#e05555'} />
               <StatTile label="Portfolio Return" value={fmtPct(summary.totGLPct)} color={summary.totGLPct >= 0 ? '#00c853' : '#e05555'} />
               <StatTile label="Total Distributions" value={fmt$(summary.totDist)} color="#7ecfff" />
               <StatTile label="Total Reinvested" value={fmt$(summary.totReinv)} color="#7ecfff" />
+              <StatTile label="Cash Taken" value={fmt$(summary.totCash)} color="#7ecfff" />
               <StatTile
-                label="NAV Erosion"
+                label="Confirmed Erosion"
                 value={summary.erosionCount + ' of ' + summary.validCount}
                 color={summary.erosionCount > 0 ? '#e05555' : '#00c853'}
-                sub="funds showing erosion"
+                sub="funds with a qualifying month"
               />
               <StatTile
-                label="Portfolio NAV Erosion Ratio"
+                label="Ending Price Deficit"
+                value={summary.deficitCount + ' of ' + summary.validCount}
+                color={summary.deficitCount > 0 ? '#e05555' : '#00c853'}
+                sub="informational only"
+              />
+              <StatTile
+                label="Portfolio Confirmed Erosion Ratio"
                 value={summary.aggCoverage != null ? summary.aggCoverage.toFixed(4) : '\u2014'}
                 color={navSeverityColor(summary.aggSeverity)}
-                sub="dollar-weighted avg"
+                sub="confirmed loss ÷ distributions"
               />
               {summary.aggCoverage != null && (
                 <div className="nep-stat-tile" style={{
@@ -663,6 +675,22 @@ export default function NavErosionPortfolio() {
                     {navSeverityText(summary.aggSeverity, true)}
                   </div>
                 </div>
+              )}
+              {summary.benchmarkReturnPct != null && (
+                <StatTile
+                  label="Benchmark Return (weighted)"
+                  value={fmtPct(summary.benchmarkReturnPct)}
+                  color={summary.benchmarkReturnPct >= 0 ? '#00c853' : '#e05555'}
+                  sub="mapped underlying benchmarks"
+                />
+              )}
+              {summary.relativeDragPct != null && (
+                <StatTile
+                  label="Relative Price Drag"
+                  value={fmtPct(summary.relativeDragPct)}
+                  color={summary.relativeDragPct > 0 ? '#e05555' : '#00c853'}
+                  sub="benchmark return − fund price return"
+                />
               )}
               {summary.best && (
                 <StatTile
@@ -707,14 +735,15 @@ export default function NavErosionPortfolio() {
                     return (
                       <tr key={idx}>
                         <td><strong>{r.ticker}</strong></td>
+                        <td>{r.benchmark || '\u2014'}</td>
                         <td>{fmt$(r.amount || 0)}</td>
                         <td>{(r.reinvest_pct || 0)}%</td>
-                        <td colSpan={13} style={{ textAlign: 'left', color: 'var(--neg-3)' }}>{r.error}</td>
-                        <td></td>
+                        <td colSpan={headers.length - 4} style={{ textAlign: 'left', color: 'var(--neg-3)' }}>{r.error}</td>
                       </tr>
                     )
                   }
                   const pCls = r.price_delta_pct < 0 ? 'pct-down' : (r.price_delta_pct > 0 ? 'pct-up' : '')
+                  const benchCls = (r.benchmark_return_pct || 0) < 0 ? 'pct-down' : 'pct-up'
                   const glCls = r.gain_loss_dollar < 0 ? 'pct-down' : 'pct-up'
                   const glPCls = r.gain_loss_pct < 0 ? 'pct-down' : 'pct-up'
                   const trCls = (r.total_return_dollar || 0) < 0 ? 'pct-down' : 'pct-up'
@@ -726,14 +755,18 @@ export default function NavErosionPortfolio() {
                   return (
                     <tr key={idx}>
                       <td><strong>{r.ticker}</strong></td>
+                      <td>{r.benchmark || '\u2014'}</td>
                       <td>{fmt$(r.amount)}</td>
                       <td>{r.reinvest_pct}%</td>
                       <td>{fmt$(r.start_price)}</td>
                       <td>{fmt$(r.end_price)}</td>
                       <td className={pCls}>{fmtPct(r.price_delta_pct)}</td>
+                      <td className={benchCls}>{fmtPct(r.benchmark_return_pct || 0)}</td>
                       <td>{fmt$(r.total_dist)}</td>
                       <td>{fmt$(r.total_reinvested)}</td>
+                      <td>{fmt$(r.cash_taken || 0)}</td>
                       <td>{fmt$(r.final_value)}</td>
+                      <td>{fmt$(r.ending_wealth ?? ((r.final_value || 0) + (r.cash_taken || 0)))}</td>
                       <td className={glCls}>{fmt$(r.gain_loss_dollar)}</td>
                       <td className={glPCls}>{fmtPct(r.gain_loss_pct)}</td>
                       <td className={trCls}>{fmt$(r.total_return_dollar || 0)}</td>
@@ -743,6 +776,7 @@ export default function NavErosionPortfolio() {
                           ? <span style={{ color: 'var(--neg-3)', fontWeight: 700 }}>Yes</span>
                           : <span style={{ color: 'var(--pos-strong)', fontWeight: 700 }}>No</span>}
                       </td>
+                      <td>{r.confirmed_erosion_months || 0}</td>
                       <td
                         className={defCls}
                         title={`Break-even shares minus total shares held: ${parseFloat(r.final_deficit || 0).toFixed(4)} (${fmtPct(gapPct)})`}
@@ -765,15 +799,19 @@ export default function NavErosionPortfolio() {
                 <tfoot>
                   <tr>
                     <td><strong>TOTAL</strong></td>
+                    <td></td>
                     <td>{fmt$(summary.totAmount)}</td>
                     <td></td><td></td><td></td><td></td>
+                    <td></td>
                     <td>{fmt$(summary.totDist)}</td>
                     <td>{fmt$(summary.totReinv)}</td>
+                    <td>{fmt$(summary.totCash)}</td>
                     <td>{fmt$(summary.totFinal)}</td>
+                    <td>{fmt$(summary.totWealth)}</td>
                     <td className={summary.totGL >= 0 ? 'pct-up' : 'pct-down'}>{fmt$(summary.totGL)}</td>
                     <td></td>
                     <td className={summary.totTR >= 0 ? 'pct-up' : 'pct-down'}>{fmt$(summary.totTR)}</td>
-                    <td></td><td></td>
+                    <td></td><td></td><td></td><td></td>
                     <td style={{ color: navSeverityColor(summary.aggSeverity), fontWeight: 600 }}>
                       {summary.aggCoverage != null ? summary.aggCoverage.toFixed(4) : '\u2014'}
                     </td>

@@ -3924,11 +3924,11 @@ function NavErosionHelp() {
     <div>
       <h2>NAV Erosion (Single Ticker)</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The NAV Erosion page is a backtester for a single high-yield ETF or fund. It simulates
+        The NAV Erosion page is a price-erosion backtester for a single high-yield ETF or fund. It simulates
         month-by-month what would have happened to your investment over a historical period,
         accounting for share price changes, distributions, and your chosen reinvestment level.
-        It answers a critical question for income investors: <em>Is this fund's distribution
-        sustainable, or is it slowly eating into your principal?</em>
+        It uses market closing prices as a NAV proxy rather than issuer-published NAV and asks:
+        <em> Does the fund lose price when its underlying benchmark is flat or rising?</em>
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -3937,18 +3937,15 @@ function NavErosionHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What is NAV Erosion?</h3>
       <p style={{ marginBottom: '1rem' }}>
-        NAV (Net Asset Value) erosion occurs when a fund's share price falls faster than its
-        distributions can compensate for. A fund paying a 15% annual distribution yield but losing
-        20% of its price per year may be eroding your principal. The NAV erosion ratio compares
-        the fund's price decline against a relevant benchmark, then scales the destructive decline
-        by the fund's distribution yield. A lower ratio means less benchmark-adjusted erosion.
-        Benchmark weakness is treated as context: if the benchmark is down too, the fund's decline
-        is not automatically treated as structural NAV erosion.
+        Confirmed erosion is a month in which the fund price declines while its underlying benchmark
+        is flat or positive. A fund is therefore not penalized merely because its whole market fell.
+        The page separately reports investor total return, relative benchmark drag, and the number of
+        shares needed to restore the initial capital value; those measures do not override the confirmed-erosion verdict.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Formula</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        The benchmark-adjusted NAV erosion ratio is computed as:
+        The confirmed price-erosion ratio is computed as:
       </p>
       <pre style={{
         background: 'var(--p-1a1a1a)',
@@ -3959,88 +3956,84 @@ function NavErosionHelp() {
         color: 'var(--text)',
         fontSize: '0.95rem',
         whiteSpace: 'pre-wrap',
-      }}>{`Ratio = |Fund Price Return| ÷ TTM Distribution Yield   (when erosion applies)
-Ratio = 0                                                (when it does not)
+      }}>{`Monthly confirmed loss/share = Prior Fund Price − Current Fund Price
+                               (only when Fund Return < 0 and Benchmark Return ≥ 0)
+Monthly ratio = Confirmed loss/share ÷ Distribution/share
+Period ratio  = Σ confirmed monthly loss/share ÷ Σ period distributions/share
 
 Where:
-  Fund Price Return     = (End Price − Start Price) ÷ Start Price
-  Benchmark Return      = (Bench End − Bench Start) ÷ Bench Start
-                          (sum of component returns for composite benchmarks)
-  TTM Distribution Yield = (Trailing-12-mo distributions per share) ÷ End Price`}</pre>
+  Fund Return      = (Current Fund Price − Prior Fund Price) ÷ Prior Fund Price
+  Benchmark Return = (Current Bench Price − Prior Bench Price) ÷ Prior Bench Price
+                     (sum of component returns for composite benchmarks)`}</pre>
       <p style={{ marginBottom: '0.75rem' }}>
-        <strong>Benchmark gate.</strong> The benchmark acts as a context filter, not a subtraction.
-        Erosion is only counted (numerator = <code>|Fund Return|</code>) when <em>both</em> conditions hold:
+        <strong>Benchmark gate.</strong> The benchmark acts as a context filter. Erosion is counted only when:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li>Fund Return is negative (the fund's price actually fell), <em>and</em></li>
         <li>Benchmark Return is flat or positive (the underlying market was not down).</li>
       </ul>
       <p style={{ marginBottom: '0.75rem' }}>
-        If the fund is up, or if the benchmark itself is down, the numerator is forced to <code>0</code>
-        — a fund is not punished for tracking a falling market lower, only for losing price while its
-        benchmark held up. This is what makes the ratio "benchmark-adjusted."
+        If the fund is up, or if the benchmark itself is down, confirmed erosion for that month is <code>0</code>.
+        Relative Drag remains available separately to show how far the fund lagged the benchmark over the full window.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
-        <strong>Why divide by yield.</strong> Dividing the destructive price decline by the distribution
-        yield asks: "How much of the yield is being financed out of NAV?" A ratio of <code>0.50</code> means
-        roughly half of the yield is offset by price erosion; <code>1.00</code> means the entire yield was
-        eaten by NAV decline. Ratio thresholds are <strong>≤ 0.25 Low</strong>, <strong>0.25–0.75 Moderate</strong>,
-        and <strong>&gt; 0.75 High</strong>. The final severity is also forced to <strong>High</strong>
-        when the fund price declined 50% or more, or when the ending share deficit is 5% or more of break-even shares.
-      </p>
-      <p style={{ marginBottom: '1rem' }}>
-        <strong>Portfolio aggregate.</strong> The portfolio-level ratio is dollar-weighted across all
-        eligible holdings: <code>Σ(erosion$ per ticker) ÷ Σ(TTM distribution$ per ticker)</code>, where
-        <code> erosion$ = numerator × start price × shares</code> and
-        <code> distribution$ = TTM dist per share × shares</code>.
+        <strong>Why divide by distributions.</strong> A ratio of <code>0.50</code> means confirmed price loss
+        equaled roughly half the distributions paid during the same selected window; <code>1.00</code> means
+        it equaled all period distributions. Thresholds are <strong>≤ 0.25 Low</strong>,
+        <strong>0.25–0.75 Moderate</strong>, and <strong>&gt; 0.75 High</strong>.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Inputs</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker</strong> — The ETF or fund to analyze (e.g., JEPI, XYLD, QYLD).</li>
         <li><strong>Initial Investment</strong> — Dollar amount to start with (default $10,000).</li>
+        <li><strong>Benchmark</strong> — Leave blank for automatic selection, or enter a priceable override such as <code>HODL</code>.</li>
         <li><strong>Start / End Date</strong> — The historical backtest window.</li>
         <li><strong>Reinvestment %</strong> — Drag the slider or type a number (0–100%). At 0%, all distributions are taken as cash. At 100%, all distributions buy more shares (full DRIP). Use values between to simulate partial reinvestment.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Automatic Benchmark Context</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        NAV erosion is benchmark-adjusted so a fund is not punished just because its whole underlying market is weak.
+        The price-erosion test is benchmark-adjusted so a fund is not punished just because its whole underlying market is weak.
         The app chooses a best-effort benchmark from known ticker mappings and fund description keywords. Examples:
         Nasdaq income funds generally compare to <code>QQQ</code>, S&amp;P 500 income funds to <code>SPY</code>,
         Russell 2000 funds to <code>IWM</code>, defense funds to <code>ITA</code>, gold funds to <code>GLD</code>,
         silver funds to <code>SLV</code>, and bitcoin funds to <code>BTC-USD</code>.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
-        For holding-level overrides, use the Dashboard NAV column. There you can force a fund to be tested, skip it,
-        or enter a custom benchmark ticker/composite when the automatic benchmark is not the right fit.
+        The selected benchmark and its return are shown in the result cards and as an orange normalized line.
+        The calculation stops with an error if benchmark history is unavailable rather than substituting the fund itself.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Statistics</h3>
       <p style={{ marginBottom: '0.75rem' }}>After running the backtest, a strip of metric tiles shows:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Total Distributions</strong> — All cash paid out over the period.</li>
+        <li><strong>Benchmark / Benchmark Return</strong> — The actual comparison series and its full-window price return.</li>
+        <li><strong>Benchmark-Confirmed Erosion</strong> — Yes only when at least one month meets the fund-down, benchmark-flat/up rule.</li>
+        <li><strong>Confirmed Erosion Ratio</strong> — Confirmed monthly losses divided by distributions over the same window.</li>
+        <li><strong>Relative Drag</strong> — How many percentage points the fund price lagged its benchmark.</li>
+        <li><strong>Total Distributions</strong> — All distributions generated over the period.</li>
         <li><strong>Shares Purchased</strong> — Shares bought via DRIP reinvestment.</li>
         <li><strong>Total Reinvested</strong> — Dollar amount reinvested.</li>
-        <li><strong>Final Portfolio Value</strong> — Ending value of all shares held.</li>
-        <li><strong>Price Change %</strong> — How much the share price moved over the period.</li>
-        <li><strong>NAV Erosion</strong> — Yes or No verdict.</li>
-        <li><strong>Final Shares Needed / Extra To Breakeven</strong> — The final share gap versus break-even, shown as both shares and a percent of break-even shares. Needed means you are short of break-even; extra means you are above it.</li>
-        <li><strong>Total NAV Erosion Ratio</strong> — Benchmark-adjusted ratio for the selected period. Ratio-only severity is low at 0.25 or below, moderate from 0.25–0.75, and high above 0.75. The screen also forces High for a 50%+ price decline or a 5%+ final share deficit.</li>
+        <li><strong>Cash Taken</strong> — Distributions not reinvested.</li>
+        <li><strong>Ending Shares Value</strong> — Ending market value of shares only.</li>
+        <li><strong>Ending Wealth / Investor Total Return</strong> — Shares value plus cash taken, compared with the initial investment.</li>
+        <li><strong>Final Shares Needed / Extra</strong> — Capital-only share gap; it intentionally excludes cash taken and does not override confirmed erosion.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Main Line Chart</strong> — Shows share price (blue), portfolio value (green), and a dashed gray break-even threshold over time. If the green line stays above the dashed line, your investment is holding its own.</li>
-        <li><strong>NAV Erosion Ratio Chart</strong> — Monthly benchmark-adjusted NAV erosion ratio plotted over time with color-coded markers: green at or below 0.25, orange at or below 0.75, red above 0.75. The headline severity can still be High from the price-decline or share-deficit rules even when the period ratio is moderate.</li>
+        <li><strong>Main Line Chart</strong> — Shows fund price (blue), the benchmark normalized to the same starting level (orange dotted), shares value (green), and the initial investment (gray dashed).</li>
+        <li><strong>Confirmed Erosion Ratio Chart</strong> — Monthly ratios with green, orange, and red severity markers.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Monthly Detail Table</h3>
-      <p style={{ marginBottom: '0.75rem' }}>A sortable month-by-month table with 12 columns:</p>
+      <p style={{ marginBottom: '0.75rem' }}>A sortable month-by-month table includes:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Date</strong> — Month/year.</li>
         <li><strong>Price</strong> — Share price that month.</li>
         <li><strong>Price Δ%</strong> — Monthly price change.</li>
+        <li><strong>Benchmark / Bench Δ%</strong> — Underlying benchmark level and monthly return.</li>
         <li><strong>Div/Share</strong> — Distribution paid per share.</li>
         <li><strong>Total Dist</strong> — Total distribution for your holding.</li>
         <li><strong>Reinvested</strong> — Amount reinvested based on slider.</li>
@@ -4049,17 +4042,17 @@ Where:
         <li><strong>Portfolio Value</strong> — Current total value.</li>
         <li><strong>Break-Even Shares</strong> — Shares needed to recover original investment at current price.</li>
         <li><strong>Shares Needed / Extra To Breakeven</strong> — The share gap versus break-even, shown as shares plus percent. <span style={{ color: 'var(--p-ef9a9a)' }}>Red needed = you need that many more shares</span>; <span style={{ color: 'var(--p-81c784)' }}>green extra = you have that many shares above break-even</span>.</li>
-        <li><strong>NAV Ratio</strong> — That month's benchmark-adjusted NAV erosion ratio, color-coded.</li>
+        <li><strong>Confirmed Ratio</strong> — That month&apos;s confirmed erosion loss divided by its distribution per share.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Enter a high-yield ticker (QYLD, XYLD, JEPI, SVOL, etc.) and set your investment amount.</li>
         <li>Start with a wide date range (e.g., 2018–present) to capture a full market cycle.</li>
-        <li>Run at <strong>0% reinvestment</strong> first — this shows worst-case NAV erosion with no DRIP offsetting it.</li>
+        <li>Run at <strong>0% reinvestment</strong> first to compare ending shares value with ending wealth including cash taken.</li>
         <li>Then run at <strong>100%</strong> — this shows whether full DRIP can overcome price decay.</li>
         <li>Find the reinvestment percentage where Shares Needed falls to zero or becomes Extra — that's the break-even DRIP rate for this fund.</li>
-        <li>Check the NAV ratio chart: consistent red months mean the fund price is lagging its benchmark despite distributions.</li>
+        <li>Check the confirmed ratio chart: red months mean the fund fell while its benchmark was flat or rising.</li>
       </ol>
     </div>
   )
@@ -4070,11 +4063,11 @@ function NavScreenerHelp() {
     <div>
       <h2>NAV Erosion Screener (Portfolio)</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The NAV Erosion Screener extends the single-ticker backtester to a full portfolio of up
-        to 80 ETFs simultaneously. You set individual investment amounts and reinvestment percentages
-        per ticker, run them all over the same date range, and get a side-by-side comparison of
-        which funds are eroding capital and which are performing sustainably. You can save and reload
-        named backtest scenarios to compare strategies over time.
+        The NAV Erosion Screener extends the benchmark-adjusted single-ticker backtester to a full portfolio
+        of up to 80 ETFs simultaneously. You set individual investment amounts and reinvestment percentages
+        per ticker, run them all over the same date range, and get a side-by-side comparison of benchmark-confirmed
+        price erosion, ending wealth, and investor total return. You can save and reload named backtest scenarios
+        to compare strategies over time.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -4098,30 +4091,29 @@ function NavScreenerHelp() {
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Strip</h3>
-      <p style={{ marginBottom: '0.75rem' }}>After running, 11 metric tiles show portfolio-wide results:</p>
+      <p style={{ marginBottom: '0.75rem' }}>After running, the summary strip shows portfolio-wide results:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Total Invested, Total Final Value, Total Gain/Loss, Portfolio Return %</li>
-        <li>Total Distributions, Total Reinvested</li>
-        <li>NAV Erosion count (e.g., "3 of 8 funds eroding")</li>
-        <li>Portfolio NAV erosion ratio (dollar-weighted average across all funds); the portfolio severity follows this weighted ratio rather than the worst individual fund.</li>
-        <li>Best Performer (ticker + return %), Worst Performer</li>
-        <li>Error Count (tickers where no data was found)</li>
+        <li>Total Invested, Ending Shares Value, Ending Wealth, Total Gain/Loss, and Portfolio Return %</li>
+        <li>Total Distributions, Total Reinvested, and Cash Taken (the portion not reinvested)</li>
+        <li>Confirmed Erosion count (e.g., "3 of 8 funds" with at least one qualifying month)</li>
+        <li>Ending Price Deficit count — an informational break-even share check, separate from confirmed erosion.</li>
+        <li>Portfolio Confirmed Erosion Ratio — total benchmark-confirmed price-loss dollars divided by total distributions over the same window.</li>
+        <li>Weighted benchmark return and relative price drag, plus best/worst performer and data errors.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results Table</h3>
-      <p style={{ marginBottom: '0.75rem' }}>A sortable 17-column table with a TOTAL footer row:</p>
+      <p style={{ marginBottom: '0.75rem' }}>A sortable 22-column table with a TOTAL footer row:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Ticker, Amount, Reinvest %</strong> — Your inputs.</li>
+        <li><strong>Ticker, Benchmark, Amount, Reinvest %</strong> — Inputs plus the mapped underlying used for the gate (for example, BTCI → BTC-USD).</li>
         <li><strong>Start Price / End Price</strong> — Share price at beginning and end of period.</li>
-        <li><strong>Price Δ%</strong> — Total price change.</li>
-        <li><strong>Total Distributions</strong> — All cash paid out.</li>
-        <li><strong>Total Reinvested</strong> — Distributions that were reinvested.</li>
-        <li><strong>Final Value</strong> — Portfolio value at end.</li>
+        <li><strong>Price Δ% / Benchmark Return %</strong> — Fund price change and mapped benchmark return over the selected window.</li>
+        <li><strong>Total Distributions / Total Reinvested / Cash Taken</strong> — Distribution cash flow split by reinvestment choice.</li>
+        <li><strong>Ending Shares Value / Ending Wealth</strong> — Shares at the end, then shares value plus cash taken.</li>
         <li><strong>Gain/Loss $</strong> and <strong>Gain/Loss %</strong> — Capital-only gain/loss. Green/red colored.</li>
         <li><strong>Total Return $</strong> and <strong>Total Return %</strong> — Including distributions.</li>
-        <li><strong>NAV Erosion</strong> — Yes (red) or No (green).</li>
-        <li><strong>Shares Needed / Extra To Breakeven</strong> — Positive share gap means erosion is winning; extra shares mean reinvestment has put the position above break-even.</li>
-        <li><strong>NAV Ratio</strong> — Weighted benchmark-adjusted NAV erosion ratio, color-coded.</li>
+        <li><strong>Confirmed Erosion / Months</strong> — Yes only when at least one month has fund price down while the benchmark is flat or up.</li>
+        <li><strong>Shares Needed / Extra To Breakeven</strong> — End-of-period capital-only share gap; informational and separate from the benchmark gate.</li>
+        <li><strong>Confirmed Erosion Ratio</strong> — Confirmed price loss per share divided by all distributions per share in the selected window.</li>
         <li><strong>Note</strong> — Any data warnings for that ticker.</li>
       </ul>
     </div>

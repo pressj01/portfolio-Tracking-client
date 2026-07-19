@@ -953,6 +953,43 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(row["total_divs_received"], 20.0)
         self.assertAlmostEqual(row["paid_for_itself"], 0.2, places=6)
 
+    def test_holdings_total_return_ignores_stale_transfer_out_loss(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Penny Stocks', 0)")
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, purchase_value, purchase_date, "
+            "current_price, current_value, gain_or_loss, realized_gains, total_divs_received, "
+            "estim_payment_per_year, reinvest, shares_bought_from_dividend, total_cash_reinvested) "
+            "VALUES ('PENNY', 20, 'Penny Stock', 10000, 0.01, 100, '2024-01-01', "
+            "0.0001, 1, -99, -25, 0, 0, 'N', 0, 0)"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes, realized_gain) "
+            "VALUES ('PENNY', 20, 'BUY', '2024-01-01', 10000, 0.01, 0, '', NULL)"
+        )
+        # Legacy transaction imports could leave a fake realized loss on a
+        # transfer-out even though no sale occurred.
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes, realized_gain) "
+            "VALUES ('PENNY', 20, 'SELL', '2024-02-01', 2500, 0, 0, "
+            "'[Transfer out] TRANSFER OF SECURITY', -25)"
+        )
+
+        res = self.client.get("/api/holdings?profile_id=20")
+
+        self.assertEqual(res.status_code, 200)
+        row = res.get_json()[0]
+        price_return = row["gain_or_loss"] / row["purchase_value"]
+        total_return = (
+            row["gain_or_loss"]
+            + row["total_return_divs_component"]
+            + row["total_return_realized_component"]
+        ) / row["total_return_basis"]
+        self.assertEqual(row["total_return_realized_component"], 0.0)
+        self.assertAlmostEqual(total_return, price_return, places=8)
+
     def test_total_return_summary_uses_dividend_payment_history_as_total_dividend_floor(self):
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Etrade Trading', 0)")
         self._execute(
