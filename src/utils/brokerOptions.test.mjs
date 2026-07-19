@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { assignBrokerImportSides, parseBrokerOptionDescriptor } from './brokerOptions.js'
+import { assignBrokerImportSides, mapBrokerOptionUnderlying, parseBrokerOptionDescriptor } from './brokerOptions.js'
 
 test('mixed unsigned NDX import builds a covered call and protective put debit spread', () => {
   const parsed = [
@@ -31,4 +31,27 @@ test('signed quantities override inferred sides', () => {
     [2, 'BUY', true],
     [3, 'SELL', true],
   ])
+})
+
+test('CBTX broker symbols use the BTC option chain and scaled strikes', () => {
+  const parsed = parseBrokerOptionDescriptor('CBTX US 08/21/26 C1490', 'SELL')
+  const proxy = mapBrokerOptionUnderlying(parsed.underlying)
+
+  assert.deepEqual(parsed, {
+    underlying: 'CBTX',
+    expiration: '2026-08-21',
+    optType: 'CALL',
+    strike: 1490,
+    qty: 1,
+    side: 'SELL',
+    sideExplicit: false,
+  })
+  assert.deepEqual(proxy, { ticker: 'BTC', divisor: 50 })
+  assert.equal(parsed.strike / proxy.divisor, 29.8)
+})
+
+test('weekly and mini Bitcoin index roots use the corresponding BTC scale', () => {
+  assert.deepEqual(mapBrokerOptionUnderlying('cbtxw'), { ticker: 'BTC', divisor: 50 })
+  assert.deepEqual(mapBrokerOptionUnderlying('MBTX'), { ticker: 'BTC', divisor: 5 })
+  assert.deepEqual(mapBrokerOptionUnderlying('MBTXW'), { ticker: 'BTC', divisor: 5 })
 })

@@ -5,6 +5,31 @@ const normalizeOptionDate = (yy, mm, dd) => {
   return `${year}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
 }
 
+// Cash-settled index options aren't available from the app's market-data
+// source. Use liquid ETF option chains as pricing proxies and translate index
+// strikes to the ETF's price grid. PM-settled and mini roots share the same
+// underlying exposure as their standard roots.
+export const BROKER_OPTION_PROXY_MAP = {
+  SPX: { ticker: 'SPY', divisor: 10 },
+  SPXW: { ticker: 'SPY', divisor: 10 },
+  RUT: { ticker: 'IWM', divisor: 10 },
+  RUTW: { ticker: 'IWM', divisor: 10 },
+  RTY: { ticker: 'IWM', divisor: 10 },
+  NDX: { ticker: 'QQQ', divisor: 40 },
+  NDXP: { ticker: 'QQQ', divisor: 40 },
+  NASDAQ: { ticker: 'QQQ', divisor: 40 },
+  NQ: { ticker: 'QQQ', divisor: 40 },
+  CBTX: { ticker: 'BTC', divisor: 50 },
+  CBTXW: { ticker: 'BTC', divisor: 50 },
+  MBTX: { ticker: 'BTC', divisor: 5 },
+  MBTXW: { ticker: 'BTC', divisor: 5 },
+}
+
+export const mapBrokerOptionUnderlying = symbol => {
+  const normalized = String(symbol || '').trim().toUpperCase()
+  return BROKER_OPTION_PROXY_MAP[normalized] || { ticker: normalized, divisor: 1 }
+}
+
 // Parse human-readable broker descriptions and compact OCC-style symbols.
 // A signed quantity is authoritative; unsigned lines can be assigned by an
 // import strategy after all related legs have been parsed.

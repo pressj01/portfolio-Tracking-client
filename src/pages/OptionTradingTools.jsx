@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE } from '../config'
 import { useTheme } from '../context/ThemeContext'
-import { assignBrokerImportSides, parseBrokerOptionDescriptor } from '../utils/brokerOptions'
+import { assignBrokerImportSides, mapBrokerOptionUnderlying, parseBrokerOptionDescriptor } from '../utils/brokerOptions'
 import { chartTheme } from '../utils/chartTheme'
 import { resizeOptionStructure } from '../utils/optionsStrategy'
 import GreekSurfaceExplorer from '../components/GreekSurfaceExplorer'
@@ -116,23 +116,8 @@ const contractEntryPrice = (contract, side, fallback = 0) => Number(
   || fallback
   || 0,
 )
-// Cash-settled index options aren't in our data, so map them to the liquid ETF
-// proxy and scale the strike to the proxy's price grid (SPY≈SPX/10, etc.).
-const INDEX_PROXY_MAP = {
-  SPX: { ticker: 'SPY', divisor: 10 },
-  SPXW: { ticker: 'SPY', divisor: 10 },
-  RUT: { ticker: 'IWM', divisor: 10 },
-  RUTW: { ticker: 'IWM', divisor: 10 },
-  RTY: { ticker: 'IWM', divisor: 10 },
-  NDX: { ticker: 'QQQ', divisor: 40 },
-  NDXP: { ticker: 'QQQ', divisor: 40 },
-  NASDAQ: { ticker: 'QQQ', divisor: 40 },
-  NQ: { ticker: 'QQQ', divisor: 40 },
-}
 const BROKER_IMPORT_EXAMPLE = 'NDX 260821C31250000\nNDX 260821P26800000\nNDX 260821P28775000'
 const RISK_VIEW_REVISION = 'risk-profile-view-v3'
-const mapBrokerUnderlying = symbol => INDEX_PROXY_MAP[String(symbol).toUpperCase()]
-  || { ticker: String(symbol).toUpperCase(), divisor: 1 }
 
 async function fetchJson(path, options) {
   const response = await fetch(`${API_BASE}${path}`, options)
@@ -1571,7 +1556,7 @@ export default function OptionTradingTools() {
       return
     }
     const mapped = parsed.map(leg => {
-      const proxy = mapBrokerUnderlying(leg.underlying)
+      const proxy = mapBrokerOptionUnderlying(leg.underlying)
       return {
         leg,
         proxyTicker: proxy.ticker,
@@ -1850,7 +1835,7 @@ export default function OptionTradingTools() {
               <div><span>Broker trade import</span><h2>Paste calls and puts to build both charts</h2></div>
             </div>
             <p className="opt-broker-help">
-              One trade per line, e.g. <code>NDX 260821C31250000</code>. In covered call + put protection mode, unsigned calls are sold and covered with 100 long proxy shares per contract; the highest put is bought and the lower put is sold as a debit spread. Cash-settled index options map to liquid ETF proxies — <strong>SPX→SPY</strong>, <strong>RUT→IWM</strong>, <strong>NDX→QQQ</strong> — and strikes scale to the proxy. A signed quantity always overrides the inferred side: <code>+2</code> buys two and <code>-2</code> sells two.
+              One trade per line, e.g. <code>NDX 260821C31250000</code>. In covered call + put protection mode, unsigned calls are sold and covered with 100 long proxy shares per contract; the highest put is bought and the lower put is sold as a debit spread. Cash-settled index options map to liquid ETF proxies — <strong>SPX→SPY</strong>, <strong>RUT→IWM</strong>, <strong>NDX→QQQ</strong>, <strong>CBTX→BTC</strong> — and strikes scale to the proxy. A signed quantity always overrides the inferred side: <code>+2</code> buys two and <code>-2</code> sells two.
             </p>
             <textarea
               className="opt-broker-input"
