@@ -256,6 +256,7 @@ function OverlapTab({ pf, holdings, onSimulate }) {
 // ─── Tab 2: Consolidation Simulator ────────────────────────────────────────────
 
 function SimulatorTab({ pf, holdings, preselectedSell }) {
+  const { isDark } = useTheme()
   const [sellTicker, setSellTicker] = useState('')
   const [buyTicker, setBuyTicker] = useState('')
   const [period, setPeriod] = useState('1y')
@@ -525,6 +526,7 @@ function CompareCard({ label, before, after, format }) {
 // ─── Tab 3: Market Regime Analysis ─────────────────────────────────────────────
 
 function RegimeTab({ pf, holdings }) {
+  const { isDark } = useTheme()
   const [selected, setSelected] = useState([])
   const [period, setPeriod] = useState('2y')
   const [loading, setLoading] = useState(false)

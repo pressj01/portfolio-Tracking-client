@@ -66,6 +66,7 @@ const DRIP_PCT_OPTIONS = Array.from({ length: 101 }, (_, i) => i)
 
 function DripProjectionsPanel() {
   const pf = useProfileFetch()
+  const dialog = useDialog()
   const { selection } = useProfile()
   const [years, setYears] = useState(1)
   const [categories, setCategories] = useState([])
