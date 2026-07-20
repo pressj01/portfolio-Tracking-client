@@ -7,6 +7,8 @@ import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
 import { selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
+import ComparerTickerLibrary from '../components/ComparerTickerLibrary'
+import { uniqueTickers } from '../utils/comparerTickerLibrary'
 
 const PERIODS = [
   { value: '1mo', label: '1M' },
@@ -442,15 +444,21 @@ export default function StockComparer() {
     return () => { cancelled = true }
   }, [pf, tickers, refreshNonce, data])
 
+  const addTickerSymbols = useCallback((nextSymbols) => {
+    const normalized = uniqueTickers(nextSymbols)
+    if (!normalized.length) return
+    setTickers(prev => uniqueTickers([...prev, ...normalized]))
+    setTimeout(() => inputRef.current?.focus(), 0)
+  }, [])
+
   const addTickers = () => {
     const symbols = input.split(/[\s,]+/).map(normalize).filter(Boolean)
     if (!symbols.length) {
       inputRef.current?.focus()
       return
     }
-    setTickers(prev => [...new Set([...prev, ...symbols])])
+    addTickerSymbols(symbols)
     setInput('')
-    setTimeout(() => inputRef.current?.focus(), 0)
   }
 
   const removeTicker = (sym) => {
@@ -881,6 +889,13 @@ export default function StockComparer() {
           )}
         </div>
       </div>
+
+      <ComparerTickerLibrary
+        symbols={symbols}
+        storageKey="stockcomparer-saved-tickers"
+        securityLabel="stocks"
+        onAddSymbols={addTickerSymbols}
+      />
 
       {error && <div className="etf-error">{error}</div>}
       {loading && <div className="etfc-loading">Loading stock comparison...</div>}
