@@ -4182,7 +4182,7 @@ thead .col-tick, thead .col-name { z-index: 4; background: var(--p-0b0b1c); }
 .ind-val { color: var(--p-888); font-size: 0.75rem; margin-left: 4px; }
 
 /* ── NAV Erosion Back-Tester ── */
-.ne-page { max-width: 1400px; margin: 0 auto; padding: 1.5rem 2rem; }
+.ne-page { max-width: 100%; margin: 0 auto; padding: 1.5rem 2rem; }
 .ne-desc { color: var(--text-dim); margin-top: 0; margin-bottom: 1.2rem; font-size: 0.875rem; }
 .ne-form {
   display: flex; flex-wrap: wrap; gap: 0.9rem; align-items: flex-end;
@@ -4215,9 +4215,33 @@ thead .col-tick, thead .col-name { z-index: 4; background: var(--p-0b0b1c); }
 .ne-stat-lbl { font-size: 0.72rem; color: var(--text-dim); margin-top: 2px; }
 .ne-table-title { margin-top: 0; margin-bottom: 0.4rem; font-size: 1rem; color: var(--text-strong); }
 .ne-tbl-outer {
-  max-height: 520px; overflow: auto; border: 1px solid var(--border);
+  width: 100%; max-height: 520px; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--border);
   border-radius: 6px; margin-top: 0.4rem;
 }
+.ne-tbl-outer .sst {
+  width: 100%; table-layout: fixed; font-size: clamp(0.7rem, 0.62vw, 0.78rem);
+}
+.ne-tbl-outer .sst th,
+.ne-tbl-outer .sst td {
+  padding: 0.38rem clamp(0.25rem, 0.38vw, 0.55rem);
+  overflow: hidden; text-overflow: ellipsis;
+}
+.ne-tbl-outer .sst th { white-space: normal; line-height: 1.15; }
+.ne-tbl-outer .sst td { white-space: nowrap; }
+.ne-tbl-outer .sst th:nth-child(1), .ne-tbl-outer .sst td:nth-child(1) { width: 6%; }
+.ne-tbl-outer .sst th:nth-child(2), .ne-tbl-outer .sst td:nth-child(2) { width: 5%; }
+.ne-tbl-outer .sst th:nth-child(3), .ne-tbl-outer .sst td:nth-child(3) { width: 6%; }
+.ne-tbl-outer .sst th:nth-child(4), .ne-tbl-outer .sst td:nth-child(4) { width: 7%; }
+.ne-tbl-outer .sst th:nth-child(5), .ne-tbl-outer .sst td:nth-child(5) { width: 6%; }
+.ne-tbl-outer .sst th:nth-child(6), .ne-tbl-outer .sst td:nth-child(6) { width: 6%; }
+.ne-tbl-outer .sst th:nth-child(7), .ne-tbl-outer .sst td:nth-child(7) { width: 6%; }
+.ne-tbl-outer .sst th:nth-child(8), .ne-tbl-outer .sst td:nth-child(8) { width: 6%; }
+.ne-tbl-outer .sst th:nth-child(9), .ne-tbl-outer .sst td:nth-child(9) { width: 7%; }
+.ne-tbl-outer .sst th:nth-child(10), .ne-tbl-outer .sst td:nth-child(10) { width: 7%; }
+.ne-tbl-outer .sst th:nth-child(11), .ne-tbl-outer .sst td:nth-child(11) { width: 8%; }
+.ne-tbl-outer .sst th:nth-child(12), .ne-tbl-outer .sst td:nth-child(12) { width: 8%; }
+.ne-tbl-outer .sst th:nth-child(13), .ne-tbl-outer .sst td:nth-child(13) { width: 15%; }
+.ne-tbl-outer .sst th:nth-child(14), .ne-tbl-outer .sst td:nth-child(14) { width: 7%; }
 .ne-date-col {
   position: sticky; left: 0; z-index: 2; min-width: 78px; max-width: 78px;
   border-right: 1px solid var(--border); background: var(--surface);
@@ -4226,6 +4250,10 @@ thead .col-tick, thead .col-name { z-index: 4; background: var(--p-0b0b1c); }
 thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 .ne-deficit { color: var(--neg-3); font-weight: 600; }
 .ne-surplus { color: var(--pos-strong); font-weight: 600; }
+@media (max-width: 1100px) {
+  .ne-tbl-outer { overflow-x: auto; }
+  .ne-tbl-outer .sst { min-width: 1100px; table-layout: fixed; }
+}
 
 /* ── NAV Erosion Portfolio Screener ── */
 .nep-page { max-width: 100%; margin: 0 auto; padding: 1.5rem 2rem; }
