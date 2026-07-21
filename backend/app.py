@@ -180,6 +180,8 @@ _ETF_SCREEN_BENCH_CACHE = {}
 _ETF_SCREEN_BENCH_TTL_SEC = 10 * 60
 _YF_INFO_CACHE = {}
 _YF_INFO_TTL_SEC = 30 * 60
+_XFUNDS_RESEARCH_CACHE = {}
+_XFUNDS_RESEARCH_TTL_SEC = 15 * 60
 
 
 def _cached_yf_info(yf_ticker_obj, symbol):
@@ -7357,6 +7359,8 @@ def _fetch_xfunds_distribution_snapshot(ticker):
         "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
         "freq": freq,
         "history": history,
+        "source": "XFUNDS",
+        "source_url": url,
     }
 
 
@@ -8098,6 +8102,12 @@ def _is_tappalpha_fund(ticker, description=""):
     return ticker in {"TSPY", "TDAQ", "TDAX", "TSYX"}
 
 
+_XFUNDS_CURRENT_TICKERS = {
+    "DRMY", "GLDN", "SLVX", "NUKX", "WEPN",
+    "BLOX", "BHDG", "NGHT", "GIAX", "FITZ", "FIAX",
+}
+
+
 def _is_xfunds_fund(ticker, description=""):
     """Identify XFunds (Nicholas Wealth) ETFs even when the description is abbreviated."""
     ticker = (ticker or "").strip().upper()
@@ -8108,8 +8118,7 @@ def _is_xfunds_fund(ticker, description=""):
         or "nicholasx" in description_l
     ):
         return True
-    explicit_family = {"GIAX", "BLOX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX"}
-    return ticker in explicit_family
+    return ticker in _XFUNDS_CURRENT_TICKERS
 
 
 def _is_kurv_fund(ticker, description=""):
@@ -15157,6 +15166,282 @@ def _derive_fund_type(legal_type, quote_type):
     return "Fund"
 
 
+_XFUNDS_BASE_URL = "https://nicholasx.com"
+_XFUNDS_LIVE_DATA_URL = f"{_XFUNDS_BASE_URL}/wp-json/twm/v1/data"
+_XFUNDS_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+}
+
+
+def _research_html_text(fragment):
+    """Convert a small HTML fragment to normalized visible text."""
+    from html import unescape
+
+    value = re.sub(r"(?is)<(script|style).*?</\1>", " ", str(fragment or ""))
+    value = re.sub(r"(?s)<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", unescape(value)).strip()
+
+
+def _research_html_table_rows(fragment):
+    """Extract header/data cell text without requiring an HTML parser dependency."""
+    rows = []
+    for row_html in re.findall(r"(?is)<tr\b[^>]*>(.*?)</tr>", str(fragment or "")):
+        cells = [
+            _research_html_text(cell)
+            for cell in re.findall(r"(?is)<t[hd]\b[^>]*>(.*?)</t[hd]>", row_html)
+        ]
+        if any(cells):
+            rows.append(cells)
+    return rows
+
+
+def _xfunds_http_get(session, url, *, params=None, accept="text/html,*/*"):
+    headers = {**_XFUNDS_HTTP_HEADERS, "Accept": accept}
+    for attempt in range(2):
+        try:
+            response = session.get(url, params=params, headers=headers, timeout=12)
+            if response.status_code == 429 and attempt == 0:
+                time.sleep(1)
+                continue
+            if response.status_code != 200:
+                return None
+            return response
+        except Exception:
+            return None
+    return None
+
+
+def _xfunds_live_rows(session, post_id, table_type):
+    response = _xfunds_http_get(
+        session,
+        _XFUNDS_LIVE_DATA_URL,
+        params={"type": table_type, "post_id": str(post_id)},
+        accept="application/json,*/*",
+    )
+    if response is None:
+        return []
+    try:
+        payload = response.json()
+    except Exception:
+        try:
+            payload = json.loads(response.text or "{}")
+        except Exception:
+            return []
+    return _research_html_table_rows(payload.get("html", ""))
+
+
+def _xfunds_label_map(rows):
+    result = {}
+    for row in rows:
+        if len(row) < 2:
+            continue
+        label = re.sub(r"\*+", "", row[0]).strip().lower()
+        result[label] = row[-1].strip()
+    return result
+
+
+def _xfunds_map_value(values, *label_prefixes):
+    prefixes = tuple(str(prefix).strip().lower() for prefix in label_prefixes)
+    for label, value in (values or {}).items():
+        if label.startswith(prefixes) and value not in (None, "", "-", "-%"):
+            return value
+    return None
+
+
+def _xfunds_money(value):
+    if value in (None, "", "-", "—"):
+        return None
+    text = str(value).strip().replace(",", "")
+    match = re.search(r"(-?[0-9]+(?:\.[0-9]+)?)\s*([kmbt]?)", text, re.I)
+    if not match:
+        return None
+    multiplier = {"": 1, "k": 1e3, "m": 1e6, "b": 1e9, "t": 1e12}.get(match.group(2).lower(), 1)
+    try:
+        return round(float(match.group(1)) * multiplier, 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _xfunds_iso_date(value):
+    if value in (None, "", "-", "—") or "XX" in str(value).upper():
+        return None
+    parsed = pd.to_datetime(value, errors="coerce")
+    return parsed.strftime("%Y-%m-%d") if not pd.isna(parsed) else None
+
+
+def _xfunds_page_section(page_html, heading, max_paragraphs=2):
+    headings = list(re.finditer(r"(?is)<h[1-6]\b[^>]*>(.*?)</h[1-6]>", page_html or ""))
+    for index, match in enumerate(headings):
+        if _research_html_text(match.group(1)).lower() != heading.lower():
+            continue
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(page_html)
+        section_html = page_html[match.end():end]
+        paragraphs = []
+        for paragraph in re.findall(r"(?is)<p\b[^>]*>(.*?)</p>", section_html):
+            text = _research_html_text(paragraph)
+            if text and text not in paragraphs:
+                paragraphs.append(text)
+            if len(paragraphs) >= max_paragraphs:
+                break
+        return " ".join(paragraphs)
+    return None
+
+
+def _xfunds_page_name(page_html):
+    generic = {"fund summary", "fund objective", "fund details", "fund data & price"}
+    for heading in re.findall(r"(?is)<h[1-3]\b[^>]*>(.*?)</h[1-3]>", page_html or ""):
+        text = _research_html_text(heading)
+        if text and text.lower() not in generic:
+            return text
+    return None
+
+
+def _xfunds_holdings_from_csv(csv_text, limit=25):
+    import csv
+    import io
+
+    holdings = []
+    meta = {}
+    try:
+        reader = csv.DictReader(io.StringIO((csv_text or "").lstrip("\ufeff")))
+        for row in reader:
+            account = str(row.get("Account") or "").strip().upper()
+            if not account:
+                continue
+            if not meta:
+                meta = {
+                    "ticker": account,
+                    "as_of": _xfunds_iso_date(row.get("Date")),
+                    "net_assets": _xfunds_money(row.get("NetAssets")),
+                }
+            weight = _research_pct(row.get("Weightings"))
+            name = str(row.get("SecurityName") or "").strip()
+            symbol = str(row.get("StockTicker") or row.get("CUSIP") or "").strip()
+            if not name or weight is None:
+                continue
+            holdings.append({
+                "symbol": symbol or name,
+                "name": name,
+                "weight_pct": round(float(weight), 2),
+            })
+            if len(holdings) >= limit:
+                break
+    except Exception:
+        return [], {}
+    return holdings, meta
+
+
+def _fetch_xfunds_etf_profile(ticker, session=None, use_cache=True):
+    """Fetch official XFUNDS research fields, leaving Yahoo to fill only gaps."""
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker or not _is_xfunds_fund(ticker):
+        return None
+    if use_cache:
+        cached = _cache_get(_XFUNDS_RESEARCH_CACHE, ticker, _XFUNDS_RESEARCH_TTL_SEC)
+        if cached is not None:
+            return dict(cached)
+
+    session = session or requests.Session()
+    source_url = f"{_XFUNDS_BASE_URL}/{ticker.lower()}/"
+    page_response = _xfunds_http_get(session, source_url)
+    if page_response is None:
+        return None
+    page_html = page_response.text or ""
+    if "Page Not Found" in page_html or "data-twm-type" not in page_html:
+        return None
+
+    post_match = re.search(
+        r'data-twm-type=["\']fund-info-table["\'][^>]*data-post-id=["\'](\d+)["\']',
+        page_html,
+        re.I,
+    )
+    if not post_match:
+        post_match = re.search(
+            r'data-post-id=["\'](\d+)["\'][^>]*data-twm-type=["\']fund-info-table["\']',
+            page_html,
+            re.I,
+        )
+    if not post_match:
+        return None
+    post_id = post_match.group(1)
+
+    fund_info = _xfunds_label_map(_xfunds_live_rows(session, post_id, "fund-info-table"))
+    daily_nav = _xfunds_label_map(_xfunds_live_rows(session, post_id, "daily-nav-table"))
+
+    holdings_url = (
+        f"{_XFUNDS_BASE_URL}/wp-content/uploads/data/"
+        f"TidalFG_Holdings_{ticker}.csv"
+    )
+    holdings_response = _xfunds_http_get(session, holdings_url, accept="text/csv,*/*")
+    holdings, holdings_meta = _xfunds_holdings_from_csv(
+        holdings_response.text if holdings_response is not None else ""
+    )
+
+    official_ticker = (_xfunds_map_value(fund_info, "ticker") or holdings_meta.get("ticker") or "").upper()
+    if official_ticker and official_ticker != ticker:
+        return None
+
+    summary = _xfunds_page_section(page_html, "Fund Summary", max_paragraphs=2)
+    objective = _xfunds_page_section(page_html, "Fund Objective", max_paragraphs=2)
+    distribution_rate = _research_pct(_xfunds_map_value(fund_info, "distribution rate"))
+    sec_yield = _research_pct(_xfunds_map_value(fund_info, "30 day sec yield", "30-day sec yield"))
+    net_assets = holdings_meta.get("net_assets") or _xfunds_money(_xfunds_map_value(daily_nav, "net assets"))
+
+    profile = {
+        "name": _xfunds_page_name(page_html),
+        "fund_type": "ETF",
+        "description": summary or objective,
+        "objective": objective or summary,
+        "issuer": "XFUNDS by Nicholas Wealth",
+        "legal_type": "Exchange Traded Fund",
+        "expense_ratio_pct": _research_expense_pct(_xfunds_map_value(fund_info, "expense ratio")),
+        "total_assets": net_assets,
+        "total_assets_label": "Net Assets",
+        "price": _xfunds_money(_xfunds_map_value(daily_nav, "closing price")),
+        "nav_price": _xfunds_money(_xfunds_map_value(daily_nav, "nav")),
+        "nav_label": "NAV",
+        "inception_date": _xfunds_iso_date(_xfunds_map_value(fund_info, "fund inception", "inception")),
+        "estimated_yield_pct": distribution_rate,
+        "distribution_rate_pct": distribution_rate,
+        "sec_30_day_yield_pct": sec_yield,
+        "target_yield_label": "Distribution Rate",
+        "top_holdings": holdings,
+        "holdings_as_of": holdings_meta.get("as_of"),
+        "source_url": source_url,
+        "data_source": "XFUNDS",
+    }
+    if distribution_rate is not None or sec_yield is not None:
+        profile["yield_source"] = "XFUNDS"
+
+    useful_fields = (
+        "name", "description", "expense_ratio_pct", "total_assets",
+        "nav_price", "inception_date", "top_holdings",
+    )
+    if not any(_research_has_value(profile.get(field)) for field in useful_fields):
+        return None
+    _cache_set(_XFUNDS_RESEARCH_CACHE, ticker, dict(profile))
+    return profile
+
+
+def _merge_official_research_profile(response, official_profile):
+    """Overlay non-empty official values and identify Yahoo as the fallback feed."""
+    if not official_profile:
+        return response
+    merged = dict(response)
+    for key, value in official_profile.items():
+        if _research_has_value(value):
+            merged[key] = value
+    if official_profile.get("data_source") and official_profile.get("data_source") != "Yahoo Finance":
+        merged["fallback_source"] = "Yahoo Finance"
+    return merged
+
+
 def _vistashares_page_text(ticker):
     try:
         from html import unescape
@@ -15342,12 +15627,16 @@ def _fetch_provider_etf_profile(ticker, response):
     """Try official issuer/provider pages when the market-data feed is sparse."""
     provider_hints = " ".join(str(response.get(k) or "") for k in ("name", "issuer", "data_source"))
     fetchers = []
+    is_xfunds = _is_xfunds_fund(ticker, provider_hints)
+    if is_xfunds:
+        fetchers.append(_fetch_xfunds_etf_profile)
     if _is_tuttle_capital_fund(ticker, provider_hints):
         fetchers.append(_fetch_income_blast_etf_profile)
     if "vistashares" in provider_hints.lower():
         fetchers.append(_fetch_vistashares_etf_profile)
-    fetchers.append(_fetch_income_blast_etf_profile)
-    fetchers.append(_fetch_vistashares_etf_profile)
+    if not is_xfunds:
+        fetchers.append(_fetch_income_blast_etf_profile)
+        fetchers.append(_fetch_vistashares_etf_profile)
 
     seen = set()
     for fetcher in fetchers:
@@ -15373,6 +15662,15 @@ def security_research(kind, ticker):
     if not ticker:
         return jsonify({"error": "ticker is required"}), 400
 
+    # XFUNDS is authoritative for its own fund facts. Yahoo remains useful for
+    # market history and for any fields the official site does not publish.
+    official_profile = None
+    if kind == "etf" and _is_xfunds_fund(ticker):
+        try:
+            official_profile = _fetch_xfunds_etf_profile(ticker)
+        except Exception:
+            official_profile = None
+
     try:
         yf_ticker = yf.Ticker(lookup_symbol)
         info = yf_ticker.info or {}
@@ -15382,7 +15680,12 @@ def security_research(kind, ticker):
             yf_ticker = yf.Ticker(lookup_symbol)
             info = yf_ticker.info or {}
     except Exception as exc:
-        return jsonify({"error": f"Could not load {ticker}: {exc}"}), 404
+        if official_profile is None:
+            return jsonify({"error": f"Could not load {ticker}: {exc}"}), 404
+        # Continue with official XFUNDS facts even when Yahoo is temporarily
+        # unavailable. The guarded Yahoo calls below will simply return gaps.
+        yf_ticker = yf.Ticker(lookup_symbol)
+        info = {}
 
     name = _research_info_value(info, "longName", "shortName", "displayName") or ticker
     quote_type = (_research_info_value(info, "quoteType") or "").upper()
@@ -15504,14 +15807,14 @@ def security_research(kind, ticker):
             "asset_classes": _research_weight_map(getattr(fund_data, "asset_classes", None)) if fund_data is not None else [],
             "data_source": "Yahoo Finance",
         }
-        official_profile = _fetch_provider_etf_profile(lookup_symbol, response) if _research_needs_provider_fallback(response) else None
-        if official_profile:
-            for key, value in official_profile.items():
-                if value not in (None, "", []):
-                    response[key] = value
+        if official_profile is None and _research_needs_provider_fallback(response):
+            official_profile = _fetch_provider_etf_profile(lookup_symbol, response)
+        response = _merge_official_research_profile(response, official_profile)
 
         # ── Official fund-site yield & distribution history ──────────────
-        description_text = f"{name} {summary}"
+        description_text = " ".join(
+            str(response.get(key) or "") for key in ("name", "description", "issuer")
+        )
         official_snapshot = None
         try:
             official_snapshot = _fetch_official_distribution_snapshot(lookup_symbol, description_text)
@@ -15536,6 +15839,12 @@ def security_research(kind, ticker):
                 ex_date = official_snapshot.get("ex_div_date")
                 if last_entry and ex_date:
                     response["last_dividend"] = {"amount": round(float(last_entry), 4), "date": ex_date}
+                try:
+                    trailing = h[h.index >= (pd.Timestamp.now(tz=h.index.tz) - pd.DateOffset(years=1))]
+                    if not trailing.empty:
+                        response["ttm_dividend_per_share"] = round(float(trailing.sum()), 4)
+                except Exception:
+                    pass
                 response["yield_source"] = official_snapshot.get("source") or "Fund Site"
                 response["distribution_source"] = response["yield_source"]
 
@@ -15555,7 +15864,7 @@ def security_research(kind, ticker):
                 })
 
         inception = _research_info_value(info, "fundInceptionDate")
-        if inception:
+        if response["inception_date"] is None and inception:
             try:
                 response["inception_date"] = pd.to_datetime(int(inception), unit="s").strftime("%Y-%m-%d")
             except Exception:

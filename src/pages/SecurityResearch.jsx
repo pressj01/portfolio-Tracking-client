@@ -252,8 +252,9 @@ function ETFResult({ data, onOpenChart, return1y }) {
     ['Last Dividend', data.last_dividend ? `${fmtMoney(data.last_dividend.amount)} on ${data.last_dividend.date}` : '-'],
     ['Source', (() => {
       const base = data.source_url ? <a href={data.source_url} target="_blank" rel="noreferrer">{data.data_source || 'Source'}</a> : (data.data_source || '-')
-      if (data.yield_source && data.yield_source !== data.data_source) return <>{base} + {data.yield_source}</>
-      return base
+      const supplemental = [data.yield_source, data.fallback_source]
+        .filter((source, index, sources) => source && source !== data.data_source && sources.indexOf(source) === index)
+      return <>{base}{supplemental.map(source => <span key={source}> + {source}</span>)}</>
     })()],
   ]
 
