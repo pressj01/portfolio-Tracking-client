@@ -21677,6 +21677,41 @@ def growth_data():
 
 # ── ETF Screen ─────────────────────────────────────────────────────────────────
 
+# Yahoo's retired NUSI history mixes two share-price bases around the fund's
+# 1-for-2 reverse split / QQQH symbol change. Its pre-split distributions are
+# already restated to the new-share basis, but closes before 2025-02-18 are not;
+# the result is a fake +100% return in every comparer trace spanning that date.
+# Keep these provider-specific price-basis corrections close to the comparer
+# calculation so broker holdings and transaction quantities remain untouched.
+_ETF_COMPARER_PRICE_BASIS_ADJUSTMENTS = {
+    "NUSI": (("2025-02-18", 2.0),),
+}
+
+
+def _normalize_etf_comparer_price_basis(ticker, close_series):
+    """Return ETF closes on one consistent, latest-share price basis.
+
+    Each adjustment is ``(first_date_on_new_basis, multiplier_for_older_rows)``.
+    A constant multiplier does not alter price returns inside an older window,
+    but it keeps per-share dividends and windows crossing the corporate action
+    on the same basis.
+    """
+    adjustments = _ETF_COMPARER_PRICE_BASIS_ADJUSTMENTS.get(str(ticker or "").upper())
+    if not adjustments or close_series is None or close_series.empty:
+        return close_series
+
+    normalized = close_series.astype(float).copy()
+    index = pd.DatetimeIndex(normalized.index)
+    for first_new_basis_date, older_multiplier in adjustments:
+        cutoff = pd.Timestamp(first_new_basis_date)
+        if index.tz is not None:
+            cutoff = cutoff.tz_localize(index.tz)
+        older_rows = index < cutoff
+        if older_rows.any():
+            normalized.iloc[older_rows] *= float(older_multiplier)
+    return normalized
+
+
 def _blend_price_drip(close_series, divs_series, frac, track_cash=True):
     """Simulate reinvestment of dividends.
 
@@ -22171,6 +22206,12 @@ def etf_screen_data():
                     continue
                 # A shorter or failed re-fetch keeps the batch series rather
                 # than replacing or dropping real history.
+
+            # Put every close on the same per-share basis before normalizing or
+            # combining it with Yahoo's already split-adjusted distributions.
+            # This removes NUSI's false +100% jump at its QQQH transition.
+            close = _normalize_etf_comparer_price_basis(sym, close)
+            div_close = _normalize_etf_comparer_price_basis(sym, div_close)
 
             # Use div_close (daily) for dates and price normalization so all
             # traces share the same x-axis.  close (from price_df) may use a
