@@ -1768,6 +1768,53 @@ export default function Dashboard() {
         </div>
       )}
 
+      <details className="card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem' }}>
+        <summary style={{ cursor: 'pointer', color: 'var(--accent-2)', fontWeight: 500 }}>
+          Understanding NAV Erosion Values and Colors
+        </summary>
+        <div style={{ color: 'var(--text-dim)', fontSize: '0.82rem', lineHeight: 1.5, marginTop: '0.75rem' }}>
+          <p style={{ margin: '0 0 0.65rem' }}>
+            The displayed NAV value and its color answer related but different questions. The value is the
+            benchmark-adjusted NAV erosion ratio: the holding&apos;s qualifying price decline divided by its
+            trailing-12-month distribution yield. Lower is better.
+          </p>
+          <ul style={{ margin: '0 0 0.65rem', paddingLeft: '1.2rem' }}>
+            <li>
+              <strong style={{ color: 'var(--text-strong)' }}>Why can the value be 0.00?</strong> The ratio is
+              zero when the holding&apos;s price rose or when its selected benchmark also declined. In the latter
+              case, the benchmark gate treats the drop as a broader market move instead of fund-specific erosion.
+            </li>
+            <li>
+              <strong style={{ color: 'var(--text-strong)' }}>Why can 0.00 still be red?</strong> The Dashboard
+              forces a High/red warning when the holding&apos;s unadjusted price has fallen 50% or more during the
+              trailing-year test, even if the benchmark gate made the ratio zero. The color is warning about the
+              absolute price collapse, not saying that 0.00 is a bad ratio.
+            </li>
+          </ul>
+          <p style={{ margin: 0 }}>
+            For example, BTCI can show <strong style={{ color: 'var(--text-strong)' }}>0.00 in red</strong> when
+            both BTCI and its BTC-USD benchmark declined, but BTCI&apos;s own decline exceeded the 50% safety threshold.
+            Detailed NAV back-tests can also force High when the ending share deficit reaches 5% or more.
+          </p>
+          <div style={{ borderTop: '1px solid var(--border)', marginTop: '0.8rem', paddingTop: '0.75rem' }}>
+            <strong style={{ color: 'var(--text-strong)' }}>Why can the benchmark box turn red?</strong>
+            <p style={{ margin: '0.35rem 0 0.55rem' }}>
+              A red border around the benchmark entry box is a validation error, not a NAV-risk rating. It means
+              the manual symbol did not return usable price history from the market-data provider, so the NAV test
+              cannot compare the holding with that benchmark.
+            </p>
+            <p style={{ margin: 0 }}>
+              To fix it, enter the provider&apos;s complete symbol and press Enter or click outside the box. For
+              example, the PHLX Semiconductor Index is <strong style={{ color: 'var(--text-strong)' }}>^SOX</strong>,
+              not SOX; <strong style={{ color: 'var(--text-strong)' }}>SOXX</strong> is also a valid semiconductor ETF
+              proxy. You can instead clear the box to let Auto choose the holding&apos;s default benchmark. A valid
+              symbol restores the normal border. Changing a valid benchmark only to remove a red NAV warning is
+              not recommended—the benchmark should represent the holding&apos;s actual underlying exposure.
+            </p>
+          </div>
+        </div>
+      </details>
+
       {/* Summary Cards Strip */}
       <div className="summary-strip">
         <SummaryCard
