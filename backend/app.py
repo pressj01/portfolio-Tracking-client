@@ -35803,7 +35803,10 @@ def general_scanner_universe():
 _options_income_tickers = set([
     # JPM / Global X / classic covered call
     "JEPI", "JEPQ", "JEPY", "QYLD", "XYLD", "RYLD", "DJIA", "QYLG", "XYLG", "TYLG",
-    "EDGQ", "EDGX", "QRMI", "XRMI", "QCLR", "XCLR", "DIVO", "PUTW", "NUSI",
+    # NUSI reverse-split 1-for-2 and renamed to QQQH on 2025-02-21; the dead
+    # NUSI ticker still serves unadjusted (corrupted) history via yfinance, so
+    # only the successor QQQH (in the NEOS block below) is kept.
+    "EDGQ", "EDGX", "QRMI", "XRMI", "QCLR", "XCLR", "DIVO", "PUTW",
     # Amplify
     "BAGY", "BITY", "QDVO", "IDVO", "HCOW", "HAKY", "ETTY", "SLJY",
     # XFunds / Nicholas Wealth
@@ -36624,7 +36627,7 @@ _DEFAULT_ETFS = [
     "SCHD", "VYM", "HDV", "DVY", "DGRO", "VIG", "SPHD", "SPYD", "NOBL", "SDY",
     "FDVV", "DGRW", "FDL", "DHS", "FVD", "OVL", "OUSA", "LVHD", "SDOG", "GCOW",
     # Covered Call / Options Income
-    "JEPI", "JEPQ", "QYLD", "XYLD", "DIVO", "NUSI", "RYLD", "SPYI", "QQQI",
+    "JEPI", "JEPQ", "QYLD", "XYLD", "DIVO", "QQQH", "RYLD", "SPYI", "QQQI",
     "SVOL", "TLTW", "YMAX", "YMAG", "CONY", "TSLY", "NVDY",
     "JEPY", "AIPI", "FEPI", "QQQY", "XDTE", "QDTE",
     # Preferred Stock
@@ -36755,11 +36758,81 @@ def general_scanner_save_defaults():
 
 # ── ETF Evaluate ────────────────────────────────────────────────────────────────
 
-def _etf_peer_history_metrics(tickers):
+def _strip_tz_index(series):
+    """Return the series with a tz-naive DatetimeIndex so histories fetched via
+    different yfinance code paths (batch download vs Ticker.history) compare."""
+    try:
+        if getattr(series.index, "tz", None) is not None:
+            series = series.copy()
+            series.index = series.index.tz_localize(None)
+    except Exception:
+        pass
+    return series
+
+
+def _annualized_return_pct(series):
+    """Annualized return (%) over a price series, or None if under 6 months."""
+    try:
+        years = (series.index[-1] - series.index[0]).days / 365.25
+        if years < 0.5 or series.iloc[0] <= 0:
+            return None, None
+        return round(((series.iloc[-1] / series.iloc[0]) ** (1 / years) - 1) * 100, 4), years
+    except Exception:
+        return None, None
+
+
+def _has_price_discontinuity(series, threshold=0.40):
+    """True if the series contains a PERSISTENT single-session level shift
+    beyond ±threshold (default 40%) — the fingerprint of an unadjusted split /
+    reverse-split that corrupts every endpoint-to-endpoint CAGR. NUSI is the
+    motivating case: it reverse-split 1-for-2 and became QQQH on 2025-02-21,
+    and yfinance's dead NUSI series shows a ~+100% one-day jump that inflated
+    its total CAGR to ~30%/yr.
+
+    A one-day bad tick that immediately reverts (QQQH itself has a transient
+    -50% print in Jun 2024) is NOT flagged: the level before and after the
+    jump is unchanged, so first-to-last CAGRs are unaffected.
+    """
+    try:
+        rets = series.pct_change().dropna()
+        big = rets[rets.abs() > threshold]
+        if not len(big):
+            return False
+        for ts in big.index:
+            pos = series.index.get_loc(ts)
+            before = series.iloc[max(0, pos - 6):pos]
+            after = series.iloc[pos:pos + 6]
+            if not len(before) or not len(after):
+                continue
+            level_shift = float(after.median()) / float(before.median())
+            if abs(level_shift - 1.0) > threshold:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+# Metric keys _etf_peer_history_metrics can produce for a peer, used when
+# copying enrichment results onto peer dicts.
+_ETF_HISTORY_METRIC_KEYS = (
+    "price_cagr", "total_cagr", "history_years",
+    "matched_years", "matched_price_cagr", "matched_total_cagr",
+    "ref_matched_price_cagr", "ref_matched_total_cagr",
+)
+
+
+def _etf_peer_history_metrics(tickers, ref_close=None, ref_adj=None):
     """Batch-download full price history for peer tickers and compute, per ticker:
     price_cagr (annualized price-only return — the NAV-erosion signal),
     total_cagr (annualized dividend-reinvested return), history_years,
     ttm_yield (trailing-12-month distributions / latest price), and last_price.
+
+    When ref_close / ref_adj (the evaluated fund's own price history) are
+    supplied, also computes matched-window metrics over the pair's overlapping
+    history — both funds' CAGRs measured from the later of the two first trade
+    dates. Full-history CAGRs are not comparable across launch dates (a fund
+    that listed at a market bottom shows a flattering number), so alternative
+    ranking prefers these matched values.
 
     Uses one batched (chunked) download so enriching dozens of peers stays fast.
     Best-effort: tickers with insufficient data are simply omitted.
@@ -36768,6 +36841,14 @@ def _etf_peer_history_metrics(tickers):
     tickers = [t for t in tickers if t]
     if not tickers:
         return out
+    if ref_close is not None:
+        ref_close = _strip_tz_index(ref_close)
+        if len(ref_close) < 2:
+            ref_close = None
+    if ref_adj is not None:
+        ref_adj = _strip_tz_index(ref_adj)
+        if len(ref_adj) < 2:
+            ref_adj = None
     try:
         df = _chunked_yf_download(
             tickers, chunk_size=25, period="max",
@@ -36790,16 +36871,21 @@ def _etf_peer_history_metrics(tickers):
                 sub = df
             if "Close" not in sub:
                 continue
-            close = sub["Close"].dropna()
+            close = _strip_tz_index(sub["Close"].dropna())
             if len(close) < 30 or close.iloc[0] <= 0:
+                continue
+            # Drop funds whose price history has a split/rename artifact — their
+            # CAGRs are meaningless and would rank spuriously high (see NUSI).
+            if _has_price_discontinuity(close):
                 continue
             years = (close.index[-1] - close.index[0]).days / 365.25
             if years < 0.5:
                 continue
             price_cagr = round(((close.iloc[-1] / close.iloc[0]) ** (1 / years) - 1) * 100, 4)
             total_cagr = None
+            adj = None
             if "Adj Close" in sub:
-                adj = sub["Adj Close"].dropna()
+                adj = _strip_tz_index(sub["Adj Close"].dropna())
                 if len(adj) >= 2 and adj.iloc[0] > 0:
                     total_cagr = round(((adj.iloc[-1] / adj.iloc[0]) ** (1 / years) - 1) * 100, 4)
             last_price = float(close.iloc[-1])
@@ -36811,13 +36897,34 @@ def _etf_peer_history_metrics(tickers):
                     ttm = float(divs[divs.index >= cutoff].sum())
                     if last_price > 0 and ttm > 0:
                         ttm_yield = round(ttm / last_price * 100, 4)
-            out[t] = {
+            entry = {
                 "price_cagr": price_cagr,
                 "total_cagr": total_cagr,
                 "history_years": round(years, 2),
                 "ttm_yield": ttm_yield,
                 "last_price": round(last_price, 4),
             }
+            if ref_close is not None:
+                start = max(close.index[0], ref_close.index[0])
+                peer_win = close[close.index >= start]
+                ref_win = ref_close[ref_close.index >= start]
+                if len(peer_win) >= 2 and len(ref_win) >= 2:
+                    m_price, m_years = _annualized_return_pct(peer_win)
+                    r_price, _ = _annualized_return_pct(ref_win)
+                    if m_price is not None and r_price is not None:
+                        entry["matched_years"] = round(m_years, 2)
+                        entry["matched_price_cagr"] = m_price
+                        entry["ref_matched_price_cagr"] = r_price
+                        if ref_adj is not None and adj is not None and len(adj) >= 2:
+                            peer_adj_win = adj[adj.index >= start]
+                            ref_adj_win = ref_adj[ref_adj.index >= start]
+                            if len(peer_adj_win) >= 2 and len(ref_adj_win) >= 2:
+                                m_total, _ = _annualized_return_pct(peer_adj_win)
+                                r_total, _ = _annualized_return_pct(ref_adj_win)
+                                if m_total is not None and r_total is not None:
+                                    entry["matched_total_cagr"] = m_total
+                                    entry["ref_matched_total_cagr"] = r_total
+            out[t] = entry
         except Exception:
             continue
     return out
@@ -36978,17 +37085,26 @@ def etf_evaluate(ticker):
     total_cagr = None
     history_years = None
     risk_ratios = None
+    fund_close = None
+    fund_adj = None
+    price_history_suspect = False
     try:
         hist = yf.Ticker(ticker).history(period="max", auto_adjust=False)
         if hist is not None and not hist.empty and len(hist) >= 30:
             close = hist["Close"].dropna()
+            # A split/rename artifact (e.g. the dead NUSI series) makes every
+            # CAGR meaningless — flag it and skip the price-derived signals
+            # rather than reporting a fabricated return.
+            price_history_suspect = _has_price_discontinuity(close)
             years = (close.index[-1] - close.index[0]).days / 365.25
-            if years >= 0.5 and len(close) >= 2 and close.iloc[0] > 0:
+            if not price_history_suspect and years >= 0.5 and len(close) >= 2 and close.iloc[0] > 0:
                 history_years = round(years, 2)
                 price_cagr = round(((close.iloc[-1] / close.iloc[0]) ** (1 / years) - 1) * 100, 4)
+                fund_close = close
                 adj = hist["Adj Close"].dropna() if "Adj Close" in hist.columns else None
                 if adj is not None and len(adj) >= 2 and adj.iloc[0] > 0:
                     total_cagr = round(((adj.iloc[-1] / adj.iloc[0]) ** (1 / years) - 1) * 100, 4)
+                    fund_adj = adj
                 # Risk-adjusted ratios on the total-return (dividend-adjusted)
                 # series so high-distribution funds aren't double-penalized for
                 # the NAV erosion the NAV criterion already measures. Same shape
@@ -37036,6 +37152,7 @@ def etf_evaluate(ticker):
         "total_cagr": total_cagr,
         "history_years": history_years,
         "risk_ratios": risk_ratios,
+        "price_history_suspect": price_history_suspect,
     }
 
     # ── Fetch peers from scanner cache ───────────────────────────────────────
@@ -37127,15 +37244,14 @@ def etf_evaluate(ticker):
     if is_option_income:
         discovered = {p["ticker"] for p in base_peers}
         discovery_tickers = sorted((set(option_universe_tickers) | discovered) - {ticker})
-        metrics = _etf_peer_history_metrics(discovery_tickers)
+        metrics = _etf_peer_history_metrics(discovery_tickers, ref_close=fund_close, ref_adj=fund_adj)
 
         for p in base_peers:
             m = metrics.get(p["ticker"])
             if not m:
                 continue
-            p["price_cagr"] = m["price_cagr"]
-            p["total_cagr"] = m["total_cagr"]
-            p["history_years"] = m["history_years"]
+            for k in _ETF_HISTORY_METRIC_KEYS:
+                p[k] = m.get(k)
             if m["last_price"] is not None:
                 p["price"] = m["last_price"]
             if m["ttm_yield"] is not None:
@@ -37147,7 +37263,7 @@ def etf_evaluate(ticker):
         for peer_ticker, m in metrics.items():
             if peer_ticker in discovered or peer_ticker == ticker:
                 continue
-            base_peers.append({
+            synthetic = {
                 "ticker": peer_ticker,
                 "name": peer_ticker,
                 "price": m.get("last_price"),
@@ -37164,10 +37280,10 @@ def etf_evaluate(ticker):
                 "beta_3y": None,
                 "fund_family": "",
                 "is_single_stock": peer_ticker in single_stock_set,
-                "price_cagr": m.get("price_cagr"),
-                "total_cagr": m.get("total_cagr"),
-                "history_years": m.get("history_years"),
-            })
+            }
+            for k in _ETF_HISTORY_METRIC_KEYS:
+                synthetic[k] = m.get(k)
+            base_peers.append(synthetic)
             discovered.add(peer_ticker)
 
         live_info_targets = [
@@ -37199,14 +37315,15 @@ def etf_evaluate(ticker):
     # Hybrid enrichment: live-fetch the price-derived metrics that the cache cannot
     # provide (price/total CAGR, trailing yield), keeping cached fundamentals.
     if not is_option_income:
-        metrics = _etf_peer_history_metrics([p["ticker"] for p in candidates])
+        metrics = _etf_peer_history_metrics(
+            [p["ticker"] for p in candidates], ref_close=fund_close, ref_adj=fund_adj
+        )
     for p in candidates:
         m = metrics.get(p["ticker"])
         if not m:
             continue
-        p["price_cagr"] = m["price_cagr"]
-        p["total_cagr"] = m["total_cagr"]
-        p["history_years"] = m["history_years"]
+        for k in _ETF_HISTORY_METRIC_KEYS:
+            p[k] = m.get(k)
         if m["last_price"] is not None:
             p["price"] = m["last_price"]
         # Trailing-12-month distribution yield is the authoritative income figure;

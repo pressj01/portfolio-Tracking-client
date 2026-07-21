@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import Plot from '../components/ThemedPlot'
 import { useProfileFetch } from '../context/ProfileContext'
 import DistributionHistoryChart from '../components/DistributionHistoryChart'
@@ -193,6 +194,7 @@ function lastVisibleIndex(dates, start, end) {
 export default function ETFComparer() {
   const pf = useProfileFetch()
   const { isDark } = useTheme()
+  const location = useLocation()
   const [tickers, setTickers] = useState([])
   const [highlightedSymbol, setHighlightedSymbol] = useState('')
   const [input, setInput] = useState('')
@@ -413,6 +415,20 @@ export default function ETFComparer() {
     setTickers(prev => uniqueTickers([...prev, ...normalized]))
     setTimeout(() => inputRef.current?.focus(), 0)
   }, [])
+
+  // Preload tickers from ?tickers=A,B in the URL (e.g. the "Compare" link on the
+  // Option-Income ETF Evaluator). Re-consumed only when the query changes so it
+  // never fights the user's manual add/remove.
+  const consumedTickerQueryRef = useRef(null)
+  useEffect(() => {
+    const search = location.search || ''
+    if (search === consumedTickerQueryRef.current) return
+    consumedTickerQueryRef.current = search
+    const raw = new URLSearchParams(search).get('tickers')
+    if (!raw) return
+    const symbols = raw.split(/[\s,]+/).map(normalize).filter(Boolean)
+    if (symbols.length) addTickerSymbols(symbols)
+  }, [location.search, addTickerSymbols])
 
   const addTickers = () => {
     const symbols = input.split(/[\s,]+/).map(normalize).filter(Boolean)
