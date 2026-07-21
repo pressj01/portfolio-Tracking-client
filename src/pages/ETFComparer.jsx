@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import Plot from '../components/ThemedPlot'
 import { useProfileFetch } from '../context/ProfileContext'
 import DistributionHistoryChart from '../components/DistributionHistoryChart'
@@ -7,6 +8,9 @@ import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
+import { selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
+import ComparerTickerLibrary from '../components/ComparerTickerLibrary'
+import { uniqueTickers } from '../utils/comparerTickerLibrary'
 
 const PERIODS = [
   { value: '1mo', label: '1M' },
@@ -122,6 +126,35 @@ function normalize(value) {
   return String(value || '').trim().toUpperCase()
 }
 
+function researchProfileForComparer(profile) {
+  if (!profile || profile.error) return null
+  const result = {}
+  const copy = (target, source = target) => {
+    const value = profile[source]
+    if (value != null && value !== '') result[target] = value
+  }
+  copy('name')
+  copy('price')
+  copy('assets', 'total_assets')
+  copy('category')
+  copy('issuer')
+  copy('inception_date')
+  copy('distribution_history')
+  copy('distribution_source')
+  copy('distribution_frequency')
+
+  // Security Research expresses these fields as display percentages (0.54),
+  // while the comparer stores them as ratios (0.0054).
+  const expensePct = Number(profile.expense_ratio_pct)
+  if (Number.isFinite(expensePct)) result.expense_ratio = expensePct / 100
+  const estimatedYieldPct = Number(profile.estimated_yield_pct)
+  if (Number.isFinite(estimatedYieldPct) && estimatedYieldPct > 0) {
+    result.expected_dividend_yield = estimatedYieldPct / 100
+    result.expected_yield_source = profile.yield_source || profile.data_source
+  }
+  return result
+}
+
 function dateKey(value) {
   return String(value || '').slice(0, 10)
 }
@@ -161,6 +194,7 @@ function lastVisibleIndex(dates, start, end) {
 export default function ETFComparer() {
   const pf = useProfileFetch()
   const { isDark } = useTheme()
+  const location = useLocation()
   const [tickers, setTickers] = useState([])
   const [highlightedSymbol, setHighlightedSymbol] = useState('')
   const [input, setInput] = useState('')
@@ -171,6 +205,7 @@ export default function ETFComparer() {
   const [showReturnLabels, setShowReturnLabels] = useState(true)
   const [returnHoverMode, setReturnHoverMode] = useState('x unified')
   const [returnPctMode, setReturnPctMode] = useState(true)
+  const [returnScalePreference, setReturnScalePreference] = useState('auto')
   const [showRangeSlider, setShowRangeSlider] = useState(true)
   const [returnXRange, setReturnXRange] = useState([null, null])
   // Committed custom data window from the date inputs (overrides `period` on the
@@ -183,6 +218,7 @@ export default function ETFComparer() {
   const loadSeqRef = useRef(0)
   const reinvestRef = useRef(reinvest)
   const [holdings, setHoldings] = useState({})
+  const [researchProfiles, setResearchProfiles] = useState({})
   const holdingsLoadedRef = useRef({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -229,8 +265,12 @@ export default function ETFComparer() {
     const commonStart = dateSeries
       .map(dates => dates.reduce((a, b) => a < b ? a : b))
       .reduce((a, b) => a > b ? a : b)
-    const startDate = period === 'max' && !fetchRange ? commonStart : earliestDate
-    return [startDate, allDates.reduce((a, b) => a > b ? a : b)]
+    const latestDate = allDates.reduce((a, b) => a > b ? a : b)
+    // A fund whose series has a single observation (transient Yahoo failure,
+    // or a fund that listed today) makes the common window zero-width, which
+    // collapses the date axis — fall back to full history in that case.
+    const useCommonStart = period === 'max' && !fetchRange && commonStart < latestDate
+    return [useCommonStart ? commonStart : earliestDate, latestDate]
   }, [data, period, fetchRange])
 
   const rangeStart = returnXRange[0] || dataDateBounds[0] || ''
@@ -272,7 +312,12 @@ export default function ETFComparer() {
     // MAX and ALL both fetch the complete histories. Their chart windows
     // differ below: MAX uses common history, while ALL shows every observation.
     const requestPeriod = period === 'all' ? 'max' : period
-    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${requestPeriod}&mode=${returnMode}&reinvest=${reinvest}&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}${rangeParam}`)
+    // Request the existing all-traces mode so a Vite hot reload remains
+    // compatible with a backend process that has not restarted yet. The UI
+    // selects the visible traces locally, so return-mode toggles stay instant.
+    // Reinvest is fixed here — the blend line is rebuilt client-side from the
+    // per-point dividend ratios, so the slider never triggers a refetch.
+    pf(`/api/etf-screen/data?ticker=${encodeURIComponent(primary)}&period=${requestPeriod}&mode=all4&reinvest=100&extra=${encodeURIComponent(extra.join(','))}&refresh=${refreshNonce}&defer_details=1${rangeParam}`)
       .then(r => r.json())
       .then(d => {
         if (loadSeqRef.current !== loadSeq) return
@@ -287,7 +332,7 @@ export default function ETFComparer() {
       .finally(() => {
         if (loadSeqRef.current === loadSeq) setLoading(false)
       })
-  }, [pf, tickers, period, returnMode, reinvest, refreshNonce, fetchRange])
+  }, [pf, tickers, period, refreshNonce, fetchRange])
 
   useEffect(() => { load() }, [load])
 
@@ -297,18 +342,24 @@ export default function ETFComparer() {
 
   useEffect(() => {
     const symbols = tickers.map(normalize).filter(Boolean)
+    const readySymbols = symbols.filter(sym => data?.series?.[sym])
+    if (!readySymbols.length) return
     // `active` is only flipped off when the inputs below genuinely change
     // (new tickers / manual refresh). It must NOT depend on per-symbol load
     // state — otherwise a fast sibling (e.g. SGOV) completing would cancel a
     // slower in-flight fetch (e.g. CSHI's ~2.6s NEOS scrape) and drop its
     // successful result, leaving "No holdings data available".
     let active = true
-    symbols.forEach(sym => {
+    readySymbols.forEach(sym => {
       if (holdingsLoadedRef.current[sym] === refreshNonce) return
       pf(`/api/security-research/etf/${encodeURIComponent(sym)}?refresh=${refreshNonce}`)
         .then(r => r.json())
         .then(d => {
           if (!active || d.error) return
+          const researchProfile = researchProfileForComparer(d)
+          if (researchProfile) {
+            setResearchProfiles(prev => ({ ...prev, [sym]: researchProfile }))
+          }
           const topHoldings = d.top_holdings || []
           if (topHoldings.length) {
             holdingsLoadedRef.current[sym] = refreshNonce
@@ -320,7 +371,7 @@ export default function ETFComparer() {
         .catch(() => {})
     })
     return () => { active = false }
-  }, [tickers, pf, refreshNonce])
+  }, [tickers, pf, refreshNonce, data])
 
   useEffect(() => {
     const requestedSymbols = tickers.map(normalize).filter(Boolean)
@@ -328,6 +379,10 @@ export default function ETFComparer() {
       setAverageData(null)
       return
     }
+    // Keep Yahoo traffic for the visible comparison ahead of the lower-page
+    // average-return work. This also avoids replacing the old chart with an
+    // empty one while a newly added ticker is still loading.
+    if (requestedSymbols.some(sym => !data?.series?.[sym])) return
 
     let cancelled = false
     setAverageData(null)
@@ -352,7 +407,28 @@ export default function ETFComparer() {
       })
 
     return () => { cancelled = true }
-  }, [pf, tickers, refreshNonce])
+  }, [pf, tickers, refreshNonce, data])
+
+  const addTickerSymbols = useCallback((nextSymbols) => {
+    const normalized = uniqueTickers(nextSymbols)
+    if (!normalized.length) return
+    setTickers(prev => uniqueTickers([...prev, ...normalized]))
+    setTimeout(() => inputRef.current?.focus(), 0)
+  }, [])
+
+  // Preload tickers from ?tickers=A,B in the URL (e.g. the "Compare" link on the
+  // Option-Income ETF Evaluator). Re-consumed only when the query changes so it
+  // never fights the user's manual add/remove.
+  const consumedTickerQueryRef = useRef(null)
+  useEffect(() => {
+    const search = location.search || ''
+    if (search === consumedTickerQueryRef.current) return
+    consumedTickerQueryRef.current = search
+    const raw = new URLSearchParams(search).get('tickers')
+    if (!raw) return
+    const symbols = raw.split(/[\s,]+/).map(normalize).filter(Boolean)
+    if (symbols.length) addTickerSymbols(symbols)
+  }, [location.search, addTickerSymbols])
 
   const addTickers = () => {
     const symbols = input.split(/[\s,]+/).map(normalize).filter(Boolean)
@@ -360,9 +436,8 @@ export default function ETFComparer() {
       inputRef.current?.focus()
       return
     }
-    setTickers(prev => [...new Set([...prev, ...symbols])])
+    addTickerSymbols(symbols)
     setInput('')
-    setTimeout(() => inputRef.current?.focus(), 0)
   }
 
   const removeTicker = (sym) => {
@@ -385,7 +460,9 @@ export default function ETFComparer() {
     setDistributionSymbol(prev => symbols.includes(prev) ? prev : symbols[0])
   }, [symbols])
 
-  const reinvestDisabled = !['all3', 'all4'].includes(returnMode)
+  // Price-only style modes ignore reinvestment; every mode that draws a
+  // Total Return line honors the slider via the bundled blend trace.
+  const reinvestDisabled = ['price', 'pricediv'].includes(returnMode)
   const refreshComparison = useCallback(() => {
     if (!symbols.length) return
     const currentReinvest = reinvestRef.current
@@ -400,7 +477,7 @@ export default function ETFComparer() {
   }, [symbols])
 
   const chart = useMemo(() => {
-    if (!data?.series) return { data: [], layout: {} }
+    if (!data?.series) return { data: [], layout: {}, logScaleActive: false }
     const traces = []
     const annotations = []
     const labelCandidates = []
@@ -415,6 +492,19 @@ export default function ETFComparer() {
     // dates or slider) so the chart visually aligns with the date set.
     const [visibleStart, visibleEnd] = visibleDateRange(data, effectiveReturnRange, true)
     const titleWindow = activeReturnRange || normalizeReturnRange(fetchRange)
+    // The blend line is rebuilt locally from the live slider value, so the
+    // chart tracks the Reinvest % instantly without another data fetch.
+    const effectiveReinvest = Number(reinvest)
+    const autoLogScale = shouldUseComparerLogScale(
+      data.series,
+      symbols,
+      returnMode,
+      visibleStart,
+      visibleEnd,
+      effectiveReinvest,
+    )
+    const logScaleActive = returnScalePreference === 'log'
+      || (returnScalePreference === 'auto' && autoLogScale)
 
     // When a symbol is highlighted, draw it last so its line sits on top of
     // the dimmed ones instead of being covered by them.
@@ -425,14 +515,29 @@ export default function ETFComparer() {
       const idx = symbols.indexOf(sym)
       const dates = data.series[sym]?.dates || []
       const traceMap = data.series[sym]?.traces || {}
-      Object.entries(traceMap).forEach(([key, values]) => {
+      const divRatio = data.series[sym]?.div_ratio
+      selectComparerTraces(traceMap, returnMode, effectiveReinvest).forEach(([key, rawValues]) => {
         const isDimmed = highlightedSymbol && highlightedSymbol !== sym
-        const color = isDimmed ? DIMMED_COLOR : COLORS[idx % COLORS.length]
-        const style = TRACE_STYLES[key] || TRACE_STYLES.total
+        // Rebuild the blend line locally for the live slider % (exact, not an
+        // approximation) so dragging Reinvest never refetches the chart.
+        const values = key === 'blend'
+          ? (computeBlendTrace(traceMap.price, divRatio, effectiveReinvest / 100) || rawValues)
+          : rawValues
+        // In Total Return / Both, a partial reinvest shows the blend as the
+        // headline line — render it solid like full DRIP (no dashes) and only
+        // tint the color so it still reads as this fund's line.
+        const blendAsTotal = key === 'blend' && ['total', 'both'].includes(returnMode)
+        const baseColor = isDimmed ? DIMMED_COLOR : COLORS[idx % COLORS.length]
+        const color = blendAsTotal && !isDimmed
+          ? shiftColorForReinvest(baseColor, effectiveReinvest)
+          : baseColor
+        const style = blendAsTotal ? TRACE_STYLES.total : (TRACE_STYLES[key] || TRACE_STYLES.total)
         const baseIdx = firstVisibleIndex(dates, visibleStart, visibleEnd)
         const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
         const base = Number(baseIdx >= 0 ? values?.[baseIdx] : values?.[0])
-        const y = base ? values.map(v => returnPctMode ? (v / base - 1) * 100 : v / base * 100) : values
+        const normalized = base ? values.map(v => v / base * 100) : values
+        const returnValues = normalized.map(v => Number(v) - 100)
+        const y = logScaleActive ? normalized : (returnPctMode ? returnValues : normalized)
         dates.forEach((date, i) => {
           const value = Number(y[i])
           if (!Number.isFinite(value)) return
@@ -441,7 +546,7 @@ export default function ETFComparer() {
             visibleYValues.push(value)
           }
         })
-        const label = key === 'blend' ? `${reinvest}%` : style.label
+        const label = key === 'blend' ? `${effectiveReinvest}% Reinvest` : style.label
         const name = label ? `${sym} (${label})` : sym
         traces.push({
           x: dates,
@@ -449,17 +554,21 @@ export default function ETFComparer() {
           type: 'scatter',
           mode: 'lines',
           name,
+          customdata: returnValues,
           line: { color, width: style.width, dash: style.dash },
-          hovertemplate: returnPctMode
-            ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:.2f}%<extra></extra>`
+          hovertemplate: logScaleActive && returnPctMode
+            ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{customdata:+,.2f}%<br>Growth of $100: %{y:,.2f}<extra></extra>`
+            : returnPctMode
+              ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:.2f}%<extra></extra>`
             : `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:.2f}<extra></extra>`,
         })
         if (showReturnLabels && labelIdx >= 0) {
           const last = y[labelIdx]
+          const lastReturn = returnValues[labelIdx]
           if (Number.isFinite(Number(last))) {
             labelCandidates.push({
               y: Number(last),
-              text: returnPctMode ? pct(last) : number(last),
+              text: returnPctMode ? pct(lastReturn) : number(last),
               color,
             })
           }
@@ -467,17 +576,21 @@ export default function ETFComparer() {
       })
     })
     if (showReturnLabels && labelCandidates.length) {
-      const axisBase = returnPctMode ? 0 : 100
-      const yMin = Math.min(axisBase, ...visibleYValues, ...labelCandidates.map(label => label.y))
-      const yMax = Math.max(axisBase, ...visibleYValues, ...labelCandidates.map(label => label.y))
-      const ySpan = Math.max(1, yMax - yMin)
-      const minLabelGap = Math.max(ySpan * 0.04, returnPctMode ? 0.45 : 1.5)
-      const sortedLabels = [...labelCandidates].sort((a, b) => a.y - b.y)
+      const axisBase = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
+      const scaleY = value => logScaleActive ? Math.log10(Math.max(Number(value), Number.MIN_VALUE)) : Number(value)
+      const unscaleY = value => logScaleActive ? 10 ** value : value
+      const yMin = Math.min(scaleY(axisBase), ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
+      const yMax = Math.max(scaleY(axisBase), ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
+      const ySpan = Math.max(logScaleActive ? 0.01 : 1, yMax - yMin)
+      const minLabelGap = Math.max(ySpan * 0.04, logScaleActive ? 0.035 : (returnPctMode ? 0.45 : 1.5))
+      const sortedLabels = [...labelCandidates]
+        .map(label => ({ ...label, scaledY: scaleY(label.y) }))
+        .sort((a, b) => a.scaledY - b.scaledY)
 
       sortedLabels.forEach((label, index) => {
         label.displayY = index === 0
-          ? label.y
-          : Math.max(label.y, sortedLabels[index - 1].displayY + minLabelGap)
+          ? label.scaledY
+          : Math.max(label.scaledY, sortedLabels[index - 1].displayY + minLabelGap)
       })
 
       const overflow = sortedLabels[sortedLabels.length - 1].displayY - yMax
@@ -494,7 +607,7 @@ export default function ETFComparer() {
         annotations.push({
           x: 1,
           xref: 'paper',
-          y: label.displayY,
+          y: unscaleY(label.displayY),
           text: label.text,
           showarrow: false,
           xanchor: 'left',
@@ -503,9 +616,10 @@ export default function ETFComparer() {
         })
       })
     }
+    const baselineY = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
     traces.push({
       x: [minDate, maxDate],
-      y: [returnPctMode ? 0 : 100, returnPctMode ? 0 : 100],
+      y: [baselineY, baselineY],
       type: 'scatter',
       mode: 'lines',
       name: 'Baseline',
@@ -518,16 +632,25 @@ export default function ETFComparer() {
     // stays scaled to the full series and looks misaligned after zooming.
     let yAxisRange = null
     if (visibleYValues.length) {
-      const axisBase = returnPctMode ? 0 : 100
+      const axisBase = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
       const labelYs = labelCandidates.map(l => l.y)
       const yLo = Math.min(axisBase, ...visibleYValues, ...labelYs)
       const yHi = Math.max(axisBase, ...visibleYValues, ...labelYs)
-      const pad = Math.max((yHi - yLo) * 0.08, 1)
-      yAxisRange = [yLo - pad, yHi + pad]
+      if (logScaleActive) {
+        const logLo = Math.log10(Math.max(yLo, Number.MIN_VALUE))
+        const logHi = Math.log10(Math.max(yHi, Number.MIN_VALUE))
+        const pad = Math.max((logHi - logLo) * 0.08, 0.04)
+        yAxisRange = [logLo - pad, logHi + pad]
+      } else {
+        const pad = Math.max((yHi - yLo) * 0.08, 1)
+        yAxisRange = [yLo - pad, yHi + pad]
+      }
     }
-    const titleText = titleWindow ? `Total Return — ${titleWindow[0]} → ${titleWindow[1]}` : 'Total Return (%)'
+    const baseTitle = titleWindow ? `Total Return — ${titleWindow[0]} → ${titleWindow[1]}` : 'Total Return (%)'
+    const titleText = `${baseTitle}${logScaleActive ? ' — Log Scale' : ''}`
     return {
       data: traces,
+      logScaleActive,
       layout: {
         template: 'plotly_dark',
         paper_bgcolor: '#1e1e2f',
@@ -539,8 +662,12 @@ export default function ETFComparer() {
         hovermode: returnHoverMode,
         legend: { orientation: 'h', x: 0, y: 1.08 },
         yaxis: {
-          title: returnPctMode ? 'Total Return (%)' : 'Normalized Return (100 = start)',
-          ticksuffix: returnPctMode ? '%' : '',
+          type: logScaleActive ? 'log' : 'linear',
+          title: logScaleActive
+            ? 'Growth of $100 (log scale)'
+            : (returnPctMode ? 'Total Return (%)' : 'Normalized Return (100 = start)'),
+          ticksuffix: !logScaleActive && returnPctMode ? '%' : '',
+          tickformat: logScaleActive ? ',.0f' : ',.2f',
           gridcolor: '#333',
           zerolinecolor: '#555',
           showspikes: true,
@@ -558,10 +685,17 @@ export default function ETFComparer() {
         annotations,
       },
     }
-  }, [data, symbols, reinvest, returnPctMode, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange, highlightedSymbol])
+  }, [data, symbols, reinvest, returnMode, returnPctMode, returnScalePreference, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange, highlightedSymbol])
+
+  const profiles = useMemo(() => {
+    const comparisonProfiles = data?.profiles || {}
+    return Object.fromEntries(symbols.map(sym => [
+      sym,
+      { ...(comparisonProfiles[sym] || {}), ...(researchProfiles[sym] || {}) },
+    ]))
+  }, [data, researchProfiles, symbols])
 
   const rows = useMemo(() => {
-    const profiles = data?.profiles || {}
     const stats = data?.stats || {}
     return symbols.map(sym => {
       const rtn1y = profiles[sym]?.return_1y ?? stats[sym]?.total_ret
@@ -583,7 +717,7 @@ export default function ETFComparer() {
         dividend_yield: bestYield,
       }
     })
-  }, [data, symbols])
+  }, [data, profiles, symbols])
 
   const activeColumns = COLUMNS.filter(col => col.locked || visibleColumns.includes(col.key))
   const filteredColumns = COLUMNS.filter(col => !search || col.label.toLowerCase().includes(search.toLowerCase()))
@@ -599,7 +733,7 @@ export default function ETFComparer() {
     return value
   }
 
-  const distributionProfile = data?.profiles?.[distributionSymbol] || {}
+  const distributionProfile = profiles[distributionSymbol] || {}
 
   const averageChart = useMemo(() => {
     const periods = averageData?.periods || []
@@ -653,13 +787,11 @@ export default function ETFComparer() {
     [averageData, symbols],
   )
   const aumBySymbol = useMemo(() => {
-    const profiles = data?.profiles || {}
     return Object.fromEntries(symbols.map(sym => [sym, positiveNumber(profiles[sym]?.assets)]))
-  }, [data, symbols])
+  }, [profiles, symbols])
   const approxYieldBySymbol = useMemo(() => {
-    const profiles = data?.profiles || {}
     return Object.fromEntries(symbols.map(sym => [sym, approxYieldFromCurrentDistributions(profiles[sym])]))
-  }, [data, symbols])
+  }, [profiles, symbols])
 
   const downloadAverageReturns = useCallback(() => {
     const exportSymbols = averageSymbols
@@ -759,6 +891,13 @@ export default function ETFComparer() {
         </div>
       </div>
 
+      <ComparerTickerLibrary
+        symbols={symbols}
+        storageKey="etfcomparer-saved-tickers"
+        securityLabel="ETFs"
+        onAddSymbols={addTickerSymbols}
+      />
+
       {error && <div className="etf-error">{error}</div>}
       {loading && <div className="etfc-loading">Loading ETF comparison...</div>}
 
@@ -777,6 +916,11 @@ export default function ETFComparer() {
           <span>Chart</span>
           <button type="button" className="btn btn-sm" onClick={refreshComparison} disabled={!symbols.length || loading}>{loading ? 'Refreshing...' : 'Refresh'}</button>
           <button className={`btn btn-sm${returnPctMode ? ' btn-active' : ''}`} onClick={() => setReturnPctMode(v => !v)}>Return %</button>
+          <button
+            className={`btn btn-sm${chart.logScaleActive ? ' btn-active' : ''}`}
+            onClick={() => setReturnScalePreference(chart.logScaleActive ? 'linear' : 'log')}
+            title={returnScalePreference === 'auto' && chart.logScaleActive ? 'Automatically enabled because the visible return range is extreme' : 'Use a logarithmic growth scale'}
+          >Log Scale{chart.logScaleActive && returnScalePreference === 'auto' ? ' (Auto)' : ''}</button>
           <button className={`btn btn-sm${showReturnLabels ? ' btn-active' : ''}`} onClick={() => setShowReturnLabels(v => !v)}>End Labels</button>
           <button className={`btn btn-sm${returnHoverMode === 'x unified' ? ' btn-active' : ''}`} onClick={() => setReturnHoverMode(m => m === 'x unified' ? 'closest' : 'x unified')}>Unified Hover</button>
           <button className={`btn btn-sm${showRangeSlider ? ' btn-active' : ''}`} onClick={() => { setShowRangeSlider(v => !v); resetReturnRange() }}>Range Slider</button>

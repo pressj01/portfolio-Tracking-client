@@ -139,7 +139,43 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
 
     if not frames:
         return pd.DataFrame()
-    return pd.concat(frames, axis=1)
+    combined = pd.concat(frames, axis=1)
+    # Yahoo can occasionally repeat a date or ticker column in one of the
+    # chunks.  A repeated label makes scalar lookups such as
+    # frame.loc[first_valid_date, ticker] return a Series instead of a number.
+    # Keep one observation for each axis before handing the frame to callers.
+    if combined.index.has_duplicates:
+        combined = combined.loc[~combined.index.duplicated(keep="last")]
+    if combined.columns.has_duplicates:
+        combined = combined.loc[:, ~combined.columns.duplicated(keep="first")]
+    return combined
+
+
+def _normalize_prices_to_100(close):
+    """Return price history normalized to 100 at each ticker's first value."""
+    if close is None or close.empty:
+        return pd.DataFrame()
+
+    norm = close.copy()
+    # Be defensive for direct/small yfinance downloads too; those bypass the
+    # multi-chunk cleanup above and may still contain duplicate labels.
+    if norm.index.has_duplicates:
+        norm = norm.loc[~norm.index.duplicated(keep="last")]
+    if norm.columns.has_duplicates:
+        norm = norm.loc[:, ~norm.columns.duplicated(keep="first")]
+
+    for col in norm.columns:
+        values = pd.to_numeric(norm[col], errors="coerce")
+        valid = values.dropna()
+        if valid.empty:
+            norm[col] = float("nan")
+            continue
+        base = float(valid.iloc[0])
+        if not math.isfinite(base) or base == 0:
+            norm[col] = float("nan")
+            continue
+        norm[col] = (values / base) * 100
+    return norm
 
 
 app = Flask(__name__)
@@ -176,12 +212,20 @@ _REINVEST_HISTORY_TTL_SEC = 6 * 60 * 60
 # button bumps a nonce in the query string, which busts the response cache.
 _ETF_SCREEN_DATA_CACHE = {}
 _ETF_SCREEN_DATA_TTL_SEC = 10 * 60
+_ETF_SCREEN_MARKET_CACHE = {}
+_ETF_SCREEN_MARKET_TTL_SEC = 10 * 60
 _ETF_SCREEN_BENCH_CACHE = {}
 _ETF_SCREEN_BENCH_TTL_SEC = 10 * 60
 _YF_INFO_CACHE = {}
 _YF_INFO_TTL_SEC = 30 * 60
 _XFUNDS_RESEARCH_CACHE = {}
 _XFUNDS_RESEARCH_TTL_SEC = 15 * 60
+_YF_DIVIDENDS_CACHE = {}
+_YF_DIVIDENDS_TTL_SEC = 30 * 60
+_OFFICIAL_DISTRIBUTION_CACHE = {}
+_OFFICIAL_DISTRIBUTION_TTL_SEC = 30 * 60
+_RESEARCH_RETURN_SERIES_CACHE = {}
+_RESEARCH_RETURN_SERIES_TTL_SEC = 30 * 60
 
 
 def _cached_yf_info(yf_ticker_obj, symbol):
@@ -196,6 +240,21 @@ def _cached_yf_info(yf_ticker_obj, symbol):
     if info:
         _cache_set(_YF_INFO_CACHE, symbol, info)
     return info
+
+
+def _cached_yf_dividends(yf_ticker_obj, symbol):
+    """Return a ticker's full dividend history without repeating slow calls."""
+    cached = _cache_get(_YF_DIVIDENDS_CACHE, symbol, _YF_DIVIDENDS_TTL_SEC)
+    if cached is not None:
+        return cached
+    try:
+        dividends = yf_ticker_obj.dividends
+    except Exception:
+        dividends = pd.Series(dtype=float)
+    if dividends is None:
+        dividends = pd.Series(dtype=float)
+    _cache_set(_YF_DIVIDENDS_CACHE, symbol, dividends)
+    return dividends
 
 
 def _cache_value(value):
@@ -1264,10 +1323,13 @@ def _realized_gains_by_ticker(conn, profile_ids):
     total still includes gains/losses realized on the old, closed-out lot —
     the same "old lot bleeds into new lot" issue already fixed above for
     dividend payments and invested cost. Recompute from the per-transaction
-    realized_gain ledger instead (already excludes transfers — see
-    _is_transfer_txn), joined to the live holding row and scoped to
+    realized_gain ledger instead, joined to the live holding row and scoped to
     transaction_date >= purchase_date, so a freshly reopened position doesn't
-    inherit a prior lot's trading history. It's also, incidentally, the fix
+    inherit a prior lot's trading history. Transfer rows are excluded here as
+    well as when realized gains are refreshed: older imports can still carry a
+    stale realized_gain on a tagged transfer-out, and counting that value would
+    make a zero-dividend holding's total return differ from its price return.
+    It's also, incidentally, the fix
     for the 'Owner' aggregate row's own realized_gains column always reading
     0 (never synced from its real sub-accounts) — this sums the sub-accounts
     directly instead of trusting that column.
@@ -1282,7 +1344,9 @@ def _realized_gains_by_ticker(conn, profile_ids):
             JOIN all_account_info a
               ON a.ticker = t.ticker AND a.profile_id = t.profile_id
             WHERE t.profile_id IN ({placeholders})
+              AND UPPER(COALESCE(t.transaction_type, '')) = 'SELL'
               AND t.realized_gain IS NOT NULL
+              AND INSTR(LOWER(COALESCE(t.notes, '')), '[transfer') = 0
               AND (a.purchase_date IS NULL OR t.transaction_date >= a.purchase_date)
             GROUP BY t.ticker""",
         ids,
@@ -6179,6 +6243,19 @@ def _infer_dividend_frequency_from_dates(dates):
         return None
 
 
+def _resolve_refresh_dividend_frequency(ticker, snapshot_frequency, weekly_tickers):
+    """Use fresh distribution cadence unless a curated weekly override applies.
+
+    A stored frequency is passed to provider fallbacks only when fresh data is
+    unavailable. It must not overrule a newer cadence inferred from dividend
+    history: doing so can annualize a monthly distribution 52 times per year.
+    """
+    if (ticker or "").strip().upper() in weekly_tickers:
+        return "W"
+    frequency = (snapshot_frequency or "").strip().upper()
+    return frequency or None
+
+
 def _fetch_yahoo_dividend_history_for_tickers(tickers):
     """Return ticker -> per-share dividend Series for the last year."""
     import yfinance as yf
@@ -6930,11 +7007,8 @@ def _family_dividend_lag_days(ticker=None, description=None, freq=None):
     if "kurv" in text:
         return 1
     if freq == "M" and "neos" in text:
-        one_day_neos = {"kqqq", "kgld"}
         two_day_neos = {"qqqi"}
         ticker_norm = (ticker or "").strip().lower()
-        if ticker_norm in one_day_neos:
-            return 1
         if ticker_norm in two_day_neos:
             return 2
     return None
@@ -7143,7 +7217,7 @@ def _fetch_neos_distribution_snapshot(ticker):
         return None
 
     entries = []
-    future_pay_map = {}
+    scheduled = []
     for declared, ex_date, _record, pay_date, amount in rows:
         ex_ts = pd.to_datetime(ex_date, format="%m/%d/%Y", errors="coerce")
         pay_ts = pd.to_datetime(pay_date, format="%m/%d/%Y", errors="coerce")
@@ -7151,11 +7225,10 @@ def _fetch_neos_distribution_snapshot(ticker):
             continue
         ex_ts = ex_ts.normalize()
         pay_ts = pay_ts.normalize() if not pd.isna(pay_ts) else None
+        scheduled.append((ex_ts, pay_ts))
         amount = (amount or "").strip()
         if amount:
             entries.append((ex_ts, float(amount), pay_ts))
-        elif pay_ts is not None:
-            future_pay_map[ex_ts] = pay_ts
 
     if not entries:
         return None
@@ -7166,15 +7239,29 @@ def _fetch_neos_distribution_snapshot(ticker):
     history = history.sort_index()
 
     pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
-    latest_ex = history.index[-1]
-    latest_pay = future_pay_map.get(latest_ex) or pay_map.get(latest_ex)
+    latest_actual_ex = history.index[-1]
+    chosen_ex = latest_actual_ex
+    chosen_pay = pay_map.get(latest_actual_ex)
+
+    # NEOS publishes forward-looking ex/pay rows before the distribution amount
+    # is announced. Surface the next scheduled ex/pay date while keeping the
+    # most recent actual amount (mirrors the InfraCap handling).
+    today = pd.Timestamp.now().normalize()
+    upcoming_rows = [
+        (ex_ts, pay_ts)
+        for ex_ts, pay_ts in scheduled
+        if ex_ts is not None and ex_ts >= today
+    ]
+    if upcoming_rows:
+        upcoming_rows.sort(key=lambda item: item[0])
+        chosen_ex, chosen_pay = upcoming_rows[0]
 
     return {
         "known": True,
         "has_dividend": True,
         "div": float(history.iloc[-1]),
-        "ex_div_date": latest_ex.strftime("%m/%d/%y"),
-        "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
+        "ex_div_date": chosen_ex.strftime("%m/%d/%y"),
+        "div_pay_date": chosen_pay.strftime("%m/%d/%y") if chosen_pay is not None else None,
         "freq": page_freq or _infer_dividend_frequency_from_history(history),
         "history": history,
     }
@@ -7253,61 +7340,106 @@ def _fetch_tappalpha_distribution_snapshot(ticker):
     }
 
 
+_XFUNDS_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def _xfunds_headers(accept="text/html,*/*"):
+    return {
+        "User-Agent": _XFUNDS_BROWSER_UA,
+        "Accept": accept,
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+
 def _fetch_xfunds_distribution_snapshot(ticker):
-    """Fetch recent official distribution history from XFunds (Nicholas Wealth) when available.
+    """Fetch official X Funds distributions, with support for both site formats.
 
-    XFunds publishes a static per-ticker CSV at a predictable path:
-        https://nicholasx.com/wp-content/uploads/data/TidalFG_Distribution_<TICKER>.csv
-
-    Columns: ``EX Date, Record Date, Payable Date, Fund Total`` (ISO dates).
-    Frequency varies per fund (BLOX/GIAX are weekly, FIAX is monthly) so we
-    infer it from the recent cadence rather than hardcoding a single value.
+    Older pages publish a static ``TidalFG_Distribution_<TICKER>.csv`` file.
+    Newer pages, including DRMY, publish a nonce-protected download URL in the
+    page. Both official paths are attempted before the caller falls back to
+    Yahoo Finance.
     """
+    import csv
+    import html as html_lib
     import requests
+    from io import StringIO
 
     ticker = (ticker or "").strip().upper()
     if not ticker:
         return None
 
-    url = (
+    page_url = f"https://nicholasx.com/{ticker}/"
+    static_url = (
         "https://nicholasx.com/wp-content/uploads/data/"
         f"TidalFG_Distribution_{ticker}.csv"
     )
+    session = requests.Session()
+    body = ""
     try:
-        resp = requests.get(
-            url,
+        resp = session.get(
+            static_url,
             timeout=10,
-            headers={
-                # Cloudflare blocks generic UAs on nicholasx.com — use a
-                # realistic browser UA to get through the WAF.
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/csv,*/*",
-            },
+            headers=_xfunds_headers("text/csv,*/*"),
         )
         resp.raise_for_status()
+        body = (resp.text or "").strip()
+    except Exception:
+        body = ""
+
+    if not body or "ex date" not in body.splitlines()[0].lower():
+        try:
+            page_resp = session.get(page_url, timeout=10, headers=_xfunds_headers())
+            page_resp.raise_for_status()
+            page_html = page_resp.content.decode("utf-8", errors="replace")
+            match = re.search(r'distributionCsvUrl\s*=\s*"([^"]+)"', page_html, flags=re.I)
+            if not match:
+                return None
+            download_url = html_lib.unescape(match.group(1))
+            download_url = download_url.replace("\\/", "/").replace("\\u0026", "&")
+            resp = session.get(
+                download_url,
+                timeout=10,
+                headers={**_xfunds_headers("text/csv,*/*"), "Referer": page_url},
+            )
+            resp.raise_for_status()
+            body = (resp.text or "").strip()
+        except Exception:
+            return None
+
+    if not body:
+        return None
+
+    try:
+        reader = csv.DictReader(StringIO(body))
     except Exception:
         return None
 
-    body = (resp.text or "").strip()
-    if not body or not body.lower().startswith("ex date"):
-        return None
+    def _csv_value(row, *keys):
+        normalized = {
+            re.sub(r"[^a-z0-9]", "", str(key or "").lower()): value
+            for key, value in row.items()
+        }
+        for key in keys:
+            value = normalized.get(key)
+            if value not in (None, ""):
+                return str(value).strip()
+        return ""
 
     entries = []
-    for line in body.splitlines()[1:]:
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) < 4:
-            continue
-        ex_date, _record_date, pay_date, amount = parts[0], parts[1], parts[2], parts[3]
+    for row in reader:
+        ex_date = _csv_value(row, "exdate", "exdividenddate")
+        pay_date = _csv_value(row, "payabledate", "paydate", "paymentdate")
+        amount = _csv_value(row, "fundtotal", "distributionamount", "distribution", "amount")
         ex_ts = pd.to_datetime(ex_date, errors="coerce")
         pay_ts = pd.to_datetime(pay_date, errors="coerce")
         if pd.isna(ex_ts):
             continue
         try:
-            amt = float(amount)
+            amt = float(re.sub(r"[^0-9.\-]", "", amount))
         except (TypeError, ValueError):
             continue
         ex_ts = ex_ts.normalize()
@@ -7322,16 +7454,12 @@ def _fetch_xfunds_distribution_snapshot(ticker):
         [item[1] for item in entries],
         index=pd.DatetimeIndex([item[0] for item in entries]),
     )
-    history = history[~history.index.duplicated(keep="last")]
-    history = history.sort_index()
+    history = history[~history.index.duplicated(keep="last")].sort_index()
 
     pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
     latest_ex = history.index[-1]
     latest_pay = pay_map.get(latest_ex)
 
-    # Infer frequency from the cadence of distributions over the last year.
-    # BLOX and GIAX are weekly, FIAX is monthly; the CSV doesn't include an
-    # explicit frequency label so we derive it from median gap in days.
     one_year_ago = pd.Timestamp.now().normalize() - pd.Timedelta(days=365)
     recent = history[history.index >= one_year_ago]
     if len(recent) >= 2:
@@ -7359,8 +7487,8 @@ def _fetch_xfunds_distribution_snapshot(ticker):
         "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
         "freq": freq,
         "history": history,
-        "source": "XFUNDS",
-        "source_url": url,
+        "source": "X Funds",
+        "source_url": page_url,
     }
 
 
@@ -8516,10 +8644,24 @@ def _fetch_official_distribution_snapshot(ticker, description=None):
     entry = _match_fund_family(ticker, description)
     if entry is None:
         return None
+    cache_key = (ticker, entry["fetcher"])
+    cached = _cache_get(
+        _OFFICIAL_DISTRIBUTION_CACHE,
+        cache_key,
+        _OFFICIAL_DISTRIBUTION_TTL_SEC,
+    )
+    if cached is False:
+        return None
+    if cached is not None:
+        return cached
     fetcher = globals().get(entry["fetcher"])
     if fetcher is None:
         return None
-    return fetcher(ticker)
+    result = fetcher(ticker)
+    # Cache misses too. Unsupported/new tickers otherwise repeatedly wait on
+    # the same issuer page every time the return mode changes.
+    _cache_set(_OFFICIAL_DISTRIBUTION_CACHE, cache_key, result if result is not None else False)
+    return result
 
 
 def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
@@ -9123,8 +9265,10 @@ def refresh_market_data():
     except Exception:
         pass
 
-    # Resolve effective frequency per ticker (once, shared across profiles)
-    freq_rank = {'W': 6, '52': 6, 'M': 5, 'Q': 4, 'SA': 3, 'A': 2, None: 0}
+    # Resolve effective frequency per ticker (once, shared across profiles).
+    # Fresh provider/issuer history takes precedence over the database's
+    # fallback frequency; otherwise a stale weekly marker can make a monthly
+    # payout appear to yield more than four times its real annual rate.
     effective_freq = {}
     for t in tickers:
         if t in div_history and div_map.get(t) is not None:
@@ -9211,15 +9355,11 @@ def refresh_market_data():
 
         snapshot = div_snapshot_map[t]
         if snapshot.get("has_dividend"):
-            nf = snapshot.get("freq")
-            if t in weekly_set:
-                nf = 'W'
-            else:
-                db_rank = freq_rank.get(db_freq_map.get(t), 0)
-                new_rank = freq_rank.get(nf, 0)
-                if new_rank < db_rank:
-                    nf = db_freq_map.get(t)
-            effective_freq[t] = nf
+            effective_freq[t] = _resolve_refresh_dividend_frequency(
+                t,
+                snapshot.get("freq"),
+                weekly_set,
+            )
         else:
             effective_freq[t] = None
 
@@ -13837,6 +13977,176 @@ def portfolio_coverage():
     return jsonify(_build_nav_coverage_payload(ticker_info, coverage_cache_key))
 
 
+def _closure_risk_money(v):
+    """Compact money label for closure-risk reason strings ($18.2M, $1.2B, $63k)."""
+    if v is None:
+        return "n/a"
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "n/a"
+    if v >= 1e9:
+        return f"${v / 1e9:.1f}B"
+    if v >= 1e6:
+        return f"${v / 1e6:.1f}M"
+    if v >= 1e3:
+        return f"${v / 1e3:.0f}k"
+    return f"${v:.0f}"
+
+
+def _closure_risk_reason(tier, aum, er, est_revenue, fund_age_years, softened):
+    """Plain-English tooltip explaining an ETF's closure-risk tier."""
+    parts = [f"{_closure_risk_money(aum)} AUM"]
+    if er is not None:
+        parts.append(f"{er * 100:.2f}% ER")
+    if est_revenue is not None:
+        parts.append(f"~{_closure_risk_money(est_revenue)}/yr est. fee revenue")
+    facts = " · ".join(parts)
+    tail = {
+        "high": "Well below the ~$500k a fund typically needs to cover its running costs — elevated chance the issuer closes it.",
+        "elevated": "Below the fee revenue most funds need to stay profitable — worth watching for a closure notice.",
+        "watch": "On the small side; comfortably profitable territory starts around $50M / ~$500k in annual fees.",
+        "ok": "Comfortably above the size at which funds are usually shut down.",
+    }.get(tier, "")
+    age = ""
+    if fund_age_years is not None:
+        if fund_age_years < 1:
+            months = max(1, int(round(fund_age_years * 12)))
+            age = f" Fund launched ~{months} month{'s' if months != 1 else ''} ago"
+        else:
+            age = f" Fund is ~{fund_age_years:.1f} years old"
+        if softened:
+            age += " — a small size is normal this early, so the rating is capped at Watch."
+        else:
+            age += "."
+    return f"{facts} — {tail}{age}".strip()
+
+
+def _assess_etf_closure_risk(info):
+    """Estimate an ETF's closure risk from AUM, expense ratio, and fund age.
+
+    ETF issuers earn roughly (AUM × expense ratio) per year; a fund becomes a
+    closure candidate when that fee revenue can't cover its running costs
+    (~$250k–$500k/yr for a small fund). Raw AUM alone is misleading — a cheap
+    fund needs far more assets to break even than an expensive one — so we
+    combine an estimated-revenue test with AUM floors, and grant newly launched
+    funds a grace period (they're seeded small on purpose).
+
+    Returns None for anything that is not an ETF (individual stocks don't get
+    liquidated for being small). Otherwise a dict with the tier
+    ('ok' | 'watch' | 'elevated' | 'high' | 'unknown'), the inputs, and a
+    plain-English reason for the dashboard tooltip.
+    """
+    if not isinstance(info, dict):
+        return None
+    quote_type = (info.get("quoteType") or "").upper()
+    if quote_type != "ETF":
+        return None
+
+    aum = info.get("totalAssets") or info.get("totalNetAssets")
+    try:
+        aum = float(aum) if aum is not None else None
+    except (TypeError, ValueError):
+        aum = None
+
+    er = info.get("annualReportExpenseRatio")
+    if er is None:
+        er = info.get("netExpenseRatio")
+    try:
+        er = float(er) if er is not None else None
+    except (TypeError, ValueError):
+        er = None
+    # Yahoo sometimes returns the expense ratio as a percent (0.35) instead of a
+    # fraction (0.0035). Anything above ~5% is certainly a percent-scaled value.
+    if er is not None and er > 0.05:
+        er = er / 100.0
+
+    inception = info.get("fundInceptionDate")
+    fund_age_years = None
+    try:
+        if inception:
+            fund_age_years = max(0.0, (time.time() - float(inception)) / (365.25 * 86400))
+    except (TypeError, ValueError):
+        fund_age_years = None
+    is_new = fund_age_years is not None and fund_age_years < 1.5
+
+    est_revenue = aum * er if (aum is not None and er is not None) else None
+
+    if aum is None:
+        return {
+            "tier": "unknown", "aum": None, "expense_ratio": er,
+            "est_revenue": None, "fund_age_years": fund_age_years,
+            "is_new": is_new, "quote_type": quote_type,
+            "reason": "Fund size (AUM) unavailable from the data provider — closure risk can't be estimated.",
+        }
+
+    # Break-even style thresholds. Estimated annual fee revenue drives the call
+    # when we can compute it; the AUM floors act as a fallback and hard floor.
+    watch_rev, elev_rev, high_rev = 500_000, 350_000, 150_000
+    watch_aum, elev_aum, high_aum = 50_000_000, 25_000_000, 10_000_000
+
+    def _hit(rev_threshold, aum_threshold):
+        rev_hit = est_revenue is not None and est_revenue < rev_threshold
+        return rev_hit or aum < aum_threshold
+
+    if _hit(high_rev, high_aum):
+        tier = "high"
+    elif _hit(elev_rev, elev_aum):
+        tier = "elevated"
+    elif _hit(watch_rev, watch_aum):
+        tier = "watch"
+    else:
+        tier = "ok"
+
+    # New funds are seeded small on purpose — don't sound the alarm on a fund
+    # that simply launched recently. Cap the severity at 'watch'.
+    softened = False
+    if is_new and tier in ("elevated", "high"):
+        tier = "watch"
+        softened = True
+
+    return {
+        "tier": tier, "aum": aum, "expense_ratio": er,
+        "est_revenue": est_revenue, "fund_age_years": fund_age_years,
+        "is_new": is_new, "quote_type": quote_type,
+        "reason": _closure_risk_reason(tier, aum, er, est_revenue, fund_age_years, softened),
+    }
+
+
+def _assess_etf_closure_risk_with_fallback(info, response):
+    """Closure risk that backfills AUM/expense/inception from an official
+    provider profile (e.g. NEOS Net Assets) when the market feed didn't supply
+    them, so a fund with a blank Yahoo AUM can still be rated.
+
+    Only engages for funds the market feed already classifies as an ETF, so a
+    stock or CEF is never coerced into an ETF rating. Otherwise defers to
+    _assess_etf_closure_risk unchanged.
+    """
+    risk = _assess_etf_closure_risk(info)
+    quote_type = (info.get("quoteType") or "").upper() if isinstance(info, dict) else ""
+    total_assets = response.get("total_assets") if isinstance(response, dict) else None
+    # Only step in when Yahoo classified it as an ETF but couldn't size it.
+    if quote_type != "ETF" or not total_assets:
+        return risk
+    if risk is not None and risk.get("tier") != "unknown":
+        return risk
+
+    synthetic = dict(info)
+    synthetic["totalAssets"] = total_assets
+    if response.get("expense_ratio_pct") is not None:
+        # response ER is a percent (0.99); the assessor de-scales values >0.05.
+        synthetic["annualReportExpenseRatio"] = response["expense_ratio_pct"]
+    if not synthetic.get("fundInceptionDate") and response.get("inception_date"):
+        try:
+            synthetic["fundInceptionDate"] = pd.Timestamp(response["inception_date"]).timestamp()
+        except Exception:
+            pass
+    retry = _assess_etf_closure_risk(synthetic)
+    if retry is not None and retry.get("tier") != "unknown":
+        return retry
+    return risk
+
+
 @app.route("/api/portfolio-summary/data", methods=["GET"])
 def portfolio_summary_data():
     """Compute per-ticker grades and portfolio-level grade via yfinance."""
@@ -13878,8 +14188,11 @@ def portfolio_summary_data():
     benchmark_symbols = {"sp500": "SPY", "nasdaq": "QQQ"}
     all_dl = list(set(tickers + list(benchmark_symbols.values())))
 
-    # Detect renamed tickers and include both old and new in download
+    # Detect renamed tickers and include both old and new in download. The same
+    # per-ticker .info fetch also feeds the ETF closure-risk assessment, so it
+    # rides along for free here rather than costing a second network round-trip.
     rename_map = {}
+    ticker_closure_risk = {}
     for t in tickers:
         try:
             _info = yf.Ticker(t).info or {}
@@ -13888,6 +14201,9 @@ def portfolio_summary_data():
                 rename_map[t] = _new
                 if _new not in all_dl:
                     all_dl.append(_new)
+            _closure = _assess_etf_closure_risk(_info)
+            if _closure is not None:
+                ticker_closure_risk[t] = _closure
         except Exception:
             pass
 
@@ -13896,11 +14212,11 @@ def portfolio_summary_data():
         if raw.empty:
             if cached:
                 return jsonify(cached)
-            return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={})
+            return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, ticker_closure_risk=ticker_closure_risk)
     except Exception as e:
         if cached:
             return jsonify(cached)
-        return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, warning=str(e))
+        return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, ticker_closure_risk=ticker_closure_risk, warning=str(e))
 
     if isinstance(raw.columns, pd.MultiIndex):
         close = raw["Close"].dropna(how="all") if "Close" in raw.columns.get_level_values(0) else pd.DataFrame()
@@ -14047,7 +14363,7 @@ def portfolio_summary_data():
     if not portfolio_grade_info and cached:
         portfolio_grade_info = cached.get("portfolio_grade", {}) or {}
 
-    response = {"ticker_grades": ticker_grades, "ticker_risk": ticker_risk, "portfolio_grade": portfolio_grade_info}
+    response = {"ticker_grades": ticker_grades, "ticker_risk": ticker_risk, "portfolio_grade": portfolio_grade_info, "ticker_closure_risk": ticker_closure_risk}
     # Only cache a usable result. Caching an empty grade from a transient/partial
     # yfinance download would pin blank tiles for the full 30-min TTL, so the
     # grades would "stick" blank across account switches and chart refreshes until
@@ -14819,7 +15135,7 @@ def _research_weight_map(value):
     return sorted(rows, key=lambda r: r["weight_pct"], reverse=True)
 
 
-def _research_adjusted_close_series(ticker):
+def _research_adjusted_close_series(ticker, force_refresh=False):
     """Load a split/dividend-adjusted close series for a single ticker."""
     import warnings
     import yfinance as yf
@@ -14830,10 +15146,20 @@ def _research_adjusted_close_series(ticker):
     if not symbol:
         return None, symbol
 
+    if not force_refresh:
+        cached = _cache_get(
+            _RESEARCH_RETURN_SERIES_CACHE,
+            symbol,
+            _RESEARCH_RETURN_SERIES_TTL_SEC,
+        )
+        if cached is not None:
+            return cached
+
     dl_symbol = _yahoo_symbol_for_ticker(symbol)
     description = symbol
     try:
-        info = yf.Ticker(dl_symbol).info or {}
+        yf_ticker = yf.Ticker(dl_symbol)
+        info = _cached_yf_info(yf_ticker, dl_symbol)
         description = info.get("longName") or info.get("shortName") or info.get("displayName") or symbol
         info_symbol = (info.get("symbol") or "").upper()
         if info_symbol and info_symbol != dl_symbol:
@@ -14865,7 +15191,9 @@ def _research_adjusted_close_series(ticker):
         series = pd.Series(series)
     series = series.dropna()
     series.index = pd.to_datetime(series.index)
-    return series, description
+    result = (series, description)
+    _cache_set(_RESEARCH_RETURN_SERIES_CACHE, symbol, result)
+    return result
 
 
 def _research_window_return(series, start_dt, annualize=False):
@@ -15093,8 +15421,8 @@ def _research_return_summary(ticker, benchmark, rows, yield_info=None):
         relation = "slightly lower than" if diff > -2 else "lower than"
 
     return (
-        f"{period_label}, {ticker} returned a total of {t_ret:.2f}%, "
-        f"which is {relation} {benchmark}'s {b_ret:.2f}% return{yield_suffix}."
+        f"{period_label}, {ticker} returned a total of {t_ret:.2f}%{yield_suffix}, "
+        f"which is {relation} {benchmark}'s {b_ret:.2f}% return."
     )
 
 
@@ -15608,6 +15936,115 @@ def _fetch_income_blast_etf_profile(ticker):
     }
 
 
+def _neos_detail_value(html, label):
+    """Value cell for a label row in the neosfunds.com fund-details table."""
+    m = re.search(
+        r">\s*" + re.escape(label) + r"\s*</td>\s*"
+        r"<td class=\"fund-details-table-sizing\"[^>]*>\s*(.*?)\s*</td>",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return None
+    value = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip()
+    return value or None
+
+
+def _neos_stat_value(html, title):
+    """Headline <div class=\"stat\"> value that follows a popover <small> title."""
+    m = re.search(
+        r"title=\"" + re.escape(title) + r"\"[^>]*>.*?</small>\s*"
+        r"<div class=\"stat\">\s*([^<]+?)\s*</div>",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return m.group(1).strip() if m else None
+
+
+def _fetch_neos_etf_profile(ticker):
+    """Official fund profile from neosfunds.com for NEOS funds.
+
+    Returns a partial profile dict; any field the page no longer exposes comes
+    back as None, so the caller keeps the Yahoo value for that field. Returns
+    None entirely when the page can't be fetched or no longer looks like a NEOS
+    fund page (site redesign / soft 404) — the caller then uses Yahoo for
+    everything. This is the "fall back to Yahoo if the HTML changes" guarantee.
+    """
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return None
+
+    url = f"https://neosfunds.com/{ticker.lower()}/"
+    try:
+        resp = requests.get(url, timeout=10, headers={"User-Agent": "PortfolioTrackingClient/1.0"})
+        resp.raise_for_status()
+    except Exception:
+        return None
+
+    # neosfunds.com is UTF-8; decode explicitly so smart quotes in the objective
+    # survive (requests' charset guess otherwise mangles them to U+FFFD).
+    html = resp.content.decode("utf-8", errors="replace")
+
+    # Bail to Yahoo if this no longer looks like a NEOS fund page.
+    if "fund-details-table-sizing" not in html and "NEOS" not in html.upper():
+        return None
+
+    net_assets = _neos_detail_value(html, "Net Assets")
+    expense = (_neos_detail_value(html, "Total Annual Fund Operating Expenses")
+               or _neos_detail_value(html, "Management Fee"))
+    frequency = _neos_detail_value(html, "Distribution Frequency")
+    dist_rate = _neos_stat_value(html, "Distribution Rate")
+    sec_yield = _neos_stat_value(html, "30-Day SEC Yield")
+
+    inception_raw = _neos_detail_value(html, "Fund Inception")
+    inception_iso = None
+    if inception_raw:
+        # The 4-column row can leak the next label, so pull just the date.
+        dm = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", inception_raw)
+        inception_iso = (
+            f"{dm.group(3)}-{int(dm.group(1)):02d}-{int(dm.group(2)):02d}" if dm else inception_raw
+        )
+
+    objective = None
+    mo = re.search(r"Investment Objective:\s*</h3>\s*<p[^>]*>(.*?)</p>", html, flags=re.IGNORECASE | re.DOTALL)
+    if mo:
+        objective = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", mo.group(1))).strip()
+        objective = (objective.replace("“", '"').replace("”", '"')
+                     .replace("‘", "'").replace("’", "'")) or None
+
+    name = None
+    if objective:
+        nm = re.search(r"The\s+(NEOS\b.*?ETF)\b", objective)
+        if nm:
+            name = nm.group(1).strip()
+
+    # If nothing meaningful parsed, treat as a miss so Yahoo stays authoritative.
+    if not any((net_assets, expense, frequency, dist_rate, sec_yield, inception_iso, objective)):
+        return None
+
+    return {
+        "name": name,
+        "fund_type": "ETF",
+        "description": objective,
+        "objective": objective,
+        "issuer": "NEOS Investments",
+        "legal_type": "Exchange Traded Fund",
+        "expense_ratio_pct": _research_expense_pct(expense),
+        "total_assets": _vistashares_money(net_assets),
+        "total_assets_label": "Net Assets",
+        "inception_date": inception_iso,
+        "dividend_frequency": frequency.title() if frequency else None,
+        "estimated_yield_pct": _research_pct(dist_rate),
+        "distribution_rate_pct": _research_pct(dist_rate),
+        "sec_30_day_yield_pct": _research_pct(sec_yield),
+        "target_yield_label": "Distribution Rate",
+        "source_url": url,
+        "data_source": "NEOS Investments",
+    }
+
+
 def _research_has_value(value):
     return value not in (None, "", [])
 
@@ -15630,6 +16067,8 @@ def _fetch_provider_etf_profile(ticker, response):
     is_xfunds = _is_xfunds_fund(ticker, provider_hints)
     if is_xfunds:
         fetchers.append(_fetch_xfunds_etf_profile)
+    if _is_neos_fund(ticker, provider_hints):
+        fetchers.append(_fetch_neos_etf_profile)
     if _is_tuttle_capital_fund(ticker, provider_hints):
         fetchers.append(_fetch_income_blast_etf_profile)
     if "vistashares" in provider_hints.lower():
@@ -15662,39 +16101,48 @@ def security_research(kind, ticker):
     if not ticker:
         return jsonify({"error": "ticker is required"}), 400
 
-    # XFUNDS is authoritative for its own fund facts. Yahoo remains useful for
-    # market history and for any fields the official site does not publish.
-    official_profile = None
+    # X Funds ETFs are issuer-first. Fetch the official profile before touching
+    # Yahoo so a complete Yahoo response can never prevent the provider data
+    # from winning. Yahoo still fills any fields the official site omits, and
+    # remains the full fallback when Nicholas X is unavailable.
+    preferred_official_profile = None
     if kind == "etf" and _is_xfunds_fund(ticker):
         try:
-            official_profile = _fetch_xfunds_etf_profile(ticker)
+            preferred_official_profile = _fetch_xfunds_etf_profile(ticker)
         except Exception:
-            official_profile = None
+            preferred_official_profile = None
 
+    yf_ticker = None
+    info = {}
     try:
         yf_ticker = yf.Ticker(lookup_symbol)
-        info = yf_ticker.info or {}
+        info = _cached_yf_info(yf_ticker, lookup_symbol)
         info_symbol = (info.get("symbol") or "").upper()
         if info_symbol and info_symbol != lookup_symbol:
             lookup_symbol = info_symbol
             yf_ticker = yf.Ticker(lookup_symbol)
-            info = yf_ticker.info or {}
+            info = _cached_yf_info(yf_ticker, lookup_symbol)
     except Exception as exc:
-        if official_profile is None:
+        if not preferred_official_profile:
             return jsonify({"error": f"Could not load {ticker}: {exc}"}), 404
-        # Continue with official XFUNDS facts even when Yahoo is temporarily
+        # Continue with official X Funds facts even when Yahoo is temporarily
         # unavailable. The guarded Yahoo calls below will simply return gaps.
         yf_ticker = yf.Ticker(lookup_symbol)
         info = {}
 
-    name = _research_info_value(info, "longName", "shortName", "displayName") or ticker
+    name = (
+        (preferred_official_profile or {}).get("name")
+        or _research_info_value(info, "longName", "shortName", "displayName")
+        or ticker
+    )
     quote_type = (_research_info_value(info, "quoteType") or "").upper()
     summary = _research_info_value(info, "longBusinessSummary") or ""
 
-    try:
-        dividends = yf_ticker.dividends
-    except Exception:
-        dividends = pd.Series(dtype=float)
+    dividends = (
+        _cached_yf_dividends(yf_ticker, lookup_symbol)
+        if yf_ticker is not None
+        else pd.Series(dtype=float)
+    )
 
     dividend_frequency = _research_dividend_frequency(dividends)
     ttm_dividend = None
@@ -15802,14 +16250,28 @@ def security_research(kind, ticker):
             "ttm_dividend_per_share": ttm_dividend,
             "estimated_yield_pct": _research_pct(_research_info_value(info, "yield", "dividendYield", "trailingAnnualDividendYield")),
             "target_yield_label": "Estimated forward yield",
-            "top_holdings": _research_top_holdings(fund_data, ticker=lookup_symbol, description=f"{name} {summary}"),
+            "top_holdings": (
+                (preferred_official_profile or {}).get("top_holdings")
+                or _research_top_holdings(fund_data, ticker=lookup_symbol, description=f"{name} {summary}")
+            ),
             "sector_weightings": _research_weight_map(getattr(fund_data, "sector_weightings", None)) if fund_data is not None else [],
             "asset_classes": _research_weight_map(getattr(fund_data, "asset_classes", None)) if fund_data is not None else [],
             "data_source": "Yahoo Finance",
         }
-        if official_profile is None and _research_needs_provider_fallback(response):
-            official_profile = _fetch_provider_etf_profile(lookup_symbol, response)
-        response = _merge_official_research_profile(response, official_profile)
+        # Supported issuer-first funds always use their official profile;
+        # non-empty Yahoo fields remain in place only where the provider omitted
+        # a value. Sparse unknown funds still use the general provider fallback.
+        is_neos = _is_neos_fund(lookup_symbol, f"{name} {summary}")
+        is_xfunds = _is_xfunds_fund(lookup_symbol, f"{name} {summary}")
+        if preferred_official_profile or _research_needs_provider_fallback(response) or is_neos or is_xfunds:
+            official_profile = preferred_official_profile or _fetch_provider_etf_profile(lookup_symbol, response)
+            # Overlays only non-empty official values and records Yahoo as the
+            # fallback feed, so the Source row stays accurate.
+            response = _merge_official_research_profile(response, official_profile)
+
+        # Rate closure risk last so it can use official AUM (e.g. NEOS Net
+        # Assets) when the market feed left it blank. Age softening still applies.
+        response["closure_risk"] = _assess_etf_closure_risk_with_fallback(info, response)
 
         # ── Official fund-site yield & distribution history ──────────────
         description_text = " ".join(
@@ -15864,7 +16326,7 @@ def security_research(kind, ticker):
                 })
 
         inception = _research_info_value(info, "fundInceptionDate")
-        if response["inception_date"] is None and inception:
+        if not response.get("inception_date") and inception:
             try:
                 response["inception_date"] = pd.to_datetime(int(inception), unit="s").strftime("%Y-%m-%d")
             except Exception:
@@ -15971,8 +16433,9 @@ def security_research_average_return(kind, ticker):
     if not benchmark:
         benchmark = "SPY"
 
-    primary_series, primary_name = _research_adjusted_close_series(ticker)
-    benchmark_series, benchmark_name = _research_adjusted_close_series(benchmark)
+    force_refresh = request.args.get("refresh", "0") not in ("", "0")
+    primary_series, primary_name = _research_adjusted_close_series(ticker, force_refresh=force_refresh)
+    benchmark_series, benchmark_name = _research_adjusted_close_series(benchmark, force_refresh=force_refresh)
 
     if primary_series is None or primary_series.empty:
         return jsonify({"error": f"No return data for {ticker}"}), 404
@@ -16015,11 +16478,12 @@ def security_research_average_returns(kind):
     if not symbols:
         return jsonify({"error": "tickers are required"}), 400
 
+    force_refresh = request.args.get("refresh", "0") not in ("", "0")
     series_by_symbol = {}
     names = {}
     errors = {}
     for symbol in symbols:
-        series, name = _research_adjusted_close_series(symbol)
+        series, name = _research_adjusted_close_series(symbol, force_refresh=force_refresh)
         if series is None or series.empty:
             errors[symbol] = f"No return data for {symbol}"
             continue
@@ -16287,6 +16751,44 @@ def _nav_align_series(*series):
             return pd.DataFrame()
         named.append(clean.rename(getattr(s, "name", None) or f"s{i}"))
     return pd.concat(named, axis=1, join="inner").dropna()
+
+
+def _nav_monthly_frame(close, divs, benchmark_close):
+    """Align fund, distribution, and benchmark data by calendar month.
+
+    Yahoo timestamps crypto in UTC and US-listed funds in America/New_York.
+    Resampling those timezone-aware series before normalizing creates distinct
+    month-end timestamps (00:00 UTC versus 04:00/05:00 UTC), which silently
+    drops every benchmark value when the series are merged. Normalize to
+    timezone-free trading dates first so each calendar month has one key.
+    """
+    fund = _nav_date_indexed_series(close)
+    benchmark = _nav_date_indexed_series(benchmark_close)
+    if fund is None or benchmark is None or fund.empty or benchmark.empty:
+        return pd.DataFrame()
+
+    monthly_close = fund.resample("ME").last()
+    monthly_benchmark = benchmark.resample("ME").last()
+    if divs is None:
+        monthly_divs = pd.Series(0.0, index=monthly_close.index)
+    else:
+        clean_divs = _nav_date_indexed_series(divs)
+        monthly_divs = (
+            clean_divs.resample("ME").sum()
+            if clean_divs is not None and not clean_divs.empty
+            else pd.Series(0.0, index=monthly_close.index)
+        )
+
+    frame = pd.DataFrame({
+        "price": monthly_close,
+        "div": monthly_divs,
+        "benchmark_price": monthly_benchmark,
+    }).dropna(subset=["price"])
+    frame["div"] = frame["div"].fillna(0.0)
+    frame["benchmark_price"] = frame["benchmark_price"].ffill()
+    # Never manufacture a benchmark from the fund itself. If the benchmark
+    # does not overlap, the caller must surface an unavailable/error state.
+    return frame.dropna(subset=["benchmark_price"])
 
 
 def _nav_benchmark_close_from_df(close_df, benchmark, fallback_close):
@@ -19854,13 +20356,9 @@ def total_return_charts():
             close = raw[["Close"]]
             close.columns = [all_dl[0]]
 
-        # Normalize to 100
-        norm = close.copy()
-        for col in norm.columns:
-            first_valid = norm[col].first_valid_index()
-            if first_valid is not None:
-                base = norm.loc[first_valid, col]
-                norm[col] = (norm[col] / base) * 100 if base and base != 0 else None
+        # Normalize to 100. Yahoo occasionally returns duplicate labels, so
+        # normalization must not rely on a label lookup being scalar.
+        norm = _normalize_prices_to_100(close)
 
         # Period return per ticker
         returns = {}
@@ -21304,6 +21802,21 @@ def _blend_price_drip(close_series, divs_series, frac, track_cash=True):
     return pd.Series(vals, index=close_series.index)
 
 
+def _download_has_dividend_actions(df):
+    """True when an actions=True download actually honored the request.
+
+    A healthy actions frame always carries a Dividends column (all zeros for
+    non-payers). A rate-limited/flaky Yahoo response can silently ignore
+    auto_adjust/actions and hand back adjusted closes with no Dividends at
+    all — dividend math built on that frame collapses every return trace to
+    the same price line, so callers must treat it as a failed download.
+    """
+    if df is None or getattr(df, "empty", True):
+        return False
+    cols = df.columns.get_level_values(0) if hasattr(df.columns, "get_level_values") else df.columns
+    return "Dividends" in set(cols)
+
+
 def _series_return(values, default=None):
     if not values:
         return default
@@ -21424,14 +21937,20 @@ def etf_screen_data():
     ticker = request.args.get("ticker", "").strip().upper()
     extra = request.args.get("extra", "").strip()
     period = request.args.get("period", "1y")
-    mode = request.args.get("mode", "ohlcv")  # ohlcv | total | price | pricediv | both | all3 | all4
-    reinvest_pct = min(100, max(0, int(request.args.get("reinvest", 100))))
+    mode = request.args.get("mode", "ohlcv")  # ohlcv | total | price | pricediv | both | all3 | all4 | bundle
+    try:
+        reinvest_pct = min(100, max(0, int(round(float(request.args.get("reinvest", 100))))))
+    except (TypeError, ValueError):
+        reinvest_pct = 100
     interval = request.args.get("interval", "")
     # Optional explicit date window. When both are present they override `period`
     # so the chart/returns are computed over exactly the requested span.
     start = request.args.get("start", "").strip()
     end = request.args.get("end", "").strip()
     use_range = bool(start and end)
+    # Comparers can prioritize the visible chart/table, then enrich full
+    # distribution histories and issuer data through Security Research.
+    defer_details = request.args.get("defer_details", "0").lower() in {"1", "true", "yes"}
 
     # yfinance's `period` only accepts a fixed set of strings (1mo/3mo/6mo/ytd/
     # 1y/2y/5y/10y/max). 3Y and 4Y aren't supported, so translate them into an
@@ -21574,16 +22093,36 @@ def etf_screen_data():
     # ---------- Return modes ----------
     frac = reinvest_pct / 100.0
     try:
-        # Download daily data with dividends for return calcs.
-        div_df = _chunked_yf_download(yahoo_symbols, interval="1d", auto_adjust=False, actions=True, progress=False, **_range_kwargs())
+        # Return-mode and reinvestment changes use the same market history.
+        # Cache that raw download independently of the rendered response so
+        # toggles only recompute traces instead of going back to Yahoo.
+        _market_key = (
+            tuple(sorted(yahoo_symbols)),
+            interval,
+            tuple(sorted(_range_kwargs().items())),
+            request.args.get("refresh", "0"),
+        )
+        market_frames = _cache_get(
+            _ETF_SCREEN_MARKET_CACHE,
+            _market_key,
+            _ETF_SCREEN_MARKET_TTL_SEC,
+        )
+        if market_frames is None:
+            # Download daily data with dividends for return calcs.
+            div_df = _chunked_yf_download(yahoo_symbols, interval="1d", auto_adjust=False, actions=True, progress=False, **_range_kwargs())
 
-        # Unadjusted price frame. For daily intervals it's the same download as
-        # div_df (which already carries OHLCV alongside Dividends), so reuse it
-        # instead of fetching the same data twice.
-        if interval == "1d":
-            price_df = div_df
+            # Unadjusted price frame. For daily intervals it's the same download
+            # as div_df, so reuse it instead of fetching identical data twice.
+            if interval == "1d":
+                price_df = div_df
+            else:
+                price_df = _chunked_yf_download(yahoo_symbols, interval=interval, auto_adjust=False, progress=False, **_range_kwargs())
+            # Never cache a frame that ignored actions=True — it would pin
+            # dividend-less (price-only) return traces for the whole TTL.
+            if _download_has_dividend_actions(div_df):
+                _cache_set(_ETF_SCREEN_MARKET_CACHE, _market_key, (div_df, price_df))
         else:
-            price_df = _chunked_yf_download(yahoo_symbols, interval=interval, auto_adjust=False, progress=False, **_range_kwargs())
+            div_df, price_df = market_frames
         if price_df.empty:
             return jsonify(error="No price data found"), 404
 
@@ -21708,19 +22247,38 @@ def etf_screen_data():
             divs_raw = _extract_col(div_df, "Dividends", dl_sym)
             divs = divs_raw.reindex(div_close.index, fill_value=0.0) if not divs_raw.empty else pd.Series(0.0, index=div_close.index)
 
-            if close.empty and div_close.empty:
+            # Also re-fetch per ticker when the batch download ignored
+            # actions=True (otherwise every return trace degrades to
+            # price-only) or collapsed this symbol to a single row — Yahoo
+            # transiently returns just the live-quote date for one ticker in
+            # a batch, which would pin a broken one-point series in the
+            # caches and rebase MAX comparisons to a zero-width window.
+            if len(div_close) <= 1 or not _download_has_dividend_actions(div_df):
                 try:
                     fallback = yf.Ticker(dl_sym).history(interval="1d", auto_adjust=False, actions=True, **_range_kwargs())
                 except Exception:
                     fallback = pd.DataFrame()
-                if fallback is not None and not fallback.empty and "Close" in fallback.columns:
-                    close = fallback["Close"].dropna()
+                fallback_close = (
+                    fallback["Close"].dropna()
+                    if fallback is not None and not fallback.empty and "Close" in fallback.columns
+                    else pd.Series(dtype=float)
+                )
+                if len(fallback_close) >= max(len(div_close), 1):
+                    close = fallback_close
                     div_close = close
                     divs_raw = fallback["Dividends"].dropna() if "Dividends" in fallback.columns else pd.Series(dtype=float)
                     divs = divs_raw.reindex(div_close.index, fill_value=0.0) if not divs_raw.empty else pd.Series(0.0, index=div_close.index)
-                else:
+                elif div_close.empty:
                     result["warnings"].append(f"{sym}: no data available")
                     continue
+                # A shorter or failed re-fetch keeps the batch series rather
+                # than replacing or dropping real history.
+
+            # Put every close on the same per-share basis before normalizing or
+            # combining it with Yahoo's already split-adjusted distributions.
+            # This removes NUSI's false +100% jump at its QQQH transition.
+            close = _normalize_etf_comparer_price_basis(sym, close)
+            div_close = _normalize_etf_comparer_price_basis(sym, div_close)
 
             # Put every close on the same per-share basis before normalizing or
             # combining it with Yahoo's already split-adjusted distributions.
@@ -21735,6 +22293,17 @@ def etf_screen_data():
             base = div_close if not div_close.empty else close
             dates = [d.strftime("%Y-%m-%d") for d in base.index]
             norm_price = [round(float(v), 4) for v in (base / float(base.iloc[0]) * 100)]
+
+            # Per-point dividend/price ratio so the client can rebuild the
+            # blended reinvestment line for any slider % locally — moving the
+            # Reinvest slider then needs no refetch (no chart blink/shake).
+            # Mirrors _blend_price_drip's per-step math exactly.
+            div_on_base = divs.reindex(base.index, fill_value=0.0)
+            div_ratio = []
+            for _i in range(len(base)):
+                _px = float(base.iloc[_i])
+                _dv = float(div_on_base.iloc[_i])
+                div_ratio.append(round(_dv / _px, 8) if _px > 0 and _dv > 0 else 0.0)
 
             # Compute return series based on mode
             traces = {}
@@ -21756,7 +22325,7 @@ def etf_screen_data():
                 traces["blend"] = [round(v, 4) for v in blend.tolist()]
                 drip = _blend_price_drip(div_close, divs, 1.0, track_cash=True)
                 traces["drip"] = [round(v, 4) for v in drip.tolist()]
-            elif mode == "all4":
+            elif mode in ("all4", "bundle"):
                 traces["price"] = norm_price
                 pdiv = _blend_price_drip(div_close, divs, 0.0, track_cash=True)
                 traces["pricediv"] = [round(v, 4) for v in pdiv.tolist()]
@@ -21771,6 +22340,11 @@ def etf_screen_data():
             if "total" in traces:
                 total_ret = _series_return(traces["total"], price_ret)
                 drawdown_basis = traces["total"]
+            elif mode == "bundle" and "drip" in traces:
+                # A bundle is shared by every display mode, so its comparison
+                # statistics consistently represent canonical total return.
+                total_ret = _series_return(traces["drip"], price_ret)
+                drawdown_basis = traces["drip"]
             elif "blend" in traces:
                 total_ret = _series_return(traces["blend"], price_ret)
                 drawdown_basis = traces["blend"]
@@ -21810,7 +22384,7 @@ def etf_screen_data():
                 if _bclose is not None:
                     delta_up, delta_down = _capture_deltas(base, _bclose)
 
-            result["series"][sym] = {"dates": dates, "traces": traces}
+            result["series"][sym] = {"dates": dates, "traces": traces, "div_ratio": div_ratio}
             result["stats"][sym] = {
                 "total_ret": total_ret,
                 "price_ret": price_ret,
@@ -21880,10 +22454,11 @@ def etf_screen_data():
                 info.get("shortName"), info.get("fundFamily"), sym,
             ))
             official_snapshot = None
-            try:
-                official_snapshot = _fetch_official_distribution_snapshot(dl_sym, description_text)
-            except Exception:
-                official_snapshot = None
+            if not defer_details:
+                try:
+                    official_snapshot = _fetch_official_distribution_snapshot(dl_sym, description_text)
+                except Exception:
+                    official_snapshot = None
             if official_snapshot and official_snapshot.get("has_dividend"):
                 official_source = official_snapshot.get("source") or "Fund Site"
                 official_history = official_snapshot.get("history")
@@ -21911,7 +22486,7 @@ def etf_screen_data():
                     except Exception:
                         pass
 
-            if expected_dividend_yield is None:
+            if expected_dividend_yield is None and not defer_details:
                 try:
                     provider_profile = _fetch_provider_etf_profile(dl_sym, {
                         "name": saved.get("fund_name") or saved.get("name") or info.get("longName") or info.get("shortName") or sym,
@@ -21929,10 +22504,11 @@ def etf_screen_data():
             _set_expected_yield(annual_dividend=saved.get("annual_div"), source=saved.get("provider"))
             _set_expected_yield(saved.get("div_yield"), source=saved.get("provider"))
 
-            try:
-                history_divs = tk_obj.dividends if tk_obj is not None else pd.Series(dtype=float)
-            except Exception:
-                history_divs = pd.Series(dtype=float)
+            history_divs = (
+                divs_raw
+                if defer_details
+                else (_cached_yf_dividends(tk_obj, dl_sym) if tk_obj is not None else pd.Series(dtype=float))
+            )
             if history_divs is None or history_divs.empty:
                 history_divs = divs_raw
             freq_code = None
@@ -24430,11 +25006,12 @@ def watchlist_data():
 
 @app.route("/api/nav-erosion/data")
 def nav_erosion_data():
-    """Back-test a ticker for NAV erosion over a custom date range."""
+    """Back-test benchmark-confirmed price erosion over a custom date range."""
     import warnings
     warnings.filterwarnings("ignore")
 
     sym = request.args.get("ticker", "").strip().upper()
+    benchmark_override = request.args.get("benchmark", "").strip().upper()
     try:
         initial_investment = float(request.args.get("amount", 0))
     except (TypeError, ValueError):
@@ -24460,22 +25037,30 @@ def nav_erosion_data():
     summary = {}
 
     try:
-        from datetime import datetime as _dt
+        from datetime import datetime as _dt, timedelta as _td
         import json
         import yfinance as yf
         import plotly.graph_objects as go
         import plotly.utils
 
-        benchmark = _nav_benchmark_for_ticker(sym)
+        requested_start = _dt.strptime(start_date, "%Y-%m-%d").date()
+        requested_end = _dt.strptime(end_date, "%Y-%m-%d").date()
+        if requested_end < requested_start:
+            return jsonify(error="End date must be on or after start date.")
+        # yfinance treats ``end`` as exclusive; add a day so the date chosen in
+        # the UI is actually included in the analysis.
+        fetch_end = (requested_end + _td(days=1)).isoformat()
+
+        benchmark = benchmark_override or _nav_benchmark_for_ticker(sym)
         hist = yf.Ticker(sym).history(
-            start=start_date, end=end_date,
+            start=start_date, end=fetch_end,
             interval="1d", auto_adjust=False, actions=True,
         )
         bench_series = []
         for bench in _nav_benchmark_parts(benchmark):
             try:
                 bench_hist = yf.Ticker(bench).history(
-                    start=start_date, end=end_date,
+                    start=start_date, end=fetch_end,
                     interval="1d", auto_adjust=True,
                 )
                 if bench_hist is not None and not bench_hist.empty and "Close" in bench_hist.columns:
@@ -24488,9 +25073,39 @@ def nav_erosion_data():
         if hist.empty:
             return jsonify(error=f"No data found for ticker {sym}. Check the symbol and date range.")
 
-        # Detect if data starts later than requested
-        requested_start = _dt.strptime(start_date, "%Y-%m-%d").date()
-        actual_start = hist.index[0].date()
+        fund_close = hist["Close"].dropna()
+        if len(fund_close) < 2:
+            return jsonify(error=f"Not enough price history for {sym} in that date range.")
+
+        if len(bench_series) == 1:
+            benchmark_close = bench_series[0]
+        elif len(bench_series) > 1:
+            aligned_bench = _nav_align_series(*bench_series)
+            if len(aligned_bench) < 2:
+                return jsonify(error=f"No overlapping benchmark history found for {benchmark}.")
+            composite = pd.Series(1.0, index=aligned_bench.index, dtype=float)
+            for col in aligned_bench.columns:
+                component_start = float(aligned_bench[col].iloc[0])
+                if component_start <= 0:
+                    return jsonify(error=f"Benchmark {benchmark} contains an invalid starting price.")
+                composite = composite + (aligned_bench[col] / component_start - 1.0)
+            benchmark_close = composite.rename(benchmark)
+        else:
+            return jsonify(
+                error=f"No usable benchmark history found for {benchmark}. "
+                      "The benchmark-adjusted result was not calculated."
+            )
+
+        aligned_daily = _nav_align_series(
+            fund_close.rename("fund"),
+            benchmark_close.rename("benchmark"),
+        )
+        if len(aligned_daily) < 2:
+            return jsonify(error=f"{sym} and {benchmark} do not have overlapping price history.")
+        fund_daily = aligned_daily["fund"]
+        benchmark_daily = aligned_daily["benchmark"]
+
+        actual_start = fund_daily.index[0].date()
         if (actual_start - requested_start).days > 30:
             warning = (
                 f"{sym} only has data going back to {actual_start.strftime('%B %d, %Y')}. "
@@ -24498,44 +25113,37 @@ def nav_erosion_data():
                 f"({requested_start.strftime('%B %d, %Y')}) predates when this ETF existed."
             )
 
-        monthly_close = hist["Close"].resample("ME").last()
-        monthly_divs = hist["Dividends"].resample("ME").sum()
-        if len(bench_series) == 1:
-            monthly_benchmark = bench_series[0].resample("ME").last()
-        elif len(bench_series) > 1:
-            aligned_bench = pd.concat(bench_series, axis=1, join="inner").dropna()
-            if len(aligned_bench) >= 2:
-                composite = 1.0
-                for col in aligned_bench.columns:
-                    composite = composite + (aligned_bench[col] / float(aligned_bench[col].iloc[0]) - 1.0)
-                monthly_benchmark = composite.resample("ME").last()
-            else:
-                monthly_benchmark = monthly_close
-        else:
-            monthly_benchmark = monthly_close
-
-        df = pd.DataFrame({"price": monthly_close, "div": monthly_divs, "benchmark_price": monthly_benchmark}).dropna(subset=["price"])
-        df["div"] = df["div"].fillna(0.0)
-        df["benchmark_price"] = df["benchmark_price"].ffill()
-
+        df = _nav_monthly_frame(
+            fund_daily,
+            hist.get("Dividends"),
+            benchmark_daily,
+        )
         if df.empty:
-            return jsonify(error=f"No usable monthly data for {sym}.")
+            return jsonify(error=f"No overlapping monthly data for {sym} and {benchmark}.")
 
-        initial_price = float(df["price"].iloc[0])
+        # Enter at the first available close on/after the requested start, not
+        # at that month's ending close. Monthly distributions are then applied
+        # only from the requested window onward.
+        initial_price = float(fund_daily.iloc[0])
+        benchmark_initial = float(benchmark_daily.iloc[0])
         if initial_price == 0:
             return jsonify(error=f"Initial price for {sym} is zero — cannot calculate.")
+        if benchmark_initial <= 0:
+            return jsonify(error=f"Initial benchmark price for {benchmark} is invalid.")
 
         current_shares = initial_investment / initial_price
         cumulative_dist = 0.0
         cumulative_reinvested = 0.0
         cumulative_shares_bought = 0.0
         prev_price = initial_price
-        prev_benchmark_price = float(df["benchmark_price"].dropna().iloc[0]) if not df["benchmark_price"].dropna().empty else initial_price
+        prev_benchmark_price = benchmark_initial
         cumulative_divs_per_share = 0.0
+        confirmed_erosion_per_share = 0.0
+        confirmed_erosion_months = 0
 
         for dt, row in df.iterrows():
             price = float(row["price"])
-            benchmark_price = float(row["benchmark_price"]) if pd.notna(row["benchmark_price"]) else prev_benchmark_price
+            benchmark_price = float(row["benchmark_price"])
             div_per_share = float(row["div"])
             total_dist = div_per_share * current_shares
             reinvest_amt = total_dist * reinvest_pct / 100.0
@@ -24544,21 +25152,28 @@ def nav_erosion_data():
             portfolio_val = current_shares * price
             breakeven_sh = (initial_investment / price) if price > 0 else 0.0
             shares_deficit = breakeven_sh - current_shares
-            price_delta_pct = (price - initial_price) / initial_price * 100 if initial_price else 0.0
+            fund_month_return = (price - prev_price) / prev_price if prev_price > 0 else 0.0
+            benchmark_month_return = (
+                (benchmark_price - prev_benchmark_price) / prev_benchmark_price
+                if prev_benchmark_price > 0 else 0.0
+            )
             cumulative_dist += total_dist
             cumulative_reinvested += reinvest_amt
             cumulative_shares_bought += shares_bought
             cumulative_divs_per_share += div_per_share
 
-            # Benchmark-adjusted NAV erosion ratio. Lower is better.
-            if div_per_share > 0 and prev_price > 0 and prev_benchmark_price > 0 and benchmark_price > 0:
-                fund_month_return = (price - prev_price) / prev_price
-                benchmark_month_return = (benchmark_price - prev_benchmark_price) / prev_benchmark_price
-                month_dist_yield = div_per_share / price if price > 0 else 0.0
-                numerator = _nav_erosion_numerator(fund_month_return, benchmark_month_return)
-                coverage_ratio = round(numerator / month_dist_yield, 4) if month_dist_yield > 0 and numerator is not None else None
-            else:
-                coverage_ratio = None
+            # Confirmed erosion exists only when the fund loses price while its
+            # underlying benchmark is flat or rising. Express it in dollars per
+            # share so the aggregate ratio uses the same units as distributions.
+            numerator = _nav_erosion_numerator(fund_month_return, benchmark_month_return)
+            erosion_per_share = (numerator or 0.0) * prev_price
+            if erosion_per_share > 1e-12:
+                confirmed_erosion_per_share += erosion_per_share
+                confirmed_erosion_months += 1
+            coverage_ratio = (
+                round(erosion_per_share / div_per_share, 4)
+                if div_per_share > 0 and numerator is not None else None
+            )
             prev_price = price
             prev_benchmark_price = benchmark_price
 
@@ -24566,7 +25181,14 @@ def nav_erosion_data():
                 "date": dt.strftime("%b %Y"),
                 "price": round(price, 4),
                 "benchmark_price": round(benchmark_price, 4) if benchmark_price is not None else None,
-                "price_delta_pct": round(price_delta_pct, 2),
+                "benchmark_normalized_price": round(
+                    initial_price * benchmark_price / benchmark_initial, 4
+                ),
+                "price_delta_pct": round(fund_month_return * 100.0, 2),
+                "benchmark_delta_pct": round(benchmark_month_return * 100.0, 2),
+                "price_change_from_start_pct": round(
+                    (price - initial_price) / initial_price * 100.0, 2
+                ),
                 "div_per_share": round(div_per_share, 4),
                 "total_dist": round(total_dist, 2),
                 "reinvested": round(reinvest_amt, 2),
@@ -24579,39 +25201,52 @@ def nav_erosion_data():
             })
 
         final_row = rows[-1]
-        # Aggregate benchmark-adjusted NAV erosion ratio across the selected period.
-        benchmark_start = float(df["benchmark_price"].dropna().iloc[0]) if not df["benchmark_price"].dropna().empty else initial_price
-        benchmark_end = float(df["benchmark_price"].dropna().iloc[-1]) if not df["benchmark_price"].dropna().empty else final_row["price"]
+        benchmark_end = float(benchmark_daily.iloc[-1])
         fund_return = (final_row["price"] - initial_price) / initial_price if initial_price > 0 else 0.0
-        benchmark_return = (benchmark_end - benchmark_start) / benchmark_start if benchmark_start > 0 else fund_return
-        period_dist_yield, _ = _nav_distribution_yield_from_history(
-            df["div"],
-            final_row["price"],
-            df["price"],
+        benchmark_return = (
+            (benchmark_end - benchmark_initial) / benchmark_initial
+            if benchmark_initial > 0 else 0.0
         )
-        numerator = _nav_erosion_numerator(fund_return, benchmark_return)
-        if period_dist_yield > 0 and numerator is not None:
-            total_coverage = round(numerator / period_dist_yield, 4)
-        else:
-            total_coverage = None
+        # Match the numerator and denominator horizons: both cover the selected
+        # window. This ratio measures the share of period distributions offset
+        # by price losses specifically confirmed against a flat/rising benchmark.
+        total_coverage = (
+            round(confirmed_erosion_per_share / cumulative_divs_per_share, 4)
+            if cumulative_divs_per_share > 0 else None
+        )
         deficit_pct = (
             final_row["shares_deficit"] / final_row["breakeven_sh"] * 100
             if final_row.get("breakeven_sh", 0) and final_row["shares_deficit"] > 0
             else 0.0
         )
-        total_severity = _nav_erosion_from_adjusted_ratio(
-            total_coverage,
-            price_change_pct=final_row["price_delta_pct"],
-            deficit_pct=deficit_pct,
-        )
+        total_severity = _nav_erosion_from_adjusted_ratio(total_coverage)
+        cash_taken = cumulative_dist - cumulative_reinvested
+        ending_wealth = final_row["portfolio_val"] + cash_taken
+        total_return_dollar = ending_wealth - initial_investment
+        total_return_pct = total_return_dollar / initial_investment * 100.0
+        price_change_pct = fund_return * 100.0
+        benchmark_return_pct = benchmark_return * 100.0
+        relative_drag_pct = max(0.0, benchmark_return_pct - price_change_pct)
         summary = {
             "benchmark": benchmark,
+            "benchmark_valid": True,
+            "actual_start": fund_daily.index[0].strftime("%Y-%m-%d"),
+            "actual_end": fund_daily.index[-1].strftime("%Y-%m-%d"),
             "total_dist": round(cumulative_dist, 2),
             "total_shares_bought": round(cumulative_shares_bought, 4),
             "total_reinvested": round(cumulative_reinvested, 2),
+            "cash_taken": round(cash_taken, 2),
             "final_value": final_row["portfolio_val"],
-            "price_chg_pct": final_row["price_delta_pct"],
-            "has_erosion": final_row["shares_deficit"] > 0,
+            "ending_wealth": round(ending_wealth, 2),
+            "total_return_dollar": round(total_return_dollar, 2),
+            "total_return_pct": round(total_return_pct, 2),
+            "price_chg_pct": round(price_change_pct, 2),
+            "benchmark_return_pct": round(benchmark_return_pct, 2),
+            "relative_drag_pct": round(relative_drag_pct, 2),
+            "has_erosion": confirmed_erosion_months > 0,
+            "confirmed_erosion_months": confirmed_erosion_months,
+            "confirmed_erosion_per_share": round(confirmed_erosion_per_share, 4),
+            "has_price_deficit": final_row["shares_deficit"] > 0,
             "final_deficit": final_row["shares_deficit"],
             "final_deficit_pct": round(deficit_pct, 2),
             "total_coverage": total_coverage,
@@ -24620,16 +25255,24 @@ def nav_erosion_data():
 
         dates_list = [r["date"] for r in rows]
         prices_list = [r["price"] for r in rows]
+        benchmark_prices_list = [r["benchmark_normalized_price"] for r in rows]
         vals_list = [r["portfolio_val"] for r in rows]
         breakeven_list = [initial_investment] * len(rows)
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=dates_list, y=prices_list,
-            name="Share Price",
+            name=f"{sym} Share Price",
             line=dict(color="#7ecfff", width=2),
             yaxis="y1",
             hovertemplate="<b>%{x}</b><br>Price: $%{y:.2f}<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=dates_list, y=benchmark_prices_list,
+            name=f"{benchmark} (Normalized)",
+            line=dict(color="#ffb74d", width=2, dash="dot"),
+            yaxis="y1",
+            hovertemplate=f"<b>%{{x}}</b><br>{benchmark} normalized: $%{{y:.2f}}<extra></extra>",
         ))
         fig.add_trace(go.Scatter(
             x=dates_list, y=vals_list,
@@ -24646,7 +25289,7 @@ def nav_erosion_data():
             hovertemplate="<b>%{x}</b><br>Break-Even: $%{y:,.2f}<extra></extra>",
         ))
         fig.update_layout(
-            title=f"{sym} — NAV Erosion Back-Test ({rows[0]['date']} → {rows[-1]['date']})",
+            title=f"{sym} vs {benchmark} — Price Erosion Back-Test ({rows[0]['date']} → {rows[-1]['date']})",
             template="plotly_dark",
             margin=dict(t=50, l=60, r=60, b=50),
             height=420,
@@ -25004,26 +25647,34 @@ def nav_erosion_portfolio_data():
         validated.append({"ticker": ticker, "amount": amount, "reinvest_pct": reinvest_pct})
 
     unique_tickers = list(dict.fromkeys(r["ticker"] for r in validated))
+    benchmark_by_ticker = {
+        t: _nav_benchmark_for_ticker(t)
+        for t in unique_tickers
+    }
     benchmark_tickers = list(dict.fromkeys(
         part
-        for t in unique_tickers
-        for part in _nav_benchmark_parts(_nav_benchmark_for_ticker(t))
+        for benchmark in benchmark_by_ticker.values()
+        for part in _nav_benchmark_parts(benchmark)
     ))
     download_tickers = list(dict.fromkeys(unique_tickers + benchmark_tickers))
 
     # Batch download all tickers
     try:
-        from datetime import datetime as _dt
+        from datetime import datetime as _dt, timedelta as _td
+        requested_end = _dt.strptime(end_date, "%Y-%m-%d").date()
+        requested_start = _dt.strptime(start_date, "%Y-%m-%d").date()
+        if requested_end < requested_start:
+            return jsonify(error="End date must be on or after start date.")
         raw = _chunked_yf_download(
             download_tickers,
-            start=start_date, end=end_date,
+            # yfinance treats ``end`` as exclusive; include the date selected
+            # in the UI by fetching one calendar day beyond it.
+            start=start_date, end=(requested_end + _td(days=1)).isoformat(),
             interval="1d", auto_adjust=False, actions=True,
             group_by="ticker", progress=False,
         )
     except Exception as e:
         return jsonify(error=f"Failed to fetch data: {str(e)}")
-
-    requested_start = _dt.strptime(start_date, "%Y-%m-%d").date()
 
     def get_ticker_df(sym):
         try:
@@ -25054,44 +25705,89 @@ def nav_erosion_portfolio_data():
     results = []
     for r in validated:
         sym = r["ticker"]
-        benchmark = _nav_benchmark_for_ticker(sym)
+        benchmark = benchmark_by_ticker.get(sym) or _nav_benchmark_for_ticker(sym)
         amount = r["amount"]
         reinvest_pct = r["reinvest_pct"]
 
         close, divs = get_ticker_df(sym)
-        benchmark_close = _nav_benchmark_close_from_df(
-            pd.DataFrame({part: get_ticker_df(part)[0] for part in _nav_benchmark_parts(benchmark) if get_ticker_df(part)[0] is not None}),
-            benchmark,
-            close,
-        )
 
         if close is None or close.dropna().empty:
             results.append({
-                "ticker": sym, "amount": amount, "reinvest_pct": reinvest_pct,
+                "ticker": sym, "benchmark": benchmark,
+                "amount": amount, "reinvest_pct": reinvest_pct,
                 "error": f"No data found for {sym}.",
             })
             continue
 
-        monthly_close = close.resample("ME").last()
-        monthly_divs = divs.resample("ME").sum()
-        monthly_benchmark = (
-            benchmark_close.resample("ME").last()
-            if benchmark_close is not None and not benchmark_close.dropna().empty
-            else monthly_close
-        )
+        benchmark_parts = []
+        for part in _nav_benchmark_parts(benchmark):
+            part_close, _ = get_ticker_df(part)
+            if part_close is not None and not part_close.dropna().empty:
+                benchmark_parts.append(part_close.dropna().rename(part))
 
-        df = pd.DataFrame({"price": monthly_close, "div": monthly_divs, "benchmark_price": monthly_benchmark}).dropna(subset=["price"])
-        df["div"] = df["div"].fillna(0.0)
-        df["benchmark_price"] = df["benchmark_price"].ffill()
-
-        if df.empty:
+        if not benchmark_parts:
             results.append({
-                "ticker": sym, "amount": amount, "reinvest_pct": reinvest_pct,
-                "error": f"No usable monthly data for {sym}.",
+                "ticker": sym, "benchmark": benchmark,
+                "amount": amount, "reinvest_pct": reinvest_pct,
+                "error": (
+                    f"No usable benchmark history found for {benchmark}. "
+                    "The benchmark-adjusted result was not calculated."
+                ),
             })
             continue
 
-        actual_start = df.index[0].date()
+        if len(benchmark_parts) == 1:
+            benchmark_close = benchmark_parts[0]
+        else:
+            aligned_bench = _nav_align_series(*benchmark_parts)
+            if len(aligned_bench) < 2:
+                results.append({
+                    "ticker": sym, "benchmark": benchmark,
+                    "amount": amount, "reinvest_pct": reinvest_pct,
+                    "error": f"No overlapping benchmark history found for {benchmark}.",
+                })
+                continue
+            benchmark_close = pd.Series(1.0, index=aligned_bench.index, dtype=float)
+            invalid_benchmark = False
+            for col in aligned_bench.columns:
+                component_start = float(aligned_bench[col].iloc[0])
+                if component_start <= 0:
+                    invalid_benchmark = True
+                    break
+                benchmark_close = benchmark_close + (aligned_bench[col] / component_start - 1.0)
+            if invalid_benchmark:
+                results.append({
+                    "ticker": sym, "benchmark": benchmark,
+                    "amount": amount, "reinvest_pct": reinvest_pct,
+                    "error": f"Benchmark {benchmark} contains an invalid starting price.",
+                })
+                continue
+            benchmark_close.name = benchmark
+
+        aligned_daily = _nav_align_series(
+            close.rename("fund"), benchmark_close.rename("benchmark")
+        )
+        if len(aligned_daily) < 2:
+            results.append({
+                "ticker": sym, "benchmark": benchmark,
+                "amount": amount, "reinvest_pct": reinvest_pct,
+                "error": f"{sym} and {benchmark} do not have overlapping price history.",
+            })
+            continue
+
+        fund_daily = aligned_daily["fund"]
+        benchmark_daily = aligned_daily["benchmark"]
+        df = _nav_monthly_frame(fund_daily, divs, benchmark_daily)
+
+        if df.empty:
+            results.append({
+                "ticker": sym, "benchmark": benchmark,
+                "amount": amount, "reinvest_pct": reinvest_pct,
+                "error": f"No overlapping monthly data for {sym} and {benchmark}.",
+            })
+            continue
+
+        actual_start = fund_daily.index[0].date()
         warning = None
         if (actual_start - requested_start).days > 30:
             warning = (
@@ -25099,11 +25795,22 @@ def nav_erosion_portfolio_data():
                 f"Results start from that date."
             )
 
-        initial_price = float(df["price"].iloc[0])
+        # Enter at the first available daily close, rather than the first
+        # month-end close. This makes the selected start date economically
+        # meaningful and keeps the price and total-return horizons aligned.
+        initial_price = float(fund_daily.iloc[0])
+        benchmark_initial = float(benchmark_daily.iloc[0])
         if initial_price == 0:
             results.append({
                 "ticker": sym, "amount": amount, "reinvest_pct": reinvest_pct,
                 "error": f"Initial price for {sym} is zero.",
+            })
+            continue
+        if benchmark_initial <= 0:
+            results.append({
+                "ticker": sym, "benchmark": benchmark,
+                "amount": amount, "reinvest_pct": reinvest_pct,
+                "error": f"Initial benchmark price for {benchmark} is invalid.",
             })
             continue
 
@@ -25111,9 +25818,15 @@ def nav_erosion_portfolio_data():
         cumul_dist = 0.0
         cumul_reinvested = 0.0
         cumul_divs_per_share = 0.0
+        cumulative_shares_bought = 0.0
+        confirmed_erosion_per_share = 0.0
+        confirmed_erosion_months = 0
+        prev_price = initial_price
+        prev_benchmark_price = benchmark_initial
 
         for dt, row in df.iterrows():
             price = float(row["price"])
+            benchmark_price = float(row["benchmark_price"])
             div_per_share = float(row["div"])
             total_dist = div_per_share * current_shares
             reinvest_amt = total_dist * reinvest_pct / 100.0
@@ -25122,12 +25835,25 @@ def nav_erosion_portfolio_data():
             cumul_dist += total_dist
             cumul_reinvested += reinvest_amt
             cumul_divs_per_share += div_per_share
+            cumulative_shares_bought += shares_bought
+
+            fund_month_return = (price - prev_price) / prev_price if prev_price > 0 else 0.0
+            benchmark_month_return = (
+                (benchmark_price - prev_benchmark_price) / prev_benchmark_price
+                if prev_benchmark_price > 0 else 0.0
+            )
+            numerator = _nav_erosion_numerator(fund_month_return, benchmark_month_return)
+            erosion_per_share = (numerator or 0.0) * prev_price
+            if erosion_per_share > 1e-12:
+                confirmed_erosion_per_share += erosion_per_share
+                confirmed_erosion_months += 1
+            prev_price = price
+            prev_benchmark_price = benchmark_price
 
         final_price = float(df["price"].iloc[-1])
         portfolio_val = current_shares * final_price
         breakeven_final = (amount / final_price) if final_price > 0 else 0.0
         final_deficit = breakeven_final - current_shares
-        has_erosion_at_end = final_deficit > 0
         price_delta_pct = (final_price - initial_price) / initial_price * 100 if initial_price else 0.0
         gain_loss_dollar = portfolio_val - amount
         gain_loss_pct = gain_loss_dollar / amount * 100 if amount else 0.0
@@ -25135,28 +25861,24 @@ def nav_erosion_portfolio_data():
         total_return_dollar = portfolio_val + cash_taken - amount
         total_return_pct = total_return_dollar / amount * 100 if amount else 0.0
 
-        # Benchmark-adjusted NAV erosion ratio. Lower is better.
-        benchmark_series = df["benchmark_price"].dropna()
-        benchmark_start = float(benchmark_series.iloc[0]) if not benchmark_series.empty else initial_price
-        benchmark_end = float(benchmark_series.iloc[-1]) if not benchmark_series.empty else final_price
         fund_return = (final_price - initial_price) / initial_price if initial_price > 0 else 0.0
-        benchmark_return = (benchmark_end - benchmark_start) / benchmark_start if benchmark_start > 0 else fund_return
-        period_dist_yield, _ = _nav_distribution_yield_from_history(
-            df["div"],
-            final_price,
-            df["price"],
+        benchmark_end = float(benchmark_daily.iloc[-1])
+        benchmark_return = (
+            (benchmark_end - benchmark_initial) / benchmark_initial
+            if benchmark_initial > 0 else 0.0
         )
-        numerator = _nav_erosion_numerator(fund_return, benchmark_return)
-        if period_dist_yield > 0 and numerator is not None:
-            coverage_ratio = round(numerator / period_dist_yield, 4)
-        else:
-            coverage_ratio = None
+        # Match numerator and denominator horizons: the ratio is the confirmed
+        # benchmark-adjusted price loss per share divided by all distributions
+        # per share over this same backtest window.
+        coverage_ratio = (
+            round(confirmed_erosion_per_share / cumul_divs_per_share, 4)
+            if cumul_divs_per_share > 0 else None
+        )
         deficit_pct = final_deficit / breakeven_final * 100 if breakeven_final > 0 and final_deficit > 0 else 0.0
-        nav_erosion_severity = _nav_erosion_from_adjusted_ratio(
-            coverage_ratio,
-            price_change_pct=price_delta_pct,
-            deficit_pct=deficit_pct,
-        )
+        nav_erosion_severity = _nav_erosion_from_adjusted_ratio(coverage_ratio)
+        starting_shares = amount / initial_price
+        confirmed_erosion_dollar = confirmed_erosion_per_share * starting_shares
+        period_distributions_dollar = cumul_divs_per_share * starting_shares
 
         results.append({
             "ticker": sym,
@@ -25173,7 +25895,16 @@ def nav_erosion_portfolio_data():
             "gain_loss_pct": round(gain_loss_pct, 2),
             "total_return_dollar": round(total_return_dollar, 2),
             "total_return_pct": round(total_return_pct, 2),
-            "has_erosion": has_erosion_at_end,
+            "cash_taken": round(cash_taken, 2),
+            "ending_wealth": round(portfolio_val + cash_taken, 2),
+            "benchmark_return_pct": round(benchmark_return * 100.0, 2),
+            "relative_drag_pct": round(max(0.0, benchmark_return * 100.0 - price_delta_pct), 2),
+            "has_erosion": confirmed_erosion_months > 0,
+            "confirmed_erosion_months": confirmed_erosion_months,
+            "confirmed_erosion_per_share": round(confirmed_erosion_per_share, 4),
+            "confirmed_erosion_dollar": round(confirmed_erosion_dollar, 2),
+            "period_distributions_dollar": round(period_distributions_dollar, 2),
+            "has_price_deficit": final_deficit > 0,
             "final_deficit": round(final_deficit, 4),
             "final_deficit_pct": round(deficit_pct, 2),
             "coverage_ratio": coverage_ratio,
@@ -35186,7 +35917,10 @@ def general_scanner_universe():
 _options_income_tickers = set([
     # JPM / Global X / classic covered call
     "JEPI", "JEPQ", "JEPY", "QYLD", "XYLD", "RYLD", "DJIA", "QYLG", "XYLG", "TYLG",
-    "EDGQ", "EDGX", "QRMI", "XRMI", "QCLR", "XCLR", "DIVO", "PUTW", "NUSI",
+    # NUSI reverse-split 1-for-2 and renamed to QQQH on 2025-02-21; the dead
+    # NUSI ticker still serves unadjusted (corrupted) history via yfinance, so
+    # only the successor QQQH (in the NEOS block below) is kept.
+    "EDGQ", "EDGX", "QRMI", "XRMI", "QCLR", "XCLR", "DIVO", "PUTW",
     # Amplify
     "BAGY", "BITY", "QDVO", "IDVO", "HCOW", "HAKY", "ETTY", "SLJY",
     # XFunds / Nicholas Wealth
@@ -36007,7 +36741,7 @@ _DEFAULT_ETFS = [
     "SCHD", "VYM", "HDV", "DVY", "DGRO", "VIG", "SPHD", "SPYD", "NOBL", "SDY",
     "FDVV", "DGRW", "FDL", "DHS", "FVD", "OVL", "OUSA", "LVHD", "SDOG", "GCOW",
     # Covered Call / Options Income
-    "JEPI", "JEPQ", "QYLD", "XYLD", "DIVO", "NUSI", "RYLD", "SPYI", "QQQI",
+    "JEPI", "JEPQ", "QYLD", "XYLD", "DIVO", "QQQH", "RYLD", "SPYI", "QQQI",
     "SVOL", "TLTW", "YMAX", "YMAG", "CONY", "TSLY", "NVDY",
     "JEPY", "AIPI", "FEPI", "QQQY", "XDTE", "QDTE",
     # Preferred Stock
@@ -36138,11 +36872,81 @@ def general_scanner_save_defaults():
 
 # ── ETF Evaluate ────────────────────────────────────────────────────────────────
 
-def _etf_peer_history_metrics(tickers):
+def _strip_tz_index(series):
+    """Return the series with a tz-naive DatetimeIndex so histories fetched via
+    different yfinance code paths (batch download vs Ticker.history) compare."""
+    try:
+        if getattr(series.index, "tz", None) is not None:
+            series = series.copy()
+            series.index = series.index.tz_localize(None)
+    except Exception:
+        pass
+    return series
+
+
+def _annualized_return_pct(series):
+    """Annualized return (%) over a price series, or None if under 6 months."""
+    try:
+        years = (series.index[-1] - series.index[0]).days / 365.25
+        if years < 0.5 or series.iloc[0] <= 0:
+            return None, None
+        return round(((series.iloc[-1] / series.iloc[0]) ** (1 / years) - 1) * 100, 4), years
+    except Exception:
+        return None, None
+
+
+def _has_price_discontinuity(series, threshold=0.40):
+    """True if the series contains a PERSISTENT single-session level shift
+    beyond ±threshold (default 40%) — the fingerprint of an unadjusted split /
+    reverse-split that corrupts every endpoint-to-endpoint CAGR. NUSI is the
+    motivating case: it reverse-split 1-for-2 and became QQQH on 2025-02-21,
+    and yfinance's dead NUSI series shows a ~+100% one-day jump that inflated
+    its total CAGR to ~30%/yr.
+
+    A one-day bad tick that immediately reverts (QQQH itself has a transient
+    -50% print in Jun 2024) is NOT flagged: the level before and after the
+    jump is unchanged, so first-to-last CAGRs are unaffected.
+    """
+    try:
+        rets = series.pct_change().dropna()
+        big = rets[rets.abs() > threshold]
+        if not len(big):
+            return False
+        for ts in big.index:
+            pos = series.index.get_loc(ts)
+            before = series.iloc[max(0, pos - 6):pos]
+            after = series.iloc[pos:pos + 6]
+            if not len(before) or not len(after):
+                continue
+            level_shift = float(after.median()) / float(before.median())
+            if abs(level_shift - 1.0) > threshold:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+# Metric keys _etf_peer_history_metrics can produce for a peer, used when
+# copying enrichment results onto peer dicts.
+_ETF_HISTORY_METRIC_KEYS = (
+    "price_cagr", "total_cagr", "history_years",
+    "matched_years", "matched_price_cagr", "matched_total_cagr",
+    "ref_matched_price_cagr", "ref_matched_total_cagr",
+)
+
+
+def _etf_peer_history_metrics(tickers, ref_close=None, ref_adj=None):
     """Batch-download full price history for peer tickers and compute, per ticker:
     price_cagr (annualized price-only return — the NAV-erosion signal),
     total_cagr (annualized dividend-reinvested return), history_years,
     ttm_yield (trailing-12-month distributions / latest price), and last_price.
+
+    When ref_close / ref_adj (the evaluated fund's own price history) are
+    supplied, also computes matched-window metrics over the pair's overlapping
+    history — both funds' CAGRs measured from the later of the two first trade
+    dates. Full-history CAGRs are not comparable across launch dates (a fund
+    that listed at a market bottom shows a flattering number), so alternative
+    ranking prefers these matched values.
 
     Uses one batched (chunked) download so enriching dozens of peers stays fast.
     Best-effort: tickers with insufficient data are simply omitted.
@@ -36151,6 +36955,14 @@ def _etf_peer_history_metrics(tickers):
     tickers = [t for t in tickers if t]
     if not tickers:
         return out
+    if ref_close is not None:
+        ref_close = _strip_tz_index(ref_close)
+        if len(ref_close) < 2:
+            ref_close = None
+    if ref_adj is not None:
+        ref_adj = _strip_tz_index(ref_adj)
+        if len(ref_adj) < 2:
+            ref_adj = None
     try:
         df = _chunked_yf_download(
             tickers, chunk_size=25, period="max",
@@ -36173,16 +36985,21 @@ def _etf_peer_history_metrics(tickers):
                 sub = df
             if "Close" not in sub:
                 continue
-            close = sub["Close"].dropna()
+            close = _strip_tz_index(sub["Close"].dropna())
             if len(close) < 30 or close.iloc[0] <= 0:
+                continue
+            # Drop funds whose price history has a split/rename artifact — their
+            # CAGRs are meaningless and would rank spuriously high (see NUSI).
+            if _has_price_discontinuity(close):
                 continue
             years = (close.index[-1] - close.index[0]).days / 365.25
             if years < 0.5:
                 continue
             price_cagr = round(((close.iloc[-1] / close.iloc[0]) ** (1 / years) - 1) * 100, 4)
             total_cagr = None
+            adj = None
             if "Adj Close" in sub:
-                adj = sub["Adj Close"].dropna()
+                adj = _strip_tz_index(sub["Adj Close"].dropna())
                 if len(adj) >= 2 and adj.iloc[0] > 0:
                     total_cagr = round(((adj.iloc[-1] / adj.iloc[0]) ** (1 / years) - 1) * 100, 4)
             last_price = float(close.iloc[-1])
@@ -36194,13 +37011,34 @@ def _etf_peer_history_metrics(tickers):
                     ttm = float(divs[divs.index >= cutoff].sum())
                     if last_price > 0 and ttm > 0:
                         ttm_yield = round(ttm / last_price * 100, 4)
-            out[t] = {
+            entry = {
                 "price_cagr": price_cagr,
                 "total_cagr": total_cagr,
                 "history_years": round(years, 2),
                 "ttm_yield": ttm_yield,
                 "last_price": round(last_price, 4),
             }
+            if ref_close is not None:
+                start = max(close.index[0], ref_close.index[0])
+                peer_win = close[close.index >= start]
+                ref_win = ref_close[ref_close.index >= start]
+                if len(peer_win) >= 2 and len(ref_win) >= 2:
+                    m_price, m_years = _annualized_return_pct(peer_win)
+                    r_price, _ = _annualized_return_pct(ref_win)
+                    if m_price is not None and r_price is not None:
+                        entry["matched_years"] = round(m_years, 2)
+                        entry["matched_price_cagr"] = m_price
+                        entry["ref_matched_price_cagr"] = r_price
+                        if ref_adj is not None and adj is not None and len(adj) >= 2:
+                            peer_adj_win = adj[adj.index >= start]
+                            ref_adj_win = ref_adj[ref_adj.index >= start]
+                            if len(peer_adj_win) >= 2 and len(ref_adj_win) >= 2:
+                                m_total, _ = _annualized_return_pct(peer_adj_win)
+                                r_total, _ = _annualized_return_pct(ref_adj_win)
+                                if m_total is not None and r_total is not None:
+                                    entry["matched_total_cagr"] = m_total
+                                    entry["ref_matched_total_cagr"] = r_total
+            out[t] = entry
         except Exception:
             continue
     return out
@@ -36361,17 +37199,26 @@ def etf_evaluate(ticker):
     total_cagr = None
     history_years = None
     risk_ratios = None
+    fund_close = None
+    fund_adj = None
+    price_history_suspect = False
     try:
         hist = yf.Ticker(ticker).history(period="max", auto_adjust=False)
         if hist is not None and not hist.empty and len(hist) >= 30:
             close = hist["Close"].dropna()
+            # A split/rename artifact (e.g. the dead NUSI series) makes every
+            # CAGR meaningless — flag it and skip the price-derived signals
+            # rather than reporting a fabricated return.
+            price_history_suspect = _has_price_discontinuity(close)
             years = (close.index[-1] - close.index[0]).days / 365.25
-            if years >= 0.5 and len(close) >= 2 and close.iloc[0] > 0:
+            if not price_history_suspect and years >= 0.5 and len(close) >= 2 and close.iloc[0] > 0:
                 history_years = round(years, 2)
                 price_cagr = round(((close.iloc[-1] / close.iloc[0]) ** (1 / years) - 1) * 100, 4)
+                fund_close = close
                 adj = hist["Adj Close"].dropna() if "Adj Close" in hist.columns else None
                 if adj is not None and len(adj) >= 2 and adj.iloc[0] > 0:
                     total_cagr = round(((adj.iloc[-1] / adj.iloc[0]) ** (1 / years) - 1) * 100, 4)
+                    fund_adj = adj
                 # Risk-adjusted ratios on the total-return (dividend-adjusted)
                 # series so high-distribution funds aren't double-penalized for
                 # the NAV erosion the NAV criterion already measures. Same shape
@@ -36419,6 +37266,7 @@ def etf_evaluate(ticker):
         "total_cagr": total_cagr,
         "history_years": history_years,
         "risk_ratios": risk_ratios,
+        "price_history_suspect": price_history_suspect,
     }
 
     # ── Fetch peers from scanner cache ───────────────────────────────────────
@@ -36510,15 +37358,14 @@ def etf_evaluate(ticker):
     if is_option_income:
         discovered = {p["ticker"] for p in base_peers}
         discovery_tickers = sorted((set(option_universe_tickers) | discovered) - {ticker})
-        metrics = _etf_peer_history_metrics(discovery_tickers)
+        metrics = _etf_peer_history_metrics(discovery_tickers, ref_close=fund_close, ref_adj=fund_adj)
 
         for p in base_peers:
             m = metrics.get(p["ticker"])
             if not m:
                 continue
-            p["price_cagr"] = m["price_cagr"]
-            p["total_cagr"] = m["total_cagr"]
-            p["history_years"] = m["history_years"]
+            for k in _ETF_HISTORY_METRIC_KEYS:
+                p[k] = m.get(k)
             if m["last_price"] is not None:
                 p["price"] = m["last_price"]
             if m["ttm_yield"] is not None:
@@ -36530,7 +37377,7 @@ def etf_evaluate(ticker):
         for peer_ticker, m in metrics.items():
             if peer_ticker in discovered or peer_ticker == ticker:
                 continue
-            base_peers.append({
+            synthetic = {
                 "ticker": peer_ticker,
                 "name": peer_ticker,
                 "price": m.get("last_price"),
@@ -36547,10 +37394,10 @@ def etf_evaluate(ticker):
                 "beta_3y": None,
                 "fund_family": "",
                 "is_single_stock": peer_ticker in single_stock_set,
-                "price_cagr": m.get("price_cagr"),
-                "total_cagr": m.get("total_cagr"),
-                "history_years": m.get("history_years"),
-            })
+            }
+            for k in _ETF_HISTORY_METRIC_KEYS:
+                synthetic[k] = m.get(k)
+            base_peers.append(synthetic)
             discovered.add(peer_ticker)
 
         live_info_targets = [
@@ -36582,14 +37429,15 @@ def etf_evaluate(ticker):
     # Hybrid enrichment: live-fetch the price-derived metrics that the cache cannot
     # provide (price/total CAGR, trailing yield), keeping cached fundamentals.
     if not is_option_income:
-        metrics = _etf_peer_history_metrics([p["ticker"] for p in candidates])
+        metrics = _etf_peer_history_metrics(
+            [p["ticker"] for p in candidates], ref_close=fund_close, ref_adj=fund_adj
+        )
     for p in candidates:
         m = metrics.get(p["ticker"])
         if not m:
             continue
-        p["price_cagr"] = m["price_cagr"]
-        p["total_cagr"] = m["total_cagr"]
-        p["history_years"] = m["history_years"]
+        for k in _ETF_HISTORY_METRIC_KEYS:
+            p[k] = m.get(k)
         if m["last_price"] is not None:
             p["price"] = m["last_price"]
         # Trailing-12-month distribution yield is the authoritative income figure;
@@ -37067,7 +37915,7 @@ def growth_2_data():
         return v
 
     profile_id = get_profile_id()
-    period_param = request.args.get("period", "1y")
+    period_param = request.args.get("period", "1y").strip().lower()
     tickers_param = request.args.get("tickers", "")
     group_by = request.args.get("group_by", "none")
     show_cost_basis = request.args.get("show_cost_basis", "true") == "true"
@@ -37082,6 +37930,7 @@ def growth_2_data():
     }
     yf_period = "1y"
     start_date = None
+    end_date = None
     if period_param in period_map:
         val = period_map[period_param]
         if val == "ytd":
@@ -37103,15 +37952,22 @@ def growth_2_data():
                 yf_period = "1y"
             else:
                 yf_period = "max"
+    elif period_param == "custom":
+        custom_start = request.args.get("start_date", "").strip()
+        custom_end = request.args.get("end_date", "").strip()
+        if not custom_start or not custom_end:
+            return jsonify({"error": "Choose both a custom start date and end date"}), 400
+        try:
+            start_date = datetime.strptime(custom_start, "%Y-%m-%d")
+            end_date = datetime.strptime(custom_end, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "Custom dates must use YYYY-MM-DD format"}), 400
+        if start_date > end_date:
+            return jsonify({"error": "Custom start date must be on or before the end date"}), 400
+        if end_date.date() > datetime.now().date():
+            return jsonify({"error": "Custom end date cannot be in the future"}), 400
     else:
-        custom_start = request.args.get("start_date", "")
-        custom_end = request.args.get("end_date", "")
-        if custom_start:
-            try:
-                start_date = datetime.strptime(custom_start, "%Y-%m-%d")
-            except ValueError:
-                pass
-        yf_period = "max"
+        return jsonify({"error": f"Unsupported period: {period_param}"}), 400
 
     conn = get_connection()
 
@@ -37181,19 +38037,84 @@ def growth_2_data():
     if not active_rows:
         return jsonify({"error": "No holdings after filter", "categories": categories, "tickers": all_tickers}), 400
 
-    active_tickers = [r["ticker"] for r in active_rows]
-    quantities = {r["ticker"]: float(r["quantity"] or 0) for r in active_rows}
-    cost_basis = {r["ticker"]: float(r["purchase_value"] or 0) for r in active_rows}
-    current_values = {r["ticker"]: float(r["current_value"] or 0) for r in active_rows}
+    active_tickers = sorted(set(r["ticker"] for r in active_rows))
+    quantities = {
+        t: sum(float(r["quantity"] or 0) for r in active_rows if r["ticker"] == t)
+        for t in active_tickers
+    }
+    cost_basis = {
+        t: sum(float(r["purchase_value"] or 0) for r in active_rows if r["ticker"] == t)
+        for t in active_tickers
+    }
+    current_values = {
+        t: sum(float(r["current_value"] or 0) for r in active_rows if r["ticker"] == t)
+        for t in active_tickers
+    }
+
+    # Build the transaction list before constructing the value timeline so a
+    # ticker is never backfilled into dates before the portfolio owned it.
+    txn_tickers = set(dict(tx)["ticker"] for tx in txn_rows)
+    synthetic_txns = []
+    for r in active_rows:
+        t = r["ticker"]
+        if t not in txn_tickers and r["purchase_date"]:
+            synthetic_txns.append({
+                "ticker": t,
+                "transaction_type": "BUY",
+                "transaction_date": r["purchase_date"],
+                "shares": float(r["quantity"] or 0),
+                "price_per_share": float(r["price_paid"] or 0),
+                "fees": 0,
+                "realized_gain": None,
+            })
+    all_txns = [dict(tx) for tx in txn_rows] + synthetic_txns
+
+    ownership_starts = {}
+
+    def _record_ownership_start(ticker, value):
+        if ticker not in active_tickers or not value:
+            return
+        try:
+            ts = pd.Timestamp(value)
+            if ts.tzinfo is not None:
+                ts = ts.tz_localize(None)
+            ts = ts.normalize()
+        except Exception:
+            return
+        current = ownership_starts.get(ticker)
+        if current is None or ts < current:
+            ownership_starts[ticker] = ts
+
+    for r in active_rows:
+        _record_ownership_start(r["ticker"], r["purchase_date"])
+    # Any recorded trade is a safer ownership boundary than inventing history
+    # back to a ticker's inception. This covers legacy holdings whose purchase
+    # date was not imported.
+    for tx in all_txns:
+        _record_ownership_start(tx.get("ticker"), tx.get("transaction_date"))
+
+    known_portfolio_start = min(ownership_starts.values()) if ownership_starts else None
+    if known_portfolio_start is not None:
+        for t in active_tickers:
+            ownership_starts.setdefault(t, known_portfolio_start)
+
     yahoo_by_ticker = {t: _yahoo_symbol_for_ticker(t) for t in active_tickers}
     ticker_by_yahoo = {yf_t: t for t, yf_t in yahoo_by_ticker.items()}
     yahoo_tickers = list(dict.fromkeys(yahoo_by_ticker.values()))
 
     try:
-        raw = _chunked_yf_download(
-            " ".join(yahoo_tickers), period=yf_period, auto_adjust=True,
-            actions=True, progress=False
-        )
+        download_kwargs = {
+            "auto_adjust": True,
+            "actions": True,
+            "progress": False,
+        }
+        if period_param == "custom":
+            download_kwargs["start"] = start_date.strftime("%Y-%m-%d")
+            # Yahoo treats end as exclusive, so include the user's end date.
+            download_kwargs["end"] = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
+        else:
+            download_kwargs["period"] = yf_period
+        raw = _chunked_yf_download(" ".join(yahoo_tickers), **download_kwargs)
         if raw.empty:
             return jsonify({"error": "No price data", "tickers": all_tickers}), 500
     except Exception as e:
@@ -37210,19 +38131,40 @@ def growth_2_data():
 
     close = close.rename(columns=ticker_by_yahoo)
     divs_raw = divs_raw.rename(columns=ticker_by_yahoo)
+    # yfinance (esp. when rate-limited across chunked downloads) can return the
+    # same symbol as duplicate columns. That makes close[t] a DataFrame instead
+    # of a Series, which later blows up float(series.iloc[-1]) with
+    # "float() argument must be ... not 'Series'". Collapse dupes to one column.
+    if close.columns.duplicated().any():
+        close = close.loc[:, ~close.columns.duplicated()]
+    if divs_raw.columns.duplicated().any():
+        divs_raw = divs_raw.loc[:, ~divs_raw.columns.duplicated()]
+    if close.index.has_duplicates:
+        close = close.loc[~close.index.duplicated(keep="last")]
+    if divs_raw.index.has_duplicates:
+        divs_raw = divs_raw.loc[~divs_raw.index.duplicated(keep="last")]
     avail = [t for t in active_tickers if t in close.columns and not close[t].dropna().empty]
     if not avail:
         return jsonify({"error": "No price data for selected holdings", "tickers": all_tickers}), 500
 
     first_valid = close[avail].dropna(how="all").index[0]
-    close_a = close[avail].loc[first_valid:].ffill().bfill()
-    divs_a = divs_raw[avail].loc[first_valid:].fillna(0) if set(avail).issubset(divs_raw.columns) else pd.DataFrame(0, index=close_a.index, columns=avail)
+    close_a = close[avail].loc[first_valid:].ffill()
+    divs_a = divs_raw.reindex(index=close_a.index, columns=avail).fillna(0)
 
+    lower_bounds = []
     if start_date is not None:
-        start_ts = pd.Timestamp(start_date)
-        if start_ts > close_a.index[0]:
-            close_a = close_a.loc[close_a.index >= start_ts]
-            divs_a = divs_a.loc[divs_a.index >= start_ts]
+        lower_bounds.append(pd.Timestamp(start_date))
+    owned_dates = [ownership_starts[t] for t in avail if t in ownership_starts]
+    if owned_dates:
+        lower_bounds.append(min(owned_dates))
+    if lower_bounds:
+        effective_start = max(lower_bounds)
+        close_a = close_a.loc[close_a.index >= effective_start]
+        divs_a = divs_a.loc[divs_a.index >= effective_start]
+    if end_date is not None:
+        end_ts = pd.Timestamp(end_date)
+        close_a = close_a.loc[close_a.index <= end_ts]
+        divs_a = divs_a.loc[divs_a.index <= end_ts]
 
     if close_a.empty:
         return jsonify({"error": "No data for selected period", "tickers": all_tickers}), 500
@@ -37230,39 +38172,36 @@ def growth_2_data():
     # ── Portfolio value timeline (current shares * historical prices) ──
     port_value = pd.Series(0.0, index=close_a.index)
     value_scale = {}
+    position_values = {}
+    use_current_value_scale = end_date is None or end_date.date() >= datetime.now().date()
     for t in avail:
         q = quantities.get(t, 0)
         series = close_a[t] * q
         latest_market_value = float(series.dropna().iloc[-1]) if not series.dropna().empty else 0
         stored_current_value = current_values.get(t, 0)
-        scale = stored_current_value / latest_market_value if latest_market_value > 0 and stored_current_value > 0 else 1.0
+        scale = (
+            stored_current_value / latest_market_value
+            if use_current_value_scale and latest_market_value > 0 and stored_current_value > 0
+            else 1.0
+        )
         value_scale[t] = scale
-        port_value += series * scale
+        owned_from = ownership_starts.get(t)
+        owned_mask = close_a.index >= owned_from if owned_from is not None else series.notna()
+        ticker_value = (series * scale).where(owned_mask, 0).fillna(0)
+        position_values[t] = ticker_value
+        port_value += ticker_value
 
     total_invested = sum(cost_basis.get(t, 0) for t in avail)
-    invested_series = pd.Series(total_invested, index=close_a.index)
+    invested_series = pd.Series(0.0, index=close_a.index)
+    for t in avail:
+        owned_from = ownership_starts.get(t)
+        if owned_from is None:
+            invested_series += cost_basis.get(t, 0)
+        else:
+            invested_series.loc[invested_series.index >= owned_from] += cost_basis.get(t, 0)
 
     # ── Build transaction timeline for trades overlay ──
     # Tickers that have explicit transaction records
-    txn_tickers = set(dict(tx)["ticker"] for tx in txn_rows)
-
-    # For tickers with no transaction records, synthesize a BUY from all_account_info
-    synthetic_txns = []
-    for r in active_rows:
-        t = r["ticker"]
-        if t not in txn_tickers and r["purchase_date"]:
-            synthetic_txns.append({
-                "ticker": t,
-                "transaction_type": "BUY",
-                "transaction_date": r["purchase_date"],
-                "shares": float(r["quantity"] or 0),
-                "price_per_share": float(r["price_paid"] or 0),
-                "fees": 0,
-                "realized_gain": None,
-            })
-
-    all_txns = [dict(tx) for tx in txn_rows] + synthetic_txns
-
     trade_points = []
     if show_trades:
         for tx in all_txns:
@@ -37295,8 +38234,13 @@ def growth_2_data():
 
     # Cumulative dividends within the period (from yfinance per-share data)
     cum_divs_dollar = pd.Series(0.0, index=dates_idx)
+    ticker_dividends = {}
     for t in avail:
-        cum_divs_dollar += divs_a[t].cumsum() * quantities.get(t, 0)
+        owned_from = ownership_starts.get(t)
+        owned_mask = dates_idx >= owned_from if owned_from is not None else pd.Series(True, index=dates_idx)
+        ticker_div = divs_a[t].where(owned_mask, 0).cumsum() * quantities.get(t, 0)
+        ticker_dividends[t] = ticker_div
+        cum_divs_dollar += ticker_div
 
     # Realized P&L from transactions
     realized_cum = pd.Series(0.0, index=dates_idx)
@@ -37371,9 +38315,8 @@ def growth_2_data():
     if group_by == "ticker":
         per_ticker = {}
         for t in avail:
-            q = quantities.get(t, 0)
-            tv = close_a[t] * q * value_scale.get(t, 1.0)
-            td_div = divs_a[t].cumsum() * q
+            tv = position_values[t]
+            td_div = ticker_dividends[t]
             if pl_basis == "first_trade":
                 t_cg = tv - cost_basis.get(t, 0)
             else:
@@ -37401,13 +38344,12 @@ def growth_2_data():
             cat_name = cat_map.get(t, "Other")
             if cat_name not in per_cat:
                 per_cat[cat_name] = {"value": np.zeros(len(dates_idx)), "cg": np.zeros(len(dates_idx)), "div": np.zeros(len(dates_idx)), "cost": 0.0, "start_val": 0.0}
-            q = quantities.get(t, 0)
-            tv = (close_a[t] * q * value_scale.get(t, 1.0)).values
-            td_div = (divs_a[t].cumsum() * q).values
+            tv = position_values[t].values
+            td_div = ticker_dividends[t].values
             per_cat[cat_name]["value"] += tv
             per_cat[cat_name]["div"] += td_div
             per_cat[cat_name]["cost"] += cost_basis.get(t, 0)
-            per_cat[cat_name]["start_val"] += float(close_a[t].iloc[0]) * q
+            per_cat[cat_name]["start_val"] += float(position_values[t].iloc[0])
 
         grouped = {}
         for cat_name, d in per_cat.items():

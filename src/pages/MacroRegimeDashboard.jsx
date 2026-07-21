@@ -1008,21 +1008,59 @@ function IncomeBenchmarkTab({ pf }) {
         )
       })()}
 
-      {/* Unclassified warning */}
-      {(data.unclassified_pct || 0) > 0 && (
-        <div style={{
-          background: 'rgba(255,202,40,0.08)', border: '1px solid var(--warning)',
-          borderRadius: 8, padding: '0.75rem 1rem', marginTop: '1rem',
-        }}>
-          <div style={{ color: 'var(--p-ffca28)', fontWeight: 600, marginBottom: 4 }}>
-            {fmtPct(data.unclassified_pct)} Unclassified
+      {/* Unclassified — assign a bucket */}
+      {(() => {
+        const unclassified = holdings_detail?.filter(h => h.bucket === 'Unclassified') || []
+        if (!unclassified.length) return null
+        return (
+          <div style={{
+            background: 'rgba(255,202,40,0.08)', border: '1px solid var(--warning)',
+            borderRadius: 8, padding: '0.75rem 1rem', marginTop: '1rem',
+          }}>
+            <div style={{ color: 'var(--p-ffca28)', fontWeight: 600, marginBottom: 4 }}>
+              {fmtPct(data.unclassified_pct)} Unclassified ({unclassified.length})
+            </div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: 8 }}>
+              These holdings couldn't be auto-classified. Pick an income bucket for each one — your choice
+              is saved as an override and takes priority over auto-detection.
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <tbody>
+                {unclassified
+                  .sort((a, b) => (b.current_value || 0) - (a.current_value || 0))
+                  .map((h, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid var(--p-263238)' }}>
+                    <td style={{ ...ibTd, fontSize: '0.78rem' }}>
+                      <span style={{ color: 'var(--accent-2)', fontWeight: 600 }}>{h.ticker}</span>
+                      <span style={{ color: 'var(--p-667)', marginLeft: 6, fontSize: '0.72rem' }}>{h.description?.substring(0, 30)}</span>
+                    </td>
+                    <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmtPct(h.pct_of_portfolio)}</td>
+                    <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmt$(h.current_value)}</td>
+                    <td style={{ ...ibTd, textAlign: 'right', fontSize: '0.78rem' }}>{fmt$(h.monthly_income)}</td>
+                    <td style={{ ...ibTd, textAlign: 'right' }}>
+                      <select
+                        value=""
+                        disabled={saving[h.ticker]}
+                        onChange={e => { if (e.target.value) handleBucketChange(h.ticker, e.target.value) }}
+                        style={{
+                          background: 'var(--p-0f172a)', color: 'var(--text)', border: '1px solid var(--p-334155)',
+                          borderRadius: 4, padding: '2px 4px', fontSize: '0.7rem', cursor: 'pointer',
+                          opacity: saving[h.ticker] ? 0.5 : 1,
+                        }}
+                      >
+                        <option value="">{saving[h.ticker] ? 'Saving...' : '— Assign bucket —'}</option>
+                        {bucketOpts.map(b => (
+                          <option key={b} value={b}>{b}</option>
+                        ))}
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-            These holdings couldn't be auto-classified: {(data.unclassified_tickers || []).join(', ')}.
-            Use the bucket dropdown when expanding a row to reclassify, or assign pillar types in Manage Holdings.
-          </div>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

@@ -65,10 +65,9 @@ import CEFvsIncomeETF from './pages/CEFvsIncomeETF'
 import ETFBuyingChecklistEvaluator from './pages/ETFBuyingChecklistEvaluator'
 import OptionIncomeETFEvaluator from './pages/OptionIncomeETFEvaluator'
 import StockBuyingChecklist from './pages/StockBuyingChecklist'
-// Option Trading Tools and Option Education are intentionally excluded from
-// deployed builds — still in development, not ready for production.
-// import OptionTradingTools from './pages/OptionTradingTools'
-// import OptionEducation from './pages/OptionEducation'
+import OptionTradingTools from './pages/OptionTradingTools'
+import OptionEducation from './pages/OptionEducation'
+import GreeksGuide from './pages/GreeksGuide'
 
 function PlotlyThemeBridge() {
   const { isDark } = useTheme()
@@ -225,7 +224,9 @@ function App() {
         <Route path="/etf-buying-checklist-evaluator" element={<ETFBuyingChecklistEvaluator />} />
         <Route path="/option-income-etf-evaluator" element={<OptionIncomeETFEvaluator />} />
         <Route path="/stock-buying-checklist" element={<StockBuyingChecklist />} />
-        {/* Option Trading Tools and Option Education routes excluded from deployment — not ready */}
+        <Route path="/options" element={<OptionTradingTools />} />
+        <Route path="/option-education" element={<OptionEducation />} />
+        <Route path="/option-greeks" element={<GreeksGuide />} />
         <Route path="/help" element={<Help />} />
       </Routes>
     </Router>
@@ -287,6 +288,11 @@ function Nav() {
     <nav className="nav-bar">
       <NavLink to="/">Dashboard</NavLink>
       <NavLink to="/action-center">Action Center</NavLink>
+      <NavDropdown label="Options">
+        <NavLink to="/options">Strategy Lab</NavLink>
+        <NavLink to="/option-education">Option Strategy Education</NavLink>
+        <NavLink to="/option-greeks">Understanding the Greeks</NavLink>
+      </NavDropdown>
       <NavDropdown label="Portfolio">
         <NavLink to="/holdings">Holdings</NavLink>
         <NavLink to="/common-info">CommonInfo</NavLink>
@@ -357,7 +363,7 @@ function Nav() {
         <NavLink to="/tax-loss">Tax-Loss Harvest</NavLink>
         <NavLink to="/blended-yield">Blended Yield</NavLink>
       </NavDropdown>
-      {/* Option Trading Tools and Option Education hidden from deployed build — not ready */}
+      {/* Option Education remains hidden while in development. */}
       <NavDropdown label="Admin">
         <NavLink to="/import">Import</NavLink>
         <NavLink to="/export">Export</NavLink>

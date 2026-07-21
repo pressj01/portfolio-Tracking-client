@@ -8,6 +8,7 @@ import {
   OPTION_BEST_PRACTICE,
   gradeOptionIncomeETF,
   findETFAlternatives,
+  rankAmongPeers,
   verdictFromComposite,
   deriveUnderlying,
   UNDERLYING_LABELS,
@@ -271,6 +272,7 @@ const UNDERLYING_OPTIONS = [
   ['russell2000', 'Russell 2000'],
   ['dow', 'Dow'],
   ['gold', 'Gold / Commodity'],
+  ['bond', 'Bond / Fixed Income'],
   ['single-stock', 'Single-stock'],
   ['other', 'Other'],
   ['any', 'Any underlying'],
@@ -337,7 +339,7 @@ function AlternativesControls({ underlyingOverride, setUnderlyingOverride, autoU
       <div style={{ flex: 1, minWidth: 220, color: 'var(--p-8aa0c8)', fontSize: '0.82rem', lineHeight: 1.5 }}>
         Alternatives must track the selected underlying and yield{' '}
         <strong style={{ color: 'var(--teal-2)' }}>
-          {floor != null ? `≥ ${floor.toFixed(2)}%` : 'at least 94% of the baseline'}
+          {floor != null ? `≥ ${floor.toFixed(2)}%` : 'at least 90% of the baseline'}
         </strong>{' '}
         ({floorSource || 'default'}).
       </div>
@@ -345,69 +347,235 @@ function AlternativesControls({ underlyingOverride, setUnderlyingOverride, autoU
   )
 }
 
-function AltCard({ alt }) {
+function ordinal(n) {
+  const rem100 = n % 100
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`
+  const rem10 = n % 10
+  return `${n}${rem10 === 1 ? 'st' : rem10 === 2 ? 'nd' : rem10 === 3 ? 'rd' : 'th'}`
+}
+
+function DeltaChip({ value, digits = 1, suffix = 'pp', lowerBetter = false, neutralBand = 0.05 }) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return null
+  const v = Number(value)
+  const good = lowerBetter ? v < 0 : v > 0
+  const color = Math.abs(v) <= neutralBand ? 'var(--text-dim-2)' : good ? 'var(--p-7be5a8)' : 'var(--neg-soft)'
   return (
-    <div style={{
-      background: 'var(--p-1a2744)', border: '1px solid var(--p-243356)', borderRadius: 8, padding: '0.8rem 1rem',
-    }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem 1rem', alignItems: 'baseline' }}>
-        <strong style={{ color: 'var(--teal-2)' }}>{alt.fund.ticker}</strong>
-        <span style={{ color: 'var(--p-b8c8e0)', flex: 1 }}>{alt.fund.name}</span>
-        {alt.isSingleStock && (
-          <span style={{
-            fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
-            background: 'var(--p-5a4a14)', color: 'var(--p-ffd76a)', border: '1px solid var(--p-a3812a)',
-            borderRadius: 4, padding: '0.1rem 0.4rem',
-          }}>
-            Single-stock — higher risk
-          </span>
-        )}
-        <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
-          Yield <strong style={{ color: 'var(--p-e6edf7)' }}>{fmtPct(alt.fund.yield_pct || alt.fund.dividend_yield)}</strong>
-        </span>
-        <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
-          Composite <strong style={{ color: 'var(--p-e6edf7)' }}>{alt.composite.toFixed(1)}</strong>
-        </span>
-      </div>
-      <div style={{ color: 'var(--p-cfd8e3)', fontSize: '0.88rem', marginTop: '0.35rem' }}>
-        <span style={{ color: 'var(--text-dim-2)' }}>Why listed: </span>
-        {alt.reasons.join('; ')}.
+    <span style={{ color, fontSize: '0.74rem', marginLeft: 5, whiteSpace: 'nowrap' }}>
+      {v > 0 ? '+' : ''}{v.toFixed(digits)}{suffix}
+    </span>
+  )
+}
+
+const altBadgeStyle = {
+  fontSize: '0.66rem', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
+  background: 'var(--p-5a4a14)', color: 'var(--p-ffd76a)', border: '1px solid var(--p-a3812a)',
+  borderRadius: 4, padding: '0.05rem 0.35rem', whiteSpace: 'nowrap',
+}
+
+// Side-by-side comparison: the evaluated fund is the first (highlighted) row;
+// every alternative row shows its value plus a signed delta vs that fund.
+// NAV/yr and total-return deltas use each pair's shared history window when
+// the backend supplied it (fund.matched_* fields).
+function AlternativesTable({ current, currentComposite, rows, onEvaluate, dividerLabel }) {
+  const right = { textAlign: 'right', whiteSpace: 'nowrap' }
+  const dim = { color: 'var(--text-dim-2)' }
+  const curYield = current.yield_pct ?? current.dividend_yield
+  const navCell = (alt) => {
+    const nav = alt.deltas?.nav
+    const val = nav ? nav.alt : alt.fund.price_cagr
+    const title = nav?.matched && alt.deltas.matchedYears != null
+      ? `Both funds measured over their shared ${alt.deltas.matchedYears.toFixed(1)}-year window`
+      : 'Full-history comparison (shared-window data unavailable)'
+    return (
+      <td style={right} title={title}>
+        {fmtPct(val)}<DeltaChip value={nav?.delta} />
+        {nav?.matched && <span style={{ ...dim, fontSize: '0.68rem' }}>*</span>}
+      </td>
+    )
+  }
+  const totalCell = (alt) => {
+    const total = alt.deltas?.total
+    const val = total ? total.alt : alt.fund.total_cagr
+    const title = total?.matched && alt.deltas.matchedYears != null
+      ? `Both funds measured over their shared ${alt.deltas.matchedYears.toFixed(1)}-year window`
+      : 'Full-history comparison (shared-window data unavailable)'
+    return (
+      <td style={right} title={title}>
+        {fmtPct(val)}<DeltaChip value={total?.delta} />
+        {total?.matched && <span style={{ ...dim, fontSize: '0.68rem' }}>*</span>}
+      </td>
+    )
+  }
+  return (
+    <div className="stock-check-table-wrap" style={{ overflowX: 'auto' }}>
+      <table className="stock-check-table" style={{ width: '100%', minWidth: 860 }}>
+        <thead>
+          <tr>
+            <th style={{ textAlign: 'left' }}>Fund</th>
+            <th style={right}>Yield</th>
+            <th style={right}>NAV /yr</th>
+            <th style={right}>Total ret /yr</th>
+            <th style={right}>Expense</th>
+            <th style={right}>AUM</th>
+            <th style={right}>Age</th>
+            <th style={right}>Composite</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          <tr style={{ background: 'var(--p-0f1e3b)' }}>
+            <td style={{ borderLeft: '3px solid var(--p-8aa0c8)' }}>
+              <span style={{
+                fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+                color: 'var(--p-8aa0c8)', border: '1px solid var(--p-2a3e6b)', borderRadius: 4,
+                padding: '0.05rem 0.35rem', marginRight: 8,
+              }}>
+                Evaluated fund
+              </span>
+              <strong style={{ color: 'var(--p-e6edf7)' }}>{current.ticker}</strong>
+              <span style={{ ...dim, fontSize: '0.74rem', marginLeft: 8 }}>baseline for the deltas below</span>
+              <div style={{ ...dim, fontSize: '0.78rem' }}>{current.name}</div>
+            </td>
+            <td style={right}>{fmtPct(curYield)}</td>
+            <td style={right}>{fmtPct(current.price_cagr)}</td>
+            <td style={right}>{fmtPct(current.total_cagr)}</td>
+            <td style={right}>{fmtPct(current.expense_ratio)}</td>
+            <td style={right}>{fmtMoney(current.aum)}</td>
+            <td style={right}>{current.history_years != null ? `${Number(current.history_years).toFixed(1)}y` : '-'}</td>
+            <td style={right}><strong style={{ color: 'var(--p-e6edf7)' }}>{currentComposite != null ? currentComposite.toFixed(1) : 'n/a'}</strong></td>
+            <td />
+          </tr>
+          {dividerLabel && (
+            <tr>
+              <td colSpan={9} style={{
+                fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase',
+                color: 'var(--teal-2)', background: 'var(--p-121d35)', padding: '0.35rem 0.6rem',
+                borderTop: '1px solid var(--p-243356)',
+              }}>
+                {dividerLabel}
+              </td>
+            </tr>
+          )}
+          {rows.map(alt => (
+            <tr key={alt.fund.ticker}>
+              <td>
+                <button
+                  type="button"
+                  className="cef-ticker-link"
+                  title={`${alt.reasons.join('; ')}. Click to evaluate ${alt.fund.ticker}.`}
+                  onClick={() => onEvaluate(alt.fund.ticker)}
+                >
+                  {alt.fund.ticker}
+                </button>
+                {alt.isSingleStock && <span style={{ ...altBadgeStyle, marginLeft: 8 }}>Single-stock</span>}
+                {alt.scoredCount != null && alt.scoredCount < 5 && (
+                  <span style={{ ...altBadgeStyle, marginLeft: 8 }} title="Composite covers fewer criteria than the evaluated fund — expense, size, or track-record data is missing.">
+                    {alt.scoredCount} criteria scored
+                  </span>
+                )}
+                <div style={{ ...dim, fontSize: '0.78rem' }}>{alt.fund.name !== alt.fund.ticker ? alt.fund.name : ''}</div>
+              </td>
+              <td style={right}>
+                {fmtPct(alt.fund.yield_pct || alt.fund.dividend_yield)}
+                <DeltaChip value={alt.deltas?.yieldPp} />
+              </td>
+              {navCell(alt)}
+              {totalCell(alt)}
+              <td style={right}>
+                {fmtPct(alt.fund.expense_ratio)}
+                <DeltaChip value={alt.deltas?.expense} digits={2} suffix="" lowerBetter neutralBand={0.01} />
+              </td>
+              <td style={right}>{fmtMoney(alt.fund.aum)}</td>
+              <td style={right}>{alt.fund.history_years != null ? `${Number(alt.fund.history_years).toFixed(1)}y` : '-'}</td>
+              <td style={right}>
+                <strong style={{ color: 'var(--p-e6edf7)' }}>{alt.composite.toFixed(1)}</strong>
+                <DeltaChip value={alt.deltas?.composite} suffix="" neutralBand={0.5} />
+              </td>
+              <td style={right}>
+                <Link
+                  to={`/etf-comparer?tickers=${encodeURIComponent(current.ticker)},${encodeURIComponent(alt.fund.ticker)}`}
+                  style={{ color: 'var(--teal-2)', fontSize: '0.82rem', whiteSpace: 'nowrap' }}
+                  title={`Open ETF Comparer with ${current.ticker} and ${alt.fund.ticker}`}
+                >
+                  Compare ⇄
+                </Link>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ color: 'var(--text-dim-2)', fontSize: '0.78rem', padding: '0.45rem 0.6rem' }}>
+        Deltas are measured against {current.ticker}. * NAV/yr and total-return figures marked with an asterisk
+        are computed over that pair's shared history window (both funds measured from the later inception), so
+        funds launched at different points in the market cycle compare fairly.
       </div>
     </div>
   )
 }
 
-function AlternativesList({ alternatives, fallbackAlternatives, peerCount, effectiveUnderlying }) {
+function RankStrip({ rankInfo, filterLabel, ticker }) {
+  if (!rankInfo) return null
+  const top = rankInfo.rank === 1
+  const groupLabel = `${filterLabel ? `${filterLabel} ` : ''}option-income peer${rankInfo.total === 1 ? '' : 's'}`
+  return (
+    <div style={{
+      display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+      padding: '0.4rem 0.8rem', marginBottom: '0.8rem', borderRadius: 6, fontSize: '0.88rem',
+      ...(top
+        ? { background: 'var(--p-0f4e2e)', border: '1px solid var(--p-1d8a52)', color: 'var(--p-7be5a8)' }
+        : { background: 'var(--p-1f2e52)', border: '1px solid var(--p-2a3e6b)', color: 'var(--p-b8c8e0)' }),
+    }}>
+      <strong>{ticker}</strong> ranks {ordinal(rankInfo.rank)} of {rankInfo.total} {groupLabel} by composite score
+      {top ? ' — best in its group.' : `. ${rankInfo.betterCount} peer${rankInfo.betterCount === 1 ? '' : 's'} score${rankInfo.betterCount === 1 ? 's' : ''} higher.`}
+    </div>
+  )
+}
+
+function AlternativesList({ fund, currentComposite, alternatives, fallbackAlternatives, peerCount, effectiveUnderlying, rankInfo, onEvaluate }) {
   const filterLabel = (effectiveUnderlying && effectiveUnderlying !== 'any')
     ? (UNDERLYING_LABELS[effectiveUnderlying] || 'Other')
     : null
   const showFallback = alternatives.length === 0 && fallbackAlternatives.length > 0
+  const rankedTop = rankInfo && rankInfo.rank === 1
   return (
     <div style={{ marginTop: '1rem' }}>
       <h2 style={{ color: 'var(--p-e6edf7)', fontSize: '1.1rem', margin: '0 0 0.4rem' }}>
-        Quality alternatives{filterLabel ? ` — ${filterLabel}` : ''}
+        Better alternatives{filterLabel ? ` — ${filterLabel}` : ''}
       </h2>
       <p style={{ color: 'var(--text-dim-2)', fontSize: '0.86rem', margin: '0 0 0.8rem' }}>
-        Option-income ETFs that clear the checklist and pass quality checks against this fund's NAV trend,
-        total return, history, and structure{filterLabel ? `, restricted to ${filterLabel} underliers` : ''}. {peerCount} peers screened.
-        Single-stock income ETFs are excluded unless the selected fund is also single-stock: they are typically far more volatile than a
-        diversified fund.
+        A peer is listed only if it beats this fund's composite by at least 2 points, clears the checklist,
+        keeps the yield floor above, and shows a concrete improvement (NAV trend, total return, yield, cost,
+        or size){filterLabel ? `, restricted to ${filterLabel} underliers` : ''}. {peerCount} peers screened.
+        Single-stock income ETFs are excluded unless the selected fund is also single-stock.
       </p>
+      <RankStrip rankInfo={rankInfo} filterLabel={filterLabel} ticker={fund.ticker} />
       {alternatives.length > 0 ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {alternatives.map(alt => <AltCard key={alt.fund.ticker} alt={alt} />)}
-        </div>
+        <AlternativesTable
+          current={fund}
+          currentComposite={currentComposite}
+          rows={alternatives}
+          onEvaluate={onEvaluate}
+          dividerLabel={`↓ ${alternatives.length} fund${alternatives.length === 1 ? '' : 's'} that beat ${fund.ticker} — click a ticker to evaluate it`}
+        />
       ) : showFallback ? (
         <>
           <div style={{
-            background: 'var(--p-5a1a1a)', border: '1px solid var(--p-a83232)', borderRadius: 6,
-            padding: '0.8rem 1rem', marginBottom: '0.7rem', color: 'var(--neg-soft)', fontSize: '0.9rem',
+            padding: '0.8rem 1rem', marginBottom: '0.7rem', borderRadius: 6, fontSize: '0.9rem',
+            ...(rankedTop
+              ? { background: 'var(--p-0f4e2e)', border: '1px solid var(--p-1d8a52)', color: 'var(--p-7be5a8)' }
+              : { background: 'var(--p-1f2e52)', border: '1px solid var(--p-2a3e6b)', color: 'var(--p-b8c8e0)' }),
           }}>
-            All {filterLabel || 'matching'} peers fail the checklist — these are the highest-scoring options in this space, but none earned a passing grade.
+            {rankedTop
+              ? `No stronger alternative found — ${fund.ticker} is the top-ranked fund in this group. The strongest peers are shown below for context.`
+              : `No peer beats ${fund.ticker} by the required margin while clearing the checklist and yield floor. The strongest peers are shown below for context — none qualified as a genuinely better alternative.`}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {fallbackAlternatives.map(alt => <AltCard key={alt.fund.ticker} alt={alt} />)}
-          </div>
+          <AlternativesTable
+            current={fund}
+            currentComposite={currentComposite}
+            rows={fallbackAlternatives}
+            onEvaluate={onEvaluate}
+            dividerLabel={`↓ closest peers for context — none beat ${fund.ticker} by the required margin`}
+          />
         </>
       ) : (
         <div style={{ background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6, padding: '1rem', color: 'var(--p-b8c8e0)' }}>
@@ -488,7 +656,11 @@ export default function OptionIncomeETFEvaluator() {
       minHistoryYears: 1.0,
       optionIncomeQualityFloor: true,
       excludeSingleStockUnlessCurrent: true,
-      minCompositeDelta: 0,
+      // "Better" means better: out-score the evaluated fund by a margin above
+      // noise, with real criterion coverage and a concrete metric improvement.
+      minCompositeDelta: 2,
+      requireImprovement: true,
+      minScoredCriteria: 5,
     }
   }, [effectiveUnderlying, targetYield, minYield])
 
@@ -499,12 +671,34 @@ export default function OptionIncomeETFEvaluator() {
     })
   }, [fund, peers, thresholds, altOpts])
 
+  // Context list when nothing clears the "actually better" bar: the strongest
+  // peers regardless, shown with honest deltas (usually negative).
   const fallbackAlternatives = useMemo(() => {
     if (!fund || alternatives.length > 0) return []
     return findETFAlternatives(fund, peers, thresholds, gradeOptionIncomeETF, 6, {
-      ...altOpts, passingOnly: false, optionIncomeQualityFloor: false, minCompositeDelta: -100,
+      ...altOpts,
+      passingOnly: false, optionIncomeQualityFloor: false,
+      minCompositeDelta: -Infinity, requireImprovement: false, minScoredCriteria: null,
     })
   }, [fund, peers, thresholds, altOpts, alternatives])
+
+  // Where the evaluated fund itself ranks among the same comparable peer
+  // population the alternatives are drawn from.
+  const rankInfo = useMemo(() => {
+    if (!fund) return null
+    return rankAmongPeers(fund, peers, thresholds, gradeOptionIncomeETF, {
+      underlyingGroup: effectiveUnderlying,
+      minHistoryYears: 1.0,
+      excludeSingleStockUnlessCurrent: true,
+      minScoredCriteria: 5,
+    })
+  }, [fund, peers, thresholds, effectiveUnderlying])
+
+  const evaluateAlt = useCallback((t) => {
+    setInputTicker(t)
+    evaluate(t)
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }) } catch { /* noop */ }
+  }, [evaluate])
 
   const verdict = useMemo(() => {
     if (!result) return null
@@ -586,6 +780,18 @@ export default function OptionIncomeETFEvaluator() {
         <>
           <HeaderCard fund={fund} />
 
+          {fund.price_history_suspect && (
+            <div style={{
+              background: 'var(--p-5a1a1a)', border: '1px solid var(--p-a83232)', borderRadius: 6,
+              padding: '0.8rem 1rem', marginBottom: '1rem', color: 'var(--neg-soft)', fontSize: '0.92rem',
+            }}>
+              <strong>{fund.ticker}</strong>'s price history contains a split/rename discontinuity (a jump too large
+              to be a real session), so NAV-erosion and total-return figures were withheld to avoid reporting a
+              fabricated return. This usually means the ticker was reverse-split or renamed — check whether a
+              successor ticker (e.g. NUSI → QQQH) should be evaluated instead.
+            </div>
+          )}
+
           <div style={{
             background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6,
             padding: '0.7rem 1rem', marginBottom: '1rem',
@@ -652,10 +858,14 @@ export default function OptionIncomeETFEvaluator() {
             fundYield={fund.yield_pct || fund.dividend_yield}
           />
           <AlternativesList
+            fund={fund}
+            currentComposite={result.composite}
             alternatives={alternatives}
             fallbackAlternatives={fallbackAlternatives}
             peerCount={peers.length}
             effectiveUnderlying={effectiveUnderlying}
+            rankInfo={rankInfo}
+            onEvaluate={evaluateAlt}
           />
 
           <div style={{
@@ -669,7 +879,10 @@ export default function OptionIncomeETFEvaluator() {
             share-price (price-only) trend over the fund's full history, which exposes distributions funded by
             return of capital even when reinvested-dividend total return looks acceptable. For funds without a
             3Y/5Y yfinance return, the full-history annualized total return is used as a fallback so newer funds
-            are still scored. Custom thresholds persist in this browser via localStorage.
+            are still scored. Alternative NAV/return deltas are computed over each pair's shared history window
+            (both funds measured from the later inception) so launch-date timing doesn't distort the comparison,
+            and a peer is only called "better" if it out-scores this fund by 2+ composite points with at least
+            one concrete improvement. Custom thresholds persist in this browser via localStorage.
           </div>
         </>
       )}

@@ -483,9 +483,19 @@ function optGradeTrackRecord(fund, peers, thresholds) {
   const t = thresholds.trackRecord
   const inception = fund.inception_date
   let ageYears = null
+  let ageFromHistory = false
   if (inception) {
     const diff = Date.now() - new Date(inception).getTime()
     ageYears = diff / (365.25 * 24 * 60 * 60 * 1000)
+  }
+  // Without an inception date, the span of available price history is a solid
+  // lower bound on age — otherwise young funds dodge the track-record penalty.
+  if (ageYears === null) {
+    const histYears = num(fund.history_years)
+    if (histYears !== null) {
+      ageYears = histYears
+      ageFromHistory = true
+    }
   }
   const r3y = num(fund.three_year_return)
   const peerReturns = (peers || [])
@@ -497,7 +507,7 @@ function optGradeTrackRecord(fund, peers, thresholds) {
   const metrics = [
     { label: 'Fund family', value: fund.fund_family || 'n/a' },
     { label: 'Inception date', value: inception || 'n/a' },
-    { label: 'Age', value: ageYears !== null ? `${ageYears.toFixed(1)} years` : 'n/a' },
+    { label: 'Age', value: ageYears !== null ? `${ageYears.toFixed(1)} years${ageFromHistory ? ' (from price history)' : ''}` : 'n/a' },
     { label: '3Y avg total return', value: pct(r3y) },
     { label: 'Option-income peer median (3Y)', value: pct(median) },
   ]
@@ -591,17 +601,65 @@ export function gradeOptionIncomeETF(fund, peers, thresholds) {
 //  ALTERNATIVES (shared by both evaluators)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function describeImprovement(label, altVal, curVal, isPct, lowerBetter) {
-  if (altVal === null || curVal === null) return null
-  const delta = altVal - curVal
-  if (lowerBetter && delta < 0)
-    return `Lower ${label} (${isPct ? pct(altVal) : altVal.toFixed(2)} vs ${isPct ? pct(curVal) : curVal.toFixed(2)})`
-  if (!lowerBetter && delta > 0)
-    return `Higher ${label} (${isPct ? pct(altVal) : altVal.toFixed(2)} vs ${isPct ? pct(curVal) : curVal.toFixed(2)})`
+const fundYield = (f) => num(f.yield_pct) ?? num(f.ttm_yield) ?? num(f.dividend_yield)
+
+// Prefer the matched-window pair (peer + evaluated fund measured over their
+// SHARED history window, attached to the peer by the backend) over raw
+// full-history CAGRs: funds launched at different points in the cycle are not
+// comparable on full-history numbers. Falls back to raw values when the
+// matched pair is unavailable (fund too new, backend cache miss).
+function pairDelta(altFund, curFund, matchedAltKey, matchedRefKey, rawKey) {
+  const am = num(altFund[matchedAltKey])
+  const rm = num(altFund[matchedRefKey])
+  if (am !== null && rm !== null) return { alt: am, cur: rm, delta: am - rm, matched: true }
+  const ar = num(altFund[rawKey])
+  const cr = num(curFund[rawKey])
+  if (ar !== null && cr !== null) return { alt: ar, cur: cr, delta: ar - cr, matched: false }
   return null
 }
 
-const fundYield = (f) => num(f.yield_pct) ?? num(f.ttm_yield) ?? num(f.dividend_yield)
+// Signed metric deltas of an alternative vs the evaluated fund, plus the
+// honest list of genuine improvements. `reasons` is empty when the candidate
+// has no concrete edge — callers must not paper over that.
+export function compareAlternative(altFund, curFund, altComposite, curComposite) {
+  const ay = fundYield(altFund)
+  const cy = fundYield(curFund)
+  const nav = pairDelta(altFund, curFund, 'matched_price_cagr', 'ref_matched_price_cagr', 'price_cagr')
+  const total = pairDelta(altFund, curFund, 'matched_total_cagr', 'ref_matched_total_cagr', 'total_cagr')
+  const ae = num(altFund.expense_ratio)
+  const ce = num(curFund.expense_ratio)
+  const aa = num(altFund.aum)
+  const ca = num(curFund.aum)
+  const matchedYears = num(altFund.matched_years)
+  const deltas = {
+    composite: (typeof altComposite === 'number' && typeof curComposite === 'number')
+      ? altComposite - curComposite : null,
+    yieldPp: (ay !== null && cy !== null) ? ay - cy : null,
+    nav,
+    total,
+    expense: (ae !== null && ce !== null) ? ae - ce : null,
+    aumRatio: (aa && ca) ? aa / ca : null,
+    matchedYears,
+  }
+  const sharedWindow = matchedYears !== null ? ` over the shared ${matchedYears.toFixed(1)}y window` : ''
+  const reasons = []
+  if (deltas.yieldPp !== null && deltas.yieldPp > 0.25) {
+    reasons.push(`Higher yield (${pct(ay)} vs ${pct(cy)})`)
+  }
+  if (nav && nav.delta > 0.5) {
+    reasons.push(`NAV holds up better (price ${pct(nav.alt)}/yr vs ${pct(nav.cur)}/yr${nav.matched ? sharedWindow : ''})`)
+  }
+  if (total && total.delta > 0.5) {
+    reasons.push(`Higher total return (${pct(total.alt)}/yr vs ${pct(total.cur)}/yr${total.matched ? sharedWindow : ''})`)
+  }
+  if (deltas.expense !== null && deltas.expense < -0.05) {
+    reasons.push(`Lower expense ratio (${pct(ae)} vs ${pct(ce)})`)
+  }
+  if (deltas.aumRatio !== null && deltas.aumRatio > 2) {
+    reasons.push(`Larger fund (${money(aa)} vs ${money(ca)})`)
+  }
+  return { deltas, reasons }
+}
 
 // Derive a canonical "underlying" group from the fund's live name / category.
 // Purely data-driven keyword extraction — no per-ticker table — so alternatives
@@ -618,6 +676,7 @@ export function deriveUnderlying(fund) {
   if (/russell|\biwm\b|\b2000\b|small[-\s]?cap/.test(text)) return 'russell2000'
   if (/\bdow\b|djia|\bdia\b|industrial average/.test(text)) return 'dow'
   if (/\bgold\b|\bgld\b|\bsilver\b|\bslv\b|precious metal|commodit/.test(text)) return 'gold'
+  if (/treasur|\bbonds?\b|fixed[-\s]?income|\btlt\b|\bhyg\b|\blqd\b|\bagg\b|munic|corporate credit|high[-\s]?yield credit/.test(text)) return 'bond'
   return 'other'
 }
 
@@ -628,6 +687,7 @@ export const UNDERLYING_LABELS = {
   russell2000: 'Russell 2000',
   dow: 'Dow',
   gold: 'Gold / Commodity',
+  bond: 'Bond / Fixed Income',
   'single-stock': 'Single-stock',
   other: 'Other',
 }
@@ -707,24 +767,73 @@ function passesOptionIncomeQualityFloor(currentFund, candidateFund, currentGrade
   return true
 }
 
+// Peers restricted to the comparable universe: same underlying group, real
+// price history, enough history, and (optionally) enough scored criteria for
+// the composite to mean something. Shared by the ranking and alternatives
+// paths so "rank" and "alternatives" always draw from the same population.
+function comparablePeers(currentFund, peers, thresholds, gradeFunc, opts = {}) {
+  const { underlyingGroup = null, minHistoryYears = null, minScoredCriteria = null,
+          excludeSingleStockUnlessCurrent = false } = opts
+  const currentTicker = String(currentFund.ticker || '').toUpperCase()
+  let graded = peers
+    .filter(p => String(p.ticker || '').toUpperCase() !== currentTicker)
+    .map(p => ({ grade: gradeFunc(p, peers, thresholds), fund: p }))
+    .filter(g => typeof g.grade.composite === 'number')
+
+  if (underlyingGroup && underlyingGroup !== 'any') {
+    graded = graded.filter(g => deriveUnderlying(g.fund) === underlyingGroup)
+  }
+  if (excludeSingleStockUnlessCurrent && !currentFund.is_single_stock) {
+    graded = graded.filter(g => !g.fund.is_single_stock)
+  }
+  if (minHistoryYears !== null) {
+    graded = graded.filter(g => {
+      const yrs = num(g.fund.history_years)
+      return yrs !== null && yrs >= minHistoryYears
+    })
+  }
+  // A composite blended from only 2-3 criteria isn't comparable to the
+  // evaluated fund's 6-7. Require real coverage before a peer can rank or
+  // be surfaced as an alternative.
+  if (minScoredCriteria !== null) {
+    graded = graded.filter(g =>
+      (g.grade.criteria || []).filter(c => typeof c.score === 'number').length >= minScoredCriteria)
+  }
+  return graded
+}
+
+// Where the evaluated fund lands among its comparable peers by composite.
+// Returns { rank, total, betterCount } (rank 1 = best) or null if the fund
+// has no composite or has no comparable peers to rank against.
+export function rankAmongPeers(currentFund, peers, thresholds, gradeFunc, opts = {}) {
+  if (!currentFund || !peers || !peers.length) return null
+  const currentGrade = gradeFunc(currentFund, peers, thresholds)
+  if (typeof currentGrade.composite !== 'number') return null
+  const graded = comparablePeers(currentFund, peers, thresholds, gradeFunc, opts)
+  if (!graded.length) return null
+  const betterCount = graded.filter(g => g.grade.composite > currentGrade.composite).length
+  return { rank: betterCount + 1, total: graded.length + 1, betterCount }
+}
+
 // opts:
 //   passingOnly    — only keep alternatives that clear the checklist (verdict not "Do Not Buy")
 //   yieldFloorRatio — alt yield must be ≥ currentYield × ratio (e.g. 0.90 = at most 10% less income)
 //   singleStockLast — sort diversified funds first, single-stock income ETFs last (still shown, flagged)
 //   optionIncomeQualityFloor — reject option-income peers materially worse than the selected fund
+//   minCompositeDelta — alt composite must beat the evaluated fund by at least this (applies on ALL paths)
+//   requireImprovement — drop candidates with no concrete metric edge (yield/NAV/return/expense/size)
+//   minScoredCriteria — require the candidate's composite to cover at least N criteria
 export function findETFAlternatives(currentFund, peers, thresholds, gradeFunc, limit = 5, opts = {}) {
   if (!currentFund || !peers || !peers.length) return []
   const {
     passingOnly = false,
     yieldFloorRatio = null,
     yieldBaseline = null,
-    underlyingGroup = null,
     singleStockLast = false,
-    minHistoryYears = null,
     minCompositeDelta = 1,
+    requireImprovement = false,
     optionIncomeQualityFloor = false,
   } = opts
-  const currentTicker = String(currentFund.ticker || '').toUpperCase()
   const currentGrade = gradeFunc(currentFund, peers, thresholds)
   const curYield = fundYield(currentFund)
   // Income floor is measured against an explicit target yield when supplied,
@@ -732,23 +841,7 @@ export function findETFAlternatives(currentFund, peers, thresholds, gradeFunc, l
   const baselineYield = (yieldBaseline !== null && Number.isFinite(yieldBaseline)) ? yieldBaseline : curYield
   const yieldFloor = (yieldFloorRatio !== null && baselineYield !== null) ? baselineYield * yieldFloorRatio : null
 
-  let graded = peers
-    .filter(p => String(p.ticker || '').toUpperCase() !== currentTicker)
-    .map(p => ({ grade: gradeFunc(p, peers, thresholds), fund: p }))
-    .filter(g => typeof g.grade.composite === 'number')
-
-  // Restrict to peers tracking the same underlying (e.g. crypto vs QQQ vs S&P).
-  // null or 'any' disables the filter.
-  if (underlyingGroup && underlyingGroup !== 'any') {
-    graded = graded.filter(g => deriveUnderlying(g.fund) === underlyingGroup)
-  }
-
-  if (minHistoryYears !== null) {
-    graded = graded.filter(g => {
-      const yrs = num(g.fund.history_years)
-      return yrs !== null && yrs >= minHistoryYears
-    })
-  }
+  let graded = comparablePeers(currentFund, peers, thresholds, gradeFunc, opts)
 
   if (passingOnly) {
     graded = graded.filter(g => {
@@ -759,8 +852,13 @@ export function findETFAlternatives(currentFund, peers, thresholds, gradeFunc, l
       const v = verdictFromComposite(g.grade.composite, g.grade.criteria)
       return v.tone === 'pass' || v.tone === 'warn'
     })
-  } else {
-    graded = graded.filter(g => currentGrade.composite === null || g.grade.composite > currentGrade.composite + minCompositeDelta)
+  }
+
+  // An alternative must out-score the evaluated fund to be "better" — enforced
+  // on every path (the passing-checklist path used to skip this, which is why
+  // funds worse than the one being evaluated kept showing up).
+  if (typeof currentGrade.composite === 'number') {
+    graded = graded.filter(g => g.grade.composite >= currentGrade.composite + minCompositeDelta)
   }
 
   if (optionIncomeQualityFloor) {
@@ -774,7 +872,20 @@ export function findETFAlternatives(currentFund, peers, thresholds, gradeFunc, l
     })
   }
 
-  graded.sort((a, b) => {
+  // Attach honest, matched-window-aware deltas and the list of genuine edges.
+  let scored = graded.map(g => ({
+    ...g,
+    cmp: compareAlternative(g.fund, currentFund, g.grade.composite, currentGrade.composite),
+  }))
+
+  // A higher composite alone can come entirely from softer criteria (expense,
+  // size, age). Require a concrete outcome edge so every listed alternative is
+  // defensibly better on something the investor cares about.
+  if (requireImprovement) {
+    scored = scored.filter(s => s.cmp.reasons.length > 0)
+  }
+
+  scored.sort((a, b) => {
     if (singleStockLast) {
       const as = a.fund.is_single_stock ? 1 : 0
       const bs = b.fund.is_single_stock ? 1 : 0
@@ -783,36 +894,21 @@ export function findETFAlternatives(currentFund, peers, thresholds, gradeFunc, l
     return b.grade.composite - a.grade.composite
   })
 
-  return graded.slice(0, limit).map(({ grade, fund: alt }) => {
-    const cur = currentFund
-    const ay = fundYield(alt), cy = fundYield(cur)
-    const reasons = [
-      (ay !== null && cy !== null)
-        ? (ay >= cy
-          ? `Comparable yield (${pct(ay)} vs ${pct(cy)})`
-          : (cy - ay <= 3
-            ? `Yield ${pct(ay)} vs ${pct(cy)} — ${(cy - ay).toFixed(2)}pp less income`
-            : `Lower yield (${pct(ay)} vs ${pct(cy)})`))
-        : null,
-      (() => {
-        const ap = num(alt.price_cagr), cp = num(cur.price_cagr)
-        if (ap !== null && cp !== null && ap > cp + 0.5)
-          return `NAV holds up better (price ${pct(ap)}/yr vs ${pct(cp)}/yr)`
-        return null
-      })(),
-      describeImprovement('total return', num(alt.total_cagr), num(cur.total_cagr), true, false),
-      describeImprovement('expense ratio', num(alt.expense_ratio), num(cur.expense_ratio), true, true),
-      (() => {
-        const a = num(alt.aum), c = num(cur.aum)
-        if (a && c && a > c * 2) return `Larger fund (${money(a)} vs ${money(c)})`
-        return null
-      })(),
-    ].filter(Boolean).slice(0, 3)
+  return scored.slice(0, limit).map(({ grade, fund: alt, cmp }) => {
+    let reasons = cmp.reasons.slice(0, 3)
+    if (!reasons.length) {
+      const d = cmp.deltas.composite
+      reasons = (typeof d === 'number' && d > 0)
+        ? [`Higher composite score (+${d.toFixed(1)})`]
+        : ['Comparable overall profile']
+    }
     return {
       fund: alt,
       composite: grade.composite,
+      deltas: cmp.deltas,
+      scoredCount: (grade.criteria || []).filter(c => typeof c.score === 'number').length,
       isSingleStock: !!alt.is_single_stock,
-      reasons: reasons.length ? reasons : ['Higher overall composite score'],
+      reasons,
     }
   })
 }

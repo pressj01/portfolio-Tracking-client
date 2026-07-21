@@ -14,6 +14,7 @@ function fmt(v, dec = 2) {
 }
 
 function ScannerChartModal({ ticker, timeframe, period, onClose }) {
+  const { isDark } = useTheme()
   const pf = useProfileFetch()
   const [figData, setFigData] = useState(null)
   const [figLayout, setFigLayout] = useState(null)

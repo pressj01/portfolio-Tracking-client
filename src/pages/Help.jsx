@@ -1,6 +1,6 @@
 ﻿import React, { useState } from 'react'
 
-const APP_VERSION = '1.31.14'
+const APP_VERSION = '1.32.1'
 
 const GROUPS = [
   {
@@ -15,6 +15,13 @@ const GROUPS = [
     label: 'Action Center',
     sections: [
       { id: 'action-center', label: 'Action Center' },
+    ],
+  },
+  {
+    id: 'options-group',
+    label: 'Options',
+    sections: [
+      { id: 'options', label: 'Options' },
     ],
   },
   {
@@ -128,6 +135,7 @@ function Overview() {
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
         <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation. Includes an Action Center preview panel showing the top follow-up items.</li>
         <li><strong>Action Center</strong> — Automatically generated follow-up items drawn from your portfolio data, categorized by priority (Needs Review, Watch, Clear) and kind (Allocation, Dividend, Income, Rebalance, Tax, etc.).</li>
+        <li><strong>Options</strong> — Build simulated multi-leg trades, graph risk and moneyness, explore first- and higher-order Greeks, and run modeled historical strategy backtests.</li>
         <li><strong>Dividends</strong> — Dividend analysis, calendar view, dividend history, dividend compare, and dividend calculator.</li>
         <li><strong>Growth</strong> — Portfolio growth charts, total return tracking, gains &amp; losses breakdown, and safe withdrawal rate analysis.</li>
         <li><strong>Watchlist</strong> — Track tickers outside your portfolio with live price and dividend data.</li>
@@ -2319,8 +2327,9 @@ function PortfolioGrowth2Help() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Controls</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
-          <strong>Period</strong> - Eight buttons covering 7d, 1m, 3m, 6m, YTD, 1y, 5y, and all. Controls
-          the date range used by both charts, and changing it triggers a fresh data fetch.
+          <strong>Period</strong> - Preset buttons cover 7d, 1m, 3m, 6m, YTD, 1y, 5y, and all. Choose
+          <strong> Custom</strong> to enter your own inclusive start and end dates. The selected range
+          controls both charts, and changing it triggers a fresh data fetch.
         </li>
         <li>
           <strong>Tickers</strong> - A multi-select dropdown listing every ticker in the active portfolio.
@@ -2333,8 +2342,9 @@ function PortfolioGrowth2Help() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart 1 - Portfolio Value</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Shows the total dollar value of your portfolio over the selected period, calculated as current
-        share quantities multiplied by historical daily closing prices. This is not a simulated backtest -
-        it uses your actual holdings and shows what those shares were worth each day.
+        share quantities multiplied by historical daily closing prices. A holding contributes only from
+        its first known purchase or transaction date; the chart does not backfill recently acquired
+        holdings into years before you owned them. This is not a simulated backtest.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
@@ -2343,8 +2353,9 @@ function PortfolioGrowth2Help() {
         </li>
         <li>
           <strong>Show cost basis</strong> - Toggle the orange dashed line showing your total invested
-          amount (sum of purchase values across all active tickers). When the portfolio line is above this
-          line you are in unrealized profit; below it you are at a loss.
+          amount (sum of purchase values across active tickers). Cost basis enters the timeline on each
+          holding's first known ownership date. When the portfolio line is above this line you are in
+          unrealized profit; below it you are at a loss.
         </li>
         <li>
           <strong>Show trades</strong> - Overlay buy and sell markers on the portfolio value line.
@@ -3081,9 +3092,31 @@ function TotalReturnHelp() {
         </li>
       </ul>
       <p style={{ marginBottom: '1rem' }}>
-        All lines are normalized to 100 at the start of the selected period so that different-priced
-        securities can be directly compared. A dashed gray baseline at 100 marks the starting point.
-        Hover over the chart for a unified tooltip showing all values at a given date.
+        All lines are normalized to 100 so that securities with different share prices can be
+        directly compared. A dashed gray baseline at 100 marks the starting value. Hover over the
+        chart for a unified tooltip showing all values at a given date.
+      </p>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Where the Measurement Starts and What the Scale Means</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each ticker is measured from its <strong>first available Yahoo Finance trading value within
+        the selected period</strong>. That value is reset to 100. The chart is therefore a relative
+        performance index—not dollars, a score, your purchase price or cost basis, or an annualized return.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>100</strong> — unchanged from the ticker's starting value.</li>
+        <li><strong>120</strong> — a cumulative gain of 20% over the displayed period.</li>
+        <li><strong>140</strong> — a cumulative gain of 40% over the displayed period.</li>
+        <li><strong>80</strong> — a cumulative loss of 20% over the displayed period.</li>
+        <li><strong>50</strong> — a cumulative loss of 50% over the displayed period.</li>
+        <li><strong>0</strong> — an effective loss of 100%.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
+        The baseline is the beginning of the selected chart period, not the date you purchased the
+        holding. A newer ticker may begin at 100 later because it does not have history for the full
+        period. In <strong>Total Return</strong> mode, Yahoo's adjusted-close history accounts for
+        distributions as though reinvested; <strong>Price</strong> mode shows price movement without
+        distributions. Extreme drops or jumps can sometimes reflect Yahoo data or corporate actions.
       </p>
 
       {/* ── Scatter Chart ───────────────────────────────────────── */}
@@ -3891,11 +3924,11 @@ function NavErosionHelp() {
     <div>
       <h2>NAV Erosion (Single Ticker)</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The NAV Erosion page is a backtester for a single high-yield ETF or fund. It simulates
+        The NAV Erosion page is a price-erosion backtester for a single high-yield ETF or fund. It simulates
         month-by-month what would have happened to your investment over a historical period,
         accounting for share price changes, distributions, and your chosen reinvestment level.
-        It answers a critical question for income investors: <em>Is this fund's distribution
-        sustainable, or is it slowly eating into your principal?</em>
+        It uses market closing prices as a NAV proxy rather than issuer-published NAV and asks:
+        <em> Does the fund lose price when its underlying benchmark is flat or rising?</em>
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -3904,18 +3937,15 @@ function NavErosionHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What is NAV Erosion?</h3>
       <p style={{ marginBottom: '1rem' }}>
-        NAV (Net Asset Value) erosion occurs when a fund's share price falls faster than its
-        distributions can compensate for. A fund paying a 15% annual distribution yield but losing
-        20% of its price per year may be eroding your principal. The NAV erosion ratio compares
-        the fund's price decline against a relevant benchmark, then scales the destructive decline
-        by the fund's distribution yield. A lower ratio means less benchmark-adjusted erosion.
-        Benchmark weakness is treated as context: if the benchmark is down too, the fund's decline
-        is not automatically treated as structural NAV erosion.
+        Confirmed erosion is a month in which the fund price declines while its underlying benchmark
+        is flat or positive. A fund is therefore not penalized merely because its whole market fell.
+        The page separately reports investor total return, relative benchmark drag, and the number of
+        shares needed to restore the initial capital value; those measures do not override the confirmed-erosion verdict.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Formula</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        The benchmark-adjusted NAV erosion ratio is computed as:
+        The confirmed price-erosion ratio is computed as:
       </p>
       <pre style={{
         background: 'var(--p-1a1a1a)',
@@ -3926,88 +3956,84 @@ function NavErosionHelp() {
         color: 'var(--text)',
         fontSize: '0.95rem',
         whiteSpace: 'pre-wrap',
-      }}>{`Ratio = |Fund Price Return| ÷ TTM Distribution Yield   (when erosion applies)
-Ratio = 0                                                (when it does not)
+      }}>{`Monthly confirmed loss/share = Prior Fund Price − Current Fund Price
+                               (only when Fund Return < 0 and Benchmark Return ≥ 0)
+Monthly ratio = Confirmed loss/share ÷ Distribution/share
+Period ratio  = Σ confirmed monthly loss/share ÷ Σ period distributions/share
 
 Where:
-  Fund Price Return     = (End Price − Start Price) ÷ Start Price
-  Benchmark Return      = (Bench End − Bench Start) ÷ Bench Start
-                          (sum of component returns for composite benchmarks)
-  TTM Distribution Yield = (Trailing-12-mo distributions per share) ÷ End Price`}</pre>
+  Fund Return      = (Current Fund Price − Prior Fund Price) ÷ Prior Fund Price
+  Benchmark Return = (Current Bench Price − Prior Bench Price) ÷ Prior Bench Price
+                     (sum of component returns for composite benchmarks)`}</pre>
       <p style={{ marginBottom: '0.75rem' }}>
-        <strong>Benchmark gate.</strong> The benchmark acts as a context filter, not a subtraction.
-        Erosion is only counted (numerator = <code>|Fund Return|</code>) when <em>both</em> conditions hold:
+        <strong>Benchmark gate.</strong> The benchmark acts as a context filter. Erosion is counted only when:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li>Fund Return is negative (the fund's price actually fell), <em>and</em></li>
         <li>Benchmark Return is flat or positive (the underlying market was not down).</li>
       </ul>
       <p style={{ marginBottom: '0.75rem' }}>
-        If the fund is up, or if the benchmark itself is down, the numerator is forced to <code>0</code>
-        — a fund is not punished for tracking a falling market lower, only for losing price while its
-        benchmark held up. This is what makes the ratio "benchmark-adjusted."
+        If the fund is up, or if the benchmark itself is down, confirmed erosion for that month is <code>0</code>.
+        Relative Drag remains available separately to show how far the fund lagged the benchmark over the full window.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
-        <strong>Why divide by yield.</strong> Dividing the destructive price decline by the distribution
-        yield asks: "How much of the yield is being financed out of NAV?" A ratio of <code>0.50</code> means
-        roughly half of the yield is offset by price erosion; <code>1.00</code> means the entire yield was
-        eaten by NAV decline. Ratio thresholds are <strong>≤ 0.25 Low</strong>, <strong>0.25–0.75 Moderate</strong>,
-        and <strong>&gt; 0.75 High</strong>. The final severity is also forced to <strong>High</strong>
-        when the fund price declined 50% or more, or when the ending share deficit is 5% or more of break-even shares.
-      </p>
-      <p style={{ marginBottom: '1rem' }}>
-        <strong>Portfolio aggregate.</strong> The portfolio-level ratio is dollar-weighted across all
-        eligible holdings: <code>Σ(erosion$ per ticker) ÷ Σ(TTM distribution$ per ticker)</code>, where
-        <code> erosion$ = numerator × start price × shares</code> and
-        <code> distribution$ = TTM dist per share × shares</code>.
+        <strong>Why divide by distributions.</strong> A ratio of <code>0.50</code> means confirmed price loss
+        equaled roughly half the distributions paid during the same selected window; <code>1.00</code> means
+        it equaled all period distributions. Thresholds are <strong>≤ 0.25 Low</strong>,
+        <strong>0.25–0.75 Moderate</strong>, and <strong>&gt; 0.75 High</strong>.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Inputs</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker</strong> — The ETF or fund to analyze (e.g., JEPI, XYLD, QYLD).</li>
         <li><strong>Initial Investment</strong> — Dollar amount to start with (default $10,000).</li>
+        <li><strong>Benchmark</strong> — Leave blank for automatic selection, or enter a priceable override such as <code>HODL</code>.</li>
         <li><strong>Start / End Date</strong> — The historical backtest window.</li>
         <li><strong>Reinvestment %</strong> — Drag the slider or type a number (0–100%). At 0%, all distributions are taken as cash. At 100%, all distributions buy more shares (full DRIP). Use values between to simulate partial reinvestment.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Automatic Benchmark Context</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        NAV erosion is benchmark-adjusted so a fund is not punished just because its whole underlying market is weak.
+        The price-erosion test is benchmark-adjusted so a fund is not punished just because its whole underlying market is weak.
         The app chooses a best-effort benchmark from known ticker mappings and fund description keywords. Examples:
         Nasdaq income funds generally compare to <code>QQQ</code>, S&amp;P 500 income funds to <code>SPY</code>,
         Russell 2000 funds to <code>IWM</code>, defense funds to <code>ITA</code>, gold funds to <code>GLD</code>,
         silver funds to <code>SLV</code>, and bitcoin funds to <code>BTC-USD</code>.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
-        For holding-level overrides, use the Dashboard NAV column. There you can force a fund to be tested, skip it,
-        or enter a custom benchmark ticker/composite when the automatic benchmark is not the right fit.
+        The selected benchmark and its return are shown in the result cards and as an orange normalized line.
+        The calculation stops with an error if benchmark history is unavailable rather than substituting the fund itself.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Statistics</h3>
       <p style={{ marginBottom: '0.75rem' }}>After running the backtest, a strip of metric tiles shows:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Total Distributions</strong> — All cash paid out over the period.</li>
+        <li><strong>Benchmark / Benchmark Return</strong> — The actual comparison series and its full-window price return.</li>
+        <li><strong>Benchmark-Confirmed Erosion</strong> — Yes only when at least one month meets the fund-down, benchmark-flat/up rule.</li>
+        <li><strong>Confirmed Erosion Ratio</strong> — Confirmed monthly losses divided by distributions over the same window.</li>
+        <li><strong>Relative Drag</strong> — How many percentage points the fund price lagged its benchmark.</li>
+        <li><strong>Total Distributions</strong> — All distributions generated over the period.</li>
         <li><strong>Shares Purchased</strong> — Shares bought via DRIP reinvestment.</li>
         <li><strong>Total Reinvested</strong> — Dollar amount reinvested.</li>
-        <li><strong>Final Portfolio Value</strong> — Ending value of all shares held.</li>
-        <li><strong>Price Change %</strong> — How much the share price moved over the period.</li>
-        <li><strong>NAV Erosion</strong> — Yes or No verdict.</li>
-        <li><strong>Final Shares Needed / Extra To Breakeven</strong> — The final share gap versus break-even, shown as both shares and a percent of break-even shares. Needed means you are short of break-even; extra means you are above it.</li>
-        <li><strong>Total NAV Erosion Ratio</strong> — Benchmark-adjusted ratio for the selected period. Ratio-only severity is low at 0.25 or below, moderate from 0.25–0.75, and high above 0.75. The screen also forces High for a 50%+ price decline or a 5%+ final share deficit.</li>
+        <li><strong>Cash Taken</strong> — Distributions not reinvested.</li>
+        <li><strong>Ending Shares Value</strong> — Ending market value of shares only.</li>
+        <li><strong>Ending Wealth / Investor Total Return</strong> — Shares value plus cash taken, compared with the initial investment.</li>
+        <li><strong>Final Shares Needed / Extra</strong> — Capital-only share gap; it intentionally excludes cash taken and does not override confirmed erosion.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Main Line Chart</strong> — Shows share price (blue), portfolio value (green), and a dashed gray break-even threshold over time. If the green line stays above the dashed line, your investment is holding its own.</li>
-        <li><strong>NAV Erosion Ratio Chart</strong> — Monthly benchmark-adjusted NAV erosion ratio plotted over time with color-coded markers: green at or below 0.25, orange at or below 0.75, red above 0.75. The headline severity can still be High from the price-decline or share-deficit rules even when the period ratio is moderate.</li>
+        <li><strong>Main Line Chart</strong> — Shows fund price (blue), the benchmark normalized to the same starting level (orange dotted), shares value (green), and the initial investment (gray dashed).</li>
+        <li><strong>Confirmed Erosion Ratio Chart</strong> — Monthly ratios with green, orange, and red severity markers.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Monthly Detail Table</h3>
-      <p style={{ marginBottom: '0.75rem' }}>A sortable month-by-month table with 12 columns:</p>
+      <p style={{ marginBottom: '0.75rem' }}>A sortable month-by-month table includes:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Date</strong> — Month/year.</li>
         <li><strong>Price</strong> — Share price that month.</li>
         <li><strong>Price Δ%</strong> — Monthly price change.</li>
+        <li><strong>Benchmark / Bench Δ%</strong> — Underlying benchmark level and monthly return.</li>
         <li><strong>Div/Share</strong> — Distribution paid per share.</li>
         <li><strong>Total Dist</strong> — Total distribution for your holding.</li>
         <li><strong>Reinvested</strong> — Amount reinvested based on slider.</li>
@@ -4016,17 +4042,17 @@ Where:
         <li><strong>Portfolio Value</strong> — Current total value.</li>
         <li><strong>Break-Even Shares</strong> — Shares needed to recover original investment at current price.</li>
         <li><strong>Shares Needed / Extra To Breakeven</strong> — The share gap versus break-even, shown as shares plus percent. <span style={{ color: 'var(--p-ef9a9a)' }}>Red needed = you need that many more shares</span>; <span style={{ color: 'var(--p-81c784)' }}>green extra = you have that many shares above break-even</span>.</li>
-        <li><strong>NAV Ratio</strong> — That month's benchmark-adjusted NAV erosion ratio, color-coded.</li>
+        <li><strong>Confirmed Ratio</strong> — That month&apos;s confirmed erosion loss divided by its distribution per share.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Enter a high-yield ticker (QYLD, XYLD, JEPI, SVOL, etc.) and set your investment amount.</li>
         <li>Start with a wide date range (e.g., 2018–present) to capture a full market cycle.</li>
-        <li>Run at <strong>0% reinvestment</strong> first — this shows worst-case NAV erosion with no DRIP offsetting it.</li>
+        <li>Run at <strong>0% reinvestment</strong> first to compare ending shares value with ending wealth including cash taken.</li>
         <li>Then run at <strong>100%</strong> — this shows whether full DRIP can overcome price decay.</li>
         <li>Find the reinvestment percentage where Shares Needed falls to zero or becomes Extra — that's the break-even DRIP rate for this fund.</li>
-        <li>Check the NAV ratio chart: consistent red months mean the fund price is lagging its benchmark despite distributions.</li>
+        <li>Check the confirmed ratio chart: red months mean the fund fell while its benchmark was flat or rising.</li>
       </ol>
     </div>
   )
@@ -4037,11 +4063,11 @@ function NavScreenerHelp() {
     <div>
       <h2>NAV Erosion Screener (Portfolio)</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The NAV Erosion Screener extends the single-ticker backtester to a full portfolio of up
-        to 80 ETFs simultaneously. You set individual investment amounts and reinvestment percentages
-        per ticker, run them all over the same date range, and get a side-by-side comparison of
-        which funds are eroding capital and which are performing sustainably. You can save and reload
-        named backtest scenarios to compare strategies over time.
+        The NAV Erosion Screener extends the benchmark-adjusted single-ticker backtester to a full portfolio
+        of up to 80 ETFs simultaneously. You set individual investment amounts and reinvestment percentages
+        per ticker, run them all over the same date range, and get a side-by-side comparison of benchmark-confirmed
+        price erosion, ending wealth, and investor total return. You can save and reload named backtest scenarios
+        to compare strategies over time.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -4065,30 +4091,29 @@ function NavScreenerHelp() {
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Strip</h3>
-      <p style={{ marginBottom: '0.75rem' }}>After running, 11 metric tiles show portfolio-wide results:</p>
+      <p style={{ marginBottom: '0.75rem' }}>After running, the summary strip shows portfolio-wide results:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Total Invested, Total Final Value, Total Gain/Loss, Portfolio Return %</li>
-        <li>Total Distributions, Total Reinvested</li>
-        <li>NAV Erosion count (e.g., "3 of 8 funds eroding")</li>
-        <li>Portfolio NAV erosion ratio (dollar-weighted average across all funds); the portfolio severity follows this weighted ratio rather than the worst individual fund.</li>
-        <li>Best Performer (ticker + return %), Worst Performer</li>
-        <li>Error Count (tickers where no data was found)</li>
+        <li>Total Invested, Ending Shares Value, Ending Wealth, Total Gain/Loss, and Portfolio Return %</li>
+        <li>Total Distributions, Total Reinvested, and Cash Taken (the portion not reinvested)</li>
+        <li>Confirmed Erosion count (e.g., "3 of 8 funds" with at least one qualifying month)</li>
+        <li>Ending Price Deficit count — an informational break-even share check, separate from confirmed erosion.</li>
+        <li>Portfolio Confirmed Erosion Ratio — total benchmark-confirmed price-loss dollars divided by total distributions over the same window.</li>
+        <li>Weighted benchmark return and relative price drag, plus best/worst performer and data errors.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results Table</h3>
-      <p style={{ marginBottom: '0.75rem' }}>A sortable 17-column table with a TOTAL footer row:</p>
+      <p style={{ marginBottom: '0.75rem' }}>A sortable 22-column table with a TOTAL footer row:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Ticker, Amount, Reinvest %</strong> — Your inputs.</li>
+        <li><strong>Ticker, Benchmark, Amount, Reinvest %</strong> — Inputs plus the mapped underlying used for the gate (for example, BTCI → BTC-USD).</li>
         <li><strong>Start Price / End Price</strong> — Share price at beginning and end of period.</li>
-        <li><strong>Price Δ%</strong> — Total price change.</li>
-        <li><strong>Total Distributions</strong> — All cash paid out.</li>
-        <li><strong>Total Reinvested</strong> — Distributions that were reinvested.</li>
-        <li><strong>Final Value</strong> — Portfolio value at end.</li>
+        <li><strong>Price Δ% / Benchmark Return %</strong> — Fund price change and mapped benchmark return over the selected window.</li>
+        <li><strong>Total Distributions / Total Reinvested / Cash Taken</strong> — Distribution cash flow split by reinvestment choice.</li>
+        <li><strong>Ending Shares Value / Ending Wealth</strong> — Shares at the end, then shares value plus cash taken.</li>
         <li><strong>Gain/Loss $</strong> and <strong>Gain/Loss %</strong> — Capital-only gain/loss. Green/red colored.</li>
         <li><strong>Total Return $</strong> and <strong>Total Return %</strong> — Including distributions.</li>
-        <li><strong>NAV Erosion</strong> — Yes (red) or No (green).</li>
-        <li><strong>Shares Needed / Extra To Breakeven</strong> — Positive share gap means erosion is winning; extra shares mean reinvestment has put the position above break-even.</li>
-        <li><strong>NAV Ratio</strong> — Weighted benchmark-adjusted NAV erosion ratio, color-coded.</li>
+        <li><strong>Confirmed Erosion / Months</strong> — Yes only when at least one month has fund price down while the benchmark is flat or up.</li>
+        <li><strong>Shares Needed / Extra To Breakeven</strong> — End-of-period capital-only share gap; informational and separate from the benchmark gate.</li>
+        <li><strong>Confirmed Erosion Ratio</strong> — Confirmed price loss per share divided by all distributions per share in the selected window.</li>
         <li><strong>Note</strong> — Any data warnings for that ticker.</li>
       </ul>
     </div>
@@ -5633,9 +5658,22 @@ function DividendCalculatorHelp() {
         the Dividend Calculator works from any tickers you enter — useful for evaluating new positions, comparing
         funds side-by-side, or modeling what-if scenarios before you buy.
       </p>
+      <p style={{ marginBottom: '1rem' }}>
+        After at least one ticker loads, the <strong>Current payout</strong> bubble at the top of the page shows
+        the selected tickers' present gross monthly and annual distribution run-rate. It updates with current
+        value, shares, price, and yield edits, and does not include taxes, DRIP, growth, or future contributions.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        After you click <strong>Calculate</strong> or <strong>Recalculate</strong>, four result bubbles appear at
+        the top: <strong>Total Income</strong> is cumulative gross dividend income over the full projection,
+        while <strong>Monthly Income</strong> and <strong>Annual Income</strong> are the combined income run-rates
+        at the final projection year. <strong>Portfolio Value</strong> is the combined value of invested holdings
+        at the final year and excludes cash dividends that are included separately in Ending Wealth. If inputs
+        change, the bubbles are marked as last-calculated values until the next recalculation.
+      </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/dividend-calculator/Screenshot 2026-05-09 102110.jpg" alt="Dividend Calculator projections interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/dividend-calculator/dividend-calculator-overview.png" alt="Dividend Calculator current payout, final-year income bubbles, monthly contribution schedule, limited contribution window, and custom allocation settings" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calculation Settings</h3>
@@ -5646,19 +5684,38 @@ function DividendCalculatorHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Years to Invest</strong> — Length of the projection (1–50 years).</li>
         <li><strong>Initial Investment Per Ticker</strong> — Starting dollar amount applied to each ticker. Updating this value re-derives the share count for any already-loaded tickers.</li>
-        <li><strong>Annual Investment Total</strong> — Total new dollars added each year and contributed at the end of each compounding period.</li>
-        <li><strong>Annual Contribution Split</strong> — Allocates the annual investment equally, by each ticker's current or starting value, or by custom per-ticker amounts. It does not change the initial investment.</li>
+        <li><strong>Contribution Schedule</strong> — Choose Annual or Monthly. The choices are mutually exclusive, so the calculator never applies both contribution schedules at once. Annual totals are divided across each ticker's payout periods, while monthly contributions are deposited at each month-end. Switching schedules converts the current total to its equivalent annual or monthly amount.</li>
+        <li><strong>Contribution Total</strong> — Total new dollars added per selected period. This is also the dollar base used for every ticker's allocation percentage.</li>
+        <li><strong>Contribution Window</strong> — Choose Full period to contribute throughout the projection, or Limited to stop new contributions after the first X years or months. For example, $300 monthly for 2 years in a 10-year projection contributes $7,200 during the first 24 months, then projects the remaining 8 years using DRIP and growth without additional cash deposits.</li>
+        <li><strong>Contribution Allocation</strong> — Allocates the selected contribution total by an even percentage split, by each ticker's current or starting value, or by custom per-ticker percentages. It does not change the initial investment.</li>
         <li><strong>Dividend Tax Rate</strong> — Applied to taxable dividends each period. The Return of Capital % on each ticker reduces the taxable portion.</li>
         <li><strong>Stock Price Growth (All Tickers)</strong> — Default annual price appreciation applied to every ticker. You can override this per ticker after it loads.</li>
         <li><strong>Dividends Reinvested (DRIP)</strong> — Percentage of net dividends reinvested each period (0–100%). Anything not reinvested is tracked as cash dividends.</li>
       </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        In custom allocation mode, every ticker can have a different percentage. The percentages refer to the
+        selected annual or monthly contribution total, not to the starting portfolio value. The dollar contribution
+        and percentage fields stay synchronized, and an even split assigns <strong>100% ÷ ticker count</strong> to
+        each ticker automatically. In <strong>Custom percentages</strong> mode, use <strong>Split percentages
+        evenly</strong> to create an editable equal-percentage starting point. When the contribution total is $0,
+        every Contribution Allocation % displays 0% and percentage editing is disabled. This does not change the
+        separate DRIP percentage, which controls dividend reinvestment. Changing one ticker's custom percentage
+        automatically redistributes the remaining percentage proportionally across the other tickers so the total
+        allocation remains 100%. Removing a ticker also renormalizes the remaining allocations to 100%. After an
+        edit, the Allocation Adjustment Summary shows the edited ticker, confirms Total allocation: 100.00%, and
+        provides an expandable list of every ticker's before-and-after percentage.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/dividend-calculator/dividend-calculator-contributions.png" alt="Dividend Calculator ticker cards showing a custom 60 percent and 40 percent monthly contribution allocation" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Type a symbol (e.g. <code>SCHD</code>, <code>JEPI</code>, <code>AAPL</code>) into the ticker bar and click
         <strong> Add Ticker</strong>. The app fetches current price, dividend yield, dividend growth rate, and
         payout frequency from Yahoo Finance, then auto-fills the row. Add as many tickers as you like — the
-        selected annual contribution split is applied across them and final results are aggregated.
+        selected contribution allocation is applied across them and final results are aggregated.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
         Each ticker becomes its own card with editable fields. Click the <strong>x</strong> on a chip or the
@@ -5673,7 +5730,7 @@ function DividendCalculatorHelp() {
         <li><strong>Dividend Growth</strong> — Annual percentage increase applied to the dividend per share each year. Auto-filled from Yahoo's historical growth rate; override based on your own expectations.</li>
         <li><strong>Return of Capital</strong> — Percentage of distributions that aren't taxable income (common for covered-call ETFs and some MLPs). Reduces the dividend tax drag without affecting cash flow.</li>
         <li><strong>Stock Price Growth</strong> — Per-ticker price appreciation. Defaults to the global setting but can be tuned individually.</li>
-        <li><strong>Payout Frequency</strong> — Weekly, Monthly, Quarterly, Semi-Annually, or Annually. Higher frequencies compound faster when DRIP is on.</li>
+        <li><strong>Payout Frequency</strong> — 0, Weekly, Monthly, Quarterly, Semi-Annually, or Annually. AOTS defaults to 0 payouts because it currently has no dividend, but its frequency remains editable. Other tickers retain their detected/default frequency. Selecting another AOTS frequency does not create dividend income while its yield is still 0%. Annual or monthly cash contributions continue buying shares independently of dividend payouts.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Running the Calculation</h3>
@@ -5689,9 +5746,13 @@ function DividendCalculatorHelp() {
         <li><strong>Summary Stats</strong> — Ending Wealth (final portfolio value plus uncollected cash dividends), Annual / Monthly Dividend Income at the final year, Yield on Cost, and total Estimated Dividend Taxes after Return of Capital adjustments.</li>
         <li><strong>Portfolio &amp; Income Chart</strong> — Combined view of portfolio value (filled area), cumulative dividends, and annual income on a secondary axis.</li>
         <li><strong>Shares Over Time</strong> — One line per ticker when multiple are loaded, or a single line for one ticker. Shows how DRIP grows your share count year by year.</li>
-        <li><strong>Year-by-Year Breakdown</strong> — Detailed table with shares, portfolio value, gross/net dividends, taxes, reinvested vs. cash dividends, and cumulative contributions per year.</li>
-        <li><strong>Per-Ticker Final Values</strong> — When two or more tickers are loaded, an additional table compares each ticker's final shares, portfolio value, income, taxes, and dividends. Useful for picking between candidates.</li>
+        <li><strong>Year-by-Year Breakdown</strong> — Detailed table with shares, portfolio value, gross/net dividends, taxes, reinvested vs. cash dividends, and cumulative contributions per year. With a limited contribution window, cumulative contributions stop increasing after the selected final contribution month.</li>
+        <li><strong>Per-Ticker Final Values</strong> — When two or more tickers are loaded, an additional table places Initial Shares immediately before Final Shares and shows Share Delta as Final Shares minus Initial Shares. It then compares portfolio value, income, taxes, and dividends. Useful for seeing share growth and picking between candidates.</li>
       </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/dividend-calculator/dividend-calculator-results.png" alt="Dividend Calculator results summary with ending wealth, final income, yield on cost, portfolio and income chart, and shares over time" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How DRIP Compounds</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -5709,6 +5770,116 @@ function DividendCalculatorHelp() {
         <li>Bump the Dividend Tax Rate to 0% to preview tax-advantaged accounts (IRA, Roth, HSA) and back to your marginal rate for taxable accounts.</li>
         <li>For high-yield covered-call ETFs (JEPI, JEPQ, QQQI, SPYI, etc.), check the fund's distribution classification — many report a meaningful ROC %, which substantially lowers the projected tax drag.</li>
       </ul>
+    </div>
+  )
+}
+
+function OptionsHelp() {
+  const imageStyle = {
+    maxWidth: '100%',
+    height: 'auto',
+    borderRadius: '4px',
+    border: '1px solid var(--p-333)',
+  }
+
+  return (
+    <div>
+      <h2>Options Strategy Laboratory</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Options page is an educational modeling workspace for building simulated positions and studying how
+        price, time, volatility, and strike selection affect an options strategy. It uses live or delayed market
+        data for the underlying and available option chains, but it does not place or route orders.
+      </p>
+      <div className="alert alert-warning" style={{ marginBottom: '1.25rem' }}>
+        <strong>Modeled results only:</strong> quotes can be delayed or incomplete, and theoretical values exclude
+        some real-world effects such as commissions unless entered, early assignment behavior, taxes, and execution
+        differences. Treat every result as an educational estimate rather than investment advice.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Simulated Trade</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Enter an underlying symbol and load its option chain. Expand an expiration, then click an ask to model a buy
+        or a bid to model a sale. The column picker can show basic pricing, Greeks, liquidity, or all available
+        columns. Each selection immediately appears in the Selected strikes box and in the position table below.
+        With broker text entered, <strong>Build risk graph</strong> imports those lines; with selected chain legs and
+        no broker text, <strong>Open risk graph</strong> uses the current position directly. You can also use quick
+        learning templates, add stock coverage, edit quantities and strikes, and save a scenario for later analysis.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/options/options-simulated-trade.png" alt="Options Simulated Trade workspace with SPY quote, broker trade import, expiration browser, and option-chain controls" style={imageStyle} />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Risk Profile</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Risk Profile combines every active stock, call, and put leg into one profit-and-loss graph. Move the analysis
+        date forward, adjust volatility, widen the displayed price range, and compare the open-position curve with
+        expiration payoff. Summary cards show entry debit or credit, theoretical maximum profit and loss,
+        breakevens, and portfolio Greeks. Probability shading and draggable strike handles make it easier to test
+        how the structure changes.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Use <strong>Zoom</strong> and drag over the graph to inspect a narrower underlying-price region, or choose
+        <strong> Pan</strong> and drag the plot left or right through the visible prices. The mouse wheel and the
+        <strong> +</strong>/<strong>−</strong> buttons change only the price axis; the profit/loss height stays locked so
+        the upper and lower curves remain visible. <strong>Fit</strong> or a double-click restores the full price range.
+        <strong> Expand</strong> opens a larger
+        window-level graph; choose <strong>Contract</strong> or press Escape to return it to the page. These view
+        controls do not change the position or its calculations. Moving the analysis-date slider keeps the current
+        graph visible while every leg is repriced, then updates the curves in place without blanking the chart. The
+        full profit/loss range stays fixed while time moves so the plot does not jump vertically; <strong>Fit</strong>
+        restores that complete fixed range after manual zooming or panning. Opening the expanded view also restores
+        safe padding above the highest payoff and below the lowest loss so neither edge is clipped by an earlier zoom.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/options/options-risk-profile.png" alt="Expanded Options Risk Profile showing zoom, pan, Fit, Contract, strike markers, and the complete profit-and-loss graph" style={imageStyle} />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Price &amp; Moneyness</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This view places every active option strike over the underlying's recent price history. The cards identify
+        each leg as in, at, or out of the money and show its distance from the current price. Switch between line
+        and candlestick charts or change the lookback period to see how close the position has been to its strikes.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/options/options-price-moneyness-staggered.png" alt="SPY candlestick chart with staggered option strike labels, moneyness lines, and the simulated position table" style={imageStyle} />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Greek Surfaces</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Greek Surfaces graphs a single contract or the signed exposure of an entire multi-leg position. Choose a
+        first- or higher-order Greek, then compare its 2D price or time profile with the 3D price-and-time surface.
+        The relationship view shows how second-order Greeks such as Gamma, Vanna, Charm, Vomma, Speed, Color, and
+        Zomma change a linked first-order Greek. The linked risk graph uses the same traced price and elapsed-time
+        scenario.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/options/options-greek-surfaces.png" alt="Options Greek Surfaces showing the signed Gamma profile, 3D price-and-time surface, and linked risk graph for an iron condor" style={imageStyle} />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Backtest</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Backtest runs a modeled historical replay of continuously rolled same-expiration strategies. Choose a
+        built-in or saved strategy, date range, capital allocation, target DTE, strike rules, pricing model,
+        volatility index, commissions, and slippage. Results compare the strategy with dividend-reinvested buy and
+        hold, provide lower- and higher-volatility sensitivity cases, and retain a cycle-level audit trail.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Historical option quotes are not used. The model reconstructs contracts from underlying history,
+        volatility assumptions, a listed-style strike grid, and the configured fills, so the comparison is useful
+        for learning and sensitivity testing rather than proof of executable historical performance.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/options/options-backtest.png" alt="Options Backtest results comparing an SPY iron condor with buy and hold, including metrics, equity curve, sensitivity tabs, and cycle audit trail" style={imageStyle} />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Suggested Workflow</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Load the underlying and build a simulated position from the chain, broker text, or a template.</li>
+        <li>Confirm every leg's side, quantity, expiration, strike, entry price, IV, and active checkbox.</li>
+        <li>Use Risk Profile to inspect payoff, breakevens, probabilities, and changes through time.</li>
+        <li>Use Price &amp; Moneyness and Greek Surfaces to understand where the position is sensitive.</li>
+        <li>Use Backtest for a modeled historical comparison, then review the assumptions and cycle audit trail.</li>
+      </ol>
     </div>
   )
 }
@@ -7290,6 +7461,7 @@ function HoldingTargetsHelp() {
 const CONTENT_MAP = {
   overview: Overview,
   'action-center': ActionCenterHelp,
+  options: OptionsHelp,
   import: ImportHelp,
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,

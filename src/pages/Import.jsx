@@ -147,14 +147,10 @@ export default function Import() {
       formData.append(k, v)
     }
 
-    try {
-      const res = await pf(endpoint, { method: 'POST', body: formData })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Import failed')
-      return data
-    } catch (e) {
-      throw e
-    }
+    const res = await pf(endpoint, { method: 'POST', body: formData })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Import failed')
+    return data
   }
 
   const waitForRefreshBeforeImport = async () => {

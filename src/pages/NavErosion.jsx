@@ -28,7 +28,7 @@ function navSeverityColor(severity) {
   return severity === 'High' ? '#e05555' : severity === 'Medium' ? '#ffb300' : severity === 'Low' ? '#00c853' : '#666'
 }
 function navSeverityText(severity) {
-  return severity === 'High' ? 'High Benchmark-Adjusted NAV Erosion' : severity === 'Medium' ? 'Moderate Benchmark-Adjusted NAV Erosion' : 'Low Benchmark-Adjusted NAV Erosion'
+  return severity === 'High' ? 'High Confirmed Price Erosion' : severity === 'Medium' ? 'Moderate Confirmed Price Erosion' : 'Low Confirmed Price Erosion'
 }
 
 function shareGapPct(deficit, breakevenShares) {
@@ -56,6 +56,7 @@ export default function NavErosion() {
   const { selection } = useProfile()
   const { isDark } = useTheme()
   const [ticker, setTicker] = useState('')
+  const [benchmark, setBenchmark] = useState('')
   const [amount, setAmount] = useState('10000')
   const [startDate, setStartDate] = useState('2015-01-01')
   const [endDate, setEndDate] = useState('2025-12-31')
@@ -84,6 +85,7 @@ export default function NavErosion() {
     const params = new URLSearchParams({
       ticker: sym, amount, start: startDate, end: endDate, reinvest: String(reinvest)
     })
+    if (benchmark.trim()) params.set('benchmark', benchmark.trim().toUpperCase())
 
     pf('/api/nav-erosion/data?' + params.toString())
       .then(r => r.json())
@@ -108,7 +110,7 @@ export default function NavErosion() {
   }
 
   // Sorting
-  const colKeys = ['date', 'price', 'price_delta_pct', 'div_per_share', 'total_dist',
+  const colKeys = ['date', 'price', 'price_delta_pct', 'benchmark_price', 'benchmark_delta_pct', 'div_per_share', 'total_dist',
     'reinvested', 'shares_bought', 'total_shares', 'portfolio_val', 'breakeven_sh', 'shares_deficit', 'coverage_ratio']
 
   const sorted = useMemo(() => {
@@ -131,8 +133,8 @@ export default function NavErosion() {
   }
   const arrow = (col) => sortCol === col ? (sortAsc ? ' \u25B2' : ' \u25BC') : ''
 
-  const headers = ['Date', 'Price', 'Price \u0394%', 'Div / Share', 'Total Dist',
-    'Reinvested', 'Shares Bought', 'Total Shares', 'Portfolio Value', 'Break-Even Shares', 'Shares Needed / Extra To Breakeven', 'NAV Ratio']
+  const headers = ['Date', 'Price', 'Monthly \u0394%', 'Benchmark', 'Bench \u0394%', 'Div / Share', 'Total Dist',
+    'Reinvested', 'Shares Bought', 'Total Shares', 'Portfolio Value', 'Break-Even Shares', 'Shares Needed / Extra To Breakeven', 'Confirmed Ratio']
 
   const s = summary || {}
   const totalSeverity = s.nav_erosion_severity || navSeverityFromRatio(s.total_coverage)
@@ -142,13 +144,14 @@ export default function NavErosion() {
 
   return (
     <div className="ne-page">
-      <h1 style={{ marginBottom: '0.3rem' }}>NAV Erosion Back-Tester</h1>
+      <h1 style={{ marginBottom: '0.3rem' }}>Benchmark-Adjusted Price Erosion Back-Tester</h1>
       <p className="ne-desc">
-        High-yield ETFs often pay large distributions while the share price slowly declines.
-        This tool shows month-by-month how many extra shares you need to reinvest to preserve
-        your original portfolio value — and what happens at any chosen reinvestment level (0–100%).
+        This tool confirms erosion only when the fund price falls during a month in which its underlying benchmark is flat or rising.
+        It uses market closing prices as a price-based NAV proxy; it does not use issuer-published NAV.
+        Cash distributions that are not reinvested are included in Ending Wealth and Investor Total Return.
         <br />
-        <span style={{ color: 'var(--accent-bright)' }}>Blue line</span> = share price &nbsp;&middot;&nbsp;
+        <span style={{ color: 'var(--accent-bright)' }}>Blue line</span> = fund share price &nbsp;&middot;&nbsp;
+        <span style={{ color: '#ffb74d' }}>Orange dotted</span> = benchmark normalized to the fund&apos;s starting price &nbsp;&middot;&nbsp;
         <span style={{ color: 'var(--pos-bright)' }}>Green line</span> = portfolio value &nbsp;&middot;&nbsp;
         <span style={{ color: 'var(--p-888)' }}>Dashed gray</span> = initial investment (break-even)
         <br /><br />
@@ -158,9 +161,8 @@ export default function NavErosion() {
         <span style={{ color: 'var(--pos-strong)', fontWeight: 600 }}> Green extra</span> means you have that many shares above break-even.
         The percent is the gap as a share of break-even shares.
         <br /><br />
-        <strong style={{ color: 'var(--p-ccc)' }}>Severity</strong> uses the benchmark-adjusted NAV ratio, but is forced
-        <span style={{ color: 'var(--neg-3)', fontWeight: 600 }}> High</span> when price falls 50%+ or the final
-        share deficit is 5%+ of break-even shares.
+        <strong style={{ color: 'var(--p-ccc)' }}>Confirmed erosion</strong> and severity use only qualifying months.
+        The share deficit remains visible as a separate capital-only measure and does not override the benchmark result.
       </p>
 
       {/* Input form */}
@@ -187,6 +189,18 @@ export default function NavErosion() {
             style={{ width: 130 }}
             value={amount}
             onChange={e => setAmount(e.target.value)}
+          />
+        </div>
+        <div className="ne-field">
+          <label className="ne-label">Benchmark (optional)</label>
+          <input
+            className="ne-input"
+            style={{ width: 130, textTransform: 'uppercase' }}
+            placeholder="Auto"
+            maxLength={40}
+            value={benchmark}
+            onChange={e => setBenchmark(e.target.value.toUpperCase())}
+            title="Leave blank for the automatic underlying benchmark, or enter a ticker such as HODL."
           />
         </div>
         <div className="ne-field">
@@ -257,27 +271,25 @@ export default function NavErosion() {
       {/* Summary strip */}
       {summary && !loading && (
         <div className="ne-summary">
-          <StatTile label="Total Distributions" value={fmt$(s.total_dist || 0)} color="#7ecfff" />
-          <StatTile label="Shares Purchased" value={fmt4(s.total_shares_bought || 0)} color="#7ecfff" />
-          <StatTile label="Total Reinvested" value={fmt$(s.total_reinvested || 0)} color="#7ecfff" />
-          <StatTile label="Final Portfolio Value" value={fmt$(s.final_value || 0)} color="#00e89a" />
-          <StatTile label="Price Change" value={fmtPct(s.price_chg_pct || 0)} color={s.price_chg_pct < 0 ? '#e05555' : '#00c853'} />
+          <StatTile
+            label="Benchmark"
+            value={s.benchmark || '\u2014'}
+            color="#ffb74d"
+            subtext={s.actual_start && s.actual_end ? `${s.actual_start} to ${s.actual_end}` : null}
+          />
+          <StatTile label="Benchmark Return" value={fmtPct(s.benchmark_return_pct || 0)} color={s.benchmark_return_pct < 0 ? '#e05555' : '#00c853'} />
+          <StatTile label="Fund Price Change" value={fmtPct(s.price_chg_pct || 0)} color={s.price_chg_pct < 0 ? '#e05555' : '#00c853'} />
           <div className="ne-stat-tile">
             <div className="ne-stat-val">
               {s.has_erosion
                 ? <span style={{ color: 'var(--neg-3)', fontWeight: 700 }}>Yes</span>
                 : <span style={{ color: 'var(--pos-strong)', fontWeight: 700 }}>No</span>}
             </div>
-            <div className="ne-stat-lbl">NAV Erosion</div>
+            <div className="ne-stat-lbl">Benchmark-Confirmed Erosion</div>
+            <div className="ne-stat-lbl" style={{ marginTop: 1 }}>{s.confirmed_erosion_months || 0} qualifying month(s)</div>
           </div>
           <StatTile
-            label={s.final_deficit > 0 ? 'Final Shares Needed' : s.final_deficit < 0 ? 'Final Extra Shares' : 'Final Share Gap'}
-            value={`${fmtAbs4(s.final_deficit || 0)} (${fmtAbsPct(finalGapPct)})`}
-            color={s.final_deficit > 0 ? '#e05555' : s.final_deficit < 0 ? '#00c853' : '#7ecfff'}
-            subtext={s.final_deficit > 0 ? 'short of break-even' : s.final_deficit < 0 ? 'above break-even' : 'at break-even'}
-          />
-          <StatTile
-            label="Total NAV Erosion Ratio"
+            label="Confirmed Erosion Ratio"
             value={s.total_coverage != null ? s.total_coverage.toFixed(4) : '\u2014'}
             color={totalSeverityColor}
           />
@@ -296,6 +308,20 @@ export default function NavErosion() {
               </div>
             </div>
           )}
+          <StatTile label={`Relative Drag vs ${s.benchmark || 'Benchmark'}`} value={fmtPct(-(s.relative_drag_pct || 0))} color={s.relative_drag_pct > 0 ? '#e05555' : '#00c853'} />
+          <StatTile label="Total Distributions" value={fmt$(s.total_dist || 0)} color="#7ecfff" />
+          <StatTile label="Shares Purchased" value={fmt4(s.total_shares_bought || 0)} color="#7ecfff" />
+          <StatTile label="Total Reinvested" value={fmt$(s.total_reinvested || 0)} color="#7ecfff" />
+          <StatTile label="Cash Taken" value={fmt$(s.cash_taken || 0)} color="#7ecfff" />
+          <StatTile label="Ending Shares Value" value={fmt$(s.final_value || 0)} color="#00e89a" />
+          <StatTile label="Ending Wealth" value={fmt$(s.ending_wealth || 0)} color="#00e89a" subtext="shares value + cash taken" />
+          <StatTile label="Investor Total Return" value={fmtPct(s.total_return_pct || 0)} color={s.total_return_pct < 0 ? '#e05555' : '#00c853'} />
+          <StatTile
+            label={s.final_deficit > 0 ? 'Final Shares Needed' : s.final_deficit < 0 ? 'Final Extra Shares' : 'Final Share Gap'}
+            value={`${fmtAbs4(s.final_deficit || 0)} (${fmtAbsPct(finalGapPct)})`}
+            color={s.final_deficit > 0 ? '#e05555' : s.final_deficit < 0 ? '#00c853' : '#7ecfff'}
+            subtext={s.final_deficit > 0 ? 'capital-only gap; cash excluded' : s.final_deficit < 0 ? 'above capital break-even' : 'at capital break-even'}
+          />
         </div>
       )}
 
@@ -312,7 +338,7 @@ export default function NavErosion() {
         </div>
       )}
 
-      {/* NAV Erosion Ratio Chart */}
+      {/* Confirmed Erosion Ratio Chart */}
       {rows.length > 0 && !loading && (() => {
         const covRows = rows.filter(r => r.coverage_ratio != null)
         if (covRows.length === 0) return null
@@ -330,8 +356,8 @@ export default function NavErosion() {
                   mode: 'lines+markers',
                   line: { color: '#7ecfff', width: 2 },
                   marker: { color: colors, size: 6 },
-                  hovertemplate: '<b>%{x}</b><br>NAV Erosion Ratio: %{y:.4f}<extra></extra>',
-                  name: 'NAV Erosion Ratio',
+                  hovertemplate: '<b>%{x}</b><br>Confirmed Erosion Ratio: %{y:.4f}<extra></extra>',
+                  name: 'Confirmed Erosion Ratio',
                 },
                 {
                   x: [dates[0], dates[dates.length - 1]],
@@ -344,7 +370,7 @@ export default function NavErosion() {
                 },
               ]}
               layout={themedPlotlyLayout({
-                title: `${ticker.trim().toUpperCase()} — Monthly NAV Erosion Ratio`,
+                title: `${ticker.trim().toUpperCase()} — Monthly Confirmed Erosion Ratio`,
                 template: 'plotly_dark',
                 margin: { t: 50, l: 60, r: 30, b: 50 },
                 height: 320,
@@ -355,7 +381,7 @@ export default function NavErosion() {
                   bordercolor: '#3a3a5c',
                   font: { color: '#e0e0e0', size: 13 },
                 },
-                yaxis: { title: 'NAV Erosion Ratio', zeroline: true },
+                yaxis: { title: 'Confirmed Erosion Ratio', zeroline: true },
                 hovermode: 'x unified',
                 shapes: [{
                   type: 'rect',
@@ -385,7 +411,7 @@ export default function NavErosion() {
               <thead>
                 <tr>
                   {headers.map((h, i) => {
-                    const cls = i === 0 ? 'ne-date-col' : ([3, 7, 9].includes(i) ? 'grp-left' : '')
+                    const cls = i === 0 ? 'ne-date-col' : ([3, 5, 9, 11].includes(i) ? 'grp-left' : '')
                     return (
                       <th key={h} className={cls} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }}>
                         {h}{arrow(i)}
@@ -397,6 +423,7 @@ export default function NavErosion() {
               <tbody>
                 {sorted.map(r => {
                   const pctCls = r.price_delta_pct < 0 ? 'pct-down' : (r.price_delta_pct > 0 ? 'pct-up' : '')
+                  const benchPctCls = r.benchmark_delta_pct < 0 ? 'pct-down' : (r.benchmark_delta_pct > 0 ? 'pct-up' : '')
                   const defCls = r.shares_deficit > 0 ? 'ne-deficit' : 'ne-surplus'
                   const gapPct = shareGapPct(r.shares_deficit, r.breakeven_sh)
                   const gapKind = shareGapKind(r.shares_deficit)
@@ -405,6 +432,8 @@ export default function NavErosion() {
                       <td className="ne-date-col"><strong>{r.date}</strong></td>
                       <td>{fmt$(r.price)}</td>
                       <td className={pctCls}>{fmtPct(r.price_delta_pct)}</td>
+                      <td className="grp-left">{r.benchmark_price != null ? fmt$(r.benchmark_price) : '\u2014'}</td>
+                      <td className={benchPctCls}>{r.benchmark_delta_pct != null ? fmtPct(r.benchmark_delta_pct) : '\u2014'}</td>
                       <td className="grp-left">{r.div_per_share > 0 ? fmt$(r.div_per_share) : '\u2014'}</td>
                       <td>{fmt$(r.total_dist)}</td>
                       <td>{fmt$(r.reinvested)}</td>

@@ -51,6 +51,20 @@ class DividendFrequencyTest(unittest.TestCase):
 
         self.assertEqual(app_module._div_calc_infer_frequency(divs), "M")
 
+    def test_fresh_monthly_snapshot_overrides_stale_weekly_database_value(self):
+        # Regression: TUGN was stored as weekly, which annualized its $0.275
+        # monthly distribution 52 times rather than 12 times.
+        self.assertEqual(
+            app_module._resolve_refresh_dividend_frequency("TUGN", "M", set()),
+            "M",
+        )
+
+    def test_curated_weekly_override_remains_authoritative(self):
+        self.assertEqual(
+            app_module._resolve_refresh_dividend_frequency("KYLD", "M", {"KYLD"}),
+            "W",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

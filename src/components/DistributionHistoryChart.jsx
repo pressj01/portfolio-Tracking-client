@@ -93,15 +93,18 @@ export function buildDistributionChart(history, ticker, price, pctMode = false, 
   const priceNum = Number(price) || 0
   const dollarValues = monthly.map(item => item.amount)
   const showPct = pctMode && priceNum > 0
-  const annualMult = annual ? 12 : 1
+  const periodLabel = distributionYieldPeriodLabel(sortedMonths.map(([key]) => key))
+  const periodsPerYear = periodLabel === 'Quarterly' ? 4 : 12
+  const annualMult = annual ? periodsPerYear : 1
   const values = showPct ? dollarValues.map(v => (v / priceNum) * 100 * annualMult) : dollarValues
   const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
-  const pctLabel = annual ? 'Annual Yield %' : `${distributionYieldPeriodLabel(sortedMonths.map(([key]) => key))} Yield %`
+  const pctLabel = annual ? 'Annual Yield %' : `${periodLabel} Yield %`
   const titleSuffix = showPct ? ` (${pctLabel})` : ''
 
   return {
     hasData: values.length > 0,
     canShowPct: priceNum > 0,
+    periodLabel,
     layout: {
       template: theme.template,
       paper_bgcolor: theme.surface,
@@ -128,6 +131,11 @@ export function buildDistributionChart(history, ticker, price, pctMode = false, 
       x: monthly.map(item => item.label),
       y: values,
       type: 'bar',
+      text: values.map(value => (showPct ? `${value.toFixed(1)}%` : `$${value.toFixed(3)}`)),
+      textposition: 'outside',
+      textangle: 0,
+      cliponaxis: false,
+      textfont: { size: 9, color: theme.title },
       marker: {
         color: values.map(value => value >= average ? '#62f27b' : '#82c7f5'),
         line: { color: 'rgba(255, 255, 255, 0.12)', width: 1 },
@@ -192,7 +200,7 @@ export default function DistributionHistoryChart({
               className={`btn btn-sm${annual ? ' btn-active' : ''}`}
               onClick={onToggleAnnual}
             >
-              {annual ? 'Monthly' : 'Annual'}
+              {annual ? chart.periodLabel : 'Annual'}
             </button>
           )}
           {source && <span className={sourceClassName}>Source: {source}</span>}
@@ -214,4 +222,3 @@ export default function DistributionHistoryChart({
     </>
   )
 }
-

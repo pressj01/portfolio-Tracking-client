@@ -4,8 +4,22 @@ import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
 
-const PERIODS = ['7d', '1m', '3m', '6m', 'YTD', '1y', '5y', 'all']
-const PERIOD_LABELS = { '7d': '7d', '1m': '1m', '3m': '3m', '6m': '6m', 'YTD': 'YTD', '1y': '1y', '5y': '5y', 'all': 'all' }
+const PERIODS = ['7d', '1m', '3m', '6m', 'YTD', '1y', '5y', 'all', 'custom']
+const PERIOD_LABELS = { '7d': '7d', '1m': '1m', '3m': '3m', '6m': '6m', 'YTD': 'YTD', '1y': '1y', '5y': '5y', 'all': 'all', custom: 'Custom' }
+
+const dateInputValue = (date) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const defaultCustomDates = () => {
+  const end = new Date()
+  const start = new Date(end)
+  start.setFullYear(start.getFullYear() - 1)
+  return { start: dateInputValue(start), end: dateInputValue(end) }
+}
 
 function TickerFilter({ tickers, selected, onChange }) {
   const [open, setOpen] = useState(false)
@@ -105,7 +119,10 @@ export default function PortfolioGrowth2() {
   const { isDark } = useTheme()
 
   // Shared state
+  const initialCustomDates = useRef(defaultCustomDates()).current
   const [period, setPeriod] = useState('1y')
+  const [customStart, setCustomStart] = useState(initialCustomDates.start)
+  const [customEnd, setCustomEnd] = useState(initialCustomDates.end)
   const [selectedTickers, setSelectedTickers] = useState([])
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -122,6 +139,14 @@ export default function PortfolioGrowth2() {
   const [groupBy, setGroupBy] = useState('none')
 
   useEffect(() => {
+    if (period === 'custom' && (!customStart || !customEnd || customStart > customEnd)) {
+      setData(null)
+      setLoading(false)
+      setError(!customStart || !customEnd
+        ? 'Choose both a custom start date and end date.'
+        : 'Custom start date must be on or before the end date.')
+      return
+    }
     setLoading(true)
     setError(null)
     const params = new URLSearchParams({
@@ -136,6 +161,10 @@ export default function PortfolioGrowth2() {
     if (selectedTickers.length > 0) {
       params.set('tickers', selectedTickers.join(','))
     }
+    if (period === 'custom') {
+      params.set('start_date', customStart)
+      params.set('end_date', customEnd)
+    }
     pf(`/api/growth-2/data?${params}`)
       .then(r => r.json())
       .then(d => {
@@ -144,7 +173,7 @@ export default function PortfolioGrowth2() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [period, selectedTickers, profitMode, plBasis, showTrades, showCostBasis, groupProfitSource, groupBy, selection])
+  }, [period, customStart, customEnd, selectedTickers, profitMode, plBasis, showTrades, showCostBasis, groupProfitSource, groupBy, selection])
 
   // ── Chart 1: Portfolio Value ──
   useEffect(() => {
@@ -200,11 +229,11 @@ export default function PortfolioGrowth2() {
       font: { color: ct.font },
       height: 420,
       title: { text: 'Portfolio value', font: { size: 16, color: ct.title } },
-      margin: { l: 60, r: 20, t: 50, b: 50 },
+      margin: { l: 80, r: 20, t: 50, b: 50 },
       hovermode: 'x unified',
       legend: { orientation: 'h', y: -0.12, xanchor: 'center', x: 0.5, font: { size: 11 } },
-      xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
-      yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, tickformat: '$,.0f', title: '' },
+      xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, automargin: true },
+      yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, tickformat: '$,.0f', title: '', automargin: true },
     }, { responsive: true })
 
     return () => { if (document.getElementById('g2-value-chart')) Plotly.purge(el) }
@@ -220,9 +249,15 @@ export default function PortfolioGrowth2() {
 
     const perf = data.performance
     const unit = data.profit_unit
-    const fmt = unit === '%' ? '.2f' : '$,.2f'
-    const suffix = unit === '%' ? '%' : ''
-    const prefix = unit === '$' ? '$' : ''
+    const isPct = unit === '%'
+    // Keep the currency/percent sign out of the d3 number format and supply it
+    // via prefix/suffix only — otherwise the '$' in the format plus tickprefix
+    // render a doubled/inconsistent sign. Hover shows 2 decimals for both units;
+    // the axis keeps 2 decimals for % but drops cents on dollar ticks.
+    const hoverFmt = isPct ? '.2f' : ',.2f'
+    const axisFmt = isPct ? '.2f' : ',.0f'
+    const suffix = isPct ? '%' : ''
+    const prefix = isPct ? '' : '$'
 
     // Determine if optional series have meaningful values (> 1% of total P&L range)
     const totalRange = Math.max(...perf.total.map(Math.abs).filter(v => v != null), 1)
@@ -231,18 +266,18 @@ export default function PortfolioGrowth2() {
     const traces = []
     if (groupProfitSource) {
       traces.push(
-        { x: data.dates, y: perf.capital_gain, name: 'Capital gain', line: { color: '#7ecfff', width: 2 }, hovertemplate: `${prefix}%{y:${fmt}}${suffix}<extra>Capital gain</extra>` },
-        { x: data.dates, y: perf.dividends, name: 'Dividends', line: { color: '#ff9800', width: 2 }, hovertemplate: `${prefix}%{y:${fmt}}${suffix}<extra>Dividends</extra>` },
+        { x: data.dates, y: perf.capital_gain, name: 'Capital gain', line: { color: '#7ecfff', width: 2 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Capital gain</extra>` },
+        { x: data.dates, y: perf.dividends, name: 'Dividends', line: { color: '#ff9800', width: 2 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Dividends</extra>` },
       )
       if (isNonTrivial(perf.realized_pl)) {
-        traces.push({ x: data.dates, y: perf.realized_pl, name: 'Realized P&L', line: { color: '#4dff91', width: 2 }, hovertemplate: `${prefix}%{y:${fmt}}${suffix}<extra>Realized P&L</extra>` })
+        traces.push({ x: data.dates, y: perf.realized_pl, name: 'Realized P&L', line: { color: '#4dff91', width: 2 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Realized P&L</extra>` })
       }
       if (isNonTrivial(perf.fees)) {
-        traces.push({ x: data.dates, y: perf.fees, name: 'Fee', line: { color: '#e040fb', width: 1.5 }, hovertemplate: `${prefix}%{y:${fmt}}${suffix}<extra>Fee</extra>` })
+        traces.push({ x: data.dates, y: perf.fees, name: 'Fee', line: { color: '#e040fb', width: 1.5 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Fee</extra>` })
       }
     }
     traces.push(
-      { x: data.dates, y: perf.total, name: 'Total', line: { color: groupProfitSource ? '#b0bec5' : '#7ecfff', width: groupProfitSource ? 1.5 : 2.5, dash: groupProfitSource ? 'dot' : undefined }, hovertemplate: `${prefix}%{y:${fmt}}${suffix}<extra>Total</extra>` },
+      { x: data.dates, y: perf.total, name: 'Total', line: { color: groupProfitSource ? '#b0bec5' : '#7ecfff', width: groupProfitSource ? 1.5 : 2.5, dash: groupProfitSource ? 'dot' : undefined }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Total</extra>` },
     )
 
     Plotly.newPlot(el, traces, {
@@ -252,11 +287,11 @@ export default function PortfolioGrowth2() {
       font: { color: ct.font },
       height: 420,
       title: { text: 'Portfolio performance', font: { size: 16, color: ct.title } },
-      margin: { l: 60, r: 20, t: 50, b: 50 },
+      margin: { l: 80, r: 20, t: 50, b: 50 },
       hovermode: 'x unified',
       legend: { orientation: 'h', y: -0.12, xanchor: 'center', x: 0.5, font: { size: 11 } },
-      xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
-      yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, tickformat: fmt, tickprefix: prefix, ticksuffix: suffix, title: '' },
+      xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, automargin: true },
+      yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, tickformat: axisFmt, tickprefix: prefix, ticksuffix: suffix, title: '', automargin: true },
     }, { responsive: true })
 
     return () => { if (document.getElementById('g2-perf-chart')) Plotly.purge(el) }
@@ -283,6 +318,29 @@ export default function PortfolioGrowth2() {
             ))}
           </div>
         </div>
+        {period === 'custom' && (
+          <div className="g2-custom-range" role="group" aria-label="Custom date range">
+            <label>
+              <span>Start date</span>
+              <input
+                type="date"
+                value={customStart}
+                max={customEnd || initialCustomDates.end}
+                onChange={e => setCustomStart(e.target.value)}
+              />
+            </label>
+            <label>
+              <span>End date</span>
+              <input
+                type="date"
+                value={customEnd}
+                min={customStart || undefined}
+                max={initialCustomDates.end}
+                onChange={e => setCustomEnd(e.target.value)}
+              />
+            </label>
+          </div>
+        )}
         {data?.tickers?.length > 0 && (
           <TickerFilter
             tickers={data.tickers}
@@ -291,6 +349,50 @@ export default function PortfolioGrowth2() {
           />
         )}
       </div>
+
+      <details className="g2-help">
+        <summary>What are these charts showing?</summary>
+        <div className="g2-help-grid">
+          <section>
+            <h3>Portfolio value</h3>
+            <p>
+              The blue line estimates what the selected holdings were worth on each date using current
+              share quantities and Yahoo Finance adjusted closing prices. A holding begins at its first
+              known purchase or transaction date, so it is not projected backward into years before you
+              owned it.
+            </p>
+            <ul>
+              <li><strong>Portfolio:</strong> combined estimated market value of the selected holdings.</li>
+              <li><strong>Invested:</strong> recorded cost basis, added when each holding first enters the timeline.</li>
+              <li><strong>Trade markers:</strong> recorded buys and sells when Show trades is enabled.</li>
+            </ul>
+            <p className="g2-help-note">
+              This is a historical estimate based on today's open share quantities, not a reconstructed
+              account balance with historical cash and share-count changes.
+            </p>
+          </section>
+          <section>
+            <h3>Portfolio performance</h3>
+            <p>
+              This chart explains the estimated profit or loss over the same dates. The total combines
+              price movement, distributions, recorded realized gains or losses, and transaction fees.
+            </p>
+            <ul>
+              <li><strong>Capital gain:</strong> change in estimated holding value.</li>
+              <li><strong>Dividends:</strong> cumulative Yahoo distributions multiplied by the selected shares.</li>
+              <li><strong>Realized P&amp;L and fees:</strong> included when present in recorded transactions.</li>
+              <li><strong>Total:</strong> the sum of the displayed profit sources.</li>
+            </ul>
+            <p className="g2-help-note">
+              Selected period starts P/L at the first displayed value. From the first trade compares value
+              with recorded cost basis. Switch between amount and percent to change the Y-axis units.
+            </p>
+          </section>
+        </div>
+        <p className="g2-help-footer">
+          Period and ticker filters apply to both charts. Custom start and end dates are inclusive.
+        </p>
+      </details>
 
       {loading && <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>}
       {error && <div className="alert alert-error">{error}</div>}
