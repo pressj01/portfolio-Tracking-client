@@ -558,6 +558,8 @@ const DEFAULT_ROW = {
   divGrowthPct: 0,
   returnOfCapitalPct: 0,
   priceGrowthPct: 3,
+  dripPct: 100,
+  dripFollowGlobal: true,
   annualContribution: 0,
   contributionWeightPct: 0,
   payoutCode: 'Q',
@@ -579,6 +581,7 @@ const DEFAULT_SETTINGS = {
   contributionMode: 'equal',
   taxRatePct: 15,
   dripPct: 100,
+  dripApplyToAll: true,
   defaultInitialInvestment: 10000,
   defaultPriceGrowthPct: 5,
 }
@@ -739,6 +742,12 @@ function effectivePayoutCode(row) {
   return row?.payoutCode || ((row?.ticker || '').toUpperCase() === 'AOTS' ? 'N' : 'Q')
 }
 
+function effectiveDripPct(row, fallbackPct) {
+  const v = row?.dripPct
+  if (v === '' || v == null) return clampPct(fallbackPct)
+  return clampPct(v)
+}
+
 export default function DividendCalculator() {
   const pf = useProfileFetch()
   const [rows, setRows] = useState([newRow()])
@@ -751,6 +760,7 @@ export default function DividendCalculator() {
   const [contributionMode, setContributionMode] = useState(DEFAULT_SETTINGS.contributionMode)
   const [taxRatePct, setTaxRatePct] = useState(DEFAULT_SETTINGS.taxRatePct)
   const [dripPct, setDripPct] = useState(DEFAULT_SETTINGS.dripPct)
+  const [dripApplyToAll, setDripApplyToAll] = useState(DEFAULT_SETTINGS.dripApplyToAll)
   const [defaultInitialInvestment, setDefaultInitialInvestment] = useState(DEFAULT_SETTINGS.defaultInitialInvestment)
   const [defaultPriceGrowthPct, setDefaultPriceGrowthPct] = useState(DEFAULT_SETTINGS.defaultPriceGrowthPct)
   const [tickerInput, setTickerInput] = useState('')
@@ -821,6 +831,7 @@ export default function DividendCalculator() {
               divGrowthPct: cleanLookupDividendGrowthPct(d.growth_pct),
               returnOfCapitalPct: recommendedRocPct || row.returnOfCapitalPct,
               priceGrowthPct: Number(defaultPriceGrowthPct) || 0,
+              dripPct: clampPct(dripPct),
               payoutCode: d.ticker === 'AOTS' ? 'N' : (d.frequency_code || 'Q'),
               yieldBasis: yieldSelection.yieldBasis,
               yieldOptions: yieldSelection.yieldOptions,
@@ -898,6 +909,7 @@ export default function DividendCalculator() {
                     ? estimatedPortfolioRocPct(yieldPct)
                     : (recommendedRocPct || row.returnOfCapitalPct),
                   priceGrowthPct: priceGrowth,
+                  dripPct: clampPct(dripPct),
                   payoutCode: d.ticker === 'AOTS' ? 'N' : (d.frequency_code || 'Q'),
                   yieldBasis: yieldSelection.yieldBasis,
                   yieldOptions: yieldSelection.yieldOptions,
@@ -987,6 +999,7 @@ export default function DividendCalculator() {
     setContributionMode(DEFAULT_SETTINGS.contributionMode)
     setTaxRatePct(DEFAULT_SETTINGS.taxRatePct)
     setDripPct(DEFAULT_SETTINGS.dripPct)
+    setDripApplyToAll(DEFAULT_SETTINGS.dripApplyToAll)
     setDefaultInitialInvestment(DEFAULT_SETTINGS.defaultInitialInvestment)
     setDefaultPriceGrowthPct(DEFAULT_SETTINGS.defaultPriceGrowthPct)
     setCalculation(null)
@@ -1111,6 +1124,37 @@ export default function DividendCalculator() {
     )))
   }
 
+  const updateGlobalDrip = (value) => {
+    setDripPct(value)
+    // Push the global value onto every ticker that is set to follow it, and only
+    // when the master override is on. Tickers whose own follow toggle is off keep
+    // their custom percentage. When the master override is off, existing per-ticker
+    // percentages are all left untouched and the global value just seeds new tickers.
+    if (dripApplyToAll) {
+      setRows(prev => prev.map(r => (
+        r.status === 'loaded' && r.dripFollowGlobal !== false ? { ...r, dripPct: value } : r
+      )))
+    }
+  }
+
+  const toggleDripApplyToAll = (next) => {
+    setDripApplyToAll(next)
+    // Turning the master override on re-syncs every following ticker to the global value.
+    if (next) {
+      setRows(prev => prev.map(r => (
+        r.status === 'loaded' && r.dripFollowGlobal !== false ? { ...r, dripPct } : r
+      )))
+    }
+  }
+
+  const toggleRowDripFollow = (idx, next) => {
+    setRows(prev => prev.map((r, i) => {
+      if (i !== idx) return r
+      // Turning follow back on snaps this ticker to the current all-tickers %.
+      return next ? { ...r, dripFollowGlobal: true, dripPct } : { ...r, dripFollowGlobal: false }
+    }))
+  }
+
   const handleAddTicker = (e) => {
     e?.preventDefault()
     const sym = tickerInput.trim().toUpperCase()
@@ -1211,6 +1255,7 @@ export default function DividendCalculator() {
       divGrowthPct: Number(r.divGrowthPct) || 0,
       returnOfCapitalPct: Number(r.returnOfCapitalPct) || 0,
       priceGrowthPct: Number(r.priceGrowthPct) || 0,
+      dripPct: effectiveDripPct(r, dripPct),
       annualContribution: Number(r.annualContribution) || 0,
       contributionWeightPct: Number(r.contributionWeightPct) || 0,
       payoutCode: effectivePayoutCode(r),
@@ -1245,6 +1290,7 @@ export default function DividendCalculator() {
       divGrowthPct: Number(r.divGrowthPct) || 0,
       returnOfCapitalPct: Number(r.returnOfCapitalPct) || 0,
       priceGrowthPct: Number(r.priceGrowthPct) || 0,
+      dripPct: effectiveDripPct(r, calculation.settings.dripPct),
       annualContribution: Number(r.annualContribution) || 0,
       contributionWeightPct: Number(r.contributionWeightPct) || 0,
       payoutCode: effectivePayoutCode(r),
@@ -1318,7 +1364,7 @@ export default function DividendCalculator() {
           contributionDurationMonths: settings.contributionDurationMonths,
           taxRatePct: settings.taxRatePct,
           payoutCode: effectivePayoutCode(r),
-          dripPct: settings.dripPct,
+          dripPct: effectiveDripPct(r, settings.dripPct),
         }),
       }))
   }, [calculation])
@@ -1330,7 +1376,8 @@ export default function DividendCalculator() {
     return [Math.min(...yearsList) - 0.25, Math.max(...yearsList) + 0.25]
   }, [totals])
   const hasNegativePriceGrowth = rows.some(r => r.status === 'loaded' && Number(r.priceGrowthPct) < 0)
-  const negativeGrowthDripNote = hasNegativePriceGrowth && clampPct(dripPct) > 0
+  const negativeGrowthDripNote = hasNegativePriceGrowth
+    && rows.some(r => r.status === 'loaded' && effectiveDripPct(r, dripPct) > 0)
     ? 'A negative stock price growth rate can still produce higher ending wealth when DRIP is on, because reinvested dividends buy more shares at lower prices.'
     : ''
 
@@ -1451,6 +1498,19 @@ export default function DividendCalculator() {
                 Changing one custom percentage redistributes the remaining percentage across the other tickers so
                 the total stays at 100%, including after a ticker is removed. An adjustment summary confirms the
                 100% total and lists every ticker&apos;s before-and-after percentage.
+              </li>
+              <li>
+                <strong>Dividends Reinvested (All Tickers)</strong> sets the portfolio-wide DRIP percentage.
+                100% reinvests every distribution; 30% reinvests 30% and takes the other 70% as cash. Each
+                ticker card also has its own <strong>Dividends Reinvested</strong> percentage, so individual
+                tickers can reinvest any percent — including 0% to take that ticker&apos;s payouts entirely as
+                cash. Use the <strong>Apply to every ticker on change</strong> toggle to control the global
+                override: when <strong>on</strong>, changing the all-tickers value resets every following ticker
+                to match (and turning it on syncs them immediately); when <strong>off</strong>, changing the
+                value leaves each ticker&apos;s own percentage untouched and only seeds newly added tickers.
+                Each ticker card also has a <strong>Follow all-tickers %</strong> toggle — turn it off (or just
+                edit that ticker&apos;s %) to exclude that one ticker from global changes while the master toggle
+                stays on; turning it back on snaps the ticker to the current all-tickers value.
               </li>
               <li>Add one or more tickers, then adjust any ticker-specific values in the cards below.</li>
               <li>
@@ -1664,8 +1724,21 @@ export default function DividendCalculator() {
             {negativeGrowthDripNote && <div className="dc-field-note">{negativeGrowthDripNote}</div>}
           </div>
           <div className="dc-field">
-            <label>Dividends Reinvested (DRIP)</label>
-            <NumberInput value={fmtInputNumber(dripPct, 2)} onChange={setDripPct} min="0" max="100" suffix="%" step="0.1" />
+            <label>Dividends Reinvested (All Tickers)</label>
+            <NumberInput value={fmtInputNumber(dripPct, 2)} onChange={updateGlobalDrip} min="0" max="100" suffix="%" step="0.1" />
+            <div className="dc-drip-toggle-row">
+              <Toggle
+                checked={dripApplyToAll}
+                onChange={toggleDripApplyToAll}
+                label="Apply to every ticker on change"
+              />
+            </div>
+            <div className="dc-field-note">
+              {dripApplyToAll
+                ? 'On: changing this % updates every ticker set to follow it (turn a ticker’s “Follow all-tickers %” off to keep its own). Turning it on re-syncs the following tickers.'
+                : 'Off: changing this % leaves each ticker’s own Dividends Reinvested % alone and only seeds newly added tickers.'}
+              {' '}Each ticker card below can still set its own %.
+            </div>
           </div>
         </div>
       </div>
@@ -1937,6 +2010,29 @@ export default function DividendCalculator() {
                     <option key={f.code} value={f.code}>{f.label}</option>
                   ))}
                 </select>
+              </div>
+              <div className="dc-field">
+                <label>Dividends Reinvested</label>
+                <NumberInput
+                  value={fmtInputNumber(effectiveDripPct(r, dripPct), 2)}
+                  onChange={(v) => updateRow(idx, { dripPct: v, dripFollowGlobal: false })}
+                  min="0"
+                  max="100"
+                  suffix="%"
+                  step="0.1"
+                />
+                <div className="dc-drip-toggle-row">
+                  <Toggle
+                    checked={r.dripFollowGlobal !== false}
+                    onChange={(next) => toggleRowDripFollow(idx, next)}
+                    label="Follow all-tickers %"
+                  />
+                </div>
+                <div className="dc-field-note">
+                  {r.dripFollowGlobal !== false
+                    ? 'Following the all-tickers %. Turn this off (or edit the % above) to set a custom rate for this ticker only.'
+                    : 'Custom for this ticker — ignores the all-tickers %. 0% takes all of its payouts as cash.'}
+                </div>
               </div>
             </div>
           </div>

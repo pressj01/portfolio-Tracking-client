@@ -5623,6 +5623,7 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   background: var(--white); border-radius: 50%; transition: left 0.15s;
 }
 .dc-toggle-track.on .dc-toggle-thumb { left: 20px; }
+.dc-drip-toggle-row { margin: 0.45rem 0 0.15rem; }
 
 .dc-results-head {
   display: flex; justify-content: space-between; align-items: center;
