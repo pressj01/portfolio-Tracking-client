@@ -1499,11 +1499,19 @@ export default function ManageHoldings() {
     const sum = (key) => filteredHoldings.reduce((s, h) => s + (Number(h[key]) || 0), 0)
     const monthlyIncome = sum('approx_monthly_income')
     const reinvested = sum('monthly_income_reinvested')
+    const tickerCount = filteredHoldings.length
+    const drippedTickerCount = filteredHoldings.filter(h => h.reinvest === 'Y').length
+    const notDrippedTickerCount = tickerCount - drippedTickerCount
     return {
       monthlyIncome,
       reinvested,
       notReinvested: sum('monthly_income_not_reinvested'),
       reinvestPct: monthlyIncome > 0 ? (reinvested / monthlyIncome) * 100 : 0,
+      tickerCount,
+      drippedTickerCount,
+      notDrippedTickerCount,
+      drippedTickerPct: tickerCount > 0 ? (drippedTickerCount / tickerCount) * 100 : 0,
+      notDrippedTickerPct: tickerCount > 0 ? (notDrippedTickerCount / tickerCount) * 100 : 0,
     }
   }, [filteredHoldings])
 
@@ -1695,6 +1703,37 @@ export default function ManageHoldings() {
 
       {!loading && holdings.length > 0 && (
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+          <div
+            className="card"
+            title="Ticker counts follow each holding's DRIP checkbox and reflect the current dividend-source filter."
+            style={{ flex: '2 1 300px', minWidth: 280, padding: '0.65rem 1rem' }}
+          >
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Ticker DRIP Coverage
+            </div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginTop: '0.1rem' }}>
+              <span style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-strong)' }}>{incTotals.tickerCount}</span>
+              <span style={{ fontSize: '0.76rem', color: 'var(--text-dim-2)' }}>
+                ticker{incTotals.tickerCount === 1 ? '' : 's'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', marginTop: '0.45rem' }}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.2rem 0.5rem',
+                borderRadius: 999, background: 'rgba(76, 175, 80, 0.13)', color: 'var(--pos)',
+                fontSize: '0.74rem', fontWeight: 700,
+              }}>
+                {incTotals.drippedTickerCount} DRIP ({incTotals.drippedTickerPct.toFixed(1)}%)
+              </span>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.2rem 0.5rem',
+                borderRadius: 999, background: 'rgba(255, 179, 0, 0.13)', color: 'var(--warning-money)',
+                fontSize: '0.74rem', fontWeight: 700,
+              }}>
+                {incTotals.notDrippedTickerCount} Not DRIP ({incTotals.notDrippedTickerPct.toFixed(1)}%)
+              </span>
+            </div>
+          </div>
           <div className="card" style={{ flex: '1 1 140px', minWidth: 140, padding: '0.65rem 1rem' }}>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Est. Monthly Income</div>
             <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--pos)' }}>{fmtM(incTotals.monthlyIncome)}</div>
@@ -1712,6 +1751,47 @@ export default function ManageHoldings() {
             <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--pos-muted)' }}>{incTotals.reinvestPct.toFixed(1)}%</div>
           </div>
         </div>
+      )}
+
+      {!loading && holdings.length > 0 && (
+        <details className="card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem' }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--accent-2)', fontWeight: 500 }}>
+            Why the DRIP Percentages Can Be Different
+          </summary>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.82rem', lineHeight: 1.5, marginTop: '0.75rem' }}>
+            <p style={{ margin: '0 0 0.65rem' }}>
+              The two percentages answer different questions, so they are not expected to match.
+            </p>
+            <ul style={{ margin: '0 0 0.65rem', paddingLeft: '1.2rem' }}>
+              <li>
+                <strong style={{ color: 'var(--text-strong)' }}>DRIP ticker percentage</strong> counts ticker
+                names. Every ticker counts once, whether the position is large or small.
+              </li>
+              <li>
+                <strong style={{ color: 'var(--text-strong)' }}>Income reinvested percentage</strong> counts
+                dividend dollars. A holding that pays more income has more effect on this percentage.
+              </li>
+            </ul>
+            <div style={{
+              padding: '0.6rem 0.75rem', borderRadius: 6, border: '1px solid var(--border)',
+              background: 'var(--surface-inset)', marginBottom: '0.65rem',
+            }}>
+              <strong style={{ color: 'var(--text-strong)' }}>Simple example:</strong> If 2 of 4 tickers have
+              DRIP turned on, then 50% of the tickers are being dripped. But if those two tickers produce only $20
+              of the portfolio&apos;s $100 monthly income, then only 20% of the income is being reinvested.
+            </div>
+            <p style={{ margin: '0 0 0.65rem' }}>
+              The number of shares can affect how much income a holding produces, but the dividend amount and payment
+              frequency also matter. This is why a small DRIP position may raise the ticker percentage without moving
+              the income percentage very much.
+            </p>
+            <p style={{ margin: 0 }}>
+              In a combined or Owner view, the same ticker may have DRIP on in one account and off in another. The
+              ticker bubble counts the ticker once, while the income percentage uses the actual dollar split across
+              those accounts.
+            </p>
+          </div>
+        </details>
       )}
 
       {loading ? (
