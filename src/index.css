@@ -1759,6 +1759,36 @@ label {
   border-top: 2px solid var(--border);
 }
 
+/* Excel-style frozen (pinned) left columns. `left` offsets are set inline
+   from measured header widths; background/z-index/hover live here. */
+.holdings-table td.frozen-col,
+.holdings-table th.frozen-col {
+  position: sticky;
+  z-index: 1;
+}
+.holdings-table td.frozen-col {
+  background: var(--surface);
+}
+.holdings-table th.frozen-col {
+  z-index: 4; /* above the sticky header row (2) and frozen body cells (1) */
+}
+.holdings-table tfoot td.frozen-col {
+  z-index: 3;
+}
+/* Single divider at the freeze boundary (only the last frozen column). */
+.holdings-table .frozen-col.frozen-col-edge {
+  box-shadow: 2px 0 4px rgba(0, 0, 0, 0.28);
+}
+/* Keep pinned cells opaque under the row hover / NAV-erosion tints by
+   compositing the same overlay used on the rest of the row over the base. */
+.holdings-table tbody tr.cov-bad td.frozen-col {
+  background: linear-gradient(rgba(255, 107, 107, 0.1), rgba(255, 107, 107, 0.1)), var(--surface);
+}
+.holdings-table tbody tr:hover td.frozen-col,
+.holdings-table tbody tr.cov-bad:hover td.frozen-col {
+  background: linear-gradient(rgba(126, 207, 255, 0.12), rgba(126, 207, 255, 0.12)), var(--surface);
+}
+
 /* Total Return */
 .tr-note { color: var(--text-dim); font-size: 0.88rem; margin: 0.25rem 0 1rem; }
 .tr-period-bar {

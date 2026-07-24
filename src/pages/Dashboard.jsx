@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react'
 import { API_BASE } from '../config'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
@@ -12,6 +12,10 @@ import { formatMoney } from '../utils/money'
 const DASHBOARD_CACHE_TTL_MS = 60 * 60 * 1000
 const SP500_CACHE_KEY = 'portfolio_dashboard_sp500'
 const HOLDINGS_COLUMN_PREF_KEY = 'dashboard_holdings_visible_columns_v1'
+// Freeze the first N visible holdings columns horizontally (Excel-style freeze
+// panes). By default the 5th column is "Purchased", so freezing 5 keeps
+// Ticker → Purchased pinned while the rest scroll under them.
+const FROZEN_HOLDING_COLS = 5
 const CLOSURE_DISMISS_KEY = 'dashboard_closure_warning_dismissed_v1'
 const IMPORT_DISMISS_KEY = 'dashboard_import_warning_dismissed_v1'
 const validSp500 = value => value?.price != null && Number.isFinite(Number(value.price))
@@ -780,6 +784,11 @@ export default function Dashboard() {
   const [navRepairing, setNavRepairing] = useState(false)
   const [actionCenter, setActionCenter] = useState(null)
   const [visibleHoldingColumnIds, setVisibleHoldingColumnIds] = useState(readHoldingColumnPreference)
+  // Left offsets (px) for each frozen holdings column, measured from the
+  // rendered header widths so freezing works with the auto-sized table.
+  const [frozenColLefts, setFrozenColLefts] = useState([])
+  const holdingsTableRef = useRef(null)
+  const holdingsHeadRowRef = useRef(null)
   const navChartRef = useRef(null)
   const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v16_${selection}_${basisMode}`, [selection, basisMode])
   const currentProfile = useMemo(
@@ -1395,11 +1404,12 @@ export default function Dashboard() {
       })
   }, [pf, refreshPortfolioCoverage])
 
-  const SortHeader = ({ col, children, align, tip, ...rest }) => (
+  const SortHeader = ({ col, children, align, tip, style, className, ...rest }) => (
     <th
       {...rest}
       onClick={() => handleSort(col)}
-      style={{ cursor: 'pointer', textAlign: align || 'left', userSelect: 'none' }}
+      className={className}
+      style={{ cursor: 'pointer', textAlign: align || 'left', userSelect: 'none', ...style }}
       title={tip || ''}
     >
       {children}{tip ? ' \u24D8' : ''} {sortCol === col ? (sortAsc ? '↑' : '↓') : ''}
@@ -1602,6 +1612,21 @@ export default function Dashboard() {
   const visibleHoldingColumns = holdingsColumns.filter(column => selectedHoldingColumnSet.has(column.id))
   const effectiveVisibleHoldingColumns = visibleHoldingColumns.length ? visibleHoldingColumns : holdingsColumns.filter(column => column.id === 'ticker')
   const visibleColumnCount = effectiveVisibleHoldingColumns.length
+  const frozenColCount = Math.min(FROZEN_HOLDING_COLS, visibleColumnCount)
+  const visibleHoldingColumnSignature = effectiveVisibleHoldingColumns.map(column => column.id).join('|')
+  // Sticky style for a frozen holdings cell (header/body/footer). Background,
+  // z-index and hover live in CSS (.holdings-table .frozen-col).
+  const frozenColStyle = (index) => (
+    index < frozenColCount ? { position: 'sticky', left: frozenColLefts[index] ?? 0 } : null
+  )
+  // Class names for a frozen cell. The last frozen column also gets
+  // .frozen-col-edge, which draws the single Excel-style freeze divider.
+  const frozenColClass = (index, base) => {
+    if (index >= frozenColCount) return base || undefined
+    const parts = [base, 'frozen-col']
+    if (index === frozenColCount - 1) parts.push('frozen-col-edge')
+    return parts.filter(Boolean).join(' ')
+  }
   const holdingColumnGroups = ['Current', 'Calculated Additions'].map(group => ({
     group,
     columns: holdingsColumns.filter(column => column.group === group),
@@ -1654,6 +1679,42 @@ export default function Dashboard() {
   useEffect(() => {
     persistHoldingColumnPreference(visibleHoldingColumnIds)
   }, [visibleHoldingColumnIds])
+
+  // Measure the rendered widths of the frozen header cells and turn them into
+  // cumulative left offsets so the pinned columns line up with an auto-sized
+  // table. Re-runs when the visible columns change; a ResizeObserver + resize
+  // listener keep offsets correct as content or the window changes width.
+  useLayoutEffect(() => {
+    const headRow = holdingsHeadRowRef.current
+    if (!headRow) return undefined
+    const measure = () => {
+      const cells = Array.from(headRow.children)
+      const count = Math.min(FROZEN_HOLDING_COLS, cells.length)
+      const lefts = []
+      let acc = 0
+      for (let i = 0; i < count; i++) {
+        lefts.push(acc)
+        acc += cells[i].getBoundingClientRect().width
+      }
+      setFrozenColLefts(prev => (
+        prev.length === lefts.length && prev.every((v, i) => Math.abs(v - lefts[i]) < 0.5)
+      ) ? prev : lefts)
+    }
+    measure()
+    const table = holdingsTableRef.current
+    let observer
+    if (typeof ResizeObserver !== 'undefined' && table) {
+      observer = new ResizeObserver(measure)
+      observer.observe(table)
+    }
+    window.addEventListener('resize', measure)
+    return () => {
+      if (observer) observer.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+    // `loading` is included so we re-measure once the table mounts (the
+    // component renders a spinner and no table while loading).
+  }, [visibleHoldingColumnSignature, loading])
 
   const currentMonthSub = useMemo(() => {
     if (!incomeSummary) return null
@@ -2314,14 +2375,20 @@ export default function Dashboard() {
       </div>
 
       <div className="holdings-table-wrap">
-        <table className="holdings-table">
+        <table className="holdings-table" ref={holdingsTableRef}>
           <thead>
-            <tr>
-              {effectiveVisibleHoldingColumns.map(column => {
+            <tr ref={holdingsHeadRowRef}>
+              {effectiveVisibleHoldingColumns.map((column, index) => {
+                const frozen = index < frozenColCount
+                const frozenStyle = frozenColStyle(index)
                 if (column.renderHeader) {
                   const header = column.renderHeader()
                   return React.cloneElement(header, {
                     key: column.id,
+                    ...(frozen ? {
+                      className: frozenColClass(index, header.props.className),
+                      style: { ...header.props.style, ...frozenStyle },
+                    } : {}),
                   })
                 }
                 return (
@@ -2330,6 +2397,8 @@ export default function Dashboard() {
                     col={column.sortKey || column.id}
                     align={column.align}
                     tip={column.tip || column.name}
+                    className={frozen ? frozenColClass(index) : undefined}
+                    style={frozenStyle || undefined}
                   >
                     {column.label}
                   </SortHeader>
@@ -2343,18 +2412,35 @@ export default function Dashboard() {
               const covBad = navSeverity === 'High'
               return (
                 <tr key={h.ticker} className={covBad ? 'cov-bad' : undefined} style={covBad ? { background: 'rgba(255,107,107,0.1)' } : undefined}>
-                  {effectiveVisibleHoldingColumns.map(column => React.cloneElement(column.render(h), { key: column.id }))}
+                  {effectiveVisibleHoldingColumns.map((column, index) => {
+                    const cell = column.render(h)
+                    if (index < frozenColCount) {
+                      return React.cloneElement(cell, {
+                        key: column.id,
+                        className: frozenColClass(index, cell.props.className),
+                        style: { ...cell.props.style, ...frozenColStyle(index) },
+                      })
+                    }
+                    return React.cloneElement(cell, { key: column.id })
+                  })}
                 </tr>
               )
             })}
           </tbody>
           <tfoot>
             <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
-              {effectiveVisibleHoldingColumns.map((column, index) => (
-                <td key={column.id} style={holdingCellStyle(column)}>
-                  {index === 0 ? (isHoldingsFiltered ? 'Filtered Totals' : 'Totals') : column.footer ? column.footer() : ''}
-                </td>
-              ))}
+              {effectiveVisibleHoldingColumns.map((column, index) => {
+                const frozen = index < frozenColCount
+                return (
+                  <td
+                    key={column.id}
+                    className={frozen ? frozenColClass(index) : undefined}
+                    style={holdingCellStyle(column, frozen ? frozenColStyle(index) : undefined)}
+                  >
+                    {index === 0 ? (isHoldingsFiltered ? 'Filtered Totals' : 'Totals') : column.footer ? column.footer() : ''}
+                  </td>
+                )
+              })}
             </tr>
           </tfoot>
         </table>
