@@ -14,14 +14,57 @@ const PALETTE = [
 ]
 
 const fmt = v => formatMoney(v)
+const roundForDisplay = v => {
+  const number = Number(v)
+  return Number.isFinite(number) ? Number(number.toFixed(2)) : null
+}
 const fmtPct = v => v != null ? `${Number(v).toFixed(2)}%` : '—'
 const fmtInt = v => formatMoneyWhole(v)
 
-function MetricCard({ label, value, className }) {
+const PREVIOUS_CALENDAR_YEAR = new Date().getFullYear() - 1
+const COMPARISON_PERIODS = [
+  { key: '1mo', label: '1M' },
+  { key: '3mo', label: '3M' },
+  { key: 'ytd', label: 'YTD' },
+  { key: '1y', label: '1Y' },
+  { key: '5y', label: '5Y' },
+  { key: '10y', label: '10Y' },
+  { key: 'max', label: 'ALL/MAX' },
+]
+const COMPARISON_RETURN_MODES = [
+  { key: 'total', label: 'Total Return', title: 'Full dividend-reinvested total return' },
+  { key: 'price', label: 'Price Only', title: 'Share-price change only; distributions are excluded' },
+  { key: 'pricediv', label: 'Price + Divs', title: 'Price change plus distributions held as cash' },
+  { key: 'both', label: 'Both', title: 'Overlay Total Return and Price Only' },
+]
+const COMPARISON_TRACE_STYLES = {
+  total: { label: 'Total Return', dash: 'solid', width: 3 },
+  price: { label: 'Price Only', dash: 'dot', width: 2.2 },
+  pricediv: { label: 'Price + Divs', dash: 'longdash', width: 2.5 },
+}
+
+const formatComparisonDate = (value) => {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return ''
+  return `${Number(match[2])}/${Number(match[3])}/${match[1]}`
+}
+
+const formatComparisonRange = (start, end) => {
+  const startLabel = formatComparisonDate(start)
+  const endLabel = formatComparisonDate(end)
+  return startLabel && endLabel ? `${startLabel}–${endLabel}` : ''
+}
+
+function MetricCard({ label, value, range, className }) {
   return (
     <div className={`summary-card ${className || ''}`}>
       <div className="summary-label">{label}</div>
       <div className="summary-value">{value ?? '—'}</div>
+      {range && (
+        <div style={{ marginTop: '0.3rem', color: 'var(--text-dim)', fontSize: '0.72rem', lineHeight: 1.25 }}>
+          {range}
+        </div>
+      )}
     </div>
   )
 }
@@ -40,25 +83,49 @@ export default function TotalReturn() {
   const [summaryError, setSummaryError] = useState(null)
 
   const [chartData, setChartData] = useState(null)
-  const [chartLoading, setChartLoading] = useState(false)
+  const [chartLoading, setChartLoading] = useState(true)
   const [chartError, setChartError] = useState(null)
 
   const [sortCol, setSortCol] = useState('total_return_pct')
   const [sortAsc, setSortAsc] = useState(false)
   const [rvyMode, setRvyMode] = useState('cur')
   const [scatterReturnMode, setScatterReturnMode] = useState('pct')
+  const [dashboardPeriod, setDashboardPeriod] = useState('1y')
+  const [dashboardCalendarYear, setDashboardCalendarYear] = useState(String(PREVIOUS_CALENDAR_YEAR))
 
   // Comparison chart state
+  const [cmpPortfolio, setCmpPortfolio] = useState(false)
   const [cmpTickers, setCmpTickers] = useState([])
   const [cmpTickerOpen, setCmpTickerOpen] = useState(false)
   const cmpTickerRef = useRef(null)
   const [cmpExtraInput, setCmpExtraInput] = useState('')
   const [cmpExtra, setCmpExtra] = useState('')
-  const [cmpPeriod, setCmpPeriod] = useState('1y')
-  const [cmpMode, setCmpMode] = useState('total') // 'price' or 'total'
+  const [cmpMode, setCmpMode] = useState('total')
   const [cmpData, setCmpData] = useState(null)
   const [cmpLoading, setCmpLoading] = useState(false)
   const [cmpError, setCmpError] = useState(null)
+
+  const dashboardRows = useMemo(() => {
+    if (!summary?.rows || !chartData?.performance_rows) return []
+    const performanceByTicker = new Map(
+      chartData.performance_rows.map(row => [String(row.ticker || '').toUpperCase(), row]),
+    )
+    return summary.rows
+      .map(row => {
+        const performance = performanceByTicker.get(String(row.ticker || '').toUpperCase())
+        return performance
+          ? {
+              ...row,
+              ...performance,
+              period_range: formatComparisonRange(
+                performance.actual_start_date,
+                performance.actual_end_date,
+              ),
+            }
+          : null
+      })
+      .filter(Boolean)
+  }, [summary, chartData])
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -91,7 +158,8 @@ export default function TotalReturn() {
   useEffect(() => {
     setChartLoading(true)
     setChartError(null)
-    const params = new URLSearchParams({ period: '1y' })
+    setChartData(null)
+    const params = new URLSearchParams({ period: dashboardPeriod })
     if (categories.length) params.set('category', categories.join(','))
     if (subcategories.length) params.set('subcategory', subcategories.join(','))
     pf(`/api/total-return/charts?${params}`)
@@ -102,7 +170,7 @@ export default function TotalReturn() {
       })
       .catch(e => setChartError(e.message))
       .finally(() => setChartLoading(false))
-  }, [categories, subcategories, selection])
+  }, [categories, subcategories, dashboardPeriod, selection])
 
   // Render Plotly charts with consistent colors across bar + line charts
   useEffect(() => {
@@ -163,18 +231,18 @@ export default function TotalReturn() {
 
   // Render scatter chart
   useEffect(() => {
-    if (!summary?.rows?.length || !window.Plotly) return
+    if (!dashboardRows.length || !window.Plotly) return
     const Plotly = window.Plotly
     const el = document.getElementById('tr-chart-scatter')
     if (!el) return
 
-    const rows = summary.rows
+    const rows = dashboardRows
       .map(r => ({
         ...r,
         category_name: r.category_name || 'Other',
-        yield_on_cost_pct: Number(r.annual_yield_on_cost || 0) * 100,
-        purchase_value_num: Number(r.purchase_value || 0),
-        total_return_pct_num: Number(r.total_return_pct || 0),
+        yield_on_cost_pct: roundForDisplay(Number(r.annual_yield_on_cost || 0) * 100),
+        purchase_value_num: Number(r.end_value || 0),
+        total_return_pct_num: roundForDisplay(r.total_return_pct || 0),
         total_return_dollar_num: Number(r.total_return_dollar || 0),
       }))
       .filter(r => r.ticker)
@@ -199,8 +267,8 @@ export default function TotalReturn() {
           color: PALETTE[i % PALETTE.length],
         },
         hovertemplate: scatterReturnMode === 'dollar'
-          ? '<b>%{text}</b><br>Total Ret: $%{y:,.2f}<br>Total Ret %: %{customdata[0]:.2f}%<br>Yield on Cost: %{x:.2f}%<extra>' + category + '</extra>'
-          : '<b>%{text}</b><br>Total Ret: %{y:.2f}%<br>Total Ret $: $%{customdata[1]:,.2f}<br>Yield on Cost: %{x:.2f}%<extra>' + category + '</extra>',
+          ? '<b>%{text}</b><br>Total Ret: $%{y:,.2f}<br>Total Ret %: %{customdata[0]:+.2f}%<br>Yield on Cost: %{x:.2f}%<extra>' + category + '</extra>'
+          : '<b>%{text}</b><br>Total Ret: %{y:+.2f}%<br>Total Ret $: $%{customdata[1]:,.2f}<br>Yield on Cost: %{x:.2f}%<extra>' + category + '</extra>',
       }
     })
 
@@ -208,7 +276,7 @@ export default function TotalReturn() {
       data: traces,
       layout: {
         title: {
-          text: `${scatterReturnMode === 'dollar' ? `Total Return (${getCurrencyLabel()})` : 'Total Return %'} vs Annual Yield on Cost (Since Purchase)`,
+          text: `${scatterReturnMode === 'dollar' ? `Total Return (${getCurrencyLabel()})` : 'Total Return %'} vs Annual Yield on Cost — ${chartData?.period_label || 'Selected Period'}`,
           font: { color: '#e0e8f0' },
         },
         template: 'plotly_dark',
@@ -220,7 +288,7 @@ export default function TotalReturn() {
         },
         yaxis: {
           title: {
-            text: scatterReturnMode === 'dollar' ? `Total Return (${getCurrencyLabel()}, Since Purchase)` : 'Total Return % (Since Purchase)',
+            text: scatterReturnMode === 'dollar' ? `Total Return (${getCurrencyLabel()})` : 'Total Return (%)',
             font: { color: '#d0dde8' },
           },
           tickfont: { color: '#c0cdd8', size: 12 },
@@ -247,14 +315,63 @@ export default function TotalReturn() {
 
     Plotly.newPlot(el, fig.data, themedPlotlyLayout(fig.layout, isDark), { responsive: true })
     return () => { if (el) Plotly.purge(el) }
-  }, [summary, scatterReturnMode, isDark])
+  }, [dashboardRows, chartData?.period_label, scatterReturnMode, isDark])
 
   // Fetch comparison chart data
   useEffect(() => {
-    if (cmpTickers.length === 0 && !cmpExtra) { setCmpData(null); return }
+    if (!cmpPortfolio && cmpTickers.length === 0 && !cmpExtra) { setCmpData(null); return }
+
+    const canReuseDashboardPortfolio = (
+      cmpPortfolio
+      && cmpTickers.length === 0
+      && !cmpExtra
+      && categories.length === 0
+      && subcategories.length === 0
+    )
+    if (canReuseDashboardPortfolio) {
+      const portfolioSeries = chartData?.portfolio_series
+      const seriesMatchesPeriod = chartData?.period_key === dashboardPeriod
+      if (portfolioSeries && seriesMatchesPeriod) {
+        const metrics = chartData.portfolio_metrics || {}
+        setCmpError(null)
+        setCmpData({
+          dates: portfolioSeries.dates,
+          price: { PORTFOLIO: portfolioSeries.price },
+          pricediv: { PORTFOLIO: portfolioSeries.pricediv },
+          total: { PORTFOLIO: portfolioSeries.total },
+          tickers: ['PORTFOLIO'],
+          labels: { PORTFOLIO: 'Entire Portfolio' },
+          portfolio_coverage: {
+            transaction_count: metrics.transaction_count || 0,
+            fallback_positions: metrics.fallback_positions || 0,
+            inferred_opening_positions: metrics.inferred_opening_positions || 0,
+            fallback_date_sources: metrics.fallback_date_sources || {},
+          },
+          portfolio_method: (
+            'Daily time-weighted return from dated BUY/SELL quantities. '
+            + 'Trades change portfolio weights without changing the return index.'
+          ),
+          period_label: chartData.period_label,
+          requested_start_date: chartData.requested_start_date,
+          requested_end_date: chartData.requested_end_date,
+          actual_start_date: metrics.actual_start_date,
+          actual_end_date: metrics.actual_end_date,
+        })
+        setCmpLoading(false)
+        return
+      }
+      if (chartLoading || (chartData?.period_key && !seriesMatchesPeriod)) {
+        setCmpLoading(true)
+        setCmpError(null)
+        setCmpData(null)
+        return
+      }
+    }
+
     setCmpLoading(true)
     setCmpError(null)
-    const params = new URLSearchParams({ period: cmpPeriod })
+    const params = new URLSearchParams({ period: dashboardPeriod })
+    if (cmpPortfolio) params.set('portfolio', '1')
     if (cmpTickers.length) params.set('tickers', cmpTickers.join(','))
     if (cmpExtra) params.set('extra', cmpExtra)
     pf(`/api/total-return/compare?${params}`)
@@ -265,7 +382,17 @@ export default function TotalReturn() {
       })
       .catch(e => setCmpError(e.message))
       .finally(() => setCmpLoading(false))
-  }, [cmpTickers, cmpExtra, cmpPeriod, selection])
+  }, [
+    cmpPortfolio,
+    cmpTickers,
+    cmpExtra,
+    dashboardPeriod,
+    selection,
+    categories,
+    subcategories,
+    chartData,
+    chartLoading,
+  ])
 
   // Render comparison chart
   useEffect(() => {
@@ -274,15 +401,32 @@ export default function TotalReturn() {
     const el = document.getElementById('tr-chart-compare')
     if (!el) return
 
-    const series = cmpMode === 'total' ? cmpData.total : cmpData.price
-    const traces = cmpData.tickers.filter(t => series[t]).map((t, i) => ({
-      x: cmpData.dates,
-      y: series[t],
-      name: t,
-      mode: 'lines',
-      line: { width: 2.5, color: PALETTE[i % PALETTE.length] },
-      hovertemplate: `<b>${t}</b><br>%{x}<br>${cmpMode === 'total' ? 'Total' : 'Price'} Return: %{y:.1f}<extra></extra>`,
-    }))
+    const traceKeys = cmpMode === 'both' ? ['total', 'price'] : [cmpMode]
+    const traces = cmpData.tickers.flatMap((ticker, tickerIndex) => {
+      const label = cmpData.labels?.[ticker] || ticker
+      const isPortfolio = ticker === 'PORTFOLIO'
+      const color = isPortfolio ? '#FFD700' : PALETTE[tickerIndex % PALETTE.length]
+      return traceKeys.flatMap(key => {
+        const values = cmpData[key]?.[ticker]
+        if (!values) return []
+        const displayValues = values.map(roundForDisplay)
+        const style = COMPARISON_TRACE_STYLES[key] || COMPARISON_TRACE_STYLES.total
+        const name = traceKeys.length > 1 ? `${label} (${style.label})` : label
+        return [{
+          x: cmpData.dates,
+          y: displayValues,
+          customdata: displayValues.map(value => value == null ? null : roundForDisplay(value - 100)),
+          name,
+          mode: 'lines',
+          line: {
+            width: style.width + (isPortfolio ? 0.8 : 0),
+            color,
+            dash: style.dash,
+          },
+          hovertemplate: `<b>${name}</b><br>%{x}<br>Index: %{y:.2f}<br>Return: %{customdata:+.2f}%<extra></extra>`,
+        }]
+      })
+    })
 
     // Add 100 baseline
     traces.push({
@@ -295,9 +439,16 @@ export default function TotalReturn() {
       hoverinfo: 'skip',
     })
 
+    const comparisonRange = formatComparisonRange(
+      cmpData.requested_start_date || cmpData.actual_start_date,
+      cmpData.requested_end_date || cmpData.actual_end_date,
+    )
+    const modeLabel = cmpMode === 'both'
+      ? 'Total Return & Price Only'
+      : (COMPARISON_RETURN_MODES.find(mode => mode.key === cmpMode)?.label || 'Return')
     const layout = {
       title: {
-        text: `${cmpMode === 'total' ? 'Total Return' : 'Price Return'} Comparison — ${cmpData.period_label} (normalized to 100)`,
+        text: `${modeLabel} Comparison — ${cmpData.period_label}${comparisonRange ? ` · ${comparisonRange}` : ''} (normalized to 100)`,
         font: { color: '#e0e8f0' },
       },
       template: 'plotly_dark',
@@ -327,25 +478,33 @@ export default function TotalReturn() {
     setCmpExtraInput('')
   }
 
+  const handleCalendarYearSubmit = (e) => {
+    e.preventDefault()
+    const year = Number(dashboardCalendarYear)
+    const currentYear = new Date().getFullYear()
+    if (!Number.isInteger(year) || year < 1900 || year > currentYear) return
+    setDashboardPeriod(String(year))
+  }
+
   // Table sorting
   const handleSort = (col) => {
     if (sortCol === col) { setSortAsc(a => !a) }
     else {
       setSortCol(col)
-      const numCols = ['quantity', 'price_paid', 'current_price', 'purchase_value', 'current_value', 'gain_or_loss', 'price_return_pct', 'total_divs_received', 'total_return_dollar', 'total_return_pct', 'ret_vs_yld_sort']
+      const numCols = ['start_value', 'end_value', 'price_return_dollar', 'price_return_pct', 'distribution_dollar', 'total_return_dollar', 'total_return_pct', 'ret_vs_yld_sort']
       setSortAsc(!numCols.includes(col))
     }
   }
 
   const enrichedRows = useMemo(() => {
-    if (!summary?.rows) return []
-    return summary.rows.map(r => {
+    if (!dashboardRows.length) return []
+    return dashboardRows.map(r => {
       const primaryYld = rvyMode === 'yoc' ? (r.annual_yield_on_cost || 0) : (r.current_annual_yield || 0)
       const yld = (primaryYld || (r.annual_yield_on_cost || 0)) * 100
       const rvy = r.total_return_pct != null ? returnVsYield(r.total_return_pct, yld) : null
       return { ...r, ret_vs_yld: rvy, ret_vs_yld_sort: rvy ? rvy.spread : -999 }
     })
-  }, [summary, rvyMode])
+  }, [dashboardRows, rvyMode])
 
   const sortedRows = useMemo(() => {
     if (!enrichedRows.length) return []
@@ -370,41 +529,42 @@ export default function TotalReturn() {
   const columns = [
     { key: 'ticker', label: 'Ticker' },
     { key: 'category_name', label: 'Category' },
-    { key: 'quantity', label: 'Shares', fmt: v => v != null ? Number(v).toFixed(3) : '—' },
-    { key: 'price_paid', label: 'Price Paid', fmt: v => formatMoney(v, { digits: 4 }) },
-    { key: 'current_price', label: 'Curr Price', fmt: v => formatMoney(v, { digits: 4 }) },
-    { key: 'purchase_value', label: 'Invested', fmt },
-    { key: 'current_value', label: 'Curr Value', fmt },
-    { key: 'gain_or_loss', label: 'Price G/L', fmt },
+    { key: 'start_value', label: 'Start Value', fmt },
+    { key: 'end_value', label: 'End Value', fmt },
+    { key: 'price_return_dollar', label: 'Price Return', fmt },
     { key: 'price_return_pct', label: 'Price Ret %', fmt: fmtPct },
-    { key: 'total_divs_received', label: 'Divs Rcvd', fmt },
+    { key: 'distribution_dollar', label: 'Distributions', fmt },
     { key: 'total_return_dollar', label: 'Total Return', fmt },
     { key: 'total_return_pct', label: 'Total Ret %', fmt: fmtPct },
+    { key: 'period_range', label: 'Effective Range' },
     { key: 'ret_vs_yld', label: 'RvY', sortKey: 'ret_vs_yld_sort' },
   ]
   const numericColumns = new Set([
-    'quantity',
-    'price_paid',
-    'current_price',
-    'purchase_value',
-    'current_value',
-    'gain_or_loss',
+    'start_value',
+    'end_value',
+    'price_return_dollar',
     'price_return_pct',
-    'total_divs_received',
+    'distribution_dollar',
     'total_return_dollar',
     'total_return_pct',
   ])
   const columnAlign = (key) => numericColumns.has(key) ? 'right' : 'left'
 
-  const t = summary?.totals || {}
+  const t = chartData?.portfolio_metrics || {}
+  const dashboardRequestedRange = formatComparisonRange(chartData?.requested_start_date, chartData?.requested_end_date)
+  const dashboardActualRange = formatComparisonRange(chartData?.actual_start_date, chartData?.actual_end_date)
+  const dashboardCardRange = dashboardActualRange || dashboardRequestedRange
+  const spyRange = formatComparisonRange(chartData?.spy_actual_start_date, chartData?.spy_actual_end_date)
+  const cmpRequestedRange = formatComparisonRange(cmpData?.requested_start_date, cmpData?.requested_end_date)
+  const cmpActualRange = formatComparisonRange(cmpData?.actual_start_date, cmpData?.actual_end_date)
 
   return (
     <div className="page dashboard">
       <h1 style={{ marginBottom: '0.5rem' }}>Total Return Dashboard</h1>
 
-      {/* Filters row — only show category filter when categories are defined */}
-      {(summary?.categories?.length > 0) && (
-        <div className="growth-filters" style={{ marginBottom: '1rem' }}>
+      {/* Page-wide filters */}
+      <div className="growth-filters" style={{ marginBottom: '1rem' }}>
+        {(summary?.categories?.length > 0) && (
           <div className="growth-filter-group" style={{ position: 'relative' }} ref={catRef}>
             <label>Categories</label>
             <button className="btn btn-secondary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', minWidth: '140px', textAlign: 'left' }}
@@ -459,24 +619,81 @@ export default function TotalReturn() {
               </div>
             )}
           </div>
+        )}
+
+        <div className="growth-filter-group">
+          <label>Dashboard Date Range</label>
+          <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+            {COMPARISON_PERIODS.map(periodOption => (
+              <button
+                type="button"
+                key={periodOption.key}
+                className={`tr-pbtn${dashboardPeriod === periodOption.key ? ' tr-pbtn-active' : ''}`}
+                style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                onClick={() => setDashboardPeriod(periodOption.key)}
+              >
+                {periodOption.label}
+              </button>
+            ))}
+          </div>
         </div>
-      )}
+
+        <form onSubmit={handleCalendarYearSubmit} className="growth-filter-group">
+          <label htmlFor="tr-dashboard-calendar-year">Calendar Year</label>
+          <div style={{ display: 'flex', gap: '0.25rem' }}>
+            <input
+              id="tr-dashboard-calendar-year"
+              type="number"
+              min="1900"
+              max={new Date().getFullYear()}
+              step="1"
+              required
+              value={dashboardCalendarYear}
+              onChange={e => setDashboardCalendarYear(e.target.value)}
+              style={{ width: '6.5rem', padding: '0.25rem 0.45rem', fontSize: '0.8rem' }}
+            />
+            <button
+              type="submit"
+              className={`tr-pbtn tr-pbtn-year${dashboardPeriod === dashboardCalendarYear ? ' tr-pbtn-active' : ''}`}
+              style={{ padding: '0.25rem 0.55rem', fontSize: '0.8rem' }}
+            >
+              View
+            </button>
+          </div>
+        </form>
+      </div>
 
       {/* Summary cards */}
       {summaryLoading && <div style={{ textAlign: 'center', padding: '2rem' }}><span className="spinner" /></div>}
       {summaryError && <div className="alert alert-error">{summaryError}</div>}
-      {summary && !summaryLoading && (
+      {summary && chartData && !summaryLoading && !chartLoading && (
         <>
-          <p className="tr-note">Summary shows <strong>all-time since purchase</strong> figures. Charts below are live from Yahoo Finance.</p>
+          <p className="tr-note">
+            <strong>{chartData?.period_label || 'Selected period'}:</strong>{' '}
+            {dashboardRequestedRange || dashboardActualRange}
+            {dashboardRequestedRange && dashboardActualRange && dashboardRequestedRange !== dashboardActualRange
+              ? ` (portfolio observations ${dashboardActualRange})`
+              : ''}
+            . Returns are cash-flow adjusted from dated transactions; purchases and sales are not counted as performance.
+            {t.inferred_opening_positions > 0
+              ? ` ${t.inferred_opening_positions} pre-existing position${t.inferred_opening_positions === 1 ? ' was' : 's were'} reconciled backward from current shares because the transaction export began after the opening lot.`
+              : ''}
+            {t.distribution_source ? ` Distribution dollars use ${t.distribution_source.toLowerCase()}.` : ''}
+            {' '}Because capital changes during the period, dollar return divided by start value may not equal the time-weighted return percentage.
+          </p>
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
-            <MetricCard label="Total Invested" value={fmtInt(t.total_invested)} />
-            <MetricCard label="Current Value" value={fmtInt(t.current_value)} />
-            <MetricCard label="Price Gain / Loss" value={<span style={{ color: (t.price_gl || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.price_gl)}</span>} />
-            <MetricCard label="Total Divs Received" value={fmtInt(t.total_divs)} />
-            <MetricCard label="Total Return" value={<span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>} />
-            <MetricCard label="Total Return %" value={<span style={{ color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.total_return_pct)}</span>} />
+            <MetricCard label="Start Value" value={fmtInt(t.start_value)} range={dashboardCardRange} />
+            <MetricCard label="End Value" value={fmtInt(t.end_value)} range={dashboardCardRange} />
+            <MetricCard label="Price Return" range={dashboardCardRange}
+              value={<span style={{ color: (t.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.price_return_dollar)}</span>} />
+            <MetricCard label="Distributions" value={fmtInt(t.distribution_dollar)} range={dashboardCardRange} />
+            <MetricCard label="Total Return" range={dashboardCardRange}
+              value={<span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>} />
+            <MetricCard label="Total Return %" range={dashboardCardRange}
+              value={<span style={{ color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.total_return_pct)}</span>} />
             {chartData?.spy_ret != null && (
               <MetricCard label={`SPY - ${chartData.period_label || '1Y'}`}
+                range={spyRange}
                 value={<span style={{ color: chartData.spy_ret >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(chartData.spy_ret)}</span>} />
             )}
           </div>
@@ -492,7 +709,10 @@ export default function TotalReturn() {
           <h2 style={{ marginTop: '1.5rem', marginBottom: '0.25rem' }}>
             Total Return % by Ticker <span className="tr-period-inline">— {chartData.period_label}</span>
           </h2>
-          <p className="tr-note">Green = positive, Red = negative. Gold dashed line = SPY.</p>
+          <p className="tr-note">
+            Portfolio range: <strong>{dashboardCardRange}</strong>. Each holding starts no earlier than the date it was actually held;
+            hover a bar for that ticker's effective range. Green = positive, Red = negative. Gold dashed line = SPY.
+          </p>
           <div id="tr-chart-bar" style={{ minHeight: '400px', marginBottom: '2rem' }} />
         </>
       )}
@@ -500,23 +720,37 @@ export default function TotalReturn() {
       {/* Performance Comparison */}
       <div style={{ marginTop: '1.5rem' }}>
         <h2 style={{ marginBottom: '0.5rem' }}>Performance Comparison</h2>
-        <p className="tr-note">Select portfolio tickers and/or add external tickers to compare side by side. Normalized to 100 at start.</p>
+        <p className="tr-note">
+          Select the entire portfolio, individual holdings, and/or external tickers to compare side by side. Normalized to 100 at start.
+          This chart uses the page-wide Dashboard Date Range above. Rolling periods use broker-style calendar date-to-date boundaries;
+          the calendar-year choice covers January 1 through December 31.
+        </p>
 
         <div className="growth-filters" style={{ marginBottom: '1rem' }}>
-          {/* Portfolio ticker multi-select */}
+          {/* Portfolio and ticker multi-select */}
           <div className="growth-filter-group" style={{ position: 'relative' }} ref={cmpTickerRef}>
-            <label>Portfolio Tickers</label>
+            <label>Portfolio &amp; Tickers</label>
             <button className="btn btn-secondary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', minWidth: '160px', textAlign: 'left' }}
               onClick={() => setCmpTickerOpen(o => !o)}>
-              {cmpTickers.length === 0 ? 'None selected' : `${cmpTickers.length} selected`}
+              {cmpTickers.length + (cmpPortfolio ? 1 : 0) === 0
+                ? 'None selected'
+                : `${cmpTickers.length + (cmpPortfolio ? 1 : 0)} selected`}
               <span style={{ float: 'right', marginLeft: '0.5rem' }}>{cmpTickerOpen ? '\u25B4' : '\u25BE'}</span>
             </button>
             {cmpTickerOpen && (
               <div className="growth-cat-dropdown" style={{ maxHeight: '300px', overflowY: 'auto' }}>
                 <div style={{ display: 'flex', gap: '0.3rem', padding: '0.3rem 0.6rem', borderBottom: '1px solid var(--border)', marginBottom: '0.2rem' }}>
-                  <button className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={() => setCmpTickers([...allTickers])}>All</button>
-                  <button className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={() => setCmpTickers([])}>Clear</button>
+                  <button type="button" className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={() => { setCmpPortfolio(true); setCmpTickers([...allTickers]) }}>All</button>
+                  <button type="button" className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={() => { setCmpPortfolio(false); setCmpTickers([]) }}>Clear</button>
                 </div>
+                <label className="growth-cat-option" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '0.45rem', marginBottom: '0.2rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={cmpPortfolio}
+                    onChange={e => setCmpPortfolio(e.target.checked)}
+                  />
+                  <span><strong>Entire Portfolio</strong></span>
+                </label>
                 {allTickers.map(t => (
                   <label key={t} className="growth-cat-option">
                     <input type="checkbox" checked={cmpTickers.includes(t)}
@@ -545,50 +779,70 @@ export default function TotalReturn() {
             {cmpExtra && <div style={{ fontSize: '0.8rem', color: 'var(--accent-bright)', marginTop: '0.25rem' }}>{cmpExtra.split(',').join(', ')}</div>}
           </form>
 
-          {/* Period */}
           <div className="growth-filter-group">
-            <label>Period</label>
-            <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
-              {[
-                { key: '3mo', label: '3M' }, { key: '6mo', label: '6M' }, { key: '9mo', label: '9M' },
-                { key: '1y', label: '1Y' }, { key: '2y', label: '2Y' }, { key: '3y', label: '3Y' },
-                { key: '4y', label: '4Y' }, { key: '5y', label: '5Y' },
-              ].map(p => (
-                <button key={p.key} className={`tr-pbtn${cmpPeriod === p.key ? ' tr-pbtn-active' : ''}`}
-                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
-                  onClick={() => setCmpPeriod(p.key)}>{p.label}</button>
-              ))}
+            <label>Dashboard Date Range</label>
+            <div style={{ color: 'var(--accent-bright)', fontSize: '0.85rem', padding: '0.35rem 0' }}>
+              {chartData?.period_label || 'Selected period'}{dashboardCardRange ? ` · ${dashboardCardRange}` : ''}
             </div>
           </div>
 
-          {/* Price vs Total Return toggle */}
+          {/* Return mode */}
           <div className="growth-filter-group">
             <label>Return Type</label>
-            <div style={{ display: 'flex', gap: '0.25rem' }}>
-              <button className={`tr-pbtn${cmpMode === 'price' ? ' tr-pbtn-active' : ''}`}
-                style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
-                onClick={() => setCmpMode('price')}>Price</button>
-              <button className={`tr-pbtn${cmpMode === 'total' ? ' tr-pbtn-active' : ''}`}
-                style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
-                onClick={() => setCmpMode('total')}>Total Return</button>
+            <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+              {COMPARISON_RETURN_MODES.map(mode => (
+                <button
+                  type="button"
+                  key={mode.key}
+                  title={mode.title}
+                  className={`tr-pbtn${cmpMode === mode.key ? ' tr-pbtn-active' : ''}`}
+                  style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
+                  onClick={() => setCmpMode(mode.key)}
+                >
+                  {mode.label}
+                </button>
+              ))}
             </div>
           </div>
         </div>
 
         {cmpLoading && <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', color: 'var(--text-dim)', padding: '0.6rem 0' }}><span className="spinner" /> Loading comparison data...</div>}
         {cmpError && <div className="alert alert-error">{cmpError}</div>}
-        {!cmpData && !cmpLoading && !cmpError && (cmpTickers.length === 0 && !cmpExtra) && (
-          <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', padding: '2rem 0', textAlign: 'center' }}>Select portfolio tickers or add external tickers to see the comparison chart.</p>
+        {cmpData && !cmpLoading && (
+          <>
+            <p className="tr-note" style={{ marginTop: '-0.35rem', marginBottom: '0.4rem' }}>
+              <strong>{cmpData.period_label}:</strong>{' '}
+              {cmpRequestedRange || cmpActualRange}
+              {cmpRequestedRange && cmpActualRange && cmpRequestedRange !== cmpActualRange
+                ? ` (available market observations ${cmpActualRange})`
+                : ''}
+            </p>
+            {cmpPortfolio && cmpData.portfolio_method && (
+              <p className="tr-note" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+                <strong>Entire Portfolio:</strong> Cash-flow-adjusted daily time-weighted performance from dated transactions.
+                Purchases and sales change portfolio weights without being counted as returns.
+                {cmpData.portfolio_coverage?.fallback_positions > 0
+                  ? ` ${cmpData.portfolio_coverage.fallback_positions} current position${cmpData.portfolio_coverage.fallback_positions === 1 ? '' : 's'} without transaction history begin on their saved purchase date, or their import/snapshot date when no purchase date is available.`
+                  : ''}
+                {cmpData.portfolio_coverage?.inferred_opening_positions > 0
+                  ? ` ${cmpData.portfolio_coverage.inferred_opening_positions} pre-existing position${cmpData.portfolio_coverage.inferred_opening_positions === 1 ? ' was' : 's were'} reconciled from current shares because the transaction export began after the opening lot.`
+                  : ''}
+              </p>
+            )}
+          </>
+        )}
+        {!cmpData && !cmpLoading && !cmpError && (!cmpPortfolio && cmpTickers.length === 0 && !cmpExtra) && (
+          <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', padding: '2rem 0', textAlign: 'center' }}>Select Entire Portfolio, portfolio tickers, or external tickers to see the comparison chart.</p>
         )}
         <div id="tr-chart-compare" style={{ minHeight: cmpData ? '550px' : '0', marginBottom: '2rem' }} />
       </div>
 
       {/* Scatter chart */}
-      {summary?.rows?.length > 0 && (
+      {!chartLoading && dashboardRows.length > 0 && (
         <>
           <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginTop: '1.5rem', marginBottom: '0.25rem' }}>
             <h2 style={{ margin: 0 }}>
-              Total Return {scatterReturnMode === 'dollar' ? getCurrencyLabel() : '%'} vs Yield on Cost <span className="tr-period-inline">— Since Purchase</span>
+              Total Return {scatterReturnMode === 'dollar' ? getCurrencyLabel() : '%'} vs Yield on Cost <span className="tr-period-inline">— {chartData?.period_label}</span>
             </h2>
             <div className="growth-filter-group" style={{ alignItems: 'flex-start' }}>
               <label>Return View</label>
@@ -602,16 +856,18 @@ export default function TotalReturn() {
               </div>
             </div>
           </div>
-          <p className="tr-note">Bubble size = position size. X = annual yield on cost. All-time data.</p>
+          <p className="tr-note">Range: <strong>{dashboardCardRange}</strong>. Bubble size = ending position value. X = current annual yield on cost.</p>
           <div id="tr-chart-scatter" style={{ minHeight: '520px', marginBottom: '2rem' }} />
         </>
       )}
 
       {/* Table */}
-      {summary && !summaryLoading && summary.rows.length > 0 && (
+      {summary && !summaryLoading && !chartLoading && dashboardRows.length > 0 && (
         <>
-          <h2 style={{ marginTop: '1.5rem', marginBottom: '0.25rem' }}>Holdings — All-Time Total Return Summary</h2>
-          <p style={{ color: 'var(--text-dim)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Click any column header to sort.</p>
+          <h2 style={{ marginTop: '1.5rem', marginBottom: '0.25rem' }}>Holdings — {chartData?.period_label} Total Return Summary</h2>
+          <p style={{ color: 'var(--text-dim)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+            Requested range: <strong>{dashboardRequestedRange || dashboardActualRange}</strong>. Each row lists its effective held-period range. Click any column header to sort.
+          </p>
           <div className="sticky-table-wrap" style={{ maxHeight: '70vh' }}>
             <table>
               <thead>
@@ -649,12 +905,11 @@ export default function TotalReturn() {
                   <tr key={row.ticker}>
                     {columns.map(col => {
                       const val = row[col.key]
-                      const isNum = typeof val === 'number'
                       let display = col.fmt ? col.fmt(val) : (val ?? '')
                       let style = { textAlign: columnAlign(col.key) }
 
                       if (col.key === 'ticker') display = <strong>{val}</strong>
-                      if (col.key === 'gain_or_loss' || col.key === 'price_return_pct' || col.key === 'total_return_dollar' || col.key === 'total_return_pct') {
+                      if (col.key === 'price_return_dollar' || col.key === 'price_return_pct' || col.key === 'total_return_dollar' || col.key === 'total_return_pct') {
                         style = { textAlign: 'right', color: (val || 0) >= 0 ? '#4dff91' : '#ff6b6b' }
                       }
                       if (col.key === 'ret_vs_yld') {
@@ -669,14 +924,15 @@ export default function TotalReturn() {
               </tbody>
               <tfoot>
                 <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
-                  <td colSpan={5}><strong>Portfolio Total</strong></td>
-                  <td style={{ textAlign: 'right' }}><strong>{fmt(t.total_invested)}</strong></td>
-                  <td style={{ textAlign: 'right' }}><strong>{fmt(t.current_value)}</strong></td>
-                  <td style={{ textAlign: 'right', color: (t.price_gl || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(t.price_gl)}</strong></td>
-                  <td></td>
-                  <td style={{ textAlign: 'right' }}><strong>{fmt(t.total_divs)}</strong></td>
+                  <td colSpan={2}><strong>Portfolio Total</strong></td>
+                  <td style={{ textAlign: 'right' }}><strong>{fmt(t.start_value)}</strong></td>
+                  <td style={{ textAlign: 'right' }}><strong>{fmt(t.end_value)}</strong></td>
+                  <td style={{ textAlign: 'right', color: (t.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(t.price_return_dollar)}</strong></td>
+                  <td style={{ textAlign: 'right', color: (t.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(t.price_return_pct)}</strong></td>
+                  <td style={{ textAlign: 'right' }}><strong>{fmt(t.distribution_dollar)}</strong></td>
                   <td style={{ textAlign: 'right', color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(t.total_return_dollar)}</strong></td>
                   <td style={{ textAlign: 'right', color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(t.total_return_pct)}</strong></td>
+                  <td>{dashboardCardRange}</td>
                   <td></td>
                 </tr>
               </tfoot>

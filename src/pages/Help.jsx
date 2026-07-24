@@ -3015,8 +3015,8 @@ function TotalReturnHelp() {
         combining both capital gains (price appreciation) and dividend income into a single
         return figure. This is the most accurate measure of how your portfolio is actually doing,
         since dividends can represent a significant portion of total returns for income-focused investors.
-        The page includes an all-time summary, a 1-year bar chart, a flexible side-by-side comparison
-        tool, a scatter plot, and a detailed holdings table.
+        A page-wide broker-style date selector keeps the summary cards, holding-return chart,
+        side-by-side comparison, scatter plot, and detailed holdings table on the same window.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -3034,30 +3034,30 @@ function TotalReturnHelp() {
       {/* ── Summary Strip ───────────────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Strip</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        A row of metric cards shows all-time portfolio figures (since each position was purchased):
+        A row of metric cards shows transaction-aware figures for the selected Dashboard Date Range.
+        Every card prints the effective portfolio start and end dates:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Total Invested</strong> — Sum of all purchase values (shares × price paid).</li>
-        <li><strong>Current Value</strong> — Today's market value of all holdings.</li>
-        <li><strong>Price Gain / Loss</strong> — Capital appreciation only (Current Value − Total Invested). Green if positive, red if negative.</li>
-        <li><strong>Total Divs Received</strong> — Lifetime dividend income across all holdings.</li>
-        <li><strong>Total Return $</strong> — Price gain/loss + dividends received. The true dollar profit.</li>
-        <li><strong>Total Return %</strong> — Total Return $ as a percentage of Total Invested.</li>
-        <li><strong>SPY — 1Y</strong> — SPY's 1-year price return, shown as a live benchmark reference.</li>
+        <li><strong>Start Value / End Value</strong> — Portfolio market value at the effective period boundaries.</li>
+        <li><strong>Price Return</strong> — Dollar price movement while holdings were owned.</li>
+        <li><strong>Distributions</strong> — Broker-imported cash payments by payment date when available, with Yahoo market history used only as a ticker-level fallback.</li>
+        <li><strong>Total Return</strong> — Price movement plus distributions, excluding purchase and sale cash flows.</li>
+        <li><strong>Total Return %</strong> — Daily time-weighted return, so deposits, purchases, and sales do not appear as performance.</li>
+        <li><strong>SPY</strong> — SPY total return for its exact displayed market-observation range.</li>
       </ul>
       <p style={{ marginBottom: '1rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
-        Note: Summary figures are <strong>all-time since purchase</strong>. The charts below pull
-        live data from Yahoo Finance for the selected period.
+        ALL/MAX begins at the first defensible portfolio ownership date. Rolling periods use exact
+        calendar date-to-date boundaries, and completed calendar years use January 1–December 31.
       </p>
 
       {/* ── Total Return Bar Chart ──────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Total Return % by Ticker Chart</h3>
       <p style={{ marginBottom: '1rem' }}>
-        A horizontal bar chart showing each holding's total return percentage over the trailing
-        1 year (live from Yahoo Finance, including dividends). Bars are color-coded per ticker —
-        green bars are positive, red are negative. A gold dashed vertical line marks SPY's 1-year
+        A horizontal bar chart showing each holding's total return percentage over the selected
+        period (live from Yahoo Finance, including dividends). Bars are color-coded per ticker —
+        green bars are positive, red are negative. A gold dashed vertical line marks SPY's selected-period
         return as a benchmark reference. Each ticker label is colored to match its bar.
-        Hover over any bar for the exact value.
+        Hover over any bar for the exact value and effective held-period range.
       </p>
 
       {/* ── Performance Comparison ──────────────────────────────── */}
@@ -3072,9 +3072,23 @@ function TotalReturnHelp() {
       <h4 style={{ marginBottom: '0.4rem' }}>Controls</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
-          <strong>Portfolio Tickers dropdown</strong> — Multi-select from your holdings. Use "All"
-          to add every holding at once, or "Clear" to deselect all. Each selected ticker becomes a
-          colored line on the chart.
+          <strong>Dashboard Date Range</strong> — The page-wide 1M, 3M, YTD, 1Y, 5Y,
+          10Y, and ALL/MAX choices update the summary cards, holding-return chart,
+          comparison chart, scatter chart, and holdings summary together. Enter any year
+          from 1900 through the current year in <strong>Calendar Year</strong> and click
+          <strong>View</strong> for a January 1–December 31 comparison. Every card displays
+          its effective start and end dates; each holdings row also lists its held-period range.
+        </li>
+        <li>
+          <strong>Portfolio &amp; Tickers dropdown</strong> — Select <strong>Entire Portfolio</strong>,
+          individual holdings, or both. Use "All" to add the portfolio and every holding at once,
+          or "Clear" to deselect everything. The portfolio line is a daily time-weighted return
+          reconstructed from dated BUY/SELL quantities, so purchases and sales change its weights
+          without being counted as investment performance. A current position without transaction
+          history begins on its saved purchase date, or its import/snapshot date when no purchase
+          date is available; it is never treated as owned since the ticker's first-ever quote.
+          If a broker export begins with a DRIP or sale for a position that was already open, the
+          missing opening quantity is reconciled backward from the current saved share count.
         </li>
         <li>
           <strong>External Tickers</strong> — Type any ticker symbols (e.g., <em>SPY QQQ VOO</em>)
@@ -3082,13 +3096,10 @@ function TotalReturnHelp() {
           Added tickers are shown as a list; click "Clear" to remove them.
         </li>
         <li>
-          <strong>Period</strong> — Eight time range buttons: 3M, 6M, 9M, 1Y, 2Y, 3Y, 4Y, 5Y.
-          Changes update the chart immediately.
-        </li>
-        <li>
-          <strong>Return Type</strong> — Toggle between <strong>Price</strong> (capital gains only)
-          and <strong>Total Return</strong> (price + dividends reinvested). Total Return will show
-          dividend-paying stocks outperforming their price-only line over longer periods.
+          <strong>Return Type</strong> — Choose <strong>Total Return</strong> (full dividend
+          reinvestment), <strong>Price Only</strong>, <strong>Price + Divs</strong> (distributions
+          held as cash), or <strong>Both</strong> to overlay Total Return and Price Only using
+          matching colors and different line styles.
         </li>
       </ul>
       <p style={{ marginBottom: '1rem' }}>
@@ -3112,9 +3123,10 @@ function TotalReturnHelp() {
         <li><strong>0</strong> — an effective loss of 100%.</li>
       </ul>
       <p style={{ marginBottom: '1rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
-        The baseline is the beginning of the selected chart period, not the date you purchased the
-        holding. A newer ticker may begin at 100 later because it does not have history for the full
-        period. In <strong>Total Return</strong> mode, Yahoo's adjusted-close history accounts for
+        The requested window limits the measurement, but a holding cannot begin before it was
+        actually owned. A newer holding may therefore begin at 100 later than the portfolio or
+        benchmark, and its effective dates are shown in the holdings summary. In
+        <strong>Total Return</strong> mode, Yahoo's adjusted-close history accounts for
         distributions as though reinvested; <strong>Price</strong> mode shows price movement without
         distributions. Extreme drops or jumps can sometimes reflect Yahoo data or corporate actions.
       </p>
@@ -3122,34 +3134,29 @@ function TotalReturnHelp() {
       {/* ── Scatter Chart ───────────────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Total Return % vs. Yield on Cost Scatter</h3>
       <p style={{ marginBottom: '1rem' }}>
-        A bubble scatter chart plotting each holding's all-time total return (Y-axis) against its
-        annual yield on cost (X-axis). Bubble size represents position size. This chart reveals
+        A bubble scatter chart plotting each holding's selected-period total return (Y-axis) against its
+        annual yield on cost (X-axis). Bubble size represents ending position value. This chart reveals
         the relationship between income generation and capital appreciation — holdings in the
         upper-right have both strong dividends and strong price growth. Hover over any bubble to
         see the ticker and exact values.
       </p>
 
       {/* ── Holdings Table ──────────────────────────────────────── */}
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table — All-Time Total Return Summary</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table — Period Total Return Summary</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        A sortable table with one row per holding showing the full all-time return breakdown.
+        A sortable table with one row per holding for the selected Dashboard Date Range.
         Click any column header to sort; click again to reverse. A Portfolio Total row at the
-        bottom aggregates key columns.
+        bottom uses the same cash-flow-adjusted period as the cards.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker</strong> — The symbol.</li>
         <li><strong>Category</strong> — Assigned category.</li>
-        <li><strong>Shares</strong> — Quantity held (3 decimal places).</li>
-        <li><strong>Price Paid</strong> — Average cost per share.</li>
-        <li><strong>Curr Price</strong> — Current market price.</li>
-        <li><strong>Invested</strong> — Total cost basis (shares × price paid).</li>
-        <li><strong>Curr Value</strong> — Current market value.</li>
-        <li><strong>Price G/L</strong> — Unrealized capital gain/loss in dollars. Green/red colored.</li>
-        <li><strong>Price Ret %</strong> — Capital-only return percentage. Green/red colored.</li>
-        <li><strong>Divs Rcvd</strong> — Total dividends received since purchase.</li>
-        <li><strong>Total Ret $</strong> — Price G/L + Dividends Received. Green/red colored.</li>
-        <li><strong>Total Ret %</strong> — Total Return $ as a percentage of Invested. Green/red colored.</li>
-        <li><strong>RvY</strong> — Return vs. Yield. Compares the all-time Total Ret % to the holding's dividend yield. <strong>Good</strong> (green) when total return exceeds yield; <strong>Poor</strong> (red) when yield exceeds total return. A toggle in the column header switches between <strong>CYld</strong> (current yield, default) and <strong>YOC</strong> (yield on cost). See the Dashboard help section for a full explanation of the metric.</li>
+        <li><strong>Start Value / End Value</strong> — The position's market value at its effective period boundaries.</li>
+        <li><strong>Price Return / Price Ret %</strong> — Price movement while the position was held; trade cash flows are excluded.</li>
+        <li><strong>Distributions</strong> — Broker-imported cash payments during the held period when available, with Yahoo market history as a fallback.</li>
+        <li><strong>Total Return / Total Ret %</strong> — Price movement plus distributions, with percentage return calculated as a daily time-weighted return.</li>
+        <li><strong>Effective Range</strong> — The exact first and last dates used for that holding.</li>
+        <li><strong>RvY</strong> — Return vs. Yield. Compares selected-period Total Ret % to the holding's current dividend yield. <strong>Good</strong> (green) when total return exceeds yield; <strong>Poor</strong> (red) when yield exceeds total return. A toggle in the column header switches between <strong>CYld</strong> (current yield, default) and <strong>YOC</strong> (yield on cost). See the Dashboard help section for a full explanation of the metric.</li>
       </ul>
 
       {/* ── How to Use ──────────────────────────────────────────── */}

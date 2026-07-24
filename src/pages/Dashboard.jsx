@@ -69,6 +69,46 @@ const SPREADSHEET_DELTA_COLUMN_IDS = [
   'current_month_income_delta',
 ]
 
+const parseHoldingColumnPreference = (raw) => {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed) || !parsed.length) return null
+    const ids = [...parsed]
+    // One-time migration: surface the new Closure Risk column for users whose
+    // saved column set predates it (insert next to NAV/Grade, not at the end).
+    if (!ids.includes('closure_risk')) {
+      const anchor = ids.indexOf('grade')
+      const at = anchor >= 0 ? anchor : (ids.indexOf('nav') >= 0 ? ids.indexOf('nav') + 1 : ids.length)
+      ids.splice(at, 0, 'closure_risk')
+    }
+    return ids
+  } catch {
+    return null
+  }
+}
+
+const readHoldingColumnPreference = () => {
+  if (typeof window === 'undefined') return DEFAULT_HOLDINGS_COLUMN_IDS
+  try {
+    return parseHoldingColumnPreference(window.localStorage.getItem(HOLDINGS_COLUMN_PREF_KEY))
+      || DEFAULT_HOLDINGS_COLUMN_IDS
+  } catch {
+    return DEFAULT_HOLDINGS_COLUMN_IDS
+  }
+}
+
+const persistHoldingColumnPreference = (ids) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(HOLDINGS_COLUMN_PREF_KEY, JSON.stringify(ids))
+  } catch {}
+}
+
+const sameColumnPreference = (left, right) => (
+  left.length === right.length && left.every((id, index) => id === right[index])
+)
+
 const fmt = (v, d = 2) => formatMoney(v, { digits: d, zeroIfInvalid: true })
 const fmtShares = (v) => Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 })
 const dripSharePrice = (h) => {
@@ -739,24 +779,7 @@ export default function Dashboard() {
   const [navBackfilling, setNavBackfilling] = useState(false)
   const [navRepairing, setNavRepairing] = useState(false)
   const [actionCenter, setActionCenter] = useState(null)
-  const [visibleHoldingColumnIds, setVisibleHoldingColumnIds] = useState(() => {
-    if (typeof window === 'undefined') return DEFAULT_HOLDINGS_COLUMN_IDS
-    try {
-      const raw = window.localStorage.getItem(HOLDINGS_COLUMN_PREF_KEY)
-      const parsed = raw ? JSON.parse(raw) : null
-      if (!Array.isArray(parsed) || !parsed.length) return DEFAULT_HOLDINGS_COLUMN_IDS
-      // One-time migration: surface the new Closure Risk column for users whose
-      // saved column set predates it (insert next to NAV/Grade, not at the end).
-      if (!parsed.includes('closure_risk')) {
-        const anchor = parsed.indexOf('grade')
-        const at = anchor >= 0 ? anchor : (parsed.indexOf('nav') >= 0 ? parsed.indexOf('nav') + 1 : parsed.length)
-        parsed.splice(at, 0, 'closure_risk')
-      }
-      return parsed
-    } catch {
-      return DEFAULT_HOLDINGS_COLUMN_IDS
-    }
-  })
+  const [visibleHoldingColumnIds, setVisibleHoldingColumnIds] = useState(readHoldingColumnPreference)
   const navChartRef = useRef(null)
   const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v16_${selection}_${basisMode}`, [selection, basisMode])
   const currentProfile = useMemo(
@@ -1585,21 +1608,51 @@ export default function Dashboard() {
   }))
   const setHoldingColumns = (ids) => {
     const unique = Array.from(new Set(ids)).filter(id => validHoldingColumnIds.has(id))
-    setVisibleHoldingColumnIds(unique.length ? unique : ['ticker'])
+    const next = unique.length ? unique : ['ticker']
+    persistHoldingColumnPreference(next)
+    setVisibleHoldingColumnIds(next)
   }
   const toggleHoldingColumn = (id) => {
-    setVisibleHoldingColumnIds(prev => {
-      const next = new Set(prev.filter(value => validHoldingColumnIds.has(value)))
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next.size ? Array.from(next) : ['ticker']
-    })
+    const next = new Set(visibleHoldingColumnIds.filter(value => validHoldingColumnIds.has(value)))
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    const ids = next.size ? Array.from(next) : ['ticker']
+    persistHoldingColumnPreference(ids)
+    setVisibleHoldingColumnIds(ids)
   }
+
+  // Keep dashboard windows/clients on the same machine in sync. The storage
+  // event updates clients that are already open; re-reading on focus covers a
+  // client that was suspended while another client changed the selection.
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    try {
-      window.localStorage.setItem(HOLDINGS_COLUMN_PREF_KEY, JSON.stringify(visibleHoldingColumnIds))
-    } catch {}
+    if (typeof window === 'undefined') return undefined
+
+    const applyPreference = (raw, useDefaults = false) => {
+      const next = parseHoldingColumnPreference(raw)
+        || (useDefaults ? DEFAULT_HOLDINGS_COLUMN_IDS : null)
+      if (!next) return
+      setVisibleHoldingColumnIds(prev => sameColumnPreference(prev, next) ? prev : next)
+    }
+    const handleStorage = (event) => {
+      if (event.storageArea !== window.localStorage || event.key !== HOLDINGS_COLUMN_PREF_KEY) return
+      applyPreference(event.newValue, event.newValue == null)
+    }
+    const handleFocus = () => {
+      try {
+        applyPreference(window.localStorage.getItem(HOLDINGS_COLUMN_PREF_KEY), true)
+      } catch {}
+    }
+
+    window.addEventListener('storage', handleStorage)
+    window.addEventListener('focus', handleFocus)
+    return () => {
+      window.removeEventListener('storage', handleStorage)
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [])
+
+  useEffect(() => {
+    persistHoldingColumnPreference(visibleHoldingColumnIds)
   }, [visibleHoldingColumnIds])
 
   const currentMonthSub = useMemo(() => {
