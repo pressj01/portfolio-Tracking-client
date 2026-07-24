@@ -620,17 +620,6 @@ export default function ReinvestmentImpact() {
       },
       {
         x: priceSensitivity.map(p => p.pct),
-        y: priceSensitivity.map(p => p.monthly),
-        type: 'scatter',
-        mode: 'lines+markers',
-        yaxis: 'y2',
-        line: { color: '#38bdf8', width: 2 },
-        marker: { size: 5, color: '#38bdf8' },
-        name: 'Projected monthly after reinvestment',
-        hovertemplate: '%{x:+.0f}% price<br>$%{y:,.0f} projected monthly<extra></extra>',
-      },
-      {
-        x: priceSensitivity.map(p => p.pct),
         y: priceSensitivity.map(p => p.currentAnnual),
         type: 'scatter',
         mode: 'lines',
@@ -1331,7 +1320,6 @@ export default function ReinvestmentImpact() {
                       title: { text: `Projected Income After Reinvestment by Price Change (${reinvestPct}% reinvested)`, x: 0.5 },
                       height: 420,
                       yaxis: { title: 'Projected annual income', tickprefix: '$', gridcolor: '#293a5f', rangemode: 'tozero' },
-                      yaxis2: { title: 'Projected monthly income', tickprefix: '$', overlaying: 'y', side: 'right', gridcolor: 'rgba(0,0,0,0)', rangemode: 'tozero' },
                       xaxis: { title: 'Portfolio price change', ticksuffix: '%', gridcolor: '#1c2a4b', range: [-65, 105], zeroline: true, zerolinecolor: '#64748b' },
                       legend: { orientation: 'h', y: -0.22 },
                     }), isDark)}
