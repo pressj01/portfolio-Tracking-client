@@ -42,6 +42,10 @@ function fmtCompactNumber(v, { prefix = '', suffix = '', signed = false } = {}) 
 
 const fmtCompact$ = (v) => formatMoneyCompact(v, { zeroIfInvalid: true, minCompact: 1e9, smallDigits: 2 })
 const fmtCompactPct = (v, signed = false) => fmtCompactNumber(v, { suffix: '%', signed })
+const clampMarketBiasPct = (value, fallback = 0) => {
+  const parsed = Number.parseFloat(value)
+  return Number.isFinite(parsed) ? Math.min(25, Math.max(0, parsed)) : fallback
+}
 
 function MoneyValue({ value }) {
   return <span className="pis-num" title={fmt$(value)}>{fmtCompact$(value)}</span>
@@ -49,6 +53,56 @@ function MoneyValue({ value }) {
 
 function PctValue({ value, signed = false }) {
   return <span className="pis-num" title={signed ? fmtPct(value) : `${Number(value || 0).toFixed(2)}%`}>{fmtCompactPct(value, signed)}</span>
+}
+
+function DistributionRateValue({ row }) {
+  const rate = row.distribution_rate_pct ?? row.ttm_yield_pct
+  if (rate == null) {
+    return <span style={{ color: 'var(--p-555)' }}>&mdash;</span>
+  }
+  const frequencyLabels = {
+    W: 'weekly',
+    M: 'monthly',
+    Q: 'quarterly',
+    SA: 'semiannual',
+    A: 'annual',
+  }
+  const frequency = frequencyLabels[row.distribution_frequency]
+  const basis = row.distribution_rate_basis_label || 'Trailing 12 months'
+  const detail = frequency ? `${basis} \u00B7 ${frequency}` : basis
+  return (
+    <span className="pis-num" title={`${Number(rate).toFixed(2)}% — ${detail}`}>
+      {Number(rate).toFixed(2)}%
+      <span style={{ display: 'block', marginTop: 2, color: 'var(--p-777)', fontSize: '0.68rem', whiteSpace: 'nowrap' }}>
+        {detail}
+      </span>
+    </span>
+  )
+}
+
+function NavErosionValue({ row }) {
+  if (row.nav_erosion_tested !== true) {
+    return <span style={{ color: 'var(--p-555)' }} title={row.nav_erosion_note || ''}>&mdash;</span>
+  }
+  return row.has_erosion
+    ? <span style={{ color: 'var(--neg-3)', fontWeight: 700 }} title={row.nav_erosion_note || ''}>Yes</span>
+    : <span style={{ color: 'var(--pos-strong)', fontWeight: 700 }} title={row.nav_erosion_note || ''}>No</span>
+}
+
+function ResultNote({ row }) {
+  const notes = [
+    row.warning ? { text: row.warning, warning: true } : null,
+    row.nav_erosion_note ? { text: row.nav_erosion_note, warning: false } : null,
+  ].filter(Boolean)
+  if (!notes.length) return <span style={{ color: 'var(--p-555)' }}>&mdash;</span>
+  return notes.map((note, index) => (
+    <span
+      key={`${note.text}-${index}`}
+      style={{ display: 'block', color: note.warning ? 'var(--warning)' : 'var(--p-aaa)' }}
+    >
+      {note.warning ? '\u26A0 ' : ''}{note.text}
+    </span>
+  ))
 }
 
 function StatTile({ label, value, color, sub, title }) {
@@ -1004,6 +1058,8 @@ export default function PortfolioIncomeSim() {
   // Simulation settings
   const [marketType, setMarketType] = useState('neutral')
   const [durationMonths, setDurationMonths] = useState(36)
+  const [bullishBiasPct, setBullishBiasPct] = useState(1)
+  const [bearishBiasPct, setBearishBiasPct] = useState(1.5)
   // Reinvestment comparison
   const [reinvestCompare, setReinvestCompare] = useState(false)
   const [reinvestSlider, setReinvestSlider] = useState(50)
@@ -1035,6 +1091,7 @@ export default function PortfolioIncomeSim() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [results, setResults] = useState(null)
+  const [calculatedInputsKey, setCalculatedInputsKey] = useState(null)
   const [savedMsg, setSavedMsg] = useState(false)
   const [deleteMsg, setDeleteMsg] = useState(false)
   // Sort
@@ -1092,6 +1149,7 @@ export default function PortfolioIncomeSim() {
   const clearGrid = () => {
     setGridRows([{ ticker: '', amount: '', reinvest_pct: '', yield_override: '' }])
     setResults(null)
+    setCalculatedInputsKey(null)
     pf('/api/pis/list', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rows: [] }),
@@ -1213,6 +1271,46 @@ export default function PortfolioIncomeSim() {
     return compTickers.filter(t => !pSet.has(t))
   }, [compPortfolioTickers, compTickers])
 
+  const activeMarketBiasPct = marketType === 'bullish'
+    ? clampMarketBiasPct(bullishBiasPct)
+    : marketType === 'bearish'
+      ? -clampMarketBiasPct(bearishBiasPct)
+      : 0
+  const compoundedMarketBiasPct = Math.expm1(
+    (activeMarketBiasPct / 100) * durationMonths
+  ) * 100
+
+  const currentInputsKey = useMemo(() => JSON.stringify({
+    mode,
+    rows: gridRows.map(r => ({
+      ticker: r.ticker.trim().toUpperCase(),
+      amount: parseFloat(r.amount) || 0,
+      reinvest_pct: parseFloat(r.reinvest_pct) || 0,
+      yield_override: r.yield_override !== '' ? parseFloat(r.yield_override) || null : null,
+    })),
+    comparison_tickers: compTickers.map(t => ({
+      ticker: t,
+      reinvest_pct: compReinvest[t] || 0,
+      amount: compAmount[t] || 10000,
+      yield_override: compYieldOverride[t] ?? null,
+    })),
+    start: mode === 'historical' ? startDate : null,
+    end: mode === 'historical' ? endDate : null,
+    market_type: mode === 'simulate' ? marketType : null,
+    duration_months: mode === 'simulate' ? durationMonths : null,
+    bullish_bias_pct: mode === 'simulate' ? clampMarketBiasPct(bullishBiasPct, 1) : null,
+    bearish_bias_pct: mode === 'simulate' ? clampMarketBiasPct(bearishBiasPct, 1.5) : null,
+    reinvest_compare: reinvestCompare,
+    reinvest_compare_pct: reinvestCompare ? reinvestSlider : null,
+  }), [
+    mode, gridRows, compTickers, compReinvest, compAmount, compYieldOverride,
+    startDate, endDate, marketType, durationMonths, bullishBiasPct, bearishBiasPct,
+    reinvestCompare, reinvestSlider,
+  ])
+  const resultsNeedUpdate = Boolean(
+    results && calculatedInputsKey && currentInputsKey !== calculatedInputsKey
+  )
+
   // Save list
   const saveList = () => {
     const rows = collectRows(gridRows)
@@ -1239,6 +1337,8 @@ export default function PortfolioIncomeSim() {
       } else {
         if (d.market_type) setMarketType(d.market_type)
         if (d.duration_months) setDurationMonths(d.duration_months)
+        setBullishBiasPct(clampMarketBiasPct(d.bullish_bias_pct, 1))
+        setBearishBiasPct(clampMarketBiasPct(d.bearish_bias_pct, 1.5))
       }
       const rows = (d.rows || []).map(r => ({
         ticker: r.ticker || '', amount: String(r.amount || ''),
@@ -1264,6 +1364,7 @@ export default function PortfolioIncomeSim() {
       setCompAmount(amtMap)
       setCompYieldOverride(yieldMap)
       setResults(null)
+      setCalculatedInputsKey(null)
       if (rows.length === 0 && tickers.length === 0) {
         await dialog.alert('Warning: This saved simulation has no ETFs. Add tickers before running.')
       }
@@ -1292,7 +1393,12 @@ export default function PortfolioIncomeSim() {
     const rows = collectRows(gridRows)
     const payload = { name, mode, rows, comparison_tickers: compTickers.map(t => ({ ticker: t, reinvest_pct: compReinvest[t] || 0, amount: compAmount[t] || 10000, yield_override: compYieldOverride[t] ?? null })) }
     if (mode === 'historical') { payload.start = startDate; payload.end = endDate }
-    else { payload.market_type = marketType; payload.duration_months = durationMonths }
+    else {
+      payload.market_type = marketType
+      payload.duration_months = durationMonths
+      payload.bullish_bias_pct = clampMarketBiasPct(bullishBiasPct, 1)
+      payload.bearish_bias_pct = clampMarketBiasPct(bearishBiasPct, 1.5)
+    }
     pf('/api/pis/saved', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1319,7 +1425,12 @@ export default function PortfolioIncomeSim() {
       if (d.error) { setRenameError(d.error); return }
       return pf('/api/pis/saved/' + selectedSaved, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, mode: d.mode, rows: d.rows, start: d.start, end: d.end, market_type: d.market_type, duration_months: d.duration_months, comparison_tickers: d.comparison_tickers || [] }),
+        body: JSON.stringify({
+          name, mode: d.mode, rows: d.rows, start: d.start, end: d.end,
+          market_type: d.market_type, duration_months: d.duration_months,
+          bullish_bias_pct: d.bullish_bias_pct, bearish_bias_pct: d.bearish_bias_pct,
+          comparison_tickers: d.comparison_tickers || [],
+        }),
       }).then(r => r.json())
     }).then(d => {
       if (!d || d.error) { setRenameError((d && d.error) || 'Failed.'); return }
@@ -1335,7 +1446,12 @@ export default function PortfolioIncomeSim() {
     const rows = collectRows(gridRows)
     const payload = { name: sel?.name || 'Unnamed', mode, rows, comparison_tickers: compTickers.map(t => ({ ticker: t, reinvest_pct: compReinvest[t] || 0, amount: compAmount[t] || 10000, yield_override: compYieldOverride[t] ?? null })) }
     if (mode === 'historical') { payload.start = startDate; payload.end = endDate }
-    else { payload.market_type = marketType; payload.duration_months = durationMonths }
+    else {
+      payload.market_type = marketType
+      payload.duration_months = durationMonths
+      payload.bullish_bias_pct = clampMarketBiasPct(bullishBiasPct, 1)
+      payload.bearish_bias_pct = clampMarketBiasPct(bearishBiasPct, 1.5)
+    }
     pf('/api/pis/saved/' + selectedSaved, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1349,11 +1465,16 @@ export default function PortfolioIncomeSim() {
 
   // Run simulation
   const runSim = () => {
+    const requestedInputsKey = currentInputsKey
     setError(null); setResults(null); setLoading(true)
     const rows = collectRows(gridRows)
     const payload = { mode, rows, comparison_tickers: compTickers.map(t => ({ ticker: t, reinvest_pct: compReinvest[t] || 0, amount: compAmount[t] || 10000, yield_override: compYieldOverride[t] ?? null })) }
     if (mode === 'historical') { payload.start = startDate; payload.end = endDate }
-    else { payload.market_type = marketType; payload.duration_months = durationMonths }
+    else {
+      payload.market_type = marketType
+      payload.duration_months = durationMonths
+      payload.market_bias_pct = Math.abs(activeMarketBiasPct)
+    }
     if (reinvestCompare) {
       payload.reinvest_compare = true
       payload.reinvest_compare_pct = reinvestSlider
@@ -1372,6 +1493,7 @@ export default function PortfolioIncomeSim() {
         if (data.error) { setError(data.error); return }
         const res = data.results || []
         setResults(res)
+        setCalculatedInputsKey(requestedInputsKey)
       }).catch(err => { setLoading(false); setError('Request failed: ' + err.message) })
     })
   }
@@ -1449,11 +1571,12 @@ export default function PortfolioIncomeSim() {
   // Sorting
   const isSim = mode === 'simulate'
   const colKeys = ['ticker', 'amount', 'reinvest_pct', 'start_price', 'end_price',
-    'price_delta_pct', 'ttm_yield_pct',
+    'price_delta_pct', 'distribution_rate_pct',
     ...(isSim ? ['_hist_mean', '_hist_vol', '_hist_skew'] : []),
     'total_dist', 'effective_yield_pct',
     'total_reinvested', 'final_value', 'gain_loss_dollar', 'gain_loss_pct',
-    'has_erosion', 'final_deficit', 'warning']
+    'distribution_adjusted_return_pct',
+    'nav_benchmark', 'benchmark_price_delta_pct', 'has_erosion', 'final_deficit', 'warning']
 
   const sortedResults = useMemo(() => {
     if (!results) return []
@@ -1519,6 +1642,7 @@ export default function PortfolioIncomeSim() {
     const hasPortfolioRows = results.some(r => !r.is_comparison && !r.error)
     let totAmount = 0, totDist = 0, totReinv = 0, totFinal = 0, totGL = 0
     let erosionCount = 0, erosionValid = 0, validCount = 0, errorCount = 0, best = null, worst = null
+    let scenarioMarketType = null, scenarioBiasMonthly = null, scenarioBiasCompounded = null
     results.forEach(r => {
       // If we have portfolio rows, exclude comparisons; otherwise include everything
       if (hasPortfolioRows && r.is_comparison) return
@@ -1526,6 +1650,11 @@ export default function PortfolioIncomeSim() {
       if (hasCompareGroupsRaw && r.compare_group === 'baseline') return
       if (r.error && !r.start_price) { errorCount++; return }
       validCount++
+      if (scenarioBiasMonthly === null && r.market_bias_monthly_pct != null) {
+        scenarioMarketType = r.market_type
+        scenarioBiasMonthly = r.market_bias_monthly_pct
+        scenarioBiasCompounded = r.market_bias_compounded_pct
+      }
       totAmount += r.amount || 0
       totDist += r.total_dist || 0
       totReinv += r.total_reinvested || 0
@@ -1534,12 +1663,14 @@ export default function PortfolioIncomeSim() {
       if (best === null || r.gain_loss_pct > best.gain_loss_pct) best = r
       if (worst === null || r.gain_loss_pct < worst.gain_loss_pct) worst = r
     })
-    // NAV erosion: count from baseline rows only (erosion measures price decline, not reinvestment impact)
+    // NAV erosion: count from baseline rows only. The test uses a separate,
+    // reinvestment-independent distribution-adjusted return.
     if (hasCompareGroupsRaw) {
       results.forEach(r => {
         if (hasPortfolioRows && r.is_comparison) return
         if (r.compare_group !== 'baseline') return
         if (r.error && !r.start_price) return
+        if (r.nav_erosion_tested !== true) return
         erosionValid++
         if (r.has_erosion) erosionCount++
       })
@@ -1547,13 +1678,18 @@ export default function PortfolioIncomeSim() {
       results.forEach(r => {
         if (hasPortfolioRows && r.is_comparison) return
         if (r.error && !r.start_price) return
+        if (r.nav_erosion_tested !== true) return
         erosionValid++
         if (r.has_erosion) erosionCount++
       })
     }
     const totGLPct = totAmount > 0 ? totGL / totAmount * 100 : 0
     const totEffYld = totAmount > 0 ? totDist / totAmount * 100 : 0
-    return { totAmount, totDist, totReinv, totFinal, totGL, totGLPct, totEffYld, erosionCount, erosionValid: erosionValid || validCount, validCount, errorCount, best, worst }
+    return {
+      totAmount, totDist, totReinv, totFinal, totGL, totGLPct, totEffYld,
+      erosionCount, erosionValid, validCount, errorCount,
+      best, worst, scenarioMarketType, scenarioBiasMonthly, scenarioBiasCompounded,
+    }
   }, [results, hasCompareGroupsRaw])
 
   // Chart data
@@ -1740,7 +1876,7 @@ export default function PortfolioIncomeSim() {
     'Start Price': 'Price per share at the beginning of the period',
     'End Price': 'Price per share at the end of the period',
     'Price \u0394%': 'Percentage change in share price from start to end',
-    'TTM Yield': 'Trailing 12-month dividend yield based on current price',
+    'Projected Dist Rate': 'Annual distribution rate used by the projection. Completed histories use trailing 12 months; newer or recently changed weekly/monthly funds use their established recent payment run annualized.',
     'Hist \u03BC%': 'Historical mean monthly return (annualized) — average expected return',
     'Hist \u03C3%': 'Historical standard deviation of monthly returns — measures volatility',
     'Skew': 'Skewness of historical returns — negative means more downside tail risk',
@@ -1750,15 +1886,19 @@ export default function PortfolioIncomeSim() {
     'Final Value': 'Total portfolio value of this position at the end of the period',
     'Gain/Loss $': 'Dollar profit or loss (Final Value minus Amount invested)',
     'Gain/Loss %': 'Percentage return on the amount invested',
-    'NAV Erosion': 'Whether the share price declined enough that dividends did not offset the loss',
+    'Adj Return %': 'Distribution-adjusted total return assuming all distributions are reinvested. This reinvestment-independent return is used for the NAV erosion test.',
+    'Underlying': 'Automatic benchmark used to judge structural price erosion',
+    'Underlying \u0394%': 'In simulations, the benchmark follows the selected market scenario exactly: neutral 0%, bullish the chosen compounded rise, and bearish the chosen compounded fall. Historical mode uses the benchmark’s actual return.',
+    'NAV Erosion': 'Yes only when the fund has a negative distribution-adjusted return while its underlying benchmark is flat or rising',
     'Deficit': 'Share deficit — how many more shares you would need to break even at the final price',
     'Note': 'Warnings or additional information about this ticker',
   }
   const headers = ['Ticker', 'Amount', 'Reinvest %', 'Start Price', 'End Price',
-    'Price \u0394%', 'TTM Yield',
+    'Price \u0394%', 'Projected Dist Rate',
     ...(isSim ? ['Hist \u03BC%', 'Hist \u03C3%', 'Skew'] : []),
     'Total Dist', 'Cum Dist %', 'Reinvested',
-    'Final Value', 'Gain/Loss $', 'Gain/Loss %', 'NAV Erosion', 'Deficit', 'Note']
+    'Final Value', 'Gain/Loss $', 'Gain/Loss %', 'Adj Return %', 'Underlying', 'Underlying \u0394%',
+    'NAV Erosion', 'Deficit', 'Note']
 
   // Get reinvest pct label for compare mode header
   const compareReinvestPct = useMemo(() => {
@@ -1816,17 +1956,50 @@ export default function PortfolioIncomeSim() {
             <span className="ne-label" style={{ marginRight: '0.3rem' }}>Market Bias:</span>
             {['bullish', 'neutral', 'bearish'].map(k => {
               const color = k === 'bullish' ? '#00c853' : k === 'bearish' ? '#e05555' : '#f9a825'
+              const label = k === 'bullish'
+                ? `Bullish (+${clampMarketBiasPct(bullishBiasPct).toFixed(2)}%/mo)`
+                : k === 'bearish'
+                  ? `Bearish (-${clampMarketBiasPct(bearishBiasPct).toFixed(2)}%/mo)`
+                  : 'Neutral (0%/mo)'
               return (
                 <button key={k}
                   className={`pis-market-btn ${marketType === k ? 'active' : ''}`}
-                  style={marketType === k ? { borderColor: color, color } : {}}
+                  style={marketType === k ? { borderColor: color, background: color, color: '#fff' } : {}}
                   onClick={() => setMarketType(k)}
-                >{k.charAt(0).toUpperCase() + k.slice(1)}</button>
+                >{label}</button>
               )
             })}
           </div>
           <div style={{ color: 'var(--p-888)', fontSize: '0.76rem', lineHeight: 1.4 }}>
-            Bias adjusts the ticker's own historical return path. Bullish improves the scenario, but funds with severe historical price decay can still decline.
+            The rise/fall is a monthly drift adjustment layered onto each ticker's own historical
+            return path. For NAV erosion, the underlying benchmark follows the selected scenario
+            exactly: flat in Neutral, the selected rise in Bullish, or the selected fall in Bearish.
+          </div>
+          <div className="pis-bias-inputs">
+            <label className={marketType === 'bullish' ? 'active bullish' : ''}>
+              <span>Bullish rise</span>
+              <span className="pis-bias-number">
+                <strong>+</strong>
+                <input className="ne-input" type="number" min="0" max="25" step="0.1"
+                  aria-label="Bullish monthly rise percentage"
+                  value={bullishBiasPct}
+                  onChange={e => setBullishBiasPct(e.target.value)}
+                  onBlur={e => setBullishBiasPct(clampMarketBiasPct(e.target.value))} />
+                <em>% / month</em>
+              </span>
+            </label>
+            <label className={marketType === 'bearish' ? 'active bearish' : ''}>
+              <span>Bearish fall</span>
+              <span className="pis-bias-number">
+                <strong>−</strong>
+                <input className="ne-input" type="number" min="0" max="25" step="0.1"
+                  aria-label="Bearish monthly fall percentage"
+                  value={bearishBiasPct}
+                  onChange={e => setBearishBiasPct(e.target.value)}
+                  onBlur={e => setBearishBiasPct(clampMarketBiasPct(e.target.value))} />
+                <em>% / month</em>
+              </span>
+            </label>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="ne-label" style={{ marginRight: '0.3rem' }}>Duration:</span>
@@ -1840,6 +2013,15 @@ export default function PortfolioIncomeSim() {
               style={{ width: 70, textAlign: 'center' }}
               onChange={e => setDurationMonths(parseInt(e.target.value) || 36)} />
             <span className="ne-label">months</span>
+          </div>
+          <div className={`pis-bias-impact ${marketType}`}>
+            {marketType === 'neutral'
+              ? 'Selected overlay: 0% — each fund uses its historical drift and normal volatility; its NAV-erosion benchmark is held flat at 0%.'
+              : <>
+                  Selected overlay: <strong>{activeMarketBiasPct > 0 ? '+' : ''}{Number(activeMarketBiasPct).toFixed(2)}% per month</strong>
+                  {' '}≈ <strong>{fmtCompactPct(compoundedMarketBiasPct, true)}</strong> compounded over {durationMonths} months.
+                  The Detail table’s Price Δ% shows each ticker’s simulated move; Underlying Δ% uses this exact compounded scenario move.
+                </>}
           </div>
         </div>
       )}
@@ -1873,8 +2055,13 @@ export default function PortfolioIncomeSim() {
         <select className="nep-saved-select" value={selectedSaved} onChange={e => setSelectedSaved(e.target.value)}>
           <option value="">— no saved simulations —</option>
           {savedList.map(s => {
+            const savedBias = s.market_type === 'bullish'
+              ? ` +${clampMarketBiasPct(s.bullish_bias_pct, 1)}%/mo`
+              : s.market_type === 'bearish'
+                ? ` -${clampMarketBiasPct(s.bearish_bias_pct, 1.5)}%/mo`
+                : ''
             const ml = s.mode === 'simulate'
-              ? `[Sim ${s.market_type || ''} ${s.duration_months || '?'}mo]`
+              ? `[Sim ${s.market_type || ''}${savedBias} ${s.duration_months || '?'}mo]`
               : `[Hist ${s.start_date || '?'} \u2192 ${s.end_date || '?'}]`
             return <option key={s.id} value={s.id}>{s.name}  {ml}  [{s.created_at}]</option>
           })}
@@ -2059,7 +2246,9 @@ export default function PortfolioIncomeSim() {
           <button className="nep-btn nep-btn-purple" onClick={() => { setSaveError(null); setSaveName(''); setSaveFormOpen(true) }}>
             Save Simulation&hellip;
           </button>
-          <button className="ne-run-btn" onClick={runSim} disabled={loading}>Run</button>
+          <button className="ne-run-btn" onClick={runSim} disabled={loading}>
+            {resultsNeedUpdate ? 'Update Results' : 'Run'}
+          </button>
           {savedMsg && <span style={{ color: 'var(--pos-strong)', fontSize: '0.82rem' }}>Saved</span>}
           <span style={{ color: 'var(--p-555)', fontSize: '0.78rem', marginLeft: 'auto' }}>
             {gridRows.filter(r => r.ticker.trim()).length} / {MAX_ROWS} ETFs
@@ -2162,6 +2351,12 @@ export default function PortfolioIncomeSim() {
       {/* Results */}
       {results && !loading && (
         <div style={{ marginTop: '0.6rem' }}>
+          {resultsNeedUpdate && (
+            <div className="pis-stale-results" role="status" aria-live="polite">
+              Inputs changed after this run. Select <strong>Update Results</strong> to apply the new
+              settings and refresh every result below.
+            </div>
+          )}
           <h2 style={{ marginTop: 0, marginBottom: '0.7rem', fontSize: '1rem', color: 'var(--p-ccc)' }}>Results</h2>
 
           {/* Summary */}
@@ -2174,8 +2369,12 @@ export default function PortfolioIncomeSim() {
               <StatTile label="Total Distributions" value={fmtCompact$(summary.totDist)} title={fmt$(summary.totDist)} color="#00e89a" />
               <StatTile label="Cum Dist Yield" value={fmtCompactPct(summary.totEffYld)} title={`${summary.totEffYld.toFixed(2)}%`} color="#00e89a" />
               <StatTile label="Total Reinvested" value={fmtCompact$(summary.totReinv)} title={fmt$(summary.totReinv)} color="#7ecfff" />
-              <StatTile label="NAV Erosion" value={summary.erosionCount + ' of ' + summary.erosionValid}
-                color={summary.erosionCount > 0 ? '#e05555' : '#00c853'} sub="funds showing erosion" />
+              <StatTile label="NAV Erosion"
+                value={summary.erosionValid > 0 ? summary.erosionCount + ' of ' + summary.erosionValid : '—'}
+                color={summary.erosionCount > 0 ? '#e05555' : '#00c853'}
+                sub={summary.erosionValid > 0
+                  ? 'negative adjusted return while underlying is flat/up'
+                  : 'no eligible funds tested'} />
               {summary.validCount === 1 && summary.best && <StatTile label="Only Performer"
                 value={<span style={{ color: summary.best.gain_loss_pct >= 0 ? 'var(--pos-strong)' : 'var(--neg-3)', fontWeight: 700 }}>{summary.best.ticker}</span>}
                 color={summary.best.gain_loss_pct >= 0 ? '#00c853' : '#e05555'}
@@ -2189,20 +2388,21 @@ export default function PortfolioIncomeSim() {
                 color="#e05555" sub={fmtCompactPct(summary.worst.gain_loss_pct, true)} title={fmtPct(summary.worst.gain_loss_pct)} />}
               {mode === 'simulate' && (
                 <StatTile label="Market Bias"
-                  value={marketType.charAt(0).toUpperCase() + marketType.slice(1)}
-                  color={marketType === 'bullish' ? '#00c853' : marketType === 'bearish' ? '#e05555' : '#f9a825'} />
+                  value={`${(summary.scenarioMarketType || marketType).charAt(0).toUpperCase() + (summary.scenarioMarketType || marketType).slice(1)} ${fmtCompactPct(summary.scenarioBiasMonthly || 0, (summary.scenarioBiasMonthly || 0) > 0)}/mo`}
+                  sub={`${fmtCompactPct(summary.scenarioBiasCompounded || 0, (summary.scenarioBiasCompounded || 0) > 0)} compounded overlay`}
+                  color={(summary.scenarioMarketType || marketType) === 'bullish' ? '#00c853' : (summary.scenarioMarketType || marketType) === 'bearish' ? '#e05555' : '#f9a825'} />
               )}
             </div>
           )}
 
           {/* Results table */}
           <h3 style={{ margin: '0 0 0.4rem', fontSize: '0.85rem', color: 'var(--p-666)', fontWeight: 400 }}>
-            Detail &mdash; click any header to sort
+            Detail &mdash; NAV erosion means the fund&apos;s distribution-adjusted return was negative while its underlying was flat or rising. Click any header to sort.
           </h3>
           <div className="nep-tbl-wrap">
             {hasCompareGroupsRaw ? (
             /* ===== COMPARE MODE: side-by-side baseline vs reinvested ===== */
-            <table className="sst" style={{ minWidth: 1800 }}>
+            <table className="sst" style={{ minWidth: 2100 }}>
               <thead>
                 <tr>
                   <th rowSpan={2}>Ticker</th>
@@ -2210,9 +2410,12 @@ export default function PortfolioIncomeSim() {
                   <th rowSpan={2}>Start Price</th>
                   <th rowSpan={2}>End Price</th>
                   <th rowSpan={2}>Price &Delta;%</th>
-                  <th rowSpan={2}>TTM Yield</th>
+                  <th rowSpan={2} title={headerTips['Projected Dist Rate']}>Projected Dist Rate</th>
+                  <th rowSpan={2} title={headerTips['Adj Return %']}>Adj Return %</th>
                   <th colSpan={6} style={{ textAlign: 'center', borderBottom: '2px solid var(--neg-3)', color: 'var(--neg-3)' }}>0% Reinvest</th>
                   <th colSpan={6} style={{ textAlign: 'center', borderBottom: '2px solid var(--pos-strong)', color: 'var(--pos-strong)' }}>{compareReinvestPct}% Reinvest</th>
+                  <th rowSpan={2}>Underlying</th>
+                  <th rowSpan={2}>Underlying &Delta;%</th>
                   <th rowSpan={2}>NAV Erosion</th>
                   <th rowSpan={2}>Deficit</th>
                   <th rowSpan={2}>Note</th>
@@ -2232,13 +2435,14 @@ export default function PortfolioIncomeSim() {
                         <tr key={idx} style={r.is_comparison ? { background: 'var(--p-0d0d22)' } : {}}>
                           <td><strong>{r.ticker}{r.is_comparison ? ' [C]' : ''}</strong></td>
                           <td><MoneyValue value={r.amount || 0} /></td>
-                          <td colSpan={19} style={{ textAlign: 'left', color: 'var(--neg-3)' }}>{r.error}</td>
+                          <td colSpan={22} style={{ textAlign: 'left', color: 'var(--neg-3)' }}>{r.error}</td>
                         </tr>
                       )
                     }
                     const pCls = r.price_delta_pct < 0 ? 'pct-down' : r.price_delta_pct > 0 ? 'pct-up' : ''
                     const glCls = r.gain_loss_dollar < 0 ? 'pct-down' : 'pct-up'
                     const glPCls = r.gain_loss_pct < 0 ? 'pct-down' : 'pct-up'
+                    const adjCls = (r.distribution_adjusted_return_pct || 0) < 0 ? 'pct-down' : 'pct-up'
                     const effCls = (r.effective_yield_pct || 0) >= 10 ? 'pct-up' : ''
                     const defCls = (r.final_deficit || 0) > 0 ? 'ne-deficit' : 'ne-surplus'
                     return (
@@ -2248,7 +2452,8 @@ export default function PortfolioIncomeSim() {
                         <td><MoneyValue value={r.start_price} /></td>
                         <td><MoneyValue value={r.end_price} /></td>
                         <td className={pCls}><PctValue value={r.price_delta_pct} signed /></td>
-                        <td>{r.ttm_yield_pct != null ? r.ttm_yield_pct.toFixed(2) + '%' : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                        <td><DistributionRateValue row={r} /></td>
+                        <td className={adjCls}><PctValue value={r.distribution_adjusted_return_pct || 0} signed /></td>
                         {/* Single row spans both groups */}
                         <td><MoneyValue value={r.total_dist} /></td>
                         <td className={effCls}><PctValue value={r.effective_yield_pct || 0} /></td>
@@ -2257,12 +2462,14 @@ export default function PortfolioIncomeSim() {
                         <td className={glCls}><MoneyValue value={r.gain_loss_dollar} /></td>
                         <td className={glPCls}><PctValue value={r.gain_loss_pct} signed /></td>
                         <td colSpan={6} style={{ textAlign: 'center', color: 'var(--p-555)' }}>&mdash;</td>
-                        <td>{r.has_erosion
-                          ? <span style={{ color: 'var(--neg-3)', fontWeight: 700 }}>Yes</span>
-                          : <span style={{ color: 'var(--pos-strong)', fontWeight: 700 }}>No</span>}</td>
+                        <td>{r.nav_benchmark || <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                        <td className={(r.benchmark_price_delta_pct || 0) < 0 ? 'pct-down' : (r.benchmark_price_delta_pct || 0) > 0 ? 'pct-up' : ''}>
+                          {r.benchmark_price_delta_pct != null ? <PctValue value={r.benchmark_price_delta_pct} signed /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}
+                        </td>
+                        <td><NavErosionValue row={r} /></td>
                         <td className={defCls}>{parseFloat(r.final_deficit || 0).toFixed(4)}</td>
                         <td style={{ textAlign: 'left', fontSize: '0.78rem', color: 'var(--p-aaa)', minWidth: 180, whiteSpace: 'normal' }}>
-                          {r.warning ? <span style={{ color: 'var(--warning)' }}>&#9888; {r.warning}</span> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}
+                          <ResultNote row={r} />
                         </td>
                       </tr>
                     )
@@ -2272,6 +2479,7 @@ export default function PortfolioIncomeSim() {
                   const r = item.reinvested || {}
                   const shared = item.baseline || item.reinvested
                   const pCls = (shared.price_delta_pct || 0) < 0 ? 'pct-down' : (shared.price_delta_pct || 0) > 0 ? 'pct-up' : ''
+                  const adjCls = (shared.distribution_adjusted_return_pct || 0) < 0 ? 'pct-down' : 'pct-up'
                   // Baseline columns
                   const bGlCls = (b.gain_loss_dollar || 0) < 0 ? 'pct-down' : 'pct-up'
                   const bGlPCls = (b.gain_loss_pct || 0) < 0 ? 'pct-down' : 'pct-up'
@@ -2289,7 +2497,8 @@ export default function PortfolioIncomeSim() {
                       <td><MoneyValue value={shared.start_price} /></td>
                       <td><MoneyValue value={shared.end_price} /></td>
                       <td className={pCls}><PctValue value={shared.price_delta_pct} signed /></td>
-                      <td>{shared.ttm_yield_pct != null ? shared.ttm_yield_pct.toFixed(2) + '%' : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td><DistributionRateValue row={shared} /></td>
+                      <td className={adjCls}><PctValue value={shared.distribution_adjusted_return_pct || 0} signed /></td>
                       {/* 0% Reinvest columns */}
                       <td>{b.total_dist != null ? <MoneyValue value={b.total_dist} /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
                       <td className={bEffCls}>{b.effective_yield_pct != null ? <PctValue value={b.effective_yield_pct} /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
@@ -2305,14 +2514,14 @@ export default function PortfolioIncomeSim() {
                       <td className={rGlCls}>{r.gain_loss_dollar != null ? <MoneyValue value={r.gain_loss_dollar} /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
                       <td className={rGlPCls}>{r.gain_loss_pct != null ? <PctValue value={r.gain_loss_pct} signed /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
                       {/* NAV Erosion from baseline */}
-                      <td>{b.has_erosion
-                        ? <span style={{ color: 'var(--neg-3)', fontWeight: 700 }}>Yes</span>
-                        : <span style={{ color: 'var(--pos-strong)', fontWeight: 700 }}>No</span>}</td>
+                      <td>{b.nav_benchmark || <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td className={(b.benchmark_price_delta_pct || 0) < 0 ? 'pct-down' : (b.benchmark_price_delta_pct || 0) > 0 ? 'pct-up' : ''}>
+                        {b.benchmark_price_delta_pct != null ? <PctValue value={b.benchmark_price_delta_pct} signed /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}
+                      </td>
+                      <td><NavErosionValue row={b} /></td>
                       <td className={defCls}>{parseFloat(b.final_deficit || 0).toFixed(4)}</td>
                       <td style={{ textAlign: 'left', fontSize: '0.78rem', color: 'var(--p-aaa)', minWidth: 180, whiteSpace: 'normal' }}>
-                        {(shared.warning)
-                          ? <span style={{ color: 'var(--warning)' }}>&#9888; {shared.warning}</span>
-                          : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}
+                        <ResultNote row={shared} />
                       </td>
                     </tr>
                   )
@@ -2323,7 +2532,7 @@ export default function PortfolioIncomeSim() {
                   <tr>
                     <td><strong>TOTAL</strong></td>
                     <td><MoneyValue value={summary.totAmount} /></td>
-                    <td></td><td></td><td></td><td></td>
+                    <td></td><td></td><td></td><td></td><td></td>
                     <td><MoneyValue value={summary.totDist} /></td>
                     <td><PctValue value={summary.totEffYld} /></td>
                     <td><MoneyValue value={summary.totReinv} /></td>
@@ -2331,14 +2540,14 @@ export default function PortfolioIncomeSim() {
                     <td className={summary.totGL >= 0 ? 'pct-up' : 'pct-down'}><MoneyValue value={summary.totGL} /></td>
                     <td className={summary.totGLPct >= 0 ? 'pct-up' : 'pct-down'}><PctValue value={summary.totGLPct} signed /></td>
                     <td colSpan={6}></td>
-                    <td></td><td></td><td></td>
+                    <td></td><td></td><td></td><td></td><td></td>
                   </tr>
                 </tfoot>
               )}
             </table>
             ) : (
             /* ===== NORMAL MODE: original single-row layout ===== */
-            <table className="sst" style={{ minWidth: 1500 }}>
+            <table className="sst" style={{ minWidth: 1800 }}>
               <thead>
                 <tr>
                   {headers.map((h, i) => (
@@ -2354,7 +2563,7 @@ export default function PortfolioIncomeSim() {
                         <td><strong>{r.ticker}{r.is_comparison ? ' [C]' : ''}</strong></td>
                         <td><MoneyValue value={r.amount || 0} /></td>
                         <td>{(r.reinvest_pct || 0)}%</td>
-                        <td colSpan={isSim ? 15 : 12} style={{ textAlign: 'left', color: 'var(--neg-3)' }}>{r.error}</td>
+                        <td colSpan={isSim ? 18 : 15} style={{ textAlign: 'left', color: 'var(--neg-3)' }}>{r.error}</td>
                         <td></td>
                       </tr>
                     )
@@ -2362,6 +2571,7 @@ export default function PortfolioIncomeSim() {
                   const pCls = r.price_delta_pct < 0 ? 'pct-down' : r.price_delta_pct > 0 ? 'pct-up' : ''
                   const glCls = r.gain_loss_dollar < 0 ? 'pct-down' : 'pct-up'
                   const glPCls = r.gain_loss_pct < 0 ? 'pct-down' : 'pct-up'
+                  const adjCls = (r.distribution_adjusted_return_pct || 0) < 0 ? 'pct-down' : 'pct-up'
                   const effCls = (r.effective_yield_pct || 0) >= 10 ? 'pct-up' : ''
                   const defCls = r.final_deficit > 0 ? 'ne-deficit' : 'ne-surplus'
                   return (
@@ -2376,7 +2586,7 @@ export default function PortfolioIncomeSim() {
                       <td><MoneyValue value={r.start_price} /></td>
                       <td><MoneyValue value={r.end_price} /></td>
                       <td className={pCls}><PctValue value={r.price_delta_pct} signed /></td>
-                      <td>{r.ttm_yield_pct != null ? r.ttm_yield_pct.toFixed(2) + '%' : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td><DistributionRateValue row={r} /></td>
                       {isSim && <td style={{ color: (r.sim_stats?.hist_mean_monthly || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{r.sim_stats?.hist_mean_monthly != null ? r.sim_stats.hist_mean_monthly.toFixed(2) + '%' : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>}
                       {isSim && <td>{r.sim_stats?.hist_sigma_monthly != null ? r.sim_stats.hist_sigma_monthly.toFixed(2) + '%' : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>}
                       {isSim && <td style={{ color: (r.sim_stats?.hist_skewness || 0) < -0.3 ? 'var(--warning)' : 'var(--p-aaa)' }}>{r.sim_stats?.hist_skewness != null ? r.sim_stats.hist_skewness.toFixed(2) : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>}
@@ -2386,14 +2596,15 @@ export default function PortfolioIncomeSim() {
                       <td><MoneyValue value={r.final_value} /></td>
                       <td className={glCls}><MoneyValue value={r.gain_loss_dollar} /></td>
                       <td className={glPCls}><PctValue value={r.gain_loss_pct} signed /></td>
-                      <td>{r.has_erosion
-                        ? <span style={{ color: 'var(--neg-3)', fontWeight: 700 }}>Yes</span>
-                        : <span style={{ color: 'var(--pos-strong)', fontWeight: 700 }}>No</span>}</td>
+                      <td className={adjCls}><PctValue value={r.distribution_adjusted_return_pct || 0} signed /></td>
+                      <td>{r.nav_benchmark || <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}</td>
+                      <td className={(r.benchmark_price_delta_pct || 0) < 0 ? 'pct-down' : (r.benchmark_price_delta_pct || 0) > 0 ? 'pct-up' : ''}>
+                        {r.benchmark_price_delta_pct != null ? <PctValue value={r.benchmark_price_delta_pct} signed /> : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}
+                      </td>
+                      <td><NavErosionValue row={r} /></td>
                       <td className={defCls}>{parseFloat(r.final_deficit).toFixed(4)}</td>
                       <td style={{ textAlign: 'left', fontSize: '0.78rem', color: 'var(--p-aaa)', minWidth: 180, whiteSpace: 'normal' }}>
-                        {r.warning
-                          ? <span style={{ color: 'var(--warning)' }}>&#9888; {r.warning}</span>
-                          : <span style={{ color: 'var(--p-555)' }}>&mdash;</span>}
+                        <ResultNote row={r} />
                       </td>
                     </tr>
                   )
@@ -2412,7 +2623,7 @@ export default function PortfolioIncomeSim() {
                     <td><MoneyValue value={summary.totFinal} /></td>
                     <td className={summary.totGL >= 0 ? 'pct-up' : 'pct-down'}><MoneyValue value={summary.totGL} /></td>
                     <td className={summary.totGLPct >= 0 ? 'pct-up' : 'pct-down'}><PctValue value={summary.totGLPct} signed /></td>
-                    <td></td><td></td><td></td>
+                    <td></td><td></td><td></td><td></td><td></td><td></td>
                   </tr>
                 </tfoot>
               )}

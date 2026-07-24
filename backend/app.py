@@ -27023,6 +27023,16 @@ def pis_list():
     return jsonify(ok=True)
 
 
+def _pis_bias_pct(value, default):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed) or parsed < 0 or parsed > 25:
+        return default
+    return parsed
+
+
 @app.route("/api/pis/saved", methods=["GET", "POST"])
 def pis_saved():
     import json as _json
@@ -27032,7 +27042,8 @@ def pis_saved():
 
     if request.method == "GET":
         cur.execute(
-            "SELECT id, name, created_at, mode, start_date, end_date, market_type, duration_months "
+            "SELECT id, name, created_at, mode, start_date, end_date, market_type, duration_months, "
+            "       bullish_bias_pct, bearish_bias_pct "
             "FROM portfolio_income_sim_saved ORDER BY created_at DESC"
         )
         saved = [
@@ -27040,6 +27051,7 @@ def pis_saved():
                 "id": r[0], "name": r[1], "created_at": r[2] or "",
                 "mode": r[3], "start_date": r[4], "end_date": r[5],
                 "market_type": r[6], "duration_months": r[7],
+                "bullish_bias_pct": r[8], "bearish_bias_pct": r[9],
             }
             for r in cur.fetchall()
         ]
@@ -27060,6 +27072,8 @@ def pis_saved():
     start = str(data.get("start", ""))
     end = str(data.get("end", ""))
     market_type = str(data.get("market_type", ""))
+    bullish_bias_pct = _pis_bias_pct(data.get("bullish_bias_pct"), 1.0)
+    bearish_bias_pct = _pis_bias_pct(data.get("bearish_bias_pct"), 1.5)
     duration_months = data.get("duration_months")
     if duration_months is not None:
         try:
@@ -27071,9 +27085,13 @@ def pis_saved():
     comparison_json = _json.dumps(comparison_input) if comparison_input else None
     cur.execute(
         "INSERT INTO portfolio_income_sim_saved "
-        "(name, mode, start_date, end_date, market_type, duration_months, rows_json, comparison_json) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (name, mode, start, end, market_type, duration_months, rows_json, comparison_json),
+        "(name, mode, start_date, end_date, market_type, duration_months, "
+        " bullish_bias_pct, bearish_bias_pct, rows_json, comparison_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            name, mode, start, end, market_type, duration_months,
+            bullish_bias_pct, bearish_bias_pct, rows_json, comparison_json,
+        ),
     )
     new_id = cur.lastrowid
     conn.commit()
@@ -27107,6 +27125,8 @@ def pis_saved_item(saved_id):
         start = str(data.get("start", ""))
         end = str(data.get("end", ""))
         market_type = str(data.get("market_type", ""))
+        bullish_bias_pct = _pis_bias_pct(data.get("bullish_bias_pct"), 1.0)
+        bearish_bias_pct = _pis_bias_pct(data.get("bearish_bias_pct"), 1.5)
         duration_months = data.get("duration_months")
         if duration_months is not None:
             try:
@@ -27119,9 +27139,13 @@ def pis_saved_item(saved_id):
         cur.execute(
             "UPDATE portfolio_income_sim_saved "
             "SET name=?, mode=?, start_date=?, end_date=?, market_type=?, "
-            "    duration_months=?, rows_json=?, comparison_json=?, created_at=CURRENT_TIMESTAMP "
+            "    duration_months=?, bullish_bias_pct=?, bearish_bias_pct=?, "
+            "    rows_json=?, comparison_json=?, created_at=CURRENT_TIMESTAMP "
             "WHERE id=?",
-            (name, mode, start, end, market_type, duration_months, rows_json, comparison_json, saved_id),
+            (
+                name, mode, start, end, market_type, duration_months,
+                bullish_bias_pct, bearish_bias_pct, rows_json, comparison_json, saved_id,
+            ),
         )
         conn.commit()
         conn.close()
@@ -27129,7 +27153,8 @@ def pis_saved_item(saved_id):
 
     # GET
     cur.execute(
-        "SELECT name, mode, start_date, end_date, market_type, duration_months, rows_json, comparison_json "
+        "SELECT name, mode, start_date, end_date, market_type, duration_months, "
+        "       bullish_bias_pct, bearish_bias_pct, rows_json, comparison_json "
         "FROM portfolio_income_sim_saved WHERE id = ?",
         (saved_id,),
     )
@@ -27137,11 +27162,12 @@ def pis_saved_item(saved_id):
     conn.close()
     if not row:
         return jsonify(error="Not found."), 404
-    comparison = _json.loads(row[7]) if row[7] else []
+    comparison = _json.loads(row[9]) if row[9] else []
     return jsonify(
         name=row[0], mode=row[1], start=row[2], end=row[3],
         market_type=row[4], duration_months=row[5],
-        rows=_json.loads(row[6]),
+        bullish_bias_pct=row[6], bearish_bias_pct=row[7],
+        rows=_json.loads(row[8]),
         comparison_tickers=comparison,
     )
 
@@ -27236,7 +27262,135 @@ def _pis_run_inner():
     if not validated:
         return jsonify(error="No valid ETFs to process.")
 
-    unique_tickers = list(dict.fromkeys(r["ticker"] for r in validated))
+    nav_benchmark_by_ticker = {
+        r["ticker"]: _nav_benchmark_for_ticker(r["ticker"])
+        for r in validated
+        if _should_test_nav_erosion(r["ticker"])
+    }
+    nav_benchmark_symbols = list(dict.fromkeys(
+        part
+        for benchmark in nav_benchmark_by_ticker.values()
+        for part in _nav_benchmark_parts(benchmark)
+    ))
+    analysis_rows = list(validated)
+    if mode == "historical":
+        analysis_rows.extend({
+            "ticker": ticker,
+            "amount": 1.0,
+            "reinvest_pct": 0.0,
+            "yield_override": 0.0,
+            "is_comparison": False,
+            "is_nav_benchmark": True,
+        } for ticker in nav_benchmark_symbols)
+    unique_tickers = list(dict.fromkeys(r["ticker"] for r in analysis_rows))
+
+    def _apply_pis_nav_erosion_rule(
+        raw_results,
+        scenario_benchmark_delta_pct=None,
+    ):
+        benchmark_rows = {
+            row.get("ticker"): row
+            for row in raw_results
+            if row.get("is_nav_benchmark") and not row.get("error")
+        }
+
+        def _benchmark_delta_for_period(benchmark_row, fund_row):
+            if mode != "historical":
+                return benchmark_row.get("price_delta_pct")
+            benchmark_prices = dict(zip(
+                benchmark_row.get("date_labels") or [],
+                benchmark_row.get("monthly_prices") or [],
+            ))
+            fund_dates = fund_row.get("date_labels") or []
+            if not fund_dates:
+                return None
+            start_price = benchmark_prices.get(fund_dates[0])
+            end_price = benchmark_prices.get(fund_dates[-1])
+            if start_price is None or end_price is None or not start_price:
+                return None
+            return (float(end_price) - float(start_price)) / float(start_price) * 100.0
+
+        visible_results = []
+        for row in raw_results:
+            if row.get("is_nav_benchmark"):
+                continue
+            benchmark = nav_benchmark_by_ticker.get(row.get("ticker"))
+            row["nav_benchmark"] = benchmark
+            row["benchmark_price_delta_pct"] = None
+            row["benchmark_delta_basis"] = None
+            row["nav_erosion_tested"] = False
+            row["has_erosion"] = False
+
+            if benchmark and not row.get("error"):
+                if scenario_benchmark_delta_pct is not None:
+                    benchmark_delta_pct = float(scenario_benchmark_delta_pct)
+                    benchmark_available = True
+                    row["benchmark_delta_basis"] = "scenario"
+                else:
+                    benchmark_parts = _nav_benchmark_parts(benchmark)
+                    component_deltas = []
+                    for part in benchmark_parts:
+                        benchmark_row = benchmark_rows.get(part)
+                        if (
+                            benchmark_row
+                            and benchmark_row.get("price_delta_pct") is not None
+                        ):
+                            component_delta = _benchmark_delta_for_period(
+                                benchmark_row,
+                                row,
+                            )
+                            if component_delta is not None:
+                                component_deltas.append(float(component_delta))
+                    benchmark_available = (
+                        len(component_deltas) == len(benchmark_parts)
+                    )
+                    benchmark_delta_pct = (
+                        sum(component_deltas)
+                        if benchmark_available
+                        else None
+                    )
+                    row["benchmark_delta_basis"] = "historical"
+
+                adjusted_delta = row.get("distribution_adjusted_return_pct")
+                if benchmark_available and adjusted_delta is not None:
+                    fund_delta_pct = float(adjusted_delta)
+                    erosion = _nav_erosion_numerator(
+                        fund_delta_pct / 100.0,
+                        benchmark_delta_pct / 100.0,
+                    )
+                    row["benchmark_price_delta_pct"] = round(benchmark_delta_pct, 2)
+                    row["nav_erosion_fund_return_pct"] = round(fund_delta_pct, 2)
+                    row["nav_erosion_tested"] = True
+                    row["has_erosion"] = bool(erosion and erosion > 0)
+                    if row["has_erosion"]:
+                        row["nav_erosion_note"] = (
+                            f"{row['ticker']}'s distribution-adjusted return was "
+                            f"{fund_delta_pct:+.2f}% while {benchmark} was flat or rising."
+                        )
+                    elif benchmark_delta_pct < 0:
+                        row["nav_erosion_note"] = (
+                            f"Not erosion: underlying {benchmark} also declined."
+                        )
+                    else:
+                        row["nav_erosion_note"] = (
+                            "Not erosion: distribution-adjusted return was "
+                            f"{fund_delta_pct:+.2f}%."
+                        )
+                elif benchmark_available:
+                    row["nav_erosion_note"] = (
+                        "NAV erosion not tested: distribution-adjusted return "
+                        f"was unavailable for {row['ticker']}."
+                    )
+                else:
+                    row["nav_erosion_note"] = (
+                        f"NAV erosion not tested: {benchmark} data was unavailable."
+                    )
+            elif not benchmark:
+                row["nav_erosion_note"] = (
+                    "NAV erosion is not applicable to this ticker."
+                )
+            visible_results.append(row)
+        return visible_results
 
     # ── HISTORICAL MODE ──────────────────────────────────────────────────────
     if mode == "historical":
@@ -27287,6 +27441,7 @@ def _pis_run_inner():
         def _run_hist_sim(df, amount, reinvest_pct):
             initial_price = float(df["price"].iloc[0])
             current_shares = amount / initial_price
+            total_return_shares = 1.0
             cumul_dist = 0.0
             cumul_reinvested = 0.0
             m_prices, m_vals, m_divs = [], [], []
@@ -27297,6 +27452,10 @@ def _pis_run_inner():
                 reinvest_amt = total_dist_m * reinvest_pct / 100.0
                 shares_bought = (reinvest_amt / price) if price > 0 else 0.0
                 current_shares += shares_bought
+                if price > 0:
+                    total_return_shares += (
+                        div_per_share * total_return_shares / price
+                    )
                 cumul_dist += total_dist_m
                 cumul_reinvested += reinvest_amt
                 m_prices.append(round(price, 4))
@@ -27310,18 +27469,22 @@ def _pis_run_inner():
             gain_loss_dollar = portfolio_val - amount
             gain_loss_pct = gain_loss_dollar / amount * 100 if amount else 0.0
             effective_yield_pct = cumul_dist / amount * 100 if amount else 0.0
+            distribution_adjusted_return_pct = (
+                (total_return_shares * final_price / initial_price) - 1.0
+            ) * 100
             return {
                 "initial_price": initial_price, "final_price": final_price,
                 "price_delta_pct": price_delta_pct, "cumul_dist": cumul_dist,
                 "cumul_reinvested": cumul_reinvested, "portfolio_val": portfolio_val,
                 "gain_loss_dollar": gain_loss_dollar, "gain_loss_pct": gain_loss_pct,
                 "effective_yield_pct": effective_yield_pct, "has_erosion": final_deficit > 0,
+                "distribution_adjusted_return_pct": distribution_adjusted_return_pct,
                 "final_deficit": final_deficit,
                 "m_prices": m_prices, "m_vals": m_vals, "m_divs": m_divs,
             }
 
         results = []
-        for r in validated:
+        for r in analysis_rows:
             sym = r["ticker"]
             amount = r["amount"]
             reinvest_pct = r["reinvest_pct"]
@@ -27331,6 +27494,7 @@ def _pis_run_inner():
             if close is None or close.dropna().empty:
                 results.append({"ticker": sym, "amount": amount, "reinvest_pct": reinvest_pct,
                                 "is_comparison": r["is_comparison"],
+                                "is_nav_benchmark": r.get("is_nav_benchmark", False),
                                 "error": f"No data found for {sym}.",
                                 "monthly_prices": [], "monthly_portfolio_vals": [], "monthly_dividends": []})
                 continue
@@ -27343,6 +27507,7 @@ def _pis_run_inner():
             if df.empty:
                 results.append({"ticker": sym, "amount": amount, "reinvest_pct": reinvest_pct,
                                 "is_comparison": r["is_comparison"],
+                                "is_nav_benchmark": r.get("is_nav_benchmark", False),
                                 "error": f"No usable monthly data for {sym}.",
                                 "monthly_prices": [], "monthly_portfolio_vals": [], "monthly_dividends": []})
                 continue
@@ -27359,6 +27524,7 @@ def _pis_run_inner():
             if initial_price == 0:
                 results.append({"ticker": sym, "amount": amount, "reinvest_pct": reinvest_pct,
                                 "is_comparison": r["is_comparison"],
+                                "is_nav_benchmark": r.get("is_nav_benchmark", False),
                                 "error": f"Initial price for {sym} is zero.",
                                 "monthly_prices": [], "monthly_portfolio_vals": [], "monthly_dividends": []})
                 continue
@@ -27367,7 +27533,11 @@ def _pis_run_inner():
 
             # Determine which reinvest runs to perform
             # Comparison tickers use their own per-ticker reinvest_pct (single run)
-            if reinvest_compare and not r["is_comparison"]:
+            if (
+                reinvest_compare
+                and not r["is_comparison"]
+                and not r.get("is_nav_benchmark", False)
+            ):
                 runs = [
                     (0.0, "baseline"),
                     (reinvest_compare_pct, "reinvested"),
@@ -27380,6 +27550,7 @@ def _pis_run_inner():
                 rec = {
                     "ticker": sym,
                     "is_comparison": r["is_comparison"],
+                    "is_nav_benchmark": r.get("is_nav_benchmark", False),
                     "amount": round(amount, 2),
                     "reinvest_pct": round(run_pct, 1),
                     "start_price": round(s["initial_price"], 4),
@@ -27391,6 +27562,10 @@ def _pis_run_inner():
                     "gain_loss_dollar": round(s["gain_loss_dollar"], 2),
                     "gain_loss_pct": round(s["gain_loss_pct"], 2),
                     "effective_yield_pct": round(s["effective_yield_pct"], 2),
+                    "distribution_adjusted_return_pct": round(
+                        s["distribution_adjusted_return_pct"],
+                        2,
+                    ),
                     "ttm_yield_pct": None,
                     "has_erosion": s["has_erosion"],
                     "final_deficit": round(s["final_deficit"], 4),
@@ -27405,7 +27580,7 @@ def _pis_run_inner():
                     rec["compare_group"] = compare_group
                 results.append(rec)
 
-        return jsonify(results=results)
+        return jsonify(results=_apply_pis_nav_erosion_rule(results))
 
     # ── SIMULATION MODE ──────────────────────────────────────────────────────
     if mode == "simulate":
@@ -27414,13 +27589,30 @@ def _pis_run_inner():
         if duration_months < 1 or duration_months > 600:
             return jsonify(error="Duration must be between 1 and 600 months.")
 
-        bias_map = {"bullish": +0.010, "bearish": -0.015, "neutral": 0.0}
+        if market_type not in {"bullish", "neutral", "bearish"}:
+            return jsonify(error="Market type must be bullish, neutral, or bearish.")
+        default_bias_pct = {"bullish": 1.0, "bearish": 1.5, "neutral": 0.0}[market_type]
+        raw_bias_pct = data.get("market_bias_pct", default_bias_pct)
+        try:
+            market_bias_pct = float(raw_bias_pct)
+        except (TypeError, ValueError):
+            return jsonify(error="Scenario rise/fall must be a number.")
+        if not math.isfinite(market_bias_pct) or market_bias_pct < 0 or market_bias_pct > 25:
+            return jsonify(error="Scenario rise/fall must be between 0% and 25% per month.")
+
         vol_mult_map = {"bullish": 0.9, "bearish": 1.2, "neutral": 1.0}
-        bias = bias_map.get(market_type, 0.0)
+        bias = (
+            market_bias_pct / 100.0
+            if market_type == "bullish"
+            else -market_bias_pct / 100.0
+            if market_type == "bearish"
+            else 0.0
+        )
+        compounded_bias_pct = math.expm1(bias * duration_months) * 100
         vol_mult = vol_mult_map.get(market_type, 1.0)
 
         results = []
-        for r in validated:
+        for r in analysis_rows:
             sym = r["ticker"]
             amount = r["amount"]
             reinvest_pct = r["reinvest_pct"]
@@ -27431,6 +27623,7 @@ def _pis_run_inner():
             except Exception as e:
                 results.append({"ticker": sym, "amount": amount, "reinvest_pct": reinvest_pct,
                                 "is_comparison": r["is_comparison"],
+                                "is_nav_benchmark": r.get("is_nav_benchmark", False),
                                 "error": f"Failed to fetch data for {sym}: {str(e)}",
                                 "monthly_prices": [], "monthly_portfolio_vals": [], "monthly_dividends": []})
                 continue
@@ -27438,6 +27631,7 @@ def _pis_run_inner():
             if hist is None or hist.empty:
                 results.append({"ticker": sym, "amount": amount, "reinvest_pct": reinvest_pct,
                                 "is_comparison": r["is_comparison"],
+                                "is_nav_benchmark": r.get("is_nav_benchmark", False),
                                 "error": f"No data found for {sym}.",
                                 "monthly_prices": [], "monthly_portfolio_vals": [], "monthly_dividends": []})
                 continue
@@ -27448,6 +27642,7 @@ def _pis_run_inner():
             if close.dropna().empty:
                 results.append({"ticker": sym, "amount": amount, "reinvest_pct": reinvest_pct,
                                 "is_comparison": r["is_comparison"],
+                                "is_nav_benchmark": r.get("is_nav_benchmark", False),
                                 "error": f"No data found for {sym}.",
                                 "monthly_prices": [], "monthly_portfolio_vals": [], "monthly_dividends": []})
                 continue
@@ -27456,16 +27651,46 @@ def _pis_run_inner():
             if current_price <= 0:
                 results.append({"ticker": sym, "amount": amount, "reinvest_pct": reinvest_pct,
                                 "is_comparison": r["is_comparison"],
+                                "is_nav_benchmark": r.get("is_nav_benchmark", False),
                                 "error": f"Could not determine current price for {sym}.",
                                 "monthly_prices": [], "monthly_portfolio_vals": [], "monthly_dividends": []})
                 continue
 
-            # TTM yield
+            # Distribution rate used by the forward-income projection. A raw
+            # trailing-year sum understates new weekly/monthly funds because
+            # they do not yet have twelve months of payments. Reuse the
+            # calculator's cadence-aware estimator: completed histories use
+            # TTM, while shorter histories annualize the established recent
+            # payment run.
             if yo is not None:
-                ttm_yield = yo / 100.0
+                distribution_yield = yo / 100.0
+                ttm_yield = None
+                distribution_frequency = None
+                distribution_rate_basis = "manual_override"
             else:
-                ttm_divs_sum = float(divs.sum()) if divs is not None else 0.0
-                ttm_yield = ttm_divs_sum / current_price if current_price > 0 else 0.0
+                distribution_frequency = _div_calc_infer_frequency(divs)
+                annual_dividend, ttm_dividend, distribution_rate_basis = (
+                    _div_calc_annual_dividend(divs, distribution_frequency)
+                )
+                distribution_yield = (
+                    annual_dividend / current_price if current_price > 0 else 0.0
+                )
+                ttm_yield = (
+                    ttm_dividend / current_price if current_price > 0 else 0.0
+                )
+
+            basis_labels = {
+                "manual_override": "Manual override",
+                "trailing_12_month": "Trailing 12 months",
+                "annualized_recent_distributions": "Recent payments annualized",
+                "annualized_average_distribution": "Available history annualized",
+                "latest_distribution_rate": "Latest payment annualized",
+                "none": "No distributions found",
+            }
+            distribution_rate_basis_label = basis_labels.get(
+                distribution_rate_basis,
+                "Estimated annual rate",
+            )
 
             # Historical monthly return statistics
             monthly_returns = close.dropna().resample("ME").last().pct_change().dropna()
@@ -27518,6 +27743,7 @@ def _pis_run_inner():
             def _run_fwd_sim(prices_arr, amount_v, reinvest_pct_v, ttm_yield_v, cur_price):
                 initial_shares = amount_v / cur_price
                 cs = initial_shares
+                total_return_shares = 1.0
                 cd = 0.0; cr = 0.0
                 mp, mv, md = [], [], []
                 for price in prices_arr[1:]:
@@ -27541,6 +27767,10 @@ def _pis_run_inner():
                     ra = total_d * (reinvest_pct_v / 100)
                     sb = ra / price if price > 0 else 0.0
                     cs += sb; cd += total_d; cr += ra
+                    if price > 0:
+                        total_return_shares += (
+                            dist_ps * total_return_shares / price
+                        )
                     mp.append(round(price, 4))
                     mv.append(round(cs * price, 2))
                     md.append(round(total_d, 2))
@@ -27548,12 +27778,16 @@ def _pis_run_inner():
                 fv = cs * fp
                 be = amount_v / fp if fp else 0.0
                 fd = be - cs
+                distribution_adjusted_return_pct = (
+                    (total_return_shares * fp / cur_price) - 1.0
+                ) * 100
                 return {
                     "final_price": fp, "final_value": fv, "final_deficit": fd,
                     "cumul_dist": cd, "cumul_reinvested": cr,
                     "gain_loss_dollar": fv - amount_v,
                     "gain_loss_pct": (fv - amount_v) / amount_v * 100 if amount_v else 0.0,
                     "eff_yield_pct": cd / amount_v * 100 if amount_v else 0.0,
+                    "distribution_adjusted_return_pct": distribution_adjusted_return_pct,
                     "has_erosion": bool(fd > 0),
                     "mp": mp, "mv": mv, "md": md,
                 }
@@ -27575,7 +27809,11 @@ def _pis_run_inner():
 
             # Determine which reinvest runs to perform
             # Comparison tickers use their own per-ticker reinvest_pct (single run)
-            if reinvest_compare and not r["is_comparison"]:
+            if (
+                reinvest_compare
+                and not r["is_comparison"]
+                and not r.get("is_nav_benchmark", False)
+            ):
                 runs = [
                     (0.0, "baseline"),
                     (reinvest_compare_pct, "reinvested"),
@@ -27584,10 +27822,17 @@ def _pis_run_inner():
                 runs = [(reinvest_pct, None)]
 
             for run_pct, compare_group in runs:
-                s = _run_fwd_sim(prices, amount, run_pct, ttm_yield, current_price)
+                s = _run_fwd_sim(
+                    prices,
+                    amount,
+                    run_pct,
+                    distribution_yield,
+                    current_price,
+                )
                 rec = {
                     "ticker": sym,
                     "is_comparison": r["is_comparison"],
+                    "is_nav_benchmark": r.get("is_nav_benchmark", False),
                     "amount": round(amount, 2),
                     "reinvest_pct": round(run_pct, 1),
                     "start_price": round(current_price, 4),
@@ -27599,7 +27844,19 @@ def _pis_run_inner():
                     "gain_loss_dollar": round(s["gain_loss_dollar"], 2),
                     "gain_loss_pct": round(s["gain_loss_pct"], 2),
                     "effective_yield_pct": round(s["eff_yield_pct"], 2),
-                    "ttm_yield_pct": round(ttm_yield * 100, 2),
+                    "distribution_adjusted_return_pct": round(
+                        s["distribution_adjusted_return_pct"],
+                        2,
+                    ),
+                    "ttm_yield_pct": (
+                        round(ttm_yield * 100, 2)
+                        if ttm_yield is not None
+                        else None
+                    ),
+                    "distribution_rate_pct": round(distribution_yield * 100, 2),
+                    "distribution_rate_basis": distribution_rate_basis,
+                    "distribution_rate_basis_label": distribution_rate_basis_label,
+                    "distribution_frequency": distribution_frequency,
                     "has_erosion": s["has_erosion"],
                     "final_deficit": round(s["final_deficit"], 4),
                     "monthly_prices": s["mp"],
@@ -27608,13 +27865,19 @@ def _pis_run_inner():
                     "date_labels": date_labels,
                     "warning": sim_warning,
                     "sim_stats": sim_stats,
+                    "market_type": market_type,
+                    "market_bias_monthly_pct": round(bias * 100, 2),
+                    "market_bias_compounded_pct": round(compounded_bias_pct, 2),
                     "error": None,
                 }
                 if compare_group is not None:
                     rec["compare_group"] = compare_group
                 results.append(rec)
 
-        return jsonify(results=results)
+        return jsonify(results=_apply_pis_nav_erosion_rule(
+            results,
+            scenario_benchmark_delta_pct=compounded_bias_pct,
+        ))
 
     return jsonify(error=f"Unknown mode: {mode}")
 

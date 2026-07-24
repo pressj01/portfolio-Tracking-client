@@ -4570,6 +4570,34 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 }
 .pis-market-btn:hover { background: var(--surface-inset); }
 .pis-market-btn.active { background: var(--primary); color: var(--white); border-color: var(--primary); }
+.pis-bias-inputs {
+  display: flex; flex-wrap: wrap; gap: 0.65rem;
+}
+.pis-bias-inputs > label {
+  align-items: center; background: var(--surface-sunken); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text-dim); display: flex; gap: 0.75rem;
+  justify-content: space-between; min-width: 245px; padding: 0.45rem 0.65rem;
+}
+.pis-bias-inputs > label.active.bullish {
+  border-color: var(--pos-strong); color: var(--pos-strong);
+}
+.pis-bias-inputs > label.active.bearish {
+  border-color: var(--neg-3); color: var(--neg-3);
+}
+.pis-bias-number { align-items: center; display: flex; gap: 0.35rem; }
+.pis-bias-number strong { font-size: 1rem; }
+.pis-bias-number input { text-align: right; width: 68px; }
+.pis-bias-number em {
+  color: var(--text-dim); font-size: 0.72rem; font-style: normal; white-space: nowrap;
+}
+.pis-bias-impact {
+  background: var(--surface-sunken); border-left: 3px solid var(--warning);
+  border-radius: 4px; color: var(--text-dim); font-size: 0.76rem;
+  line-height: 1.45; padding: 0.5rem 0.65rem;
+}
+.pis-bias-impact.bullish { border-left-color: var(--pos-strong); }
+.pis-bias-impact.bearish { border-left-color: var(--neg-3); }
+.pis-bias-impact strong { color: var(--text-strong); }
 
 .pis-dur-btn {
   padding: 0.3rem 0.7rem; border: 1px solid var(--border); border-radius: 4px;
@@ -4633,6 +4661,13 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   font-size: 0.88rem; font-weight: 600; color: var(--purple);
   white-space: nowrap; margin-right: 1rem;
 }
+.pis-stale-results {
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  border-radius: 7px; color: var(--warning); font-size: 0.8rem;
+  margin-bottom: 0.75rem; padding: 0.65rem 0.8rem;
+}
+.pis-stale-results strong { color: var(--text-strong); }
 
 /* ── Portfolio Builder ───────────────────────────────────────────────────── */
 

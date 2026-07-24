@@ -620,6 +620,8 @@ def ensure_tables_exist(conn=None):
             end_date        TEXT,
             market_type     TEXT,
             duration_months INTEGER,
+            bullish_bias_pct REAL NOT NULL DEFAULT 1.0,
+            bearish_bias_pct REAL NOT NULL DEFAULT 1.5,
             rows_json       TEXT NOT NULL,
             comparison_json TEXT
         )
@@ -630,6 +632,20 @@ def ensure_tables_exist(conn=None):
         cur.execute("SELECT comparison_json FROM portfolio_income_sim_saved LIMIT 1")
     except Exception:
         cur.execute("ALTER TABLE portfolio_income_sim_saved ADD COLUMN comparison_json TEXT")
+    try:
+        cur.execute("SELECT bullish_bias_pct FROM portfolio_income_sim_saved LIMIT 1")
+    except Exception:
+        cur.execute(
+            "ALTER TABLE portfolio_income_sim_saved "
+            "ADD COLUMN bullish_bias_pct REAL NOT NULL DEFAULT 1.0"
+        )
+    try:
+        cur.execute("SELECT bearish_bias_pct FROM portfolio_income_sim_saved LIMIT 1")
+    except Exception:
+        cur.execute(
+            "ALTER TABLE portfolio_income_sim_saved "
+            "ADD COLUMN bearish_bias_pct REAL NOT NULL DEFAULT 1.5"
+        )
 
     # ── watchlist_watching ─────────────────────────────────────────────────────
     cur.execute("""
