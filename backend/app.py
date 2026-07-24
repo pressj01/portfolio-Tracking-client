@@ -6073,6 +6073,9 @@ def lookup_ticker(ticker):
     from datetime import datetime as _dt
 
     ticker = ticker.strip().upper()
+    if not ticker:
+        return jsonify({"error": "Ticker is required."}), 400
+
     result = {
         "ticker": ticker,
         "description": ticker,
@@ -6088,100 +6091,198 @@ def lookup_ticker(ticker):
         "paid_for_itself": 0,
     }
 
+    def _positive_number(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return number if math.isfinite(number) and number > 0 else 0.0
+
     try:
         tk = yf.Ticker(ticker)
+    except Exception as e:
+        return jsonify({"error": f"Could not look up {ticker}: {str(e)}"}), 404
+
+    # Yahoo's quote-summary endpoint is less reliable than its chart endpoint,
+    # especially for newer ETFs. Treat .info as enrichment rather than making
+    # it a prerequisite for a valid price/dividend lookup.
+    try:
         info = tk.info or {}
+    except Exception:
+        info = {}
 
-        # Detect ticker rename (e.g. TOPW → WPAY)
-        actual_symbol = info.get("symbol", "").upper()
-        if actual_symbol and actual_symbol != ticker:
-            # yfinance resolved this to a different ticker — fetch data under the new symbol
-            tk = yf.Ticker(actual_symbol)
+    # Detect ticker rename (e.g. TOPW → WPAY).
+    actual_symbol = str(info.get("symbol") or "").upper()
+    if actual_symbol and actual_symbol != ticker:
+        tk = yf.Ticker(actual_symbol)
+        try:
             info = tk.info or {}
-            result["renamed_to"] = actual_symbol
-
-        result["description"] = (info.get("longName") or info.get("shortName") or ticker)[:200]
-        result["classification_type"] = (info.get("quoteType") or "ETF")[:20]
-        result["current_price"] = info.get("regularMarketPrice") or info.get("currentPrice") or 0
-
-        # Infer frequency and div from dividend history
-        freq_code = "Q"
-        try:
-            hist = tk.dividends
-            if hist is not None and len(hist) > 0:
-                # Match timezone awareness of the index
-                if hist.index.tz is not None:
-                    one_year_ago = pd.Timestamp.now(tz=hist.index.tz) - pd.Timedelta(days=365)
-                else:
-                    one_year_ago = pd.Timestamp.now() - pd.Timedelta(days=365)
-                recent = hist[hist.index >= one_year_ago]
-                n = len(recent[recent > 0])
-                if n >= 45:
-                    freq_code = "W"
-                elif n >= 10:
-                    freq_code = "M"
-                elif n >= 3:
-                    freq_code = "Q"
-                elif n >= 2:
-                    freq_code = "SA"
-                elif n >= 1:
-                    freq_code = "A"
-
-                # Last dividend per share (actual payment, not annual rate)
-                last_div = recent[recent > 0]
-                if not last_div.empty:
-                    result["div"] = round(float(last_div.iloc[-1]), 6)
-
-                # Ex-div date from last payment
-                result["ex_div_date"] = last_div.index[-1].strftime("%m/%d/%y") if not last_div.empty else None
         except Exception:
-            # Fallback to info fields
-            annual_rate = info.get("dividendRate") or 0
-            if annual_rate:
-                result["div"] = round(annual_rate, 6)
-            ex_ts = info.get("exDividendDate")
-            if ex_ts:
-                try:
-                    result["ex_div_date"] = _dt.utcfromtimestamp(ex_ts).strftime("%m/%d/%y")
-                except Exception:
-                    pass
+            info = {}
+        result["renamed_to"] = actual_symbol
 
-        result["div_frequency"] = freq_code
+    result["description"] = str(info.get("longName") or info.get("shortName") or ticker)[:200]
+    result["classification_type"] = str(info.get("quoteType") or "ETF")[:20]
+    result["current_price"] = _positive_number(
+        info.get("regularMarketPrice")
+        or info.get("currentPrice")
+        or info.get("navPrice")
+        or info.get("previousClose")
+    )
 
-        # Dividend pay date — try yfinance calendar, else estimate from ex-div + 2-4 weeks
+    # Cache recent chart history within this request because it can supply both
+    # the current price and dividend events when quote-summary is unavailable.
+    recent_history = None
+    history_loaded = False
+
+    def _load_recent_history():
+        nonlocal recent_history, history_loaded
+        if not history_loaded:
+            history_loaded = True
+            try:
+                recent_history = tk.history(period="1y", auto_adjust=False, actions=True)
+            except Exception:
+                recent_history = pd.DataFrame()
+        return recent_history
+
+    if result["current_price"] <= 0:
         try:
-            cal = tk.calendar
-            if cal is not None:
-                # yfinance returns calendar as dict or DataFrame depending on version
-                pay_date = None
-                if isinstance(cal, dict):
-                    pay_date = cal.get("Dividend Date") or cal.get("Payment Date")
-                elif hasattr(cal, "loc"):
-                    for key in ["Dividend Date", "Payment Date"]:
-                        if key in cal.index:
-                            pay_date = cal.loc[key].iloc[0] if hasattr(cal.loc[key], "iloc") else cal.loc[key]
-                            break
-                if pay_date is not None:
-                    if hasattr(pay_date, "strftime"):
-                        result["div_pay_date"] = pay_date.strftime("%m/%d/%y")
-                    elif isinstance(pay_date, (int, float)):
-                        result["div_pay_date"] = _dt.fromtimestamp(pay_date, tz=__import__('datetime').timezone.utc).strftime("%m/%d/%y")
+            fast_info = tk.fast_info
+            result["current_price"] = _positive_number(
+                getattr(fast_info, "last_price", None)
+                or (fast_info.get("last_price") if hasattr(fast_info, "get") else None)
+                or getattr(fast_info, "previous_close", None)
+                or (fast_info.get("previous_close") if hasattr(fast_info, "get") else None)
+            )
         except Exception:
             pass
 
-        # Estimate pay date from ex-div + payout frequency if we have no confirmed date
-        if not result["div_pay_date"] and result["ex_div_date"]:
-            result["div_pay_date"] = _format_mdy_date(
-                _estimate_dividend_pay_from_pattern(
-                    result["ex_div_date"],
-                    result["div_frequency"],
-                    ticker=ticker,
-                    description=result.get("description"),
-                )
-            )
+    if result["current_price"] <= 0:
+        frame = _load_recent_history()
+        try:
+            closes = pd.to_numeric(frame["Close"], errors="coerce").dropna()
+            if not closes.empty:
+                result["current_price"] = _positive_number(closes.iloc[-1])
+        except Exception:
+            pass
 
-    except Exception as e:
-        return jsonify({"error": f"Could not look up {ticker}: {str(e)}"}), 404
+    # Infer frequency and the latest per-share distribution from history.
+    freq_code = "Q"
+    try:
+        hist = tk.dividends
+    except Exception:
+        hist = pd.Series(dtype=float)
+    if hist is None or hist.empty:
+        frame = _load_recent_history()
+        try:
+            hist = frame["Dividends"]
+        except Exception:
+            hist = pd.Series(dtype=float)
+
+    try:
+        if hist is not None and len(hist) > 0:
+            if hist.index.tz is not None:
+                one_year_ago = pd.Timestamp.now(tz=hist.index.tz) - pd.Timedelta(days=365)
+            else:
+                one_year_ago = pd.Timestamp.now() - pd.Timedelta(days=365)
+            recent = pd.to_numeric(hist[hist.index >= one_year_ago], errors="coerce").dropna()
+            positive = recent[recent > 0]
+            n = len(positive)
+            if n >= 45:
+                freq_code = "W"
+            elif n >= 10:
+                freq_code = "M"
+            elif n >= 3:
+                freq_code = "Q"
+            elif n >= 2:
+                freq_code = "SA"
+            elif n >= 1:
+                freq_code = "A"
+
+            if not positive.empty:
+                result["div"] = round(float(positive.iloc[-1]), 6)
+                result["ex_div_date"] = positive.index[-1].strftime("%m/%d/%y")
+    except Exception:
+        pass
+
+    if result["div"] <= 0:
+        annual_rate = _positive_number(info.get("dividendRate"))
+        if annual_rate:
+            result["div"] = round(annual_rate, 6)
+    if not result["ex_div_date"]:
+        ex_ts = info.get("exDividendDate")
+        if ex_ts:
+            try:
+                result["ex_div_date"] = _dt.utcfromtimestamp(ex_ts).strftime("%m/%d/%y")
+            except Exception:
+                pass
+
+    result["div_frequency"] = freq_code
+
+    # If Yahoo is unavailable, an existing portfolio quote is still sufficient
+    # to add the ticker to a DRIP comparison.
+    if result["current_price"] <= 0:
+        conn = None
+        try:
+            conn = get_connection()
+            local = conn.execute(
+                """SELECT description, classification_type, current_price, div,
+                          div_frequency, ex_div_date, div_pay_date
+                   FROM all_account_info
+                   WHERE ticker = ? AND IFNULL(current_price, 0) > 0
+                   ORDER BY profile_id
+                   LIMIT 1""",
+                (ticker,),
+            ).fetchone()
+            if local:
+                result["description"] = local["description"] or result["description"]
+                result["classification_type"] = local["classification_type"] or result["classification_type"]
+                result["current_price"] = _positive_number(local["current_price"])
+                result["div"] = _positive_number(local["div"]) or result["div"]
+                result["div_frequency"] = local["div_frequency"] or result["div_frequency"]
+                result["ex_div_date"] = local["ex_div_date"] or result["ex_div_date"]
+                result["div_pay_date"] = local["div_pay_date"] or result["div_pay_date"]
+        except Exception:
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
+
+    if result["current_price"] <= 0:
+        return jsonify({"error": f"Could not find market data for {ticker}."}), 404
+
+    # Dividend pay date — try yfinance calendar, else estimate from ex-div.
+    try:
+        cal = tk.calendar
+        if cal is not None:
+            pay_date = None
+            if isinstance(cal, dict):
+                pay_date = cal.get("Dividend Date") or cal.get("Payment Date")
+            elif hasattr(cal, "loc"):
+                for key in ["Dividend Date", "Payment Date"]:
+                    if key in cal.index:
+                        pay_date = cal.loc[key].iloc[0] if hasattr(cal.loc[key], "iloc") else cal.loc[key]
+                        break
+            if pay_date is not None:
+                if hasattr(pay_date, "strftime"):
+                    result["div_pay_date"] = pay_date.strftime("%m/%d/%y")
+                elif isinstance(pay_date, (int, float)):
+                    result["div_pay_date"] = _dt.fromtimestamp(
+                        pay_date,
+                        tz=__import__("datetime").timezone.utc,
+                    ).strftime("%m/%d/%y")
+    except Exception:
+        pass
+
+    if not result["div_pay_date"] and result["ex_div_date"]:
+        result["div_pay_date"] = _format_mdy_date(
+            _estimate_dividend_pay_from_pattern(
+                result["ex_div_date"],
+                result["div_frequency"],
+                ticker=ticker,
+                description=result.get("description"),
+            )
+        )
 
     return jsonify(result)
 
@@ -19515,7 +19616,7 @@ def drip_projection():
             pass
         return v
 
-    profile_id = get_profile_id()
+    _, profile_ids = get_profile_filter()
     conn = get_connection()
     ensure_tables_exist(conn)
 
@@ -19526,28 +19627,51 @@ def drip_projection():
     investment_overrides = data.get("investment_overrides", {})  # {ticker: dollar_amount}
     filter_categories = data.get("categories", [])   # list of category names
     filter_sub_ids = [int(s) for s in data.get("subcategories", []) if str(s).isdigit()]  # sub-category ids
-
-    # Load saved DRIP defaults
-    saved_drip = {}
-    for r in conn.execute("SELECT ticker, reinvest_pct FROM drip_settings WHERE profile_id = ?", (profile_id,)).fetchall():
-        saved_drip[r["ticker"]] = r["reinvest_pct"]
+    custom_tickers_data = data.get("custom_tickers", [])
+    if not isinstance(custom_tickers_data, list):
+        custom_tickers_data = []
 
     # Load holdings
+    placeholders = ",".join("?" * len(profile_ids))
     rows = conn.execute(
-        """SELECT ticker, description, classification_type,
-                  quantity, current_price, div, div_frequency,
-                  current_annual_yield, estim_payment_per_year
+        f"""SELECT ticker,
+                   MAX(description) AS description,
+                   MAX(classification_type) AS classification_type,
+                   SUM(IFNULL(quantity, 0)) AS quantity,
+                   CASE
+                       WHEN SUM(CASE WHEN IFNULL(current_price, 0) > 0 THEN IFNULL(quantity, 0) ELSE 0 END) > 0
+                       THEN SUM(CASE WHEN IFNULL(current_price, 0) > 0 THEN current_price * IFNULL(quantity, 0) ELSE 0 END)
+                            / SUM(CASE WHEN IFNULL(current_price, 0) > 0 THEN IFNULL(quantity, 0) ELSE 0 END)
+                       ELSE MAX(IFNULL(current_price, 0))
+                   END AS current_price,
+                   CASE
+                       WHEN SUM(CASE WHEN IFNULL(div, 0) > 0 THEN IFNULL(quantity, 0) ELSE 0 END) > 0
+                       THEN SUM(CASE WHEN IFNULL(div, 0) > 0 THEN div * IFNULL(quantity, 0) ELSE 0 END)
+                            / SUM(CASE WHEN IFNULL(div, 0) > 0 THEN IFNULL(quantity, 0) ELSE 0 END)
+                       ELSE MAX(IFNULL(div, 0))
+                   END AS div,
+                   MAX(div_frequency) AS div_frequency,
+                   CASE
+                       WHEN SUM(CASE WHEN IFNULL(current_annual_yield, 0) > 0 THEN IFNULL(purchase_value, 0) ELSE 0 END) > 0
+                       THEN SUM(CASE WHEN IFNULL(current_annual_yield, 0) > 0 THEN current_annual_yield * IFNULL(purchase_value, 0) ELSE 0 END)
+                            / SUM(CASE WHEN IFNULL(current_annual_yield, 0) > 0 THEN IFNULL(purchase_value, 0) ELSE 0 END)
+                       ELSE MAX(IFNULL(current_annual_yield, 0))
+                   END AS current_annual_yield,
+                   SUM(IFNULL(estim_payment_per_year, 0)) AS estim_payment_per_year
            FROM all_account_info
            WHERE purchase_value IS NOT NULL AND purchase_value > 0
              AND IFNULL(quantity, 0) > 0
-             AND profile_id = ?
+             AND profile_id IN ({placeholders})
+           GROUP BY ticker
            ORDER BY ticker""",
-        (profile_id,),
+        profile_ids,
     ).fetchall()
-    df = pd.DataFrame([dict(r) for r in rows])
-    if df.empty:
-        conn.close()
-        return jsonify(holdings=[], yearly=[], totals={}, categories=[])
+    holding_columns = [
+        "ticker", "description", "classification_type", "quantity",
+        "current_price", "div", "div_frequency", "current_annual_yield",
+        "estim_payment_per_year",
+    ]
+    df = pd.DataFrame([dict(r) for r in rows], columns=holding_columns)
 
     # Enrich with category names
     try:
@@ -19555,7 +19679,8 @@ def drip_projection():
             "SELECT tc.ticker, c.name AS category_name "
             "FROM ticker_categories tc "
             "JOIN categories c ON c.id = tc.category_id "
-            "WHERE tc.profile_id = ?", (profile_id,)
+            f"WHERE tc.profile_id IN ({placeholders})",
+            profile_ids,
         ).fetchall()
         cat_map = pd.DataFrame([dict(r) for r in cat_map_rows])
         if not cat_map.empty:
@@ -19577,19 +19702,25 @@ def drip_projection():
 
     # Categories list for filter UI
     cats = conn.execute(
-        "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
-        (profile_id,),
+        f"SELECT id, name FROM categories WHERE profile_id IN ({placeholders}) ORDER BY sort_order, name",
+        profile_ids,
     ).fetchall()
     categories_list = [{"id": c["id"], "name": c["name"]} for c in cats]
-    _attach_subcategories(conn, [profile_id], categories_list)
-    sub_tickers = _subcategory_ticker_set(conn, [profile_id], filter_sub_ids)
+    _attach_subcategories(conn, profile_ids, categories_list)
+    sub_tickers = _subcategory_ticker_set(conn, profile_ids, filter_sub_ids)
     conn.close()
 
     # Apply category / sub-category filter
     if filter_categories or filter_sub_ids:
         df = df[df["category_name"].isin(filter_categories) | df["ticker"].isin(sub_tickers)]
-    if df.empty:
-        return jsonify(holdings=[], yearly=[], totals={}, categories=categories_list)
+    if df.empty and not custom_tickers_data:
+        return jsonify(
+            holdings=[],
+            yearly_totals=[],
+            ticker_yearly={},
+            totals={},
+            categories=categories_list,
+        )
 
     # Coerce numerics
     for col in ["quantity", "current_price", "div", "current_annual_yield", "estim_payment_per_year"]:
@@ -19673,7 +19804,6 @@ def drip_projection():
         })
 
     # Add custom tickers (not in portfolio) for comparison
-    custom_tickers_data = data.get("custom_tickers", [])
     existing_tickers = {t["ticker"] for t in tickers_info}
     for ct in custom_tickers_data:
         sym = str(ct.get("ticker", "")).strip().upper()
@@ -26781,25 +26911,42 @@ def nav_erosion_portfolio_data():
 @app.route("/api/pis/portfolio-tickers")
 def pis_portfolio_tickers():
     """Return all live portfolio tickers for the picker modal."""
-    pid = get_profile_id()
+    _, profile_ids = get_profile_filter()
     conn = get_connection()
+    placeholders = ",".join("?" * len(profile_ids))
     rows = conn.execute(
-        """SELECT ticker, description, classification_type,
-                  purchase_value, reinvest, current_annual_yield
+        f"""SELECT ticker,
+                   MAX(description) AS description,
+                   MAX(classification_type) AS classification_type,
+                   SUM(IFNULL(purchase_value, 0)) AS purchase_value,
+                   MAX(CASE WHEN UPPER(IFNULL(reinvest, '')) = 'Y' THEN 1 ELSE 0 END) AS reinvest,
+                   CASE
+                       WHEN SUM(CASE WHEN IFNULL(current_annual_yield, 0) > 0 THEN IFNULL(purchase_value, 0) ELSE 0 END) > 0
+                       THEN SUM(CASE WHEN IFNULL(current_annual_yield, 0) > 0 THEN current_annual_yield * IFNULL(purchase_value, 0) ELSE 0 END)
+                            / SUM(CASE WHEN IFNULL(current_annual_yield, 0) > 0 THEN IFNULL(purchase_value, 0) ELSE 0 END)
+                       ELSE MAX(IFNULL(current_annual_yield, 0))
+                   END AS current_annual_yield
            FROM all_account_info
-           WHERE current_price IS NOT NULL AND profile_id = ?
+           WHERE current_price IS NOT NULL
+             AND profile_id IN ({placeholders})
+           GROUP BY ticker
            ORDER BY ticker""",
-        (pid,),
+        profile_ids,
     ).fetchall()
     conn.close()
+
+    def _yield_percent(value):
+        raw = float(value or 0)
+        return raw * 100 if 0 < raw <= 1 else raw
+
     tickers = [
         {
             "ticker": r[0],
             "description": r[1] or "",
             "type": r[2] or "",
             "amount": round(float(r[3] or 0), 2),
-            "drip": (r[4] or "").upper() == "Y",
-            "current_yield": round(float(r[5] or 0), 2),
+            "drip": bool(r[4]),
+            "current_yield": round(_yield_percent(r[5]), 2),
         }
         for r in rows
     ]

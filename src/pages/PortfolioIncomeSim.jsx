@@ -67,7 +67,7 @@ const DRIP_PCT_OPTIONS = Array.from({ length: 101 }, (_, i) => i)
 function DripProjectionsPanel() {
   const pf = useProfileFetch()
   const dialog = useDialog()
-  const { selection } = useProfile()
+  const { selection, currentProfileName } = useProfile()
   const [years, setYears] = useState(1)
   const [categories, setCategories] = useState([])
   const [selectedCats, setSelectedCats] = useState([])
@@ -105,6 +105,10 @@ function DripProjectionsPanel() {
   const [tickerFilterOpen, setTickerFilterOpen] = useState(false)
   const tickerFilterRef = React.useRef(null)
   const [portfolioTickers, setPortfolioTickers] = useState([])  // persists across clears
+  const [portfolioHoldings, setPortfolioHoldings] = useState([])
+  const [portfolioPickerOpen, setPortfolioPickerOpen] = useState(false)
+  const [portfolioPickerSearch, setPortfolioPickerSearch] = useState('')
+  const [portfolioPickerChecked, setPortfolioPickerChecked] = useState(new Set())
   const skipRefetch = React.useRef(false)
   const [customTickers, setCustomTickers] = useState([])  // [{ticker, description, price, div_per_share, freq_str, shares}]
   const [customTickerInput, setCustomTickerInput] = useState('')
@@ -146,6 +150,27 @@ function DripProjectionsPanel() {
         }
       })
       .catch(() => {})
+  }, [pf, selection])
+
+  // Keep a complete list of holdings available for the explicit portfolio
+  // picker, including when the projection table has been cleared.
+  useEffect(() => {
+    let cancelled = false
+    pf('/api/pis/portfolio-tickers')
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return
+        const tickers = Array.isArray(data?.tickers) ? data.tickers : []
+        setPortfolioHoldings(tickers)
+        setPortfolioTickers(tickers.map(t => t.ticker).filter(Boolean))
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPortfolioHoldings([])
+          setPortfolioTickers([])
+        }
+      })
+    return () => { cancelled = true }
   }, [pf, selection])
 
   const fetchProjection = useCallback(() => {
@@ -232,7 +257,7 @@ function DripProjectionsPanel() {
   const allTickers = useMemo(() => holdings.map(h => h.ticker), [holdings])
   const allTickersWithCustom = useMemo(() => [...allTickers, ...customTickers.map(c => c.ticker)], [allTickers, customTickers])
 
-  const addCustomTicker = () => {
+  const addCustomTicker = async () => {
     const sym = customTickerInput.trim().toUpperCase()
     if (!sym) return
     if (allTickers.includes(sym) || customTickers.some(c => c.ticker === sym)) {
@@ -242,21 +267,82 @@ function DripProjectionsPanel() {
       return
     }
     setCustomTickerLoading(true)
-    pf(`/api/lookup/${sym}`)
-      .then(r => r.json())
-      .then(async data => {
-        if (data.error) { await dialog.alert(`Could not find ticker: ${sym}`); return }
-        setCustomTickers(prev => [...prev, {
-          ticker: sym,
-          description: data.description || sym,
-          price: data.current_price || 0,
-          div_per_share: data.div || 0,
-          freq_str: data.div_frequency || 'Q',
-        }])
-        setSelectedTickers(prev => [...prev, sym])
-      })
-      .catch(async () => await dialog.alert(`Could not look up ${sym}`))
-      .finally(() => { setCustomTickerLoading(false); setCustomTickerInput('') })
+    try {
+      const response = await pf(`/api/lookup/${encodeURIComponent(sym)}`)
+      const contentType = response.headers.get('content-type') || ''
+      const data = contentType.includes('application/json') ? await response.json() : null
+      if (!response.ok || !data || data.error) {
+        throw new Error(data?.error || `Could not find market data for ${sym}.`)
+      }
+
+      const price = Number(data.current_price)
+      if (!Number.isFinite(price) || price <= 0) {
+        throw new Error(`Could not find a current price for ${sym}.`)
+      }
+
+      setCustomTickers(prev => [...prev, {
+        ticker: sym,
+        description: data.description || sym,
+        price,
+        div_per_share: Number(data.div) || 0,
+        freq_str: data.div_frequency || 'Q',
+      }])
+      setSelectedTickers(prev => [...prev, sym])
+    } catch (error) {
+      await dialog.alert(error?.message || `Could not look up ${sym}. The market-data service did not respond.`)
+    } finally {
+      setCustomTickerLoading(false)
+      setCustomTickerInput('')
+    }
+  }
+
+  const filteredPortfolioHoldings = useMemo(() => {
+    const query = portfolioPickerSearch.trim().toLowerCase()
+    if (!query) return portfolioHoldings
+    return portfolioHoldings.filter(h =>
+      h.ticker.toLowerCase().includes(query)
+      || (h.description || '').toLowerCase().includes(query)
+    )
+  }, [portfolioHoldings, portfolioPickerSearch])
+
+  const openPortfolioPicker = () => {
+    const portfolioSet = new Set(portfolioTickers)
+    setPortfolioPickerSearch('')
+    setPortfolioPickerChecked(new Set(selectedTickers.filter(t => portfolioSet.has(t))))
+    setPortfolioPickerOpen(true)
+  }
+
+  const togglePortfolioPickerTicker = (ticker) => {
+    setPortfolioPickerChecked(prev => {
+      const next = new Set(prev)
+      if (next.has(ticker)) next.delete(ticker)
+      else next.add(ticker)
+      return next
+    })
+  }
+
+  const selectAllFilteredPortfolioHoldings = () => {
+    setPortfolioPickerChecked(prev => {
+      const next = new Set(prev)
+      filteredPortfolioHoldings.forEach(h => next.add(h.ticker))
+      return next
+    })
+  }
+
+  const applyPortfolioTickers = (tickers) => {
+    const customSet = new Set(customTickers.map(c => c.ticker))
+    const selectedCustom = selectedTickers.filter(t => customSet.has(t))
+    setSelectedTickers([...new Set([...tickers, ...selectedCustom])])
+    setPortfolioPickerOpen(false)
+    if (holdings.length === 0) fetchProjection()
+  }
+
+  const addSelectedPortfolioHoldings = () => {
+    applyPortfolioTickers(portfolioTickers.filter(t => portfolioPickerChecked.has(t)))
+  }
+
+  const addEntirePortfolio = () => {
+    applyPortfolioTickers(portfolioTickers)
   }
 
   const clearTickerFilter = () => {
@@ -497,12 +583,103 @@ function DripProjectionsPanel() {
             {customTickerLoading ? '...' : 'Add'}
           </button>
         </div>
+        <button
+          onClick={openPortfolioPicker}
+          className="nep-btn"
+          style={{ padding: '0.4rem 0.6rem', fontSize: '0.82rem', alignSelf: 'flex-end' }}
+        >
+          Add from Portfolio&hellip;
+        </button>
         {(selectedTickers.length > 0 || customTickers.length > 0 || holdings.length > 0) && (
           <button onClick={clearTickerFilter} className="nep-btn" style={{ padding: '0.4rem 0.6rem', fontSize: '0.82rem', background: 'var(--p-6b2020)', alignSelf: 'flex-end' }}>
             Clear
           </button>
         )}
       </div>
+
+      {portfolioPickerOpen && (
+        <div className="pis-picker-overlay" onClick={e => { if (e.target === e.currentTarget) setPortfolioPickerOpen(false) }}>
+          <div className="pis-picker-modal">
+            <h2 style={{ margin: '0 0 0.2rem', fontSize: '1rem', color: 'var(--text-strong)' }}>
+              Add from {currentProfileName}
+            </h2>
+            <p style={{ margin: '0 0 0.7rem', color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+              Choose one, several, or every holding. Any test tickers you added manually will stay selected.
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <input
+                className="ne-input"
+                style={{ flex: 1, minWidth: 180 }}
+                placeholder="Search portfolio holdings..."
+                value={portfolioPickerSearch}
+                onChange={e => setPortfolioPickerSearch(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Escape') setPortfolioPickerOpen(false) }}
+                autoFocus
+              />
+              <button className="nep-btn" onClick={selectAllFilteredPortfolioHoldings}>Select All</button>
+              <button className="nep-btn" onClick={() => setPortfolioPickerChecked(new Set())}>Clear</button>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                {portfolioPickerChecked.size} selected
+              </span>
+            </div>
+            <div style={{ maxHeight: 400, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 6 }}>
+              <table className="sst" style={{ fontSize: '0.82rem' }}>
+                <thead>
+                  <tr>
+                    <th style={{ width: 30 }}></th>
+                    <th style={{ textAlign: 'left' }}>Ticker</th>
+                    <th style={{ textAlign: 'left' }}>Description</th>
+                    <th>Amount</th>
+                    <th>Yield</th>
+                    <th>DRIP</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredPortfolioHoldings.map(h => (
+                    <tr key={h.ticker}>
+                      <td style={{ textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${h.ticker}`}
+                          checked={portfolioPickerChecked.has(h.ticker)}
+                          onChange={() => togglePortfolioPickerTicker(h.ticker)}
+                          style={{ accentColor: 'var(--accent)' }}
+                        />
+                      </td>
+                      <td style={{ fontWeight: 700 }}>{h.ticker}</td>
+                      <td
+                        style={{ color: 'var(--text-muted)', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        title={h.description}
+                      >
+                        {h.description}
+                      </td>
+                      <td style={{ textAlign: 'right' }}>{fmt$(h.amount)}</td>
+                      <td style={{ textAlign: 'right', color: 'var(--accent-bright)' }}>{Number(h.current_yield || 0).toFixed(2)}%</td>
+                      <td style={{ textAlign: 'right' }}>{h.drip ? '100%' : '0%'}</td>
+                    </tr>
+                  ))}
+                  {filteredPortfolioHoldings.length === 0 && (
+                    <tr>
+                      <td colSpan={6} style={{ textAlign: 'center', padding: '1rem', color: 'var(--text-dim)' }}>
+                        No holdings found in {currentProfileName}.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.7rem', justifyContent: 'flex-end' }}>
+              <button className="nep-btn" onClick={addEntirePortfolio} disabled={portfolioHoldings.length === 0}>
+                Add Entire Portfolio
+              </button>
+              <button className="nep-btn nep-btn-purple" onClick={addSelectedPortfolioHoldings} disabled={portfolioPickerChecked.size === 0}>
+                Add Selected ({portfolioPickerChecked.size})
+              </button>
+              <button className="nep-btn" onClick={() => setPortfolioPickerOpen(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Controls */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
@@ -659,7 +836,9 @@ function DripProjectionsPanel() {
         {loading ? (
           <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}><span className="spinner" /> Loading projections...</div>
         ) : holdings.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>No holdings found. Import portfolio data to use DRIP projections.</div>
+          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>
+            Add any ticker above, or choose one to all holdings from {currentProfileName}.
+          </div>
         ) : (
           <table className="nep-table" style={{ fontSize: '0.8rem' }}>
             <thead>
