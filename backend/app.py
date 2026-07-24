@@ -14697,6 +14697,32 @@ def portfolio_summary_data():
         if old_t not in close.columns and new_t in close.columns:
             close[old_t] = close[new_t]
 
+    # yfinance silently drops the occasional symbol from a batch download — and
+    # that includes the SPY/QQQ benchmarks, not just holdings. When a benchmark
+    # goes missing the whole beta system (per-ticker best-fit beta AND the
+    # portfolio Beta card) blanks out with "Relative move unavailable" even
+    # though every holding graded fine. Re-fetch any missing benchmark
+    # individually (cheap, rare) BEFORE we derive the benchmark return series.
+    for _bsym in benchmark_symbols.values():
+        if _bsym in close.columns:
+            continue
+        try:
+            r = _chunked_yf_download(_bsym, period="1y", auto_adjust=True, progress=False, threads=False)
+            if r is None or r.empty:
+                continue
+            if isinstance(r.columns, pd.MultiIndex):
+                series = r["Close"].iloc[:, 0] if "Close" in r.columns.get_level_values(0) else None
+            else:
+                series = r["Close"] if "Close" in r.columns else None
+            if series is None:
+                continue
+            series = pd.to_numeric(series, errors="coerce").dropna()
+            if series.empty:
+                continue
+            close[_bsym] = series
+        except Exception:
+            continue
+
     bench_close = close["SPY"] if "SPY" in close.columns else None
     bench_ret = bench_close.pct_change().dropna() if bench_close is not None else None
     benchmark_returns = {}
@@ -14825,13 +14851,35 @@ def portfolio_summary_data():
     if not portfolio_grade_info and cached:
         portfolio_grade_info = cached.get("portfolio_grade", {}) or {}
 
+    # Safety net for the Portfolio Beta card: if the benchmarks were still
+    # unavailable after the recovery pass (rare — SPY/QQQ genuinely un-downloadable
+    # right now), the grade computed but every benchmark beta is None. Reuse the
+    # last good benchmark betas so the card shows a slightly stale value instead of
+    # "Relative move unavailable". Betas move slowly, so this is a safe fallback.
+    benchmark_betas_present = any(
+        v is not None for v in (portfolio_grade_info.get("benchmark_betas") or {}).values()
+    )
+    if portfolio_grade_info and not benchmark_betas_present and cached:
+        cached_pg = cached.get("portfolio_grade", {}) or {}
+        cached_bb = cached_pg.get("benchmark_betas") or {}
+        if any(v is not None for v in cached_bb.values()):
+            portfolio_grade_info["benchmark_betas"] = cached_bb
+            for _k in ("beta", "beta_sp500", "beta_nasdaq"):
+                if portfolio_grade_info.get(_k) is None and cached_pg.get(_k) is not None:
+                    portfolio_grade_info[_k] = cached_pg.get(_k)
+            benchmark_betas_present = True
+
     response = {"ticker_grades": ticker_grades, "ticker_risk": ticker_risk, "portfolio_grade": portfolio_grade_info, "ticker_closure_risk": ticker_closure_risk}
     # Only cache a usable result. Caching an empty grade from a transient/partial
     # yfinance download would pin blank tiles for the full 30-min TTL, so the
     # grades would "stick" blank across account switches and chart refreshes until
-    # the cache expired. A genuinely ungradeable portfolio (<2 priceable holdings)
-    # is still cached so we don't re-download on every load.
-    if portfolio_grade_info or len(tickers) < 2:
+    # the cache expired. A grade whose benchmark betas are all missing is treated
+    # as partial too, so a dropped SPY/QQQ doesn't pin a blank Beta card for the
+    # full TTL — the next load retries the benchmark download. A genuinely
+    # ungradeable portfolio (<2 priceable holdings) is still cached so we don't
+    # re-download on every load.
+    cacheable = (portfolio_grade_info and benchmark_betas_present) or len(tickers) < 2
+    if cacheable:
         _PORTFOLIO_SUMMARY_CACHE[cache_key] = (time.time(), response)
     return jsonify(response)
 
