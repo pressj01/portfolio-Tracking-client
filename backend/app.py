@@ -1545,10 +1545,7 @@ def cash_flow_summary():
     series = _expand_cash_flow_plan(conn, plan["id"], month, 12)
     current = series[0]
     is_aggregate, profile_ids = get_profile_filter()
-    portfolio_profile_ids = _cash_profile_ids_for_read(
-        conn, is_aggregate, profile_ids
-    )
-    portfolio = _cash_flow_portfolio_snapshot(conn, portfolio_profile_ids)
+    portfolio = _cash_flow_portfolio_for_view(conn, is_aggregate, profile_ids)
     portfolio_monthly_gross = portfolio["annual_income"] / 12.0
     portfolio_monthly_net = portfolio_monthly_gross * (
         1.0 - settings["portfolio_tax_pct"] / 100.0
@@ -1631,10 +1628,7 @@ def cash_flow_simulate():
     months = horizon * 12
     series = _expand_cash_flow_plan(conn, plan["id"], start_month, months)
     is_aggregate, profile_ids = get_profile_filter()
-    portfolio_profile_ids = _cash_profile_ids_for_read(
-        conn, is_aggregate, profile_ids
-    )
-    portfolio = _cash_flow_portfolio_snapshot(conn, portfolio_profile_ids)
+    portfolio = _cash_flow_portfolio_for_view(conn, is_aggregate, profile_ids)
     results = []
     for scenario in ("bullish", "neutral", "bearish"):
         for include_income in (True, False):
@@ -2331,6 +2325,44 @@ def _cash_profile_ids_for_read(conn, is_aggregate, profile_ids):
         source_ids = _get_owner_source_profile_ids(conn)
         return source_ids or ids
     return ids
+
+
+def _cash_flow_portfolio_for_view(conn, is_aggregate, profile_ids):
+    """Portfolio income/value snapshot for a cash-flow view.
+
+    For the Owner view we read the linked source accounts so per-account
+    imports are counted once. But holdings entered directly on the Owner
+    profile (profile 1) — e.g. tickers a user added manually — live in no
+    source account, so a plain source read silently drops them even though
+    they show on every other screen (Manage Holdings, dashboard, etc.).
+
+    Fold those Owner-only tickers back in, keyed by ticker, so an imported
+    holding that also exists in a source account is never double-counted.
+    Single-account users have no sources, so `_cash_profile_ids_for_read`
+    already returns [1] and this fold-in is a no-op.
+    """
+    read_ids = _cash_profile_ids_for_read(conn, is_aggregate, profile_ids)
+    snapshot = _cash_flow_portfolio_snapshot(conn, read_ids)
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or [1])))
+    is_owner_view = (not is_aggregate) and ids == [1]
+    if is_owner_view and 1 not in read_ids:
+        owner_direct = _cash_flow_portfolio_snapshot(conn, [1])
+        seen = {h["ticker"] for h in snapshot["holdings"]}
+        extra = [h for h in owner_direct["holdings"] if h["ticker"] not in seen]
+        if extra:
+            snapshot["holdings"].extend(extra)
+            snapshot["holdings"].sort(
+                key=lambda row: (-row["annual_income"], -row["value"], row["ticker"])
+            )
+            snapshot["value"] = round(
+                sum(h["value"] for h in snapshot["holdings"]), 2
+            )
+            snapshot["annual_income"] = round(
+                sum(h["annual_income"] for h in snapshot["holdings"]), 2
+            )
+            # Owner itself contributed unique holdings, so count it as a source.
+            snapshot["profile_count"] = snapshot.get("profile_count", 0) + 1
+    return snapshot
 
 
 def _get_owner_source_profile_ids(conn):

@@ -355,6 +355,9 @@ class CashFlowApiTest(unittest.TestCase):
     def test_owner_summary_reads_the_four_linked_source_accounts(self):
         conn = self._get_connection()
         try:
+            # Isolate source-account reading: drop the Owner-direct holding that
+            # setUp seeds so this test only exercises the linked accounts.
+            conn.execute("DELETE FROM all_account_info WHERE profile_id = 1")
             conn.execute(
                 "INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Linked A', 1)"
             )
@@ -383,6 +386,42 @@ class CashFlowApiTest(unittest.TestCase):
         self.assertEqual(summary["portfolio_profile_count"], 2)
         self.assertEqual(summary["portfolio_monthly_income_gross"], 3000)
         self.assertEqual(summary["portfolio_monthly_income_net"], 2550)
+
+    def test_owner_summary_folds_in_owner_direct_holdings_without_double_counting(self):
+        # A user on the Owner view who adds tickers manually stores them on
+        # profile 1. Those must be counted (they show on every other screen),
+        # while an imported ticker present on both Owner and a source account
+        # must be counted only once.
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Linked A', 1)"
+            )
+            # Imported holding 'A' in the linked source account...
+            conn.execute(
+                """INSERT INTO all_account_info
+                   (ticker, profile_id, quantity, current_price, current_value,
+                    estim_payment_per_year, approx_monthly_income)
+                   VALUES ('A', 2, 10, 100, 1000, 12000, 1000)"""
+            )
+            # ...and its aggregate copy on Owner (profile 1): must NOT double count.
+            conn.execute(
+                """INSERT INTO all_account_info
+                   (ticker, profile_id, quantity, current_price, current_value,
+                    estim_payment_per_year, approx_monthly_income)
+                   VALUES ('A', 1, 10, 100, 1000, 12000, 1000)"""
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        summary = self.client.get(
+            f"/api/cash-flow/summary?profile_id=1&plan_id={self.plan_id}&month=2026-01"
+        ).get_json()["summary"]
+        # Source 'A' (1000/mo, counted once) + Owner-only 'INCOME' from setUp
+        # (1000/mo, folded in) = 2000/mo. Owner-direct 'A' is de-duplicated.
+        self.assertEqual(summary["portfolio_monthly_income_gross"], 2000)
+        self.assertEqual(summary["portfolio_profile_count"], 2)
 
     def test_recurrence_expands_annual_and_weekly_items(self):
         self._add(
