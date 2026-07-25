@@ -410,7 +410,8 @@ def compute_ticker_metrics(close: pd.Series, divs: pd.Series, ticker: str, *,
     # versus held as cash. Scale-free, and sign-identical to the DRIP score.
     growth = full["shares_end"] - full["shares_start"]
     cash_fv = none["cash_end"]
-    re_value = (growth * p_end) / cash_fv if cash_fv > 0 else None
+    reinvested_shares_value = growth * p_end
+    re_value = reinvested_shares_value / cash_fv if cash_fv > 0 else None
 
     drip_score = full["total_return"] - none["total_return"]
     income_factor = cash_fv / initial
@@ -431,6 +432,12 @@ def compute_ticker_metrics(close: pd.Series, divs: pd.Series, ticker: str, *,
         "tr_full": full["total_return"],
         "tr_50": half["total_return"],
         "tr_none": none["total_return"],
+        "shares_initial": full["shares_start"],
+        "shares_full_end": full["shares_end"],
+        "shares_50_end": half["shares_end"],
+        "full_drip_ending_value": full["terminal_value"],
+        "half_drip_ending_value": half["terminal_value"],
+        "no_drip_ending_value": none["terminal_value"],
         "annual_yield": annual_yield,
         "coverage": coverage,
         "drip_score": drip_score,

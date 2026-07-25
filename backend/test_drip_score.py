@@ -133,6 +133,37 @@ class SimulationTest(unittest.TestCase):
             sim["terminal_value"], sim["share_value_end"] + sim["cash_end"], places=6)
         self.assertAlmostEqual(sim["cash_end"], sim["gross_distributions"], places=6)
 
+    def test_grid_share_and_cash_fields_reconcile(self):
+        """The grid exposes the share counts and dollar bridge behind RE."""
+        close, divs = _series(104, lambda i: 100.0 - i * 0.40, 0.60)
+        row = compute_ticker_metrics(
+            close, divs, "BRIDGE", initial=INITIAL, cash_rate=0.04)
+        full = simulate_drip(
+            close, divs, initial=INITIAL, reinvest=1.0, cash_rate=0.04)
+        half = simulate_drip(
+            close, divs, initial=INITIAL, reinvest=0.5, cash_rate=0.04)
+        none = simulate_drip(
+            close, divs, initial=INITIAL, reinvest=0.0, cash_rate=0.04)
+
+        self.assertAlmostEqual(row["shares_initial"], full["shares_start"], places=12)
+        self.assertAlmostEqual(row["shares_full_end"], full["shares_end"], places=12)
+        self.assertAlmostEqual(row["shares_50_end"], half["shares_end"], places=12)
+        self.assertAlmostEqual(
+            row["full_drip_ending_value"],
+            full["shares_end"] * full["end_price"],
+            places=9,
+        )
+        self.assertAlmostEqual(
+            row["half_drip_ending_value"],
+            half["shares_end"] * half["end_price"] + half["cash_end"],
+            places=9,
+        )
+        self.assertAlmostEqual(
+            row["no_drip_ending_value"],
+            none["shares_start"] * none["end_price"] + none["cash_end"],
+            places=9,
+        )
+
 
 class ScoringTest(unittest.TestCase):
     def test_flat_price_income_is_fully_covered(self):

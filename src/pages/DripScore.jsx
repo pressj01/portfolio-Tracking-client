@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { useProfileFetch } from '../context/ProfileContext'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { formatMoney } from '../utils/money'
 
 const MAX_TICKERS = 75
+const ALL_HOLDINGS_VALUE = '__all_holdings__'
 
 // Verdict buckets. Order is the ranking order used for the summary strip.
 const BUCKETS = {
@@ -57,6 +58,23 @@ function heatClass(key, value) {
     if (value < 80) return 'ds-heat ds-heat-watch'
     return 'ds-heat ds-heat-good'
   }
+  return ''
+}
+const ENDING_VALUE_KEYS = [
+  'full_drip_ending_value',
+  'half_drip_ending_value',
+  'no_drip_ending_value',
+]
+function endingValueHeatClass(key, row) {
+  if (!ENDING_VALUE_KEYS.includes(key)) return ''
+  const values = ENDING_VALUE_KEYS.map((field) => Number(row[field]))
+  if (values.some((value) => !Number.isFinite(value))) return ''
+  const highest = Math.max(...values)
+  const lowest = Math.min(...values)
+  if (highest === lowest) return ''
+  const value = Number(row[key])
+  if (value === highest) return 'ds-heat ds-heat-good'
+  if (value === lowest) return 'ds-heat ds-heat-bad'
   return ''
 }
 function verdictHeatClass(bucket) {
@@ -126,6 +144,12 @@ const COLUMNS = [
   { key: 'tr_full', label: 'Full DRIP TR', fmt: signedPct, sign: true },
   { key: 'tr_50', label: '50% DRIP TR', fmt: signedPct, sign: true },
   { key: 'tr_none', label: 'No DRIP TR', fmt: signedPct, sign: true },
+  { key: 'shares_initial', label: 'Initial Shares', fmt: (v) => num(v, 2), title: 'Shares purchased with the initial investment at the starting price.' },
+  { key: 'shares_full_end', label: '100% Final Shares', fmt: (v) => num(v, 2), title: 'Ending shares after reinvesting 100% of distributions.' },
+  { key: 'shares_50_end', label: '50% Final Shares', fmt: (v) => num(v, 2), title: 'Ending shares after reinvesting 50% of distributions.' },
+  { key: 'full_drip_ending_value', label: '100% Ending Value', fmt: formatMoney, title: '100% final shares × final price: all initial and newly reinvested shares at the ending price.' },
+  { key: 'half_drip_ending_value', label: '50% Ending Value', fmt: formatMoney, title: '(50% final shares × final price) + the cash retained from the other 50% of distributions.' },
+  { key: 'no_drip_ending_value', label: 'Initial Share Worth + Cash', fmt: formatMoney, title: '(Initial shares × final price) + the No DRIP cash balance.' },
   { key: 'annual_yield', label: 'Yield / yr', fmt: pct },
   { key: 'covered_yield', label: 'Covered Yield', fmt: pct, title: 'Historical yield supported by the fund’s matched-period total return.' },
   { key: 'coverage', label: 'Coverage', fmt: (v) => num(v, 2), title: '>=1 fully supported by period total return · 0-1 partly offset by price loss · <0 total return was negative' },
@@ -179,7 +203,7 @@ function Grid({ rows, sort, onSort, caption, onRowClick }) {
         tabIndex={0}
         aria-label={`${caption || 'Full history'} results table`}
       >
-        <table className="sst ds-tbl">
+        <table className="sst ds-tbl ds-grid">
           <thead>
             <tr>
               {COLUMNS.map((c) => (
@@ -224,7 +248,11 @@ function Grid({ rows, sort, onSort, caption, onRowClick }) {
                     return <td key={c.key} className="ds-name" title={r.name || ''}>{r.name || '—'}</td>
                   }
                   const raw = r[c.key]
-                  const cellClass = [c.sign ? signClass(raw) : '', heatClass(c.key, raw)]
+                  const cellClass = [
+                    c.sign ? signClass(raw) : '',
+                    heatClass(c.key, raw),
+                    endingValueHeatClass(c.key, r),
+                  ]
                     .filter(Boolean)
                     .join(' ')
                   return (
@@ -385,6 +413,7 @@ function DetailDrawer({ ticker, detail, loading, error, onClose }) {
 
 export default function DripScore() {
   const pf = useProfileFetch()
+  const { profileQueryString } = useProfile()
   const dialog = useDialog()
 
   const [sets, setSets] = useState([])
@@ -394,6 +423,11 @@ export default function DripScore() {
   const [saving, setSaving] = useState(false)
   const [name, setName] = useState('')
   const [tickerText, setTickerText] = useState('')
+  const [portfolioHoldingsState, setPortfolioHoldingsState] = useState({
+    scope: null,
+    holdings: [],
+    unavailable: false,
+  })
   const [startDate, setStartDate] = useState(isoYearsAgo(2))
   const [endDate, setEndDate] = useState(isoToday())
   const [cashRate, setCashRate] = useState(4)
@@ -411,6 +445,9 @@ export default function DripScore() {
   const [detailError, setDetailError] = useState('')
 
   const tickers = useMemo(() => parseTickers(tickerText), [tickerText])
+  const holdingsLoading = portfolioHoldingsState.scope !== profileQueryString
+  const holdingsUnavailable = !holdingsLoading && portfolioHoldingsState.unavailable
+  const portfolioHoldings = holdingsLoading ? [] : portfolioHoldingsState.holdings
 
   const loadSets = useCallback(() => {
     pf('/api/drip-score/sets')
@@ -420,6 +457,44 @@ export default function DripScore() {
   }, [pf])
 
   useEffect(() => { loadSets() }, [loadSets])
+
+  useEffect(() => {
+    let cancelled = false
+
+    pf('/api/holdings')
+      .then(async (response) => {
+        const data = await response.json()
+        if (!response.ok) throw new Error(data?.error || 'Could not load holdings.')
+        return Array.isArray(data) ? data : (data.holdings || [])
+      })
+      .then((rows) => {
+        if (cancelled) return
+        const byTicker = new Map()
+        rows.forEach((holding) => {
+          const ticker = String(holding?.ticker || '').trim().toUpperCase()
+          if (!ticker || byTicker.has(ticker)) return
+          byTicker.set(ticker, {
+            ticker,
+            description: String(holding?.description || '').trim(),
+          })
+        })
+        setPortfolioHoldingsState({
+          scope: profileQueryString,
+          holdings: Array.from(byTicker.values()).sort((a, b) => a.ticker.localeCompare(b.ticker)),
+          unavailable: false,
+        })
+      })
+      .catch(() => {
+        if (cancelled) return
+        setPortfolioHoldingsState({
+          scope: profileQueryString,
+          holdings: [],
+          unavailable: true,
+        })
+      })
+
+    return () => { cancelled = true }
+  }, [pf, profileQueryString])
 
   function applySet(s, remember = true) {
     setName(s.name || '')
@@ -488,6 +563,37 @@ export default function DripScore() {
       parseTickers(current).filter((item) => item !== ticker).join(', ')
     ))
     setError('')
+  }
+
+  function clearTickers() {
+    setTickerText('')
+    setResult(null)
+    setError('')
+    setDetailTicker('')
+    setDetail(null)
+    setDetailLoading(false)
+    setDetailError('')
+  }
+
+  function addPortfolioHoldings(value) {
+    if (!value) return
+    const requested = value === ALL_HOLDINGS_VALUE
+      ? portfolioHoldings.map((holding) => holding.ticker)
+      : [value]
+    const additions = requested.filter((ticker) => !tickers.includes(ticker))
+    const room = Math.max(0, MAX_TICKERS - tickers.length)
+    const accepted = additions.slice(0, room)
+
+    if (accepted.length) {
+      setTickerText([...tickers, ...accepted].join(', '))
+    }
+    if (accepted.length < additions.length) {
+      setError(
+        `Added ${accepted.length} of ${additions.length} portfolio holdings because this analyzer supports up to ${MAX_TICKERS} tickers.`
+      )
+    } else {
+      setError('')
+    }
   }
 
   async function saveSet(asNew) {
@@ -619,21 +725,22 @@ export default function DripScore() {
 
   return (
     <div className="ds-page">
-      <h1 className="ds-title">DRIP Score</h1>
+      <h1 className="ds-title">DRIP vs. Cash Analyzer</h1>
       <p className="ds-sub">
         Replays actual prices and distributions over one common window and asks, per fund:
         reinvest, take the cash, or stay out.
       </p>
 
       <details className="ds-help">
-        <summary>How to use DRIP Score</summary>
+        <summary>How to use the DRIP vs. Cash Analyzer</summary>
         <div className="ds-help-grid">
           <section>
             <h3>Manage a saved set</h3>
             <p>
               Select a set, then click <strong>Edit Tickers</strong>. Remove one ticker with the
-              <strong> ×</strong> beside its symbol, or type and paste symbols in the editor.
-              Save commits the changes; Cancel discards changes made in edit mode.
+              <strong> ×</strong> beside its symbol, choose one or all of your portfolio holdings
+              from the dropdown, or type and paste symbols in the editor. Save commits the changes;
+              Cancel discards changes made in edit mode.
             </p>
           </section>
           <section>
@@ -655,6 +762,18 @@ export default function DripScore() {
             </p>
           </section>
           <section className="ds-help-definition-section">
+            <h3>Share and ending-value columns</h3>
+            <ul>
+              <li><strong>Initial Shares:</strong> the initial investment divided by the starting price.</li>
+              <li><strong>100% Final Shares:</strong> initial shares plus every share purchased by reinvesting distributions.</li>
+              <li><strong>50% Final Shares:</strong> initial shares plus the shares purchased by reinvesting half of each distribution.</li>
+              <li><strong>100% Ending Value:</strong> 100% Final Shares multiplied by the final price. Full DRIP holds no separate cash.</li>
+              <li><strong>50% Ending Value:</strong> 50% Final Shares multiplied by the final price, plus the cash retained from the other half of distributions.</li>
+              <li><strong>Initial Share Worth + Cash:</strong> Initial Shares multiplied by the final price, plus all No DRIP cash distributions and modeled cash interest.</li>
+              <li><strong>Ending-value colors:</strong> the highest of these three ending values is green, the lowest is red, and the middle value is neutral. Equal values remain neutral.</li>
+            </ul>
+          </section>
+          <section className="ds-help-definition-section">
             <h3>Verdict definitions</h3>
             <ul>
               <li><strong>Compounder:</strong> yield at least 8% and Coverage at least 1.00. Total return fully supported the distributions.</li>
@@ -674,7 +793,7 @@ export default function DripScore() {
               <li><strong>N/A:</strong> there was not enough meaningful distribution data to compare reinvestment with cash.</li>
               <li><strong>Conflicted:</strong> the final-date call disagrees with the majority of eligible exit dates.</li>
               <li><strong>Unstable:</strong> the win rate is near 50%, so the result depends heavily on exit timing.</li>
-              <li><strong>Cell colors:</strong> green is favorable, yellow is borderline, amber means caution, and red is unfavorable. Colors grade DRIP Score, Coverage, RE, Opportunity, Verdict, and Call; the displayed values remain authoritative.</li>
+              <li><strong>Cell colors:</strong> green is favorable, yellow is borderline, amber means caution, and red is unfavorable. Colors grade DRIP Score, Coverage, RE, Opportunity, Verdict, and Call. The three ending-value columns instead compare with one another: highest is green, lowest is red, and middle is neutral. Displayed values remain authoritative.</li>
             </ul>
           </section>
         </div>
@@ -735,13 +854,65 @@ export default function DripScore() {
           </span>
           <TickerList tickers={tickers} editing={isEditing} onRemove={removeTicker} />
           {isEditing && (
-            <textarea
-              rows={2}
-              value={tickerText}
-              onChange={(e) => setTickerText(e.target.value)}
-              aria-label="Edit ticker symbols"
-              placeholder="AAPW, CONY, MSTY, GDXY, DGRO — commas, spaces or newlines"
-            />
+            <div className="ds-ticker-editor">
+              <div className="ds-holdings-picker-row">
+                <label className="ds-field ds-holdings-picker">
+                  <span>Add from portfolio</span>
+                  <select
+                    value=""
+                    onChange={(e) => addPortfolioHoldings(e.target.value)}
+                    disabled={holdingsLoading || holdingsUnavailable || portfolioHoldings.length === 0}
+                    aria-label="Add one or all portfolio holdings"
+                  >
+                    <option value="">
+                      {holdingsLoading
+                        ? 'Loading holdings…'
+                        : holdingsUnavailable
+                          ? 'Holdings unavailable'
+                          : portfolioHoldings.length === 0
+                            ? 'No portfolio holdings'
+                            : 'Choose one or all holdings…'}
+                    </option>
+                    {portfolioHoldings.length > 0 && (
+                      <option
+                        value={ALL_HOLDINGS_VALUE}
+                        disabled={portfolioHoldings.every((holding) => tickers.includes(holding.ticker))}
+                      >
+                        Add all holdings ({portfolioHoldings.length})
+                      </option>
+                    )}
+                    {portfolioHoldings.map((holding) => {
+                      const alreadyAdded = tickers.includes(holding.ticker)
+                      const detail = holding.description ? ` — ${holding.description}` : ''
+                      return (
+                        <option key={holding.ticker} value={holding.ticker} disabled={alreadyAdded}>
+                          {holding.ticker}{detail}{alreadyAdded ? ' (added)' : ''}
+                        </option>
+                      )
+                    })}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="ds-btn"
+                  onClick={clearTickers}
+                  disabled={tickers.length === 0}
+                  aria-label="Clear ticker list"
+                >
+                  Clear list
+                </button>
+              </div>
+              <label className="ds-field ds-ticker-textarea">
+                <span>Type or paste ticker symbols</span>
+                <textarea
+                  rows={2}
+                  value={tickerText}
+                  onChange={(e) => setTickerText(e.target.value)}
+                  aria-label="Edit ticker symbols"
+                  placeholder="AAPW, CONY, MSTY, GDXY, DGRO — commas, spaces or newlines"
+                />
+              </label>
+            </div>
           )}
         </div>
 

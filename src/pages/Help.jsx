@@ -92,7 +92,7 @@ const GROUPS = [
       { type: 'heading', label: 'Income & NAV Risk' },
       { id: 'nav-erosion', label: 'NAV Erosion' },
       { id: 'nav-screener', label: 'NAV Erosion Screener' },
-      { id: 'drip-score', label: 'DRIP Score' },
+      { id: 'drip-score', label: 'DRIP vs. Cash Analyzer' },
       { id: 'income-sim', label: 'Income Simulator' },
       { id: 'income-growth', label: 'Income Growth' },
       { type: 'heading', label: 'Portfolio Diagnostics' },
@@ -4138,17 +4138,17 @@ function DripScoreHelp() {
 
   return (
     <div>
-      <h2>DRIP Score</h2>
+      <h2>DRIP vs. Cash Analyzer</h2>
       <p style={{ marginBottom: '1rem' }}>
-        DRIP Score replays each fund&apos;s actual prices and distributions over one common
-        date window. It compares full reinvestment, 50% reinvestment, and taking every
-        distribution as cash, then shows whether reinvesting improved the result.
+        The DRIP vs. Cash Analyzer replays each fund&apos;s actual prices and distributions
+        over one common date window. It compares full reinvestment, 50% reinvestment, and
+        taking every distribution as cash, then shows which choice produced the better result.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img
           src="./help-screenshots/drip-score/saved-set.png"
-          alt="DRIP Score saved set with ticker chips and Edit Tickers button"
+          alt="DRIP vs. Cash Analyzer saved set with ticker chips and Edit Tickers button"
           style={screenshotStyle}
         />
       </div>
@@ -4166,7 +4166,7 @@ function DripScoreHelp() {
       <div style={{ marginBottom: '1.5rem' }}>
         <img
           src="./help-screenshots/drip-score/edit-tickers.png"
-          alt="DRIP Score edit mode with individual ticker remove buttons"
+          alt="DRIP vs. Cash Analyzer edit mode with individual ticker remove buttons"
           style={screenshotStyle}
         />
       </div>
@@ -4197,6 +4197,12 @@ function DripScoreHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Large result tables get their own vertical scrollbar. The column headers stay pinned at the top, and the ticker column stays pinned while scrolling horizontally.</li>
         <li><strong>Full / 50% / No DRIP TR</strong> — total return under each distribution choice.</li>
+        <li><strong>Initial Shares</strong> — the initial investment divided by the starting price.</li>
+        <li><strong>100% Final Shares</strong> — Initial Shares plus every share purchased by reinvesting distributions.</li>
+        <li><strong>50% Final Shares</strong> — Initial Shares plus the shares purchased by reinvesting half of each distribution.</li>
+        <li><strong>100% Ending Value</strong> — 100% Final Shares multiplied by the final price. Full DRIP has no separate cash balance.</li>
+        <li><strong>50% Ending Value</strong> — 50% Final Shares multiplied by the final price, plus the cash retained from the other half of distributions.</li>
+        <li><strong>Initial Share Worth + Cash</strong> — Initial Shares multiplied by the final price, plus all No DRIP cash distributions and modeled cash interest.</li>
         <li><strong>DRIP Score</strong> — Full DRIP total return minus No DRIP total return. Positive means full reinvestment won for the final date.</li>
         <li><strong>Covered Yield</strong> and <strong>Coverage</strong> — compare historical distributions with total return using the same period and annualisation basis. Coverage of 1.00 or more means period total return fully supported the distribution rate. This is a performance proxy, not a tax classification of return of capital.</li>
         <li><strong>Price CAGR</strong> — annualized change in the split-adjusted market price. It is not the fund&apos;s official published NAV.</li>
@@ -4211,7 +4217,7 @@ function DripScoreHelp() {
       <div style={{ marginBottom: '1rem' }}>
         <img
           src="./help-screenshots/drip-score/color-coding.png"
-          alt="DRIP Score table with green, yellow, amber, and red result cells"
+          alt="DRIP vs. Cash Analyzer table with green, yellow, amber, and red result cells"
           style={screenshotStyle}
         />
       </div>
@@ -4221,6 +4227,7 @@ function DripScoreHelp() {
         <li><strong>Amber</strong> — caution; the metric is positive or usable but incomplete or weak.</li>
         <li><strong>Red</strong> — unfavorable result.</li>
         <li>Color grading is applied to <strong>DRIP Score, Coverage, RE, Opportunity, Verdict, and Call</strong>. Exact values and labels remain authoritative.</li>
+        <li><strong>Ending-value comparison:</strong> the highest of 100% Ending Value, 50% Ending Value, and Initial Share Worth + Cash is green; the lowest is red; the middle is neutral. Equal values remain neutral.</li>
         <li><strong>DRIP Score:</strong> red at −2% or worse, yellow from above −2% through +2%, and green above +2%.</li>
         <li><strong>Coverage:</strong> red below 0.50, amber from 0.50 to below 1.00, and green at 1.00 or higher.</li>
         <li><strong>RE:</strong> red at 0.98 or lower, yellow between 0.98 and 1.02, and green at 1.02 or higher.</li>
@@ -4233,7 +4240,7 @@ function DripScoreHelp() {
       <div style={{ marginBottom: '1rem' }}>
         <img
           src="./help-screenshots/drip-score/definitions.png"
-          alt="Expanded DRIP Score hidden help showing all verdict definitions"
+          alt="Expanded DRIP vs. Cash Analyzer help showing all verdict definitions"
           style={screenshotStyle}
         />
       </div>
@@ -4252,7 +4259,7 @@ function DripScoreHelp() {
       <div style={{ marginBottom: '1rem' }}>
         <img
           src="./help-screenshots/drip-score/call-definitions.png"
-          alt="Expanded DRIP Score hidden help showing DRIP, Take cash, Toss-up, and badge definitions"
+          alt="Expanded DRIP vs. Cash Analyzer help showing DRIP, Take cash, Toss-up, and badge definitions"
           style={screenshotStyle}
         />
       </div>

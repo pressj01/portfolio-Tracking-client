@@ -338,7 +338,7 @@ function Nav() {
         <NavMenuGroup title="Income & NAV Risk">
           <NavLink to="/nav-erosion">NAV Erosion</NavLink>
           <NavLink to="/nav-erosion-portfolio">NAV Erosion Screener</NavLink>
-          <NavLink to="/drip-score">DRIP Score</NavLink>
+          <NavLink to="/drip-score">DRIP vs. Cash Analyzer</NavLink>
           <NavLink to="/income-sim">Income Simulator</NavLink>
           <NavLink to="/income-growth">Income Growth</NavLink>
         </NavMenuGroup>
