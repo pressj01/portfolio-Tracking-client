@@ -8080,3 +8080,285 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 
 .opt-risk-chart-shell.is-expanded .opt-risk-chart-frame { flex: 1 1 0; }
 .opt-risk-chart-shell.is-expanded .opt-risk-chart { height: 100%; min-height: 0; }
+
+/* ── DRIP Score ─────────────────────────────────────────────────────────────── */
+/* --warning is tuned to be read as a FILL elsewhere in the app. Used as small
+   text on a light surface it lands at 3.92:1, so this page scopes a darker
+   amber for the Harvester / Fading verdict text. Dark mode keeps the token. */
+.ds-page { padding: 1.5rem 2rem; --ds-amber: var(--warning); }
+[data-theme="light"] .ds-page { --ds-amber: #8a5200; }
+.ds-title { margin: 0 0 0.2rem; }
+.ds-sub { color: var(--text-dim); font-size: 0.85rem; margin: 0 0 1rem; max-width: 70ch; }
+
+.ds-help {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  margin: 0 0 1rem; overflow: hidden;
+}
+.ds-help > summary {
+  color: var(--accent); cursor: pointer; font-size: 0.78rem; font-weight: 700;
+  list-style: none; padding: 0.6rem 0.8rem;
+}
+.ds-help > summary::-webkit-details-marker { display: none; }
+.ds-help > summary::before {
+  content: '?'; display: inline-grid; place-items: center;
+  width: 1.1rem; height: 1.1rem; margin-right: 0.45rem;
+  background: var(--surface-2); border: 1px solid var(--accent); border-radius: 50%;
+  font-size: 0.68rem;
+}
+.ds-help[open] > summary { border-bottom: 1px solid var(--border); }
+.ds-help-grid {
+  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.65rem; padding: 0.75rem 0.8rem;
+}
+.ds-help-grid section {
+  background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 5px;
+  grid-column: span 2; padding: 0.6rem 0.7rem;
+}
+.ds-help-grid .ds-help-definition-section { grid-column: span 3; }
+.ds-help-grid h3 { color: var(--text-strong); font-size: 0.76rem; margin: 0 0 0.3rem; }
+.ds-help-grid p { color: var(--text-dim); font-size: 0.72rem; line-height: 1.5; margin: 0; }
+.ds-help-grid ul {
+  color: var(--text-dim); font-size: 0.72rem; line-height: 1.5;
+  margin: 0; padding-left: 1.1rem;
+}
+.ds-help-grid li + li { margin-top: 0.2rem; }
+@media (max-width: 900px) {
+  .ds-help-grid { grid-template-columns: 1fr; }
+  .ds-help-grid section,
+  .ds-help-grid .ds-help-definition-section { grid-column: auto; }
+}
+
+.ds-panel {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  padding: 0.9rem 1.1rem; margin-bottom: 1rem;
+}
+.ds-row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 0.75rem; }
+.ds-row:last-child { margin-bottom: 0; }
+.ds-field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 110px; flex: 0 1 auto; }
+.ds-field-wide { min-width: 190px; flex: 1 1 190px; }
+.ds-field-block { display: flex; flex-direction: column; gap: 0.2rem; margin-bottom: 0.75rem; }
+.ds-field > span { font-size: 0.72rem; color: var(--text-dim); letter-spacing: 0.02em; }
+/* Inherits --text-dim from the parent label; --text-faint drops this counter
+   to 3.6:1 and it carries real information (how close you are to the cap). */
+.ds-field > span em { font-style: normal; }
+.ds-edit-hint {
+  color: var(--accent); font-size: inherit; font-weight: 600; margin-left: 0.5rem;
+}
+.ds-field input, .ds-field select, .ds-field textarea {
+  background: var(--surface-sunken); border: 1px solid var(--border); color: var(--text);
+  border-radius: 4px; padding: 0.35rem 0.5rem; font-size: 0.84rem; font-family: inherit;
+  min-inline-size: 0; width: 100%;
+}
+.ds-field textarea { resize: vertical; line-height: 1.5; }
+.ds-field input:focus, .ds-field select:focus, .ds-field textarea:focus {
+  outline: none; border-color: var(--accent);
+}
+.ds-field input:disabled, .ds-field select:disabled, .ds-field textarea:disabled {
+  color: var(--text-dim); cursor: default; opacity: 0.8;
+}
+
+.ds-ticker-list {
+  display: flex; flex-wrap: wrap; gap: 0.4rem;
+  min-height: 2.15rem; padding: 0.45rem;
+  background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 4px;
+}
+.ds-ticker-pill {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  min-height: 1.25rem; padding: 0.15rem 0.45rem;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; color: var(--text-strong);
+  font-size: 0.76rem; font-weight: 700; line-height: 1;
+}
+.ds-ticker-remove {
+  display: inline-grid; place-items: center;
+  width: 1rem; height: 1rem; padding: 0;
+  background: transparent; border: 0; border-radius: 50%;
+  color: var(--text-dim); cursor: pointer; font: inherit; line-height: 1;
+}
+.ds-ticker-remove:hover, .ds-ticker-remove:focus-visible {
+  background: var(--neg-strong); color: var(--white); outline: none;
+}
+.ds-ticker-empty {
+  align-self: center; color: var(--text-dim); font-size: 0.76rem; font-style: italic;
+}
+
+.ds-btns { display: flex; gap: 0.4rem; align-items: flex-end; }
+.ds-btn {
+  background: var(--surface-sunken); border: 1px solid var(--border); color: var(--text);
+  border-radius: 4px; padding: 0.36rem 0.85rem; font-size: 0.82rem; cursor: pointer;
+  font-family: inherit; white-space: nowrap;
+}
+.ds-btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--accent); }
+.ds-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+/* --accent inverts between themes (#1565c0 light / #64b5f6 dark), so the label
+   has to invert with it — white on the dark-mode accent is only 2.2:1. */
+.ds-btn-primary { background: var(--accent); border-color: var(--accent); color: var(--black); font-weight: 600; }
+[data-theme="light"] .ds-btn-primary { color: var(--white); }
+.ds-btn-primary:hover:not(:disabled) { background: var(--accent-bright); border-color: var(--accent-bright); }
+/* --neg-3 for the resting outline (--neg-strong is only 3.45:1 on the dark
+   surface); --neg-strong is fine as the hover FILL behind white. */
+.ds-btn-danger { border-color: var(--neg-3); color: var(--neg-3); }
+.ds-btn-danger:hover:not(:disabled) { background: var(--neg-strong); color: var(--white); border-color: var(--neg-strong); }
+
+.ds-meta {
+  display: flex; flex-wrap: wrap; gap: 1.1rem; font-size: 0.76rem;
+  color: var(--text-dim); margin-bottom: 0.6rem;
+}
+.ds-cached { color: var(--text-faint); font-style: italic; }
+
+.ds-tally { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 0.8rem; font-size: 0.8rem; }
+.ds-tally-item strong { font-size: 1rem; }
+
+.ds-banner {
+  border: 1px solid var(--border); border-left-width: 3px; border-radius: 4px;
+  padding: 0.5rem 0.8rem; margin-bottom: 0.8rem; font-size: 0.8rem; line-height: 1.5;
+}
+.ds-banner-error { border-left-color: var(--neg-strong); color: var(--neg-3); }
+.ds-banner-warn  { border-left-color: var(--warning); }
+.ds-banner-info  { border-left-color: var(--accent); }
+
+.ds-heat-legend {
+  display: flex; flex-wrap: wrap; gap: 0.85rem;
+  align-items: center; margin: 0 0 0.45rem;
+  color: var(--text-dim); font-size: 0.7rem;
+}
+.ds-heat-legend span { display: inline-flex; align-items: center; gap: 0.3rem; }
+.ds-heat-swatch {
+  display: inline-block; width: 0.8rem; height: 0.8rem;
+  border: 1px solid var(--border); border-radius: 2px;
+}
+
+.ds-section { margin-bottom: 1.2rem; }
+.ds-section-cap {
+  font-size: 0.75rem; color: var(--text-dim); margin-bottom: 0.3rem;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.ds-tbl-wrap {
+  max-height: clamp(260px, calc(100vh - 300px), 620px);
+  overflow: auto; scrollbar-gutter: stable;
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.ds-tbl { min-width: 1750px; }
+.ds-tbl td, .ds-tbl th { text-align: right; }
+.ds-tbl thead th { position: sticky; top: 0; z-index: 5; }
+.ds-tbl td:first-child, .ds-tbl th:first-child,
+.ds-tbl td.ds-name, .ds-tbl th:nth-child(2) { text-align: left; }
+.ds-sticky-col { position: sticky; left: 0; z-index: 2; }
+.ds-tbl thead th.ds-sticky-col { z-index: 6; }
+.ds-ticker { font-weight: 700; color: var(--text-strong); }
+.ds-name {
+  max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text-dim); font-size: 0.78rem;
+}
+
+.ds-tbl td.ds-heat { color: var(--text-strong); font-weight: 700; }
+.ds-tbl td.ds-heat-good {
+  background: color-mix(in srgb, var(--pos-strong) 22%, var(--surface)) !important;
+  border-color: color-mix(in srgb, var(--pos-strong) 70%, var(--border));
+}
+.ds-tbl td.ds-heat-watch {
+  background: color-mix(in srgb, #d6ad22 20%, var(--surface)) !important;
+  border-color: color-mix(in srgb, #d6ad22 60%, var(--border));
+}
+.ds-tbl td.ds-heat-caution {
+  background: color-mix(in srgb, #d97706 20%, var(--surface)) !important;
+  border-color: color-mix(in srgb, #d97706 60%, var(--border));
+}
+.ds-tbl td.ds-heat-bad {
+  background: color-mix(in srgb, var(--neg-strong) 23%, var(--surface)) !important;
+  border-color: color-mix(in srgb, var(--neg-strong) 70%, var(--border));
+}
+.ds-heat-swatch.ds-heat-good { background: color-mix(in srgb, var(--pos-strong) 48%, var(--surface)); }
+.ds-heat-swatch.ds-heat-watch { background: color-mix(in srgb, #d6ad22 52%, var(--surface)); }
+.ds-heat-swatch.ds-heat-caution { background: color-mix(in srgb, #d97706 48%, var(--surface)); }
+.ds-heat-swatch.ds-heat-bad { background: color-mix(in srgb, var(--neg-strong) 48%, var(--surface)); }
+.ds-tbl td.ds-heat .ds-chip {
+  color: var(--text-strong) !important;
+  border-color: color-mix(in srgb, var(--text-strong) 55%, transparent) !important;
+}
+
+.ds-chip {
+  display: inline-block; padding: 1px 8px; border-radius: 3px;
+  border: 1px solid currentColor; font-weight: 700; font-size: 0.7rem;
+  letter-spacing: 0.03em; white-space: nowrap;
+}
+.ds-call { font-weight: 600; }
+.ds-flag {
+  display: inline-block; margin-left: 5px; padding: 0 5px; border-radius: 3px;
+  font-size: 0.63rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; vertical-align: middle;
+}
+/* Conflicted is solid (the call may be wrong). Unstable uses its own dark
+   backing so the label stays readable over every heat-map color. */
+.ds-flag-conflicted { background: var(--warning); color: var(--black); }
+.ds-flag-unstable   {
+  background: var(--surface-sunken); color: var(--warning-text);
+  border: 1px solid var(--warning); padding: 0 4px;
+}
+.ds-flag-partial    { background: var(--surface-2); color: var(--text-dim); font-weight: 600; }
+
+/* --text-dim, not --text-faint: this is a paragraph meant to be read, and
+   --text-faint lands at 3.42:1 on the light surface. */
+.ds-note {
+  font-size: 0.75rem; color: var(--text-dim);
+  max-width: 80ch; line-height: 1.6; margin-top: 1rem;
+}
+
+@media (max-width: 900px) {
+  .ds-page { padding: 1rem; }
+  .ds-field, .ds-field-wide { flex: 1 1 100%; min-width: 0; }
+}
+
+/* ── DRIP Score: detail drawer ──────────────────────────────────────────────── */
+.ds-clickable { cursor: pointer; }
+.ds-drawer-backdrop {
+  position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center; padding: 2rem 1rem;
+}
+.ds-drawer {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  width: min(1500px, 96vw); max-height: 92vh; display: flex; flex-direction: column;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.ds-drawer-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+  padding: 0.9rem 1.2rem; border-bottom: 1px solid var(--border);
+}
+.ds-drawer-title { margin: 0; font-size: 1.3rem; color: var(--text-strong); }
+.ds-drawer-sub { font-size: 0.8rem; color: var(--text-dim); margin-top: 2px; }
+.ds-drawer-body { padding: 1rem 1.2rem; overflow: auto; }
+
+.ds-tiles { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; }
+.ds-tile {
+  background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 6px;
+  padding: 0.55rem 1rem; flex: 1 1 150px; min-inline-size: 0; text-align: center;
+}
+.ds-tile-val { font-size: 1.15rem; font-weight: 700; color: var(--text-strong); }
+.ds-tile-lbl { font-size: 0.7rem; color: var(--text-dim); margin-top: 2px; }
+/* --text-dim: these captions say what the number above them MEANS, so they
+   have to be readable; --text-faint is 3.27:1 on the light surface. */
+.ds-tile-sub { font-size: 0.66rem; color: var(--text-dim); margin-top: 1px; }
+
+.ds-modes { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1.2rem; }
+.ds-mode {
+  background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 6px;
+  padding: 0.7rem 1rem; flex: 1 1 200px; min-inline-size: 0;
+}
+.ds-mode-best { border-color: var(--pos-strong); }
+.ds-mode-name { font-size: 0.74rem; color: var(--text-dim); letter-spacing: 0.03em; }
+.ds-mode-tag {
+  margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 0.6rem;
+  font-weight: 700; text-transform: uppercase; background: var(--pos-strong); color: var(--black);
+}
+.ds-mode-total { font-size: 1.25rem; font-weight: 700; color: var(--text-strong); margin-top: 3px; }
+.ds-mode-tr { font-size: 0.9rem; font-weight: 600; }
+.ds-mode-split { font-size: 0.68rem; color: var(--text-dim); margin-top: 3px; }
+
+.ds-drawer-tbl { max-height: 46vh; }
+.ds-sched { min-width: 1350px; }
+.ds-sched td:first-child, .ds-sched th:first-child { text-align: left; }
+
+@media (max-width: 900px) {
+  .ds-drawer-backdrop { padding: 0.5rem; }
+  .ds-drawer { max-height: 96vh; }
+}

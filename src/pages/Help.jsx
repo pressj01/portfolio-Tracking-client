@@ -92,6 +92,7 @@ const GROUPS = [
       { type: 'heading', label: 'Income & NAV Risk' },
       { id: 'nav-erosion', label: 'NAV Erosion' },
       { id: 'nav-screener', label: 'NAV Erosion Screener' },
+      { id: 'drip-score', label: 'DRIP Score' },
       { id: 'income-sim', label: 'Income Simulator' },
       { id: 'income-growth', label: 'Income Growth' },
       { type: 'heading', label: 'Portfolio Diagnostics' },
@@ -4127,6 +4128,151 @@ function NavScreenerHelp() {
   )
 }
 
+function DripScoreHelp() {
+  const screenshotStyle = {
+    maxWidth: '100%',
+    height: 'auto',
+    borderRadius: '4px',
+    border: '1px solid var(--p-333)',
+  }
+
+  return (
+    <div>
+      <h2>DRIP Score</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        DRIP Score replays each fund&apos;s actual prices and distributions over one common
+        date window. It compares full reinvestment, 50% reinvestment, and taking every
+        distribution as cash, then shows whether reinvesting improved the result.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/drip-score/saved-set.png"
+          alt="DRIP Score saved set with ticker chips and Edit Tickers button"
+          style={screenshotStyle}
+        />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>
+        Saved Sets
+      </h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2', marginBottom: '1rem' }}>
+        <li>Select a named set from <strong>Saved set</strong>. Its ticker chips, test settings, and latest cached results load together.</li>
+        <li>Click <strong>Edit Tickers</strong> to change the set name or ticker membership. The date range and other run settings remain directly editable for quick reruns.</li>
+        <li>Click <strong>Save</strong> to update the set, <strong>Save As</strong> to create a copy, or <strong>Cancel</strong> to discard changes made in edit mode.</li>
+        <li>Use <strong>Delete</strong> only when you want to remove the entire saved set.</li>
+      </ol>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/drip-score/edit-tickers.png"
+          alt="DRIP Score edit mode with individual ticker remove buttons"
+          style={screenshotStyle}
+        />
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>
+        Editing Tickers
+      </h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Each ticker appears as a chip. Click its <strong>×</strong> to remove only that ticker.</li>
+        <li>You can also type or paste symbols in the ticker editor. Commas, spaces, semicolons, and new lines are accepted; duplicates are removed automatically.</li>
+        <li>The counter shows the current number of unique tickers, up to 75.</li>
+        <li>The <strong>Run</strong> button stays disabled while a saved set has unsaved edits. Save or cancel first so cached results cannot be confused with a changed list.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>
+        Running the Comparison
+      </h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Start / End</strong> — the common historical window used for every fund.</li>
+        <li><strong>Cash rate %</strong> — annual return assumed on distributions that are not reinvested.</li>
+        <li><strong>Initial</strong> — the same starting investment applied to each ticker.</li>
+        <li><strong>Short history</strong> — include newer funds in a separate table or exclude them entirely.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>
+        Reading the Results
+      </h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Large result tables get their own vertical scrollbar. The column headers stay pinned at the top, and the ticker column stays pinned while scrolling horizontally.</li>
+        <li><strong>Full / 50% / No DRIP TR</strong> — total return under each distribution choice.</li>
+        <li><strong>DRIP Score</strong> — Full DRIP total return minus No DRIP total return. Positive means full reinvestment won for the final date.</li>
+        <li><strong>Covered Yield</strong> and <strong>Coverage</strong> — compare historical distributions with total return using the same period and annualisation basis. Coverage of 1.00 or more means period total return fully supported the distribution rate. This is a performance proxy, not a tax classification of return of capital.</li>
+        <li><strong>Price CAGR</strong> — annualized change in the split-adjusted market price. It is not the fund&apos;s official published NAV.</li>
+        <li><strong>RE</strong> — Reinvestment Efficiency: what one dollar of distributions became under DRIP versus holding cash.</li>
+        <li><strong>Win Rate</strong> — share of eligible daily closing dates where DRIP beat cash. A conflicted or unstable badge warns that the call depends heavily on timing.</li>
+        <li><strong>Opportunity</strong> — ranking score combining price CAGR and covered yield.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>
+        Result Colors
+      </h3>
+      <div style={{ marginBottom: '1rem' }}>
+        <img
+          src="./help-screenshots/drip-score/color-coding.png"
+          alt="DRIP Score table with green, yellow, amber, and red result cells"
+          style={screenshotStyle}
+        />
+      </div>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Green</strong> — favorable result.</li>
+        <li><strong>Yellow</strong> — borderline result near a decision threshold.</li>
+        <li><strong>Amber</strong> — caution; the metric is positive or usable but incomplete or weak.</li>
+        <li><strong>Red</strong> — unfavorable result.</li>
+        <li>Color grading is applied to <strong>DRIP Score, Coverage, RE, Opportunity, Verdict, and Call</strong>. Exact values and labels remain authoritative.</li>
+        <li><strong>DRIP Score:</strong> red at −2% or worse, yellow from above −2% through +2%, and green above +2%.</li>
+        <li><strong>Coverage:</strong> red below 0.50, amber from 0.50 to below 1.00, and green at 1.00 or higher.</li>
+        <li><strong>RE:</strong> red at 0.98 or lower, yellow between 0.98 and 1.02, and green at 1.02 or higher.</li>
+        <li><strong>Opportunity:</strong> red below 50, amber from 50 to below 65, yellow from 65 to below 80, and green at 80 or higher.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>
+        Verdict Definitions
+      </h3>
+      <div style={{ marginBottom: '1rem' }}>
+        <img
+          src="./help-screenshots/drip-score/definitions.png"
+          alt="Expanded DRIP Score hidden help showing all verdict definitions"
+          style={screenshotStyle}
+        />
+      </div>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Compounder</strong> — yield is at least 8% and Coverage is at least 1.00. Total return fully supported the distributions.</li>
+        <li><strong>Harvester</strong> — yield is at least 8% and Coverage is from 0 to below 1.00. Total return was positive, but price loss consumed part of the distributions. The name describes historical performance; it is not a tax or return-of-capital classification.</li>
+        <li><strong>Liquidator</strong> — yield is at least 8% and Coverage is below 0. Total return was negative despite the distributions, indicating capital erosion over the test window.</li>
+        <li><strong>Grower</strong> — yield is below 8% and Coverage is at least 1.00. Healthy return coverage, but not a high-income holding.</li>
+        <li><strong>Fading</strong> — yield is below 8% and Coverage is from 0 to below 1.00. Low income with only partial return coverage.</li>
+        <li><strong>Broken</strong> — yield is below 8% and Coverage is below 0. Negative total return with little income.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>
+        Call and Badge Definitions
+      </h3>
+      <div style={{ marginBottom: '1rem' }}>
+        <img
+          src="./help-screenshots/drip-score/call-definitions.png"
+          alt="Expanded DRIP Score hidden help showing DRIP, Take cash, Toss-up, and badge definitions"
+          style={screenshotStyle}
+        />
+      </div>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>DRIP</strong> — RE is 1.02 or higher, so reinvested distributions finished at least 2% ahead of keeping them as cash.</li>
+        <li><strong>Take cash</strong> — RE is 0.98 or lower, so keeping distributions as cash finished at least 2% ahead of reinvesting them.</li>
+        <li><strong>Toss-up</strong> — RE is between 0.98 and 1.02. The difference is inside the 2% deadband and is too small for a directional call.</li>
+        <li><strong>N/A</strong> — there was not enough meaningful distribution data to compare reinvestment with cash.</li>
+        <li><strong>Conflicted</strong> — the final-date call disagrees with the majority of eligible exit dates.</li>
+        <li><strong>Unstable</strong> — the win rate is near 50%, so the result depends heavily on exit timing.</li>
+      </ul>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
+        Funds with incomplete histories are ranked separately because a partial market window is not
+        comparable with funds tested over the full period.
+      </div>
+    </div>
+  )
+}
+
 function SingleStrategyHelp() {
   return (
     <div>
@@ -7507,6 +7653,7 @@ const CONTENT_MAP = {
   'buy-sell': BuySellHelp,
   'nav-erosion': NavErosionHelp,
   'nav-screener': NavScreenerHelp,
+  'drip-score': DripScoreHelp,
   'single-strategy': SingleStrategyHelp,
   'income-sim': IncomeSimHelp,
   correlation: CorrelationHelp,

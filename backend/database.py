@@ -597,6 +597,50 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    # ── drip_score_sets ────────────────────────────────────────────────────────
+    # Named ticker sets for the DRIP Score screen. Not profile-scoped, matching
+    # nav_erosion_saved_backtests — this is ticker research, not portfolio state.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS drip_score_sets (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            name               TEXT NOT NULL UNIQUE,
+            created_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at         TEXT,
+            start_date         TEXT,
+            end_date           TEXT,
+            cash_rate          REAL NOT NULL DEFAULT 0.04,
+            initial_investment REAL NOT NULL DEFAULT 50000,
+            partial_data       TEXT NOT NULL DEFAULT 'include'
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS drip_score_set_tickers (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            set_id     INTEGER NOT NULL,
+            ticker     TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_drip_set_tickers "
+        "ON drip_score_set_tickers(set_id)"
+    )
+
+    # Last-run cache so reopening the screen doesn't refetch from Yahoo.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS drip_score_runs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            set_id      INTEGER NOT NULL,
+            run_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            params_json TEXT NOT NULL,
+            rows_json   TEXT NOT NULL
+        )
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_drip_runs_set ON drip_score_runs(set_id)"
+    )
+
     # ── portfolio_income_sim_list ──────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS portfolio_income_sim_list (

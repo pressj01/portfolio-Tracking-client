@@ -29627,6 +29627,367 @@ def portfolio_tester_run():
     return jsonify(result)
 
 
+# ── DRIP Score ────────────────────────────────────────────────────────────────
+# Historical DRIP-vs-cash analyzer. Spec: docs/drip-score-spec.md
+
+DRIP_SET_FIELDS = ("start_date", "end_date", "cash_rate",
+                   "initial_investment", "partial_data")
+
+
+def _drip_clean_tickers(raw):
+    """Normalise a ticker list from the client: upper, trimmed, deduped."""
+    if isinstance(raw, str):
+        raw = raw.replace(",", " ").split()
+    out = []
+    for item in raw or []:
+        sym = str(item).strip().upper()
+        if sym and sym not in out:
+            out.append(sym)
+    return out
+
+
+def _drip_set_params(data, existing=None):
+    """Validate the tunable parameters of a set. Returns (params, error)."""
+    import drip_score
+    base = dict(existing or {})
+    params = {
+        "start_date": str(data.get("start_date", base.get("start_date") or "")).strip(),
+        "end_date": str(data.get("end_date", base.get("end_date") or "")).strip(),
+        "partial_data": str(
+            data.get("partial_data", base.get("partial_data") or "include")).strip(),
+    }
+    if params["partial_data"] not in ("include", "exclude"):
+        return None, "partial_data must be 'include' or 'exclude'."
+    try:
+        params["cash_rate"] = float(
+            data.get("cash_rate", base.get("cash_rate", drip_score.DEFAULT_CASH_RATE)))
+        params["initial_investment"] = float(
+            data.get("initial_investment",
+                     base.get("initial_investment", drip_score.DEFAULT_INITIAL)))
+    except (TypeError, ValueError):
+        return None, "cash_rate and initial_investment must be numbers."
+    if not 0.0 <= params["cash_rate"] <= 1.0:
+        return None, "cash_rate must be between 0 and 1."
+    if params["initial_investment"] <= 0:
+        return None, "initial_investment must be greater than 0."
+    return params, None
+
+
+def _drip_load_set(conn, set_id):
+    """Return a set dict with its tickers, or None."""
+    row = conn.execute(
+        "SELECT id, name, created_at, updated_at, start_date, end_date, "
+        "cash_rate, initial_investment, partial_data "
+        "FROM drip_score_sets WHERE id = ?", (set_id,)).fetchone()
+    if not row:
+        return None
+    tickers = conn.execute(
+        "SELECT ticker FROM drip_score_set_tickers WHERE set_id = ? "
+        "ORDER BY sort_order, id", (set_id,)).fetchall()
+    return {
+        "id": row[0], "name": row[1],
+        "created_at": row[2] or "", "updated_at": row[3] or "",
+        "start_date": row[4], "end_date": row[5],
+        "cash_rate": row[6], "initial_investment": row[7],
+        "partial_data": row[8],
+        "tickers": [t[0] for t in tickers],
+    }
+
+
+def _drip_write_tickers(conn, set_id, tickers):
+    conn.execute("DELETE FROM drip_score_set_tickers WHERE set_id = ?", (set_id,))
+    conn.executemany(
+        "INSERT INTO drip_score_set_tickers (set_id, ticker, sort_order) "
+        "VALUES (?, ?, ?)",
+        [(set_id, t, i) for i, t in enumerate(tickers)])
+
+
+@app.route("/api/drip-score/sets", methods=["GET", "POST"])
+def drip_score_sets():
+    import drip_score
+    conn = get_connection()
+    ensure_tables_exist(conn)
+
+    if request.method == "GET":
+        rows = conn.execute("""
+            SELECT s.id, s.name, s.created_at, s.updated_at, s.start_date, s.end_date,
+                   s.cash_rate, s.initial_investment, s.partial_data,
+                   (SELECT COUNT(*) FROM drip_score_set_tickers t WHERE t.set_id = s.id)
+            FROM drip_score_sets s
+            ORDER BY COALESCE(s.updated_at, s.created_at) DESC
+        """).fetchall()
+        conn.close()
+        return jsonify(sets=[{
+            "id": r[0], "name": r[1], "created_at": r[2] or "", "updated_at": r[3] or "",
+            "start_date": r[4], "end_date": r[5], "cash_rate": r[6],
+            "initial_investment": r[7], "partial_data": r[8], "ticker_count": r[9],
+        } for r in rows])
+
+    data = request.get_json(force=True, silent=True) or {}
+    name = str(data.get("name", "")).strip()
+    if not name:
+        conn.close()
+        return jsonify(error="Name is required."), 400
+    if len(name) > 200:
+        conn.close()
+        return jsonify(error="Name must be 200 characters or less."), 400
+
+    tickers = _drip_clean_tickers(data.get("tickers"))
+    if not tickers:
+        conn.close()
+        return jsonify(error="At least one ticker is required."), 400
+    if len(tickers) > drip_score.MAX_TICKERS:
+        conn.close()
+        return jsonify(error=f"Too many tickers (max {drip_score.MAX_TICKERS})."), 400
+
+    params, err = _drip_set_params(data)
+    if err:
+        conn.close()
+        return jsonify(error=err), 400
+
+    try:
+        cur = conn.execute(
+            "INSERT INTO drip_score_sets "
+            "(name, start_date, end_date, cash_rate, initial_investment, partial_data) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (name, params["start_date"], params["end_date"], params["cash_rate"],
+             params["initial_investment"], params["partial_data"]))
+    except sqlite3.IntegrityError:
+        conn.close()
+        return jsonify(error=f'A set named "{name}" already exists.'), 409
+
+    set_id = cur.lastrowid
+    _drip_write_tickers(conn, set_id, tickers)
+    conn.commit()
+    result = _drip_load_set(conn, set_id)
+    conn.close()
+    return jsonify(ok=True, set=result), 201
+
+
+def _drip_fund_names(conn, tickers):
+    """Map ticker -> display name without a network call.
+
+    ``etf_provider_funds`` is bundled seed data (~2.6k funds) and carries
+    properly-cased names; ``holdings.description`` is the broker's ALL-CAPS
+    text and is only a fallback for anything the seed doesn't cover.
+    """
+    if not tickers:
+        return {}
+    placeholders = ",".join("?" * len(tickers))
+    upper = [t.upper() for t in tickers]
+    names = {}
+    for row in conn.execute(
+            f"SELECT UPPER(symbol), fund_name FROM etf_provider_funds "
+            f"WHERE UPPER(symbol) IN ({placeholders}) AND fund_name IS NOT NULL",
+            upper).fetchall():
+        names.setdefault(row[0], row[1])
+    missing = [t for t in upper if t not in names]
+    if missing:
+        placeholders = ",".join("?" * len(missing))
+        for row in conn.execute(
+                f"SELECT UPPER(ticker), description FROM holdings "
+                f"WHERE UPPER(ticker) IN ({placeholders}) AND description IS NOT NULL",
+                missing).fetchall():
+            names.setdefault(row[0], row[1])
+    return names
+
+
+@app.route("/api/drip-score/run", methods=["POST"])
+def drip_score_run():
+    import json as _json
+    import drip_score
+
+    data = request.get_json(force=True, silent=True) or {}
+    conn = get_connection()
+    ensure_tables_exist(conn)
+
+    saved = None
+    set_id = data.get("set_id")
+    if set_id is not None:
+        try:
+            set_id = int(set_id)
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify(error="set_id must be an integer."), 400
+        saved = _drip_load_set(conn, set_id)
+        if not saved:
+            conn.close()
+            return jsonify(error="Not found."), 404
+
+    tickers = _drip_clean_tickers(data.get("tickers"))
+    if not tickers and saved:
+        tickers = saved["tickers"]
+    if not tickers:
+        conn.close()
+        return jsonify(error="At least one ticker is required."), 400
+    if len(tickers) > drip_score.MAX_TICKERS:
+        conn.close()
+        return jsonify(error=f"Too many tickers (max {drip_score.MAX_TICKERS})."), 400
+
+    params, err = _drip_set_params(data, saved)
+    if err:
+        conn.close()
+        return jsonify(error=err), 400
+    if not params["start_date"] or not params["end_date"]:
+        conn.close()
+        return jsonify(error="Start and end dates are required."), 400
+
+    try:
+        result = drip_score.run_drip_score(
+            tickers,
+            params["start_date"], params["end_date"],
+            initial=params["initial_investment"],
+            cash_rate=params["cash_rate"],
+            partial_data=params["partial_data"],
+        )
+    except ValueError as e:
+        conn.close()
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        conn.close()
+        return jsonify(error=f"DRIP Score run failed: {e}"), 500
+
+    names = _drip_fund_names(conn, tickers)
+    for row in result["rows"] + result["partial"]:
+        row["name"] = names.get(row["ticker"])
+    for row in result["excluded"]:
+        row["name"] = names.get(str(row.get("ticker", "")).upper())
+
+    if saved:
+        # Keep only the latest run per set.
+        conn.execute("DELETE FROM drip_score_runs WHERE set_id = ?", (set_id,))
+        conn.execute(
+            "INSERT INTO drip_score_runs (set_id, params_json, rows_json) "
+            "VALUES (?, ?, ?)",
+            (set_id, _json.dumps(result["meta"]), _json.dumps({
+                "rows": result["rows"],
+                "partial": result["partial"],
+                "excluded": result["excluded"],
+            })))
+        conn.commit()
+
+    conn.close()
+    return jsonify(result)
+
+
+@app.route("/api/drip-score/detail", methods=["GET"])
+def drip_score_detail():
+    import drip_score
+
+    ticker = (request.args.get("ticker") or "").strip().upper()
+    if not ticker:
+        return jsonify(error="ticker is required."), 400
+
+    params, err = _drip_set_params({
+        "start_date": request.args.get("start_date", ""),
+        "end_date": request.args.get("end_date", ""),
+        "cash_rate": request.args.get("cash_rate", drip_score.DEFAULT_CASH_RATE),
+        "initial_investment": request.args.get(
+            "initial_investment", drip_score.DEFAULT_INITIAL),
+    })
+    if err:
+        return jsonify(error=err), 400
+    if not params["start_date"] or not params["end_date"]:
+        return jsonify(error="Start and end dates are required."), 400
+
+    try:
+        detail = drip_score.run_detail(
+            ticker, params["start_date"], params["end_date"],
+            initial=params["initial_investment"], cash_rate=params["cash_rate"])
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=f"DRIP Score detail failed: {e}"), 500
+
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    detail["summary"]["name"] = _drip_fund_names(conn, [ticker]).get(ticker)
+    conn.close()
+    return jsonify(detail)
+
+
+@app.route("/api/drip-score/sets/<int:set_id>/last-run", methods=["GET"])
+def drip_score_last_run(set_id):
+    import json as _json
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    row = conn.execute(
+        "SELECT run_at, params_json, rows_json FROM drip_score_runs "
+        "WHERE set_id = ? ORDER BY run_at DESC LIMIT 1", (set_id,)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify(error="No cached run for this set."), 404
+    payload = _json.loads(row[2])
+    return jsonify(run_at=row[0], meta=_json.loads(row[1]), **payload)
+
+
+@app.route("/api/drip-score/sets/<int:set_id>", methods=["GET", "PUT", "DELETE"])
+def drip_score_set_item(set_id):
+    import drip_score
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    existing = _drip_load_set(conn, set_id)
+    if not existing:
+        conn.close()
+        return jsonify(error="Not found."), 404
+
+    if request.method == "GET":
+        conn.close()
+        return jsonify(set=existing)
+
+    if request.method == "DELETE":
+        # No PRAGMA foreign_keys in this codebase — remove children explicitly.
+        conn.execute("DELETE FROM drip_score_set_tickers WHERE set_id = ?", (set_id,))
+        conn.execute("DELETE FROM drip_score_runs WHERE set_id = ?", (set_id,))
+        conn.execute("DELETE FROM drip_score_sets WHERE id = ?", (set_id,))
+        conn.commit()
+        conn.close()
+        return jsonify(ok=True)
+
+    data = request.get_json(force=True, silent=True) or {}
+    name = str(data.get("name", existing["name"])).strip()
+    if not name:
+        conn.close()
+        return jsonify(error="Name is required."), 400
+    if len(name) > 200:
+        conn.close()
+        return jsonify(error="Name must be 200 characters or less."), 400
+
+    tickers = (_drip_clean_tickers(data["tickers"])
+               if "tickers" in data else existing["tickers"])
+    if not tickers:
+        conn.close()
+        return jsonify(error="At least one ticker is required."), 400
+    if len(tickers) > drip_score.MAX_TICKERS:
+        conn.close()
+        return jsonify(error=f"Too many tickers (max {drip_score.MAX_TICKERS})."), 400
+
+    params, err = _drip_set_params(data, existing)
+    if err:
+        conn.close()
+        return jsonify(error=err), 400
+
+    try:
+        conn.execute(
+            "UPDATE drip_score_sets SET name=?, start_date=?, end_date=?, cash_rate=?, "
+            "initial_investment=?, partial_data=?, updated_at=CURRENT_TIMESTAMP "
+            "WHERE id=?",
+            (name, params["start_date"], params["end_date"], params["cash_rate"],
+             params["initial_investment"], params["partial_data"], set_id))
+    except sqlite3.IntegrityError:
+        conn.close()
+        return jsonify(error=f'A set named "{name}" already exists.'), 409
+
+    _drip_write_tickers(conn, set_id, tickers)
+    # Any saved run reflects the previous set configuration. Do not show stale
+    # rows after a ticker or parameter is edited.
+    conn.execute("DELETE FROM drip_score_runs WHERE set_id = ?", (set_id,))
+    conn.commit()
+    result = _drip_load_set(conn, set_id)
+    conn.close()
+    return jsonify(ok=True, set=result)
+
+
 # ── Portfolio Builder CRUD ────────────────────────────────────────────────────
 
 @app.route("/api/builder/portfolios", methods=["GET"])

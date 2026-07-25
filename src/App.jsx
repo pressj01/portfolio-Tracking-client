@@ -23,6 +23,7 @@ import Watchlist from './pages/Watchlist'
 import BuySellSignals from './pages/BuySellSignals'
 import NavErosion from './pages/NavErosion'
 import NavErosionPortfolio from './pages/NavErosionPortfolio'
+import DripScore from './pages/DripScore'
 import PortfolioIncomeSim from './pages/PortfolioIncomeSim'
 import Correlation from './pages/Correlation'
 import Analytics from './pages/Analytics'
@@ -185,6 +186,7 @@ function App() {
         <Route path="/buy-sell-signals" element={<BuySellSignals />} />
         <Route path="/nav-erosion" element={<NavErosion />} />
         <Route path="/nav-erosion-portfolio" element={<NavErosionPortfolio />} />
+        <Route path="/drip-score" element={<DripScore />} />
         <Route path="/income-sim" element={<PortfolioIncomeSim />} />
         <Route path="/income-growth" element={<IncomeGrowthSim />} />
         <Route path="/growth-income-freedom" element={<GrowthIncomeFreedom />} />
@@ -336,6 +338,7 @@ function Nav() {
         <NavMenuGroup title="Income & NAV Risk">
           <NavLink to="/nav-erosion">NAV Erosion</NavLink>
           <NavLink to="/nav-erosion-portfolio">NAV Erosion Screener</NavLink>
+          <NavLink to="/drip-score">DRIP Score</NavLink>
           <NavLink to="/income-sim">Income Simulator</NavLink>
           <NavLink to="/income-growth">Income Growth</NavLink>
         </NavMenuGroup>
