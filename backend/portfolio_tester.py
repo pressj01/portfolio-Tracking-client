@@ -36,6 +36,43 @@ def _cache_key(tickers: List[str], start: str, end: str) -> str:
     return "|".join(sorted(set(tickers))) + f"::{start}::{end}"
 
 
+def _download_series(raw: pd.DataFrame, yahoo_ticker: str,
+                     field: str) -> pd.Series:
+    """Extract one field from either yfinance column layout."""
+    if raw is None or raw.empty:
+        return pd.Series(dtype=float)
+
+    value = None
+    if isinstance(raw.columns, pd.MultiIndex):
+        outer = raw.columns.get_level_values(0)
+        if yahoo_ticker in outer:
+            ticker_frame = raw[yahoo_ticker]
+            if field in ticker_frame.columns:
+                value = ticker_frame[field]
+        elif field in outer:
+            field_frame = raw[field]
+            if isinstance(field_frame, pd.Series):
+                value = field_frame
+            elif yahoo_ticker in field_frame.columns:
+                value = field_frame[yahoo_ticker]
+            elif len(field_frame.columns) == 1:
+                value = field_frame.iloc[:, 0]
+    elif field in raw.columns:
+        value = raw[field]
+
+    if isinstance(value, pd.DataFrame):
+        if yahoo_ticker in value.columns:
+            value = value[yahoo_ticker]
+        elif len(value.columns) == 1:
+            value = value.iloc[:, 0]
+        else:
+            value = None
+
+    if value is None:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(value, errors="coerce")
+
+
 def fetch_prices(tickers: List[str], start: str, end: str
                  ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Download daily Close + Dividend series for every ticker.
@@ -59,29 +96,60 @@ def fetch_prices(tickers: List[str], start: str, end: str
         progress=False,
         group_by="ticker" if len(yahoo_tickers) > 1 else "column",
     )
-    if raw is None or raw.empty:
+
+    close_by_ticker = {}
+    divs_by_ticker = {}
+    for ticker in tickers:
+        yahoo_ticker = yahoo_by_ticker.get(ticker, ticker)
+        close_series = _download_series(raw, yahoo_ticker, "Close").dropna()
+        if close_series.empty:
+            continue
+        close_by_ticker[ticker] = close_series
+        divs_by_ticker[ticker] = _download_series(raw, yahoo_ticker, "Dividends")
+
+    # yfinance occasionally omits one symbol from an otherwise valid batch.
+    # Retry missing symbols individually before caching the response so a
+    # transient batch gap cannot become a false "no data returned" result.
+    missing = [ticker for ticker in tickers if ticker not in close_by_ticker]
+    retries = {}
+    for ticker in missing:
+        yahoo_ticker = yahoo_by_ticker.get(ticker, ticker)
+        if yahoo_ticker not in retries:
+            try:
+                retries[yahoo_ticker] = yf.download(
+                    yahoo_ticker,
+                    start=start,
+                    end=end,
+                    auto_adjust=False,
+                    actions=True,
+                    progress=False,
+                    group_by="column",
+                    threads=False,
+                )
+            except Exception:
+                retries[yahoo_ticker] = pd.DataFrame()
+
+        retry_raw = retries[yahoo_ticker]
+        close_series = _download_series(
+            retry_raw, yahoo_ticker, "Close").dropna()
+        if close_series.empty:
+            continue
+        close_by_ticker[ticker] = close_series
+        divs_by_ticker[ticker] = _download_series(
+            retry_raw, yahoo_ticker, "Dividends")
+
+    if not close_by_ticker:
         raise ValueError("yfinance returned no data for the requested range.")
 
-    close = pd.DataFrame()
-    divs = pd.DataFrame()
-    if len(yahoo_tickers) == 1:
-        yf_t = yahoo_tickers[0]
-        requested = [t for t, mapped in yahoo_by_ticker.items() if mapped == yf_t]
-        div_values = raw["Dividends"] if "Dividends" in raw.columns else 0.0
-        for t in requested:
-            close[t] = raw["Close"]
-            divs[t] = div_values
-    else:
-        for t in tickers:
-            yf_t = yahoo_by_ticker.get(t, t)
-            if yf_t not in raw.columns.get_level_values(0):
-                continue
-            sub = raw[yf_t]
-            close[t] = sub["Close"] if "Close" in sub.columns else np.nan
-            divs[t] = sub["Dividends"] if "Dividends" in sub.columns else 0.0
-
+    close = pd.concat(close_by_ticker, axis=1)
+    close = close.reindex(
+        columns=[ticker for ticker in tickers if ticker in close.columns])
     close = close.dropna(how="all").sort_index()
-    divs = divs.reindex(close.index).fillna(0.0)
+    divs = pd.DataFrame(index=close.index)
+    for ticker in close.columns:
+        series = divs_by_ticker.get(ticker)
+        divs[ticker] = (series.reindex(close.index).fillna(0.0)
+                         if series is not None and not series.empty else 0.0)
 
     _PRICE_CACHE[key] = (time.time(), close.copy(), divs.copy())
     return close, divs
