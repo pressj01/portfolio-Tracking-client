@@ -6,7 +6,7 @@ import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
-import { selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
+import { comparerLogHoverData, selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
 import ComparerTickerLibrary from '../components/ComparerTickerLibrary'
 import { uniqueTickers } from '../utils/comparerTickerLibrary'
 
@@ -566,10 +566,12 @@ export default function StockComparer() {
           type: 'scatter',
           mode: 'lines',
           name,
-          customdata: returnValues,
+          customdata: logScaleActive
+            ? comparerLogHoverData(returnValues, normalized)
+            : returnValues,
           line: { color, width: style.width, dash: style.dash },
           hovertemplate: logScaleActive && returnPctMode
-            ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{customdata:+,.2f}%<br>Growth of $100: %{y:,.2f}<extra></extra>`
+            ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{customdata[0]}<br>Growth of $100: %{customdata[1]}<extra></extra>`
             : returnPctMode
               ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:+,.2f}%<extra></extra>`
             : `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:,.2f}<extra></extra>`,
@@ -1063,6 +1065,7 @@ export default function StockComparer() {
             history={distributionResearch.distribution_history}
             ticker={distributionSymbol}
             price={distributionResearch.price}
+            frequency={distributionResearch.dividend_frequency}
             source={distributionResearch.yield_source || distributionResearch.data_source || ''}
             pctMode={distPctMode}
             annual={distAnnual}

@@ -251,7 +251,7 @@ function AverageReturnChart({ kind, ticker, benchmark }) {
   )
 }
 
-function DistributionChart({ history, ticker, price, source }) {
+function DistributionChart({ history, ticker, price, frequency, source }) {
   const [pctMode, setPctMode] = useState(false)
   const [annual, setAnnual] = useState(false)
 
@@ -263,6 +263,7 @@ function DistributionChart({ history, ticker, price, source }) {
         history={history}
         ticker={ticker}
         price={price}
+        frequency={frequency}
         source={source}
         pctMode={pctMode}
         annual={annual}
@@ -329,6 +330,7 @@ function ETFResult({ data, onOpenChart, return1y }) {
         history={data.distribution_history}
         ticker={data.ticker}
         price={chartPrice}
+        frequency={data.dividend_frequency}
         source={data.distribution_source || data.yield_source || data.data_source}
       />
 
@@ -434,6 +436,7 @@ function StockResult({ data, onOpenChart, return1y }) {
         history={data.distribution_history}
         ticker={data.ticker}
         price={data.price}
+        frequency={data.dividend_frequency}
         source={data.distribution_source || data.yield_source || data.data_source}
       />
     </div>

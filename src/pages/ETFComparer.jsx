@@ -8,7 +8,7 @@ import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
-import { selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
+import { comparerLogHoverData, selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
 import ComparerTickerLibrary from '../components/ComparerTickerLibrary'
 import { uniqueTickers } from '../utils/comparerTickerLibrary'
 
@@ -142,6 +142,7 @@ function researchProfileForComparer(profile) {
   copy('distribution_history')
   copy('distribution_source')
   copy('distribution_frequency')
+  if (!result.distribution_frequency) copy('distribution_frequency', 'dividend_frequency')
 
   // Security Research expresses these fields as display percentages (0.54),
   // while the comparer stores them as ratios (0.0054).
@@ -554,10 +555,12 @@ export default function ETFComparer() {
           type: 'scatter',
           mode: 'lines',
           name,
-          customdata: returnValues,
+          customdata: logScaleActive
+            ? comparerLogHoverData(returnValues, normalized)
+            : returnValues,
           line: { color, width: style.width, dash: style.dash },
           hovertemplate: logScaleActive && returnPctMode
-            ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{customdata:+,.2f}%<br>Growth of $100: %{y:,.2f}<extra></extra>`
+            ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{customdata[0]}<br>Growth of $100: %{customdata[1]}<extra></extra>`
             : returnPctMode
               ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:.2f}%<extra></extra>`
             : `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:.2f}<extra></extra>`,
@@ -967,6 +970,7 @@ export default function ETFComparer() {
             history={distributionProfile.distribution_history}
             ticker={distributionSymbol}
             price={distributionProfile.price}
+            frequency={distributionProfile.distribution_frequency}
             source={distributionProfile.distribution_source || distributionProfile.expected_yield_source || ''}
             pctMode={distPctMode}
             annual={distAnnual}

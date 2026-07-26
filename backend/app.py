@@ -15311,25 +15311,43 @@ def _research_expense_pct(*values):
     return None
 
 
-def _research_dividend_frequency(dividends):
+_RESEARCH_INITIAL_DIVIDEND_FREQUENCIES = {
+    # WRTH launched in April 2026 and has only one Yahoo distribution so far.
+    # The issuer's first distribution announcement identifies the schedule as
+    # quarterly.  Treat this as a launch-time seed only; observed spacing wins
+    # as soon as Yahoo has enough payments to establish a cadence.
+    "WRTH": "Quarterly",
+}
+
+
+def _research_dividend_frequency(dividends, ticker=None):
     if dividends is None or dividends.empty:
-        return None
+        return _RESEARCH_INITIAL_DIVIDEND_FREQUENCIES.get((ticker or "").strip().upper())
     divs = dividends[dividends > 0].dropna()
     if divs.empty:
-        return None
-    recent = divs[divs.index >= (divs.index.max() - pd.DateOffset(months=18))]
-    count = len(recent) if len(recent) else len(divs.tail(12))
-    if count >= 40:
+        return _RESEARCH_INITIAL_DIVIDEND_FREQUENCIES.get((ticker or "").strip().upper())
+
+    dates = list(dict.fromkeys(divs.sort_index().index))[-9:]
+    if len(dates) < 2:
+        return (
+            _RESEARCH_INITIAL_DIVIDEND_FREQUENCIES.get((ticker or "").strip().upper())
+            or "Annual/Irregular"
+        )
+
+    gaps = sorted(
+        abs((dates[i] - dates[i - 1]).total_seconds()) / 86400.0
+        for i in range(1, len(dates))
+    )
+    median_gap = gaps[len(gaps) // 2]
+    if median_gap <= 10:
         return "Weekly"
-    if count >= 10:
+    if median_gap <= 45:
         return "Monthly"
-    if count >= 5:
-        return "Quarterly/Monthly"
-    if count >= 3:
+    if median_gap <= 115:
         return "Quarterly"
-    if count >= 2:
+    if median_gap <= 240:
         return "Semiannual"
-    return "Annual/Irregular"
+    return "Annual"
 
 
 def _fetch_neos_top_holdings(ticker, limit=25):
@@ -16787,7 +16805,7 @@ def security_research(kind, ticker):
         else pd.Series(dtype=float)
     )
 
-    dividend_frequency = _research_dividend_frequency(dividends)
+    dividend_frequency = _research_dividend_frequency(dividends, lookup_symbol)
     ttm_dividend = None
     last_dividend = None
     if dividends is not None and not dividends.empty:

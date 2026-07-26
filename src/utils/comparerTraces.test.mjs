@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  comparerLogHoverData,
   comparerStatsForMode,
   computeBlendTrace,
   selectComparerTraces,
@@ -121,5 +122,18 @@ test('automatically selects a log scale only for extreme visible wealth ranges',
   assert.equal(
     shouldUseComparerLogScale(extreme, ['MSFT', 'JNJ'], 'total', '2026-01-01', '2026-01-01'),
     false,
+  )
+})
+
+test('preformats log-scale hover values to two decimal places', () => {
+  assert.deepEqual(
+    comparerLogHoverData(
+      [1234567.89123, -12.3456],
+      [1234667.89123, 87.6544],
+    ),
+    [
+      ['+1,234,567.89%', '1,234,667.89'],
+      ['-12.35%', '87.65'],
+    ],
   )
 })

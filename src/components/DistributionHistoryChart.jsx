@@ -1,6 +1,9 @@
 import React, { useMemo } from 'react'
 import Plot from './ThemedPlot'
-import { distributionYieldPeriodLabel } from '../utils/distributionPeriod'
+import {
+  distributionPeriodsPerYear,
+  distributionYieldPeriodLabel,
+} from '../utils/distributionPeriod'
 import { getCurrencyLabel } from '../utils/money'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
@@ -65,7 +68,7 @@ export function estimateForwardYield(history, price) {
   }
 }
 
-export function buildDistributionChart(history, ticker, price, pctMode = false, annual = false, emptyLabel = 'this symbol', theme = chartTheme(true)) {
+export function buildDistributionChart(history, ticker, price, pctMode = false, annual = false, emptyLabel = 'this symbol', theme = chartTheme(true), frequency = null) {
   const byMonth = new Map()
 
   ;(Array.isArray(history) ? history : []).forEach(item => {
@@ -93,17 +96,20 @@ export function buildDistributionChart(history, ticker, price, pctMode = false, 
   const priceNum = Number(price) || 0
   const dollarValues = monthly.map(item => item.amount)
   const showPct = pctMode && priceNum > 0
-  const periodLabel = distributionYieldPeriodLabel(sortedMonths.map(([key]) => key))
-  const periodsPerYear = periodLabel === 'Quarterly' ? 4 : 12
-  const annualMult = annual ? periodsPerYear : 1
+  const periodLabel = distributionYieldPeriodLabel(sortedMonths.map(([key]) => key), frequency)
+  const periodsPerYear = distributionPeriodsPerYear(periodLabel)
+  const isAnnualized = Boolean(annual && periodsPerYear)
+  const annualMult = isAnnualized ? periodsPerYear : 1
   const values = showPct ? dollarValues.map(v => (v / priceNum) * 100 * annualMult) : dollarValues
   const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
-  const pctLabel = annual ? 'Annual Yield %' : `${periodLabel} Yield %`
+  const pctLabel = isAnnualized ? 'Annual Yield %' : `${periodLabel} Yield %`
   const titleSuffix = showPct ? ` (${pctLabel})` : ''
 
   return {
     hasData: values.length > 0,
     canShowPct: priceNum > 0,
+    canAnnualize: periodsPerYear != null,
+    isAnnualized,
     periodLabel,
     layout: {
       template: theme.template,
@@ -151,6 +157,7 @@ export default function DistributionHistoryChart({
   history,
   ticker,
   price,
+  frequency,
   source,
   pctMode,
   annual,
@@ -165,8 +172,8 @@ export default function DistributionHistoryChart({
   const { isDark } = useTheme()
   const theme = chartTheme(isDark)
   const chart = useMemo(
-    () => buildDistributionChart(history, ticker, price, pctMode, annual, emptyLabel, theme),
-    [history, ticker, price, pctMode, annual, emptyLabel, theme],
+    () => buildDistributionChart(history, ticker, price, pctMode, annual, emptyLabel, theme, frequency),
+    [history, ticker, price, pctMode, annual, emptyLabel, theme, frequency],
   )
   const estimate = useMemo(
     () => (showEstimatedYield ? estimateForwardYield(history, price) : null),
@@ -195,12 +202,12 @@ export default function DistributionHistoryChart({
               {pctMode ? `Amount (${getCurrencyLabel()})` : 'Yield %'}
             </button>
           )}
-          {pctMode && chart.canShowPct && (
+          {pctMode && chart.canShowPct && chart.canAnnualize && (
             <button
-              className={`btn btn-sm${annual ? ' btn-active' : ''}`}
+              className={`btn btn-sm${chart.isAnnualized ? ' btn-active' : ''}`}
               onClick={onToggleAnnual}
             >
-              {annual ? chart.periodLabel : 'Annual'}
+              {chart.isAnnualized ? chart.periodLabel : 'Annual'}
             </button>
           )}
           {source && <span className={sourceClassName}>Source: {source}</span>}

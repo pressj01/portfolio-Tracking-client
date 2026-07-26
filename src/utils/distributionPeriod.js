@@ -11,13 +11,35 @@ const median = (values) => {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
 }
 
-export const distributionYieldPeriodLabel = (monthKeys = []) => {
+const explicitPeriodLabel = (frequency) => {
+  const value = String(frequency || '').trim().toLowerCase()
+  if (['w', 'weekly', '52', 'm', 'monthly', '12'].includes(value)) return 'Monthly'
+  if (['q', 'quarterly', '4'].includes(value)) return 'Quarterly'
+  if (['sa', 'semiannual', 'semi-annually', 'semiannually', 'semi-annual', '2'].includes(value)) return 'Semiannual'
+  if (['a', 'annual', 'annually', 'yearly', '1'].includes(value)) return 'Annual'
+  return null
+}
+
+export const distributionPeriodsPerYear = (periodLabel) => ({
+  Monthly: 12,
+  Quarterly: 4,
+  Semiannual: 2,
+  Annual: 1,
+}[periodLabel] || null)
+
+export const distributionYieldPeriodLabel = (monthKeys = [], frequency = null) => {
+  const explicit = explicitPeriodLabel(frequency)
+  if (explicit) return explicit
+
   const indexes = [...new Set(monthKeys)]
     .map(monthIndex)
     .filter(value => value != null)
     .sort((a, b) => a - b)
 
-  if (indexes.length < 2) return 'Monthly'
+  // A single payment contains no cadence information. Calling it monthly also
+  // makes the annual-yield view multiply it by 12, which materially overstates
+  // newly launched quarterly funds.
+  if (indexes.length < 2) return 'Distribution'
 
   const intervals = indexes
     .slice(1)
@@ -25,9 +47,13 @@ export const distributionYieldPeriodLabel = (monthKeys = []) => {
     .filter(value => value > 0 && value <= 12)
     .slice(-8)
 
-  if (!intervals.length) return 'Monthly'
+  if (!intervals.length) return 'Distribution'
 
   const quarterlyIntervals = intervals.filter(value => value >= 2 && value <= 4).length
   const quarterlyShare = quarterlyIntervals / intervals.length
-  return median(intervals) >= 2.5 && quarterlyShare >= 0.6 ? 'Quarterly' : 'Monthly'
+  const medianInterval = median(intervals)
+  if (medianInterval >= 2.5 && quarterlyShare >= 0.6) return 'Quarterly'
+  if (medianInterval >= 5 && medianInterval <= 7) return 'Semiannual'
+  if (medianInterval >= 10) return 'Annual'
+  return 'Monthly'
 }

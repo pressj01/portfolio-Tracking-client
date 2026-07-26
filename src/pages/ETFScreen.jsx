@@ -7,6 +7,7 @@ import MarkovPanel from '../components/MarkovPanel'
 import { computeMarkov, REGIME_COLORS } from '../utils/markov'
 import { formatMoney } from '../utils/money'
 import {
+  comparerLogHoverData,
   comparerStatsForMode,
   selectComparerTraces,
   shouldUseComparerLogScale,
@@ -2936,10 +2937,12 @@ export default function ETFScreen() {
         })
         traces.push({
           x: dates, y: yVals, type: 'scatter', mode: 'lines', name,
-          customdata: returnValues,
+          customdata: logScaleActive
+            ? comparerLogHoverData(returnValues, normalizedValues)
+            : returnValues,
           line: { color, dash, width },
           hovertemplate: logScaleActive && returnPctMode
-            ? `<b>%{x|%b %d, %Y}</b><br>${lineLabel}: %{customdata:+,.2f}%<br>Growth of $100: %{y:,.2f}<extra></extra>`
+            ? `<b>%{x|%b %d, %Y}</b><br>${lineLabel}: %{customdata[0]}<br>Growth of $100: %{customdata[1]}<extra></extra>`
             : returnPctMode
               ? `<b>%{x|%b %d, %Y}</b><br>${lineLabel}: %{y:.2f}%<extra></extra>`
             : `<b>%{x|%b %d, %Y}</b><br>${lineLabel}: %{y:.2f}<extra></extra>`,

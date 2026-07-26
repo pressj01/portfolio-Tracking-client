@@ -121,6 +121,26 @@ export function shouldUseComparerLogScale(
   return found && minWealth > 0 && maxWealth / minWealth >= ratioThreshold
 }
 
+function fixedGrouped(value, signed = false) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '-'
+  const [integer, fraction] = Math.abs(number).toFixed(2).split('.')
+  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  const sign = number < 0 ? '-' : (signed ? '+' : '')
+  return `${sign}${grouped}.${fraction}`
+}
+
+// Plotly can expose raw floating-point precision from customdata in unified
+// hover on a logarithmic axis. Preformat the two displayed values so the ETF
+// comparer, stock comparer, and Stock and ETF Analysis page stay consistent
+// with the two-decimal linear hover.
+export function comparerLogHoverData(returnValues = [], normalizedValues = []) {
+  return returnValues.map((returnValue, index) => [
+    `${fixedGrouped(returnValue, true)}%`,
+    fixedGrouped(normalizedValues[index]),
+  ])
+}
+
 function rounded(value) {
   return Number.isFinite(value) ? Number(value.toFixed(2)) : null
 }

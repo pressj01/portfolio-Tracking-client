@@ -13,6 +13,32 @@ def _distributions(dates):
 
 
 class DividendFrequencyTest(unittest.TestCase):
+    def test_research_frequency_uses_wrth_quarterly_launch_schedule(self):
+        divs = _distributions(["2026-06-29"])
+
+        self.assertEqual(
+            app_module._research_dividend_frequency(divs, "WRTH"),
+            "Quarterly",
+        )
+
+    def test_research_frequency_does_not_guess_monthly_from_one_payment(self):
+        divs = _distributions(["2026-06-29"])
+
+        self.assertEqual(
+            app_module._research_dividend_frequency(divs, "NEWF"),
+            "Annual/Irregular",
+        )
+
+    def test_research_frequency_prefers_observed_spacing_after_launch(self):
+        divs = _distributions([
+            "2026-06-29", "2026-07-29", "2026-08-28",
+        ])
+
+        self.assertEqual(
+            app_module._research_dividend_frequency(divs, "WRTH"),
+            "Monthly",
+        )
+
     def test_recent_monthly_cadence_overrides_older_quarterly_history(self):
         # Regression: OVL changed from quarterly to monthly in January 2026.
         divs = _distributions([
