@@ -34,6 +34,15 @@ TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-/]{0,10}$")
 ADJUSTMENT_NOTE = "Automatically generated transaction to adjust"
 
 
+def clean_security_description(value):
+    """Turn broker/Excel multiline security names into a single clean label."""
+    text = str(value or "")
+    # Some Shear Excel exports expose OOXML carriage-return/newline escapes as
+    # literal text, followed by a real line break (for example `_x000d_\n`).
+    text = re.sub(r"_x(?:000d|000a)_", " ", text, flags=re.IGNORECASE)
+    return " ".join(text.replace("\r", " ").replace("\n", " ").split())
+
+
 def _is_csv_file(file_path, filename=None):
     name = str(filename or file_path or "").lower()
     return name.endswith(".csv")
@@ -1827,7 +1836,7 @@ def parse_shear_group_positions(file_path, filename):
 
         positions.append({
             "ticker": ticker,
-            "description": str(record.get("Description") or "").strip(),
+            "description": clean_security_description(record.get("Description")),
             "quantity": quantity,
             "cost_per_share": cost_per_share or 0.0,
             "current_price": current_price,

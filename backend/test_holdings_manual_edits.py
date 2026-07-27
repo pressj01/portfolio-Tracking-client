@@ -3,6 +3,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as app_module
@@ -214,6 +217,106 @@ class ManualHoldingEditApiTest(unittest.TestCase):
         self.assertEqual(row["gain_or_loss"], -20)
         self.assertEqual(row["gain_or_loss_percentage"], -0.1)
         self.assertEqual(row["percent_change"], -0.1)
+
+    def test_dashboard_holdings_read_returns_saved_frequency_and_recomputed_income(self):
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, current_price, purchase_value, current_value, "
+            "div, div_frequency, estim_payment_per_year, approx_monthly_income) "
+            "VALUES ('WRTH', 1, 10, 30, 35, 300, 350, 0.409, 'A', 4.09, 0.34)"
+        )
+
+        update_res = self.client.put(
+            "/api/holdings/WRTH?profile_id=1",
+            json={"div_frequency": "Q"},
+        )
+        dashboard_res = self.client.get("/api/holdings?profile_id=1")
+
+        self.assertEqual(update_res.status_code, 200)
+        self.assertEqual(dashboard_res.status_code, 200)
+        row = dashboard_res.get_json()[0]
+        self.assertEqual(row["ticker"], "WRTH")
+        self.assertEqual(row["div_frequency"], "Q")
+        self.assertAlmostEqual(row["estim_payment_per_year"], 16.36, places=2)
+        self.assertAlmostEqual(row["approx_monthly_income"], 1.36, places=2)
+
+    def test_aggregate_dashboard_ticker_return_uses_member_holdings(self):
+        self._execute(
+            "CREATE TABLE aggregate_config "
+            "(aggregate_id INTEGER, member_profile_id INTEGER)"
+        )
+        self._execute(
+            "INSERT INTO aggregate_config (aggregate_id, member_profile_id) "
+            "VALUES (3, 23), (3, 24)"
+        )
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) "
+            "VALUES (23, 'Member A', 0), (24, 'Member B', 0)"
+        )
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, purchase_date, price_paid, "
+            "purchase_value, original_price_paid, original_purchase_value, "
+            "broker_price_paid, broker_purchase_value) "
+            "VALUES ('JPME', 23, 'JPMorgan Diversified Return U.S. Mid Cap Equity ETF', "
+            "82, '2026-01-07', 104.21939, 8545.99, 104.209186, 8961.99, 104.21939, 8545.99)"
+        )
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, purchase_date, price_paid, "
+            "purchase_value, original_price_paid, original_purchase_value, "
+            "broker_price_paid, broker_purchase_value) "
+            "VALUES ('JPME', 24, 'JPMorgan Diversified Return U.S. Mid Cap Equity ETF', "
+            "29, '2026-02-02', 104.23069, 3022.69, 104.215806, 3230.69, 104.23069, 3022.69)"
+        )
+        history = pd.DataFrame(
+            {
+                "Close": [110.0, 112.0, 114.0],
+                "Dividends": [0.0, 0.25, 0.0],
+            },
+            index=pd.to_datetime(["2026-01-07", "2026-01-08", "2026-01-09"]),
+        )
+
+        with (
+            patch("yfinance.Ticker") as ticker_mock,
+            patch.object(app_module, "_chunked_yf_download", return_value=history),
+        ):
+            ticker_mock.return_value.info = {}
+            res = self.client.get(
+                "/api/ticker-return/JPME?aggregate_id=3&basis_mode=original"
+            )
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data["ticker"], "JPME")
+        self.assertEqual(data["purchase_date"], "2026-01-07")
+        self.assertEqual(len(data["dates"]), 3)
+        self.assertEqual(len(data["price_return"]), 3)
+        self.assertEqual(len(data["total_return"]), 3)
+        self.assertAlmostEqual(
+            data["price_paid"],
+            (8961.99 + 3230.69) / (82 + 29),
+            places=6,
+        )
+
+    def test_holdings_read_repairs_stored_excel_line_breaks_in_fund_name(self):
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, purchase_value) "
+            "VALUES ('JPME', 1, 'JPMORGAN_x000d_\nDIVERSIFIED RETURN U S_x000D_\nMID CAP EQUITY ETF', "
+            "10, 104, 1040)"
+        )
+
+        res = self.client.get("/api/holdings?profile_id=1")
+
+        self.assertEqual(res.status_code, 200)
+        expected = "JPMORGAN DIVERSIFIED RETURN U S MID CAP EQUITY ETF"
+        self.assertEqual(res.get_json()[0]["description"], expected)
+        stored = self._row(
+            "SELECT description FROM all_account_info "
+            "WHERE ticker = 'JPME' AND profile_id = 1"
+        )
+        self.assertEqual(stored["description"], expected)
 
     def test_holdings_recomputes_current_yield_and_yoc_from_annual_income(self):
         self._execute(

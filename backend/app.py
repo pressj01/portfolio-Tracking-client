@@ -70,7 +70,10 @@ from normalize import (
     populate_pillar_weights,
     snapshot_nav,
 )
-from transaction_import import PARSERS as TXN_PARSERS
+from transaction_import import (
+    PARSERS as TXN_PARSERS,
+    clean_security_description,
+)
 import tax_report
 import tax_loss
 from options_api import register_routes as register_options_routes
@@ -2013,6 +2016,34 @@ def _basis_fallback_price(row, mode=None):
     return _first_not_none(row.get("original_price_paid"), row.get("price_paid"), row.get("broker_price_paid"))
 
 
+def _repair_encoded_security_descriptions(conn):
+    """Clean Excel line-break escapes already stored in holding descriptions."""
+    for table in ("all_account_info", "holdings"):
+        cols = {
+            row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if "description" not in cols:
+            continue
+        rows = conn.execute(
+            f"""SELECT rowid, description
+                FROM {table}
+                WHERE description IS NOT NULL
+                  AND (
+                      INSTR(LOWER(description), '_x000d_') > 0
+                      OR INSTR(LOWER(description), '_x000a_') > 0
+                      OR INSTR(description, CHAR(10)) > 0
+                      OR INSTR(description, CHAR(13)) > 0
+                  )"""
+        ).fetchall()
+        for row in rows:
+            cleaned = clean_security_description(row["description"])
+            if cleaned != row["description"]:
+                conn.execute(
+                    f"UPDATE {table} SET description = ? WHERE rowid = ?",
+                    (cleaned, row["rowid"]),
+                )
+
+
 def _ensure_basis_columns(conn):
     """Make older/minimal databases understand the split basis fields."""
     cols = {r[1] for r in conn.execute("PRAGMA table_info(all_account_info)").fetchall()}
@@ -2036,6 +2067,7 @@ def _ensure_basis_columns(conn):
             OR broker_price_paid IS NULL
             OR broker_purchase_value IS NULL
     """)
+    _repair_encoded_security_descriptions(conn)
     conn.commit()
 
 
@@ -6838,17 +6870,50 @@ def _infer_dividend_frequency_from_dates(dates):
         return None
 
 
-def _resolve_refresh_dividend_frequency(ticker, snapshot_frequency, weekly_tickers):
+_INITIAL_DIVIDEND_FREQUENCY_CODES = {
+    # WRTH launched in April 2026 and has only one Yahoo distribution so far.
+    # The issuer's first distribution announcement identifies the schedule as
+    # quarterly. Observed spacing wins once enough payments establish cadence.
+    "WRTH": "Q",
+}
+
+
+def _dividend_history_payment_count(history):
+    if history is None:
+        return None
+    try:
+        return len(pd.DatetimeIndex(history.index).drop_duplicates())
+    except Exception:
+        try:
+            return len(history)
+        except Exception:
+            return None
+
+
+def _resolve_refresh_dividend_frequency(
+    ticker,
+    snapshot_frequency,
+    weekly_tickers,
+    fallback_frequency=None,
+    history=None,
+):
     """Use fresh distribution cadence unless a curated weekly override applies.
 
     A stored frequency is passed to provider fallbacks only when fresh data is
     unavailable. It must not overrule a newer cadence inferred from dividend
     history: doing so can annualize a monthly distribution 52 times per year.
+    One payment does not establish cadence, though, so preserve a saved holding
+    frequency (or a curated launch schedule) until spacing can be observed.
     """
-    if (ticker or "").strip().upper() in weekly_tickers:
+    ticker = (ticker or "").strip().upper()
+    if ticker in weekly_tickers:
         return "W"
     frequency = (snapshot_frequency or "").strip().upper()
-    return frequency or None
+    fallback = (fallback_frequency or "").strip().upper()
+    payment_count = _dividend_history_payment_count(history)
+    if payment_count is not None and payment_count < 2:
+        return _INITIAL_DIVIDEND_FREQUENCY_CODES.get(ticker) or fallback or frequency or None
+    return frequency or fallback or _INITIAL_DIVIDEND_FREQUENCY_CODES.get(ticker) or None
 
 
 def _fetch_yahoo_dividend_history_for_tickers(tickers):
@@ -9954,6 +10019,8 @@ def refresh_market_data():
                 t,
                 snapshot.get("freq"),
                 weekly_set,
+                fallback_frequency=db_freq_map.get(t),
+                history=snapshot.get("history"),
             )
         else:
             effective_freq[t] = None
@@ -15052,6 +15119,64 @@ def _research_price_and_dividend_series(raw, dl_ticker):
     return close_col, divs_col
 
 
+def _ticker_return_holding_context(conn, ticker):
+    """Resolve the Dashboard holding represented by the current profile scope."""
+    is_aggregate, profile_ids = get_profile_filter()
+    profile_ids = list(dict.fromkeys(int(pid) for pid in profile_ids))
+    placeholders = ",".join("?" * len(profile_ids))
+
+    if is_aggregate:
+        basis_total = _basis_total_expr("a")
+        row = conn.execute(
+            f"""SELECT
+                    MIN(NULLIF(a.purchase_date, '')) AS purchase_date,
+                    CASE
+                        WHEN SUM(COALESCE(a.quantity, 0)) > 0
+                        THEN SUM({basis_total}) / SUM(COALESCE(a.quantity, 0))
+                        ELSE 0
+                    END AS price_paid,
+                    MAX(NULLIF(a.description, '')) AS description
+                FROM all_account_info a
+                WHERE a.ticker = ?
+                  AND a.profile_id IN ({placeholders})
+                  AND COALESCE(a.quantity, 0) > 1e-9
+                HAVING SUM(COALESCE({basis_total}, 0)) > 0""",
+            [ticker] + profile_ids,
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """SELECT purchase_date, price_paid, description, quantity,
+                      purchase_value, original_price_paid, original_purchase_value,
+                      broker_price_paid, broker_purchase_value
+               FROM all_account_info
+               WHERE ticker = ? AND profile_id = ?
+                 AND COALESCE(quantity, 0) > 1e-9""",
+            (ticker, profile_ids[0]),
+        ).fetchone()
+        if row:
+            holding = dict(row)
+            selected_total = _basis_fallback_total(holding)
+            if not selected_total or selected_total <= 0:
+                row = None
+            else:
+                holding["price_paid"] = _basis_fallback_price(holding)
+                row = holding
+
+    txn_row = conn.execute(
+        f"""SELECT transaction_date, price_per_share
+            FROM transactions
+            WHERE ticker = ?
+              AND profile_id IN ({placeholders})
+              AND UPPER(COALESCE(transaction_type, '')) = 'BUY'
+              AND shares > 0
+              AND price_per_share > 0
+            ORDER BY transaction_date ASC
+            LIMIT 1""",
+        [ticker] + profile_ids,
+    ).fetchone()
+    return row, txn_row
+
+
 @app.route("/api/ticker-return/<ticker>", methods=["GET"])
 def ticker_return_chart(ticker):
     """Return price return % and total return % data since purchase date."""
@@ -15059,35 +15184,22 @@ def ticker_return_chart(ticker):
     import yfinance as yf
     warnings.filterwarnings("ignore")
 
-    profile_id = get_profile_id()
     ticker = ticker.strip().upper()
     conn = get_connection()
-    row = conn.execute(
-        "SELECT purchase_date, price_paid, description FROM all_account_info WHERE ticker = ? AND profile_id = ? AND purchase_value > 0",
-        (ticker, profile_id),
-    ).fetchone()
-    txn_row = conn.execute(
-        """SELECT transaction_date, price_per_share
-           FROM transactions
-           WHERE ticker = ? AND profile_id = ?
-             AND transaction_type = 'BUY'
-             AND shares > 0
-             AND price_per_share > 0
-           ORDER BY transaction_date ASC
-           LIMIT 1""",
-        (ticker, profile_id),
-    ).fetchone()
-    conn.close()
+    try:
+        row, txn_row = _ticker_return_holding_context(conn, ticker)
+    finally:
+        conn.close()
 
     if not row:
         return jsonify({"error": f"No data found for {ticker}"}), 404
 
-    purchase_date = pd.to_datetime(row["purchase_date"])
+    purchase_date = pd.to_datetime(row["purchase_date"], errors="coerce")
     price_paid = float(row["price_paid"] or 0)
     description = row["description"] or ticker
 
     if pd.isna(purchase_date) and txn_row:
-        purchase_date = pd.to_datetime(txn_row["transaction_date"])
+        purchase_date = pd.to_datetime(txn_row["transaction_date"], errors="coerce")
         price_paid = float(txn_row["price_per_share"] or 0)
     if price_paid <= 0 and txn_row:
         price_paid = float(txn_row["price_per_share"] or 0)
@@ -15311,26 +15423,31 @@ def _research_expense_pct(*values):
     return None
 
 
-_RESEARCH_INITIAL_DIVIDEND_FREQUENCIES = {
-    # WRTH launched in April 2026 and has only one Yahoo distribution so far.
-    # The issuer's first distribution announcement identifies the schedule as
-    # quarterly.  Treat this as a launch-time seed only; observed spacing wins
-    # as soon as Yahoo has enough payments to establish a cadence.
-    "WRTH": "Quarterly",
+_RESEARCH_FREQUENCY_LABELS = {
+    "W": "Weekly",
+    "M": "Monthly",
+    "Q": "Quarterly",
+    "SA": "Semiannual",
+    "A": "Annual",
 }
+
+
+def _research_initial_dividend_frequency(ticker):
+    code = _INITIAL_DIVIDEND_FREQUENCY_CODES.get((ticker or "").strip().upper())
+    return _RESEARCH_FREQUENCY_LABELS.get(code)
 
 
 def _research_dividend_frequency(dividends, ticker=None):
     if dividends is None or dividends.empty:
-        return _RESEARCH_INITIAL_DIVIDEND_FREQUENCIES.get((ticker or "").strip().upper())
+        return _research_initial_dividend_frequency(ticker)
     divs = dividends[dividends > 0].dropna()
     if divs.empty:
-        return _RESEARCH_INITIAL_DIVIDEND_FREQUENCIES.get((ticker or "").strip().upper())
+        return _research_initial_dividend_frequency(ticker)
 
     dates = list(dict.fromkeys(divs.sort_index().index))[-9:]
     if len(dates) < 2:
         return (
-            _RESEARCH_INITIAL_DIVIDEND_FREQUENCIES.get((ticker or "").strip().upper())
+            _research_initial_dividend_frequency(ticker)
             or "Annual/Irregular"
         )
 

@@ -165,6 +165,23 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(position["purchase_value"], 3435.25)
         self.assertAlmostEqual(position["cost_per_share"], 3435.25 / 57.0)
 
+    def test_shear_group_positions_cleans_excel_line_breaks_from_fund_names(self):
+        content = "\n".join([
+            "Account Number,Account Name,Account Nick Name,Symbol/CUSIP,Description,Quantity,Price ($),Value ($),Unit Cost,Cost Basis ($),Unrealized G/L ($),Security Type Description",
+            '45514950,PRESSER JAMES,PRESSER JAMES,JPME,"JPMORGAN_x000d_\nDIVERSIFIED RETURN U S_x000D_\nMID CAP EQUITY ETF",10,$114.00,"$1,140.00",$104.00,"$1,040.00",$100.00,ETF',
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Positions.csv"
+            path.write_text(content, encoding="utf-8")
+
+            result = parse_shear_group_positions(str(path), path.name)
+
+        self.assertEqual(
+            result["positions"][0]["description"],
+            "JPMORGAN DIVERSIFIED RETURN U S MID CAP EQUITY ETF",
+        )
+
     def test_shear_group_activity_feeds_gains_losses_transactions(self):
         content = "\n".join([
             "Date,Activity,Symbol,Description,Quantity,Unit Price,Value,Held In,Account Nickname,Account Number",

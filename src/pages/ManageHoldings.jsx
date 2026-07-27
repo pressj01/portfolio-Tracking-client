@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useDialog } from '../components/DialogProvider'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
-import { clearDashboardCacheForSelection } from '../utils/dashboardCache'
+import { clearAllDashboardCache } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
 
 const EMPTY_HOLDING = {
@@ -27,7 +27,10 @@ function normalizeHoldingRow(row) {
 
 function invalidateDashboardCache() {
   try {
-    clearDashboardCacheForSelection(localStorage.getItem('portfolio_selectedProfileId') || 'p:1')
+    // A holding can feed its individual account, Owner, and one or more
+    // aggregate portfolios. Clear every Dashboard view so none of those
+    // dependent views can preload values from before the edit.
+    clearAllDashboardCache()
   } catch {
     // Cache invalidation is best-effort; data refresh still comes from the API.
   }
@@ -1363,6 +1366,7 @@ export default function ManageHoldings() {
       if (!res.ok) throw new Error(data.error)
       setRepairPreview(null)
       setMessage(data.message)
+      invalidateDashboardCache()
       await fetchHoldings()
     } catch (e) {
       setError(e.message)
@@ -1382,6 +1386,7 @@ export default function ManageHoldings() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setMessage(data.message)
+      invalidateDashboardCache()
       await fetchHoldings()
     } catch (e) {
       setError(e.message)
@@ -2140,7 +2145,11 @@ export default function ManageHoldings() {
       {showDripMatrix && (
         <DripMatrixModal
           onClose={() => setShowDripMatrix(false)}
-          onSynced={(msg) => { setMessage(msg); fetchHoldings() }}
+          onSynced={(msg) => {
+            setMessage(msg)
+            invalidateDashboardCache()
+            fetchHoldings()
+          }}
           pf={pf}
         />
       )}

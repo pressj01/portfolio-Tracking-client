@@ -91,6 +91,49 @@ class DividendFrequencyTest(unittest.TestCase):
             "W",
         )
 
+    def test_refresh_preserves_saved_frequency_when_one_payment_cannot_establish_cadence(self):
+        divs = _distributions(["2026-06-29"])
+
+        self.assertEqual(
+            app_module._resolve_refresh_dividend_frequency(
+                "NEWF",
+                "A",
+                set(),
+                fallback_frequency="Q",
+                history=divs,
+            ),
+            "Q",
+        )
+
+    def test_refresh_uses_wrth_launch_schedule_until_spacing_is_observed(self):
+        divs = _distributions(["2026-06-29"])
+
+        self.assertEqual(
+            app_module._resolve_refresh_dividend_frequency(
+                "WRTH",
+                "A",
+                set(),
+                history=divs,
+            ),
+            "Q",
+        )
+
+    def test_refresh_prefers_observed_cadence_over_saved_frequency(self):
+        divs = _distributions([
+            "2026-06-29", "2026-07-29", "2026-08-28",
+        ])
+
+        self.assertEqual(
+            app_module._resolve_refresh_dividend_frequency(
+                "WRTH",
+                "M",
+                set(),
+                fallback_frequency="Q",
+                history=divs,
+            ),
+            "M",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -645,12 +645,15 @@ function TickerModal({ ticker, onClose }) {
     if (!ticker) return
     setLoading(true)
     setError(null)
-    pf(`/api/ticker-return/${ticker}`)
-      .then(r => {
-        if (!r.ok) throw new Error(`Could not load return data for ${ticker}`)
-        return r.json()
+    setData(null)
+    pf(`/api/ticker-return/${encodeURIComponent(ticker)}`)
+      .then(async r => {
+        const payload = await r.json().catch(() => null)
+        if (!r.ok) throw new Error(payload?.error || `Could not load return data for ${ticker}`)
+        return payload
       })
       .then(d => {
+        if (!d) throw new Error(`Could not load return data for ${ticker}`)
         if (d.error) throw new Error(d.error)
         setData(d)
       })
@@ -838,7 +841,10 @@ export default function Dashboard() {
     let stale = false
     const cached = readDashboardCache(dashboardCacheKey)
     if (cached) {
-      setHoldings(normalizeDashboardHoldings(cached.holdings))
+      // Holding rows are editable and are also changed by imports/refreshes.
+      // Never render them from the long-lived Dashboard cache: a fresh
+      // /api/holdings read is the source of truth for every editable field.
+      setHoldings([])
       setIncomeSummary(cached.incomeSummary || null)
       setPortfolioValue(cached.portfolioValue || null)
       setUpcomingDivs(cached.upcomingDivs || [])
@@ -854,7 +860,7 @@ export default function Dashboard() {
       setOverviewGroups(cached.overviewGroups || null)
       setOverviewCategories(cached.overviewCategories || null)
       setDailyChange(cached.dailyChange || null)
-      setLoading(false)
+      setLoading(true)
     } else {
       setHoldings([])
       setIncomeSummary(null)
@@ -1064,7 +1070,6 @@ export default function Dashboard() {
   useEffect(() => {
     if (loading || !holdings.length) return
     writeDashboardCache(dashboardCacheKey, {
-      holdings,
       incomeSummary,
       portfolioValue,
       upcomingDivs,
