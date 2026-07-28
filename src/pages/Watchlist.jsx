@@ -25,7 +25,7 @@ function fmt(v) {
   return formatMoney(v)
 }
 
-function YieldCell({ ticker, computed, override, overridden, onSave }) {
+function YieldCell({ ticker, computed, source, override, overridden, onSave }) {
   const [editing, setEditing] = useState(false)
   const initial = (override ?? '').toString()
   const [draft, setDraft] = useState(initial)
@@ -74,7 +74,9 @@ function YieldCell({ ticker, computed, override, overridden, onSave }) {
   return (
     <span
       onClick={() => setEditing(true)}
-      title={overridden ? 'Manual override (click to edit)' : 'Click to override yield'}
+      title={overridden
+        ? 'Manual override (click to edit)'
+        : `${source ? `${source}. ` : ''}Click to override yield`}
       style={{
         display: 'inline-block',
         minWidth: 60,
@@ -600,7 +602,7 @@ export default function Watchlist() {
                   { label: 'Ticker' },
                   { label: 'Price', tip: 'Current market price' },
                   { label: '1D Chg', tip: '1-day price change percentage' },
-                  { label: 'Div Yield', tip: 'Current annual dividend yield. Click the cell to override (e.g. for high-yield ETFs where yfinance is stale).' },
+                  { label: 'Div Yield', tip: 'Expected annual distribution yield, annualized from the current payout schedule for funds without a full year of history. Click the cell to override.' },
                   { label: 'Signal', tip: 'Overall buy/sell signal — majority vote across indicators' },
                   { label: 'AO', tip: 'Awesome Oscillator signal — momentum based on 5/34-period midpoint SMAs' },
                   { label: 'RSI', tip: 'Relative Strength Index signal — overbought >70, oversold <30' },
@@ -642,6 +644,7 @@ export default function Watchlist() {
                       <YieldCell
                         ticker={r.ticker}
                         computed={a?.div_yield}
+                        source={a?.div_yield_source}
                         override={r.div_yield_override}
                         overridden={a?.div_yield_overridden}
                         onSave={updateYieldOverride}

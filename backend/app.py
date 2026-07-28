@@ -6460,6 +6460,101 @@ def _div_calc_annual_dividend(divs, freq_code):
     return (ttm_div or run_rate_div), ttm_div, "trailing_12_month"
 
 
+def _expected_annual_distribution_yield_pct(
+    ticker,
+    current_price,
+    distributions,
+    frequency=None,
+    price_history=None,
+    distribution_rate_pct=None,
+):
+    """Return a fund's expected annual distribution yield as a percentage.
+
+    A raw TTM sum badly understates recently launched funds because their
+    available history contains only part of a year. Prefer an issuer-published
+    distribution rate, then annualize the current payment cadence. When a new
+    fund has only one payment, use the elapsed launch-to-payment period so a
+    partial first month/quarter is not treated as a full annual schedule.
+    """
+    try:
+        official_rate = float(distribution_rate_pct)
+        if math.isfinite(official_rate) and official_rate >= 0:
+            return round(official_rate, 2), "issuer_distribution_rate"
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        price = float(current_price)
+    except (TypeError, ValueError):
+        price = 0.0
+    if not math.isfinite(price) or price <= 0:
+        return None, None
+
+    pos = _div_calc_positive_dividends(distributions).sort_index()
+    if pos.empty:
+        return None, None
+
+    # A single payment cannot reveal cadence. For a genuinely new fund (its
+    # downloaded price history is shorter than a year), annualize the partial
+    # launch period through that first ex-date. This covers partial inaugural
+    # quarters such as WRTH without hard-coding a yield for the ticker.
+    if len(pos) == 1 and price_history is not None:
+        try:
+            prices = price_history.dropna().sort_index()
+            launch_ts = pd.Timestamp(prices.index[0])
+            latest_price_ts = pd.Timestamp(prices.index[-1])
+            payment_ts = pd.Timestamp(pos.index[-1])
+            available_days = (latest_price_ts - launch_ts).total_seconds() / 86400.0
+            earning_days = (payment_ts - launch_ts).total_seconds() / 86400.0
+            if 0 < earning_days and available_days < 350:
+                annual_dividend = float(pos.iloc[-1]) * (365.25 / earning_days)
+                return round(annual_dividend / price * 100, 2), "annualized_since_launch"
+        except Exception:
+            pass
+
+    freq_code = str(frequency or "").strip().upper()
+    if freq_code not in _DIV_CALC_FREQ_MAP:
+        dates = list(dict.fromkeys(pos.index))[-4:]
+        if len(dates) >= 2:
+            gaps = sorted(
+                abs((dates[i] - dates[i - 1]).total_seconds()) / 86400.0
+                for i in range(1, len(dates))
+            )
+            median_gap = gaps[len(gaps) // 2]
+            if median_gap <= 10:
+                freq_code = "W"
+            elif median_gap <= 45:
+                freq_code = "M"
+            elif median_gap <= 115:
+                freq_code = "Q"
+            elif median_gap <= 240:
+                freq_code = "SA"
+            else:
+                freq_code = "A"
+        else:
+            initial_codes = globals().get("_INITIAL_DIVIDEND_FREQUENCY_CODES", {})
+            freq_code = initial_codes.get(str(ticker or "").strip().upper()) or "A"
+
+    annual_dividend, _ttm_dividend, source = _div_calc_annual_dividend(pos, freq_code)
+
+    # The shared calculator already annualizes incomplete weekly/monthly runs.
+    # Extend the same behavior to quarterly and semiannual funds rather than
+    # presenting one or two observed payments as a completed trailing year.
+    if freq_code in {"Q", "SA"}:
+        _, payments_per_year = _DIV_CALC_FREQ_MAP[freq_code]
+        tz = pos.index.tz
+        now = pd.Timestamp.now(tz=tz) if tz is not None else pd.Timestamp.now()
+        trailing = pos[pos.index >= now - pd.DateOffset(years=1)]
+        if 0 < len(trailing) < payments_per_year:
+            recent = trailing.tail(payments_per_year)
+            annual_dividend = float(recent.mean()) * payments_per_year
+            source = "annualized_recent_distributions"
+
+    if not math.isfinite(float(annual_dividend)) or annual_dividend <= 0:
+        return None, None
+    return round(float(annual_dividend) / price * 100, 2), source
+
+
 def _div_calc_growth_pct(divs, freq_code):
     """Annualized dividend growth using median-based CAGR over up to 5 years.
 
@@ -15673,6 +15768,12 @@ def _fetch_income_blast_distribution_snapshot(ticker):
     text = _income_blast_text_from_html(html_text)
     if not _is_tuttle_capital_fund(ticker, text):
         return None
+    distribution_rate_pct = _research_pct(
+        _vistashares_match(
+            text,
+            r"Distribution Rate\s+([0-9.]+)\s+X\.XX%",
+        )
+    )
 
     header = re.search(r"Ex-Date\s*\n\s*Pay Date\s*\n\s*Amount\b", text, re.S)
     if not header:
@@ -15758,6 +15859,7 @@ def _fetch_income_blast_distribution_snapshot(ticker):
         "freq": freq or "W",
         "history": history,
         "pay_lag_days": pay_lag_days,
+        "distribution_rate_pct": distribution_rate_pct,
         "source": "Income Blast (Tuttle Capital)",
     }
 
@@ -26060,18 +26162,62 @@ def watchlist_data():
                 if price is not None and prev_price else None
 
             div_yield = None
-            if divs_df is not None and price is not None and price > 0:
+            div_yield_source = None
+            t_divs = pd.Series([], dtype=float)
+            if divs_df is not None and ticker in divs_df.columns:
                 try:
-                    t_divs = divs_df[ticker].dropna() if ticker in divs_df.columns else pd.Series([], dtype=float)
-                    ttm_divs = t_divs[t_divs > 0].sum()
-                    if ttm_divs > 0:
-                        div_yield = round(ttm_divs / price * 100, 2)
+                    t_divs = divs_df[ticker].dropna()
+                    t_divs = t_divs[t_divs > 0]
                 except Exception:
-                    pass
+                    t_divs = pd.Series([], dtype=float)
+
+            expected_divs = t_divs
+            expected_frequency = None
+            official_rate = None
+            official_source = None
+            try:
+                official_snapshot = _fetch_official_distribution_snapshot(ticker)
+                if official_snapshot:
+                    official_history = official_snapshot.get("history")
+                    if official_history is not None and not official_history.empty:
+                        expected_divs = official_history
+                    expected_frequency = official_snapshot.get("freq")
+                    official_rate = official_snapshot.get("distribution_rate_pct")
+                    official_source = official_snapshot.get("source") or "Fund Site"
+            except Exception:
+                pass
+
+            price_history = (
+                unadj_close_df[ticker].dropna()
+                if ticker in unadj_close_df.columns
+                else close
+            )
+            div_yield, annualization_source = _expected_annual_distribution_yield_pct(
+                ticker,
+                price,
+                expected_divs,
+                frequency=expected_frequency,
+                price_history=price_history,
+                distribution_rate_pct=official_rate,
+            )
+            if div_yield is not None:
+                base_source = official_source or "Yahoo Finance"
+                source_labels = {
+                    "issuer_distribution_rate": "issuer distribution rate",
+                    "annualized_since_launch": "annualized since launch",
+                    "annualized_recent_distributions": "annualized current distributions",
+                    "annualized_average_distribution": "annualized average distribution",
+                    "latest_distribution_rate": "latest distribution annualized",
+                    "trailing_12_month": "trailing 12 months",
+                }
+                detail = source_labels.get(annualization_source, "annualized distributions")
+                div_yield_source = f"{base_source} - {detail}"
+
             div_yield_override = yield_overrides.get(ticker)
             if div_yield_override is not None:
                 try:
                     div_yield = round(float(div_yield_override), 2)
+                    div_yield_source = "Manual override"
                 except (TypeError, ValueError):
                     pass
 
@@ -26095,6 +26241,7 @@ def watchlist_data():
                 "price": round(price, 2) if price is not None else None,
                 "change_1d": change_1d,
                 "div_yield": div_yield,
+                "div_yield_source": div_yield_source,
                 "div_yield_overridden": ticker in yield_overrides,
                 "signal": signal,
                 "ao_sig": ao_sig,
