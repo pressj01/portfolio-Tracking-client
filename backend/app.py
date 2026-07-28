@@ -28750,8 +28750,14 @@ def _get_single_stock_etfs():
     result = set(_DEFAULT_SINGLE_STOCK_ETFS)
     try:
         conn = get_connection()
-        row = conn.execute("SELECT value FROM settings WHERE key = 'single_stock_etfs'").fetchone()
-        conn.close()
+        # close() must be in a finally: this runs at import time, before the
+        # tables exist on a fresh database, and the SELECT below then raises.
+        # Leaving it inside the try leaked the connection for the life of the
+        # process — which on Windows keeps a lock on the database file.
+        try:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'single_stock_etfs'").fetchone()
+        finally:
+            conn.close()
         if row and row["value"]:
             user_tickers = {t.strip().upper() for t in row["value"].split(",") if t.strip()}
             result |= user_tickers
@@ -38757,7 +38763,9 @@ def _get_default_scanner_etfs():
         "YMAX", "YMAG", "ULTY", "LFGY", "SLTY", "BIGY", "FIVY",
         "QQQY", "XDTE", "QDTE", "RDTE", "WDTE",
     ]
-    for t in _DEFAULT_ETFS + INCOME_ETFS + _get_single_stock_etfs() + extra_income:
+    # _get_single_stock_etfs() returns a set, which cannot be concatenated to a
+    # list; sorted() also keeps the seeded universe order stable between runs.
+    for t in _DEFAULT_ETFS + INCOME_ETFS + sorted(_get_single_stock_etfs()) + extra_income:
         ticker = str(t).strip().upper()
         if ticker and ticker not in seen:
             seen.add(ticker)
