@@ -273,6 +273,91 @@ class HoldingsTransactionTest(unittest.TestCase):
         self.assertEqual(row["purchase_value"], 201)
         self.assertEqual(row["purchase_date"], "2026-01-10")
 
+    def _seed_profiles_table(self, profile_id, positions_managed):
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS profiles (id INTEGER PRIMARY KEY, name TEXT, positions_managed INTEGER)"
+        )
+        self.conn.execute(
+            "INSERT INTO profiles (id, name, positions_managed) VALUES (?, 'Test', ?)",
+            (profile_id, 1 if positions_managed else 0),
+        )
+
+    def test_rollup_keeps_broker_basis_split_from_original(self):
+        # Broker-managed profile: the position import owns broker_*, and original_*
+        # is frozen at first sight.  A later rollup must leave both alone so the
+        # Original / Broker-adjusted toggle still has two distinct values.
+        self._seed_profiles_table(1, positions_managed=True)
+        self.conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, "
+            "original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value) "
+            "VALUES ('ABC', 1, 10, 20, 200, 20, 200, 15, 150)"
+        )
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES ('ABC', 1, 'BUY', '2026-01-10', 10, 20, 0)"
+        )
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES ('ABC', 1, 'BUY', '2026-02-10', 10, 30, 0)"
+        )
+
+        _rollup_transactions("ABC", 1, self.conn)
+
+        row = self.conn.execute(
+            "SELECT price_paid, original_price_paid, broker_price_paid, broker_purchase_value "
+            "FROM all_account_info WHERE ticker = 'ABC' AND profile_id = 1"
+        ).fetchone()
+        self.assertEqual(row["price_paid"], 25)  # ledger average moves
+        self.assertEqual(row["original_price_paid"], 20)  # frozen original survives
+        self.assertEqual(row["broker_price_paid"], 15)  # broker feed still owns this
+        self.assertEqual(row["broker_purchase_value"], 150)
+
+    def test_rollup_tracks_broker_basis_when_profile_has_no_broker_feed(self):
+        # No position feed: the ledger is the only authority, so broker_* should
+        # follow it while original_* stays pinned to what was first recorded.
+        self._seed_profiles_table(1, positions_managed=False)
+        self.conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, "
+            "original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value) "
+            "VALUES ('ABC', 1, 10, 20, 200, 20, 200, 20, 200)"
+        )
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES ('ABC', 1, 'BUY', '2026-01-10', 10, 20, 0)"
+        )
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES ('ABC', 1, 'BUY', '2026-02-10', 10, 30, 0)"
+        )
+
+        _rollup_transactions("ABC", 1, self.conn)
+
+        row = self.conn.execute(
+            "SELECT original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value "
+            "FROM all_account_info WHERE ticker = 'ABC' AND profile_id = 1"
+        ).fetchone()
+        self.assertEqual(row["original_price_paid"], 20)
+        self.assertEqual(row["original_purchase_value"], 200)
+        self.assertEqual(row["broker_price_paid"], 25)
+        self.assertEqual(row["broker_purchase_value"], 500)
+
+    def test_rollup_still_seeds_original_basis_when_absent(self):
+        # A brand-new holding has no frozen original yet; COALESCE must still fill it.
+        self._seed_profiles_table(1, positions_managed=True)
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES ('ABC', 1, 'BUY', '2026-01-10', 10, 20, 0)"
+        )
+
+        _rollup_transactions("ABC", 1, self.conn)
+
+        row = self.conn.execute(
+            "SELECT original_price_paid, original_purchase_value FROM all_account_info "
+            "WHERE ticker = 'ABC' AND profile_id = 1"
+        ).fetchone()
+        self.assertEqual(row["original_price_paid"], 20)
+        self.assertEqual(row["original_purchase_value"], 200)
+
     def test_preserved_position_realized_gain_refresh_does_not_change_holding(self):
         self.conn.execute(
             "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, current_value, gain_or_loss) "

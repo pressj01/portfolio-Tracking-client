@@ -2231,10 +2231,15 @@ def _profile_is_positions_managed(profile_id, conn=None):
         conn = get_connection()
         close = True
     try:
-        row = conn.execute(
-            "SELECT positions_managed FROM profiles WHERE id = ?",
-            (profile_id,),
-        ).fetchone()
+        try:
+            row = conn.execute(
+                "SELECT positions_managed FROM profiles WHERE id = ?",
+                (profile_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # Minimal/older databases may not carry the profiles table at all;
+            # with no broker feed on record, treat the profile as unmanaged.
+            return False
         if not row:
             return False
         return bool(row["positions_managed"] if isinstance(row, dict) else row[0])
@@ -12382,17 +12387,31 @@ def _rollup_transactions(ticker, profile_id, conn):
         gl = round(cur_val - total_cost, 2) if cur_val is not None else None
         gl_pct = round(gl / total_cost, 6) if gl is not None and total_cost > 0 else None
 
+        # original_* is the frozen first-seen basis, so COALESCE it the same way
+        # the position import does.  Rewriting it on every rollup collapses the
+        # Original vs Broker-adjusted toggle to a single value.  broker_* mirrors
+        # the broker's own reported basis, so refresh it here only for profiles
+        # with no broker position feed, where the ledger is the authority.
+        basis_sets = [
+            "original_price_paid = COALESCE(original_price_paid, ?)",
+            "original_purchase_value = COALESCE(original_purchase_value, ?)",
+        ]
+        basis_values = [round(avg_price, 4), round(total_cost, 2)]
+        if not _profile_is_positions_managed(profile_id, conn):
+            basis_sets += ["broker_price_paid = ?", "broker_purchase_value = ?"]
+            basis_values += [round(avg_price, 4), round(total_cost, 2)]
+
         conn.execute(
-            """UPDATE all_account_info
+            f"""UPDATE all_account_info
                SET quantity = ?, price_paid = ?, purchase_value = ?,
-                   original_price_paid = ?, original_purchase_value = ?,
+                   {', '.join(basis_sets)},
                    purchase_date = ?, base_quantity = ?, import_date = ?,
                    realized_gains = ?,
                    current_value = ?, gain_or_loss = ?,
                    gain_or_loss_percentage = ?, percent_change = ?
                WHERE ticker = ? AND profile_id = ?""",
             (round(total_shares, 6), round(avg_price, 4), round(total_cost, 2),
-             round(avg_price, 4), round(total_cost, 2),
+             *basis_values,
              earliest_buy, round(total_shares, 6), _date.today().isoformat(),
              round(total_realized, 2),
              cur_val, gl, gl_pct, gl_pct,
