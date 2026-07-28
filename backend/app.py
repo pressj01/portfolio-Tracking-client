@@ -28745,8 +28745,33 @@ _DEFAULT_SINGLE_STOCK_ETFS = {
 }
 
 
+# Cached ticker sets derived from the user-editable settings list. All three are
+# dropped together by _invalidate_single_stock_etf_caches() when that list is
+# saved, so edits on the Settings screen take effect without a backend restart.
+_single_stock_etf_cache = None
+_option_income_ticker_cache = None
+_ticker_strategy_override_cache = None
+
+
+def _invalidate_single_stock_etf_caches():
+    """Drop the cached ticker sets after the user edits the settings list."""
+    global _single_stock_etf_cache, _option_income_ticker_cache
+    global _ticker_strategy_override_cache
+    _single_stock_etf_cache = None
+    _option_income_ticker_cache = None
+    _ticker_strategy_override_cache = None
+
+
 def _get_single_stock_etfs():
-    """Return built-in set merged with any user-added tickers from settings."""
+    """Return built-in set merged with any user-added tickers from settings.
+
+    Cached because this is consulted once per fund row while scanning, and
+    opening a fresh SQLite connection for each row cost hundreds of round
+    trips per scan.
+    """
+    global _single_stock_etf_cache
+    if _single_stock_etf_cache is not None:
+        return set(_single_stock_etf_cache)
     result = set(_DEFAULT_SINGLE_STOCK_ETFS)
     try:
         conn = get_connection()
@@ -28762,7 +28787,11 @@ def _get_single_stock_etfs():
             user_tickers = {t.strip().upper() for t in row["value"].split(",") if t.strip()}
             result |= user_tickers
     except Exception:
-        pass
+        # Settings unreadable, typically the import-time call on a fresh
+        # database before the tables exist. Return the built-ins but do not
+        # cache them, so a later call retries once the table is there.
+        return result
+    _single_stock_etf_cache = frozenset(result)
     return result
 
 
@@ -31757,6 +31786,7 @@ def save_single_stock_etfs():
                  ("single_stock_etfs", value))
     conn.commit()
     conn.close()
+    _invalidate_single_stock_etf_caches()
     return jsonify({"ok": True, "user_added": cleaned})
 
 
@@ -37884,7 +37914,7 @@ def general_scanner_universe():
     return jsonify(rows=[{"ticker": r["ticker"], "asset_type": r["asset_type"]} for r in rows])
 
 
-_options_income_tickers = set([
+_OPTION_INCOME_BASE_TICKERS = frozenset([
     # JPM / Global X / classic covered call
     "JEPI", "JEPQ", "JEPY", "QYLD", "XYLD", "RYLD", "DJIA", "QYLG", "XYLG", "TYLG",
     # NUSI reverse-split 1-for-2 and renamed to QQQH on 2025-02-21; the dead
@@ -37915,7 +37945,23 @@ _options_income_tickers = set([
     # Other option-income / derivatives
     "CHPY", "GPTY", "TSPY", "TDAQ", "TDAX", "TSYX", "SEPI", "QDVO", "OVL",
     "YMAX", "YMAG", "ULTY", "LFGY", "SLTY", "BIGY", "FIVY",
-]) | set(_get_single_stock_etfs())
+])
+
+
+def _option_income_tickers():
+    """Static option-income list plus the current single-stock ETFs.
+
+    Resolved on call rather than at import so tickers added on the Settings
+    screen are picked up without restarting the backend.
+    """
+    global _option_income_ticker_cache
+    if _option_income_ticker_cache is not None:
+        return set(_option_income_ticker_cache)
+    tickers = set(_OPTION_INCOME_BASE_TICKERS) | _get_single_stock_etfs()
+    # Only cache once the settings read has actually succeeded.
+    if _single_stock_etf_cache is not None:
+        _option_income_ticker_cache = frozenset(tickers)
+    return tickers
 
 _OPTION_INCOME_TEXT_KEYWORDS = (
     "option income",
@@ -37933,9 +37979,7 @@ def _has_option_income_text(info, name=""):
     text = f"{fund_name} {summary}".lower().replace("-", " ")
     return any(keyword in text for keyword in _OPTION_INCOME_TEXT_KEYWORDS)
 
-_TICKER_STRATEGY_OVERRIDES = {
-    # Options / Covered Call Income
-    **{t: "Options Income" for t in sorted(_options_income_tickers)},
+_TICKER_STRATEGY_OVERRIDES_STATIC = {
     # CEF Income
     **{t: "CEF" for t in [
         "PCEF", "CEFS", "YYY", "XMPT", "FCEF", "ADX", "ASGI", "BST",
@@ -37957,10 +38001,31 @@ _TICKER_STRATEGY_OVERRIDES = {
     ]},
 }
 
+
+def _ticker_strategy_overrides():
+    """Ticker -> strategy map with the option-income entries resolved on call.
+
+    The static entries are merged last so they keep overriding the generated
+    Options Income ones, matching the key order of the original dict literal
+    (BST, for instance, stays CEF rather than Options Income).
+    """
+    global _ticker_strategy_override_cache
+    if _ticker_strategy_override_cache is not None:
+        return _ticker_strategy_override_cache
+    overrides = {
+        # Options / Covered Call Income
+        **{t: "Options Income" for t in sorted(_option_income_tickers())},
+        **_TICKER_STRATEGY_OVERRIDES_STATIC,
+    }
+    if _single_stock_etf_cache is not None:
+        _ticker_strategy_override_cache = overrides
+    return overrides
+
+
 def _classify_etf(category, ticker=""):
     """Derive strategy and cap size from yfinance ETF category string."""
     # Check ticker-based override first
-    override = _TICKER_STRATEGY_OVERRIDES.get(ticker, "")
+    override = _ticker_strategy_overrides().get(ticker, "")
 
     if not category and not override:
         return "", override or "", ""
@@ -38212,14 +38277,15 @@ def _general_scanner_refresh_impl(tickers, type_map, force_info=False):
     conn = get_connection()
     refreshed = 0
     since_commit = 0
+    strategy_overrides = _ticker_strategy_overrides()
     for t in tickers:
         tech = tech_data.get(t, {})
         fund = fund_data.get(t, {})
         if not tech and not fund:
             continue
         # Apply ticker-based strategy override if info wasn't fetched
-        if "etf_strategy" not in fund and t in _TICKER_STRATEGY_OVERRIDES:
-            fund["etf_strategy"] = _TICKER_STRATEGY_OVERRIDES[t]
+        if "etf_strategy" not in fund and t in strategy_overrides:
+            fund["etf_strategy"] = strategy_overrides[t]
         merged = {**tech, **fund, "asset_type": type_map.get(t, "Stock")}
         cols = ["ticker"] + list(merged.keys()) + ["updated_at"]
         vals = [t] + list(merged.values()) + [pd.Timestamp.now().isoformat()]
@@ -39146,7 +39212,7 @@ def etf_evaluate(ticker):
             _override_kind is None
             and (
                 etf_strategy == "Options Income"
-                or ticker in _options_income_tickers
+                or ticker in _option_income_tickers()
                 or _has_option_income_text(info)
             )
         )
@@ -39245,7 +39311,7 @@ def etf_evaluate(ticker):
     option_universe_tickers = []
     conn = get_connection()
     if is_option_income:
-        peer_tickers = sorted(_options_income_tickers - {ticker})
+        peer_tickers = sorted(_option_income_tickers() - {ticker})
         option_universe_tickers = peer_tickers
         if peer_tickers:
             placeholders = ",".join("?" for _ in peer_tickers)
@@ -39498,7 +39564,7 @@ def _classify_fund_kind(ticker, info, name=None, cef_universe=None):
     _, strategy, _ = _classify_etf(info.get("category", ""), ticker)
     if (
         strategy == "Options Income"
-        or ticker in _options_income_tickers
+        or ticker in _option_income_tickers()
         or _has_option_income_text(info, name)
     ):
         return "option_income"
