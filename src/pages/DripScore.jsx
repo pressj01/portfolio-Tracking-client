@@ -937,7 +937,7 @@ export default function DripScore() {
                 <textarea
                   rows={2}
                   value={tickerText}
-                  onChange={(e) => setTickerText(e.target.value)}
+                  onChange={(e) => setTickerText(e.target.value.toUpperCase())}
                   aria-label="Edit ticker symbols"
                   placeholder="AAPW, CONY, MSTY, GDXY, DGRO — commas, spaces or newlines"
                 />
