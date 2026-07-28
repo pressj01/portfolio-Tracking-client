@@ -594,7 +594,7 @@ export default function Watchlist() {
 
       {/* Table */}
       {watchingList.length > 0 && !loading && (
-        <div className="sst-wrap">
+        <div className="sst-wrap watchlist-wrap">
           <table className="sst">
             <thead>
               <tr>
