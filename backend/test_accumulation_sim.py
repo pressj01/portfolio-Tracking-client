@@ -11,6 +11,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from accumulation_sim import (
+    _annual_distribution_growth,
+    _infer_correlation_group,
     _release_return_paths,
     _scenario_month_parameters,
     build_market_assumptions,
@@ -33,7 +35,11 @@ def assumption(ticker, *, total_return=0.0, yield_rate=0.0, scenario_type="other
         "annual_volatility": 0.0,
         "beta": 0.0,
         "neutral_distribution_growth": 0.0,
-        "sustainable_yield_cap": 0.45 if scenario_type == "high_distribution_option" else 0.18,
+        "sustainable_yield_cap": (
+            0.45
+            if scenario_type == "high_distribution_option"
+            else 0.25 if scenario_type == "option_income" else 0.18
+        ),
         "history_years": 10.0,
         "source": "test",
     }
@@ -122,6 +128,179 @@ class AccumulationSimulationTest(unittest.TestCase):
             self.assertAlmostEqual(strategy["summary"]["final_value"]["p50"], 13200, delta=1)
             self.assertEqual(strategy["summary"]["total_contributions"], 1200)
 
+    def test_distribution_growth_ignores_incomplete_inception_years(self):
+        current_year = pd.Timestamp.now().year
+        partial_dates = pd.date_range(
+            f"{current_year - 3}-10-31",
+            f"{current_year - 1}-12-31",
+            freq="ME",
+        )
+        partial_values = pd.Series(1.0, index=partial_dates)
+        self.assertIsNone(_annual_distribution_growth(partial_values))
+
+        full_dates = pd.date_range(
+            f"{current_year - 4}-01-31",
+            f"{current_year - 1}-12-31",
+            freq="ME",
+        )
+        annual_amounts = {
+            current_year - 4: 1.00,
+            current_year - 3: 1.10,
+            current_year - 2: 1.21,
+            current_year - 1: 1.331,
+        }
+        full_values = pd.Series(
+            [annual_amounts[date.year] for date in full_dates],
+            index=full_dates,
+        )
+        self.assertAlmostEqual(
+            _annual_distribution_growth(full_values),
+            0.10,
+            places=6,
+        )
+
+    def test_goldman_fund_names_do_not_become_precious_metals(self):
+        self.assertEqual(
+            _infer_correlation_group({
+                "ticker": "GPIQ",
+                "description": "Goldman Sachs Nasdaq-100 Premium Income ETF",
+                "scenario_type": "option_income",
+            }),
+            "nasdaq",
+        )
+        self.assertEqual(
+            _infer_correlation_group({
+                "ticker": "GPIX",
+                "description": "Goldman Sachs S&P 500 Premium Income ETF",
+                "scenario_type": "option_income",
+            }),
+            "sp500",
+        )
+
+    def test_market_assumptions_assign_fund_specific_payout_models(self):
+        holdings = [
+            {
+                "ticker": "QQQI",
+                "weight": 1,
+                "scenario_type": "option_income",
+                "current_yield_pct": 14.0,
+                "current_price": 50.0,
+            },
+            {
+                "ticker": "SCHD",
+                "weight": 1,
+                "scenario_type": "dividend_growth",
+                "current_yield_pct": 3.5,
+                "current_price": 30.0,
+            },
+            {
+                "ticker": "QQQM",
+                "weight": 1,
+                "scenario_type": "non_income_equity",
+                "current_yield_pct": 0.6,
+                "current_price": 200.0,
+            },
+        ]
+        assumptions, _warnings = build_market_assumptions(
+            holdings,
+            history_loader=lambda _tickers: {},
+        )
+        self.assertEqual(assumptions["QQQI"]["payout_model"], "nav_yield")
+        self.assertEqual(
+            assumptions["SCHD"]["payout_model"],
+            "per_share_growth",
+        )
+        self.assertEqual(
+            assumptions["QQQM"]["payout_model"],
+            "per_share_growth",
+        )
+        self.assertAlmostEqual(assumptions["QQQI"]["current_yield"], 0.14)
+
+    def test_option_income_uses_nav_linked_distribution_rates(self):
+        payload = self.base_payload()
+        payload.update({
+            "years": 3,
+            "monthly_contribution": 0,
+            "inflation_rate": 0,
+        })
+        high_rate = assumption(
+            "AAA",
+            total_return=0.07,
+            yield_rate=0.12,
+            scenario_type="option_income",
+        )
+        low_rate = assumption(
+            "BBB",
+            total_return=0.07,
+            yield_rate=0.08,
+            scenario_type="option_income",
+        )
+        high_rate["payout_model"] = low_rate["payout_model"] = "nav_yield"
+        result = run_accumulation_comparison(
+            payload,
+            assumptions_override={"AAA": high_rate, "BBB": low_rate},
+        )
+        high, low = result["scenarios"]["neutral"]["strategies"]
+        self.assertAlmostEqual(
+            high["summary"]["final_value"]["p50"],
+            low["summary"]["final_value"]["p50"],
+            delta=1,
+        )
+        self.assertAlmostEqual(
+            high["summary"]["final_annual_income"]["p50"]
+            / high["summary"]["final_value"]["p50"],
+            0.12,
+            places=5,
+        )
+        self.assertAlmostEqual(
+            low["summary"]["final_annual_income"]["p50"]
+            / low["summary"]["final_value"]["p50"],
+            0.08,
+            places=5,
+        )
+        self.assertGreater(
+            high["summary"]["final_monthly_income"]["p50"],
+            low["summary"]["final_monthly_income"]["p50"],
+        )
+
+    def test_dividend_growth_and_pure_growth_keep_distinct_income_behavior(self):
+        payload = self.base_payload()
+        payload.update({
+            "years": 5,
+            "monthly_contribution": 0,
+            "inflation_rate": 0,
+        })
+        dividend = assumption(
+            "AAA",
+            total_return=0.08,
+            yield_rate=0.03,
+            scenario_type="dividend_growth",
+        )
+        dividend["neutral_distribution_growth"] = 0.05
+        dividend["payout_model"] = "per_share_growth"
+        growth = assumption(
+            "BBB",
+            total_return=0.08,
+            yield_rate=0.0,
+            scenario_type="non_income_equity",
+        )
+        growth["payout_model"] = "per_share_growth"
+        result = run_accumulation_comparison(
+            payload,
+            assumptions_override={"AAA": dividend, "BBB": growth},
+        )
+        dividend_result, growth_result = (
+            result["scenarios"]["neutral"]["strategies"]
+        )
+        self.assertGreater(
+            dividend_result["summary"]["final_annual_income"]["p50"],
+            dividend_result["summary"]["starting_capital"] * 0.03,
+        )
+        self.assertEqual(
+            growth_result["summary"]["final_annual_income"]["p50"],
+            0,
+        )
+
     def test_identical_portfolios_receive_identical_market_paths(self):
         payload = self.base_payload()
         payload["strategies"][1]["holdings"] = [{"ticker": "AAA", "weight": 100}]
@@ -174,6 +353,86 @@ class AccumulationSimulationTest(unittest.TestCase):
             growth["summary"]["cumulative_distributions_reinvested"]["p50"],
             0,
         )
+
+    def test_holding_drip_rates_split_distributions_between_shares_and_cash(self):
+        payload = self.base_payload()
+        payload["monthly_contribution"] = 0
+        payload["strategies"] = [
+            {
+                "name": "Full DRIP",
+                "style": "income",
+                "holdings": [{"ticker": "AAA", "weight": 100, "drip_pct": 100}],
+            },
+            {
+                "name": "Half DRIP",
+                "style": "income",
+                "holdings": [{"ticker": "AAA", "weight": 100, "drip_pct": 50}],
+            },
+            {
+                "name": "No DRIP",
+                "style": "income",
+                "holdings": [{"ticker": "AAA", "weight": 100, "drip_pct": 0}],
+            },
+        ]
+        result = run_accumulation_comparison(
+            payload,
+            assumptions_override={
+                "AAA": assumption(
+                    "AAA",
+                    total_return=0.0,
+                    yield_rate=0.12,
+                    scenario_type="option_income",
+                ),
+            },
+        )
+        full, half, none = result["scenarios"]["neutral"]["strategies"]
+        full_summary = full["summary"]
+        half_summary = half["summary"]
+        none_summary = none["summary"]
+
+        self.assertEqual(full_summary["weighted_drip_pct"], 100)
+        self.assertEqual(half_summary["weighted_drip_pct"], 50)
+        self.assertEqual(none_summary["weighted_drip_pct"], 0)
+        self.assertGreater(
+            full_summary["cumulative_distributions_reinvested"]["p50"],
+            half_summary["cumulative_distributions_reinvested"]["p50"],
+        )
+        self.assertGreater(
+            half_summary["cumulative_distributions_reinvested"]["p50"],
+            0,
+        )
+        self.assertEqual(
+            none_summary["cumulative_distributions_reinvested"]["p50"],
+            0,
+        )
+        self.assertEqual(full_summary["retained_cash_balance"]["p50"], 0)
+        self.assertGreater(none_summary["retained_cash_balance"]["p50"], 0)
+        self.assertGreater(
+            full_summary["final_annual_income"]["p50"],
+            half_summary["final_annual_income"]["p50"],
+        )
+        self.assertGreater(
+            half_summary["final_annual_income"]["p50"],
+            none_summary["final_annual_income"]["p50"],
+        )
+        for summary in (half_summary, none_summary):
+            self.assertAlmostEqual(
+                summary["final_value"]["p50"],
+                full_summary["final_value"]["p50"],
+                delta=2,
+            )
+
+    def test_duplicate_ticker_drip_rate_is_exposure_weighted(self):
+        strategy = normalize_strategy({
+            "name": "Merged",
+            "style": "custom",
+            "holdings": [
+                {"ticker": "AAA", "weight": 25, "drip_pct": 0},
+                {"ticker": "AAA", "weight": 75, "drip_pct": 100},
+            ],
+        })
+        self.assertEqual(len(strategy["holdings"]), 1)
+        self.assertEqual(strategy["holdings"][0]["drip_pct"], 75)
 
     def test_growth_strategy_reinvests_income_when_its_holding_pays(self):
         payload = self.base_payload()
@@ -706,12 +965,14 @@ class AccumulationSimulationTest(unittest.TestCase):
                 "scenario_type_override": "option_income",
                 "option_strategy": "short_put_spread",
                 "correlation_group": "sp500",
+                "drip_pct": 37.5,
             }],
         })
         holding = strategy["holdings"][0]
         self.assertEqual(holding["scenario_type_override"], "option_income")
         self.assertEqual(holding["option_strategy"], "short_put_spread")
         self.assertEqual(holding["correlation_group"], "sp500")
+        self.assertEqual(holding["drip_pct"], 37.5)
 
 
 if __name__ == "__main__":

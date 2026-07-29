@@ -22,6 +22,7 @@ const GROUPS = [
     label: 'Options',
     sections: [
       { id: 'options', label: 'Options' },
+      { id: 'put-selling-scanner', label: 'Put Selling Scanner' },
     ],
   },
   {
@@ -5419,10 +5420,10 @@ function GrowthIncomeFreedomHelp() {
       </p>
 
       <div className="alert alert-info" style={{ marginBottom: '1.25rem' }}>
-        <strong>Accumulation-phase rule:</strong> the core simulation makes no withdrawals. Every dividend
-        and distribution is reinvested into the security that paid it, including distributions paid
-        by holdings inside a Growth strategy. The optional Sustainability tests (below) run separate
-        side-calculations on top of this result — they never change the projected value or income lines.
+        <strong>Accumulation-phase rule:</strong> the core simulation makes no withdrawals. Each holding
+        can reinvest 0–100% of its distributions into the security that paid them. Any portion not
+        reinvested remains in the strategy as non-interest-bearing cash and is included in ending wealth.
+        The optional Sustainability tests (below) run separate side-calculations on top of this result.
       </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -5454,11 +5455,13 @@ function GrowthIncomeFreedomHelp() {
         <li><strong>Check all / Uncheck all</strong> — Enables or disables every ticker in the strategy at once. Disabled rows remain available to recheck and are excluded from the run.</li>
         <li><strong>Equal weight</strong> — Assigns the same percentage to every enabled holding.</li>
         <li><strong>Normalize to 100%</strong> — Scales enabled weights proportionally until their total is exactly 100%.</li>
+        <li><strong>Apply the same DRIP rate</strong> — Enter 0–100% and select <strong>Apply equally</strong> to assign that reinvestment percentage to every enabled holding in the strategy.</li>
         <li><strong>Clear</strong> — Removes every holding from that side and returns it to manual ticker-building mode.</li>
         <li><strong>Row checkbox</strong> — Includes or excludes one holding without deleting it. The × button permanently removes that ticker from the strategy list.</li>
         <li><strong>Weight</strong> — Controls how much of the strategy is assigned to that holding. Only enabled holdings with positive weights enter the simulation.</li>
         <li><strong>Current yield</strong> — Shows the security's current annualized distribution yield. Forward payout stress and yield ceilings may prevent an unusually high current yield from compounding indefinitely.</li>
-        <li><strong>Behavior override</strong> — Replaces automatic classification for a holding when you know its role more accurately, such as Growth / non-income equity, diversified option income, bonds, or commodities.</li>
+        <li><strong>DRIP</strong> — Controls the percentage of that holding&apos;s distributions that buys additional shares of the same holding. The remainder stays as cash at a modeled 0% return, so it remains part of wealth without receiving an unrequested growth assumption.</li>
+        <li><strong>Fund type</strong> — Replaces automatic classification for a holding when you know its role more accurately, such as Growth / non-income equity, diversified option income, bonds, or commodities.</li>
         <li><strong>Option structure</strong> — Identifies covered calls, short puts, short put spreads, protective put spreads, collars/buffers, or mixed options. Auto uses available fund metadata and name clues; an unspecified put spread deliberately receives no directional tail adjustment.</li>
         <li><strong>Correlation group</strong> — Identifies the shared underlying exposure used when market history is short, such as S&amp;P 500, Nasdaq, semiconductors, bonds, gold, or crypto. Auto uses the holding's metadata and description.</li>
       </ul>
@@ -5520,11 +5523,12 @@ function GrowthIncomeFreedomHelp() {
         <li><strong>Neutral</strong> — Blends historical market behavior with forward strategy assumptions and represents the central long-run case.</li>
         <li><strong>Bull</strong> — Applies expansionary early conditions and then gradually fades toward the neutral assumptions.</li>
         <li><strong>Bear</strong> — Applies an early negative shock and elevated volatility, followed by recovery and a gradual return toward neutral conditions.</li>
-        <li><strong>100% DRIP</strong> — Every distribution buys more shares of the security that paid it. This applies equally to Income, Growth, Custom, and blended strategies.</li>
-        <li><strong>Growth holdings can produce income</strong> — Strategy style never discards a dividend. If a growth ETF or stock pays a distribution, the model records it as income and reinvests it.</li>
-        <li><strong>No double counting</strong> — Total return already contains the economic value of distributions. The engine separates price movement from the cash payout, reinvests that payout, and tracks it without adding the same return twice.</li>
+        <li><strong>Configurable DRIP</strong> — Each holding can reinvest 0–100% of its distribution. A bulk control applies one rate equally to all active holdings; individual rows can then be adjusted. Blended strategies use an exposure-weighted DRIP rate when the same ticker appears on both sides.</li>
+        <li><strong>Growth holdings can produce income</strong> — Strategy style never discards a dividend. If a growth ETF or stock pays a distribution, the model records it as income and applies that holding&apos;s selected DRIP rate.</li>
+        <li><strong>No double counting</strong> — Total return already contains the economic value of distributions. The engine separates price movement from the cash payout, reinvests only the selected portion, retains the remainder as cash, and never adds the same return twice.</li>
         <li><strong>Contributions</strong> — Monthly deposits are invested after that month's return and distribution processing, following the target weights.</li>
-        <li><strong>Payout realism</strong> — Distribution growth, payout stress, and strategy-specific sustainable-yield ceilings keep extreme current yields from creating an unrealistic share-count spiral.</li>
+        <li><strong>Payout realism</strong> — Option-income funds use a NAV-linked distribution-rate model, so a stable 10% target remains approximately 10% of NAV instead of becoming an independently compounding per-share payout. Dividend-growth holdings use per-share distribution growth, while pure-growth holdings remain return-driven. Strategy-specific payout stress and yield ceilings keep extreme rates from creating an unrealistic share-count spiral.</li>
+        <li><strong>Fund type detection</strong> — Known option-income, dividend-growth, and growth tickers are classified automatically. Use the per-holding Fund type menu only when the detected type needs correction.</li>
         <li><strong>Common random conditions</strong> — Both sides experience the same simulated market environment, so differences come from their holdings and weights rather than one side receiving luckier random paths.</li>
         <li><strong>No volatility return bonus</strong> — Expected total return is treated as an arithmetic expectation. The lognormal path drift includes the variance correction, so higher volatility widens the result range instead of manufacturing additional average return.</li>
         <li><strong>Limited-history uncertainty</strong> — Holdings with less than five years of history receive progressively wider forecast volatility. The Data quality panel flags short records, and the assumptions table shows both base and forecast volatility plus history confidence.</li>
@@ -5601,7 +5605,7 @@ function GrowthIncomeFreedomHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Data Quality and Holding Assumptions</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Data quality and fallback notes</strong> — Appears when a ticker has limited history or requires a classification-based fallback. Review these warnings before relying heavily on a comparison.</li>
+        <li><strong>Data quality and fallback notes</strong> — Appears when a ticker has limited history or requires a classification-based fallback. Incomplete launch years and the current partial year are excluded from per-share distribution-growth calibration. Review these warnings before relying heavily on a comparison.</li>
         <li><strong>Correlation model</strong> — Reports average normal and bear-stressed correlation, how many ticker pairs use overlapping history versus conservative fallbacks, and the strongest modeled relationships.</li>
         <li><strong>Holding assumptions used in this run</strong> — Expands into an audit table containing modeled behavior, option structure, correlation group, current yield, expected total return, forecast volatility, average correlation, beta, sustainable yield ceiling, and history confidence for every ticker.</li>
         <li>A ticker with little or no history can still run using its security classification, but its estimate contains more model uncertainty than a holding with a long history.</li>
@@ -5986,6 +5990,174 @@ function OptionsHelp() {
         <li>Use Price &amp; Moneyness and Greek Surfaces to understand where the position is sensitive.</li>
         <li>Use Backtest for a modeled historical comparison, then review the assumptions and cycle audit trail.</li>
       </ol>
+    </div>
+  )
+}
+
+function PutSellingScannerHelp() {
+  const screenshotStyle = {
+    maxWidth: '100%',
+    height: 'auto',
+    borderRadius: '4px',
+    border: '1px solid var(--p-333)',
+  }
+
+  return (
+    <div>
+      <h2>Put Selling Scanner</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Put Selling Scanner looks for large and mid-cap stocks that have sold off further than their own
+        volatility justifies, then rates each one as a candidate for selling cash-secured puts. It suggests a
+        specific strike and expiration for every candidate and shows what you would actually be paid.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/put-selling-scanner/01-scanner-overview.png"
+          alt="Put Selling Scanner showing the ETF and stock include controls, presets, scan filters, and ranked put candidates"
+          style={screenshotStyle}
+        />
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          The scanner keeps the universe, risk filters, suggested contract, return, assignment basis, and warnings
+          together so a high premium is never read without its tradeoffs.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        What &ldquo;fallen more than reasonable&rdquo; means here
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A 20% drop means very different things for a utility and a semiconductor stock, so the scanner does not rank
+        on the raw decline. For each stock it measures the daily volatility of the period <em>before</em> the selloff,
+        works out how far that stock would ordinarily travel over the lookback window, and expresses the actual drop
+        as a multiple of that figure. This is the <strong>Stretch</strong> column, shown in standard deviations
+        (&sigma;). A stretch of 2.5&sigma; means the stock fell two and a half standard deviations further than its own
+        history says is routine.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        The scanner also subtracts the market&rsquo;s move times the stock&rsquo;s beta, reported as
+        <strong> vs Market</strong>. A stock that merely fell along with everything else is not dislocated; this column
+        isolates the part of the decline that is specific to the company.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How candidates are scored</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        Each name receives a 0&ndash;100 composite and a letter grade built from four independent axes. Inputs between
+        the thresholds below earn points on a straight-line ramp; values beyond them receive the minimum or maximum
+        for that item.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Dislocation (30 points)</strong> — stretch from 1&sigma; to 3&sigma; earns 0&ndash;15 points; a 10&ndash;35% drawdown earns 0&ndash;8; and a 3&ndash;20% beta-unexplained decline earns 0&ndash;7.</li>
+        <li><strong>Premium (25 points)</strong> — IV/RV from 1.0 to 1.6 earns 0&ndash;14 points; the IV-rank proxy from 30 to 80 earns 0&ndash;6; and an 8&ndash;30% annualized return earns 0&ndash;5. Earnings before expiry subtract 6 premium points.</li>
+        <li><strong>Quality (25 points)</strong> — stocks use size (7), profitability (7), balance sheet (6), and share liquidity (5). Funds use AUM (8), diversification (9), and liquidity (8).</li>
+        <li><strong>Stabilization (20 points)</strong> — not making a fresh 52-week low earns 7 points; a 0&ndash;6% bounce earns 0&ndash;5; 0&ndash;8 percentage points of deceleration earns 0&ndash;4; and sitting 2&ndash;15% above the 52-week low earns 0&ndash;4.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Grades are <strong>A &ge; 80, B &ge; 70, C &ge; 60, D &ge; 50</strong>, otherwise F. If no option chain is
+        available, the other three axes are rescaled from 75 points to 100 and the grade gets an asterisk. That
+        provisional score always sorts below fully priced candidates because the premium edge is still unknown.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/put-selling-scanner/03-score-derived.png"
+          alt="Put Selling Scanner hidden help with the complete score derivation expanded"
+          style={screenshotStyle}
+        />
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          Select <strong>How this works</strong>, then expand <strong>How the score is built</strong> to see the same
+          weights and thresholds without leaving the scan.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The suggested put</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        For the highest-rated candidates the scanner pulls the live option chain, picks the expiration closest to your
+        target days-to-expiration, and selects the put nearest your target delta. It then reports the bid/ask, the
+        premium per contract, the cash required to secure it, the return on that cash in both raw and annualized terms,
+        the probability of expiring out of the money, and the <strong>basis if assigned</strong> — the strike minus the
+        premium, which is your effective cost per share if the stock is put to you.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Stocks and ETFs together</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Include</strong> checkboxes at the top choose what gets scanned: <strong>Stocks</strong> (using the
+        stock universe dropdown), <strong>Index ETFs</strong> (SPY, QQQ, IWM, DIA, style and rates funds), and
+        <strong> Sector &amp; commodity ETFs</strong> (XLK, XLE, GLD, SLV, SMH, GDX and the rest). The groups are
+        independent, so unchecking Stocks genuinely skips the stock universe rather than filtering it out afterwards —
+        an ETF-only scan finishes in a few seconds. Everything selected is scored on the same scale and ranked in one
+        table, with a <strong>Type</strong> badge marking each row as Stock, Index, or Sector.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Funds are judged differently where it matters. They report <strong>assets under management</strong> rather than
+        a market cap, and they have no earnings, margins, or balance sheet — so the profitability and earnings filters
+        never apply to them, and the Quality axis substitutes <strong>breadth of holdings</strong> for profitability: a
+        broad index scores highest because no single company can sink it, a sector or commodity fund a little lower,
+        and a leveraged or inverse fund scores zero there (those are excluded by default). Funds also get their own
+        drop and stretch floors, because SPY almost never falls 12% from its high and would otherwise never appear.
+        The stretch measure still does the real work &mdash; a 6% decline in a low-volatility index can be just as many
+        standard deviations as a 25% decline in a semiconductor name.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Staying clear of earnings</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        A single earnings report can gap a stock straight through your strike, so the scanner treats it as an event to
+        avoid rather than merely warn about. When a candidate has a report coming up, it first tries to find a
+        <em> different</em> expiration inside your days-to-expiration window that closes before the announcement, with a
+        few days&rsquo; buffer &mdash; typically stepping down to a shorter-dated contract. Only if no expiration can
+        clear the date is the candidate dropped (with <strong>Skip earnings inside trade</strong> on, which is the
+        default). The <strong>Earnings</strong> column shows days until the next report and whether the suggested
+        expiration clears it, and the trade panel spells out the margin.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Price chart popup</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Click any ticker (or the <strong>Price chart</strong> button in the expanded row) to open the Stock and ETF
+        Analysis price chart for that name without leaving the scanner. It shows candles or a line with the
+        <strong> 50 and 200-day moving averages</strong>, volume, <strong>MACD</strong>, and <strong>RSI</strong>, and
+        the period can be switched from 3 months to 5 years. The indicator math is shared with the Analysis screen, so
+        both places show the same values for a given ticker.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Choose what to scan with the independent <strong>Stocks</strong>, <strong>Index ETFs</strong>, and <strong>Sector &amp; commodity ETFs</strong> checkboxes.</li>
+        <li>Pick a <strong>preset</strong> (Conservative, Balanced, Aggressive) or set the filters yourself.</li>
+        <li>Choose a <strong>universe</strong>: the built-in large-cap or mid-cap lists, your own holdings, your watchlist, or a custom ticker list.</li>
+        <li>Click <strong>Run Scan</strong>. The first run pulls a year of history for the whole universe and takes roughly 20&ndash;40 seconds; re-running with different filters is much faster while that price data stays cached.</li>
+        <li>Click any row to expand the score breakdown, the full trade detail, the dislocation metrics, and the underlying business fundamentals.</li>
+        <li>Click the ticker to pull up its price chart with moving averages, MACD, and RSI.</li>
+      </ol>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/put-selling-scanner/02-how-to-use.png"
+          alt="Put Selling Scanner hidden help with the quick-start workflow expanded"
+          style={screenshotStyle}
+        />
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          The hidden quick-start guide stays on the scanner, above the filters, and can be closed as soon as the
+          workflow is familiar.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Warnings</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        The Warnings column flags conditions worth checking before writing a contract: earnings landing inside the
+        trade, wide bid/ask spreads, thin open interest, heavy debt, unprofitable companies, fresh 52-week lows, and
+        prices far below the 200-day average.
+      </p>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
+        <strong>No trades execute here.</strong> The scanner rates setups from public market data. Scores are not
+        advice, and assignment risk is real — a cash-secured put obliges you to buy 100 shares per contract at the
+        strike no matter how far the stock has fallen.
+      </div>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        If a scan returns nothing, that is usually correct rather than broken. In a market near its highs very few
+        quality names are meaningfully dislocated. Lower the minimum drop or stretch, or widen the universe.
+      </div>
     </div>
   )
 }
@@ -7568,6 +7740,7 @@ const CONTENT_MAP = {
   overview: Overview,
   'action-center': ActionCenterHelp,
   options: OptionsHelp,
+  'put-selling-scanner': PutSellingScannerHelp,
   import: ImportHelp,
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,

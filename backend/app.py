@@ -44,6 +44,7 @@ from config import get_connection, FRED_API_KEY, DB_PATH
 from database import ensure_tables_exist
 from cash_flow import (
     HOLDING_SCENARIO_PROFILES,
+    OPTION_INCOME_TICKERS,
     classify_holding_scenario_type as _classify_cash_flow_holding,
     expand_plan as _expand_cash_flow_plan,
     get_or_create_default_plan as _get_or_create_default_cash_flow_plan,
@@ -77,6 +78,7 @@ from transaction_import import (
 import tax_report
 import tax_loss
 from options_api import register_routes as register_options_routes
+from put_scanner import register_routes as register_put_scanner_routes
 from market_symbols import yahoo_symbol_for_ticker as _yahoo_symbol_for_ticker
 from market_calendar import (
     is_nyse_trading_day,
@@ -6511,6 +6513,28 @@ def lookup_ticker(ticker):
                 description=result.get("description"),
             )
         )
+
+    frequency_multiplier = {
+        "W": 52,
+        "BW": 26,
+        "M": 12,
+        "Q": 4,
+        "SA": 2,
+        "A": 1,
+    }.get(result["div_frequency"], 0)
+    classified_ticker = str(result.get("renamed_to") or ticker).upper()
+    scenario_type = _classify_cash_flow_holding({
+        "ticker": classified_ticker,
+        "description": result["description"],
+        "classification_type": result["classification_type"],
+        "annual_income": result["div"] * frequency_multiplier,
+        "value": result["current_price"],
+    })
+    result["scenario_type"] = scenario_type
+    result["scenario_label"] = HOLDING_SCENARIO_PROFILES.get(
+        scenario_type,
+        HOLDING_SCENARIO_PROFILES["other"],
+    ).get("label", "Other / unclassified")
 
     return jsonify(result)
 
@@ -38295,38 +38319,7 @@ def general_scanner_universe():
     return jsonify(rows=[{"ticker": r["ticker"], "asset_type": r["asset_type"]} for r in rows])
 
 
-_OPTION_INCOME_BASE_TICKERS = frozenset([
-    # JPM / Global X / classic covered call
-    "JEPI", "JEPQ", "JEPY", "QYLD", "XYLD", "RYLD", "DJIA", "QYLG", "XYLG", "TYLG",
-    # NUSI reverse-split 1-for-2 and renamed to QQQH on 2025-02-21; the dead
-    # NUSI ticker still serves unadjusted (corrupted) history via yfinance, so
-    # only the successor QQQH (in the NEOS block below) is kept.
-    "EDGQ", "EDGX", "QRMI", "XRMI", "QCLR", "XCLR", "DIVO", "PUTW",
-    # Amplify
-    "BAGY", "BITY", "QDVO", "IDVO", "HCOW", "HAKY", "ETTY", "SLJY",
-    # XFunds / Nicholas Wealth
-    "GIAX", "BLOX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX",
-    # NEOS / option-income and hedged-income
-    "SPYI", "QQQI", "IWMI", "IYRI", "BTCI", "ETHI", "NEHI", "NIHI", "MLPI",
-    "IAUI", "HYBI", "CSHI", "QQQH", "SPYH", "XQQI", "XSPI",
-    # Goldman / First Trust / Simplify / iShares / Roundhill / Defiance
-    "GPIQ", "GPIX", "FTQI", "SVOL", "TLTW", "KLIP", "USOI",
-    "QQQY", "XDTE", "QDTE", "RDTE", "WDTE", "BALI", "ISPY", "JEPX", "SPXX", "QQXX", "IWMW",
-    # Kurv
-    "KQQQ", "KYLD", "KGLD", "KSLV", "KCOP", "AMZP", "AAPY", "GOOP", "MSFY", "NFLP", "TSLP",
-    # REX Shares income
-    "AIPI", "FEPI", "CEPI", "ULTI", "GIF", "ATCL",
-    "COII", "MSII", "NVII", "TSII", "HOII", "PLTI", "CWII", "LLII", "WMTI", "TLDR",
-    # Quantify Funds option-income
-    "ISBG", "ISSB",
-    # VistaShares
-    "ACKY", "OMAH", "QUSA", "DRKY", "SIOO", "TPRY", "BTYB",
-    # GraniteShares YieldBOOST
-    "YSPY", "TQQY", "YBST", "YBTY", "NVYY", "XBTY", "MTYY", "PLYY", "MAAY", "IOYY", "RTYY", "HMYY",
-    # Other option-income / derivatives
-    "CHPY", "GPTY", "TSPY", "TDAQ", "TDAX", "TSYX", "SEPI", "QDVO", "OVL",
-    "YMAX", "YMAG", "ULTY", "LFGY", "SLTY", "BIGY", "FIVY",
-])
+_OPTION_INCOME_BASE_TICKERS = OPTION_INCOME_TICKERS
 
 
 def _option_income_tickers():
@@ -40309,6 +40302,7 @@ def cef_scan():
 
 
 register_options_routes(app)
+register_put_scanner_routes(app)
 
 
 # ── Portfolio Growth 2 ──────────────────────────────────────────────────────────

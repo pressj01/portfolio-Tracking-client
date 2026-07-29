@@ -32,7 +32,7 @@ const FREQUENCY_MULTIPLIERS = {
 }
 
 const BEHAVIOR_OPTIONS = [
-  ['', 'Auto classify'],
+  ['', 'Auto detect (recommended)'],
   ['option_income', 'Diversified option income'],
   ['high_distribution_option', 'High-distribution options'],
   ['fixed_income', 'Bonds / fixed income'],
@@ -95,6 +95,10 @@ function pct(value, digits = 1) {
   return `${number.toFixed(digits)}%`
 }
 
+function clampDrip(value) {
+  return Math.min(100, Math.max(0, Number(value) || 0))
+}
+
 function createStrategy(name, style) {
   return {
     name,
@@ -106,6 +110,7 @@ function createStrategy(name, style) {
     holdings: [],
     portfolioName: name,
     autoName: true,
+    bulkDripPct: 100,
   }
 }
 
@@ -211,11 +216,18 @@ function rankStrategies(strategyResults, goal, targetEnabled) {
 function buildBlend(strategyA, strategyB, pctA) {
   const merged = new Map()
   const add = (holding, multiplier) => {
+    const scaledWeight = holding.weight * multiplier
+    const dripPct = clampDrip(holding.drip_pct ?? 100)
     const existing = merged.get(holding.ticker)
     if (existing) {
-      existing.weight += holding.weight * multiplier
+      existing.weight += scaledWeight
+      existing.dripWeighted += scaledWeight * dripPct
     } else {
-      merged.set(holding.ticker, { ...holding, weight: holding.weight * multiplier })
+      merged.set(holding.ticker, {
+        ...holding,
+        weight: scaledWeight,
+        dripWeighted: scaledWeight * dripPct,
+      })
     }
   }
   normalizeHoldings(strategyA.holdings).forEach(row => add(row, pctA / 100))
@@ -223,7 +235,10 @@ function buildBlend(strategyA, strategyB, pctA) {
   return {
     name: `${strategyA.name} / ${strategyB.name} Blend`,
     style: 'blend',
-    holdings: [...merged.values()],
+    holdings: [...merged.values()].map(({ dripWeighted, ...holding }) => ({
+      ...holding,
+      drip_pct: holding.weight > 0 ? dripWeighted / holding.weight : 100,
+    })),
   }
 }
 
@@ -254,6 +269,12 @@ function StrategyBuilder({
       .includes(query)
   })
   const weightTotal = active.reduce((sum, row) => sum + (Number(row.weight) || 0), 0)
+  const weightedDripPct = weightTotal > 0
+    ? active.reduce(
+      (sum, row) => sum + (Number(row.weight) || 0) * clampDrip(row.drip_pct ?? 100),
+      0,
+    ) / weightTotal
+    : 100
 
   const updateHolding = (ticker, patch) => {
     const holdings = strategy.holdings.map(row => (
@@ -300,6 +321,16 @@ function StrategyBuilder({
     onChange({
       holdings: strategy.holdings.map(row => (
         byTicker.has(row.ticker) ? { ...row, weight: byTicker.get(row.ticker) } : row
+      )),
+    })
+  }
+
+  const applyEqualDrip = () => {
+    const dripPct = clampDrip(strategy.bulkDripPct ?? 100)
+    onChange({
+      bulkDripPct: dripPct,
+      holdings: strategy.holdings.map(row => (
+        row.enabled === false ? row : { ...row, drip_pct: dripPct }
       )),
     })
   }
@@ -396,10 +427,12 @@ function StrategyBuilder({
             current_price: price,
             current_yield_pct: currentYield,
             classification_type: info.classification_type || '',
-            scenario_type: 'other',
+            scenario_type: info.scenario_type || 'other',
+            scenario_label: info.scenario_label || '',
             scenario_type_override: '',
             option_strategy: 'auto',
             correlation_group: 'auto',
+            drip_pct: clampDrip(strategy.bulkDripPct ?? 100),
             imported: false,
           }],
         })
@@ -575,6 +608,7 @@ function StrategyBuilder({
       <div className="gif-holding-tools">
         <span>
           {active.length} holding{active.length === 1 ? '' : 's'} · weights {weightTotal.toFixed(1)}%
+          {' '}· weighted DRIP {weightedDripPct.toFixed(1)}%
         </span>
         <button onClick={checkAllHoldings} disabled={!strategy.holdings.length || active.length === strategy.holdings.length}>
           Check all
@@ -588,6 +622,30 @@ function StrategyBuilder({
         >
           Clear
         </button>
+      </div>
+      <div className="gif-drip-tools">
+        <div>
+          <strong>Apply the same DRIP rate</strong>
+          <span>Set every active holding to one reinvestment percentage.</span>
+        </div>
+        <div className="gif-drip-input">
+          <input
+            type="number"
+            min="0"
+            max="100"
+            step="5"
+            value={strategy.bulkDripPct ?? 100}
+            onChange={event => onChange({ bulkDripPct: clampDrip(event.target.value) })}
+            aria-label={`${strategy.name} equal DRIP percentage`}
+          />
+          <span>%</span>
+        </div>
+        <button onClick={applyEqualDrip} disabled={!active.length}>Apply equally</button>
+      </div>
+      <div className="gif-field-note">
+        Fund type is detected automatically from ticker metadata and strategy history.
+        Use the Fund type menu only when you need to correct the detection. Unreinvested
+        distributions remain as non-interest-bearing strategy cash.
       </div>
 
       <div className="gif-holdings-wrap">
@@ -603,7 +661,8 @@ function StrategyBuilder({
                 <th>Ticker</th>
                 <th>Weight</th>
                 <th>Current yield</th>
-                <th>Behavior override</th>
+                <th>DRIP</th>
+                <th>Fund type</th>
                 <th>Option structure</th>
                 <th>Correlation group</th>
                 <th></th>
@@ -643,6 +702,23 @@ function StrategyBuilder({
                   </td>
                   <td>{pct(row.current_yield_pct || 0, 2)}</td>
                   <td>
+                    <div className="gif-weight-input">
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="5"
+                        value={row.drip_pct ?? 100}
+                        disabled={row.enabled === false}
+                        onChange={event => updateHolding(row.ticker, {
+                          drip_pct: clampDrip(event.target.value),
+                        })}
+                        aria-label={`${row.ticker} DRIP percentage`}
+                      />
+                      <span>%</span>
+                    </div>
+                  </td>
+                  <td>
                     <select
                       className="gif-holding-select"
                       value={row.scenario_type_override || ''}
@@ -650,7 +726,7 @@ function StrategyBuilder({
                       onChange={event => updateHolding(row.ticker, {
                         scenario_type_override: event.target.value,
                       })}
-                      aria-label={`${row.ticker} behavior override`}
+                      aria-label={`${row.ticker} fund type`}
                     >
                       {BEHAVIOR_OPTIONS.map(([value, label]) => (
                         <option key={value || 'auto'} value={value}>{label}</option>
@@ -752,8 +828,15 @@ function StrategyResultCard({ result, index, targetEnabled }) {
         <Metric
           label="Distributions reinvested"
           value={compactMoney(summary.cumulative_distributions_reinvested.p50)}
-          sub="Generated and reinvested, not added twice"
+          sub={`${pct(summary.weighted_drip_pct, 1)} weighted DRIP rate · not added twice`}
         />
+        {summary.weighted_drip_pct < 100 && (
+          <Metric
+            label="Distributions retained as cash"
+            value={compactMoney(summary.retained_cash_balance.p50)}
+            sub={`${compactMoney(summary.cumulative_distributions_retained.p50)} retained · 0% cash return`}
+          />
+        )}
         {targetEnabled && (
           <>
             <Metric
@@ -1034,8 +1117,8 @@ function ProjectedIncomePanel({ strategies, years, scenario }) {
           <h3>Income generated after {years} year{years === 1 ? '' : 's'}</h3>
         </div>
         <p>
-          {scenarioLabel} scenario · median values in today&apos;s dollars · all distributions,
-          including growth holdings, remain reinvested
+          {scenarioLabel} scenario · median values in today&apos;s dollars · selected per-position
+          DRIP rates are reflected and unreinvested payouts remain in cash
         </p>
       </div>
       <div className="gif-income-summary-grid">
@@ -1097,7 +1180,7 @@ export default function GrowthIncomeFreedom() {
   const [selectedScenario, setSelectedScenario] = useState('neutral')
   const [applyTax, setApplyTax] = useState(false)
   const [taxRatePct, setTaxRatePct] = useState(15)
-  const [capPayout, setCapPayout] = useState(false)
+  const [capPayout, setCapPayout] = useState(true)
   const [checkDripStop, setCheckDripStop] = useState(false)
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -1145,6 +1228,7 @@ export default function GrowthIncomeFreedom() {
             enabled: true,
             imported: true,
             portfolio_weight: row.weight,
+            drip_pct: clampDrip(row.drip_pct ?? 100),
           })),
         })
       })
@@ -1170,6 +1254,25 @@ export default function GrowthIncomeFreedom() {
     if (blendEnabled) base.push(buildBlend(strategies[0], strategies[1], blendA))
     return base
   }, [strategies, blendEnabled, blendA])
+
+  const dripPolicy = useMemo(() => {
+    const rates = strategies.flatMap(strategy => (
+      strategy.holdings
+        .filter(row => row.enabled !== false && Number(row.weight) > 0)
+        .map(row => clampDrip(row.drip_pct ?? 100))
+    ))
+    if (!rates.length) {
+      return { label: '100% DRIP', detail: 'Default rate for new holdings' }
+    }
+    const first = rates[0]
+    const uniform = rates.every(rate => Math.abs(rate - first) < 0.001)
+    return {
+      label: uniform ? `${first.toFixed(first % 1 === 0 ? 0 : 1)}% DRIP` : 'CUSTOM DRIP',
+      detail: uniform
+        ? 'Same reinvestment rate across active holdings'
+        : 'Reinvestment varies by holding',
+    }
+  }, [strategies])
 
   const validationError = useMemo(() => {
     for (const strategy of requestStrategies.slice(0, 2)) {
@@ -1306,8 +1409,8 @@ export default function GrowthIncomeFreedom() {
           </p>
         </div>
         <div className="gif-policy-badge">
-          <strong>100% DRIP</strong>
-          <span>No withdrawals during the growth phase</span>
+          <strong>{dripPolicy.label}</strong>
+          <span>{dripPolicy.detail} · retained payouts stay in cash</span>
         </div>
       </header>
 
@@ -1503,7 +1606,7 @@ export default function GrowthIncomeFreedom() {
           <small className="gif-sustainability-note">
             The FI dates below actively sell shares to fund the target and require the money to last the
             “Money must last” horizon. These toggles refine that test and the Sustainable Freedom winner;
-            the value/income lines above still assume 100% DRIP and no withdrawals.
+            the value/income lines above use the selected per-holding DRIP rates and make no withdrawals.
           </small>
         </div>
 
@@ -1740,6 +1843,8 @@ export default function GrowthIncomeFreedom() {
                   <tr>
                     <th>Ticker</th>
                     <th>Behavior</th>
+                    <th>Payout model</th>
+                    <th>Neutral payout change</th>
                     <th>Option structure</th>
                     <th>Correlation group</th>
                     <th>Current yield</th>
@@ -1756,9 +1861,28 @@ export default function GrowthIncomeFreedom() {
                     <tr key={row.ticker}>
                       <td><strong>{row.ticker}</strong></td>
                       <td>{row.scenario_label}</td>
+                      <td>
+                        {row.payout_model === 'nav_yield'
+                          ? 'NAV-linked distribution rate'
+                          : 'Per-share distribution growth'}
+                      </td>
+                      <td>
+                        {pct((row.neutral_distribution_growth || 0) * 100, 1)}
+                        <small className="gif-table-sub">
+                          {row.distribution_growth_source || 'strategy assumption'}
+                        </small>
+                      </td>
                       <td>{OPTION_STRATEGY_OPTIONS.find(([value]) => value === row.option_strategy)?.[1] || row.option_strategy}</td>
                       <td>{CORRELATION_GROUP_OPTIONS.find(([value]) => value === row.correlation_group)?.[1] || row.correlation_group}</td>
-                      <td>{pct(row.current_yield * 100, 2)}</td>
+                      <td>
+                        {pct(row.current_yield * 100, 2)}
+                        {Number.isFinite(Number(row.trailing_twelve_month_yield))
+                          && Math.abs(Number(row.trailing_twelve_month_yield) - Number(row.current_yield)) > 0.0001 && (
+                          <small className="gif-table-sub">
+                            {pct(row.trailing_twelve_month_yield * 100, 2)} trailing 12m
+                          </small>
+                        )}
+                      </td>
                       <td>{pct(row.expected_total_return * 100, 2)}</td>
                       <td>
                         {pct((row.forecast_annual_volatility ?? row.annual_volatility) * 100, 1)}
@@ -1790,8 +1914,9 @@ export default function GrowthIncomeFreedom() {
             the money to last the “Money must last” horizon at your chosen confidence; “preserves principal”
             additionally keeps real starting value intact. “Spending capacity (4% reference)” is an
             informational value × rate figure only and does not drive the FI dates. The value/income charts
-            still assume 100% DRIP and no withdrawals. Estimated taxes apply only when enabled — leave them
-            off for Roth or other tax-free accounts.
+            use the selected per-holding DRIP rates; unreinvested distributions stay in non-interest-bearing
+            strategy cash and no growth-phase withdrawals are made. Estimated taxes apply only when enabled
+            — leave them off for Roth or other tax-free accounts.
           </div>
         </section>
       )}

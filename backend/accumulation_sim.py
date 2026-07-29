@@ -2,8 +2,9 @@
 
 The simulator keeps total return, price movement, and cash distributions
 consistent.  A monthly total-return draw is split into a synthetic ex-
-distribution price move plus a cash distribution, which is immediately
-reinvested.  Monthly contributions are invested after that month's return.
+distribution price move plus a cash distribution.  Each holding can reinvest
+0% to 100% of that distribution; the remainder stays in non-interest-bearing
+strategy cash.  Monthly contributions are invested after that month's return.
 
 This module is Flask-free so the recurrence and scenario behavior can be unit
 tested without a database or network connection.
@@ -14,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import re
 import tempfile
 import time
 from dataclasses import dataclass
@@ -89,6 +91,14 @@ SUSTAINABLE_YIELD_CAPS = {
     "commodities": 0.18,
     "non_income_equity": 0.08,
     "other": 0.18,
+}
+
+# Option-income products generally manage a distribution rate against NAV.
+# Dividend-growth stocks and funds, by contrast, grow a per-share dividend that
+# is not mechanically reset to the current share price each month.
+NAV_LINKED_PAYOUT_TYPES = {
+    "option_income",
+    "high_distribution_option",
 }
 
 OPTION_STRATEGIES = {
@@ -260,6 +270,7 @@ def normalize_strategy(strategy: dict[str, Any]) -> dict[str, Any]:
             combined[ticker] = {
                 "ticker": ticker,
                 "weight": 0.0,
+                "_drip_weighted": 0.0,
                 "description": str(raw.get("description") or ticker)[:200],
                 "scenario_type": str(raw.get("scenario_type") or "other"),
                 "current_yield_pct": max(0.0, _finite(raw.get("current_yield_pct"), 0.0)),
@@ -296,6 +307,11 @@ def normalize_strategy(strategy: dict[str, Any]) -> dict[str, Any]:
                 existing["option_strategy"] = raw_option
             if existing.get("correlation_group") == "auto" and raw_group != "auto":
                 existing["correlation_group"] = raw_group
+        combined[ticker]["_drip_weighted"] += weight * _clip(
+            _finite(raw.get("drip_pct"), 100.0),
+            0.0,
+            100.0,
+        )
         combined[ticker]["weight"] += weight
 
     if not combined:
@@ -308,6 +324,11 @@ def normalize_strategy(strategy: dict[str, Any]) -> dict[str, Any]:
     total = sum(row["weight"] for row in combined.values())
     holdings = []
     for row in combined.values():
+        raw_weight = row["weight"]
+        row["drip_pct"] = round(
+            row.pop("_drip_weighted") / raw_weight if raw_weight > 0 else 100.0,
+            6,
+        )
         row["weight"] = row["weight"] / total
         if row["scenario_type"] not in HOLDING_SCENARIO_PROFILES:
             row["scenario_type"] = "other"
@@ -431,16 +452,25 @@ def _monthly_total_returns(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, p
 def _annual_distribution_growth(monthly_dividends: pd.Series) -> float | None:
     if monthly_dividends.empty:
         return None
+    monthly_dividends = monthly_dividends.sort_index()
     annual = monthly_dividends.groupby(monthly_dividends.index.year).sum()
+    month_counts = monthly_dividends.groupby(monthly_dividends.index.year).size()
     current_year = pd.Timestamp.now().year
-    annual = annual[annual.index < current_year]
+    complete_years = month_counts[
+        (month_counts >= 12) & (month_counts.index < current_year)
+    ].index
+    annual = annual[annual.index.isin(complete_years)]
     annual = annual[annual > 0]
     if len(annual) < 3:
         return None
     growth = annual.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
     if growth.empty:
         return None
-    return _clip(float(growth.median()), -0.50, 0.25)
+    # Winsorize each annual observation before taking the median.  A split,
+    # special distribution, or data repair should not become a perpetual
+    # double-digit payout-growth assumption.
+    growth = growth.clip(lower=-0.20, upper=0.15)
+    return _clip(float(growth.median()), -0.15, 0.15)
 
 
 def _holding_text(holding: dict[str, Any]) -> str:
@@ -501,7 +531,7 @@ def _infer_correlation_group(holding: dict[str, Any]) -> str:
         return "real_estate"
     if any(phrase in text for phrase in ("bitcoin", "ethereum", "crypto")):
         return "crypto"
-    if any(phrase in text for phrase in ("gold", "silver", "precious metal")):
+    if re.search(r"\b(?:gold|silver)\b|precious metals?", text):
         return "precious_metals"
     if scenario_type == "commodities" or any(
         phrase in text for phrase in ("commodity", "natural resources", "midstream")
@@ -689,13 +719,28 @@ def build_market_assumptions(
             **raw_holding,
             "scenario_type": scenario_type,
         })
-        cache_key = f"{ticker}|{scenario_type}|{option_strategy}|{correlation_group}"
+        supplied_yield = max(
+            0.0, _finite(raw_holding.get("current_yield_pct"), 0.0) / 100.0
+        )
+        supplied_price = max(
+            0.01, _finite(raw_holding.get("current_price"), 100.0)
+        )
+        payout_model = (
+            "nav_yield"
+            if scenario_type in NAV_LINKED_PAYOUT_TYPES
+            else "per_share_growth"
+        )
+        cache_key = (
+            f"{ticker}|{scenario_type}|{option_strategy}|{correlation_group}"
+            f"|{supplied_yield:.8f}|{supplied_price:.4f}"
+        )
         cached = _ASSUMPTION_CACHE.get(cache_key)
         if history_loader is None and cached and now - cached[0] < _ASSUMPTION_TTL_SECONDS:
             row = dict(cached[1])
             row["scenario_type"] = scenario_type
             row["option_strategy"] = option_strategy
             row["correlation_group"] = correlation_group
+            row["payout_model"] = payout_model
             row.pop("correlations", None)
             row.pop("correlation_history_months", None)
             history_confidence = _clip(
@@ -729,17 +774,17 @@ def build_market_assumptions(
         prior_beta = BETA_PRIORS[scenario_type]
         profile = HOLDING_SCENARIO_PROFILES[scenario_type]
         neutral_div_growth = _finite(profile["neutral"].get("income_growth"), 0.0)
-        supplied_yield = max(0.0, _finite(raw_holding.get("current_yield_pct"), 0.0) / 100.0)
-        supplied_price = max(0.01, _finite(raw_holding.get("current_price"), 100.0))
         frame = histories.get(ticker)
 
         source = "class assumption"
+        distribution_growth_source = "strategy assumption"
         history_years = 0.0
         expected_return = prior_return
         volatility = prior_vol
         beta = prior_beta
         current_price = supplied_price
         current_yield = supplied_yield
+        trailing_yield = None
         div_growth = neutral_div_growth
 
         if frame is not None:
@@ -774,10 +819,17 @@ def build_market_assumptions(
                     cutoff = monthly_close.index[-1] - pd.Timedelta(days=365)
                     ttm_dividends = float(monthly_dividends[monthly_dividends.index >= cutoff].sum())
                     if ttm_dividends > 0:
-                        current_yield = ttm_dividends / current_price
-                    historical_div_growth = _annual_distribution_growth(monthly_dividends)
+                        trailing_yield = ttm_dividends / current_price
+                        if supplied_yield <= 0:
+                            current_yield = trailing_yield
+                    historical_div_growth = (
+                        _annual_distribution_growth(monthly_dividends)
+                        if payout_model == "per_share_growth"
+                        else None
+                    )
                     if historical_div_growth is not None:
                         div_growth = neutral_div_growth * 0.70 + historical_div_growth * 0.30
+                        distribution_growth_source = "complete-year history + strategy"
 
         history_confidence = _clip(history_years / 5.0, 0.0, 1.0)
         uncertainty_multiplier = 1.0 + (1.0 - history_confidence) * 0.25
@@ -800,14 +852,21 @@ def build_market_assumptions(
             "scenario_label": profile["label"],
             "option_strategy": option_strategy,
             "correlation_group": correlation_group,
+            "payout_model": payout_model,
             "current_price": round(current_price, 6),
             "current_yield": round(_clip(current_yield, 0.0, 0.80), 8),
+            "trailing_twelve_month_yield": (
+                round(_clip(trailing_yield, 0.0, 0.80), 8)
+                if trailing_yield is not None
+                else None
+            ),
             "expected_total_return": round(_clip(expected_return, -0.10, 0.20), 8),
             "annual_volatility": round(volatility, 8),
             "forecast_annual_volatility": round(forecast_volatility, 8),
             "history_confidence_pct": round(history_confidence * 100.0, 1),
             "beta": round(beta, 6),
-            "neutral_distribution_growth": round(_clip(div_growth, -0.25, 0.15), 8),
+            "neutral_distribution_growth": round(_clip(div_growth, -0.15, 0.15), 8),
+            "distribution_growth_source": distribution_growth_source,
             "sustainable_yield_cap": SUSTAINABLE_YIELD_CAPS[scenario_type],
             "history_years": round(history_years, 1),
             "source": source,
@@ -1251,6 +1310,9 @@ def _simulate_withdrawal_window(
     shares0: np.ndarray,
     price0: np.ndarray,
     dps0: np.ndarray,
+    payout_rates0: np.ndarray,
+    cash0: np.ndarray,
+    nav_yield_mask: np.ndarray,
     log_returns: np.ndarray,
     return_ticker_indices: np.ndarray,
     dps_growth: np.ndarray,
@@ -1266,9 +1328,12 @@ def _simulate_withdrawal_window(
     ``log_returns`` keeps the shared universe layout ``(paths, months,
     universe_tickers)`` and ``return_ticker_indices`` selects this strategy's
     columns one month at a time, avoiding a large per-strategy copy.
-    ``dps_growth`` is ``(tickers, months)`` and ``yield_caps`` is ``(tickers,)``.
-    Distributions cover the inflation-adjusted target first; any shortfall sells
-    shares pro-rata by value and any surplus buys shares.
+    ``payout_rates0`` carries the annual NAV-linked rates for option-income
+    holdings, ``cash0`` carries distributions retained during accumulation,
+    ``nav_yield_mask`` selects the payout model, ``dps_growth`` is ``(tickers,
+    months)``, and ``yield_caps`` is ``(tickers,)``. Retained cash and
+    distributions cover the inflation-adjusted target first; any shortfall
+    sells shares pro-rata by value and any surplus buys shares.
 
     Returns ``(survived_mask, end_value, retire_value)`` per path, where
     ``survived_mask`` is True on paths that never fully depleted, ``end_value`` is
@@ -1278,14 +1343,26 @@ def _simulate_withdrawal_window(
     shares = shares0.copy()
     price = price0.copy()
     dps = dps0.copy()
+    payout_rates = payout_rates0.copy()
+    cash = cash0.copy()
     n_paths = shares.shape[0]
-    retire_value = (shares * price).sum(axis=1)
+    retire_value = (shares * price).sum(axis=1) + cash
     depleted = np.zeros(n_paths, dtype=bool)
 
     for offset in range(withdrawal_months):
         month = start_month + offset
         total_return = np.expm1(log_returns[:, month, return_ticker_indices])
-        payout_per_share = np.minimum(dps / 12.0, price * yield_caps / 12.0)
+        capped_rates = np.minimum(payout_rates, yield_caps[np.newaxis, :])
+        nav_linked_payout = price * capped_rates / 12.0
+        per_share_payout = np.minimum(
+            dps / 12.0,
+            price * yield_caps[np.newaxis, :] / 12.0,
+        )
+        payout_per_share = np.where(
+            nav_yield_mask[np.newaxis, :],
+            nav_linked_payout,
+            per_share_payout,
+        )
         distribution = shares * payout_per_share
         price_end = np.maximum(price * (1.0 + total_return) - payout_per_share, price * 0.01)
 
@@ -1293,8 +1370,9 @@ def _simulate_withdrawal_window(
         target = settings.freedom_monthly_target * (
             (1.0 + settings.inflation_rate) ** ((month + 1) / 12.0)
         )
-        shortfall = np.maximum(target - net_distribution, 0.0)
-        surplus = np.maximum(net_distribution - target, 0.0)
+        available_cash = cash + net_distribution
+        shortfall = np.maximum(target - available_cash, 0.0)
+        surplus = np.maximum(available_cash - target, 0.0)
 
         value = shares * price_end
         total_value = value.sum(axis=1)
@@ -1307,8 +1385,22 @@ def _simulate_withdrawal_window(
         buy_shares = surplus[:, None] * weight_frac / safe_price
 
         shares = np.maximum(shares - sell_shares + buy_shares, 0.0)
+        cash = np.zeros_like(cash)
         price = price_end
-        dps = np.minimum(dps * dps_growth[:, month], price * yield_caps)
+        growth_factor = dps_growth[:, month][np.newaxis, :]
+        payout_rates = np.minimum(
+            payout_rates * growth_factor,
+            yield_caps[np.newaxis, :],
+        )
+        per_share_dps = np.minimum(
+            dps * growth_factor,
+            price * yield_caps[np.newaxis, :],
+        )
+        dps = np.where(
+            nav_yield_mask[np.newaxis, :],
+            price * payout_rates,
+            per_share_dps,
+        )
 
     end_value = (shares * price).sum(axis=1)
     return ~depleted, end_value, retire_value
@@ -1326,7 +1418,10 @@ def _simulate_strategy(
     portfolio_values = np.zeros((settings.paths, months + 1), dtype=np.float64)
     flow_adjusted_index = np.full((settings.paths, months + 1), 100.0, dtype=np.float64)
     annual_income = np.zeros((settings.paths, months + 1), dtype=np.float64)
-    cumulative_distributions = np.zeros(settings.paths, dtype=np.float64)
+    cumulative_distributions_generated = np.zeros(settings.paths, dtype=np.float64)
+    cumulative_distributions_reinvested = np.zeros(settings.paths, dtype=np.float64)
+    cumulative_distributions_retained = np.zeros(settings.paths, dtype=np.float64)
+    retained_cash = np.zeros(settings.paths, dtype=np.float64)
     portfolio_values[:, 0] = settings.starting_capital
     no_drip_cash_collected = np.zeros(settings.paths, dtype=np.float64)
     # Year-end snapshots (shares/price/dps per ticker) feed the per-year FI
@@ -1335,6 +1430,7 @@ def _simulate_strategy(
 
     weights = {row["ticker"]: row["weight"] for row in strategy["holdings"]}
     weighted_yield = 0.0
+    weighted_drip_rate = 0.0
     blended_expected_total_return = 0.0
     ticker_states: dict[str, dict[str, np.ndarray]] = {}
     for holding in strategy["holdings"]:
@@ -1348,19 +1444,49 @@ def _simulate_strategy(
             assumption["current_price"] * assumption["current_yield"],
             dtype=np.float64,
         )
+        yield_cap = _finite(
+            assumption.get("sustainable_yield_cap"),
+            SUSTAINABLE_YIELD_CAPS[assumption["scenario_type"]],
+        )
+        payout_rate = np.full(
+            settings.paths,
+            min(assumption["current_yield"], yield_cap),
+            dtype=np.float64,
+        )
+        payout_model = str(
+            assumption.get("payout_model")
+            or (
+                "nav_yield"
+                if assumption["scenario_type"] in NAV_LINKED_PAYOUT_TYPES
+                else "per_share_growth"
+            )
+        )
+        drip_rate = _clip(
+            _finite(holding.get("drip_pct"), 100.0) / 100.0,
+            0.0,
+            1.0,
+        )
         ticker_states[ticker] = {
             "price": price,
             "shares": shares,
             "dps": dps,
-            "yield_cap": _finite(
-                assumption.get("sustainable_yield_cap"),
-                SUSTAINABLE_YIELD_CAPS[assumption["scenario_type"]],
-            ),
+            "payout_rate": payout_rate,
+            "payout_model": payout_model,
+            "yield_cap": yield_cap,
+            "drip_rate": drip_rate,
         }
         if sustainability.check_drip_stop_stability:
             ticker_states[ticker]["shares_no_drip"] = shares.copy()
-        annual_income[:, 0] += shares * dps
-        weighted_yield += holding["weight"] * assumption["current_yield"]
+        effective_dps = (
+            price * payout_rate
+            if payout_model == "nav_yield"
+            else np.minimum(dps, price * yield_cap)
+        )
+        annual_income[:, 0] += shares * effective_dps
+        weighted_yield += holding["weight"] * min(
+            assumption["current_yield"], yield_cap
+        )
+        weighted_drip_rate += holding["weight"] * drip_rate
         blended_expected_total_return += holding["weight"] * _finite(
             assumption["expected_total_return"], 0.0
         )
@@ -1379,10 +1505,17 @@ def _simulate_strategy(
             # forever. This ceiling prevents a falling-price/high-payout loop
             # from manufacturing infinite shares while still allowing a much
             # higher sustainable rate for option-income strategies.
-            payout_per_share = np.minimum(
-                state["dps"] / 12.0,
-                state["price"] * state["yield_cap"] / 12.0,
-            )
+            if state["payout_model"] == "nav_yield":
+                payout_per_share = (
+                    state["price"]
+                    * np.minimum(state["payout_rate"], state["yield_cap"])
+                    / 12.0
+                )
+            else:
+                payout_per_share = np.minimum(
+                    state["dps"] / 12.0,
+                    state["price"] * state["yield_cap"] / 12.0,
+                )
             distribution = state["shares"] * payout_per_share
             total_return = np.expm1(path["log_returns"][:, month])
             price_end = state["price"] * (1.0 + total_return) - payout_per_share
@@ -1391,8 +1524,10 @@ def _simulate_strategy(
             if sustainability.check_drip_stop_stability:
                 no_drip_cash_collected += state["shares_no_drip"] * payout_per_share
 
-            # All distributions are reinvested into the paying security.
-            state["shares"] += distribution / price_end
+            reinvested_distribution = distribution * state["drip_rate"]
+            retained_distribution = distribution - reinvested_distribution
+            state["shares"] += reinvested_distribution / price_end
+            retained_cash += retained_distribution
             month_pre_contribution += state["shares"] * price_end
             contribution = settings.monthly_contribution * weights[ticker]
             if contribution > 0:
@@ -1400,15 +1535,26 @@ def _simulate_strategy(
                 if sustainability.check_drip_stop_stability:
                     state["shares_no_drip"] += contribution / price_end
             state["price"] = price_end
-            state["dps"] = np.minimum(
-                state["dps"] * path["dps_growth"][month],
-                state["price"] * state["yield_cap"],
-            )
+            if state["payout_model"] == "nav_yield":
+                state["payout_rate"] = np.minimum(
+                    state["payout_rate"] * path["dps_growth"][month],
+                    state["yield_cap"],
+                )
+                state["dps"] = state["price"] * state["payout_rate"]
+            else:
+                state["dps"] = np.minimum(
+                    state["dps"] * path["dps_growth"][month],
+                    state["price"] * state["yield_cap"],
+                )
 
-            cumulative_distributions += distribution
+            cumulative_distributions_generated += distribution
+            cumulative_distributions_reinvested += reinvested_distribution
+            cumulative_distributions_retained += retained_distribution
             month_total += state["shares"] * state["price"]
             month_income += state["shares"] * state["dps"]
 
+        month_total += retained_cash
+        month_pre_contribution += retained_cash
         portfolio_values[:, month + 1] = month_total
         monthly_portfolio_factor = np.divide(
             month_pre_contribution,
@@ -1426,6 +1572,11 @@ def _simulate_strategy(
                 "shares": np.stack([ticker_states[t]["shares"] for t in ticker_order], axis=1),
                 "price": np.stack([ticker_states[t]["price"] for t in ticker_order], axis=1),
                 "dps": np.stack([ticker_states[t]["dps"] for t in ticker_order], axis=1),
+                "payout_rate": np.stack(
+                    [ticker_states[t]["payout_rate"] for t in ticker_order],
+                    axis=1,
+                ),
+                "cash": retained_cash.copy(),
             }
 
     if sustainability.check_drip_stop_stability:
@@ -1465,6 +1616,13 @@ def _simulate_strategy(
         yield_caps = np.array(
             [ticker_states[t]["yield_cap"] for t in ticker_order], dtype=np.float64
         )
+        nav_yield_mask = np.array(
+            [
+                ticker_states[t]["payout_model"] == "nav_yield"
+                for t in ticker_order
+            ],
+            dtype=bool,
+        )
         withdrawal_tax_factor = (1.0 - sustainability.tax_rate) if sustainability.apply_tax else 1.0
 
     depleted = np.zeros(settings.paths, dtype=bool)
@@ -1472,6 +1630,7 @@ def _simulate_strategy(
         snap = year_snapshots[settings.years]
         survived, _end_value, _retire_value = _simulate_withdrawal_window(
             snap["shares"], snap["price"], snap["dps"],
+            snap["payout_rate"], snap["cash"], nav_yield_mask,
             return_path_matrix, return_ticker_indices, stacked_dps_growth, yield_caps,
             months, sustainability.withdrawal_years * 12, settings, withdrawal_tax_factor,
         )
@@ -1504,6 +1663,7 @@ def _simulate_strategy(
                 continue
             survived, end_value, retire_value = _simulate_withdrawal_window(
                 snapshot["shares"], snapshot["price"], snapshot["dps"],
+                snapshot["payout_rate"], snapshot["cash"], nav_yield_mask,
                 return_path_matrix, return_ticker_indices, stacked_dps_growth, yield_caps,
                 year * 12, fi_horizon_months, settings, withdrawal_tax_factor,
             )
@@ -1661,6 +1821,7 @@ def _simulate_strategy(
             settings.starting_capital + settings.monthly_contribution * months, 2
         ),
         "starting_yield_pct": round(weighted_yield * 100.0, 2),
+        "weighted_drip_pct": round(weighted_drip_rate * 100.0, 2),
         "final_value": _percentiles(portfolio_values[:, -1]),
         "final_real_value": _percentiles(real_values[:, -1]),
         "final_annual_income": _percentiles(annual_income[:, -1]),
@@ -1668,7 +1829,16 @@ def _simulate_strategy(
         "final_monthly_income": _percentiles(annual_income[:, -1] / 12.0),
         "final_real_monthly_income": _percentiles(final_real_income / 12.0),
         "spending_capacity": _percentiles(final_spending),
-        "cumulative_distributions_reinvested": _percentiles(cumulative_distributions),
+        "cumulative_distributions_generated": _percentiles(
+            cumulative_distributions_generated
+        ),
+        "cumulative_distributions_reinvested": _percentiles(
+            cumulative_distributions_reinvested
+        ),
+        "cumulative_distributions_retained": _percentiles(
+            cumulative_distributions_retained
+        ),
+        "retained_cash_balance": _percentiles(retained_cash),
         "max_drawdown_pct": _percentiles(max_drawdown),
         "income_target_probability": target_income_probability,
         "spending_target_probability": target_spending_probability,
@@ -1810,7 +1980,8 @@ def run_accumulation_comparison(
             "seed": settings.seed,
             "return_path_cells": return_path_cells,
             "return_path_storage": return_path_storage,
-            "reinvest_distributions_pct": 100,
+            "reinvestment_policy": "per_holding",
+            "retained_distribution_cash_return_pct": 0,
             "withdrawals": 0,
             "sustainability": {
                 "apply_tax": sustainability.apply_tax,

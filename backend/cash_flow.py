@@ -29,6 +29,49 @@ DEFAULT_SETTINGS = {
 }
 
 
+# Shared strategy registries used by portfolio cash-flow tools and the
+# accumulation simulator.  Text descriptions from quote providers are often
+# too terse to expose an ETF's option overlay (QQQI and SPYI are common
+# examples), so known products are classified before falling back to text.
+OPTION_INCOME_TICKERS = frozenset({
+    # JPM / Global X / classic covered call
+    "JEPI", "JEPQ", "JEPY", "QYLD", "XYLD", "RYLD", "DJIA", "QYLG",
+    "XYLG", "TYLG", "EDGQ", "EDGX", "QRMI", "XRMI", "QCLR", "XCLR",
+    "DIVO", "PUTW",
+    # Amplify / XFunds / Nicholas Wealth
+    "BAGY", "BITY", "QDVO", "IDVO", "HCOW", "HAKY", "ETTY", "SLJY",
+    "GIAX", "BLOX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX",
+    # NEOS option-income and hedged-income
+    "SPYI", "QQQI", "IWMI", "IYRI", "BTCI", "ETHI", "NEHI", "NIHI",
+    "MLPI", "IAUI", "HYBI", "CSHI", "QQQH", "SPYH", "XQQI", "XSPI",
+    # Goldman / First Trust / Simplify / iShares / Roundhill / Defiance
+    "GPIQ", "GPIX", "FTQI", "SVOL", "TLTW", "KLIP", "USOI", "QQQY",
+    "XDTE", "QDTE", "RDTE", "WDTE", "BALI", "ISPY", "JEPX", "SPXX",
+    "QQXX", "IWMW",
+    # Kurv / REX Shares / Quantify / VistaShares
+    "KQQQ", "KYLD", "KGLD", "KSLV", "KCOP", "AMZP", "AAPY", "GOOP",
+    "MSFY", "NFLP", "TSLP", "AIPI", "FEPI", "CEPI", "ULTI", "GIF",
+    "ATCL", "COII", "MSII", "NVII", "TSII", "HOII", "PLTI", "CWII",
+    "LLII", "WMTI", "TLDR", "ISBG", "ISSB", "ACKY", "OMAH", "QUSA",
+    "DRKY", "SIOO", "TPRY", "BTYB",
+    # GraniteShares and other option-income products
+    "YSPY", "TQQY", "YBST", "YBTY", "NVYY", "XBTY", "MTYY", "PLYY",
+    "MAAY", "IOYY", "RTYY", "HMYY", "CHPY", "GPTY", "TSPY", "TDAQ",
+    "TDAX", "TSYX", "SEPI", "OVL", "YMAX", "YMAG", "ULTY", "LFGY",
+    "SLTY", "BIGY", "FIVY",
+})
+
+DIVIDEND_GROWTH_TICKERS = frozenset({
+    "SCHD", "DGRO", "VIG", "VIGI", "DGRW", "DGRS", "NOBL", "SDY",
+    "RDVY", "FDVV", "DIVB", "LEAD", "DTD", "FVD", "REGL", "SMDV",
+})
+
+GROWTH_EQUITY_TICKERS = frozenset({
+    "QQQ", "QQQM", "VUG", "SCHG", "IWF", "IVW", "MGK", "VOOG",
+    "VONG", "SPYG", "IWY", "FSPGX", "VIGAX",
+})
+
+
 # Cash-flow projections keep the two parts of an income portfolio separate:
 # holding values move with the market, while owned shares generate cash
 # distributions at their current run rate. Distributions are not deducted from
@@ -212,7 +255,8 @@ def classify_holding_scenario_type(holding):
         return "cash"
 
     option_income = (
-        strategy.strip().lower() == "options income"
+        ticker in OPTION_INCOME_TICKERS
+        or strategy.strip().lower() == "options income"
         or fund_kind.strip().lower() == "option income"
         or "covered call / options income" in income_bucket.lower()
         or any(
@@ -296,8 +340,21 @@ def classify_holding_scenario_type(holding):
     if "dividend growth" in income_bucket.lower() or any(
         phrase in text
         for phrase in ("dividend growth", "dividend appreciation", "aristocrat", "quality dividend")
-    ):
+    ) or ticker in DIVIDEND_GROWTH_TICKERS:
         return "dividend_growth"
+    growth_name = any(
+        phrase in text
+        for phrase in (
+            "large cap growth",
+            "large growth",
+            "growth etf",
+            "growth index",
+            "nasdaq 100 index",
+            "nasdaq-100 index",
+        )
+    )
+    if ticker in GROWTH_EQUITY_TICKERS or (growth_name and current_yield < 0.03):
+        return "non_income_equity"
     if annual_income > 0:
         return "equity_income"
     if classification.strip().upper() in {"ETF", "STOCK", "EQUITY", "NONE", ""}:

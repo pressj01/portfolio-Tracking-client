@@ -542,6 +542,46 @@ class SustainabilityMathTest(unittest.TestCase):
             "bdc",
         )
 
+    def test_growth_and_income_fund_types_use_ticker_strategy_registries(self):
+        for ticker, description in (
+            ("QQQI", "NEOS Nasdaq-100 High Income ETF"),
+            ("SPYI", "NEOS S&P 500 High Income ETF"),
+            ("GPIQ", "Goldman Sachs Nasdaq-100 Premium Income ETF"),
+            ("GPIX", "Goldman Sachs S&P 500 Premium Income ETF"),
+        ):
+            with self.subTest(ticker=ticker):
+                self.assertEqual(
+                    classify_holding_scenario_type({
+                        "ticker": ticker,
+                        "description": description,
+                        "classification_type": "ETF",
+                        "value": 100000,
+                        "annual_income": 10000,
+                    }),
+                    "option_income",
+                )
+
+        self.assertEqual(
+            classify_holding_scenario_type({
+                "ticker": "SCHD",
+                "description": "Schwab U.S. Dividend Equity ETF",
+                "classification_type": "ETF",
+                "value": 100000,
+                "annual_income": 3500,
+            }),
+            "dividend_growth",
+        )
+        self.assertEqual(
+            classify_holding_scenario_type({
+                "ticker": "QQQM",
+                "description": "Invesco NASDAQ 100 ETF",
+                "classification_type": "ETF",
+                "value": 100000,
+                "annual_income": 600,
+            }),
+            "non_income_equity",
+        )
+
     def test_bill_rolls_only_after_due_date_and_keeps_prior_month_pay_date(self):
         bill = {
             "kind": "expense",

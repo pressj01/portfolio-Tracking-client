@@ -12,34 +12,15 @@ import {
   selectComparerTraces,
   shouldUseComparerLogScale,
 } from '../utils/comparerTraces'
-
-// ── Indicator helpers ────────────────────────────────────────────────────────
-
-function sma(values, period) {
-  // Warm-up mode: start plotting from bar 0 using available data
-  const result = new Array(values.length).fill(null)
-  for (let i = 0; i < values.length; i++) {
-    const window = Math.min(period, i + 1)
-    let sum = 0
-    for (let j = i - window + 1; j <= i; j++) sum += values[j]
-    result[i] = sum / window
-  }
-  return result
-}
-
-function ema(values, period) {
-  const result = new Array(values.length).fill(null)
-  if (!values.length) return result
-  const k = 2 / (period + 1)
-  // Seed with first value so EMA starts from bar 0
-  let prev = values[0]
-  result[0] = prev
-  for (let i = 1; i < values.length; i++) {
-    prev = values[i] * k + prev * (1 - k)
-    result[i] = prev
-  }
-  return result
-}
+// Shared with the Put Selling Scanner's price popup so both screens draw the
+// same MACD, RSI, and moving averages for a given ticker.
+import {
+  sma,
+  ema,
+  computeMacd,
+  computeRsi,
+  tradingSessionRangeBreaks,
+} from '../utils/chartIndicators'
 
 // ── Study Templates (TOS-style: add multiple instances of the same type) ─────
 
@@ -1226,29 +1207,7 @@ const STUDY_TEMPLATES = [
       { key: 'slow', label: 'Slow', type: 'number', min: 1, max: 100 },
       { key: 'signal', label: 'Signal', type: 'number', min: 1, max: 100 },
     ],
-    compute(records, params) {
-      const closes = records.map(r => r.close)
-      const dates = records.map(r => r.date)
-      const emaFast = ema(closes, params.fast)
-      const emaSlow = ema(closes, params.slow)
-      const macdLine = closes.map((_, i) => emaFast[i] != null && emaSlow[i] != null ? emaFast[i] - emaSlow[i] : null)
-      const macdValid = macdLine.filter(v => v != null)
-      const signalFull = ema(macdValid, params.signal)
-      const signalLine = new Array(closes.length).fill(null)
-      let si = 0
-      for (let i = 0; i < closes.length; i++) { if (macdLine[i] != null) { signalLine[i] = signalFull[si] || null; si++ } }
-      const histogram = closes.map((_, i) => macdLine[i] != null && signalLine[i] != null ? macdLine[i] - signalLine[i] : null)
-      const histColors = histogram.map(v => v != null && v >= 0 ? '#26A69A' : '#EF5350')
-      return {
-        mainTraces: [],
-        subTraces: [
-          { x: dates, y: histogram, type: 'bar', name: 'Histogram', marker: { color: histColors }, showlegend: false },
-          { x: dates, y: macdLine, type: 'scatter', mode: 'lines', name: 'MACD', line: { color: '#2962FF', width: 1.5 } },
-          { x: dates, y: signalLine, type: 'scatter', mode: 'lines', name: 'Signal', line: { color: '#FF6D00', width: 1.5 } },
-        ],
-        subTitle: `MACD (${params.fast},${params.slow},${params.signal})`,
-      }
-    },
+    compute: (records, params) => computeMacd(records, params),
   },
   {
     type: 'marketforecast', label: 'MarketForecast', group: 'Oscillators', panel: 'lower',
@@ -1408,37 +1367,7 @@ const STUDY_TEMPLATES = [
     type: 'rsi', label: 'RSI', group: 'Oscillators', panel: 'lower',
     multi: false, defaultParams: { period: 14 },
     paramFields: [{ key: 'period', label: 'Period', type: 'number', min: 1, max: 100 }],
-    compute(records, params) {
-      const dates = records.map(r => r.date)
-      const closes = records.map(r => r.close)
-      const period = params.period
-      const rsi = new Array(closes.length).fill(null)
-      if (closes.length < 2) return { mainTraces: [], subTraces: [], subTitle: '' }
-      let avgGain = 0, avgLoss = 0
-      for (let i = 1; i < closes.length; i++) {
-        const change = closes[i] - closes[i - 1]
-        const gain = change > 0 ? change : 0
-        const loss = change < 0 ? -change : 0
-        if (i <= period) {
-          avgGain += gain / period
-          avgLoss += loss / period
-          rsi[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss)
-        } else {
-          avgGain = (avgGain * (period - 1) + gain) / period
-          avgLoss = (avgLoss * (period - 1) + loss) / period
-          rsi[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss)
-        }
-      }
-      return {
-        mainTraces: [],
-        subTraces: [
-          { x: dates, y: rsi, type: 'scatter', mode: 'lines', name: `RSI ${period}`, line: { color: '#AB47BC', width: 1.5 }, showlegend: false },
-          { x: [dates[0], dates[dates.length - 1]], y: [70, 70], type: 'scatter', mode: 'lines', line: { color: '#ef5350', width: 1, dash: 'dash' }, showlegend: false, hoverinfo: 'skip' },
-          { x: [dates[0], dates[dates.length - 1]], y: [30, 30], type: 'scatter', mode: 'lines', line: { color: '#26A69A', width: 1, dash: 'dash' }, showlegend: false, hoverinfo: 'skip' },
-        ],
-        subTitle: `RSI (${period})`,
-      }
-    },
+    compute: (records, params) => computeRsi(records, params),
   },
   {
     type: 'stoch', label: 'Stochastic', group: 'Oscillators', panel: 'lower',
@@ -2767,42 +2696,14 @@ export default function ETFScreen() {
     }
 
     // Daily and intraday market data should advance by trading sessions, not
-    // calendar days. Remove Saturday/Sunday from Plotly's date axis so Friday
-    // candles sit directly beside Monday candles, as they do in thinkorswim.
-    // Leave weekly/monthly series alone; their wider cadence is intentional.
-    const gapDays = dates.slice(1)
-      .map((date, index) => (new Date(date) - new Date(dates[index])) / 86400000)
-      .filter(gap => Number.isFinite(gap) && gap > 0)
-      .sort((a, b) => a - b)
-    const medianGapDays = gapDays.length ? gapDays[Math.floor(gapDays.length / 2)] : null
-    const tradingSessionRangeBreaks = []
-    if (medianGapDays != null && medianGapDays < 4) {
-      tradingSessionRangeBreaks.push({ bounds: ['sat', 'mon'] })
-
-      // Daily bars should also sit together across exchange holidays. Intraday
-      // series have sub-day median gaps, so only generate whole-day breaks when
-      // this is genuinely daily data.
-      if (medianGapDays >= 0.75) {
-        const presentDates = new Set(dates.map(dateKey))
-        const firstDay = new Date(`${dateKey(dates[0])}T00:00:00Z`)
-        const lastDay = new Date(`${dateKey(dates[dates.length - 1])}T00:00:00Z`)
-        const missingWeekdays = []
-        for (const day = new Date(firstDay); day <= lastDay; day.setUTCDate(day.getUTCDate() + 1)) {
-          const weekday = day.getUTCDay()
-          const key = day.toISOString().slice(0, 10)
-          if (weekday !== 0 && weekday !== 6 && !presentDates.has(key)) missingWeekdays.push(key)
-        }
-        if (missingWeekdays.length) {
-          tradingSessionRangeBreaks.push({ values: missingWeekdays, dvalue: 86400000 })
-        }
-      }
-    }
+    // calendar days, so Friday candles sit directly beside Monday candles.
+    const sessionRangeBreaks = tradingSessionRangeBreaks(dates)
 
     const layout = {
       template: 'plotly_dark', paper_bgcolor: '#1e1e2f', plot_bgcolor: '#1e1e2f',
       font: { color: '#e0e0e0', size: 12 }, margin: { l: 60, r: 30, t: 40, b: 40 },
       height: 500 + lowerCount * 130,
-      xaxis: { rangeslider: { visible: false }, type: 'date', rangebreaks: tradingSessionRangeBreaks, gridcolor: '#333', hoverformat: '%a %b %d, %Y', tickvals: xTickVals, ticktext: xTickTexts, tickfont: { size: 9, color: '#aaa' }, tickangle: 0, showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot', ...(xRange ? { range: xRange } : {}) },
+      xaxis: { rangeslider: { visible: false }, type: 'date', rangebreaks: sessionRangeBreaks, gridcolor: '#333', hoverformat: '%a %b %d, %Y', tickvals: xTickVals, ticktext: xTickTexts, tickfont: { size: 9, color: '#aaa' }, tickangle: 0, showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot', ...(xRange ? { range: xRange } : {}) },
       yaxis: {
         title: isPct ? 'Change (%)' : 'Price',
         domain: domains[0], gridcolor: '#333',

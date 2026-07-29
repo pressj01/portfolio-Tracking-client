@@ -116,6 +116,8 @@ class PortfolioIncomeSimulatorTests(unittest.TestCase):
         self.assertEqual(payload["current_price"], 54.96)
         self.assertEqual(payload["div"], 0.394)
         self.assertEqual(payload["div_frequency"], "M")
+        self.assertEqual(payload["scenario_type"], "option_income")
+        self.assertEqual(payload["scenario_label"], "Diversified option income")
 
     def test_custom_ticker_projects_without_imported_holdings(self):
         handle, db_path = tempfile.mkstemp(suffix=".db")

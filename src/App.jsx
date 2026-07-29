@@ -68,6 +68,7 @@ import OptionIncomeETFEvaluator from './pages/OptionIncomeETFEvaluator'
 import StockBuyingChecklist from './pages/StockBuyingChecklist'
 import OptionTradingTools from './pages/OptionTradingTools'
 import OptionEducation from './pages/OptionEducation'
+import PutSellingScanner from './pages/PutSellingScanner'
 import GreeksGuide from './pages/GreeksGuide'
 
 function PlotlyThemeBridge() {
@@ -227,6 +228,7 @@ function App() {
         <Route path="/option-income-etf-evaluator" element={<OptionIncomeETFEvaluator />} />
         <Route path="/stock-buying-checklist" element={<StockBuyingChecklist />} />
         <Route path="/options" element={<OptionTradingTools />} />
+        <Route path="/put-selling-scanner" element={<PutSellingScanner />} />
         <Route path="/option-education" element={<OptionEducation />} />
         <Route path="/option-greeks" element={<GreeksGuide />} />
         <Route path="/help" element={<Help />} />
@@ -292,6 +294,7 @@ function Nav() {
       <NavLink to="/action-center">Action Center</NavLink>
       <NavDropdown label="Options">
         <NavLink to="/options">Strategy Lab</NavLink>
+        <NavLink to="/put-selling-scanner">Put Selling Scanner</NavLink>
         <NavLink to="/option-education">Option Strategy Education</NavLink>
         <NavLink to="/option-greeks">Understanding the Greeks</NavLink>
       </NavDropdown>
