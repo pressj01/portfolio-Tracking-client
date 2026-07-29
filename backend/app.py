@@ -2153,20 +2153,88 @@ _ACCOUNT_MATCH_IGNORED_TOKENS = {
     "traditional",
 }
 
+_BROKER_SOURCE_ALIASES = {
+    "charles schwab": "schwab",
+    "charles_schwab": "schwab",
+    "e trade": "etrade",
+    "e*trade": "etrade",
+    "shear group": "shear_group",
+}
+
+_BROKER_SOURCE_LABELS = {
+    "schwab": "Charles Schwab",
+    "etrade": "E*TRADE",
+    "fidelity": "Fidelity",
+    "robinhood": "Robinhood",
+    "shear_group": "Shear Group",
+    "snowball": "Snowball",
+    "other": "Other / Manual",
+}
+
+_BROKER_IMPORT_SOURCE_PREFIXES = (
+    ("schwab", "schwab"),
+    ("etrade", "etrade"),
+    ("fidelity", "fidelity"),
+    ("robinhood", "robinhood"),
+    ("shear_group", "shear_group"),
+)
+
 
 def _normalize_account_tokens(label):
     text = re.sub(r"[^a-z0-9]+", " ", (label or "").strip().lower())
     return [tok for tok in text.split() if tok]
 
 
-def _account_match_info(account_name, profile_name, source_format=None):
+def _normalize_broker_source(value):
+    normalized = (value or "").strip().lower()
+    return _BROKER_SOURCE_ALIASES.get(normalized, normalized)
+
+
+def _broker_source_for_import(source_format):
+    normalized = (source_format or "").strip().lower()
+    for prefix, broker_source in _BROKER_IMPORT_SOURCE_PREFIXES:
+        if normalized == prefix or normalized.startswith(f"{prefix}_"):
+            return broker_source
+    return ""
+
+
+def _broker_source_mismatch_message(profile_name, selected_source, import_source):
+    selected_label = _BROKER_SOURCE_LABELS.get(selected_source, selected_source)
+    import_label = _BROKER_SOURCE_LABELS.get(import_source, import_source)
+    return (
+        f"'{profile_name}' is marked as {selected_label}, so it cannot accept a "
+        f"{import_label} import. Change Broker Source on Manage Portfolios or "
+        f"select a {import_label} portfolio."
+    )
+
+
+def _account_match_info(account_name, profile_name, source_format=None, broker_source=None):
     """Return whether an import file account appears to match the target profile."""
+    source_format = (source_format or "").strip().lower()
+    selected_broker = _normalize_broker_source(broker_source)
+    import_broker = _broker_source_for_import(source_format)
+
+    # Broker Source is the authoritative import-routing metadata. Account names
+    # in broker exports are often generic ("IRA", "Individual", etc.), so once
+    # the user marks a portfolio with a broker, do not require the display name
+    # to repeat that broker name.
+    if selected_broker and import_broker:
+        matched = selected_broker == import_broker
+        return {
+            "matched": matched,
+            "reason": "broker_source_match" if matched else "broker_source_mismatch",
+            "message": None if matched else _broker_source_mismatch_message(
+                profile_name,
+                selected_broker,
+                import_broker,
+            ),
+        }
+
     if not account_name:
         return {"matched": True, "reason": "missing_account_name"}
 
     account_tokens = _normalize_account_tokens(account_name)
     profile_tokens = _normalize_account_tokens(profile_name)
-    source_format = (source_format or "").strip().lower()
 
     account_core = {
         tok for tok in account_tokens
@@ -2546,7 +2614,7 @@ def _snapshot_nav_after_multi_profile_update(profile_ids, nav_date=None):
         snapshot_nav(pid, nav_date=nav_date)
 
 
-def _broker_import_target_error(profile_id, conn):
+def _broker_import_target_error(profile_id, fmt, conn):
     """Return an error message when broker/Snowball imports should be blocked."""
     if _request_aggregate_id() is not None:
         return (
@@ -2561,6 +2629,24 @@ def _broker_import_target_error(profile_id, conn):
                 "Broker and Snowball imports cannot be imported into Owner when Owner is made up "
                 "of more than one account. Import into the underlying source portfolio instead."
             )
+
+    selected_broker = _profile_broker_source(profile_id, conn)
+    import_broker = _broker_source_for_import(fmt)
+    if selected_broker and import_broker and selected_broker != import_broker:
+        profile_row = conn.execute(
+            "SELECT name FROM profiles WHERE id = ?",
+            (profile_id,),
+        ).fetchone()
+        profile_name = (
+            profile_row["name"] if isinstance(profile_row, dict)
+            else profile_row[0] if profile_row
+            else f"Portfolio {profile_id}"
+        )
+        return _broker_source_mismatch_message(
+            profile_name,
+            selected_broker,
+            import_broker,
+        )
 
     return None
 
@@ -2579,7 +2665,7 @@ def _profile_broker_source(profile_id, conn):
     if not row:
         return ""
     value = row["broker_source"] if isinstance(row, dict) else row[0]
-    return (value or "").strip().lower()
+    return _normalize_broker_source(value)
 
 
 def _should_preserve_positions_for_transaction_import(profile_id, fmt, conn):
@@ -4586,12 +4672,14 @@ def api_import_transactions_preview():
     if fmt not in TXN_PARSERS:
         return jsonify({"error": f"Unknown format: {fmt}"}), 400
     conn = get_connection()
+    profile_broker_source = ""
     try:
+        profile_broker_source = _profile_broker_source(profile_id, conn)
         blocked_msg = None
         if fmt == "portfolio_export" and _request_aggregate_id() is not None:
             blocked_msg = "Portfolio export imports cannot be run from an Aggregate view. Select a specific portfolio first."
         elif fmt != "portfolio_export":
-            blocked_msg = _broker_import_target_error(profile_id, conn)
+            blocked_msg = _broker_import_target_error(profile_id, fmt, conn)
     finally:
         conn.close()
     if blocked_msg:
@@ -4628,6 +4716,7 @@ def api_import_transactions_preview():
                 result.get("account_name"),
                 result["target_profile_name"],
                 fmt,
+                profile_broker_source,
             )
         return jsonify(result)
     except ValueError as e:
@@ -4942,12 +5031,14 @@ def api_import_transactions():
     if fmt not in TXN_PARSERS:
         return jsonify({"error": f"Unknown format: {fmt}"}), 400
     conn = get_connection()
+    profile_broker_source = ""
     try:
+        profile_broker_source = _profile_broker_source(profile_id, conn)
         blocked_msg = None
         if fmt == "portfolio_export" and _request_aggregate_id() is not None:
             blocked_msg = "Portfolio export imports cannot be run from an Aggregate view. Select a specific portfolio first."
         elif fmt != "portfolio_export":
-            blocked_msg = _broker_import_target_error(profile_id, conn)
+            blocked_msg = _broker_import_target_error(profile_id, fmt, conn)
     finally:
         conn.close()
     if blocked_msg:
@@ -4988,7 +5079,12 @@ def api_import_transactions():
 
     if parsed.get("account_name"):
         profile_name = _get_profile_name(profile_id)
-        account_match = _account_match_info(parsed.get("account_name"), profile_name, fmt)
+        account_match = _account_match_info(
+            parsed.get("account_name"),
+            profile_name,
+            fmt,
+            profile_broker_source,
+        )
         if not account_match["matched"]:
             return jsonify({"error": account_match["message"]}), 400
 

@@ -7,7 +7,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as app_module
 from app import (
+    _account_match_info,
     _apply_holding_display_quantities,
+    _broker_import_target_error,
     _repair_drip_tracking_for_profiles,
     _refresh_drip_tracking_from_transactions,
     _refresh_transaction_realized_gains,
@@ -15,6 +17,70 @@ from app import (
     _validate_sell_quantity_available,
     _yahoo_symbol_for_ticker,
 )
+
+
+class BrokerImportRoutingTest(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            """
+            CREATE TABLE profiles (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                broker_source TEXT,
+                include_in_owner INTEGER DEFAULT 0
+            );
+            INSERT INTO profiles (id, name, broker_source, include_in_owner)
+            VALUES
+                (41, 'Trust', 'fidelity', 0),
+                (42, 'Trading Account', 'etrade', 0),
+                (43, 'Legacy Fidelity', '', 0);
+            """
+        )
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_fidelity_source_authorizes_neutral_portfolio_name(self):
+        for fmt in ("fidelity", "fidelity_transactions"):
+            with self.subTest(fmt=fmt):
+                with app_module.app.test_request_context("/api/import/transactions/preview"):
+                    self.assertIsNone(
+                        _broker_import_target_error(41, fmt, self.conn)
+                    )
+
+                match = _account_match_info(
+                    "IRA",
+                    "Trust",
+                    fmt,
+                    "fidelity",
+                )
+                self.assertTrue(match["matched"])
+                self.assertEqual(match["reason"], "broker_source_match")
+
+    def test_selected_broker_source_blocks_wrong_broker_import(self):
+        with app_module.app.test_request_context("/api/import/transactions/preview"):
+            error = _broker_import_target_error(41, "etrade", self.conn)
+
+        self.assertIn("marked as Fidelity", error)
+        self.assertIn("E*TRADE import", error)
+
+    def test_unset_broker_source_keeps_legacy_name_fallback(self):
+        match = _account_match_info(
+            "IRA",
+            "Legacy Fidelity",
+            "fidelity",
+            "",
+        )
+        self.assertTrue(match["matched"])
+        self.assertEqual(match["reason"], "broker_profile_match")
+
+    def test_snowball_layering_is_not_blocked_by_broker_source(self):
+        with app_module.app.test_request_context("/api/import/transactions/preview"):
+            self.assertIsNone(
+                _broker_import_target_error(41, "snowball", self.conn)
+            )
 
 
 class HoldingsTransactionTest(unittest.TestCase):

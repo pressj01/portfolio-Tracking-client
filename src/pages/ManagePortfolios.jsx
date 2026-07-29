@@ -292,7 +292,7 @@ export default function ManagePortfolios() {
                     }
                   }}
                   style={{ width: '150px' }}
-                  title="Broker used for import safety checks"
+                  title="Matching broker imports are authorized by this source, regardless of the portfolio name"
                 >
                   {BROKER_OPTIONS.map(opt => (
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
