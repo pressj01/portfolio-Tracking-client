@@ -27,7 +27,37 @@ This release includes every change merged after v1.32.1: 39 commits spanning two
 
 ## Portfolio Performance and Dashboard
 
-- Unified 1M, 3M, YTD, 1Y, 5Y, 10Y, ALL/MAX, and calendar-year periods across Dashboard, Total Return, Growth, and Portfolio Growth 2, with consistent effective dates and grading windows.
+### Total Return
+
+- Added a page-wide 7D, 1M, 3M, 6M, YTD, 1Y, 5Y, All, and Custom date selector. The selected range now controls the summary cards, return-by-ticker chart, comparison chart, return-vs-yield scatter plot, and holdings table together.
+- Replaced the all-time summary with transaction-aware Start Value, End Value, Price Return, Distributions, Total Return, daily time-weighted Total Return %, and SPY cards for the selected period, with exact effective dates printed on every card.
+- Rebuilt portfolio performance from dated buys and sells so trades change portfolio weights without appearing as gains or losses. Missing opening lots can be reconciled backward from current shares, and holdings without transaction history begin on their saved purchase or import/snapshot date instead of the ticker’s first-ever quote.
+- Added an Entire Portfolio comparison line alongside individual holdings and external tickers.
+- Expanded comparison modes to Total Return, Price Only, Price + Dividends held as cash, and Both. Matching colors and distinct line styles make price and reinvested-return traces directly comparable.
+- Updated the holdings table for the selected period with Start Value, End Value, Price Return, Distributions, Total Return, Total Return %, and each holding’s exact Effective Range.
+- Updated the scatter plot to use selected-period return and ending position value, improved signed hover values, and synchronized category filtering across the full page.
+
+### Growth
+
+- Replaced the limited 1Y/5Y/Max selector with the shared 7D, 1M, 3M, 6M, YTD, 1Y, 5Y, All, and Custom ranges. Custom dates are inclusive and validated before loading.
+- All now begins at the portfolio’s first recorded trade rather than using older benchmark history, and the exact requested and effective dates are displayed above the analysis.
+- Made the selected period and category filters apply consistently to the portfolio grade, Total Return %, Sharpe and Sortino metrics, price-return chart, dividend-reinvested total-return chart, ticker bar chart, and heatmap.
+- Added a selected-period Total Return % card and effective-date labels to the grade and return cards.
+- Aligned the portfolio grade with the Dashboard’s adjusted-price, current-value-weighted calculation so both pages produce the same grade for the same holdings and period.
+- Changed Performance by Ticker from several fixed trailing periods to the currently selected period, with positive and negative bars color-coded for faster comparison.
+- Clarified the indexed charts as Price Return Index and Total Return Index (Dividends Reinvested).
+
+### Portfolio Growth 2
+
+- Adopted the same shared 7D, 1M, 3M, 6M, YTD, 1Y, 5Y, All, and Custom period controls used by the other performance pages.
+- Added synchronized Start Value, End Value, Total Profit, and Total Return % cards, each showing the exact effective range; End Value also identifies included cash.
+- Kept the dollar-value chart, profit/loss chart, and headline cards on the same dates and ticker selection.
+- Made All begin at the first recorded trade and use the same inception basis as “From the first trade,” removing an ambiguous second basis choice for that range.
+- Prevented holdings from being backfilled into periods before they were owned, while anchoring the latest all-holdings value to the stored holdings and cash used by the Dashboard.
+- Added inclusive custom-range validation and clearer requested-versus-effective date messaging.
+
+### Dashboard and Shared Performance Updates
+
 - Expanded Dashboard performance analysis with transaction-aware Start Value, End Value, Price Return, Distributions, Total Return, time-weighted Total Return %, and SPY comparisons.
 - Synchronized the Dashboard period across metric cards, holding-return chart, comparison chart, scatter plot, and detailed holdings table.
 - Improved portfolio and ticker comparison modes, including Total Return, Price Only, Price + Dividends, and Both, while preserving actual ownership dates and excluding deposits, purchases, and sales from performance.
