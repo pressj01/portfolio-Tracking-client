@@ -3,23 +3,11 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
-
-const PERIODS = ['7d', '1m', '3m', '6m', 'YTD', '1y', '5y', 'all', 'custom']
-const PERIOD_LABELS = { '7d': '7d', '1m': '1m', '3m': '3m', '6m': '6m', 'YTD': 'YTD', '1y': '1y', '5y': '5y', 'all': 'all', custom: 'Custom' }
-
-const dateInputValue = (date) => {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-const defaultCustomDates = () => {
-  const end = new Date()
-  const start = new Date(end)
-  start.setFullYear(start.getFullYear() - 1)
-  return { start: dateInputValue(start), end: dateInputValue(end) }
-}
+import {
+  PERFORMANCE_PERIODS,
+  defaultCustomDates,
+  formatPerformanceRange,
+} from '../utils/performancePeriods'
 
 function TickerFilter({ tickers, selected, onChange }) {
   const [open, setOpen] = useState(false)
@@ -137,6 +125,7 @@ export default function PortfolioGrowth2() {
   const [groupProfitSource, setGroupProfitSource] = useState(true)
   const [plBasis, setPlBasis] = useState('selected_period')
   const [groupBy, setGroupBy] = useState('none')
+  const effectivePlBasis = period === 'all' ? 'first_trade' : plBasis
 
   useEffect(() => {
     if (period === 'custom' && (!customStart || !customEnd || customStart > customEnd)) {
@@ -152,7 +141,7 @@ export default function PortfolioGrowth2() {
     const params = new URLSearchParams({
       period: period.toLowerCase(),
       profit_mode: profitMode,
-      pl_basis: plBasis,
+      pl_basis: effectivePlBasis,
       show_trades: showTrades ? 'true' : 'false',
       show_cost_basis: showCostBasis ? 'true' : 'false',
       group_profit_source: groupProfitSource ? 'true' : 'false',
@@ -173,7 +162,7 @@ export default function PortfolioGrowth2() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [period, customStart, customEnd, selectedTickers, profitMode, plBasis, showTrades, showCostBasis, groupProfitSource, groupBy, selection])
+  }, [period, customStart, customEnd, selectedTickers, profitMode, effectivePlBasis, showTrades, showCostBasis, groupProfitSource, groupBy, selection])
 
   // ── Chart 1: Portfolio Value ──
   useEffect(() => {
@@ -306,14 +295,14 @@ export default function PortfolioGrowth2() {
         <div className="growth-filter-group">
           <label>Period</label>
           <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none' }}>
-            {PERIODS.map(p => (
+            {PERFORMANCE_PERIODS.map(option => (
               <button
-                key={p}
-                className={`tab${period === p ? ' active' : ''}`}
-                onClick={() => setPeriod(p)}
+                key={option.key}
+                className={`tab${period === option.key ? ' active' : ''}`}
+                onClick={() => setPeriod(option.key)}
                 style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
               >
-                {PERIOD_LABELS[p]}
+                {option.label}
               </button>
             ))}
           </div>
@@ -399,6 +388,43 @@ export default function PortfolioGrowth2() {
 
       {data && !loading && (
         <>
+          <p className="tr-note" style={{ marginTop: 0 }}>
+            <strong>{data.period_label}:</strong>{' '}
+            {formatPerformanceRange(data.actual_start_date, data.actual_end_date)}
+            {data.requested_start_date && data.actual_start_date !== data.requested_start_date
+              ? ` (requested from ${formatPerformanceRange(data.requested_start_date, data.requested_end_date)})`
+              : ''}.
+            {period === 'all'
+              ? ' All begins with the first recorded trade and uses the same basis as “From the first trade.”'
+              : ' Both charts and the summary below use this exact range.'}
+          </p>
+          <div className="summary-strip" style={{ marginBottom: '1rem' }}>
+            <div className="summary-card">
+              <div className="summary-label">Start Value</div>
+              <div className="summary-value">{formatMoney(data.summary?.start_value)}</div>
+              <div className="summary-sub">{formatPerformanceRange(data.actual_start_date, data.actual_end_date)}</div>
+            </div>
+            <div className="summary-card">
+              <div className="summary-label">End Value</div>
+              <div className="summary-value">{formatMoney(data.summary?.end_value)}</div>
+              <div className="summary-sub">
+                {formatPerformanceRange(data.actual_start_date, data.actual_end_date)}
+                {data.summary?.cash_value > 0 ? ` | Includes ${formatMoney(data.summary.cash_value)} cash` : ''}
+              </div>
+            </div>
+            <div className="summary-card">
+              <div className="summary-label">Total Profit</div>
+              <div className="summary-value">{formatMoney(data.summary?.total_profit_amount)}</div>
+              <div className="summary-sub">{formatPerformanceRange(data.actual_start_date, data.actual_end_date)}</div>
+            </div>
+            <div className="summary-card">
+              <div className="summary-label">Total Return %</div>
+              <div className="summary-value">
+                {data.summary?.total_return_pct != null ? `${Number(data.summary.total_return_pct).toFixed(2)}%` : '—'}
+              </div>
+              <div className="summary-sub">{formatPerformanceRange(data.actual_start_date, data.actual_end_date)}</div>
+            </div>
+          </div>
           {/* ── Chart 1: Portfolio Value ── */}
           <div className="g2-chart-section">
             <div className="g2-chart-area">
@@ -437,13 +463,15 @@ export default function PortfolioGrowth2() {
                 <div className="g2-control-label g2-pl-label">Calculate P/L for:</div>
                 <TabButtons
                   options={[{ value: 'selected_period', label: 'Selected period' }, { value: 'first_trade', label: 'From the first trade' }]}
-                  value={plBasis}
-                  onChange={setPlBasis}
+                  value={effectivePlBasis}
+                  onChange={value => { if (period !== 'all') setPlBasis(value) }}
                 />
                 <div className="g2-hint">
-                  {plBasis === 'selected_period'
+                  {effectivePlBasis === 'selected_period'
                     ? 'P/L is calculated relative to the portfolio value at the beginning of the period.'
-                    : 'P/L is calculated relative to total invested cost basis (purchase price).'}
+                    : period === 'all'
+                      ? 'All and From the first trade are the same inception-based calculation.'
+                      : 'P/L is calculated relative to total invested cost basis (purchase price).'}
                 </div>
               </div>
             </div>

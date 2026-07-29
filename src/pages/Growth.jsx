@@ -2,9 +2,12 @@ import React, { useState, useEffect, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
-
-const PERIODS = ['1y', '5y', 'max']
-const PERIOD_LABELS = { '1y': '1Y', '5y': '5Y', 'max': 'Max' }
+import {
+  PERFORMANCE_PERIODS,
+  addCustomRangeParams,
+  defaultCustomDates,
+  formatPerformanceRange,
+} from '../utils/performancePeriods'
 
 function GradeBadge({ grade, large }) {
   if (!grade || grade === 'N/A') return <span className={`grade-badge grade-na ${large ? 'grade-lg' : ''}`}>N/A</span>
@@ -13,11 +16,12 @@ function GradeBadge({ grade, large }) {
   return <span className={`grade-badge ${cls} ${large ? 'grade-lg' : ''}`}>{grade}</span>
 }
 
-function MetricCard({ label, value }) {
+function MetricCard({ label, value, sub }) {
   return (
     <div className="summary-card">
       <div className="summary-label">{label}</div>
       <div className="summary-value">{value ?? '—'}</div>
+      {sub && <div className="summary-sub">{sub}</div>}
     </div>
   )
 }
@@ -26,7 +30,10 @@ export default function Growth() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const { isDark } = useTheme()
+  const initialCustomDates = useRef(defaultCustomDates()).current
   const [period, setPeriod] = useState('1y')
+  const [customStart, setCustomStart] = useState(initialCustomDates.start)
+  const [customEnd, setCustomEnd] = useState(initialCustomDates.end)
   const [benchmark, setBenchmark] = useState('SPY')
   const [benchInput, setBenchInput] = useState('SPY')
   const [categories, setCategories] = useState([])
@@ -44,12 +51,21 @@ export default function Growth() {
   const [error, setError] = useState(null)
 
   useEffect(() => {
+    if (period === 'custom' && (!customStart || !customEnd || customStart > customEnd)) {
+      setData(null)
+      setLoading(false)
+      setError(!customStart || !customEnd
+        ? 'Choose both a custom start date and end date.'
+        : 'Custom start date must be on or before the end date.')
+      return undefined
+    }
     const controller = new AbortController()
     let active = true
 
     setLoading(true)
     setError(null)
     const params = new URLSearchParams({ period, benchmark })
+    addCustomRangeParams(params, period, customStart, customEnd)
     if (categories.length) params.set('category', categories.join(','))
     if (subcategories.length) params.set('subcategory', subcategories.join(','))
     pf(`/api/growth/data?${params}`, { signal: controller.signal })
@@ -78,7 +94,7 @@ export default function Growth() {
       active = false
       controller.abort()
     }
-  }, [period, benchmark, categories, subcategories, selection, pf])
+  }, [period, customStart, customEnd, benchmark, categories, subcategories, selection, pf])
 
   useEffect(() => {
     if (!data || !window.Plotly) return
@@ -109,7 +125,7 @@ export default function Growth() {
       }
       Plotly.newPlot(priceEl, traces, {
         ...layoutBase, height: 380,
-        title: { text: 'Portfolio Value (Price Only)', font: { size: 14, color: ct.title } },
+        title: { text: 'Price Return Index', font: { size: 14, color: ct.title } },
         margin: { l: 50, r: 20, t: 50, b: 40 },
         hovermode: 'x unified',
         legend: { orientation: 'h', y: -0.15, xanchor: 'center', x: 0.5, font: { size: 11 } },
@@ -130,7 +146,7 @@ export default function Growth() {
       }
       Plotly.newPlot(totalEl, traces, {
         ...layoutBase, height: 380,
-        title: { text: 'Total Return (incl. Dividends)', font: { size: 14, color: ct.title } },
+        title: { text: 'Total Return Index (Dividends Reinvested)', font: { size: 14, color: ct.title } },
         margin: { l: 50, r: 20, t: 50, b: 40 },
         hovermode: 'x unified',
         legend: { orientation: 'h', y: -0.15, xanchor: 'center', x: 0.5, font: { size: 11 } },
@@ -143,20 +159,21 @@ export default function Growth() {
     const barEl = document.getElementById('growth-bar-chart')
     if (barEl && data.ticker_returns.length) {
       ids.push('growth-bar-chart')
-      const periods = ['1M', '3M', '6M', 'YTD', '1Y']
-      const colors = { '1M': '#7ecfff', '3M': '#64b5f6', '6M': '#42a5f5', 'YTD': '#4dff91', '1Y': '#ffd700' }
       const tickers = data.ticker_returns.map(r => r.ticker).reverse()
-      const traces = periods.map(p => ({
+      const traces = [{
         y: tickers,
-        x: data.ticker_returns.map(r => r[p]).reverse(),
-        name: p, type: 'bar', orientation: 'h',
-        marker: { color: colors[p] },
-        hovertemplate: '%{x:.1f}%<extra>' + p + '</extra>',
-      }))
+        x: data.ticker_returns.map(r => r.return_pct).reverse(),
+        name: data.period_label, type: 'bar', orientation: 'h',
+        marker: {
+          color: data.ticker_returns
+            .map(r => (r.return_pct ?? 0) >= 0 ? '#4dff91' : '#ff6b6b')
+            .reverse(),
+        },
+        hovertemplate: `%{x:.1f}%<extra>${data.period_label}</extra>`,
+      }]
       Plotly.newPlot(barEl, traces, {
         ...layoutBase,
-        barmode: 'group',
-        title: { text: 'Performance by Ticker', font: { size: 14, color: ct.title } },
+        title: { text: `Performance by Ticker — ${data.period_label}`, font: { size: 14, color: ct.title } },
         xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, title: 'Return %', ticksuffix: '%' },
         yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, automargin: true },
         legend: { orientation: 'h', y: -0.08, xanchor: 'center', x: 0.5, font: { size: 11 } },
@@ -298,18 +315,41 @@ export default function Growth() {
         <div className="growth-filter-group">
           <label>Period</label>
           <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none' }}>
-            {PERIODS.map(p => (
+            {PERFORMANCE_PERIODS.map(option => (
               <button
-                key={p}
-                className={`tab${period === p ? ' active' : ''}`}
-                onClick={() => setPeriod(p)}
+                key={option.key}
+                className={`tab${period === option.key ? ' active' : ''}`}
+                onClick={() => setPeriod(option.key)}
                 style={{ padding: '0.3rem 0.8rem', fontSize: '0.85rem' }}
               >
-                {PERIOD_LABELS[p]}
+                {option.label}
               </button>
             ))}
           </div>
         </div>
+        {period === 'custom' && (
+          <div className="g2-custom-range" role="group" aria-label="Custom date range">
+            <label>
+              <span>Start date</span>
+              <input
+                type="date"
+                value={customStart}
+                max={customEnd || initialCustomDates.end}
+                onChange={e => setCustomStart(e.target.value)}
+              />
+            </label>
+            <label>
+              <span>End date</span>
+              <input
+                type="date"
+                value={customEnd}
+                min={customStart || undefined}
+                max={initialCustomDates.end}
+                onChange={e => setCustomEnd(e.target.value)}
+              />
+            </label>
+          </div>
+        )}
       </div>
 
       {loading && <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>}
@@ -317,6 +357,14 @@ export default function Growth() {
 
       {data && !loading && (
         <>
+          <p className="tr-note" style={{ marginTop: 0 }}>
+            <strong>{data.period_label}:</strong>{' '}
+            {formatPerformanceRange(data.actual_start_date, data.actual_end_date)}
+            {data.requested_start_date && data.actual_start_date !== data.requested_start_date
+              ? ` (requested from ${formatPerformanceRange(data.requested_start_date, data.requested_end_date)})`
+              : ''}
+            . The period and category filters apply to every metric and chart below.
+          </p>
           {/* Metrics strip */}
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
             <div className="summary-card summary-card-grade">
@@ -324,8 +372,19 @@ export default function Growth() {
               <div className="summary-value">
                 {data.grade?.overall ? <GradeBadge grade={data.grade.overall} large /> : '—'}
               </div>
-              {data.grade?.score != null && <div className="summary-sub">Score: {data.grade.score}</div>}
+              {data.grade?.score != null && (
+                <div className="summary-sub">
+                  Score: {data.grade.score} | {formatPerformanceRange(data.actual_start_date, data.actual_end_date)}
+                </div>
+              )}
             </div>
+            <MetricCard
+              label="Total Return %"
+              value={data.portfolio_metrics?.total_return_pct != null
+                ? `${Number(data.portfolio_metrics.total_return_pct).toFixed(2)}%`
+                : '—'}
+              sub={formatPerformanceRange(data.actual_start_date, data.actual_end_date)}
+            />
             <MetricCard label="Portfolio Sharpe" value={data.grade?.sharpe} />
             <MetricCard label="Portfolio Sortino" value={data.grade?.sortino} />
             <MetricCard label={`${data.benchmark_ticker} Sharpe`} value={data.benchmark_metrics?.sharpe} />

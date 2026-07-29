@@ -636,8 +636,19 @@ function DashboardHelp() {
         The top section displays key metrics as cards:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
-        <li><strong>Portfolio Grade</strong> — composite grade based on yield, growth, and risk metrics.</li>
-        <li><strong>Ulcer / Calmar / Omega / Sortino / Sharpe</strong> — risk-adjusted performance ratios.</li>
+        <li>
+          <strong>Grade &amp; Risk Period</strong> — choose <strong>7D, 1M, 3M, 6M, YTD, 1Y,
+          5Y, All, or Custom</strong>. All begins with the portfolio&apos;s earliest recorded trade
+          (or saved purchase/import date when trade history is incomplete). The exact market-data
+          start and end dates are printed below the selector; a requested date can move to the next
+          trading day for weekends or market holidays.
+        </li>
+        <li>
+          <strong>Portfolio Grade</strong> — a composite risk-adjusted performance grade for the
+          selected dates. Dashboard and Growth &amp; Performance use the same calculation, holdings,
+          and current-value weights, so their grades match when the same period and holdings are selected.
+        </li>
+        <li><strong>Ulcer / Calmar / Omega / Sortino / Sharpe</strong> — risk-adjusted performance ratios for the selected dates.</li>
         <li><strong>Lifetime Income</strong> — total dividend income received by the selected account across all years.</li>
         <li><strong>YTD Dividends</strong> — total dividends received year-to-date.</li>
         <li><strong>[Month] Income</strong> (e.g. "May Income") — dividends actually received this calendar month from recorded payments, with a subtitle showing the number of recorded payments through today. Estimated only when no payment history exists.</li>
@@ -2135,9 +2146,10 @@ function GrowthHelp() {
           in the metrics strip.
         </li>
         <li>
-          <strong>Period</strong> — Three tab buttons: <strong>1Y</strong> (1 year), <strong>5Y</strong> (5 years),
-          and <strong>Max</strong> (all available history). This controls the time range for the line charts
-          and the data window for the performance metrics.
+          <strong>Period</strong> — The shared choices are <strong>7D, 1M, 3M, 6M, YTD, 1Y, 5Y,
+          All, and Custom</strong>. All begins with the portfolio&apos;s first recorded trade rather than
+          the benchmark&apos;s older history. Custom start and end dates are inclusive. The selected
+          range controls every metric and chart on the page.
         </li>
       </ul>
 
@@ -2149,7 +2161,13 @@ function GrowthHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
           <strong>Portfolio Grade</strong> — A letter grade (A+ through F) with a numeric score, summarizing
-          overall risk-adjusted performance. The grade considers both return and volatility.
+          overall risk-adjusted performance for the selected dates. It uses the same adjusted-price,
+          current-value-weighted calculation as the Dashboard, so the two pages match when the same
+          holdings and period are selected. The exact effective dates appear on the grade card.
+        </li>
+        <li>
+          <strong>Total Return %</strong> — The portfolio&apos;s dividend-reinvested return over the selected
+          period. The exact effective start and end dates appear on the card and above the charts.
         </li>
         <li>
           <strong>Portfolio Sharpe</strong> — The Sharpe ratio measures excess return per unit of total risk
@@ -2190,93 +2208,19 @@ function GrowthHelp() {
 
       <h4 style={{ marginBottom: '0.4rem' }}>Performance by Ticker (Bar Chart)</h4>
       <p style={{ marginBottom: '0.75rem' }}>
-        A grouped horizontal bar chart showing each ticker's return over multiple time windows:
-        <strong> 1M</strong> (1 month), <strong>3M</strong>, <strong>6M</strong>, <strong>YTD</strong>
-        (year-to-date), and <strong>1Y</strong> (1 year). Each window has its own color. This lets you
-        quickly spot which holdings are driving performance and which are dragging it down.
-        The chart height scales with the number of tickers.
+        A horizontal bar chart showing each ticker&apos;s total return over the period selected at the top
+        of the page. This lets you quickly spot which holdings are driving that period&apos;s performance
+        and which are dragging it down. The chart height scales with the number of tickers.
       </p>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Performance Heatmap</h4>
       <p style={{ marginBottom: '0.75rem' }}>
-        A color-coded grid with tickers on the Y-axis and time windows on the X-axis. Each cell shows
-        the percentage return for that ticker over that period. Colors range from <span style={{ color: 'var(--neg)' }}>red</span> (negative)
+        A color-coded grid with tickers on the Y-axis and the selected period on the X-axis. Each cell
+        shows the percentage return for that ticker over the exact same effective range used above.
+        Colors range from <span style={{ color: 'var(--neg)' }}>red</span> (negative)
         through dark (near zero) to <span style={{ color: 'var(--p-81c784)' }}>green</span> (positive).
-        This gives you an at-a-glance view of which holdings have been strong or weak across different
-        time horizons. Hover over any cell to see the exact value.
-      </p>
-
-      {/* ── How to Use ─────────────────────────────────────────── */}
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Optimization View</h3>
-      <p style={{ marginBottom: '0.75rem' }}>
-        The Optimization tab is an income-smoothing planner. It takes the calendar's known or
-        estimated pay dates, dividend frequency, dividend amount, share count, and estimated annual
-        income, then projects cash flow into the next 12 calendar months. The month-to-month shape
-        follows the pay-date schedule, while the 12-month total is reconciled to the same estimated
-        annual income used on the Dividends page.
-      </p>
-      <p style={{ marginBottom: '0.75rem' }}>
-        <strong>Important:</strong> this screen is about <em>timing</em>. It answers "which months
-        look light or heavy?" and "which pay schedules might help?" It does not decide whether a
-        ticker is attractive, safe, undervalued, or appropriate to buy.
-      </p>
-
-      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Top Cards</h4>
-      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Average monthly income</strong> - the projected 12-month total divided by 12. This should closely match the Dividends page's estimated monthly income, apart from rounding.</li>
-        <li><strong>Lowest month</strong> - the month with the lowest projected dividend income in the next 12 months.</li>
-        <li><strong>Highest month</strong> - the month with the highest projected dividend income in the next 12 months.</li>
-        <li><strong>Total shortfall</strong> - the sum of all below-average months' shortfalls. This is not a required investment amount; it is a way to measure how uneven the calendar is.</li>
-      </ul>
-
-      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>12-Month Income Smoothing Heatmap</h4>
-      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Month tile</strong> - projected dividend income expected to be paid in that calendar month.</li>
-        <li><strong>Green tile</strong> - month is at or above the portfolio's average monthly income.</li>
-        <li><strong>Amber tile</strong> - month is below average but not a severe shortfall.</li>
-        <li><strong>Red tile</strong> - month is materially below average.</li>
-        <li><strong>"Below avg"</strong> - percentage shortfall versus the average monthly income. For example, "10% below avg" means that month is projected to be 10% lighter than the portfolio average month.</li>
-      </ul>
-
-      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Shortfall Months Table</h4>
-      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Month</strong> - the calendar month being analyzed.</li>
-        <li><strong>Projected</strong> - estimated dividend income expected to be paid in that month.</li>
-        <li><strong>Shortfall to avg</strong> - how many dollars that month is below the average monthly income. Yellow numbers mean the month is under target. "On target" means the month is at or above average.</li>
-        <li><strong>Top current payers</strong> - current holdings projected to pay in that month, sorted by estimated dollar contribution from highest to lowest.</li>
-      </ul>
-
-      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Suggestions</h4>
-      <p style={{ marginBottom: '0.75rem' }}>
-        Suggestions translate the shortfall table into plain language. If January is below average,
-        the page may say January needs about a certain dollar amount to match the average month.
-        That means January is light compared with your own portfolio average; it does not mean you
-        must add that exact amount or buy a specific ticker.
-      </p>
-
-      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Schedule-Fit Candidates</h4>
-      <p style={{ marginBottom: '0.75rem' }}>
-        Schedule-Fit Candidates are funds whose known pay dates overlap your current shortfall
-        months. This is pay-date fit only, not a buy recommendation. A ticker can rank highly here
-        simply because it pays in a month where your current income is light.
-      </p>
-      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Ticker</strong> - the candidate symbol. The row may show whether it is already owned, watchlisted, or known from available calendar data.</li>
-        <li><strong>Provider</strong> - the fund family or source group, such as NEOs, TAPPALPHA, X Funds, Tuttle funds, Kurv funds, Amplify, Shelton SEPI, YieldMax, or REX Shares.</li>
-        <li><strong>Freq</strong> - dividend frequency used for the schedule: weekly, monthly, quarterly, semiannual, or annual.</li>
-        <li><strong>Helps</strong> - shortfall months where that ticker has a known pay schedule. The smaller basis line shows which helped month is used for the share-count math and that month's shortfall.</li>
-        <li><strong>Distribution/share</strong> - projected total distribution per share in the basis month. Weekly payers include all projected weekly payments in that month.</li>
-        <li><strong>Yield</strong> - approximate annualized distribution yield based on the latest payout, frequency, and current price when available.</li>
-        <li><strong>Shares needed to fill the gap</strong> - estimated shares needed to offset the basis month's shortfall using the listed distribution/share. This is math only, not a trade recommendation.</li>
-        <li><strong>Est. cost</strong> - approximate cost of those what-if shares using the latest available price.</li>
-      </ul>
-
-      <h4 style={{ color: 'var(--accent-2)', marginTop: '1rem', marginBottom: '0.4rem' }}>Candidate Universe</h4>
-      <p style={{ marginBottom: '1rem' }}>
-        The Candidate Universe lists the fund families and seeded tickers the app is allowed to
-        consider for future schedule-fit analysis. Tickers without schedule data are shown as tracked
-        candidates, but they are not ranked until the app has usable pay-date metadata. Adding a ticker
-        to holdings or watchlist and refreshing dividend metadata can make it eligible for scoring.
+        This gives you an at-a-glance view of which holdings have been strong or weak in the chosen
+        range. Hover over any cell to see the exact value.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
@@ -2294,7 +2238,8 @@ function GrowthHelp() {
           "High Yield" holdings perform vs. your "Growth" holdings.
         </li>
         <li>
-          <strong>Switch to 5Y or Max</strong> to see long-term trends. Short-term noise smooths out
+          <strong>Switch to 5Y or All</strong> to see long-term trends. All starts at the first recorded
+          portfolio activity, so benchmark history before ownership is excluded. Short-term noise smooths out
           over longer periods.
         </li>
         <li>
@@ -2317,8 +2262,8 @@ function PortfolioGrowth2Help() {
         performance down by source: capital gains, dividends, realized P&amp;L, and fees.
       </p>
       <p style={{ marginBottom: '1rem' }}>
-        Both charts share the same period selector and ticker filter, so every view stays in sync as you
-        explore different time ranges or focus on a subset of your holdings.
+        Both charts and the headline cards share the same period selector and ticker filter. The exact
+        effective dates are printed above them, so every view stays in sync as you explore a range.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -2328,9 +2273,10 @@ function PortfolioGrowth2Help() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Controls</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
-          <strong>Period</strong> - Preset buttons cover 7d, 1m, 3m, 6m, YTD, 1y, 5y, and all. Choose
+          <strong>Period</strong> - Preset buttons cover 7D, 1M, 3M, 6M, YTD, 1Y, 5Y, and All. Choose
           <strong> Custom</strong> to enter your own inclusive start and end dates. The selected range
-          controls both charts, and changing it triggers a fresh data fetch.
+          controls both charts and the summary cards. <strong>All</strong> begins with the first recorded
+          trade and is the same inception basis as <strong>From the first trade</strong>.
         </li>
         <li>
           <strong>Tickers</strong> - A multi-select dropdown listing every ticker in the active portfolio.
@@ -2343,7 +2289,8 @@ function PortfolioGrowth2Help() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart 1 - Portfolio Value</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Shows the total dollar value of your portfolio over the selected period, calculated as current
-        share quantities multiplied by historical daily closing prices. A holding contributes only from
+        share quantities multiplied by historical daily closing prices. The latest all-holdings point is
+        anchored to the same stored holding values and cash balance used by the Dashboard. A holding contributes only from
         its first known purchase or transaction date; the chart does not backfill recently acquired
         holdings into years before you owned them. This is not a simulated backtest.
       </p>
@@ -2417,7 +2364,7 @@ function PortfolioGrowth2Help() {
           <strong>Calculate P/L for: From the first trade</strong> - P&amp;L is measured against your total
           invested cost basis (sum of purchase values). Capital gain reflects the difference between
           current value and what you paid. This gives a true "return on investment" view regardless of
-          which period is selected.
+          which period is selected. Selecting <strong>All</strong> activates this basis automatically.
         </li>
       </ul>
 
@@ -3047,8 +2994,8 @@ function TotalReturnHelp() {
         <li><strong>SPY</strong> — SPY total return for its exact displayed market-observation range.</li>
       </ul>
       <p style={{ marginBottom: '1rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
-        ALL/MAX begins at the first defensible portfolio ownership date. Rolling periods use exact
-        calendar date-to-date boundaries, and completed calendar years use January 1–December 31.
+        All begins at the first defensible portfolio ownership date. Rolling periods use exact
+        calendar date-to-date boundaries, and Custom uses the inclusive dates entered by the user.
       </p>
 
       {/* ── Total Return Bar Chart ──────────────────────────────── */}
@@ -3073,12 +3020,11 @@ function TotalReturnHelp() {
       <h4 style={{ marginBottom: '0.4rem' }}>Controls</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
-          <strong>Dashboard Date Range</strong> — The page-wide 1M, 3M, YTD, 1Y, 5Y,
-          10Y, and ALL/MAX choices update the summary cards, holding-return chart,
-          comparison chart, scatter chart, and holdings summary together. Enter any year
-          from 1900 through the current year in <strong>Calendar Year</strong> and click
-          <strong>View</strong> for a January 1–December 31 comparison. Every card displays
-          its effective start and end dates; each holdings row also lists its held-period range.
+          <strong>Dashboard Date Range</strong> — The page-wide 7D, 1M, 3M, 6M, YTD, 1Y,
+          5Y, All, and Custom choices update the summary cards, holding-return chart,
+          comparison chart, scatter chart, and holdings summary together. All starts with
+          the portfolio&apos;s first recorded trade; Custom accepts inclusive start and end dates.
+          Every card displays its effective dates, and each holding also lists its held-period range.
         </li>
         <li>
           <strong>Portfolio &amp; Tickers dropdown</strong> — Select <strong>Entire Portfolio</strong>,
@@ -3164,16 +3110,16 @@ function TotalReturnHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>
-          <strong>Check the summary strip first</strong> — Total Return % gives you your all-time
-          portfolio performance in a single number. Compare it to SPY's 1Y return shown alongside it.
+          <strong>Check the summary strip first</strong> — Total Return % gives you performance for
+          the selected range in a single number. Compare it with SPY over its displayed effective dates.
         </li>
         <li>
           <strong>Use the bar chart</strong> to quickly see which holdings are dragging returns over
-          the past year. Negative red bars are candidates for review.
+          the selected period. Negative red bars are candidates for review.
         </li>
         <li>
           <strong>Build a comparison chart</strong> by selecting a few key holdings plus SPY and QQQ
-          as external tickers. Set the period to 3Y or 5Y and switch to "Total Return" mode to see
+          as external tickers. Set the period to 1Y or 5Y and switch to "Total Return" mode to see
           the true long-term performance including dividends.
         </li>
         <li>
@@ -3181,8 +3127,8 @@ function TotalReturnHelp() {
           with both high yield on cost and strong total return sit in the upper-right quadrant.
         </li>
         <li>
-          <strong>Sort the table by Total Ret %</strong> to rank your holdings from best to worst
-          all-time performance. This helps identify underperformers worth trimming.
+          <strong>Sort the table by Total Ret %</strong> to rank holdings from best to worst over
+          the selected period. This helps identify underperformers worth reviewing.
         </li>
         <li>
           <strong>Compare Price Ret % vs Total Ret %</strong> in the table — a big gap between the

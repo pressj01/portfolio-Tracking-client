@@ -20,7 +20,7 @@ class PortfolioGrowth2ApiTest(unittest.TestCase):
             """
             CREATE TABLE all_account_info (
                 ticker TEXT, quantity REAL, price_paid REAL, purchase_value REAL,
-                current_value REAL, purchase_date TEXT, profile_id INTEGER
+                current_value REAL, purchase_date TEXT, import_date TEXT, profile_id INTEGER
             );
             CREATE TABLE categories (id INTEGER, name TEXT, profile_id INTEGER, sort_order INTEGER);
             CREATE TABLE ticker_categories (ticker TEXT, category_id INTEGER, profile_id INTEGER);
@@ -29,7 +29,7 @@ class PortfolioGrowth2ApiTest(unittest.TestCase):
                 price_per_share REAL, fees REAL, realized_gain REAL, profile_id INTEGER
             );
             CREATE TABLE dividend_payments (ticker TEXT, payment_date TEXT, amount REAL, profile_id INTEGER);
-            INSERT INTO all_account_info VALUES ('AAA', 1, 8, 8, 12, '2024-01-02', 6);
+            INSERT INTO all_account_info VALUES ('AAA', 1, 8, 8, 12, '2024-01-02', NULL, 6);
             """
         )
         conn.commit()
@@ -81,6 +81,8 @@ class PortfolioGrowth2ApiTest(unittest.TestCase):
         self.assertEqual(data["dates"], ["2024-01-02", "2024-12-31"])
         self.assertEqual(data["portfolio_value"], [10.0, 12.0])
         self.assertEqual(data["invested"], [8.0, 8.0])
+        self.assertEqual(data["pl_basis"], "first_trade")
+        self.assertEqual(data["summary"]["total_return_pct"], 20.0)
 
     def test_custom_range_is_inclusive_and_sent_to_yahoo(self):
         response = self.client.get(

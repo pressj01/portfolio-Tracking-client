@@ -8,6 +8,12 @@ import { chartTheme } from '../utils/chartTheme'
 import { returnVsYield } from '../utils/returnVsYield'
 import { readDashboardCache, writeDashboardCache } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
+import {
+  PERFORMANCE_PERIODS,
+  addCustomRangeParams,
+  defaultCustomDates,
+  formatPerformanceRange,
+} from '../utils/performancePeriods'
 
 const DASHBOARD_CACHE_TTL_MS = 60 * 60 * 1000
 const SP500_CACHE_KEY = 'portfolio_dashboard_sp500'
@@ -762,6 +768,14 @@ export default function Dashboard() {
   const [tickerClosureRisk, setTickerClosureRisk] = useState({})
   const [tickerRiskLoading, setTickerRiskLoading] = useState(false)
   const [portfolioGrade, setPortfolioGrade] = useState({})
+  const initialGradeCustomDates = useRef(defaultCustomDates()).current
+  const [gradePeriod, setGradePeriod] = useState('1y')
+  const [gradeCustomStart, setGradeCustomStart] = useState(initialGradeCustomDates.start)
+  const [gradeCustomEnd, setGradeCustomEnd] = useState(initialGradeCustomDates.end)
+  const [gradeRefreshToken, setGradeRefreshToken] = useState(0)
+  const gradePeriodRef = useRef(gradePeriod)
+  const gradePeriodEffectReady = useRef(false)
+  gradePeriodRef.current = gradePeriod
   const [betaBenchmark, setBetaBenchmark] = useState('sp500')
   const [upcomingDivs, setUpcomingDivs] = useState([])
   const [incomeSummary, setIncomeSummary] = useState(null)
@@ -793,7 +807,7 @@ export default function Dashboard() {
   const holdingsTableRef = useRef(null)
   const holdingsHeadRowRef = useRef(null)
   const navChartRef = useRef(null)
-  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v16_${selection}_${basisMode}`, [selection, basisMode])
+  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v17_${selection}_${basisMode}`, [selection, basisMode])
   const currentProfile = useMemo(
     () => profiles.find(p => p.id === profileId) || null,
     [profiles, profileId],
@@ -1012,7 +1026,7 @@ export default function Dashboard() {
               if (g.ticker_closure_risk) setTickerClosureRisk(g.ticker_closure_risk)
               // {} is truthy — only overwrite when grades were actually computed,
               // so an empty/failed response never blanks good grade tiles.
-              if (g.portfolio_grade && Object.keys(g.portfolio_grade).length) setPortfolioGrade(g.portfolio_grade)
+              if (gradePeriodRef.current === '1y' && g.portfolio_grade && Object.keys(g.portfolio_grade).length) setPortfolioGrade(g.portfolio_grade)
             })
             .catch(() => {})
             .finally(() => { if (!stale) setTickerRiskLoading(false) })
@@ -1037,6 +1051,7 @@ export default function Dashboard() {
               if (summary) setIncomeSummary(summary)
               if (valueSummary) setPortfolioValue(valueSummary)
               setGradeStatus('Loading risk grades...')
+              if (gradePeriodRef.current !== '1y') setGradeRefreshToken(token => token + 1)
               setTickerRiskLoading(true)
               return pf('/api/portfolio-summary/data')
                 .then(safeJson)
@@ -1048,7 +1063,7 @@ export default function Dashboard() {
                   // {} is truthy — only overwrite when grades were actually
                   // computed, so the post-refresh fetch can't clobber the good
                   // grades the first fetch already set with an empty response.
-                  if (g.portfolio_grade && Object.keys(g.portfolio_grade).length) setPortfolioGrade(g.portfolio_grade)
+                  if (gradePeriodRef.current === '1y' && g.portfolio_grade && Object.keys(g.portfolio_grade).length) setPortfolioGrade(g.portfolio_grade)
                   setGradeStatus('Grades loaded.')
                   setTimeout(() => { if (!stale) setGradeStatus(null) }, 3000)
                 })
@@ -1068,15 +1083,74 @@ export default function Dashboard() {
   }, [pf, selection, dashboardCacheKey, runMarketRefresh])
 
   useEffect(() => {
+    // The existing Dashboard load owns the initial 1Y request. Subsequent
+    // period, account, custom-range, or market-refresh changes are handled
+    // here without reloading every unrelated Dashboard data source.
+    if (!gradePeriodEffectReady.current) {
+      gradePeriodEffectReady.current = true
+      return undefined
+    }
+    if (gradePeriod === 'custom' && (
+      !gradeCustomStart
+      || !gradeCustomEnd
+      || gradeCustomStart > gradeCustomEnd
+    )) {
+      setGradeStatus(!gradeCustomStart || !gradeCustomEnd
+        ? 'Choose both grade dates.'
+        : 'Grade start date must be on or before the end date.')
+      return undefined
+    }
+
+    const controller = new AbortController()
+    let active = true
+    const params = new URLSearchParams({ period: gradePeriod })
+    addCustomRangeParams(params, gradePeriod, gradeCustomStart, gradeCustomEnd)
+    setGradeStatus('Loading risk grades...')
+    setTickerRiskLoading(true)
+    setPortfolioGrade({})
+    pf(`/api/portfolio-summary/data?${params}`, { signal: controller.signal })
+      .then(safeJson)
+      .then(g => {
+        if (!active || !g) return
+        if (g.ticker_grades) setTickerGrades(g.ticker_grades)
+        if (g.ticker_risk) setTickerRisk(g.ticker_risk)
+        if (g.ticker_closure_risk) setTickerClosureRisk(g.ticker_closure_risk)
+        if (g.portfolio_grade && Object.keys(g.portfolio_grade).length) {
+          setPortfolioGrade(g.portfolio_grade)
+        }
+        setGradeStatus('Grades loaded.')
+        setTimeout(() => { if (active) setGradeStatus(null) }, 3000)
+      })
+      .catch(error => {
+        if (active && error.name !== 'AbortError') setGradeStatus('Grade loading failed.')
+      })
+      .finally(() => {
+        if (active) setTickerRiskLoading(false)
+      })
+
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [
+    gradePeriod,
+    gradeCustomStart,
+    gradeCustomEnd,
+    gradeRefreshToken,
+    selection,
+    pf,
+  ])
+
+  useEffect(() => {
     if (loading || !holdings.length) return
     writeDashboardCache(dashboardCacheKey, {
       incomeSummary,
       portfolioValue,
       upcomingDivs,
-      tickerGrades,
-      tickerRisk,
-      tickerClosureRisk,
-      portfolioGrade,
+      tickerGrades: gradePeriod === '1y' ? tickerGrades : {},
+      tickerRisk: gradePeriod === '1y' ? tickerRisk : {},
+      tickerClosureRisk: gradePeriod === '1y' ? tickerClosureRisk : {},
+      portfolioGrade: gradePeriod === '1y' ? portfolioGrade : {},
       portfolioCoverage,
       portfolioCoverageSeverity,
       tickerCoverage,
@@ -1096,6 +1170,7 @@ export default function Dashboard() {
     tickerRisk,
     tickerClosureRisk,
     portfolioGrade,
+    gradePeriod,
     portfolioCoverage,
     portfolioCoverageSeverity,
     tickerCoverage,
@@ -2121,6 +2196,62 @@ export default function Dashboard() {
           </div>
         </div>
       </details>
+
+      <div className="growth-filters" style={{ marginBottom: '0.5rem' }}>
+        <div className="growth-filter-group">
+          <label>Grade &amp; Risk Period</label>
+          <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none' }}>
+            {PERFORMANCE_PERIODS.map(option => (
+              <button
+                key={option.key}
+                className={`tab${gradePeriod === option.key ? ' active' : ''}`}
+                onClick={() => setGradePeriod(option.key)}
+                style={{ padding: '0.3rem 0.8rem', fontSize: '0.85rem' }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {gradePeriod === 'custom' && (
+          <div className="g2-custom-range" role="group" aria-label="Custom grade date range">
+            <label>
+              <span>Start date</span>
+              <input
+                type="date"
+                value={gradeCustomStart}
+                max={gradeCustomEnd || initialGradeCustomDates.end}
+                onChange={event => setGradeCustomStart(event.target.value)}
+              />
+            </label>
+            <label>
+              <span>End date</span>
+              <input
+                type="date"
+                value={gradeCustomEnd}
+                min={gradeCustomStart || undefined}
+                max={initialGradeCustomDates.end}
+                onChange={event => setGradeCustomEnd(event.target.value)}
+              />
+            </label>
+          </div>
+        )}
+      </div>
+      <p className="tr-note" style={{ marginTop: 0 }}>
+        <strong>{portfolioGrade.period_label || 'Grade period'}:</strong>{' '}
+        {formatPerformanceRange(
+          portfolioGrade.actual_start_date,
+          portfolioGrade.actual_end_date,
+        ) || 'Loading dates...'}
+        {portfolioGrade.requested_start_date
+          && portfolioGrade.actual_start_date !== portfolioGrade.requested_start_date
+          ? ` (requested from ${formatPerformanceRange(
+            portfolioGrade.requested_start_date,
+            portfolioGrade.requested_end_date,
+          )})`
+          : ''}
+        . These dates apply to the Portfolio Grade, beta, and risk-ratio cards below.
+      </p>
 
       {/* Summary Cards Strip */}
       <div className="summary-strip">

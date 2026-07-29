@@ -47,12 +47,13 @@ class TotalReturnPeriodTest(unittest.TestCase):
 
     def test_resolves_broker_style_rolling_ranges_date_to_date(self):
         expected_starts = {
+            "7d": "2026-07-16",
             "1mo": "2026-06-23",
             "3mo": "2026-04-23",
+            "6mo": "2026-01-23",
             "ytd": "2026-01-01",
             "1y": "2025-07-23",
             "5y": "2021-07-23",
-            "10y": "2016-07-23",
         }
 
         for period, expected_start in expected_starts.items():
@@ -63,23 +64,31 @@ class TotalReturnPeriodTest(unittest.TestCase):
                 self.assertEqual(result["yf_kwargs"]["start"], expected_start)
                 self.assertEqual(result["yf_kwargs"]["end"], "2026-07-24")
 
-    def test_resolves_any_completed_calendar_year(self):
-        for year in (2025, 2018):
-            with self.subTest(year=year):
-                result = _resolve_total_return_period(str(year), today=self.today)
+    def test_resolves_all_from_portfolio_inception(self):
+        result = _resolve_total_return_period(
+            "max",
+            today=self.today,
+            inception_date="2022-04-15",
+        )
 
-                self.assertEqual(result["label"], f"Calendar Year {year}")
-                self.assertEqual(result["start_date"], f"{year}-01-01")
-                self.assertEqual(result["end_date"], f"{year}-12-31")
-                self.assertEqual(result["yf_kwargs"]["end"], f"{year + 1}-01-01")
-
-    def test_resolves_all_max(self):
-        result = _resolve_total_return_period("max", today=self.today)
-
-        self.assertEqual(result["label"], "All / Max")
-        self.assertIsNone(result["start_date"])
+        self.assertEqual(result["key"], "all")
+        self.assertEqual(result["label"], "From First Trade")
+        self.assertEqual(result["start_date"], "2022-04-15")
         self.assertEqual(result["end_date"], "2026-07-23")
-        self.assertEqual(result["yf_kwargs"], {"period": "max"})
+        self.assertEqual(result["yf_kwargs"]["start"], "2022-04-15")
+        self.assertEqual(result["yf_kwargs"]["end"], "2026-07-24")
+
+    def test_resolves_inclusive_custom_range(self):
+        result = _resolve_total_return_period(
+            "custom",
+            today=self.today,
+            start_date="2024-02-01",
+            end_date="2024-03-31",
+        )
+
+        self.assertEqual(result["start_date"], "2024-02-01")
+        self.assertEqual(result["end_date"], "2024-03-31")
+        self.assertEqual(result["yf_kwargs"]["end"], "2024-04-01")
 
     def test_clamps_leap_day_for_rolling_year(self):
         result = _resolve_total_return_period(

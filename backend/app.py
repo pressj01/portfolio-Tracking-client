@@ -198,26 +198,84 @@ def _calendar_years_ago(value, years):
     return datetime.date(year, value.month, day)
 
 
-def _resolve_total_return_period(period, today=None):
-    """Resolve broker-style comparison periods to explicit date boundaries.
+def _resolve_total_return_period(
+    period,
+    today=None,
+    start_date=None,
+    end_date=None,
+    inception_date=None,
+):
+    """Resolve the shared performance periods to explicit date boundaries.
 
-    yfinance treats ``end`` as exclusive, so the download end is one day after
-    the date shown to the user. ALL/MAX is the exception and requests all
-    available history.
+    ``All``/legacy ``Max`` begins at the portfolio's first defensible activity
+    date when one is supplied. It never inherits a benchmark's much older quote
+    history. Yahoo treats ``end`` as exclusive, so downloads add one day.
     """
     today = today or datetime.date.today()
-    key = str(period or "1y").strip().lower()
+    raw_key = str(period or "1y").strip().lower()
+    aliases = {
+        "1mo": "1m",
+        "3mo": "3m",
+        "6mo": "6m",
+        "max": "all",
+    }
+    key = aliases.get(raw_key, raw_key)
     labels = {
-        "1mo": "1 Month",
-        "3mo": "3 Months",
+        "7d": "7 Days",
+        "1m": "1 Month",
+        "3m": "3 Months",
+        "6m": "6 Months",
         "ytd": "Year to Date",
         "1y": "1 Year",
         "5y": "5 Years",
-        "10y": "10 Years",
-        "max": "All / Max",
+        "all": "From First Trade",
+        "custom": "Custom",
     }
 
-    if key == "max":
+    def parse_date(value, field_name):
+        if isinstance(value, datetime.datetime):
+            return value.date()
+        if isinstance(value, datetime.date):
+            return value
+        try:
+            return datetime.datetime.strptime(str(value or "").strip(), "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must use YYYY-MM-DD format") from exc
+
+    if key == "custom":
+        if not start_date or not end_date:
+            raise ValueError("Choose both a custom start date and end date")
+        resolved_start = parse_date(start_date, "Custom start date")
+        resolved_end = parse_date(end_date, "Custom end date")
+        if resolved_start > resolved_end:
+            raise ValueError("Custom start date must be on or before the end date")
+        if resolved_end > today:
+            raise ValueError("Custom end date cannot be in the future")
+        return {
+            "key": key,
+            "label": labels[key],
+            "start_date": resolved_start.isoformat(),
+            "end_date": resolved_end.isoformat(),
+            "yf_kwargs": {
+                "start": resolved_start.isoformat(),
+                "end": (resolved_end + datetime.timedelta(days=1)).isoformat(),
+            },
+        }
+
+    if key == "all":
+        if inception_date:
+            resolved_start = parse_date(inception_date, "Portfolio inception date")
+            resolved_start = min(resolved_start, today)
+            return {
+                "key": key,
+                "label": labels[key],
+                "start_date": resolved_start.isoformat(),
+                "end_date": today.isoformat(),
+                "yf_kwargs": {
+                    "start": resolved_start.isoformat(),
+                    "end": (today + datetime.timedelta(days=1)).isoformat(),
+                },
+            }
         return {
             "key": key,
             "label": labels[key],
@@ -226,36 +284,22 @@ def _resolve_total_return_period(period, today=None):
             "yf_kwargs": {"period": "max"},
         }
 
-    if key == "1mo":
+    if key == "7d":
+        start_date = today - datetime.timedelta(days=7)
+    elif key == "1m":
         start_date = _calendar_months_ago(today, 1)
-    elif key == "3mo":
+    elif key == "3m":
         start_date = _calendar_months_ago(today, 3)
+    elif key == "6m":
+        start_date = _calendar_months_ago(today, 6)
     elif key == "ytd":
         start_date = datetime.date(today.year, 1, 1)
     elif key == "1y":
         start_date = _calendar_years_ago(today, 1)
     elif key == "5y":
         start_date = _calendar_years_ago(today, 5)
-    elif key == "10y":
-        start_date = _calendar_years_ago(today, 10)
-    elif key.isdigit() and len(key) == 4:
-        year = int(key)
-        if year < 1900 or year > today.year:
-            return _resolve_total_return_period("1y", today=today)
-        start_date = datetime.date(year, 1, 1)
-        end_date = min(datetime.date(year, 12, 31), today)
-        return {
-            "key": key,
-            "label": f"Calendar Year {year}",
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
-            "yf_kwargs": {
-                "start": start_date.isoformat(),
-                "end": (end_date + datetime.timedelta(days=1)).isoformat(),
-            },
-        }
     else:
-        return _resolve_total_return_period("1y", today=today)
+        raise ValueError(f"Unsupported period: {period}")
 
     return {
         "key": key,
@@ -277,6 +321,25 @@ def _portfolio_event_date(value):
         return pd.Timestamp(value).date()
     except (TypeError, ValueError):
         return None
+
+
+def _portfolio_inception_date(current_holdings, transactions):
+    """Earliest saved trade, purchase, or import date for a portfolio slice."""
+    dates = []
+    for transaction in transactions or []:
+        value = transaction.get("transaction_date") if isinstance(transaction, dict) else None
+        parsed = _portfolio_event_date(value)
+        if parsed is not None:
+            dates.append(parsed)
+    for holding in current_holdings or []:
+        if not isinstance(holding, dict):
+            continue
+        parsed = _portfolio_event_date(holding.get("purchase_date"))
+        if parsed is None:
+            parsed = _portfolio_event_date(holding.get("import_date"))
+        if parsed is not None:
+            dates.append(parsed)
+    return min(dates).isoformat() if dates else None
 
 
 def _build_transaction_aware_portfolio_series(
@@ -15021,7 +15084,7 @@ def _assess_etf_closure_risk_with_fallback(info, response):
 
 @app.route("/api/portfolio-summary/data", methods=["GET"])
 def portfolio_summary_data():
-    """Compute per-ticker grades and portfolio-level grade via yfinance."""
+    """Compute period-aware ticker and portfolio grades via yfinance."""
     import warnings
     import numpy as np
     import yfinance as yf
@@ -15037,7 +15100,22 @@ def portfolio_summary_data():
     # BTCI in some IRA accounts) must still be graded — keying on purchase_value
     # would silently drop it from the ticker set and blank its risk columns.
     rows = conn.execute(
-        f"SELECT ticker, SUM(current_value) as current_value FROM all_account_info WHERE profile_id IN ({placeholders}) AND quantity > 0 AND current_value > 0 GROUP BY ticker",
+        f"""SELECT ticker, SUM(current_value) AS current_value,
+                   MIN(purchase_date) AS purchase_date,
+                   MIN(import_date) AS import_date
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND quantity > 0 AND current_value > 0
+            GROUP BY ticker""",
+        pids,
+    ).fetchall()
+    transaction_rows = conn.execute(
+        f"""SELECT ticker, profile_id, transaction_type, transaction_date,
+                   shares, price_per_share, fees
+            FROM transactions
+            WHERE profile_id IN ({placeholders})
+              AND transaction_date IS NOT NULL
+            ORDER BY transaction_date, id""",
         pids,
     ).fetchall()
     conn.close()
@@ -15045,12 +15123,38 @@ def portfolio_summary_data():
     if not rows:
         return jsonify({"error": "No data"}), 400
 
+    period = request.args.get("period", "1y").strip().lower()
+    custom_start = request.args.get("start_date", "").strip()
+    custom_end = request.args.get("end_date", "").strip()
+    holdings_for_inception = [dict(row) for row in rows]
+    transactions_for_inception = [dict(row) for row in transaction_rows]
+    inception_date = _portfolio_inception_date(
+        holdings_for_inception,
+        transactions_for_inception,
+    )
+    try:
+        period_range = _resolve_total_return_period(
+            period,
+            start_date=custom_start,
+            end_date=custom_end,
+            inception_date=inception_date,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
     tickers = [r["ticker"] for r in rows]
     # Key on ticker set + profile so intraday price movement doesn't bust the cache.
     # Weights within the 30-min window will be slightly stale if prices move, which
     # is acceptable for grade/ratio display; a buy/sell changes the ticker set and
     # naturally invalidates.
-    cache_key = ("summary-beta-v2-ticker-risk", tuple(pids), tuple(sorted(r["ticker"] for r in rows)))
+    cache_key = (
+        "summary-beta-v3-period-aware",
+        tuple(pids),
+        tuple(sorted(r["ticker"] for r in rows)),
+        period_range["key"],
+        period_range["start_date"],
+        period_range["end_date"],
+    )
     default_ticker_grades = {t: {"grade": "N/A", "score": None} for t in tickers}
     cache_entry = _PORTFOLIO_SUMMARY_CACHE.get(cache_key)
     cached_ts, cached = cache_entry if cache_entry else (0, None)
@@ -15080,7 +15184,13 @@ def portfolio_summary_data():
             pass
 
     try:
-        raw = _chunked_yf_download(" ".join(all_dl), period="1y", auto_adjust=True, progress=False, threads=False)
+        raw = _chunked_yf_download(
+            " ".join(all_dl),
+            **period_range["yf_kwargs"],
+            auto_adjust=True,
+            progress=False,
+            threads=False,
+        )
         if raw.empty:
             if cached:
                 return jsonify(cached)
@@ -15117,7 +15227,13 @@ def portfolio_summary_data():
         if _bsym in close.columns:
             continue
         try:
-            r = _chunked_yf_download(_bsym, period="1y", auto_adjust=True, progress=False, threads=False)
+            r = _chunked_yf_download(
+                _bsym,
+                **period_range["yf_kwargs"],
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
             if r is None or r.empty:
                 continue
             if isinstance(r.columns, pd.MultiIndex):
@@ -15198,7 +15314,13 @@ def portfolio_summary_data():
     missing = [t for t in tickers if t not in close.columns]
     for t in missing:
         try:
-            r = _chunked_yf_download(t, period="1y", auto_adjust=True, progress=False, threads=False)
+            r = _chunked_yf_download(
+                t,
+                **period_range["yf_kwargs"],
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
             if r is None or r.empty:
                 continue
             if isinstance(r.columns, pd.MultiIndex):
@@ -15279,7 +15401,39 @@ def portfolio_summary_data():
                     portfolio_grade_info[_k] = cached_pg.get(_k)
             benchmark_betas_present = True
 
-    response = {"ticker_grades": ticker_grades, "ticker_risk": ticker_risk, "portfolio_grade": portfolio_grade_info, "ticker_closure_risk": ticker_closure_risk}
+    actual_range = (
+        close[available].dropna(how="all")
+        if available
+        else pd.DataFrame()
+    )
+    actual_start_date = (
+        pd.Timestamp(actual_range.index[0]).strftime("%Y-%m-%d")
+        if not actual_range.empty
+        else None
+    )
+    actual_end_date = (
+        pd.Timestamp(actual_range.index[-1]).strftime("%Y-%m-%d")
+        if not actual_range.empty
+        else None
+    )
+    portfolio_grade_info["period_key"] = period_range["key"]
+    portfolio_grade_info["period_label"] = period_range["label"]
+    portfolio_grade_info["requested_start_date"] = period_range["start_date"]
+    portfolio_grade_info["requested_end_date"] = period_range["end_date"]
+    portfolio_grade_info["actual_start_date"] = actual_start_date
+    portfolio_grade_info["actual_end_date"] = actual_end_date
+    response = {
+        "ticker_grades": ticker_grades,
+        "ticker_risk": ticker_risk,
+        "portfolio_grade": portfolio_grade_info,
+        "ticker_closure_risk": ticker_closure_risk,
+        "period_key": period_range["key"],
+        "period_label": period_range["label"],
+        "requested_start_date": period_range["start_date"],
+        "requested_end_date": period_range["end_date"],
+        "actual_start_date": actual_start_date,
+        "actual_end_date": actual_end_date,
+    }
     # Only cache a usable result. Caching an empty grade from a transient/partial
     # yfinance download would pin blank tiles for the full 30-min TTL, so the
     # grades would "stick" blank across account switches and chart refreshes until
@@ -21266,37 +21420,15 @@ def total_return_charts():
     warnings.filterwarnings("ignore")
 
     period = request.args.get("period", "1y")
+    custom_start = request.args.get("start_date", "").strip()
+    custom_end = request.args.get("end_date", "").strip()
     compare = request.args.get("compare", "").strip()
-    period_range = _resolve_total_return_period(period)
-    period_label = period_range["label"]
 
     _, profile_ids = get_profile_filter()
     placeholders = ",".join("?" * len(profile_ids))
     cat_param = request.args.get("category", "").strip()
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
     sub_ids = _parse_subcategory_ids(request.args.get("subcategory"))
-    db_signature = tuple(
-        os.path.getmtime(path) if os.path.exists(path) else None
-        for path in (DB_PATH, f"{DB_PATH}-wal")
-    )
-    cache_key = (
-        tuple(profile_ids),
-        period_range["key"],
-        period_range["start_date"],
-        period_range["end_date"],
-        compare,
-        tuple(cat_ids),
-        tuple(sub_ids),
-        db_signature,
-    )
-    cached_payload = _cache_get(
-        _TOTAL_RETURN_DASHBOARD_CACHE,
-        cache_key,
-        _TOTAL_RETURN_DASHBOARD_TTL_SEC,
-    )
-    if cached_payload is not None:
-        return jsonify(cached_payload)
-
     conn = get_connection()
     sub_tickers = _subcategory_ticker_set(conn, profile_ids, sub_ids)
 
@@ -21391,6 +21523,48 @@ def total_return_charts():
         payment_profile_ids,
     ).fetchall()
     conn.close()
+
+    filtered_transaction_records = [
+        dict(row) for row in transaction_rows
+        if not (cat_ids or sub_ids)
+        or str(row["ticker"] or "").strip().upper() in allowed_tickers
+    ]
+    inception_date = _portfolio_inception_date(
+        filtered_holding_records,
+        filtered_transaction_records,
+    )
+    try:
+        period_range = _resolve_total_return_period(
+            period,
+            start_date=custom_start,
+            end_date=custom_end,
+            inception_date=inception_date,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    period_label = period_range["label"]
+
+    db_signature = tuple(
+        os.path.getmtime(path) if os.path.exists(path) else None
+        for path in (DB_PATH, f"{DB_PATH}-wal")
+    )
+    cache_key = (
+        tuple(profile_ids),
+        period_range["key"],
+        period_range["start_date"],
+        period_range["end_date"],
+        compare,
+        tuple(cat_ids),
+        tuple(sub_ids),
+        db_signature,
+    )
+    cached_payload = _cache_get(
+        _TOTAL_RETURN_DASHBOARD_CACHE,
+        cache_key,
+        _TOTAL_RETURN_DASHBOARD_TTL_SEC,
+    )
+    if cached_payload is not None:
+        return jsonify(cached_payload)
 
     portfolio_transactions = []
     portfolio_holdings = []
@@ -21713,6 +21887,8 @@ def total_return_compare():
     tickers_param = request.args.get("tickers", "").strip()
     extra_param = request.args.get("extra", "").strip()
     period = request.args.get("period", "1y")
+    custom_start = request.args.get("start_date", "").strip()
+    custom_end = request.args.get("end_date", "").strip()
     include_portfolio = str(request.args.get("portfolio", "")).strip().lower() in {
         "1", "true", "yes", "on",
     }
@@ -21724,9 +21900,6 @@ def total_return_compare():
     if not all_tickers and not include_portfolio:
         return jsonify({"error": "No tickers selected"}), 400
 
-    period_range = _resolve_total_return_period(period)
-    yf_kwargs = period_range["yf_kwargs"]
-    period_label = period_range["label"]
     portfolio_transactions = []
     portfolio_holdings = []
     portfolio_symbols = []
@@ -21773,6 +21946,22 @@ def total_return_compare():
             portfolio_holdings.append(row)
             if market_symbol:
                 portfolio_symbols.append(market_symbol)
+
+    inception_date = _portfolio_inception_date(
+        portfolio_holdings,
+        portfolio_transactions,
+    ) if include_portfolio else None
+    try:
+        period_range = _resolve_total_return_period(
+            period,
+            start_date=custom_start,
+            end_date=custom_end,
+            inception_date=inception_date,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    yf_kwargs = period_range["yf_kwargs"]
+    period_label = period_range["label"]
 
     db_signature = tuple(
         os.path.getmtime(path) if os.path.exists(path) else None
@@ -21929,6 +22118,7 @@ def total_return_compare():
                 if "PORTFOLIO" in price_series else None
             ),
             "period_label": period_label,
+            "period_key": period_range["key"],
             "requested_start_date": period_range["start_date"],
             "requested_end_date": period_range["end_date"],
             "actual_start_date": dates[0] if dates else None,
@@ -22861,7 +23051,7 @@ def growth_data():
     import warnings
     import numpy as np
     import yfinance as yf
-    from grading import grade_portfolio, letter_grade, _sharpe, _sortino, _is_stale_or_dead
+    from grading import grade_portfolio, _sharpe, _sortino
     warnings.filterwarnings("ignore")
 
     def _clean(v):
@@ -22876,13 +23066,12 @@ def growth_data():
         return v
 
     profile_id = get_profile_id()
-    period = request.args.get("period", "1y")
+    period = request.args.get("period", "1y").strip().lower()
+    custom_start = request.args.get("start_date", "").strip()
+    custom_end = request.args.get("end_date", "").strip()
     benchmark = request.args.get("benchmark", "SPY").upper().strip()
     category_id = request.args.get("category")
     subcategory_id = request.args.get("subcategory")
-
-    if period not in ("1y", "5y", "max"):
-        period = "1y"
 
     conn = get_connection()
 
@@ -22900,20 +23089,44 @@ def growth_data():
             conds.append(f"tc.subcategory_id IN ({','.join('?' * len(sub_ids))})")
             qparams += sub_ids
         rows = conn.execute(
-            f"""SELECT DISTINCT a.ticker, a.quantity, a.current_value
+            f"""SELECT DISTINCT a.ticker, a.profile_id, a.quantity, a.current_value,
+                       a.purchase_date, a.import_date
                FROM all_account_info a
                JOIN ticker_categories tc ON a.ticker = tc.ticker AND a.profile_id = tc.profile_id
                WHERE a.profile_id = ? AND ({' OR '.join(conds)})
-                 AND a.purchase_value > 0 AND a.quantity > 0""",
+                 AND a.quantity > 0 AND a.current_value > 0""",
             qparams,
         ).fetchall()
     else:
         rows = conn.execute(
-            """SELECT ticker, quantity, current_value
+            """SELECT ticker, profile_id, quantity, current_value,
+                      purchase_date, import_date
                FROM all_account_info
-               WHERE profile_id = ? AND purchase_value > 0 AND quantity > 0""",
+               WHERE profile_id = ? AND quantity > 0 AND current_value > 0""",
             (profile_id,),
         ).fetchall()
+
+    selected_tickers = {
+        str(row["ticker"] or "").strip().upper()
+        for row in rows
+    }
+    transaction_rows = conn.execute(
+        """SELECT ticker, profile_id, transaction_type, transaction_date,
+                  shares, price_per_share, fees
+           FROM transactions
+           WHERE profile_id = ? AND transaction_date IS NOT NULL
+           ORDER BY transaction_date, id""",
+        (profile_id,),
+    ).fetchall()
+    filtered_transactions = [
+        dict(row) for row in transaction_rows
+        if str(row["ticker"] or "").strip().upper() in selected_tickers
+    ]
+    inception_transactions = (
+        filtered_transactions
+        if cat_ids or sub_ids
+        else [dict(row) for row in transaction_rows]
+    )
 
     # Fetch categories (with sub-categories) for the filter dropdown
     cats = conn.execute(
@@ -22937,16 +23150,47 @@ def growth_data():
     if not rows:
         return jsonify({"error": "No holdings found", "categories": categories}), 400
 
-    tickers = [r["ticker"] for r in rows]
-    quantities = {r["ticker"]: float(r["quantity"] or 0) for r in rows}
-    values = {r["ticker"]: float(r["current_value"] or 0) for r in rows}
+    holding_records = [dict(row) for row in rows]
+    try:
+        period_range = _resolve_total_return_period(
+            period,
+            start_date=custom_start,
+            end_date=custom_end,
+            inception_date=_portfolio_inception_date(
+                holding_records,
+                inception_transactions,
+            ),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc), "categories": categories}), 400
+
+    tickers = sorted(selected_tickers)
+    quantities = {
+        ticker: sum(
+            float(row["quantity"] or 0)
+            for row in rows
+            if str(row["ticker"] or "").strip().upper() == ticker
+        )
+        for ticker in tickers
+    }
+    values = {
+        ticker: sum(
+            float(row["current_value"] or 0)
+            for row in rows
+            if str(row["ticker"] or "").strip().upper() == ticker
+        )
+        for ticker in tickers
+    }
     yahoo_by_symbol = {sym: _yahoo_symbol_for_ticker(sym) for sym in tickers + [benchmark]}
     yahoo_symbols = list(dict.fromkeys(yahoo_by_symbol.values()))
 
     try:
         raw = _chunked_yf_download(
-            " ".join(yahoo_symbols), period=period, auto_adjust=True,
-            actions=True, progress=False
+            " ".join(yahoo_symbols),
+            **period_range["yf_kwargs"],
+            auto_adjust=False,
+            actions=True,
+            progress=False,
         )
         if raw.empty:
             return jsonify({"error": "No price data"}), 500
@@ -22956,10 +23200,17 @@ def growth_data():
     # Parse close prices and dividends
     if isinstance(raw.columns, pd.MultiIndex):
         close = raw["Close"].dropna(how="all")
+        adjusted = (
+            raw["Adj Close"].dropna(how="all")
+            if "Adj Close" in raw.columns.get_level_values(0)
+            else close.copy()
+        )
         divs = raw["Dividends"].fillna(0) if "Dividends" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
     else:
         close = raw[["Close"]].dropna(how="all")
         close.columns = [yahoo_symbols[0]]
+        adjusted = raw[["Adj Close"]].dropna(how="all") if "Adj Close" in raw.columns else close.copy()
+        adjusted.columns = [yahoo_symbols[0]]
         divs = raw[["Dividends"]].fillna(0) if "Dividends" in raw.columns else pd.DataFrame(0, index=close.index, columns=[yahoo_symbols[0]])
         divs.columns = [yahoo_symbols[0]]
 
@@ -22967,6 +23218,7 @@ def growth_data():
     # tickers, and ignore empty download columns so one failed ticker cannot
     # turn the whole portfolio series into NaN.
     close_by_ticker = pd.DataFrame(index=close.index)
+    adjusted_by_ticker = pd.DataFrame(index=close.index)
     divs_by_ticker = pd.DataFrame(index=close.index)
     for symbol, yahoo_symbol in yahoo_by_symbol.items():
         if yahoo_symbol not in close.columns:
@@ -22975,12 +23227,28 @@ def growth_data():
         if len(symbol_close) < 2:
             continue
         close_by_ticker[symbol] = close[yahoo_symbol]
+        adjusted_by_ticker[symbol] = (
+            adjusted[yahoo_symbol]
+            if yahoo_symbol in adjusted.columns
+            else close[yahoo_symbol]
+        )
         if yahoo_symbol in divs.columns:
             divs_by_ticker[symbol] = divs[yahoo_symbol]
         else:
             divs_by_ticker[symbol] = 0
     close = close_by_ticker.dropna(how="all")
+    adjusted = adjusted_by_ticker.reindex(close.index).dropna(how="all")
     divs = divs_by_ticker.reindex(close.index).fillna(0)
+    if period_range["start_date"]:
+        start_boundary = pd.Timestamp(period_range["start_date"])
+        close = close.loc[close.index >= start_boundary]
+        adjusted = adjusted.loc[adjusted.index >= start_boundary]
+        divs = divs.loc[divs.index >= start_boundary]
+    if period_range["end_date"]:
+        end_boundary = pd.Timestamp(period_range["end_date"])
+        close = close.loc[close.index <= end_boundary]
+        adjusted = adjusted.loc[adjusted.index <= end_boundary]
+        divs = divs.loc[divs.index <= end_boundary]
 
     # Filter to tickers actually present in data
     available_tickers = [t for t in tickers if t in close.columns and len(close[t].dropna()) >= 2]
@@ -22990,10 +23258,8 @@ def growth_data():
     # ── Portfolio value series (price-only and total return) ──
     first_valid = close[available_tickers].dropna(how="all").index[0]
     close_aligned = close[available_tickers].loc[first_valid:].ffill().bfill()
+    adjusted_aligned = adjusted[available_tickers].loc[first_valid:].ffill().bfill()
     divs_aligned = divs[available_tickers].loc[first_valid:].fillna(0) if set(available_tickers).issubset(divs.columns) else pd.DataFrame(0, index=close_aligned.index, columns=available_tickers)
-
-    # Cumulative dividends per share
-    cum_divs = divs_aligned.cumsum()
 
     # Portfolio price-only value
     port_price = pd.Series(0.0, index=close_aligned.index)
@@ -23001,7 +23267,7 @@ def growth_data():
     for t in available_tickers:
         q = quantities.get(t, 0)
         port_price += close_aligned[t] * q
-        port_total += (close_aligned[t] + cum_divs[t]) * q
+        port_total += adjusted_aligned[t] * q
 
     # Normalize to 100
     p0 = port_price.iloc[0]
@@ -23014,52 +23280,46 @@ def growth_data():
     bench_total_norm = pd.Series(dtype=float)
     if benchmark in close.columns:
         bc = close[benchmark].loc[first_valid:].ffill().bfill()
-        bd = divs[benchmark].loc[first_valid:].fillna(0) if benchmark in divs.columns else pd.Series(0, index=bc.index)
-        bc_cum_div = bd.cumsum()
+        ba = (
+            adjusted[benchmark].loc[first_valid:].ffill().bfill()
+            if benchmark in adjusted.columns
+            else bc
+        )
         b0 = bc.iloc[0]
+        ba0 = ba.iloc[0]
         bench_price_norm = (bc / b0 * 100) if b0 > 0 else bc
-        bench_total_norm = ((bc + bc_cum_div) / b0 * 100) if b0 > 0 else bc
+        bench_total_norm = (ba / ba0 * 100) if ba0 > 0 else ba
 
     dates_str = [d.strftime("%Y-%m-%d") for d in port_price_norm.index]
 
     # ── Per-ticker returns for bar chart ──
-    def pct_return(series, n):
-        if len(series) < n + 1:
+    def selected_period_return(series):
+        series = pd.to_numeric(series, errors="coerce").dropna()
+        if len(series) < 2:
             return None
-        v = float((series.iloc[-1] / series.iloc[-n] - 1) * 100)
+        v = float((series.iloc[-1] / series.iloc[0] - 1) * 100)
         return _clean(round(v, 2))
 
-    def ytd_return(series):
-        yr = series.index[-1].year
-        yr_start = series.loc[series.index >= f"{yr}-01-01"]
-        if len(yr_start) < 2:
-            return None
-        v = float((yr_start.iloc[-1] / yr_start.iloc[0] - 1) * 100)
-        return _clean(round(v, 2))
-
-    windows = {"1M": 21, "3M": 63, "6M": 126, "1Y": 252}
     ticker_returns = []
     for t in available_tickers:
-        tc = close_aligned[t]
-        row = {"ticker": t}
-        for label, n in windows.items():
-            row[label] = pct_return(tc, n)
-        row["YTD"] = ytd_return(tc)
-        ticker_returns.append(row)
-    ticker_returns.sort(key=lambda r: r.get("1Y") or 0, reverse=True)
+        ticker_returns.append({
+            "ticker": t,
+            "return_pct": selected_period_return(adjusted_aligned[t]),
+        })
+    ticker_returns.sort(
+        key=lambda row: row.get("return_pct")
+        if row.get("return_pct") is not None
+        else float("-inf"),
+        reverse=True,
+    )
 
     # ── Heatmap ──
-    heatmap_windows = {"1D": 1, "7D": 5, "1M": 21, "3M": 63, "6M": 126, "1Y": 252}
     heatmap_tickers = [r["ticker"] for r in ticker_returns]
-    heatmap_labels = list(heatmap_windows.keys()) + ["YTD"]
-    heatmap_values = []
-    for t in heatmap_tickers:
-        tc = close_aligned[t]
-        row = []
-        for label, n in heatmap_windows.items():
-            row.append(pct_return(tc, n))
-        row.append(ytd_return(tc))
-        heatmap_values.append(row)
+    heatmap_labels = [period_range["label"]]
+    heatmap_values = [
+        [selected_period_return(adjusted_aligned[t])]
+        for t in heatmap_tickers
+    ]
 
     # ── Correlation matrix ──
     daily_returns = close_aligned[available_tickers].pct_change().dropna(how="all")
@@ -23069,30 +23329,34 @@ def growth_data():
 
     # ── Portfolio grade ──
     grade_info = {}
-    if len(available_tickers) >= 2 and len(daily_returns) >= 30:
-        # Drop delisted / flat-lined / penny-stock series from the overall grade
-        live_tickers = [
-            t for t in available_tickers
-            if not _is_stale_or_dead(close_aligned[t].dropna(), daily_returns[t])
-        ]
-        if not live_tickers:
-            live_tickers = available_tickers  # fallback
-        weights_arr = np.array([values.get(t, 0.0) for t in live_tickers])
-        bench_ret = close[benchmark].loc[first_valid:].ffill().pct_change().dropna() if benchmark in close.columns else None
-        returns_for_grade = daily_returns[live_tickers]
-        pm = grade_portfolio(returns_for_grade, weights_arr, bench_ret)
-        g = pm.get("grade", {})
-        grade_info = {
-            "overall": g.get("overall", "N/A"),
-            "score": _clean(g.get("score")),
-            "sharpe": _clean(pm.get("sharpe")),
-            "sortino": _clean(pm.get("sortino")),
-        }
+    grade_tickers = [
+        t for t in available_tickers
+        if t in adjusted.columns and len(adjusted[t].dropna()) >= 30
+    ]
+    if len(grade_tickers) >= 2:
+        # Match the Dashboard: adjusted prices, current-value weights, and zero
+        # return on dates before a newer holding has its first available quote.
+        returns_for_grade = adjusted[grade_tickers].pct_change().fillna(0)
+        if len(returns_for_grade) >= 30:
+            weights_arr = np.array([values.get(t, 0.0) for t in grade_tickers])
+            bench_ret = (
+                adjusted[benchmark].pct_change().dropna()
+                if benchmark in adjusted.columns
+                else None
+            )
+            pm = grade_portfolio(returns_for_grade, weights_arr, bench_ret)
+            g = pm.get("grade", {})
+            grade_info = {
+                "overall": g.get("overall", "N/A"),
+                "score": _clean(g.get("score")),
+                "sharpe": _clean(pm.get("sharpe")),
+                "sortino": _clean(pm.get("sortino")),
+            }
 
     # ── Benchmark metrics ──
     benchmark_metrics = {}
-    if benchmark in close.columns:
-        bc_full = close[benchmark].loc[first_valid:].dropna()
+    if benchmark in adjusted.columns:
+        bc_full = adjusted[benchmark].dropna()
         benchmark_metrics = {
             "sharpe": _clean(_sharpe(bc_full)),
             "sortino": _clean(_sortino(bc_full)),
@@ -23100,6 +23364,17 @@ def growth_data():
 
     def _clean_series(s):
         return [_clean(round(float(v), 2)) for v in s]
+
+    total_return_pct = (
+        round(float(port_total_norm.iloc[-1]) - 100, 2)
+        if len(port_total_norm)
+        else None
+    )
+    price_return_pct = (
+        round(float(port_price_norm.iloc[-1]) - 100, 2)
+        if len(port_price_norm)
+        else None
+    )
 
     return jsonify(
         portfolio_price={"dates": dates_str, "values": _clean_series(port_price_norm)},
@@ -23113,6 +23388,16 @@ def growth_data():
         grade=grade_info,
         benchmark_metrics=benchmark_metrics,
         categories=categories,
+        period_key=period_range["key"],
+        period_label=period_range["label"],
+        requested_start_date=period_range["start_date"],
+        requested_end_date=period_range["end_date"],
+        actual_start_date=dates_str[0] if dates_str else None,
+        actual_end_date=dates_str[-1] if dates_str else None,
+        portfolio_metrics={
+            "price_return_pct": price_return_pct,
+            "total_return_pct": total_return_pct,
+        },
     )
 
 
@@ -40050,68 +40335,42 @@ def growth_2_data():
 
     profile_id = get_profile_id()
     period_param = request.args.get("period", "1y").strip().lower()
+    custom_start = request.args.get("start_date", "").strip()
+    custom_end = request.args.get("end_date", "").strip()
     tickers_param = request.args.get("tickers", "")
     group_by = request.args.get("group_by", "none")
     show_cost_basis = request.args.get("show_cost_basis", "true") == "true"
     show_trades = request.args.get("show_trades", "false") == "true"
     profit_mode = request.args.get("profit_mode", "dollar")
     pl_basis = request.args.get("pl_basis", "selected_period")
+    if period_param == "all":
+        pl_basis = "first_trade"
     group_profit_source = request.args.get("group_profit_source", "true") == "true"
-
-    period_map = {
-        "7d": 7, "1m": 30, "3m": 90, "6m": 180,
-        "ytd": "ytd", "1y": 365, "5y": 1825, "all": "max",
-    }
-    yf_period = "1y"
-    start_date = None
-    end_date = None
-    if period_param in period_map:
-        val = period_map[period_param]
-        if val == "ytd":
-            start_date = datetime(datetime.now().year, 1, 1)
-            yf_period = "ytd"
-        elif val == "max":
-            yf_period = "max"
-        else:
-            start_date = datetime.now() - timedelta(days=val)
-            if val <= 7:
-                yf_period = "1mo"
-            elif val <= 30:
-                yf_period = "3mo"
-            elif val <= 90:
-                yf_period = "6mo"
-            elif val <= 180:
-                yf_period = "1y"
-            elif val <= 365:
-                yf_period = "1y"
-            else:
-                yf_period = "max"
-    elif period_param == "custom":
-        custom_start = request.args.get("start_date", "").strip()
-        custom_end = request.args.get("end_date", "").strip()
-        if not custom_start or not custom_end:
-            return jsonify({"error": "Choose both a custom start date and end date"}), 400
-        try:
-            start_date = datetime.strptime(custom_start, "%Y-%m-%d")
-            end_date = datetime.strptime(custom_end, "%Y-%m-%d")
-        except ValueError:
-            return jsonify({"error": "Custom dates must use YYYY-MM-DD format"}), 400
-        if start_date > end_date:
-            return jsonify({"error": "Custom start date must be on or before the end date"}), 400
-        if end_date.date() > datetime.now().date():
-            return jsonify({"error": "Custom end date cannot be in the future"}), 400
-    else:
-        return jsonify({"error": f"Unsupported period: {period_param}"}), 400
 
     conn = get_connection()
 
     rows = conn.execute(
-        """SELECT ticker, quantity, price_paid, purchase_value, current_value,
-                  purchase_date
+        """SELECT ticker, profile_id, quantity, price_paid, purchase_value, current_value,
+                  purchase_date, import_date
            FROM all_account_info
-           WHERE profile_id = ? AND purchase_value > 0 AND quantity > 0""",
+           WHERE profile_id = ? AND quantity > 0""",
         (profile_id,),
     ).fetchall()
+
+    cash_value = 0.0
+    profile_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()
+    }
+    if "cash_value" in profile_cols:
+        cash_profile_ids = _cash_profile_ids_for_read(conn, False, [profile_id])
+        cash_placeholders = ",".join("?" * len(cash_profile_ids))
+        cash_row = conn.execute(
+            f"""SELECT COALESCE(SUM(cash_value), 0)
+                FROM profiles
+                WHERE id IN ({cash_placeholders})""",
+            cash_profile_ids,
+        ).fetchone()
+        cash_value = float(cash_row[0] if cash_row else 0)
 
     cats = conn.execute(
         "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
@@ -40129,7 +40388,7 @@ def growth_2_data():
     # Owner (profile_id=1) is the combined view — fetch transactions across all profiles
     if profile_id == 1:
         txn_rows = conn.execute(
-            """SELECT ticker, transaction_type, transaction_date, shares,
+            """SELECT ticker, profile_id, transaction_type, transaction_date, shares,
                       price_per_share, fees, realized_gain
                FROM transactions
                ORDER BY transaction_date"""
@@ -40141,7 +40400,7 @@ def growth_2_data():
         ).fetchall()
     else:
         txn_rows = conn.execute(
-            """SELECT ticker, transaction_type, transaction_date, shares,
+            """SELECT ticker, profile_id, transaction_type, transaction_date, shares,
                       price_per_share, fees, realized_gain
                FROM transactions
                WHERE profile_id = ?
@@ -40191,11 +40450,13 @@ def growth_2_data():
     synthetic_txns = []
     for r in active_rows:
         t = r["ticker"]
-        if t not in txn_tickers and r["purchase_date"]:
+        fallback_date = r["purchase_date"] or r["import_date"]
+        if t not in txn_tickers and fallback_date:
             synthetic_txns.append({
                 "ticker": t,
+                "profile_id": r["profile_id"],
                 "transaction_type": "BUY",
-                "transaction_date": r["purchase_date"],
+                "transaction_date": fallback_date,
                 "shares": float(r["quantity"] or 0),
                 "price_per_share": float(r["price_paid"] or 0),
                 "fees": 0,
@@ -40220,7 +40481,10 @@ def growth_2_data():
             ownership_starts[ticker] = ts
 
     for r in active_rows:
-        _record_ownership_start(r["ticker"], r["purchase_date"])
+        _record_ownership_start(
+            r["ticker"],
+            r["purchase_date"] or r["import_date"],
+        )
     # Any recorded trade is a safer ownership boundary than inventing history
     # back to a ticker's inception. This covers legacy holdings whose purchase
     # date was not imported.
@@ -40232,22 +40496,41 @@ def growth_2_data():
         for t in active_tickers:
             ownership_starts.setdefault(t, known_portfolio_start)
 
+    try:
+        period_range = _resolve_total_return_period(
+            period_param,
+            start_date=custom_start,
+            end_date=custom_end,
+            inception_date=(
+                known_portfolio_start.strftime("%Y-%m-%d")
+                if known_portfolio_start is not None
+                else None
+            ),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    start_date = (
+        datetime.strptime(period_range["start_date"], "%Y-%m-%d")
+        if period_range["start_date"]
+        else None
+    )
+    end_date = (
+        datetime.strptime(period_range["end_date"], "%Y-%m-%d")
+        if period_range["end_date"]
+        else None
+    )
+
     yahoo_by_ticker = {t: _yahoo_symbol_for_ticker(t) for t in active_tickers}
     ticker_by_yahoo = {yf_t: t for t, yf_t in yahoo_by_ticker.items()}
     yahoo_tickers = list(dict.fromkeys(yahoo_by_ticker.values()))
 
     try:
         download_kwargs = {
-            "auto_adjust": True,
+            "auto_adjust": False,
             "actions": True,
             "progress": False,
+            **period_range["yf_kwargs"],
         }
-        if period_param == "custom":
-            download_kwargs["start"] = start_date.strftime("%Y-%m-%d")
-            # Yahoo treats end as exclusive, so include the user's end date.
-            download_kwargs["end"] = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
-        else:
-            download_kwargs["period"] = yf_period
         raw = _chunked_yf_download(" ".join(yahoo_tickers), **download_kwargs)
         if raw.empty:
             return jsonify({"error": "No price data", "tickers": all_tickers}), 500
@@ -40256,14 +40539,22 @@ def growth_2_data():
 
     if isinstance(raw.columns, pd.MultiIndex):
         close = raw["Close"].dropna(how="all")
+        adjusted_raw = (
+            raw["Adj Close"].dropna(how="all")
+            if "Adj Close" in raw.columns.get_level_values(0)
+            else close.copy()
+        )
         divs_raw = raw["Dividends"].fillna(0) if "Dividends" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
     else:
         close = raw[["Close"]].dropna(how="all")
         close.columns = [yahoo_tickers[0]]
+        adjusted_raw = raw[["Adj Close"]].dropna(how="all") if "Adj Close" in raw.columns else close.copy()
+        adjusted_raw.columns = [yahoo_tickers[0]]
         divs_raw = raw[["Dividends"]].fillna(0) if "Dividends" in raw.columns else pd.DataFrame(0, index=close.index, columns=[yahoo_tickers[0]])
         divs_raw.columns = [yahoo_tickers[0]]
 
     close = close.rename(columns=ticker_by_yahoo)
+    adjusted_raw = adjusted_raw.rename(columns=ticker_by_yahoo)
     divs_raw = divs_raw.rename(columns=ticker_by_yahoo)
     # yfinance (esp. when rate-limited across chunked downloads) can return the
     # same symbol as duplicate columns. That makes close[t] a DataFrame instead
@@ -40271,10 +40562,14 @@ def growth_2_data():
     # "float() argument must be ... not 'Series'". Collapse dupes to one column.
     if close.columns.duplicated().any():
         close = close.loc[:, ~close.columns.duplicated()]
+    if adjusted_raw.columns.duplicated().any():
+        adjusted_raw = adjusted_raw.loc[:, ~adjusted_raw.columns.duplicated()]
     if divs_raw.columns.duplicated().any():
         divs_raw = divs_raw.loc[:, ~divs_raw.columns.duplicated()]
     if close.index.has_duplicates:
         close = close.loc[~close.index.duplicated(keep="last")]
+    if adjusted_raw.index.has_duplicates:
+        adjusted_raw = adjusted_raw.loc[~adjusted_raw.index.duplicated(keep="last")]
     if divs_raw.index.has_duplicates:
         divs_raw = divs_raw.loc[~divs_raw.index.duplicated(keep="last")]
     avail = [t for t in active_tickers if t in close.columns and not close[t].dropna().empty]
@@ -40283,6 +40578,7 @@ def growth_2_data():
 
     first_valid = close[avail].dropna(how="all").index[0]
     close_a = close[avail].loc[first_valid:].ffill()
+    adj_a = adjusted_raw.reindex(index=close_a.index, columns=avail).ffill()
     divs_a = divs_raw.reindex(index=close_a.index, columns=avail).fillna(0)
 
     lower_bounds = []
@@ -40294,14 +40590,46 @@ def growth_2_data():
     if lower_bounds:
         effective_start = max(lower_bounds)
         close_a = close_a.loc[close_a.index >= effective_start]
+        adj_a = adj_a.loc[adj_a.index >= effective_start]
         divs_a = divs_a.loc[divs_a.index >= effective_start]
     if end_date is not None:
         end_ts = pd.Timestamp(end_date)
         close_a = close_a.loc[close_a.index <= end_ts]
+        adj_a = adj_a.loc[adj_a.index <= end_ts]
         divs_a = divs_a.loc[divs_a.index <= end_ts]
 
     if close_a.empty:
         return jsonify({"error": "No data for selected period", "tickers": all_tickers}), 500
+
+    return_transactions = []
+    for transaction in all_txns:
+        row = dict(transaction)
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if ticker not in avail:
+            continue
+        row["market_symbol"] = ticker
+        row["position_key"] = (row.get("profile_id", profile_id), ticker)
+        return_transactions.append(row)
+
+    return_holdings = []
+    for holding in active_rows:
+        row = dict(holding)
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if ticker not in avail:
+            continue
+        row["market_symbol"] = ticker
+        row["position_key"] = (row.get("profile_id", profile_id), ticker)
+        return_holdings.append(row)
+
+    portfolio_return_result = _build_transaction_aware_portfolio_series(
+        close_a,
+        adj_a,
+        divs_a,
+        None,
+        return_transactions,
+        return_holdings,
+    )
+    portfolio_return_metrics = _portfolio_period_metrics(portfolio_return_result)
 
     # ── Portfolio value timeline (current shares * historical prices) ──
     port_value = pd.Series(0.0, index=close_a.index)
@@ -40324,6 +40652,11 @@ def growth_2_data():
         ticker_value = (series * scale).where(owned_mask, 0).fillna(0)
         position_values[t] = ticker_value
         port_value += ticker_value
+
+    holdings_value = port_value.copy()
+    include_cash = not filter_tickers and use_current_value_scale
+    if include_cash and cash_value:
+        port_value += cash_value
 
     total_invested = sum(cost_basis.get(t, 0) for t in avail)
     invested_series = pd.Series(0.0, index=close_a.index)
@@ -40364,7 +40697,7 @@ def growth_2_data():
     # Capital gain = portfolio_value - invested at each point
     # For "from first trade": use absolute values from start
     # For "selected period": compute relative to period start
-    start_port_val = float(port_value.iloc[0])
+    start_port_val = float(holdings_value.iloc[0])
 
     # Cumulative dividends within the period (from yfinance per-share data)
     cum_divs_dollar = pd.Series(0.0, index=dates_idx)
@@ -40397,9 +40730,9 @@ def growth_2_data():
 
     # Capital gain (unrealized price change)
     if pl_basis == "first_trade":
-        capital_gain = port_value - total_invested
+        capital_gain = holdings_value - total_invested
     else:
-        capital_gain = port_value - start_port_val
+        capital_gain = holdings_value - start_port_val
 
     total_pl = capital_gain + cum_divs_dollar + realized_cum + fees_cum
 
@@ -40422,6 +40755,14 @@ def growth_2_data():
         "categories": categories,
         "ticker_info": {t: {"category": cat_map.get(t, "Other"), "quantity": quantities.get(t, 0), "cost_basis": cost_basis.get(t, 0)} for t in avail},
         "trade_points": trade_points,
+        "period_key": period_range["key"],
+        "period_label": period_range["label"],
+        "actual_start_date": dates_str[0] if dates_str else None,
+        "actual_end_date": dates_str[-1] if dates_str else None,
+        "requested_start_date": period_range["start_date"],
+        "requested_end_date": period_range["end_date"],
+        "cash_value": round(cash_value, 2) if include_cash else 0,
+        "pl_basis": pl_basis,
     }
 
     base_for_pct = total_invested if pl_basis == "first_trade" else start_port_val
@@ -40444,6 +40785,19 @@ def growth_2_data():
             "total": _cs(total_pl),
         }
         result["profit_unit"] = "$"
+
+    result["summary"] = {
+        "start_value": _clean(round(float(port_value.iloc[0]), 2)),
+        "end_value": _clean(round(float(port_value.iloc[-1]), 2)),
+        "total_profit_amount": _clean(round(float(total_pl.iloc[-1]), 2)),
+        "total_profit_pct": _clean(round(float(to_pct(total_pl, base_for_pct).iloc[-1]), 2)),
+        "total_return_pct": (
+            portfolio_return_metrics.get("total_return_pct")
+            if portfolio_return_metrics
+            else None
+        ),
+        "cash_value": round(cash_value, 2) if include_cash else 0,
+    }
 
     # Per-ticker breakdown when grouping requested
     if group_by == "ticker":

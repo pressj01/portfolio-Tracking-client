@@ -4,6 +4,13 @@ import { returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyWhole, getCurrencyLabel } from '../utils/money'
+import {
+  PERFORMANCE_PERIODS,
+  addCustomRangeParams,
+  defaultCustomDates,
+  formatPerformanceDate,
+  formatPerformanceRange,
+} from '../utils/performancePeriods'
 
 // 30 bright, high-contrast colors for dark backgrounds
 const PALETTE = [
@@ -21,16 +28,6 @@ const roundForDisplay = v => {
 const fmtPct = v => v != null ? `${Number(v).toFixed(2)}%` : '—'
 const fmtInt = v => formatMoneyWhole(v)
 
-const PREVIOUS_CALENDAR_YEAR = new Date().getFullYear() - 1
-const COMPARISON_PERIODS = [
-  { key: '1mo', label: '1M' },
-  { key: '3mo', label: '3M' },
-  { key: 'ytd', label: 'YTD' },
-  { key: '1y', label: '1Y' },
-  { key: '5y', label: '5Y' },
-  { key: '10y', label: '10Y' },
-  { key: 'max', label: 'ALL/MAX' },
-]
 const COMPARISON_RETURN_MODES = [
   { key: 'total', label: 'Total Return', title: 'Full dividend-reinvested total return' },
   { key: 'price', label: 'Price Only', title: 'Share-price change only; distributions are excluded' },
@@ -43,17 +40,8 @@ const COMPARISON_TRACE_STYLES = {
   pricediv: { label: 'Price + Divs', dash: 'longdash', width: 2.5 },
 }
 
-const formatComparisonDate = (value) => {
-  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (!match) return ''
-  return `${Number(match[2])}/${Number(match[3])}/${match[1]}`
-}
-
-const formatComparisonRange = (start, end) => {
-  const startLabel = formatComparisonDate(start)
-  const endLabel = formatComparisonDate(end)
-  return startLabel && endLabel ? `${startLabel}–${endLabel}` : ''
-}
+const formatComparisonDate = formatPerformanceDate
+const formatComparisonRange = formatPerformanceRange
 
 function MetricCard({ label, value, range, className }) {
   return (
@@ -90,8 +78,10 @@ export default function TotalReturn() {
   const [sortAsc, setSortAsc] = useState(false)
   const [rvyMode, setRvyMode] = useState('cur')
   const [scatterReturnMode, setScatterReturnMode] = useState('pct')
+  const initialCustomDates = useRef(defaultCustomDates()).current
   const [dashboardPeriod, setDashboardPeriod] = useState('1y')
-  const [dashboardCalendarYear, setDashboardCalendarYear] = useState(String(PREVIOUS_CALENDAR_YEAR))
+  const [customStart, setCustomStart] = useState(initialCustomDates.start)
+  const [customEnd, setCustomEnd] = useState(initialCustomDates.end)
 
   // Comparison chart state
   const [cmpPortfolio, setCmpPortfolio] = useState(false)
@@ -156,10 +146,19 @@ export default function TotalReturn() {
 
   // Fetch yfinance charts
   useEffect(() => {
+    if (dashboardPeriod === 'custom' && (!customStart || !customEnd || customStart > customEnd)) {
+      setChartData(null)
+      setChartLoading(false)
+      setChartError(!customStart || !customEnd
+        ? 'Choose both a custom start date and end date.'
+        : 'Custom start date must be on or before the end date.')
+      return
+    }
     setChartLoading(true)
     setChartError(null)
     setChartData(null)
     const params = new URLSearchParams({ period: dashboardPeriod })
+    addCustomRangeParams(params, dashboardPeriod, customStart, customEnd)
     if (categories.length) params.set('category', categories.join(','))
     if (subcategories.length) params.set('subcategory', subcategories.join(','))
     pf(`/api/total-return/charts?${params}`)
@@ -170,7 +169,7 @@ export default function TotalReturn() {
       })
       .catch(e => setChartError(e.message))
       .finally(() => setChartLoading(false))
-  }, [categories, subcategories, dashboardPeriod, selection])
+  }, [categories, subcategories, dashboardPeriod, customStart, customEnd, selection])
 
   // Render Plotly charts with consistent colors across bar + line charts
   useEffect(() => {
@@ -320,6 +319,12 @@ export default function TotalReturn() {
   // Fetch comparison chart data
   useEffect(() => {
     if (!cmpPortfolio && cmpTickers.length === 0 && !cmpExtra) { setCmpData(null); return }
+    if (dashboardPeriod === 'custom' && (!customStart || !customEnd || customStart > customEnd)) {
+      setCmpData(null)
+      setCmpLoading(false)
+      setCmpError('Choose a valid custom start and end date.')
+      return
+    }
 
     const canReuseDashboardPortfolio = (
       cmpPortfolio
@@ -371,6 +376,7 @@ export default function TotalReturn() {
     setCmpLoading(true)
     setCmpError(null)
     const params = new URLSearchParams({ period: dashboardPeriod })
+    addCustomRangeParams(params, dashboardPeriod, customStart, customEnd)
     if (cmpPortfolio) params.set('portfolio', '1')
     if (cmpTickers.length) params.set('tickers', cmpTickers.join(','))
     if (cmpExtra) params.set('extra', cmpExtra)
@@ -387,6 +393,8 @@ export default function TotalReturn() {
     cmpTickers,
     cmpExtra,
     dashboardPeriod,
+    customStart,
+    customEnd,
     selection,
     categories,
     subcategories,
@@ -476,14 +484,6 @@ export default function TotalReturn() {
       return merged.join(',')
     })
     setCmpExtraInput('')
-  }
-
-  const handleCalendarYearSubmit = (e) => {
-    e.preventDefault()
-    const year = Number(dashboardCalendarYear)
-    const currentYear = new Date().getFullYear()
-    if (!Number.isInteger(year) || year < 1900 || year > currentYear) return
-    setDashboardPeriod(String(year))
   }
 
   // Table sorting
@@ -624,7 +624,7 @@ export default function TotalReturn() {
         <div className="growth-filter-group">
           <label>Dashboard Date Range</label>
           <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
-            {COMPARISON_PERIODS.map(periodOption => (
+            {PERFORMANCE_PERIODS.map(periodOption => (
               <button
                 type="button"
                 key={periodOption.key}
@@ -638,29 +638,29 @@ export default function TotalReturn() {
           </div>
         </div>
 
-        <form onSubmit={handleCalendarYearSubmit} className="growth-filter-group">
-          <label htmlFor="tr-dashboard-calendar-year">Calendar Year</label>
-          <div style={{ display: 'flex', gap: '0.25rem' }}>
-            <input
-              id="tr-dashboard-calendar-year"
-              type="number"
-              min="1900"
-              max={new Date().getFullYear()}
-              step="1"
-              required
-              value={dashboardCalendarYear}
-              onChange={e => setDashboardCalendarYear(e.target.value)}
-              style={{ width: '6.5rem', padding: '0.25rem 0.45rem', fontSize: '0.8rem' }}
-            />
-            <button
-              type="submit"
-              className={`tr-pbtn tr-pbtn-year${dashboardPeriod === dashboardCalendarYear ? ' tr-pbtn-active' : ''}`}
-              style={{ padding: '0.25rem 0.55rem', fontSize: '0.8rem' }}
-            >
-              View
-            </button>
+        {dashboardPeriod === 'custom' && (
+          <div className="g2-custom-range" role="group" aria-label="Custom dashboard date range">
+            <label>
+              <span>Start date</span>
+              <input
+                type="date"
+                value={customStart}
+                max={customEnd || initialCustomDates.end}
+                onChange={e => setCustomStart(e.target.value)}
+              />
+            </label>
+            <label>
+              <span>End date</span>
+              <input
+                type="date"
+                value={customEnd}
+                min={customStart || undefined}
+                max={initialCustomDates.end}
+                onChange={e => setCustomEnd(e.target.value)}
+              />
+            </label>
           </div>
-        </form>
+        )}
       </div>
 
       {/* Summary cards */}
@@ -722,8 +722,8 @@ export default function TotalReturn() {
         <h2 style={{ marginBottom: '0.5rem' }}>Performance Comparison</h2>
         <p className="tr-note">
           Select the entire portfolio, individual holdings, and/or external tickers to compare side by side. Normalized to 100 at start.
-          This chart uses the page-wide Dashboard Date Range above. Rolling periods use broker-style calendar date-to-date boundaries;
-          the calendar-year choice covers January 1 through December 31.
+          This chart uses the page-wide Dashboard Date Range above. All starts with the portfolio&apos;s first recorded trade,
+          and Custom uses the inclusive dates you enter.
         </p>
 
         <div className="growth-filters" style={{ marginBottom: '1rem' }}>
