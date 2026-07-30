@@ -24,12 +24,12 @@ const num = value => {
 // would contradict the card the user just clicked.
 const entryPrice = leg => num(leg?.mid) ?? num(leg?.ask) ?? num(leg?.bid) ?? 0
 
-const optionLeg = (leg, side, optType, expiration, strike) => {
+const optionLeg = (leg, side, optType, expiration, strike, qty = 1) => {
   const value = num(strike) ?? num(leg?.strike)
   if (!value || value <= 0 || !expiration) return null
   return {
     side,
-    qty: 1,
+    qty: Math.max(1, Math.round(num(qty) ?? 1)),
     opt_type: optType,
     strike: value,
     expiration,
@@ -123,6 +123,16 @@ const BUILDERS = {
       optionLeg(condor.call_leg_long, 'BUY', 'CALL', condor.expiration, condor.call_long_strike),
     ])
   },
+
+  'unbalanced-put-condor': row => {
+    if (!row?.expiration) return null
+    return trade(row, 'unbalanced put condor', [
+      optionLeg(row.upper_long_leg, 'BUY', 'PUT', row.expiration, row.upper_long_strike, row.bought_quantity),
+      optionLeg(row.upper_short_leg, 'SELL', 'PUT', row.expiration, row.upper_short_strike, row.bought_quantity),
+      optionLeg(row.lower_short_leg, 'SELL', 'PUT', row.expiration, row.lower_short_strike, row.sold_quantity),
+      optionLeg(row.lower_long_leg, 'BUY', 'PUT', row.expiration, row.lower_long_strike, row.sold_quantity),
+    ])
+  },
 }
 
 /** The suggested trade as risk-graph legs, or null when the row has no option trade. */
@@ -132,7 +142,13 @@ export function buildScannerTrade(kind, row) {
   const built = build(row)
   // A partial structure would draw a payoff the scanner never suggested.
   if (!built) return null
-  const expected = { 'bull-put-spread': 2, 'bear-put-spread': 2, 'bear-call-spread': 2, 'iron-condor': 4 }[kind]
+  const expected = {
+    'bull-put-spread': 2,
+    'bear-put-spread': 2,
+    'bear-call-spread': 2,
+    'iron-condor': 4,
+    'unbalanced-put-condor': 4,
+  }[kind]
   if (expected && built.legs.length !== expected) return null
   return built
 }
@@ -166,7 +182,9 @@ export function buildScannerStrategyPayload(kind, row, source) {
     origin: 'scanner',
     scanner_kind: kind,
     scanner_source: source || null,
-    scanner_key: scannerTradeKey(kind, built.ticker),
+    scanner_key: row?.scanner_variant
+      ? `${scannerTradeKey(kind, built.ticker)}:${String(row.scanner_variant).toLowerCase()}`
+      : scannerTradeKey(kind, built.ticker),
     legs: built.legs.map((leg, index) => ({
       group_id: 0,
       included: true,

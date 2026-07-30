@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import PriceChartModal from '../components/PriceChartModal'
 import RiskGraphButton from '../components/RiskGraphButton'
+import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
 
 const STORAGE_KEY = 'put-scanner-filters'
@@ -687,6 +688,7 @@ export default function PutSellingScanner() {
         Finds stocks and ETFs that have fallen further than their own volatility justifies, then rates
         them as candidates for selling cash-secured puts.
       </p>
+      <ScannerRiskNotice />
 
       {showHelp && <HelpPanel />}
 

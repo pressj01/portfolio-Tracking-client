@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import PriceChartModal from '../components/PriceChartModal'
 import RiskGraphButton from '../components/RiskGraphButton'
+import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
 
 const STORAGE_KEY = 'bull-put-spread-scanner-filters'
@@ -408,6 +409,7 @@ export default function BullPutSpreadScanner() {
         Finds healthy stocks and ETFs in controlled pullbacks, then sells an out-of-the-money put spread with
         defined risk, adequate credit, a real breakeven cushion, and a two-sided market on both legs.
       </p>
+      <ScannerRiskNotice />
       {showHelp && <HelpPanel />}
 
       <div style={{

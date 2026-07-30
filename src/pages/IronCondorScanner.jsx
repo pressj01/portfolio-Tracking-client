@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import PriceChartModal from '../components/PriceChartModal'
 import RiskGraphButton from '../components/RiskGraphButton'
+import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
 
 const STORAGE_KEY = 'iron-condor-scanner-filters'
@@ -524,6 +525,7 @@ export default function IronCondorScanner() {
         sells a four-leg condor with defined risk, both breakevens outside the expected move, and a balanced
         pair of short strikes.
       </p>
+      <ScannerRiskNotice />
       {showHelp && <HelpPanel />}
 
       <div style={{

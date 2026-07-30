@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import PriceChartModal from '../components/PriceChartModal'
 import RiskGraphButton from '../components/RiskGraphButton'
+import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
 
 const STORAGE_KEY = 'call-scanner-filters'
@@ -815,6 +816,7 @@ export default function CoveredCallScanner() {
         stall</em>, then rates them as candidates for selling covered calls. Overbought alone is not the signal &mdash;
         a name still breaking out is the one that runs through your strike.
       </p>
+      <ScannerRiskNotice />
 
       {showHelp && <HelpPanel />}
 

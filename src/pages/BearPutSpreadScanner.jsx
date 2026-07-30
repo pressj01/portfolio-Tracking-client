@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import PriceChartModal from '../components/PriceChartModal'
 import RiskGraphButton from '../components/RiskGraphButton'
+import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
 
 const STORAGE_KEY = 'bear-put-spread-scanner-filters'
@@ -947,6 +948,7 @@ export default function BearPutSpreadScanner() {
         each. Whatever just crashed is the wrong answer &mdash; that is the Put Selling Scanner&rsquo;s setup, and
         buying downside into it means paying peak volatility for a move already made.
       </p>
+      <ScannerRiskNotice />
 
       {showHelp && <HelpPanel />}
 

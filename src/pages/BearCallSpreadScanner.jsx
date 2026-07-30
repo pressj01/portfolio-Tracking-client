@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import PriceChartModal from '../components/PriceChartModal'
 import RiskGraphButton from '../components/RiskGraphButton'
+import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
 
 const STORAGE_KEY = 'bear-call-spread-scanner-filters'
@@ -1067,6 +1068,7 @@ export default function BearCallSpreadScanner() {
         Scanner&rsquo;s setup, and without the shares behind it a rally through the strike is a cash loss rather than
         a capped gain.
       </p>
+      <ScannerRiskNotice />
 
       {showHelp && <HelpPanel />}
 
