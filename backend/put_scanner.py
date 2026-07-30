@@ -24,9 +24,10 @@ Endpoints:
 from __future__ import annotations
 
 import math
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -151,6 +152,12 @@ ALL_ETF_UNIVERSE = INDEX_ETF_UNIVERSE + SECTOR_ETF_UNIVERSE
 INDEX_ETF_SET = frozenset(INDEX_ETF_UNIVERSE)
 SECTOR_ETF_SET = frozenset(SECTOR_ETF_UNIVERSE)
 
+# Tickers known to be single companies before any network call. The price stage
+# uses this to decide which thresholds to apply; anything in neither this set nor
+# the ETF sets (a holding, a watchlist name, a custom ticker) is unknown until
+# `.info` comes back in stage 2. See the gating note in run_put_scan.
+CURATED_STOCK_SET = frozenset(LARGE_CAP_UNIVERSE) | frozenset(MID_CAP_UNIVERSE)
+
 BENCHMARK = "SPY"
 
 UNIVERSE_CHOICES = {
@@ -167,15 +174,47 @@ UNIVERSE_CHOICES = {
 }
 
 # Leveraged and inverse funds decay and gap in ways a cash-secured put seller is
-# not compensated for. Detected by name so holdings/watchlist/custom scans catch
-# them too, not just the curated lists (which contain none).
-_LEVERAGED_HINTS = (
-    "2X", "3X", "ULTRA", "ULTRASHORT", "LEVERAGED", "INVERSE", "BEAR", "BULL",
-    "-1X", "DAILY 2", "DAILY 3", "SHORT ", "DOUBLE", "TRIPLE",
+# not compensated for. Detected by name and category so holdings/watchlist/custom
+# scans catch them too, not just the curated lists (which contain none).
+#
+# The detection is two-tier on purpose. Plain substring hints do not work here:
+# "SHORT" and "ULTRA" are duration words as often as leverage words, so hints
+# like "SHORT " and "ULTRA" classified the entire short-duration bond complex as
+# leveraged — SHY ("Short Government"), BIL, JPST and ICSH ("Ultrashort Bond")
+# were all silently dropped from every scan, and those are exactly the funds a
+# real portfolio holds.
+#
+# Tier 1 is unambiguous leverage language, including the Morningstar/Yahoo
+# "Trading--Leveraged" / "Trading--Inverse" categories that every real leveraged
+# ETF carries. Tier 2 is the ambiguous wording, and only counts when the string
+# does not also read as a bond-duration description.
+_LEVERAGE_STRONG_RE = re.compile(
+    r"\b-?[23]X\b"
+    r"|\b-1X\b"
+    r"|\bULTRAPRO\b"
+    r"|\bLEVERAGED\b"
+    r"|\bINVERSE\b"
+    r"|\bDOUBLE\b|\bTRIPLE\b"
+    r"|\b(?:BEAR|BULL)\s*-?[123]\s*X\b"
+    r"|\bTRADING\W+(?:LEVERAGED|INVERSE)\b"
 )
+_LEVERAGE_WEAK_RE = re.compile(r"\bULTRA\b|\bULTRASHORT\b|\bSHORT\b")
+_BOND_DURATION_RE = re.compile(
+    r"\b(?:ULTRA[\s-]?SHORT|SHORT)[\s-]?"
+    r"(?:TERM|DURATION|MATURITY|GOVERNMENT|CREDIT|CORPORATE|TREASURY|BOND|MUNI)"
+)
+
+
+def _reads_as_leveraged(text: str) -> bool:
+    """True when a fund's name/category describes leverage or an inverse."""
+    if _LEVERAGE_STRONG_RE.search(text):
+        return True
+    return bool(_LEVERAGE_WEAK_RE.search(text)) and not _BOND_DURATION_RE.search(text)
 
 RISK_FREE = 0.0375
 TRADING_DAYS = 252
+MIN_TARGET_DTE = 1
+MAX_TARGET_DTE = 1095
 
 # ---------------------------------------------------------------------------
 # Caches
@@ -230,6 +269,59 @@ def _parse_date(value) -> date | None:
         return None
 
 
+def _ts_to_iso(value) -> str | None:
+    """Yahoo returns dividend dates as a unix timestamp; keep them as ISO days."""
+    ts = _num(value)
+    if ts is None or ts <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _quoted_spread_pct(bid, ask, mid) -> float | None:
+    """Bid/ask width as a percentage of the mid, or None when unquotable.
+
+    Returns None rather than a number for a crossed or one-sided quote (ask below
+    bid, or either side missing), which Yahoo does return on stale chains. The old
+    `ask - bid` arithmetic turned those into a *negative* spread, which then
+    sailed through every "is this tight enough" comparison.
+    """
+    b, a, m = _num(bid), _num(ask), _num(mid)
+    if b is None or a is None or m is None or m <= 0:
+        return None
+    if b <= 0 or a <= 0 or a < b:
+        return None
+    return (a - b) / m * 100.0
+
+
+def dividend_yield_for_pricing(fund: dict, price: float | None) -> float:
+    """Continuous dividend yield (decimal) for the Black-Scholes carry term.
+
+    Derived from dollars per share over price rather than Yahoo's
+    `dividendYield` field, which is genuinely ambiguous: current yfinance
+    returns it in percent (AAPL 0.32 meaning 0.32%), older versions returned a
+    decimal, and a "divide by 100 only if > 1" heuristic silently mis-reads
+    every sub-1% payer as a 32%-yield stock — which distorts delta and so picks
+    the wrong strike. Dollars per share has no such ambiguity.
+    """
+    px = _num(price)
+    if px and px > 0:
+        for key in ("dividend_rate", "trailing_annual_dividend_rate"):
+            rate = _num(fund.get(key))
+            if rate is not None and rate > 0:
+                return min(0.5, rate / px)
+
+    # No per-share figure available. The reported yield is percent in current
+    # yfinance, so scale it once; clamped because a bad unit here is worse than
+    # ignoring the carry term entirely.
+    reported = _num(fund.get("dividend_yield"))
+    if reported is None or reported <= 0:
+        return 0.0
+    return min(0.5, reported / 100.0)
+
+
 def _is_fund(fund: dict, ticker: str = "") -> bool:
     """True for ETFs and mutual funds, which have AUM instead of a market cap."""
     quote_type = str(fund.get("quote_type") or "").upper()
@@ -248,7 +340,7 @@ def _fund_kind(ticker: str, fund: dict) -> str:
     be sunk by one company's bad quarter, while a narrow thematic fund can.
     """
     name = f"{fund.get('name') or ''} {fund.get('category') or ''}".upper()
-    if any(hint in name for hint in _LEVERAGED_HINTS) and "SHORT TERM" not in name:
+    if _reads_as_leveraged(name):
         return "leveraged"
     if ticker in INDEX_ETF_SET:
         return "index"
@@ -302,6 +394,41 @@ def _atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14):
         (low - prev_close).abs(),
     ], axis=1).max(axis=1)
     return _num(tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean().iloc[-1])
+
+
+def window_stretch(log_ret: pd.Series, lookback_days: int) -> dict | None:
+    """Size the recent move against the volatility that came before it.
+
+    Shared by both option scanners, because the subtlety here decides whether
+    either screen discriminates at all: the baseline sigma is measured from the
+    period *before* the window. Letting the move itself into its own yardstick
+    collapses every name toward ~1σ and the ranking stops meaning anything.
+
+    `stretch_sigma` is signed for a decline (positive = fell that many sigma),
+    which is what the put screen wants; the call screen negates it.
+    """
+    n = min(lookback_days, len(log_ret) - 1)
+    if n < 5:
+        return None
+
+    window_log_ret = float(log_ret.iloc[-n:].sum())
+
+    baseline = log_ret.iloc[:-n]
+    if len(baseline) < 40:
+        baseline = log_ret
+    sigma_d = _num(baseline.std())
+    if not sigma_d or sigma_d <= 0:
+        return None
+
+    root_n = math.sqrt(n)
+    return {
+        "n": n,
+        "window_log_ret": window_log_ret,
+        "window_pct": (math.exp(window_log_ret) - 1.0) * 100.0,
+        "sigma_d": sigma_d,
+        "expected_move_pct": sigma_d * root_n * 100.0,
+        "stretch_sigma": -window_log_ret / (sigma_d * root_n),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -387,25 +514,16 @@ def _compute_technicals(sub: pd.DataFrame, bench_ret, lookback_days: int) -> dic
         return None
 
     log_ret = np.log(close / close.shift(1)).dropna()
-    n = min(lookback_days, len(log_ret) - 1)
-    if n < 5:
+    # Baseline vol comes from before the window — see window_stretch.
+    ws = window_stretch(log_ret, lookback_days)
+    if ws is None:
         return None
-
-    # Return over the decline window.
-    window_log_ret = float(log_ret.iloc[-n:].sum())
-    window_pct = (math.exp(window_log_ret) - 1.0) * 100.0
-
-    # Baseline volatility from BEFORE the window, so the crash itself does not
-    # inflate the yardstick we are measuring the crash against.
-    baseline = log_ret.iloc[:-n]
-    if len(baseline) < 40:
-        baseline = log_ret
-    sigma_d = _num(baseline.std())
-    if not sigma_d or sigma_d <= 0:
-        return None
-
-    expected_move_pct = sigma_d * math.sqrt(n) * 100.0
-    stretch_sigma = -window_log_ret / (sigma_d * math.sqrt(n))
+    n = ws["n"]
+    window_log_ret = ws["window_log_ret"]
+    window_pct = ws["window_pct"]
+    sigma_d = ws["sigma_d"]
+    expected_move_pct = ws["expected_move_pct"]
+    stretch_sigma = ws["stretch_sigma"]
 
     # Drawdown from the 52-week high, and how many sigma that drop represents
     # over the number of sessions it actually took.
@@ -545,6 +663,12 @@ def _fetch_fundamentals(ticker: str) -> dict:
         "dividend_yield": None, "target_mean_price": None, "quote_type": None,
         "next_earnings": None, "total_assets": None, "category": None,
         "fund_family": None, "expense_ratio": None,
+        # Dividend detail. The put screen only needs the yield for the carry
+        # term, but the covered-call screen needs the dates and the per-payment
+        # amount to judge early assignment, and both share this cache.
+        "dividend_rate": None, "trailing_annual_dividend_rate": None,
+        "last_dividend_value": None, "ex_dividend_date": None,
+        "last_dividend_date": None,
     }
     try:
         tk = yf.Ticker(ticker)
@@ -561,6 +685,11 @@ def _fetch_fundamentals(ticker: str) -> dict:
             "forward_pe": _num(info.get("forwardPE")),
             "trailing_pe": _num(info.get("trailingPE")),
             "dividend_yield": _num(info.get("dividendYield")),
+            "dividend_rate": _num(info.get("dividendRate")),
+            "trailing_annual_dividend_rate": _num(info.get("trailingAnnualDividendRate")),
+            "last_dividend_value": _num(info.get("lastDividendValue")),
+            "ex_dividend_date": _ts_to_iso(info.get("exDividendDate")),
+            "last_dividend_date": _ts_to_iso(info.get("lastDividendDate")),
             "target_mean_price": _num(info.get("targetMeanPrice")),
             "quote_type": info.get("quoteType"),
             # Funds report size as AUM; marketCap comes back empty for them.
@@ -677,6 +806,27 @@ def _pick_expiration(expirations: list[str], target_dte: int, min_dte: int, max_
     return best[1], best[2], bool(clearing)
 
 
+def _earnings_within_target_window(
+    earnings_date,
+    target_dte: int,
+    buffer_days: int = 0,
+    *,
+    as_of: date | None = None,
+) -> bool:
+    """True when a report conflicts with the requested trade horizon.
+
+    The Target DTE control is a trade-horizon decision, not permission to
+    substitute a near-expiration contract.  When the earnings skip is enabled,
+    a stock with a report inside that horizon (plus the safety buffer) is
+    removed before any option-chain lookup.
+    """
+    earnings_d = _parse_date(earnings_date)
+    if not earnings_d:
+        return False
+    days = (earnings_d - (as_of or date.today())).days
+    return 0 <= days <= max(0, int(target_dte)) + max(0, int(buffer_days))
+
+
 def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
                  target_delta: float, min_dte: int, max_dte: int,
                  earnings_date: str | None = None, earnings_buffer_days: int = 5) -> dict | None:
@@ -728,8 +878,7 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
     premium_yield = mid / strike * 100.0
     annualized = premium_yield * (365.0 / dte_eff)
     effective_basis = strike - mid
-    spread = pick["ask"] - pick["bid"]
-    spread_pct = (spread / pick["mid"] * 100.0) if pick["mid"] > 0 else None
+    spread_pct = _quoted_spread_pct(pick["bid"], pick["ask"], pick["mid"])
 
     return {
         "expiration": expiration,
@@ -765,6 +914,11 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
 # ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
+# Named so the partial-score denominator stays in step with what the chain
+# actually contributes. Premium is the only axis that needs a live chain, so a
+# row without one is rated on the other 75 points.
+PREMIUM_MAX = 25.0
+
 
 def score_candidate(tech: dict, fund: dict, put: dict | None,
                     earnings_buffer_days: int = 5) -> dict:
@@ -945,7 +1099,7 @@ def score_candidate(tech: dict, fund: dict, put: dict | None,
     # still less actionable than a priced one, so run_put_scan ranks it below
     # every candidate that did get a chain rather than letting the smaller
     # denominator float it to the top.
-    scored_max = 100.0 if put else 75.0
+    scored_max = 100.0 if put else (100.0 - PREMIUM_MAX)
     normalized = total / scored_max * 100.0
     if put is None:
         flags.append("Option chain unavailable")
@@ -1002,9 +1156,16 @@ def recommend_buyback(put: dict | None, rating: dict | None) -> dict | None:
     score = _num(rating.get("score"), 0.0) or 0.0
     grade = str(rating.get("grade") or "")
     prob_otm = _num(put.get("prob_otm"))
-    delta = abs(_num(put.get("delta"), 1.0) or 1.0)
-    dte = max(1, int(_num(put.get("dte"), 1) or 1))
-    spread_pct = _num(put.get("spread_pct"), 100.0) or 100.0
+    delta_raw = _num(put.get("delta"))
+    delta = abs(delta_raw) if delta_raw is not None else 1.0
+    dte_raw = _num(put.get("dte"))
+    dte = max(1, int(dte_raw)) if dte_raw is not None else 1
+    # `or 100.0` would be wrong here: a perfectly tight market quotes 0.0, and
+    # treating that as a 100% spread demoted the best-quoted setups on the board
+    # to "Defensive". Only a genuinely missing spread means "assume the worst".
+    spread_pct = _num(put.get("spread_pct"))
+    if spread_pct is None:
+        spread_pct = 100.0
     open_interest = int(_num(put.get("open_interest"), 0) or 0)
     flags = set(rating.get("flags") or [])
     material_risk_flags = {
@@ -1236,8 +1397,10 @@ DEFAULTS = {
     "exclude_earnings_before_expiry": True,
     "earnings_buffer_days": 5,
     "target_dte": 35,
-    "min_dte": 14,
-    "max_dte": 70,
+    # Target DTE is user-controlled, so the implicit API window must not cap it.
+    # Explicit callers can still provide narrower min/max bounds when needed.
+    "min_dte": MIN_TARGET_DTE,
+    "max_dte": MAX_TARGET_DTE,
     "target_delta": 0.25,
     "chain_limit": 20,
     "max_results": 40,
@@ -1256,9 +1419,12 @@ def run_put_scan(payload: dict) -> dict:
     fund_min_aum = max(0.0, _num(p["fund_min_aum"], 0.0) or 0.0)
     max_rsi = _num(p["max_rsi"], 100.0) or 100.0
     min_adv = _num(p["min_avg_dollar_volume"], 0.0) or 0.0
-    target_dte = max(1, int(_num(p["target_dte"], 35)))
-    min_dte = max(1, int(_num(p["min_dte"], 14)))
-    max_dte = max(min_dte, int(_num(p["max_dte"], 70)))
+    target_dte = max(
+        MIN_TARGET_DTE,
+        min(MAX_TARGET_DTE, int(_num(p["target_dte"], 35))),
+    )
+    min_dte = max(MIN_TARGET_DTE, int(_num(p["min_dte"], MIN_TARGET_DTE)))
+    max_dte = max(min_dte, int(_num(p["max_dte"], MAX_TARGET_DTE)))
     target_delta = min(0.9, max(0.01, _num(p["target_delta"], 0.25) or 0.25))
     earnings_buffer = max(0, min(30, int(_num(p["earnings_buffer_days"], 5))))
     chain_limit = max(0, min(60, int(_num(p["chain_limit"], 20))))
@@ -1294,11 +1460,24 @@ def run_put_scan(payload: dict) -> dict:
             continue
         priced += 1
 
-        looks_like_fund = ticker in etf_hint
+        # A curated ticker is known to be a fund (or a company) before any network
+        # call, so the right floor can be applied here. Anything else — a holding,
+        # a watchlist name, a custom ticker — is unknown until `.info` comes back
+        # in stage 2, and gating it on the stock floors silently dropped every ETF
+        # a user actually holds: SCHD or JEPI almost never falls 12% from its high,
+        # so a holdings scan quietly hid the whole fund side of the portfolio.
+        # Unknown tickers therefore clear the *looser* of the two floors here and
+        # are re-checked against the correct one once _is_fund can answer.
         drop = -(tech.get("drawdown_pct") or 0.0)
-        if drop < (fund_min_drop if looks_like_fund else min_drop):
-            continue
-        if (tech.get("stretch_sigma") or 0.0) < (fund_min_stretch if looks_like_fund else min_stretch):
+        stretch = tech.get("stretch_sigma") or 0.0
+        if ticker in etf_hint:
+            drop_floor, stretch_floor = fund_min_drop, fund_min_stretch
+        elif ticker in CURATED_STOCK_SET:
+            drop_floor, stretch_floor = min_drop, min_stretch
+        else:
+            drop_floor = min(min_drop, fund_min_drop)
+            stretch_floor = min(min_stretch, fund_min_stretch)
+        if drop < drop_floor or stretch < stretch_floor:
             continue
         rsi = tech.get("rsi_14")
         if rsi is not None and rsi > max_rsi:
@@ -1319,15 +1498,23 @@ def run_put_scan(payload: dict) -> dict:
         ticker = tech["ticker"]
         fund = fundamentals.get(ticker, {})
         is_fund = _is_fund(fund, ticker)
+        drop = -(tech.get("drawdown_pct") or 0.0)
+        stretch = tech.get("stretch_sigma") or 0.0
 
         # A fund reports AUM, not a market cap, and has no earnings or margins
         # to be profitable with — applying the stock gates would drop them all.
+        # The drop/stretch floors are re-applied here because the price stage can
+        # only guess at which set a non-curated ticker belongs to.
         if is_fund:
+            if drop < fund_min_drop or stretch < fund_min_stretch:
+                continue
             if fund_min_aum and (_num(fund.get("total_assets")) or 0.0) < fund_min_aum:
                 continue
             if p["exclude_leveraged_funds"] and _fund_kind(ticker, fund) == "leveraged":
                 continue
         else:
+            if drop < min_drop or stretch < min_stretch:
+                continue
             if min_cap and (_num(fund.get("market_cap")) or 0.0) < min_cap:
                 continue
             if p["require_profitable"]:
@@ -1338,6 +1525,22 @@ def run_put_scan(payload: dict) -> dict:
                     continue
         survivors.append((tech, fund))
 
+    passed_fundamentals = len(survivors)
+    dropped_for_earnings = 0
+    if p["exclude_earnings_before_expiry"]:
+        kept = []
+        for tech, fund in survivors:
+            if (
+                not _is_fund(fund, tech["ticker"])
+                and _earnings_within_target_window(
+                    fund.get("next_earnings"), target_dte, earnings_buffer
+                )
+            ):
+                dropped_for_earnings += 1
+                continue
+            kept.append((tech, fund))
+        survivors = kept
+
     # Provisional score without the chain, to choose who gets a chain lookup.
     survivors.sort(
         key=lambda pair: -score_candidate(pair[0], pair[1], None)["score"]
@@ -1347,9 +1550,7 @@ def run_put_scan(payload: dict) -> dict:
 
     def _chain_for(pair):
         tech, fund = pair
-        div_y = _num(fund.get("dividend_yield")) or 0.0
-        if div_y > 1.0:      # yfinance sometimes reports percent, sometimes decimal
-            div_y /= 100.0
+        div_y = dividend_yield_for_pricing(fund, tech.get("price"))
         try:
             return _suggest_put(
                 tech["ticker"], tech["price"], div_y,
@@ -1367,7 +1568,6 @@ def run_put_scan(payload: dict) -> dict:
                 puts[pair[0]["ticker"]] = put
 
     rows = []
-    dropped_for_earnings = 0
     for tech, fund in survivors:
         put = puts.get(tech["ticker"])
         rating = score_candidate(tech, fund, put, earnings_buffer_days=earnings_buffer)
@@ -1434,7 +1634,7 @@ def run_put_scan(payload: dict) -> dict:
             "universe": len(tickers),
             "priced": priced,
             "passed_price": len(price_pass),
-            "passed_fundamentals": len(survivors),
+            "passed_fundamentals": passed_fundamentals,
             "chains_fetched": sum(1 for v in puts.values() if v),
             "dropped_for_earnings": dropped_for_earnings,
             "final": len(rows),

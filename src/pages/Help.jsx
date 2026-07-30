@@ -23,6 +23,9 @@ const GROUPS = [
     sections: [
       { id: 'options', label: 'Options' },
       { id: 'put-selling-scanner', label: 'Put Selling Scanner' },
+      { id: 'bull-put-spread-scanner', label: 'Bull Put Spread Scanner' },
+      { id: 'covered-call-scanner', label: 'Covered Call Scanner' },
+      { id: 'bear-put-spread-scanner', label: 'Bear Put Spread Scanner' },
     ],
   },
   {
@@ -6102,12 +6105,10 @@ function PutSellingScannerHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Staying clear of earnings</h3>
       <p style={{ marginBottom: '1rem' }}>
         A single earnings report can gap a stock straight through your strike, so the scanner treats it as an event to
-        avoid rather than merely warn about. When a candidate has a report coming up, it first tries to find a
-        <em> different</em> expiration inside your days-to-expiration window that closes before the announcement, with a
-        few days&rsquo; buffer &mdash; typically stepping down to a shorter-dated contract. Only if no expiration can
-        clear the date is the candidate dropped (with <strong>Skip earnings inside trade</strong> on, which is the
-        default). The <strong>Earnings</strong> column shows days until the next report and whether the suggested
-        expiration clears it, and the trade panel spells out the margin.
+        avoid rather than merely warn about. With <strong>Skip earnings inside trade</strong> on, a stock is removed
+        when its next report falls within Target DTE plus the safety buffer. The scanner will not replace the requested
+        trade with a near-expiration contract just to get out before the announcement. The
+        <strong> Earnings</strong> column shows the next known report for candidates that remain.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Price chart popup</h3>
@@ -6157,6 +6158,340 @@ function PutSellingScannerHelp() {
       <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
         If a scan returns nothing, that is usually correct rather than broken. In a market near its highs very few
         quality names are meaningfully dislocated. Lower the minimum drop or stretch, or widen the universe.
+      </div>
+    </div>
+  )
+}
+
+function CoveredCallScannerHelp() {
+  return (
+    <div>
+      <h2>Covered Call Scanner</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Covered Call Scanner is the mirror of the Put Selling Scanner, but the trade is not symmetric, so the entry
+        test is not simply the same screen flipped over. It looks for stocks and ETFs that have already made their move
+        <em> and are starting to stall</em>, then rates each one as a candidate for selling a covered call, suggests a
+        specific strike and expiration, and shows both what you are paid and what you give up.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Why &ldquo;overbought&rdquo; on its own is the wrong screen
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Selling a covered call trades the upside above the strike for a premium collected today. It wins when the
+        underlying goes sideways or drifts down, and it loses its whole point when the underlying keeps running: the
+        shares are called away and you watch the rest of the move without owning it.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        That is why screening purely for overbought names backfires. The strongest momentum names carry the fattest
+        premium <em>because</em> they keep going up. This scanner therefore requires three conditions at once &mdash; the
+        move has already happened, the options are genuinely overpriced rather than merely expensive-looking, and the
+        advance is cooling rather than accelerating. A name printing fresh 52-week highs scores zero on the Stall axis
+        and is excluded by default, exactly as a name printing fresh lows is excluded from the put screen.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        What &ldquo;already made its move&rdquo; means here
+      </h3>
+      <p style={{ marginBottom: '1rem' }}>
+        A 15% rally means very different things for a utility and a semiconductor stock, so nothing is ranked on the raw
+        advance. For each name the scanner measures the daily volatility of the period <em>before</em> the run, works out
+        how far that name would ordinarily travel over the lookback window, and expresses the actual advance as a
+        multiple of it. That is the <strong>Stretch</strong> column, in standard deviations (&sigma;). The measure is
+        shared with the Put Selling Scanner so the two screens cannot drift apart. <strong>vs Market</strong> subtracts
+        the market&rsquo;s move times beta, and <strong>% of Range</strong> shows where the price sits between its
+        52-week low and high.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How candidates are scored</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Overextension (30 points)</strong> — stretch from 1&sigma; to 3&sigma; earns 0&ndash;12 points; sitting 60&ndash;100% of the way up the 52-week range earns 0&ndash;6; standing 0.5&ndash;3.0 ATRs above the 50-day average earns 0&ndash;6; and a 2&ndash;15% beta-unexplained advance earns 0&ndash;6.</li>
+        <li><strong>Premium (25 points)</strong> — IV/RV from 1.0 to 1.6 earns 0&ndash;14 points; the IV-rank proxy from 30 to 80 earns 0&ndash;6; and an 8&ndash;30% annualized static return earns 0&ndash;5. Earnings before expiry subtract 6 premium points.</li>
+        <li><strong>Stall (20 points)</strong> — not making a fresh 52-week high earns 7 points; a 0&ndash;4% pullback off the 10-day high earns 0&ndash;5; 0&ndash;8 percentage points of deceleration earns 0&ndash;4; and sitting 1&ndash;10% below the 52-week high earns 0&ndash;4.</li>
+        <li><strong>Trade terms (25 points)</strong> — underlying size (4) and share liquidity (4) need no option chain. The rest does: a 10&ndash;40% annualized if-called return earns 0&ndash;6, 2&ndash;12% of upside room earns 0&ndash;5, the chain&rsquo;s spread and open interest earn 0&ndash;4, and freedom from dividend-driven early assignment earns 0&ndash;2.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Grades are <strong>A &ge; 80, B &ge; 70, C &ge; 60, D &ge; 50</strong>, otherwise F, and the bands are calibrated
+        against the Put Selling Scanner so a C means the same thing on both screens. There is no Quality axis here: a
+        covered call is written on shares you already hold, so the question is whether the option market is real rather
+        than whether the business is one to be assigned into. If no option chain is available, the 58 points that did
+        not need one are rescaled and the grade gets an asterisk; those provisional scores always sort below fully
+        priced candidates.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Small caps</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        The universe dropdown offers <strong>Small caps only</strong>, <strong>Mid + small caps</strong>, and
+        <strong> Large + mid + small caps</strong> &mdash; lists the Put Selling Scanner deliberately does not carry.
+        Selling a put means agreeing to be assigned into the business, so a small cap has to clear a quality bar first;
+        writing a call means selling upside on shares you already hold, where a small cap&rsquo;s much richer implied
+        volatility is the whole attraction. The real risk is <em>option</em> liquidity rather than company size, since
+        plenty of small caps list a chain that cannot actually be traded &mdash; so <strong>Min $ volume</strong> does
+        the important filtering, the chain&rsquo;s spread and open interest are scored directly, and thin names collect
+        the <em>Illiquid</em> and <em>Small</em> warnings. Because the large-cap floor would drop every small cap
+        outright, they are measured against a separate <strong>Small-cap min cap</strong> figure, the same way funds are
+        measured on AUM. The <strong>Small caps</strong> preset also asks for more room above the strike and a lower
+        delta, since these names gap harder than a mega cap.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Your shares and your cost basis</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Your holdings are the default universe, because only a position you actually hold has a share count and a cost
+        basis to check the strike against. The <strong>Shares</strong> column shows the shares held and how many
+        contracts that supports &mdash; one per 100 shares, so a 60-share position supports none, and
+        <strong> Only where I hold 100+ shares</strong> filters the scan down to positions you can write against today.
+        With <strong>Keep strike above my cost basis</strong> on (the default) the scanner only considers strikes at or
+        above your average cost, since being called away below what you paid turns a premium into a realized loss. If no
+        strike above your basis has a live bid it falls back to the best available contract and flags
+        <strong> Below basis</strong> rather than hiding the candidate. Basis follows the cost-basis mode selected in the
+        header and is derived from shares times price per share.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The two ways you lose the shares</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Earnings.</strong> A single report can gap the underlying straight through your strike, handing away the
+        exact move you hold it for. With <strong>Skip earnings inside trade</strong> on, a stock is removed when its
+        next report falls within Target DTE plus the safety buffer. The scanner will not substitute a near-expiration
+        call to get out before the report. ETFs read &ldquo;no earnings&rdquo;.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Ex-dividend early assignment.</strong> This risk has no equivalent when selling puts. A call holder
+        exercises early only to capture a dividend, and only once the option&rsquo;s remaining <em>extrinsic</em> value is
+        worth less than that dividend. So when an ex-dividend date falls inside the trade, the scanner compares the
+        dividend against the credit collected: under a quarter of it is noted, half or more is flagged as a real risk,
+        and a dividend larger than the whole premium is flagged as likely assignment. In that case the management plan
+        tells you to close or roll <em>before</em> the ex-date rather than at expiry. Ex-dates that have not yet been
+        declared are projected from the payment frequency and labelled <em>estimated</em>.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The suggested call and the management plan</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        For the highest-rated candidates the scanner pulls the live chain, takes the expiration closest to your target
+        DTE, and picks the call nearest your target delta that is at least your minimum distance out of the money. A
+        0.30 delta is the conventional covered-call target: enough premium to be worth writing, roughly a 70% chance of
+        keeping the shares. <strong>Ann. Return</strong> is the credit against the value of the shares committed if the
+        underlying goes nowhere; <strong>If Called</strong> adds the capital gain up to the strike, which is the capped
+        best case. The expanded row also gives the effective sale price, the downside breakeven, and the gain against
+        your own basis if the shares are called.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Buy Back At</strong> is a success-oriented exit: a limit to close early, keeping most of the credit while
+        removing the assignment risk that the last of the premium pays for &mdash; 70% of the credit for strong liquid
+        setups, 65% for balanced ones, 60% for anything carrying a warning. <strong>Defend At</strong> is the strike:
+        reach it with time left and the shares are genuinely in play, so the choice is to roll up and out for a net
+        credit or to let them go and bank the capped gain.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Start with <strong>My holdings</strong> (the default), and tick <strong>Only where I hold 100+ shares</strong> to see nothing but writable positions.</li>
+        <li>Add <strong>Index ETFs</strong> or <strong>Sector &amp; commodity ETFs</strong> with the independent Include checkboxes; an ETF-only scan skips the stock universe and finishes in a few seconds.</li>
+        <li>Pick a <strong>preset</strong> (Conservative, Balanced, Aggressive) or set the filters yourself.</li>
+        <li>Click <strong>Run Scan</strong>. The first run pulls a year of history and takes roughly 20&ndash;40 seconds; the price cache is shared with the Put Selling Scanner, so running one after the other is much faster.</li>
+        <li>Click any row for the score breakdown, the full trade, the management plan, the extension metrics, and the dividend and earnings detail.</li>
+        <li>Click the ticker to pull up its price chart with moving averages, MACD, and RSI.</li>
+      </ol>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
+        <strong>No trades execute here.</strong> The scanner rates setups from public market data. Scores are not
+        advice. A covered call caps your upside at the strike and does almost nothing to protect the downside &mdash; you
+        keep the credit, but you still own every dollar of a decline below it. Writing calls on shares you are not
+        willing to sell is the most common way this trade goes wrong.
+      </div>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        If a scan returns nothing, that is usually correct rather than broken. In a flat or falling market very few
+        names are meaningfully extended. Lower the minimum run, stretch, or RSI, widen the universe, or untick
+        <strong> Only where I hold 100+ shares</strong>.
+      </div>
+    </div>
+  )
+}
+
+function BullPutSpreadScannerHelp() {
+  return (
+    <div>
+      <h2>Bull Put Spread Scanner</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        This scanner adapts the Put Selling Scanner to a defined-risk credit spread. It looks for liquid, financially
+        sound stocks and ETFs in a healthy longer-term trend that have pulled back without breaking down. For each
+        candidate it sells a higher-strike put and buys a lower-strike put in the same expiration.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Why the entry screen is different from cash-secured puts
+      </h3>
+      <p style={{ marginBottom: '1rem' }}>
+        A cash-secured put can justify targeting a severe dislocation because assignment is an intended outcome. A
+        bull put spread has a fixed loss below the long strike and works best when support holds, so its default screen
+        is narrower: an orderly pullback, price above the 200-day average, RSI that is soft but not exhausted, and no
+        fresh 52-week low. The scanner keeps the Put Selling Scanner&rsquo;s business-quality checks, then adds
+        spread-specific safety and execution tests.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Trade math and hard gates
+      </h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Maximum profit</strong> is the credit received.</li>
+        <li><strong>Maximum loss</strong> is the strike width minus the credit.</li>
+        <li><strong>Breakeven</strong> at expiration is the short strike minus the credit.</li>
+        <li><strong>Return on risk</strong> is credit divided by maximum loss; the annualized figure is included only for comparison, not as a forecast.</li>
+        <li>The default scan requires live, uncrossed quotes on both legs, a positive natural credit, enough credit and downside cushion, minimum open interest on the thinner leg, and tolerable two-leg execution cost.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Actionable versus watchlist
+      </h3>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Actionable Spreads</strong> meet every price, quality, event, liquidity, and structure gate.
+        With the earnings skip enabled, a stock whose report falls within Target DTE plus the safety buffer is removed
+        entirely. <strong>Watchlist Candidates</strong> remain visible when the chain is unavailable or no spread clears
+        every hard gate. A relaxed fallback is never promoted to the actionable table.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Management</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        The result includes a buy-back target that captures roughly 50&ndash;65% of the original credit, a defensive
+        debit near twice the credit, a DTE checkpoint, and a default instruction to close before the final three days.
+        Short puts can be assigned before expiration, and pin risk rises near expiration, so the page treats monitoring
+        and an early closing plan as part of the setup rather than an afterthought.
+      </p>
+
+      <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+        The scanner is a research and ranking tool, not an order ticket. Verify the quotes as one vertical limit order,
+        check earnings and other events again before entry, and size from maximum loss rather than the credit received.
+      </div>
+    </div>
+  )
+}
+
+function BearPutSpreadScannerHelp() {
+  return (
+    <div>
+      <h2>Bear Put Spread Scanner</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The third screen in the options family, and the only one where you <em>pay</em> rather than collect. A bear put
+        spread buys a higher-strike put and sells a lower-strike put in the same expiration: the debit is the entire
+        risk, the width minus the debit is the entire reward, and the trade only pays if the underlying actually falls
+        to the short strike. The scanner finds names whose breakdown has <em>started but not finished</em>, then prices
+        a specific vertical on each one.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Why this is not the Put Selling Scanner run backwards
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Both obvious screens are wrong, and each one is wrong by being another scanner&rsquo;s screen. &ldquo;Find
+        whatever just crashed and buy puts&rdquo; is precisely the Put Selling Scanner&rsquo;s setup &mdash; a name
+        down three standard deviations, deeply oversold, printing fresh 52-week lows, is where put <em>sellers</em> get
+        paid for taking the bounce. Buying downside there means paying peak implied volatility for the last leg of a
+        move already made. &ldquo;Buy puts on whatever looks overbought&rdquo; is the Covered Call Scanner&rsquo;s
+        setup, and it fails the same way that screen fails: the strongest names keep going up.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        So this screen asks for the awkward middle. Trend structure has genuinely turned and the name is
+        underperforming the market with momentum still rolling over, but it is not yet spent. Names at fresh lows are
+        excluded by default, and the size of the decline is scored as a <strong>band</strong> rather than a ramp:
+        roughly 1&ndash;2&sigma; earns full credit and credit falls away above 2.5&sigma;, because past that you are
+        paying for a move that is behind you. That single inversion is the difference between this screen and the put
+        screen read upside-down.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How candidates are scored</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Breakdown (30 points)</strong> — trend structure is worth 12: below the 50-day (4), the 20-day under the 50-day (3), the 50-day under the 200-day (3), and a break less than 15 sessions old (2). Relative weakness of 1&ndash;12pp earns 0&ndash;8. Momentum rolling over earns up to 6 &mdash; 3&ndash;20 points of RSI decline earns 0&ndash;4, plus 2 for a lower high. The last 4 come from the decline-size band.</li>
+        <li><strong>Room to fall (20 points)</strong> — the payoff is capped at the short strike, so distance has to be left. Sitting 5&ndash;40% above the 52-week low earns 0&ndash;8; 25&ndash;80% of the way up the 52-week range earns 0&ndash;6; and a band on the drawdown gives the last 6, peaking between 6% and 25% off the high.</li>
+        <li><strong>Structure (30 points)</strong> — needs a live chain. Reward-to-risk from 1:1 to 3:1 earns 0&ndash;9. A band on the required move earns 0&ndash;8, peaking where the short strike sits about 0.65&ndash;1.10 expected moves away. Edge from &minus;15% to +40% earns 0&ndash;8. A put-skew ratio from 1.00 to 1.25 earns 0&ndash;5. Earnings before expiry subtract 6.</li>
+        <li><strong>Executability (20 points)</strong> — underlying size (4) and share liquidity (4) need no chain. The rest does: combined two-leg slippage from 40% down to 8% of the debit earns 0&ndash;7, and open interest on the thinner leg earns 0&ndash;5.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Grades are <strong>A &ge; 80, B &ge; 70, C &ge; 60, D &ge; 50</strong>, otherwise F, calibrated against the
+        other two option screens so a C means the same thing on all three. A grade with an asterisk and a dashed
+        outline had no option chain, so it is rescaled from the 58 points that could still be scored &mdash; the same
+        partial budget the Covered Call Scanner uses &mdash; and partial scores always sort below fully priced ones.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Edge: what the spread is worth versus what it costs
+      </h3>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Edge</strong> compares the debit against what the vertical would be worth if the stock simply kept
+        moving the way it has actually been moving &mdash; priced off its own <em>realized</em> volatility, with no
+        assumed direction at all. Positive means the market is charging less than the name&rsquo;s own movement
+        justifies; negative means you are overpaying, which is the usual state of affairs after a scare. The comparison
+        is deliberately direction-neutral so it cannot double-count the bearish thesis that Breakdown already scores,
+        and it is why there is no separate implied-versus-realized term: a spread priced off inflated implied
+        volatility simply fails to beat the realized-volatility value. Note that <strong>IV/RV</strong> reads the
+        opposite way here than on the two selling screens &mdash; on this screen you are the buyer, so above 1.0 is a
+        cost and it is coloured red.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Strike selection and the two-leg fill
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Rather than mechanically taking &ldquo;the 50-delta and the 25-delta&rdquo;, the scanner enumerates every
+        plausible strike pair inside your delta bands and width window, then picks the best. A vertical has two free
+        parameters that trade directly against each other &mdash; pay more for a nearer target, or less for one
+        further away &mdash; and which end wins depends on the chain&rsquo;s skew and liquidity, not on a rule of
+        thumb. <strong>Needs</strong> reports the distance to the short strike both as a percentage and as a multiple
+        of the move this name would ordinarily make over the life of the trade; above about 2&sigma; the target is a
+        lottery ticket however good the reward-to-risk looks.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        A covered call or cash-secured put crosses one bid/ask spread. A vertical crosses two, and both come out of
+        the debit. <strong>Slippage</strong> adds the width of both quotes as a share of what you are paying: at 8% it
+        is noise, at 30% it has quietly turned a 2:1 reward-to-risk into something nearer 1.4:1. Only strikes where
+        <em> both</em> sides of the market are live and uncrossed are considered, because a one-sided quote makes the
+        whole debit fictional.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Managing the trade</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Take profit at</strong> is set as a share of <em>max profit</em> rather than of a credit, because
+        there is no credit &mdash; 75% for strong setups, 65% for balanced, 50% for anything carrying a warning.
+        Holding for the last slice requires the stock to sit still through the most gamma-sensitive stretch of the
+        trade. <strong>Stop at</strong> is a discipline stop even though the risk is already capped: recovering half
+        the debit funds the next attempt. <strong>Reassess by</strong> is a time stop &mdash; a directional debit
+        spread that has not worked by the time decay bites is a wrong thesis, not an early one. And
+        <strong> Invalidate above</strong> names the level that kills the reason for the trade: a close back above the
+        nearest moving average the stock just lost.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Hedging what you own</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        The <strong>Shares</strong> column shows any position you hold and how many contracts would cover it, one per
+        100 shares. That is the screen&rsquo;s second use: when a holding breaks down, a bear put spread defines the
+        downside for a known, capped cost instead of selling the position and triggering a taxable gain. It is a
+        partial hedge only &mdash; protection stops at the short strike, and the debit is spent whether or not the
+        stock falls. The <strong>Hedge my holdings</strong> preset scans your own positions and loosens the
+        relative-weakness and fresh-low gates, since for a hedge what matters is that <em>this</em> position is
+        falling, not that it is falling faster than the market.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Pick a <strong>preset</strong>. Conservative wants a confirmed downtrend and a cheap, reachable spread; <strong>Hedge my holdings</strong> scans what you already own.</li>
+        <li>Add <strong>Index ETFs</strong> or <strong>Sector &amp; commodity ETFs</strong> with the independent Include checkboxes; an ETF-only scan finishes in seconds.</li>
+        <li>Set <strong>Target DTE</strong> to anything from a few days to a LEAP &mdash; the scanner takes the listed expiration nearest to it and nothing clips your choice.</li>
+        <li>Click <strong>Run Scan</strong>. The first run pulls a year of history and takes roughly 20&ndash;40 seconds; the price <em>and</em> option-chain caches are shared with the Put Selling Scanner, so running one after the other is much faster.</li>
+        <li>Click any row for the score breakdown, both legs with their quotes, the exit plan, and the breakdown metrics.</li>
+        <li>Click the ticker to pull up its price chart with moving averages, MACD, and RSI.</li>
+      </ol>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
+        <strong>No trades execute here.</strong> The scanner rates setups from public market data. Scores are not
+        advice. A bear put spread is a directional bet that expires: unlike selling premium, time works against you
+        every day, and the entire debit is lost if the stock simply goes nowhere. Both selling screens can be wrong
+        and still profit; this one cannot.
+      </div>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        If a scan returns nothing, that is usually correct rather than broken &mdash; the gates here are deliberately
+        narrow, and in a rising market very few names qualify. Lower <strong>Min vs market</strong>, widen the RSI
+        band, untick <strong>Require 50-day below 200-day</strong>, or widen the universe. If candidates appear but
+        none get a spread, loosen <strong>Max debit</strong> or <strong>Min R:R</strong>.
       </div>
     </div>
   )
@@ -7741,6 +8076,9 @@ const CONTENT_MAP = {
   'action-center': ActionCenterHelp,
   options: OptionsHelp,
   'put-selling-scanner': PutSellingScannerHelp,
+  'bull-put-spread-scanner': BullPutSpreadScannerHelp,
+  'covered-call-scanner': CoveredCallScannerHelp,
+  'bear-put-spread-scanner': BearPutSpreadScannerHelp,
   import: ImportHelp,
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,

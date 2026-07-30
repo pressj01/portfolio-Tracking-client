@@ -141,6 +141,49 @@ class ExpirationTests(unittest.TestCase):
         self.assertEqual(chosen, self._exp(35))
         self.assertTrue(cleared)
 
+    def test_default_window_does_not_cap_a_long_dated_target(self):
+        """The UI only sends target_dte, so backend defaults must allow it to move."""
+        exps = [self._exp(35), self._exp(63), self._exp(124)]
+        chosen, dte, _ = ps._pick_expiration(
+            exps,
+            120,
+            ps.DEFAULTS["min_dte"],
+            ps.DEFAULTS["max_dte"],
+        )
+        self.assertEqual(chosen, self._exp(124))
+        self.assertEqual(dte, 124)
+
+
+class EarningsTargetWindowTests(unittest.TestCase):
+    def setUp(self):
+        self.as_of = date(2026, 7, 29)
+
+    def test_report_inside_target_horizon_is_excluded(self):
+        earnings = self.as_of + timedelta(days=15)
+        self.assertTrue(ps._earnings_within_target_window(
+            earnings, 60, 5, as_of=self.as_of,
+        ))
+
+    def test_buffer_is_part_of_the_exclusion_window(self):
+        earnings = self.as_of + timedelta(days=65)
+        self.assertTrue(ps._earnings_within_target_window(
+            earnings, 60, 5, as_of=self.as_of,
+        ))
+
+    def test_report_beyond_target_and_buffer_is_clear(self):
+        earnings = self.as_of + timedelta(days=66)
+        self.assertFalse(ps._earnings_within_target_window(
+            earnings, 60, 5, as_of=self.as_of,
+        ))
+
+    def test_missing_or_stale_report_is_not_a_conflict(self):
+        self.assertFalse(ps._earnings_within_target_window(
+            None, 60, 5, as_of=self.as_of,
+        ))
+        self.assertFalse(ps._earnings_within_target_window(
+            self.as_of - timedelta(days=1), 60, 5, as_of=self.as_of,
+        ))
+
 
 class ScoringTests(unittest.TestCase):
     def base_tech(self, **over):
