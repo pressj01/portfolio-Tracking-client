@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import PriceChartModal from '../components/PriceChartModal'
+import RiskGraphButton from '../components/RiskGraphButton'
+import { useScanCache } from '../utils/useScanCache'
 
 const STORAGE_KEY = 'bull-put-spread-scanner-filters'
 
@@ -185,7 +187,10 @@ function DetailRow({ row, colSpan }) {
   return (
     <tr>
       <td colSpan={colSpan} style={{ padding: '0.8rem', background: 'var(--surface-sunken)' }}>
-        <p style={{ margin: '0 0 0.7rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>{row.verdict}</p>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
+          <RiskGraphButton kind="bull-put-spread" row={row} source="Bull Put Spread Scanner" />
+        </div>
+        <p style={{ maxWidth: '1100px', margin: '0 0 0.7rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>{row.verdict}</p>
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 0.7fr) minmax(420px, 2fr)', gap: '1rem' }}>
           <div>
             <ScoreBar label="Setup" value={row.components?.setup} max={30} />
@@ -265,10 +270,11 @@ export default function BullPutSpreadScanner() {
     }
   })
   const [universes, setUniverses] = useState([])
-  const [rows, setRows] = useState([])
-  const [watchlistRows, setWatchlistRows] = useState([])
-  const [stats, setStats] = useState(null)
-  const [asOf, setAsOf] = useState(null)
+  const [cachedScan, saveScan] = useScanCache('bull-put-spread')
+  const [rows, setRows] = useState(cachedScan?.rows || [])
+  const [watchlistRows, setWatchlistRows] = useState(cachedScan?.watchlist_rows || [])
+  const [stats, setStats] = useState(cachedScan?.stats || null)
+  const [asOf, setAsOf] = useState(cachedScan?.as_of || null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [expanded, setExpanded] = useState(null)
@@ -276,7 +282,7 @@ export default function BullPutSpreadScanner() {
   const [sortCol, setSortCol] = useState('score')
   const [sortAsc, setSortAsc] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
-  const [hasScanned, setHasScanned] = useState(false)
+  const [hasScanned, setHasScanned] = useState(Boolean(cachedScan))
 
   useEffect(() => {
     pf('/api/options/bull-put-spread-scan/universes')
@@ -311,10 +317,14 @@ export default function BullPutSpreadScanner() {
         setStats(data.stats || null)
         setAsOf(data.as_of || null)
         setHasScanned(true)
+        saveScan({
+          rows: data.rows || [], watchlist_rows: data.watchlist_rows || [],
+          stats: data.stats || null, as_of: data.as_of || null,
+        })
       })
       .catch(scanError => setError(scanError.message))
       .finally(() => setLoading(false))
-  }, [pf, filters])
+  }, [pf, filters, saveScan])
 
   const sortedRows = useMemo(() => {
     const accessor = SORT_ACCESSORS[sortCol] || (row => row[sortCol])

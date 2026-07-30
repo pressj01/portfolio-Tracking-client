@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '../config'
 import { useTheme } from '../context/ThemeContext'
 import { assignBrokerImportSides, mapBrokerOptionUnderlying, parseBrokerOptionDescriptor } from '../utils/brokerOptions'
 import { chartTheme } from '../utils/chartTheme'
 import { resizeOptionStructure } from '../utils/optionsStrategy'
+import { scannerTradeKey, takeScannerTrade } from '../utils/optionTradeHandoff'
 import GreekSurfaceExplorer from '../components/GreekSurfaceExplorer'
 import OptionBacktest from '../components/OptionBacktest'
 
@@ -52,6 +54,7 @@ const addDays = (dateString, days) => {
 }
 const uniqueId = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
 const OPTION_CHAIN_COLUMN_PREF_KEY = 'options_chain_visible_columns_v1'
+const RISK_PRICE_CHART_PREF_KEY = 'options_risk_price_chart_v1'
 const CHAIN_COLUMNS = [
   { id: 'last', label: 'Last', name: 'Last price', tip: 'Most recent traded option price' },
   { id: 'mid', label: 'Mark', name: 'Mark / midpoint', tip: 'Midpoint of the bid and ask' },
@@ -890,6 +893,7 @@ function ChainCells({ contract, itm, onAdd, optType, columns }) {
 }
 
 export default function OptionTradingTools() {
+  const navigate = useNavigate()
   const [workspace, setWorkspace] = useState('trades')
   const [tickerInput, setTickerInput] = useState('SPY')
   const [ticker, setTicker] = useState('SPY')
@@ -958,6 +962,11 @@ export default function OptionTradingTools() {
   const [brokerChartError, setBrokerChartError] = useState('')
   const [brokerChartRefresh, setBrokerChartRefresh] = useState(0)
 
+  const [scannerTrade, setScannerTrade] = useState(null)
+  const [showRiskPriceChart, setShowRiskPriceChart] = useState(() => {
+    try { return localStorage.getItem(RISK_PRICE_CHART_PREF_KEY) === 'on' } catch { return false }
+  })
+
   const loadSavedStrategies = useCallback(() => {
     return fetchJson('/api/options/strategies')
       .then(setSavedStrategies)
@@ -965,6 +974,11 @@ export default function OptionTradingTools() {
   }, [])
 
   useEffect(() => { loadSavedStrategies() }, [loadSavedStrategies])
+  const stagedScannerStrategy = useMemo(() => {
+    if (!scannerTrade?.kind) return null
+    const key = scannerTradeKey(scannerTrade.kind, ticker)
+    return savedStrategies.find(strategy => strategy.scanner_key === key) || null
+  }, [savedStrategies, scannerTrade?.kind, ticker])
   useEffect(() => {
     try { localStorage.setItem(OPTION_CHAIN_COLUMN_PREF_KEY, JSON.stringify(chainColumnIds)) } catch { /* optional preference */ }
   }, [chainColumnIds])
@@ -1028,6 +1042,38 @@ export default function OptionTradingTools() {
       .finally(() => { if (!cancelled) setChainLoading(false) })
     return () => { cancelled = true }
   }, [ticker, selectedExpiration, marketRefresh])
+
+  // A scanner staged its suggested trade before navigating here. Load it as the
+  // active position so the risk profile and the strike lines on the price chart
+  // describe the exact trade the user clicked.
+  useEffect(() => {
+    const staged = takeScannerTrade()
+    if (!staged) return
+    setScannerTrade(staged)
+    setTicker(staged.ticker)
+    setTickerInput(staged.ticker)
+    setLegs(staged.legs.map(leg => ({
+      local_id: uniqueId(),
+      included: true,
+      side: leg.side,
+      qty: Math.max(1, Number(leg.qty) || 1),
+      opt_type: leg.opt_type,
+      strike: Number(leg.strike) || 0,
+      expiration: leg.expiration || '',
+      entry_price: Number(leg.entry_price) || 0,
+      iv: leg.opt_type === 'STOCK' ? null : Number(leg.iv) || 0.2,
+      iv_adjustment: 0,
+      delta: leg.delta ?? (leg.opt_type === 'STOCK' ? 1 : null),
+    })))
+    setStrategyId(null)
+    setStrategyName(staged.name || `${staged.ticker} scanner trade`)
+    setNotes(staged.source ? `Suggested by the ${staged.source}.` : '')
+    setChainTargetLegId(null)
+    setEvaluationDate(TODAY())
+    setVolatilityShift(0)
+    setShowRiskPriceChart(true)
+    setWorkspace('risk')
+  }, [])
 
   const loadMonthChain = useCallback(async expiration => {
     if (!ticker || !expiration) return null
@@ -1110,8 +1156,9 @@ export default function OptionTradingTools() {
     return [leg.local_id, strikes]
   })), [activeOptionLegs, monthChains, chain])
   const chainTargetLeg = useMemo(() => legs.find(leg => leg.local_id === chainTargetLegId) || null, [legs, chainTargetLegId])
+  const wantsPriceChart = workspace === 'moneyness' || (workspace === 'risk' && showRiskPriceChart)
   useEffect(() => {
-    if (workspace !== 'moneyness' || !ticker || !activeOptionLegs.length) return undefined
+    if (!wantsPriceChart || !ticker || !activeOptionLegs.length) return undefined
     const controller = new AbortController()
     setBrokerChartLoading(true)
     setBrokerChartError('')
@@ -1125,7 +1172,10 @@ export default function OptionTradingTools() {
       })
       .finally(() => { if (!controller.signal.aborted) setBrokerChartLoading(false) })
     return () => controller.abort()
-  }, [workspace, ticker, activeOptionLegs.length, brokerChartPeriod, brokerChartRefresh])
+  }, [wantsPriceChart, ticker, activeOptionLegs.length, brokerChartPeriod, brokerChartRefresh])
+  useEffect(() => {
+    try { localStorage.setItem(RISK_PRICE_CHART_PREF_KEY, showRiskPriceChart ? 'on' : 'off') } catch { /* optional preference */ }
+  }, [showRiskPriceChart])
   useEffect(() => {
     const missingExpirations = [...new Set(activeOptionLegs.map(leg => leg.expiration).filter(expiration => expiration && !monthChains[expiration]))]
     missingExpirations.forEach(expiration => {
@@ -1674,9 +1724,17 @@ export default function OptionTradingTools() {
         entry_price: Number(leg.entry_price) || 0, iv_override: isStockLeg(leg) ? null : modeledLegIv(leg), sort_order: index,
       })),
     }
+    if (scannerTrade?.kind) {
+      payload.origin = 'scanner'
+      payload.scanner_kind = scannerTrade.kind
+      payload.scanner_source = scannerTrade.source || null
+      payload.scanner_key = scannerTradeKey(scannerTrade.kind, ticker)
+    }
     try {
-      if (strategyId) {
-        await fetchJson(`/api/options/strategies/${strategyId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const savedId = strategyId || stagedScannerStrategy?.id
+      if (savedId) {
+        await fetchJson(`/api/options/strategies/${savedId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        setStrategyId(savedId)
         setSaveStatus(`Updated ${payload.name}`)
       } else {
         const created = await fetchJson('/api/options/strategies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
@@ -1702,6 +1760,11 @@ export default function OptionTradingTools() {
       opt_type: leg.opt_type, strike: leg.strike, expiration: leg.expiration,
       entry_price: leg.entry_price ?? 0, iv: isStockLeg(leg) ? null : leg.iv_override ?? 0.2, iv_adjustment: 0, delta: isStockLeg(leg) ? 1 : null,
     })))
+    setScannerTrade(strategy.origin === 'scanner' ? {
+      kind: strategy.scanner_kind,
+      source: strategy.scanner_source,
+      scanner_key: strategy.scanner_key,
+    } : null)
     setEvaluationDate(TODAY())
     setVolatilityShift(0)
     setChainTargetLegId(null)
@@ -1729,6 +1792,7 @@ export default function OptionTradingTools() {
     setEvaluationDate(TODAY())
     setVolatilityShift(0)
     setChainTargetLegId(null)
+    setScannerTrade(null)
     setSaveStatus('New strategy')
     setWorkspace('trades')
   }
@@ -1777,7 +1841,9 @@ export default function OptionTradingTools() {
         </div>
         {!['greeks', 'backtest'].includes(workspace) && <div className="opt-save-actions">
           <button type="button" className="btn btn-secondary" onClick={newStrategy}>New</button>
-          <button type="button" className="btn btn-primary" onClick={saveStrategy} disabled={!legs.length}>{strategyId ? 'Update strategy' : 'Save strategy'}</button>
+          <button type="button" className="btn btn-primary" onClick={saveStrategy} disabled={!legs.length}>
+            {strategyId || stagedScannerStrategy ? (scannerTrade?.kind ? 'Update saved trade' : 'Update strategy') : (scannerTrade?.kind ? 'Save scanner trade' : 'Save strategy')}
+          </button>
           {saveStatus && <span>{saveStatus}</span>}
         </div>}
       </div>
@@ -1787,8 +1853,8 @@ export default function OptionTradingTools() {
         <label><span>Pricing model</span><select value={model} onChange={event => setModel(event.target.value)}><option value="black-scholes">Black–Scholes</option><option value="bjerksund-stensland">Bjerksund–Stensland</option></select></label>
         <label><span>Rate</span><div className="opt-suffix-input"><input type="number" step="0.05" value={ratePct} onChange={event => setRatePct(event.target.value)} /><b>%</b></div></label>
         <label className="opt-notes-field"><span>Learning notes</span><input value={notes} onChange={event => setNotes(event.target.value)} placeholder="What are you testing?" /></label>
-        <label><span>Saved scenarios</span><select aria-label="Saved strategy" value={strategyId == null ? '' : String(strategyId)} onChange={event => { const saved = savedStrategies.find(item => String(item.id) === event.target.value); if (saved) loadStrategy(saved) }}><option value="" disabled>Select a saved strategy…</option>{savedStrategies.map(item => <option key={item.id} value={item.id}>{item.name} · {item.underlying}</option>)}</select></label>
-        {strategyId && <button type="button" className="opt-delete-saved" onClick={() => { const saved = savedStrategies.find(item => item.id === strategyId); if (saved) deleteStrategy(saved) }}>Delete strategy</button>}
+        <label><span>Saved trades &amp; scenarios</span><select aria-label="Saved strategy" value={strategyId == null ? '' : String(strategyId)} onChange={event => { const saved = savedStrategies.find(item => String(item.id) === event.target.value); if (saved) loadStrategy(saved) }}><option value="" disabled>Select a saved trade or strategy…</option>{savedStrategies.map(item => <option key={item.id} value={item.id}>{item.origin === 'scanner' ? `Scanner trade · ${item.name} · expires ${formatExpiration(item.expires_on)}` : `${item.name} · ${item.underlying}`}</option>)}</select></label>
+        {strategyId && <button type="button" className="opt-delete-saved" onClick={() => { const saved = savedStrategies.find(item => item.id === strategyId); if (saved) deleteStrategy(saved) }}>{scannerTrade?.kind ? 'Delete saved trade' : 'Delete strategy'}</button>}
       </section>}
 
       {workspace === 'greeks' ? (
@@ -1996,6 +2062,22 @@ export default function OptionTradingTools() {
         </section>
       ) : (
         <section className={`card opt-risk-workspace${riskLoading && risk ? ' is-repricing' : ''}`} aria-busy={riskLoading}>
+          {scannerTrade && <div className="opt-scanner-handoff">
+            <div>
+              <strong>{scannerTrade.name}</strong>
+              <span>
+                Loaded from the {scannerTrade.source || 'scanner'}. Legs are entered at the mid quotes the scan
+                priced, so the profile below matches the numbers on the scanner card. Edit quantity, strikes or
+                entry price in the position table to explore variations.
+              </span>
+            </div>
+            <div className="opt-scanner-handoff-actions">
+              {scannerTrade.return_to && <button type="button" className="is-back" onClick={() => navigate(scannerTrade.return_to)}>
+                ← Back to the {scannerTrade.source || 'scanner'}
+              </button>}
+              <button type="button" onClick={() => setScannerTrade(null)}>Dismiss</button>
+            </div>
+          </div>}
           <div className="opt-risk-controls">
             <label><span>Analysis date</span><input type="date" min={TODAY()} max={analysisHorizon} value={evaluationDate} onInput={event => setBoundedEvaluationDate(event.target.value)} onChange={event => setBoundedEvaluationDate(event.target.value)} /></label>
             <label className="opt-time-slider"><span>Move through time · day {evaluationOffset} of {evolutionDays}</span><input type="range" min="0" max={evolutionDays} value={evaluationOffset} onInput={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} onChange={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} /></label>
@@ -2057,6 +2139,30 @@ export default function OptionTradingTools() {
               {!!positionStrikes.length && <div className="opt-position-strikes"><strong>Position strikes</strong>{positionStrikes.map(strike => <span key={strike}>{money(strike)}</span>)}</div>}
               {strikeStructure && <div className="opt-structure-drag-hint"><span aria-hidden="true">↔</span><span>Drag either blue strike handle to widen or narrow the entire structure around <strong>{money(strikeStructure.center)}</strong>.</span></div>}
               <RiskChart result={risk} evaluationDate={evaluationDate} strikeStructure={strikeStructure} positionStrikes={positionStrikes} onResizeStructure={resizeLegStructure} onAdjustProbabilityBoundary={adjustProbabilityBoundary} />
+              {!!activeOptionLegs.length && <div className="opt-risk-price-panel">
+                <div className="opt-slice-heading">
+                  <div><span>Price vs strikes</span><h3>Where {ticker} sits against every strike in the position</h3></div>
+                  <div className="opt-broker-chart-controls">
+                    {showRiskPriceChart && <>
+                      <div className="opt-period-buttons" role="group" aria-label="Price chart period">
+                        {[['1mo', '1M'], ['3mo', '3M'], ['6mo', '6M'], ['1y', '1Y']].map(([value, label]) => <button key={value} type="button" className={brokerChartPeriod === value ? 'active' : ''} onClick={() => setBrokerChartPeriod(value)}>{label}</button>)}
+                      </div>
+                      <div className="opt-period-buttons" role="group" aria-label="Price chart type">
+                        <button type="button" className={brokerChartType === 'line' ? 'active' : ''} onClick={() => setBrokerChartType('line')}>Line</button>
+                        <button type="button" className={brokerChartType === 'candlestick' ? 'active' : ''} onClick={() => setBrokerChartType('candlestick')}>Candle</button>
+                      </div>
+                    </>}
+                    <button type="button" onClick={() => setShowRiskPriceChart(value => !value)} aria-expanded={showRiskPriceChart}>
+                      {showRiskPriceChart ? 'Hide price chart' : 'Show price chart'}
+                    </button>
+                  </div>
+                </div>
+                {showRiskPriceChart && <>
+                  {brokerChartLoading && <div className="opt-calculating">Loading {brokerChartPeriod.toUpperCase()} price history…</div>}
+                  {brokerChartError && <div className="opt-error">{brokerChartError}</div>}
+                  {!!brokerChartRecords.length && <BrokerMoneynessChart ticker={ticker} spot={spot} legs={activeOptionLegs} records={brokerChartRecords} chartType={brokerChartType} />}
+                </>}
+              </div>}
               <div className="opt-slice-heading"><div><span>Price slices</span><h3>Greeks and modeled P/L at selected prices</h3></div><div className="opt-slice-inputs">{sliceOffsets.map((offset, index) => <label key={index}><input type="number" value={offset} onChange={event => setSliceOffsets(values => values.map((value, current) => current === index ? Number(event.target.value) : value))} /><span>%</span></label>)}</div></div>
               <div className="opt-table-wrap"><table className="opt-slices-table"><thead><tr><th>Underlying</th><th>Move</th><th>Delta</th><th>Gamma</th><th>Theta</th><th>Vega</th><th>P/L open</th><th>1-day theta</th></tr></thead><tbody>{(risk.price_slices || []).map((slice, index) => <tr key={`${slice.s}-${index}`}><td>{money(slice.s)}</td><td>{Number(sliceOffsets[index]) > 0 ? '+' : ''}{sliceOffsets[index]}%</td><td>{fmt(slice.delta, 3)}</td><td>{fmt(slice.gamma, 4)}</td><td>{fmt(slice.theta, 2)}</td><td>{fmt(slice.vega, 2)}</td><td className={Number(slice.pnl_open) >= 0 ? 'opt-positive' : 'opt-negative'}>{signedMoney(slice.pnl_open)}</td><td className={Number(slice.pnl_day) >= 0 ? 'opt-positive' : 'opt-negative'}>{signedMoney(slice.pnl_day)}</td></tr>)}</tbody></table></div>
             </>

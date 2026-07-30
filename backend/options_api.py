@@ -16,6 +16,7 @@ Endpoints:
 from __future__ import annotations
 
 import math
+import sqlite3
 import time
 from datetime import datetime, date, timedelta
 from statistics import NormalDist
@@ -39,6 +40,91 @@ _CHAIN_TTL = 30          # seconds
 _quote_cache: dict[str, tuple[float, dict]] = {}
 _exp_cache: dict[str, tuple[float, list[str]]] = {}
 _chain_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+
+
+def _purge_expired_scanner_strategies(conn, as_of: date | None = None) -> int:
+    """Delete scanner-saved trades after their last option expiration."""
+    cutoff = (as_of or date.today()).isoformat()
+    rows = conn.execute(
+        """
+        SELECT id
+        FROM option_strategies
+        WHERE origin = 'scanner'
+          AND expires_on IS NOT NULL
+          AND expires_on < ?
+        """,
+        (cutoff,),
+    ).fetchall()
+    strategy_ids = [int(row["id"]) for row in rows]
+    if not strategy_ids:
+        return 0
+    placeholders = ",".join("?" for _ in strategy_ids)
+    conn.execute(
+        f"DELETE FROM option_strategy_legs WHERE strategy_id IN ({placeholders})",
+        strategy_ids,
+    )
+    conn.execute(
+        f"DELETE FROM option_strategies WHERE id IN ({placeholders})",
+        strategy_ids,
+    )
+    conn.commit()
+    return len(strategy_ids)
+
+
+def _strategy_origin_fields(
+    payload: dict,
+    underlying: str,
+    legs: list[dict],
+    existing=None,
+) -> dict:
+    """Validate and derive scanner-only persistence metadata."""
+    existing_origin = existing["origin"] if existing is not None else "manual"
+    origin = str(payload.get("origin", existing_origin) or "manual").strip().lower()
+    if origin not in {"manual", "scanner"}:
+        raise ValueError("origin must be manual or scanner")
+    if origin == "manual":
+        return {
+            "origin": "manual",
+            "scanner_kind": None,
+            "scanner_source": None,
+            "scanner_key": None,
+            "expires_on": None,
+        }
+
+    existing_kind = existing["scanner_kind"] if existing is not None else None
+    existing_source = existing["scanner_source"] if existing is not None else None
+    scanner_kind = str(
+        payload.get("scanner_kind", existing_kind) or ""
+    ).strip().lower()
+    scanner_source = str(
+        payload.get("scanner_source", existing_source) or ""
+    ).strip() or None
+    if not scanner_kind:
+        raise ValueError("scanner_kind is required for scanner trades")
+
+    expirations = []
+    for leg in legs:
+        if str(leg.get("opt_type") or "").strip().upper() == "STOCK":
+            continue
+        expiration = str(leg.get("expiration") or "").strip()
+        try:
+            parsed = datetime.strptime(expiration, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError("scanner option legs require YYYY-MM-DD expirations") from exc
+        expirations.append(parsed)
+    if not expirations:
+        raise ValueError("scanner trades require at least one expiring option leg")
+
+    expires_on = max(expirations)
+    if expires_on < date.today():
+        raise ValueError("cannot save a scanner trade after its DTE has passed")
+    return {
+        "origin": "scanner",
+        "scanner_kind": scanner_kind,
+        "scanner_source": scanner_source,
+        "scanner_key": f"{scanner_kind}:{underlying}",
+        "expires_on": expires_on.isoformat(),
+    }
 
 
 def _now() -> float:
@@ -1242,6 +1328,11 @@ def register_routes(app):
             'model': row['model'],
             'rate': row['rate'],
             'notes': row['notes'],
+            'origin': row['origin'],
+            'scanner_kind': row['scanner_kind'],
+            'scanner_source': row['scanner_source'],
+            'scanner_key': row['scanner_key'],
+            'expires_on': row['expires_on'],
             'created_date': row['created_date'],
             'updated_date': row['updated_date'],
             'legs': [dict(leg) for leg in legs],
@@ -1251,8 +1342,23 @@ def register_routes(app):
     def list_strategies():
         conn = get_connection()
         try:
+            _purge_expired_scanner_strategies(conn)
+            clauses = []
+            params = []
+            requested_origin = (request.args.get('origin') or '').strip().lower()
+            requested_key = (request.args.get('scanner_key') or '').strip()
+            if requested_origin:
+                if requested_origin not in {'manual', 'scanner'}:
+                    return jsonify(error='origin must be manual or scanner'), 400
+                clauses.append("origin = ?")
+                params.append(requested_origin)
+            if requested_key:
+                clauses.append("scanner_key = ?")
+                params.append(requested_key)
+            where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
             rows = conn.execute(
-                "SELECT * FROM option_strategies ORDER BY updated_date DESC"
+                f"SELECT * FROM option_strategies{where} ORDER BY updated_date DESC",
+                params,
             ).fetchall()
             out = []
             for row in rows:
@@ -1269,6 +1375,7 @@ def register_routes(app):
     def get_strategy(sid):
         conn = get_connection()
         try:
+            _purge_expired_scanner_strategies(conn)
             row = conn.execute(
                 "SELECT * FROM option_strategies WHERE id=?", (sid,)
             ).fetchone()
@@ -1310,21 +1417,47 @@ def register_routes(app):
         underlying = (data.get('underlying') or '').strip().upper()
         if not name or not underlying:
             return jsonify(error='name and underlying required'), 400
+        legs = data.get('legs') or []
+        try:
+            origin_fields = _strategy_origin_fields(data, underlying, legs)
+        except (TypeError, ValueError) as exc:
+            return jsonify(error=str(exc)), 400
         conn = get_connection()
         try:
+            _purge_expired_scanner_strategies(conn)
+            if origin_fields['scanner_key']:
+                existing = conn.execute(
+                    "SELECT id FROM option_strategies WHERE scanner_key=?",
+                    (origin_fields['scanner_key'],),
+                ).fetchone()
+                if existing:
+                    return jsonify(
+                        error='this scanner trade is already saved',
+                        id=existing['id'],
+                    ), 409
             cur = conn.execute("""
-                INSERT INTO option_strategies (name, underlying, model, rate, notes)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO option_strategies
+                (name, underlying, model, rate, notes, origin, scanner_kind,
+                 scanner_source, scanner_key, expires_on)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 name, underlying,
                 data.get('model') or 'black-scholes',
                 float(data.get('rate') if data.get('rate') is not None else 0.0375),
                 data.get('notes'),
+                origin_fields['origin'],
+                origin_fields['scanner_kind'],
+                origin_fields['scanner_source'],
+                origin_fields['scanner_key'],
+                origin_fields['expires_on'],
             ))
             sid = cur.lastrowid
-            _insert_legs(conn, sid, data.get('legs') or [])
+            _insert_legs(conn, sid, legs)
             conn.commit()
-            return jsonify(id=sid)
+            return jsonify(id=sid, expires_on=origin_fields['expires_on'])
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            return jsonify(error='this scanner trade is already saved'), 409
         finally:
             conn.close()
 
@@ -1333,34 +1466,74 @@ def register_routes(app):
         data = request.get_json(force=True) or {}
         conn = get_connection()
         try:
+            _purge_expired_scanner_strategies(conn)
             existing = conn.execute(
-                "SELECT id FROM option_strategies WHERE id=?", (sid,)
+                "SELECT * FROM option_strategies WHERE id=?", (sid,)
             ).fetchone()
             if not existing:
                 return jsonify(error='not found'), 404
 
+            underlying = (
+                (data.get('underlying') or '').strip().upper()
+                if 'underlying' in data
+                else existing['underlying']
+            )
+            if not underlying:
+                return jsonify(error='underlying is required'), 400
+            if 'name' in data and not str(data.get('name') or '').strip():
+                return jsonify(error='name is required'), 400
+            existing_legs = [
+                dict(row) for row in conn.execute(
+                    "SELECT * FROM option_strategy_legs WHERE strategy_id=? ORDER BY sort_order, id",
+                    (sid,),
+                ).fetchall()
+            ]
+            effective_legs = data.get('legs') if 'legs' in data else existing_legs
+            try:
+                origin_fields = _strategy_origin_fields(
+                    data,
+                    underlying,
+                    effective_legs or [],
+                    existing=existing,
+                )
+            except (TypeError, ValueError) as exc:
+                return jsonify(error=str(exc)), 400
+
             conn.execute("""
                 UPDATE option_strategies
                 SET name=COALESCE(?, name),
-                    underlying=COALESCE(?, underlying),
+                    underlying=?,
                     model=COALESCE(?, model),
                     rate=COALESCE(?, rate),
                     notes=COALESCE(?, notes),
+                    origin=?,
+                    scanner_kind=?,
+                    scanner_source=?,
+                    scanner_key=?,
+                    expires_on=?,
                     updated_date=CURRENT_TIMESTAMP
                 WHERE id=?
             """, (
-                data.get('name'),
-                (data.get('underlying') or '').upper() or None,
+                str(data.get('name')).strip() if 'name' in data else None,
+                underlying,
                 data.get('model'),
                 data.get('rate'),
                 data.get('notes'),
+                origin_fields['origin'],
+                origin_fields['scanner_kind'],
+                origin_fields['scanner_source'],
+                origin_fields['scanner_key'],
+                origin_fields['expires_on'],
                 sid,
             ))
             if 'legs' in data:
                 conn.execute("DELETE FROM option_strategy_legs WHERE strategy_id=?", (sid,))
                 _insert_legs(conn, sid, data['legs'] or [])
             conn.commit()
-            return jsonify(ok=True)
+            return jsonify(ok=True, expires_on=origin_fields['expires_on'])
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            return jsonify(error='this scanner trade is already saved'), 409
         finally:
             conn.close()
 
@@ -1368,6 +1541,7 @@ def register_routes(app):
     def delete_strategy(sid):
         conn = get_connection()
         try:
+            _purge_expired_scanner_strategies(conn)
             conn.execute("DELETE FROM option_strategy_legs WHERE strategy_id=?", (sid,))
             conn.execute("DELETE FROM option_strategies WHERE id=?", (sid,))
             conn.commit()

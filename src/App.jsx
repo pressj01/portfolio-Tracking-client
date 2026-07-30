@@ -73,6 +73,7 @@ import CoveredCallScanner from './pages/CoveredCallScanner'
 import BearPutSpreadScanner from './pages/BearPutSpreadScanner'
 import BullPutSpreadScanner from './pages/BullPutSpreadScanner'
 import BearCallSpreadScanner from './pages/BearCallSpreadScanner'
+import IronCondorScanner from './pages/IronCondorScanner'
 import GreeksGuide from './pages/GreeksGuide'
 
 function PlotlyThemeBridge() {
@@ -237,6 +238,7 @@ function App() {
         <Route path="/covered-call-scanner" element={<CoveredCallScanner />} />
         <Route path="/bear-put-spread-scanner" element={<BearPutSpreadScanner />} />
         <Route path="/bear-call-spread-scanner" element={<BearCallSpreadScanner />} />
+        <Route path="/iron-condor-scanner" element={<IronCondorScanner />} />
         <Route path="/option-education" element={<OptionEducation />} />
         <Route path="/option-greeks" element={<GreeksGuide />} />
         <Route path="/help" element={<Help />} />
@@ -307,6 +309,7 @@ function Nav() {
         <NavLink to="/covered-call-scanner">Covered Call Scanner</NavLink>
         <NavLink to="/bear-put-spread-scanner">Bear Put Spread Scanner</NavLink>
         <NavLink to="/bear-call-spread-scanner">Bear Call Spread Scanner</NavLink>
+        <NavLink to="/iron-condor-scanner">Iron Condor Scanner</NavLink>
         <NavLink to="/option-education">Option Strategy Education</NavLink>
         <NavLink to="/option-greeks">Understanding the Greeks</NavLink>
       </NavDropdown>

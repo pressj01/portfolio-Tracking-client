@@ -83,6 +83,7 @@ from call_scanner import register_routes as register_call_scanner_routes
 from bear_put_spread_scanner import register_routes as register_bear_put_spread_scanner_routes
 from bull_put_spread_scanner import register_routes as register_bull_put_spread_scanner_routes
 from bear_call_spread_scanner import register_routes as register_bear_call_spread_scanner_routes
+from iron_condor_scanner import register_routes as register_iron_condor_scanner_routes
 from market_symbols import yahoo_symbol_for_ticker as _yahoo_symbol_for_ticker
 from market_calendar import (
     is_nyse_trading_day,
@@ -40374,6 +40375,7 @@ register_call_scanner_routes(app)
 register_bear_put_spread_scanner_routes(app)
 register_bull_put_spread_scanner_routes(app)
 register_bear_call_spread_scanner_routes(app)
+register_iron_condor_scanner_routes(app)
 
 
 # ── Portfolio Growth 2 ──────────────────────────────────────────────────────────

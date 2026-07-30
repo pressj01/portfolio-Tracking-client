@@ -27,6 +27,7 @@ const GROUPS = [
       { id: 'covered-call-scanner', label: 'Covered Call Scanner' },
       { id: 'bear-put-spread-scanner', label: 'Bear Put Spread Scanner' },
       { id: 'bear-call-spread-scanner', label: 'Bear Call Spread Scanner' },
+      { id: 'iron-condor-scanner', label: 'Iron Condor Scanner' },
     ],
   },
   {
@@ -6670,6 +6671,192 @@ function BearCallSpreadScannerHelp() {
   )
 }
 
+function IronCondorScannerHelp() {
+  return (
+    <div>
+      <h2>Iron Condor Scanner</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The sixth screen in the options family, and structurally the sum of two of the others: a bull put spread below
+        the market and a bear call spread above it, same underlying and same expiration, opened for one net credit. The
+        credit is the maximum profit and it is kept in full if the stock finishes between the two short strikes. The
+        scanner finds names that are going <em>nowhere</em> and whose options are expensive relative to how far they
+        actually travel, then prices a specific four-leg structure on each one.
+      </p>
+
+      <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+        <strong>Maximum loss is the wider wing minus the credit &mdash; not the sum of both wings.</strong> Price can
+        only finish on one side of the range, so only one wing can ever be breached. This is how brokers margin the
+        position. Adding the two wings together is the most common arithmetic error in condor trading: it roughly
+        doubles the apparent risk and halves the apparent return on it.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Why this is not the Bull Put and Bear Call scanners run together
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The obvious construction is to take both credit screens and keep whatever appears on both lists. That returns
+        the empty set. The Bull Put Spread Scanner wants a <em>bullish</em> underlying &mdash; a controlled pullback
+        inside an intact uptrend. The Bear Call Spread Scanner wants a <em>bearish</em> one &mdash; a rally refused
+        under overhead supply. Nothing is both. Taking the union instead returns a directional bet wearing four legs.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Neutral is not the average of bullish and bearish; it is its own property, it needs its own measurements, and no
+        other screen here measures it. That is what this scanner adds. The thesis has two parts and both must hold:
+        the underlying is <strong>range-bound and likely to stay that way</strong>, and its <strong>implied volatility
+        is expensive relative to what it actually delivers</strong>. The second part is the entire edge &mdash; a
+        directional spread can be right about direction and profit on ordinary premium, but a condor has no direction to
+        be right about, so if the premium is not rich nothing is paying you.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        How &ldquo;going nowhere&rdquo; is measured
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Efficiency ratio</strong> is net distance travelled divided by total path length. Near 0 means price
+        covered a great deal of ground and arrived nowhere, which is what a condor is paid for; near 1 means every day
+        pointed the same way. This is the heaviest single term on the screen because it catches what no net-drift test
+        can: a stock that rises 20% and falls straight back has <em>zero</em> net drift, so window return, stretch
+        sigma, and distance from a moving average all call it quiet &mdash; and a condor sold inside that round trip was
+        breached twice.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Variance ratio</strong> compares the variance of five-day moves against five times the variance of daily
+        moves. Below 1 the name mean-reverts, which is the behaviour that refills the premium between entry and
+        expiration; above 1 its moves compound in one direction. Where the efficiency ratio describes the window just
+        observed, this describes the name&rsquo;s habit across the whole year, so it survives a window that happened to
+        be quiet. Measured across large caps and index funds the median sits near 0.89, slightly mean-reverting.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Net drift, both moving-average slopes, and relative strength are all read as <strong>magnitudes</strong>, and
+        RSI is scored as a band centred on 50. This is the family&rsquo;s only screen that does so. On the Bear Call
+        Spread Scanner a falling 50-day is resistance and therefore an asset; to a condor a falling 50-day is simply a
+        downtrend, and it breaks the put wing. Fresh 52-week highs <em>and</em> fresh lows are both disqualifying,
+        because this is the only screen here short both tails at once.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Reading the premium</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>IV/RV</strong> is at-the-money implied volatility over recent realized volatility. Note this reads the
+        opposite way from the Bear Put Spread Scanner, where rich implied vol is a <em>cost</em> because that screen
+        buys; this one sells, so rich is the point. The ramp starts at 1.0 rather than the 0.95 the directional sellers
+        use, because premium that merely matches realized volatility pays a neutral trade for nothing.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>IV percentile</strong> is the more useful of the two, and is the honest substitute for the
+        practitioner&rsquo;s &ldquo;only sell condors at high IV rank&rdquo; rule &mdash; true IV rank needs a year of
+        stored implied vol history this application does not keep. It reports the share of the name&rsquo;s own
+        past-year <em>realized</em> volatility readings that sit below today&rsquo;s implied, which answers the question
+        the rule is actually asking. It matters because it disagrees with IV/RV exactly when the point estimate is
+        misleading: a stock whose volatility swings between 15% and 60% but happens to sit at 20% today shows a
+        flattering 1.3&times; IV/RV at an implied 26%, while against its own distribution that reading is unremarkable.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Strike selection: delta, not distance
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Short strikes default to <strong>16 delta</strong>, approximately the one-standard-deviation strike, which is
+        where the classic condor is sold. Both breakevens must sit outside the expected move over the life of the trade,
+        and that is scored on the <em>nearer</em> side &mdash; a generous call wing does nothing for a tight put wing.
+        Selling short strikes inside the expected move is the classic condor failure, and the credit looks generous
+        there precisely because the market expects to reach them.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>The two wings are matched by delta rather than by distance from spot</strong>, and the difference is not
+        cosmetic. Equity put skew means the put 5% below spot carries a materially higher delta than the call 5% above
+        it, so a condor with equidistant strikes is a net short-delta position &mdash; a bullish bet, sized by accident,
+        inside a structure the trader believes is neutral. It also collects most of its credit from the wing carrying
+        most of its risk. The scanner reports the gap between the two short deltas, the whole structure&rsquo;s net
+        delta, and each wing&rsquo;s share of the credit, and flags a structure as <em>Lopsided</em> when the two shorts
+        drift apart.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How candidates are scored</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Range (30 points)</strong> &mdash; efficiency ratio earns 0&ndash;9, net drift as a magnitude 0&ndash;7, variance ratio 0&ndash;5, moving-average flatness 0&ndash;4, and a band on RSI centred at 50 gives the last 5. Penalties: fresh 52-week highs 9, fresh lows 9, and trending against the market up to 6. The axis floors at zero.</li>
+        <li><strong>Vol (25 points)</strong> &mdash; IV/RV from 1.0 to 1.6 earns 0&ndash;10, IV percentile from the 40th to the 85th earns 0&ndash;6, credit over the four-leg realized-vol fair value 0&ndash;6, and contracting realized volatility 0&ndash;3. Only that last term works without a live chain.</li>
+        <li><strong>Structure (20 points)</strong> &mdash; needs a live chain throughout. The nearer breakeven from 0.8&sigma; to 1.8&sigma; earns 0&ndash;8, delta balance 0&ndash;4, credit as a share of the wing width from 12% to 33% earns 0&ndash;5, and the odds of finishing between the shorts 0&ndash;3.</li>
+        <li><strong>Safety (25 points)</strong> &mdash; size (3) and share liquidity (3) need no chain. The rest does: four-leg slippage 0&ndash;6, the odds of finishing between the breakevens 0&ndash;4, open interest on the worst of four legs 0&ndash;4, a credit surviving all four markets 3, and equal wings 2. Deductions: earnings before expiry 9, and a dividend inviting early assignment 5 (2.5 if merely elevated).</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Grades are <strong>A &ge; 80, B &ge; 70, C &ge; 60, D &ge; 50</strong>, otherwise F, calibrated against the
+        other five option screens so a C means the same thing on all six. A grade with an asterisk and a dashed outline
+        had no option chain, so it is rescaled from the 39 points that could still be scored, and partial scores always
+        sort below fully priced ones.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        The quiet killer: four markets, twice
+      </h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Execution cost carries roughly <strong>double the weight it does on the two-leg screens</strong>, and the
+        default ceiling is 45% of the credit rather than 30%. There are four bid/ask spreads to cross opening the
+        position and four closing it, against a credit that is not twice a vertical&rsquo;s. The scanner shows the
+        mid-price credit beside the <em>natural</em> credit &mdash; what is left after crossing every market &mdash; and
+        a structure whose natural credit is not still positive is flagged, because that credit is fictional. Open
+        interest is applied to the <em>worst</em> of the four legs, since all four must fill to open and all four to
+        close.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Trade math and management</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Maximum profit</strong> is the net credit, kept if price finishes between the short strikes.</li>
+        <li><strong>Maximum loss</strong> is the wider wing minus the credit &mdash; size the position from this, never from the premium.</li>
+        <li><strong>Breakevens</strong> are the short put minus the credit and the short call plus the credit. Everything between them profits, which is a wider window than the max-profit zone.</li>
+        <li><strong>Cushion</strong> is the <em>nearer</em> breakeven expressed as a multiple of the expected move over the life of the trade, alongside the smaller of the two percentage distances.</li>
+        <li><strong>Two probabilities</strong> are shown: the odds of finishing between the breakevens (any profit) and between the short strikes (max profit). Both are exact terminal probabilities rather than delta proxies.</li>
+        <li><strong>Buy back at</strong> targets <strong>50% of the credit</strong> rather than the 60&ndash;65% a clean vertical can hold for. A condor&rsquo;s payoff is a high win rate against a fat tail, so the last stretch of credit is the part bought most expensively in risk &mdash; earned only by holding a position short gamma on both sides through the period where gamma is largest.</li>
+        <li><strong>Reassess at 21 DTE.</strong> Inside three weeks a short condor&rsquo;s gamma rises sharply, and a strike that was comfortably distant becomes one a single session can reach.</li>
+        <li><strong>Stop at</strong> roughly twice the credit, capped just inside the wing so the structure can still trade.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Defending a tested side</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        If price reaches one of the short strikes, that side is tested. <strong>Roll the untested wing closer rather
+        than widening the tested one.</strong> The untested side is risk that has just become <em>less</em> likely to
+        matter, so bringing it in is the only adjustment that collects new credit without adding to the side already in
+        trouble. If both breakevens come into play the range thesis is simply gone, and the position should be closed
+        rather than adjusted &mdash; adjusting a broken thesis is how a defined-risk trade becomes an open-ended one.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Event risk</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Earnings inside the expiration remove the name entirely</strong> rather than merely flagging it, and the
+        penalty is heavier than on any single vertical. The implied volatility that made the credit look generous
+        <em> is</em> the earnings premium; it collapses the morning after regardless of direction, and the gap breaks
+        whichever wing it points at. This is also why broad index funds are the classic condor underlying and are
+        included by default &mdash; they mean-revert more than single names, cannot be taken over, never report
+        earnings, and carry the deepest chains in the market.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>A dividend inside the trade</strong> puts the short call at risk of early exercise, which happens the
+        day before the ex-date once remaining extrinsic value is worth less than the dividend. That leaves a short stock
+        position nobody intended, arriving alongside three other open legs, so when the exposure is material the plan
+        sets a hard <strong>Close before</strong> date. Small caps are deliberately absent from this screen&rsquo;s
+        universes: a condor is exposed to a takeover gap <em>and</em> a collapse at the same time, and thin chains turn
+        a theoretical credit into an unfillable one.
+      </p>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        This screen is educational research, not a recommendation or personalized advice. An iron condor has a high win
+        rate and a loss that is several times the credit collected, which is the shape most likely to encourage
+        oversizing &mdash; size from the maximum loss, never from the premium or the win rate. All four legs should be
+        opened and closed as a single condor order. Short options can be assigned before expiration and pin risk rises
+        sharply near expiry, so monitoring and an early closing plan are part of the setup rather than an afterthought.
+      </div>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        If a scan returns nothing, that is usually correct rather than broken &mdash; in a trending market very few
+        names are genuinely range-bound, and that is the screen working. Raise <strong>Max efficiency</strong> or
+        <strong> Max drift</strong>, widen the RSI band, loosen the range-position window, or make sure
+        <strong> Index ETFs</strong> are included, since broad funds range far more often than single names. If
+        candidates appear but none get a structure, lower <strong>Min credit</strong>, <strong>Min cushion</strong>, or
+        <strong> Min leg OI</strong>, or raise <strong>Max slippage</strong>.
+      </div>
+    </div>
+  )
+}
+
 function ETFProviderUpdateHelp() {
   return (
     <div>
@@ -8254,6 +8441,7 @@ const CONTENT_MAP = {
   'covered-call-scanner': CoveredCallScannerHelp,
   'bear-put-spread-scanner': BearPutSpreadScannerHelp,
   'bear-call-spread-scanner': BearCallSpreadScannerHelp,
+  'iron-condor-scanner': IronCondorScannerHelp,
   import: ImportHelp,
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,

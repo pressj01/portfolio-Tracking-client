@@ -1,4 +1,6 @@
 import sys
+import sqlite3
+import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
@@ -504,6 +506,218 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
                 self.assertIsNotNone(contract[greek])
             self.assertEqual(contract["volume"], 120)
             self.assertEqual(contract["open_interest"], 450)
+
+
+class SavedScannerTradeApiTest(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = str(Path(self.temp_dir.name) / "scanner-trades.db")
+        conn = self._connection()
+        conn.executescript(
+            """
+            CREATE TABLE option_strategies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                underlying TEXT NOT NULL,
+                model TEXT DEFAULT 'black-scholes',
+                rate REAL DEFAULT 0.0375,
+                notes TEXT,
+                origin TEXT NOT NULL DEFAULT 'manual',
+                scanner_kind TEXT,
+                scanner_source TEXT,
+                scanner_key TEXT,
+                expires_on TEXT,
+                created_date TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_date TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX idx_option_strategies_scanner_key
+            ON option_strategies(scanner_key)
+            WHERE scanner_key IS NOT NULL;
+            CREATE TABLE option_strategy_legs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_id INTEGER NOT NULL,
+                group_id INTEGER DEFAULT 0,
+                included INTEGER DEFAULT 1,
+                side TEXT NOT NULL,
+                qty INTEGER NOT NULL,
+                opt_type TEXT NOT NULL,
+                strike REAL NOT NULL,
+                expiration TEXT NOT NULL,
+                entry_price REAL,
+                iv_override REAL,
+                sort_order INTEGER DEFAULT 0,
+                FOREIGN KEY (strategy_id) REFERENCES option_strategies(id) ON DELETE CASCADE
+            );
+            """
+        )
+        conn.close()
+        self.connection_patch = patch(
+            "options_api.get_connection",
+            side_effect=self._connection,
+        )
+        self.connection_patch.start()
+        self.app = Flask(__name__)
+        options_api.register_routes(self.app)
+        self.client = self.app.test_client()
+        self.today = date.today()
+
+    def tearDown(self):
+        self.connection_patch.stop()
+        self.temp_dir.cleanup()
+
+    def _connection(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    def _payload(self, expiration=None):
+        expiration = expiration or (self.today + timedelta(days=30)).isoformat()
+        return {
+            "name": f"SPY bull put spread · {expiration}",
+            "underlying": "SPY",
+            "origin": "scanner",
+            "scanner_kind": "bull-put-spread",
+            "scanner_source": "Bull Put Spread Scanner",
+            "legs": [
+                {
+                    "side": "SELL",
+                    "qty": 1,
+                    "opt_type": "PUT",
+                    "strike": 100,
+                    "expiration": expiration,
+                    "entry_price": 2.25,
+                    "iv_override": 0.24,
+                },
+                {
+                    "side": "BUY",
+                    "qty": 1,
+                    "opt_type": "PUT",
+                    "strike": 95,
+                    "expiration": expiration,
+                    "entry_price": 1.15,
+                    "iv_override": 0.25,
+                },
+            ],
+        }
+
+    def test_scanner_trade_can_be_saved_updated_and_deleted(self):
+        expiration = (self.today + timedelta(days=30)).isoformat()
+        created = self.client.post("/api/options/strategies", json=self._payload(expiration))
+
+        self.assertEqual(created.status_code, 200)
+        strategy_id = created.get_json()["id"]
+        self.assertEqual(created.get_json()["expires_on"], expiration)
+
+        listed = self.client.get(
+            "/api/options/strategies",
+            query_string={
+                "origin": "scanner",
+                "scanner_key": "bull-put-spread:SPY",
+            },
+        )
+        self.assertEqual(listed.status_code, 200)
+        saved = listed.get_json()[0]
+        self.assertEqual(saved["id"], strategy_id)
+        self.assertEqual(saved["origin"], "scanner")
+        self.assertEqual(saved["scanner_source"], "Bull Put Spread Scanner")
+        self.assertEqual(len(saved["legs"]), 2)
+
+        later_expiration = (self.today + timedelta(days=45)).isoformat()
+        updated_payload = self._payload(later_expiration)
+        updated_payload["legs"][0]["strike"] = 102
+        updated = self.client.put(
+            f"/api/options/strategies/{strategy_id}",
+            json=updated_payload,
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.get_json()["expires_on"], later_expiration)
+
+        fetched = self.client.get(f"/api/options/strategies/{strategy_id}")
+        self.assertEqual(fetched.get_json()["expires_on"], later_expiration)
+        self.assertEqual(fetched.get_json()["legs"][0]["strike"], 102)
+
+        deleted = self.client.delete(f"/api/options/strategies/{strategy_id}")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(
+            self.client.get(f"/api/options/strategies/{strategy_id}").status_code,
+            404,
+        )
+
+    def test_duplicate_scanner_kind_and_ticker_requires_update(self):
+        first = self.client.post("/api/options/strategies", json=self._payload())
+        duplicate = self.client.post("/api/options/strategies", json=self._payload())
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(duplicate.get_json()["id"], first.get_json()["id"])
+
+    def test_expired_scanner_trades_are_purged_but_manual_scenarios_remain(self):
+        yesterday = (self.today - timedelta(days=1)).isoformat()
+        conn = self._connection()
+        expired_id = conn.execute(
+            """
+            INSERT INTO option_strategies
+            (name, underlying, origin, scanner_kind, scanner_source, scanner_key, expires_on)
+            VALUES (?, ?, 'scanner', ?, ?, ?, ?)
+            """,
+            (
+                "Expired SPY trade",
+                "SPY",
+                "cash-secured-put",
+                "Put Selling Scanner",
+                "cash-secured-put:SPY",
+                yesterday,
+            ),
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO option_strategy_legs
+            (strategy_id, side, qty, opt_type, strike, expiration)
+            VALUES (?, 'SELL', 1, 'PUT', 95, ?)
+            """,
+            (expired_id, yesterday),
+        )
+        manual_id = conn.execute(
+            """
+            INSERT INTO option_strategies
+            (name, underlying, origin)
+            VALUES ('Permanent learning scenario', 'QQQ', 'manual')
+            """
+        ).lastrowid
+        conn.commit()
+        conn.close()
+
+        listed = self.client.get("/api/options/strategies")
+
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual([item["id"] for item in listed.get_json()], [manual_id])
+        conn = self._connection()
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM option_strategy_legs WHERE strategy_id=?",
+                (expired_id,),
+            ).fetchone()[0],
+            0,
+        )
+        conn.close()
+
+    def test_expiration_day_is_retained_and_past_expiration_is_rejected(self):
+        same_day = self.client.post(
+            "/api/options/strategies",
+            json=self._payload(self.today.isoformat()),
+        )
+        self.assertEqual(same_day.status_code, 200)
+
+        past = self.client.post(
+            "/api/options/strategies",
+            json={
+                **self._payload((self.today - timedelta(days=1)).isoformat()),
+                "underlying": "QQQ",
+            },
+        )
+        self.assertEqual(past.status_code, 400)
+        self.assertIn("DTE", past.get_json()["error"])
 
 
 if __name__ == "__main__":

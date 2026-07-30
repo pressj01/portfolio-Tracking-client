@@ -1344,9 +1344,31 @@ def ensure_tables_exist(conn=None):
             model        TEXT DEFAULT 'black-scholes',
             rate         REAL DEFAULT 0.0375,
             notes        TEXT,
+            origin       TEXT NOT NULL DEFAULT 'manual',
+            scanner_kind TEXT,
+            scanner_source TEXT,
+            scanner_key  TEXT,
+            expires_on   TEXT,
             created_date TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_date TEXT DEFAULT CURRENT_TIMESTAMP
         )
+    """)
+    option_strategy_cols = {
+        row[1] for row in cur.execute("PRAGMA table_info(option_strategies)").fetchall()
+    }
+    for column, definition in [
+        ("origin", "TEXT NOT NULL DEFAULT 'manual'"),
+        ("scanner_kind", "TEXT"),
+        ("scanner_source", "TEXT"),
+        ("scanner_key", "TEXT"),
+        ("expires_on", "TEXT"),
+    ]:
+        if column not in option_strategy_cols:
+            cur.execute(f"ALTER TABLE option_strategies ADD COLUMN {column} {definition}")
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_option_strategies_scanner_key
+        ON option_strategies(scanner_key)
+        WHERE scanner_key IS NOT NULL
     """)
 
     cur.execute("""
@@ -1365,6 +1387,25 @@ def ensure_tables_exist(conn=None):
             sort_order   INTEGER DEFAULT 0,
             FOREIGN KEY (strategy_id) REFERENCES option_strategies(id) ON DELETE CASCADE
         )
+    """)
+    # Scanner trades are live opportunities rather than permanent learning
+    # scenarios. Remove them on the first application request after every option
+    # leg has expired; manual strategies are intentionally retained.
+    cur.execute("""
+        DELETE FROM option_strategy_legs
+        WHERE strategy_id IN (
+            SELECT id
+            FROM option_strategies
+            WHERE origin = 'scanner'
+              AND expires_on IS NOT NULL
+              AND expires_on < DATE('now', 'localtime')
+        )
+    """)
+    cur.execute("""
+        DELETE FROM option_strategies
+        WHERE origin = 'scanner'
+          AND expires_on IS NOT NULL
+          AND expires_on < DATE('now', 'localtime')
     """)
 
     cur.execute("""

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import PriceChartModal from '../components/PriceChartModal'
+import RiskGraphButton from '../components/RiskGraphButton'
+import { useScanCache } from '../utils/useScanCache'
 
 const STORAGE_KEY = 'bear-call-spread-scanner-filters'
 
@@ -563,16 +565,17 @@ function DetailRow({ row, colSpan, onShowChart }) {
   return (
     <tr>
       <td colSpan={colSpan} style={{ background: 'var(--surface-sunken)', padding: '0.9rem 1.1rem', whiteSpace: 'normal' }}>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'baseline', marginBottom: '0.8rem', flexWrap: 'wrap' }}>
-          <div style={{ flex: '1 1 340px', fontSize: '0.88rem', color: 'var(--text-strong)' }}>
-            {row.verdict}
-          </div>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
           <button
             className="btn btn-xs btn-outline"
             onClick={(e) => { e.stopPropagation(); onShowChart(row.ticker) }}
           >
             &#128200; Price chart
           </button>
+          <RiskGraphButton kind="bear-call-spread" row={row} source="Bear Call Spread Scanner" />
+        </div>
+        <div style={{ maxWidth: '1100px', fontSize: '0.88rem', color: 'var(--text-strong)', marginBottom: '0.8rem' }}>
+          {row.verdict}
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) 2fr', gap: '1.5rem', alignItems: 'start' }}>
@@ -924,10 +927,11 @@ export default function BearCallSpreadScanner() {
     }
   })
   const [universes, setUniverses] = useState([])
-  const [rows, setRows] = useState([])
-  const [watchlistRows, setWatchlistRows] = useState([])
-  const [stats, setStats] = useState(null)
-  const [asOf, setAsOf] = useState(null)
+  const [cachedScan, saveScan] = useScanCache('bear-call-spread')
+  const [rows, setRows] = useState(cachedScan?.rows || [])
+  const [watchlistRows, setWatchlistRows] = useState(cachedScan?.watchlist_rows || [])
+  const [stats, setStats] = useState(cachedScan?.stats || null)
+  const [asOf, setAsOf] = useState(cachedScan?.as_of || null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [expanded, setExpanded] = useState(null)
@@ -935,7 +939,7 @@ export default function BearCallSpreadScanner() {
   const [sortCol, setSortCol] = useState('score')
   const [sortAsc, setSortAsc] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
-  const [hasScanned, setHasScanned] = useState(false)
+  const [hasScanned, setHasScanned] = useState(Boolean(cachedScan))
 
   useEffect(() => {
     pf('/api/options/bear-call-spread-scan/universes')
@@ -984,10 +988,14 @@ export default function BearCallSpreadScanner() {
         setStats(d.stats || null)
         setAsOf(d.as_of || null)
         setHasScanned(true)
+        saveScan({
+          rows: d.rows || [], watchlist_rows: d.watchlist_rows || [],
+          stats: d.stats || null, as_of: d.as_of || null,
+        })
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [pf, filters])
+  }, [pf, filters, saveScan])
 
   const toggleSort = (key) => {
     if (sortCol === key) setSortAsc(a => !a)
