@@ -32,6 +32,7 @@ import re
 import yfinance as yf
 from flask import jsonify, request
 
+from options_pricing import black_scholes
 from put_scanner import (
     MAX_TARGET_DTE,
     MIN_TARGET_DTE,
@@ -49,6 +50,7 @@ from put_scanner import (
 
 
 CONTRACT_MULTIPLIER = 100.0
+EARLY_CLOSE_FRACTIONS = (0.50, 2.0 / 3.0)
 DELTA_PRESETS = {
     "15/5": (0.15, 0.05),
     "20/10": (0.20, 0.10),
@@ -165,6 +167,149 @@ def _prob_touch_lower(
         max(-700.0, min(700.0, -2.0 * log_drift_rate * x / (volatility * volatility)))
     ) * _norm_cdf((-x + drift_t) / sigma_root_t)
     return min(1.0, max(0.0, terminal_below + reflection))
+
+
+def _position_pl_at_exit(
+    candidate: dict,
+    exit_spot: float,
+    remaining_years: float,
+    dividend_yield: float = 0.0,
+) -> float | None:
+    """Theoretical P/L in option points when all four legs are closed together."""
+    if exit_spot <= 0 or remaining_years < 0:
+        return None
+    bought_quantity = max(1, int(candidate.get("bought_quantity") or 1))
+    sold_quantity = max(1, int(candidate.get("sold_quantity") or 1))
+    legs = (
+        (candidate.get("upper_long_leg") or {}, bought_quantity),
+        (candidate.get("upper_short_leg") or {}, -bought_quantity),
+        (candidate.get("lower_short_leg") or {}, -sold_quantity),
+        (candidate.get("lower_long_leg") or {}, sold_quantity),
+    )
+    position_mark = 0.0
+    for leg, signed_quantity in legs:
+        strike = _num(leg.get("strike"))
+        volatility = _num(leg.get("iv"))
+        if strike is None or strike <= 0 or volatility is None or volatility <= 0:
+            return None
+        option_value = black_scholes(
+            exit_spot,
+            strike,
+            remaining_years,
+            RISK_FREE,
+            dividend_yield,
+            volatility,
+            "put",
+        )["price"]
+        position_mark += signed_quantity * option_value
+    return (_num(candidate.get("entry_credit"), 0.0) or 0.0) + position_mark
+
+
+def _early_close_estimate(
+    candidate: dict,
+    spot: float,
+    dte: int,
+    elapsed_fraction: float,
+    dividend_yield: float = 0.0,
+) -> dict | None:
+    """Risk-neutral chance the full position has positive modeled P/L at exit."""
+    distribution_iv = _num(candidate.get("probability_iv"))
+    if (
+        spot <= 0
+        or dte < 2
+        or distribution_iv is None
+        or distribution_iv <= 0
+        or not 0 < elapsed_fraction < 1
+    ):
+        return None
+
+    elapsed_days = max(1, min(dte - 1, int(round(dte * elapsed_fraction))))
+    remaining_dte = dte - elapsed_days
+    elapsed_years = elapsed_days / 365.0
+    remaining_years = remaining_dte / 365.0
+    sigma_root_t = distribution_iv * math.sqrt(elapsed_years)
+    log_drift = (
+        RISK_FREE - dividend_yield - 0.5 * distribution_iv * distribution_iv
+    ) * elapsed_years
+
+    def spot_at_z(z_score: float) -> float:
+        return spot * math.exp(log_drift + sigma_root_t * z_score)
+
+    def profit_at_z(z_score: float) -> float | None:
+        return _position_pl_at_exit(
+            candidate,
+            spot_at_z(z_score),
+            remaining_years,
+            dividend_yield,
+        )
+
+    # Locate every profitable price interval over virtually all of the normal
+    # distribution. Four same-expiration puts produce only a few sign changes;
+    # a dense z-grid plus bisection is deterministic and avoids Monte Carlo
+    # noise in the displayed probability.
+    z_grid = [-8.0 + index * 0.10 for index in range(161)]
+    p_grid = [profit_at_z(z_score) for z_score in z_grid]
+    if any(value is None for value in p_grid):
+        return None
+
+    roots = []
+    for index in range(1, len(z_grid)):
+        low_z, high_z = z_grid[index - 1], z_grid[index]
+        low_p, high_p = p_grid[index - 1], p_grid[index]
+        if low_p == 0:
+            root = low_z
+        elif high_p == 0:
+            root = high_z
+        elif low_p * high_p > 0:
+            continue
+        else:
+            for _ in range(45):
+                mid_z = 0.5 * (low_z + high_z)
+                mid_p = profit_at_z(mid_z)
+                if mid_p is None:
+                    return None
+                if low_p * mid_p <= 0:
+                    high_z, high_p = mid_z, mid_p
+                else:
+                    low_z, low_p = mid_z, mid_p
+            root = 0.5 * (low_z + high_z)
+        if not roots or abs(root - roots[-1]) > 1e-7:
+            roots.append(root)
+
+    boundaries = [-math.inf, *roots, math.inf]
+    profitable_ranges = []
+    probability = 0.0
+    for index in range(1, len(boundaries)):
+        low_z, high_z = boundaries[index - 1], boundaries[index]
+        if math.isinf(low_z) and math.isinf(high_z):
+            probe_z = 0.0
+        elif math.isinf(low_z):
+            probe_z = high_z - 1.0
+        elif math.isinf(high_z):
+            probe_z = low_z + 1.0
+        else:
+            probe_z = 0.5 * (low_z + high_z)
+        probe_profit = profit_at_z(probe_z)
+        if probe_profit is None:
+            return None
+        if probe_profit <= 0:
+            continue
+
+        low_probability = 0.0 if math.isinf(low_z) else _norm_cdf(low_z)
+        high_probability = 1.0 if math.isinf(high_z) else _norm_cdf(high_z)
+        probability += high_probability - low_probability
+        profitable_ranges.append({
+            "lower": None if math.isinf(low_z) else spot_at_z(low_z),
+            "upper": None if math.isinf(high_z) else spot_at_z(high_z),
+        })
+
+    return {
+        "elapsed_fraction": elapsed_days / dte,
+        "elapsed_days": elapsed_days,
+        "remaining_dte": remaining_dte,
+        "probability_profit_pct": min(100.0, max(0.0, probability * 100.0)),
+        "profitable_ranges": profitable_ranges,
+    }
 
 
 def _build_put_condor(
@@ -620,6 +765,25 @@ def _round_candidate(candidate: dict) -> dict:
         ("lower_short_distance_sigma", 2),
     ):
         out[key] = _round(out.get(key), decimals)
+    out["early_close_estimates"] = [
+        {
+            **estimate,
+            "elapsed_fraction": _round(estimate.get("elapsed_fraction"), 3),
+            "probability_profit_pct": _round(
+                estimate.get("probability_profit_pct"),
+                1,
+            ),
+            "profitable_ranges": [
+                {
+                    "lower": _round(price_range.get("lower"), 2),
+                    "upper": _round(price_range.get("upper"), 2),
+                }
+                for price_range in estimate.get("profitable_ranges", [])
+            ],
+        }
+        for estimate in out.get("early_close_estimates", [])
+        if estimate is not None
+    ]
     return out
 
 
@@ -805,6 +969,19 @@ def run_unbalanced_put_condor_scan(payload: dict) -> dict:
                     f"-q{bought_quantity}x{sold_quantity}"
                 ),
             })
+            best["early_close_estimates"] = [
+                estimate
+                for fraction in EARLY_CLOSE_FRACTIONS
+                if (
+                    estimate := _early_close_estimate(
+                        best,
+                        spot,
+                        dte,
+                        fraction,
+                        div_yield,
+                    )
+                ) is not None
+            ]
             chosen.append(_round_candidate(best))
 
         return {

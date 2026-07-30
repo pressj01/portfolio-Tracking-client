@@ -178,10 +178,70 @@ function DownsideRiskCard({ row }) {
   )
 }
 
+function formatProfitableRanges(ranges) {
+  if (!ranges?.length) return 'No modeled profitable price range'
+  return ranges.map(priceRange => {
+    if (priceRange.lower == null && priceRange.upper == null) return 'All modeled prices'
+    if (priceRange.lower == null) return `At or below ${usd(priceRange.upper)}`
+    if (priceRange.upper == null) return `At or above ${usd(priceRange.lower)}`
+    return `${usd(priceRange.lower)} to ${usd(priceRange.upper)}`
+  }).join(' or ')
+}
+
+function EarlyCloseWinCard({ row }) {
+  const estimates = row.early_close_estimates || []
+  if (!estimates.length) return null
+  return (
+    <div style={{
+      background: 'var(--surface-inset)', border: '1px solid var(--accent)',
+      borderRadius: 7, padding: '0.85rem 1rem', marginBottom: '0.9rem',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.55rem', flexWrap: 'wrap', marginBottom: '0.65rem' }}>
+        <strong style={{ color: 'var(--accent-bright)', fontSize: '0.92rem' }}>
+          Modeled probability of a profitable close
+        </strong>
+        <span style={{ color: 'var(--text-dim)', fontSize: '0.68rem' }}>
+          Win = close all four legs together for more than $0 modeled P/L
+        </span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(245px, 1fr))', gap: '0.75rem' }}>
+        {estimates.map(estimate => {
+          const elapsedPct = Math.round(estimate.elapsed_fraction * 100)
+          return (
+            <div key={elapsedPct} style={{
+              padding: '0.7rem 0.8rem', background: 'var(--surface-sunken)',
+              borderLeft: '4px solid var(--pos-strong)', borderRadius: 4,
+            }}>
+              <div style={{ color: 'var(--text-dim)', fontSize: '0.64rem', textTransform: 'uppercase' }}>
+                Close after {elapsedPct}% of original DTE
+              </div>
+              <strong style={{ display: 'block', color: 'var(--pos-strong)', fontSize: '1.65rem', lineHeight: 1.15 }}>
+                {pct(estimate.probability_profit_pct)}
+              </strong>
+              <div style={{ color: 'var(--text-strong)', fontWeight: 650, marginTop: '0.15rem' }}>
+                {estimate.elapsed_days} days held · {estimate.remaining_dte} DTE remaining
+              </div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.69rem', marginTop: '0.25rem' }}>
+                Profitable modeled {row.ticker} range: {formatProfitableRanges(estimate.profitable_ranges)}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <div style={{ color: 'var(--text-dim)', fontSize: '0.67rem', marginTop: '0.65rem' }}>
+        Entry uses the current mid; all four exit values are theoretical marks with each leg&rsquo;s
+        current IV held constant. The risk-neutral estimate excludes commissions and slippage and measures
+        P/L only on the planned close date; price may have crossed a strike earlier.
+      </div>
+    </div>
+  )
+}
+
 function Detail({ row, colSpan }) {
   return (
     <tr>
       <td colSpan={colSpan} style={{ background: 'var(--surface-sunken)', padding: '0.8rem 1rem' }}>
+        <EarlyCloseWinCard row={row} />
         <DownsideRiskCard row={row} />
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', alignItems: 'flex-start' }}>
           <div>
@@ -571,6 +631,13 @@ export default function UnbalancedPutCondorScanner() {
                         <div style={{ color: 'var(--amber)', fontSize: '0.66rem', fontWeight: 700 }}>
                           Touch back short {pct(row.prob_touch_lower_short_pct)}
                         </div>
+                        {!!row.early_close_estimates?.length && (
+                          <div style={{ color: 'var(--pos-strong)', fontSize: '0.66rem', fontWeight: 700 }}>
+                            Close win {row.early_close_estimates.map(estimate => (
+                              `${Math.round(estimate.elapsed_fraction * 100)}%: ${pct(estimate.probability_profit_pct)}`
+                            )).join(' · ')}
+                          </div>
+                        )}
                       </td>
                       <td style={{ textAlign: 'right' }}>
                         <strong style={{ color: 'var(--pos)' }}>{usd(row.max_profit_dollars, 0)}</strong>

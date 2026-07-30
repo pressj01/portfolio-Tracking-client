@@ -205,6 +205,76 @@ class DownsideProbabilities(unittest.TestCase):
         self.assertIsNone(result["prob_finish_below_lower_long_pct"])
 
 
+class EarlyCloseProbabilities(unittest.TestCase):
+    @staticmethod
+    def candidate():
+        return scanner._build_put_condor(
+            upper_long=leg(105, 5.0, -0.30),
+            upper_short=leg(100, 3.0, -0.25),
+            lower_short=leg(90, 1.5, -0.15),
+            lower_long=leg(85, 0.5, -0.10),
+            spot=110,
+            expiration="2027-01-15",
+            dte=180,
+            preset="25/15",
+            target_upper_delta=0.25,
+            target_lower_delta=0.15,
+        )
+
+    def test_exit_mark_matches_expiration_payoff_regions(self):
+        candidate = self.candidate()
+
+        self.assertAlmostEqual(
+            scanner._position_pl_at_exit(candidate, 110, 0),
+            candidate["upper_flat_outcome"],
+        )
+        self.assertAlmostEqual(
+            scanner._position_pl_at_exit(candidate, 95, 0),
+            candidate["center_max_profit"],
+        )
+        self.assertAlmostEqual(
+            scanner._position_pl_at_exit(candidate, 80, 0),
+            candidate["lower_flat_outcome"],
+        )
+
+    def test_half_and_two_thirds_exit_estimates_include_profitable_bounds(self):
+        candidate = self.candidate()
+        half = scanner._early_close_estimate(candidate, 110, 180, 0.50)
+        two_thirds = scanner._early_close_estimate(candidate, 110, 180, 2 / 3)
+
+        self.assertEqual(half["elapsed_days"], 90)
+        self.assertEqual(half["remaining_dte"], 90)
+        self.assertEqual(two_thirds["elapsed_days"], 120)
+        self.assertEqual(two_thirds["remaining_dte"], 60)
+        for estimate in (half, two_thirds):
+            self.assertGreater(estimate["probability_profit_pct"], 0.0)
+            self.assertLess(estimate["probability_profit_pct"], 100.0)
+            self.assertEqual(len(estimate["profitable_ranges"]), 1)
+            self.assertLess(
+                estimate["profitable_ranges"][0]["lower"],
+                estimate["profitable_ranges"][0]["upper"],
+            )
+
+    def test_probability_can_cover_all_prices(self):
+        candidate = self.candidate()
+        candidate["entry_credit"] = 1000.0
+        estimate = scanner._early_close_estimate(candidate, 110, 180, 0.50)
+
+        self.assertAlmostEqual(estimate["probability_profit_pct"], 100.0)
+        self.assertEqual(
+            estimate["profitable_ranges"],
+            [{"lower": None, "upper": None}],
+        )
+
+    def test_missing_leg_iv_suppresses_early_close_estimate(self):
+        candidate = self.candidate()
+        candidate["lower_long_leg"]["iv"] = None
+
+        self.assertIsNone(
+            scanner._early_close_estimate(candidate, 110, 180, 0.50)
+        )
+
+
 class DeltaSelection(unittest.TestCase):
     @staticmethod
     def candidate(position_delta, delta_error=0.01):

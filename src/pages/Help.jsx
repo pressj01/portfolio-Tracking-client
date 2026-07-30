@@ -28,6 +28,7 @@ const GROUPS = [
       { id: 'bear-put-spread-scanner', label: 'Bear Put Spread Scanner' },
       { id: 'bear-call-spread-scanner', label: 'Bear Call Spread Scanner' },
       { id: 'iron-condor-scanner', label: 'Iron Condor Scanner' },
+      { id: 'unbalanced-put-condor-scanner', label: 'Unbalanced Put Condor Scanner' },
     ],
   },
   {
@@ -6857,6 +6858,123 @@ function IronCondorScannerHelp() {
   )
 }
 
+function UnbalancedPutCondorScannerHelp() {
+  const screenshotStyle = {
+    maxWidth: '100%',
+    height: 'auto',
+    borderRadius: '4px',
+    border: '1px solid var(--p-333)',
+  }
+
+  return (
+    <div>
+      <h2>Unbalanced Put Condor Scanner</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        This scanner builds a long-dated, four-put position on SPY, IWM, GLD, QQQ, or a custom ticker list.
+        It buys an upper put debit spread and sells a farther-out-of-the-money put credit spread at the same
+        expiration, then searches nearby strikes for the complete package whose net delta best matches the
+        selected neutral, slightly bullish, or slightly bearish target.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/unbalanced-put-condor-scanner/01-scanner-overview.png"
+          alt="Unbalanced Put Condor Scanner controls, active delta and quantity presets, and ranked four-put results"
+          style={screenshotStyle}
+        />
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          The green buttons show the active delta lean and quantity ratio. Widths and quantities remain independent,
+          so a 5-point purchased spread can be paired with a 10-point sold spread and a 5:10 contract ratio.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        The four legs and delta presets
+      </h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Buy the upper long put</strong> and <strong>sell the upper short put</strong> to create the purchased spread.</li>
+        <li><strong>Sell the lower short put</strong> and <strong>buy the lower long put</strong> to create the back spread.</li>
+        <li><strong>15/5, 20/10, and 25/15</strong> name the target deltas of the upper and lower short puts. The scanner checks nearby listed strikes because the net delta of all four legs is the governing result.</li>
+      </ol>
+      <p style={{ marginBottom: '1rem' }}>
+        A <strong>neutral</strong> target seeks approximately zero share-equivalent delta. The +1.5 and −1.5
+        quick choices intentionally lean the package slightly bullish or bearish. Contract quantities are included
+        in that calculation: five purchased spreads and ten sold spreads can be flatter than a 1:1 construction
+        even though the lower wing carries twice as many contracts.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Probability of closing the trade profitably
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Expanding a result shows two planned-exit estimates: close after <strong>50% of the original DTE has
+        elapsed</strong> and after <strong>67% has elapsed</strong>. A win means closing all four legs together for
+        more than $0 of modeled P/L. Each estimate also shows the underlying price range that produces a modeled
+        profit on that close date and the DTE that would still remain.
+      </p>
+      <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+        Entry uses the current mid; the early-close probability reprices every exit leg at a theoretical mark,
+        holds each leg&rsquo;s current implied volatility constant, and excludes commissions and slippage. It
+        measures the result <em>on the planned close date</em>; the underlying may have crossed a strike earlier.
+        It is a risk-neutral model estimate, not a forecast or a guaranteed win rate.
+      </div>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/unbalanced-put-condor-scanner/02-probability-cards.png"
+          alt="Expanded unbalanced put condor result showing profitable-close probabilities and downside risk probabilities"
+          style={screenshotStyle}
+        />
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          The upper card answers whether the whole trade can be closed profitably at the planned dates. The lower
+          card separates touching the back short, reaching the back long where the expiration max-loss area begins,
+          and actually finishing below those strikes.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Reading the payoff and downside probabilities
+      </h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Upper flat</strong> is the expiration result above the highest strike. This is why the upper expiration line should begin flat.</li>
+        <li><strong>Center max</strong> is the best expiration outcome between the two short puts.</li>
+        <li><strong>Lower flat</strong> is the expiration result below the back long. With unequal widths or quantities, this can be much worse than the upper flat outcome.</li>
+        <li><strong>Touch back short</strong> estimates the chance of reaching the sold lower put at any time before expiration.</li>
+        <li><strong>Reach max-loss area</strong> estimates the chance of touching the back long before expiration—the price boundary where the expiration payoff becomes flat at its lower-tail result.</li>
+        <li><strong>Finish below</strong> probabilities are terminal estimates and are normally lower than the corresponding touch probabilities.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to use it</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Enter one or more liquid tickers and choose one delta pair or scan all three.</li>
+        <li>Choose the target expiration and allowed DTE window.</li>
+        <li>Set the purchased and sold widths independently, then choose a 1:1 or 5:10 quantity ratio—or enter custom quantities.</li>
+        <li>Select neutral, slightly bullish, or slightly bearish, and adjust the delta tolerances if needed.</li>
+        <li>Run the scan. Exact matches satisfy every enabled delta, width, liquidity, and credit constraint; near matches show the closest listed construction and its warnings.</li>
+        <li>Expand a row to compare the early-close win probabilities, downside tests, payoff, execution quality, and maximum loss.</li>
+        <li>Use <strong>Risk graph</strong> for the full payoff model or <strong>Save trade</strong> to send the exact strikes and quantities to Strategy Lab.</li>
+      </ol>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        <strong>Trade at your own risk.</strong> Probability is not protection. Volatility, skew, gaps, dividends,
+        assignment, commissions, and four-leg execution can materially change a real closing price. Size from the
+        maximum loss, verify every leg and quantity, and use one multi-leg closing order where supported.
+      </div>
+
+      <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+        Educational references:{' '}
+        <a href="https://www.optionseducation.org/optionsoverview/options-pricing" target="_blank" rel="noreferrer">
+          Options Industry Council—Options Pricing
+        </a>
+        {' · '}
+        <a href="https://www.optionseducation.org/oic-profit-and-loss-simulator" target="_blank" rel="noreferrer">
+          OIC Profit &amp; Loss Simulator
+        </a>
+      </p>
+    </div>
+  )
+}
+
 function ETFProviderUpdateHelp() {
   return (
     <div>
@@ -8442,6 +8560,7 @@ const CONTENT_MAP = {
   'bear-put-spread-scanner': BearPutSpreadScannerHelp,
   'bear-call-spread-scanner': BearCallSpreadScannerHelp,
   'iron-condor-scanner': IronCondorScannerHelp,
+  'unbalanced-put-condor-scanner': UnbalancedPutCondorScannerHelp,
   import: ImportHelp,
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,
