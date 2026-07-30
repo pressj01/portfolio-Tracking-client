@@ -932,6 +932,78 @@ const COLUMNS = [
   { key: 'realized_gains', label: 'Realized G/L', type: 'number', width: 120, tip: 'Realized gain or loss from shares already sold' },
 ]
 
+const LOT_COLUMNS = [
+  { key: 'transaction_type', label: 'Type', type: 'string' },
+  { key: 'transaction_date', label: 'Date', type: 'date' },
+  { key: 'shares', label: 'Shares', type: 'number' },
+  { key: 'price_per_share', label: 'Price', type: 'number' },
+  { key: 'fees', label: 'Fees', type: 'number' },
+  { key: 'cost_proceeds', label: 'Cost/Proceeds', type: 'number' },
+  { key: 'unrealized_gain', label: 'Unrealized G/L', type: 'number' },
+  { key: 'realized_gain', label: 'Realized G/L', type: 'number' },
+  { key: 'position_after', label: 'Position', type: 'number', divider: true },
+  { key: 'avg_cost_after', label: 'Avg Cost', type: 'number' },
+  { key: 'total_cost_after', label: 'Total Cost', type: 'number' },
+  { key: 'notes', label: 'Notes', type: 'string' },
+]
+
+const lotCostOrProceeds = (txn) => {
+  const shares = Number(txn.shares) || 0
+  const price = Number(txn.price_per_share) || 0
+  const fees = Number(txn.fees) || 0
+  return (txn.transaction_type || 'BUY') === 'SELL'
+    ? (shares * price) - fees
+    : (shares * price) + fees
+}
+
+const lotUnrealizedGain = (txn, holding) => {
+  if ((txn.transaction_type || 'BUY') === 'SELL') return null
+  const shares = Number(txn.shares) || 0
+  const currentPrice = Number(holding.current_price) || 0
+  return (shares * currentPrice) - lotCostOrProceeds(txn)
+}
+
+const lotSortValue = (txn, holding, key) => {
+  if (key === 'transaction_type') return txn.transaction_type || 'BUY'
+  if (key === 'cost_proceeds') return lotCostOrProceeds(txn)
+  if (key === 'unrealized_gain') return lotUnrealizedGain(txn, holding)
+  return txn[key]
+}
+
+const sortLotTransactions = (transactions, holding, sort) => {
+  if (!Array.isArray(transactions) || !sort?.key) return transactions || []
+  const column = LOT_COLUMNS.find(col => col.key === sort.key)
+
+  return transactions
+    .map((txn, index) => ({ txn, index }))
+    .sort((a, b) => {
+      const av = lotSortValue(a.txn, holding, sort.key)
+      const bv = lotSortValue(b.txn, holding, sort.key)
+      const aMissing = av == null || av === ''
+      const bMissing = bv == null || bv === ''
+      if (aMissing && bMissing) return a.index - b.index
+      if (aMissing) return 1
+      if (bMissing) return -1
+
+      let comparison
+      if (column?.type === 'number') {
+        comparison = Number(av) - Number(bv)
+      } else if (column?.type === 'date') {
+        const aTime = Date.parse(av)
+        const bTime = Date.parse(bv)
+        comparison = Number.isNaN(aTime) || Number.isNaN(bTime)
+          ? String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' })
+          : aTime - bTime
+      } else {
+        comparison = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' })
+      }
+
+      if (comparison === 0) return a.index - b.index
+      return sort.direction === 'asc' ? comparison : -comparison
+    })
+    .map(({ txn }) => txn)
+}
+
 const DEFAULT_COLUMN_WIDTH = 96
 const ACTIONS_COLUMN_WIDTH = 150
 const columnWidth = (col, i) => i < FROZEN_COLS ? FROZEN_WIDTHS[i] : (col.width || DEFAULT_COLUMN_WIDTH)
@@ -1210,6 +1282,7 @@ export default function ManageHoldings() {
   const [txnTicker, setTxnTicker] = useState(null)    // ticker for transaction modal
   const [txnIsNew, setTxnIsNew] = useState(false)      // true = new ticker via transaction
   const [expandedTickers, setExpandedTickers] = useState({})  // { ticker: [txns] | 'loading' }
+  const [lotSorts, setLotSorts] = useState({})          // { ticker: { key, direction } }
 
   // `silent` re-fetches without flashing the table spinner — used to reconcile
   // a single optimistic edit (e.g. a DRIP toggle) against the backend's
@@ -1408,6 +1481,19 @@ export default function ManageHoldings() {
     } catch {
       setExpandedTickers(prev => ({ ...prev, [ticker]: [] }))
     }
+  }
+
+  const handleLotSort = (ticker, key) => {
+    setLotSorts(prev => {
+      const current = prev[ticker]
+      return {
+        ...prev,
+        [ticker]: {
+          key,
+          direction: current?.key === key && current.direction === 'asc' ? 'desc' : 'asc',
+        },
+      }
+    })
   }
 
   const handleAdd = () => {
@@ -1999,28 +2085,57 @@ export default function ManageHoldings() {
                           <table style={{ width: 'auto', fontSize: '0.82rem', marginBottom: 0 }}>
                             <thead>
                               <tr style={{ borderBottom: '1px solid var(--p-1a3a5c)' }}>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Type</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Date</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Shares</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Price</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Fees</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Cost/Proceeds</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Unrealized G/L</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Realized G/L</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2, borderLeft: '1px solid var(--p-1a3a5c)' }}>Position</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Avg Cost</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Total Cost</th>
-                                <th style={{ padding: '0.3rem 0.75rem', fontWeight: 600, color: 'var(--text-dim-2)', position: 'sticky', top: 30, background: 'var(--p-13203a)', zIndex: 2 }}>Notes</th>
+                                {LOT_COLUMNS.map(col => {
+                                  const activeSort = lotSorts[h.ticker]?.key === col.key
+                                  const direction = activeSort ? lotSorts[h.ticker].direction : null
+                                  return (
+                                    <th
+                                      key={col.key}
+                                      aria-sort={activeSort ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+                                      style={{
+                                        padding: '0.3rem 0.75rem',
+                                        fontWeight: 600,
+                                        color: 'var(--text-dim-2)',
+                                        position: 'sticky',
+                                        top: 30,
+                                        background: 'var(--p-13203a)',
+                                        zIndex: 2,
+                                        ...(col.divider ? { borderLeft: '1px solid var(--p-1a3a5c)' } : {}),
+                                      }}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => handleLotSort(h.ticker, col.key)}
+                                        title={`Sort lots by ${col.label}`}
+                                        style={{
+                                          alignItems: 'center',
+                                          background: 'transparent',
+                                          border: 0,
+                                          color: 'inherit',
+                                          cursor: 'pointer',
+                                          display: 'inline-flex',
+                                          font: 'inherit',
+                                          fontWeight: 'inherit',
+                                          gap: '0.25rem',
+                                          padding: 0,
+                                          whiteSpace: 'nowrap',
+                                        }}
+                                      >
+                                        {col.label}
+                                        <span aria-hidden="true" style={{ fontSize: '0.65rem', opacity: activeSort ? 1 : 0.55 }}>
+                                          {activeSort ? (direction === 'asc' ? '\u25B2' : '\u25BC') : '\u2195'}
+                                        </span>
+                                      </button>
+                                    </th>
+                                  )
+                                })}
                               </tr>
                             </thead>
                             <tbody>
-                              {expandedTickers[h.ticker].map(txn => {
+                              {sortLotTransactions(expandedTickers[h.ticker], h, lotSorts[h.ticker]).map(txn => {
                                 const isSell = (txn.transaction_type || 'BUY') === 'SELL'
-                                const lotCost = isSell
-                                  ? ((txn.shares || 0) * (txn.price_per_share || 0)) - (txn.fees || 0)
-                                  : ((txn.shares || 0) * (txn.price_per_share || 0)) + (txn.fees || 0)
-                                const lotValue = isSell ? null : (txn.shares || 0) * (h.current_price || 0)
-                                const lotGL = isSell ? null : lotValue - (((txn.shares || 0) * (txn.price_per_share || 0)) + (txn.fees || 0))
+                                const lotCost = lotCostOrProceeds(txn)
+                                const lotGL = lotUnrealizedGain(txn, h)
                                 return (
                                   <tr key={txn.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                                     <td style={{ padding: '0.3rem 0.75rem', color: isSell ? 'var(--p-ef9a9a)' : 'var(--p-81c784)', fontWeight: 600 }}>{isSell ? 'SELL' : 'BUY'}</td>
