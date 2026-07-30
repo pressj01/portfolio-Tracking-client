@@ -8,6 +8,7 @@ import openpyxl
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from transaction_import import (
     parse_etrade_transactions_xlsx,
+    parse_fidelity_positions_xlsx,
     parse_schwab_csv,
     parse_shear_group_activity,
     parse_shear_group_positions,
@@ -144,6 +145,49 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(result["summary"]["cash"], 6425.39)
         self.assertEqual(result["summary"]["account_value"], 6597.89)
         self.assertEqual(result["source_format"], "schwab")
+
+    def test_fidelity_positions_removes_export_footer_before_account_validation(self):
+        content = "\n".join([
+            "Account number,Account name,Symbol,Description,Last Price,Current value,Cost basis total,Average cost basis,Total gain/loss $,Quantity,Dist. yield",
+            ",ROTH IRA,SPAXX**,HELD IN MONEY MARKET,,$11.10,,,,,3.32%",
+            ',ROTH IRA,AVDV,AVANTIS INTERNATIONAL SMALL CAP VAL ETF,$102.22,"$1,581.03","$1,635.52",$105.74,($54.49),15.467,2.84%',
+            "",
+            '"The data and information in this spreadsheet is provided solely for informational purposes.",,,,,,,,,,',
+            '"Brokerage services are provided by Fidelity Brokerage Services LLC.",,,,,,,,,,',
+            "Date downloaded Jul-29-2026 9:33 p.m ET,,,,,,,,,,",
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Portfolio_Positions.csv"
+            path.write_text(content, encoding="utf-8")
+
+            result = parse_fidelity_positions_xlsx(str(path), path.name)
+
+        self.assertEqual(result["account_name"], "ROTH IRA")
+        self.assertEqual(result["summary"]["holdings"], 1)
+        self.assertEqual(result["summary"]["filtered"], 4)
+        self.assertEqual(result["summary"]["cash"], 11.10)
+        self.assertEqual(result["summary"]["account_value"], 1592.13)
+        position = result["positions"][0]
+        self.assertEqual(position["ticker"], "AVDV")
+        self.assertEqual(position["description"], "AVANTIS INTERNATIONAL SMALL CAP VAL ETF")
+        self.assertEqual(position["purchase_value"], 1635.52)
+
+    def test_fidelity_positions_accepts_file_that_is_already_clean(self):
+        content = "\n".join([
+            "Account number,Account name,Symbol,Description,Last Price,Current value,Cost basis total,Average cost basis,Total gain/loss $,Quantity,Dist. yield",
+            ',ROTH IRA,AVDV,AVANTIS INTERNATIONAL SMALL CAP VAL ETF,$102.22,"$1,581.03","$1,635.52",$105.74,($54.49),15.467,2.84%',
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Already_Clean.csv"
+            path.write_text(content, encoding="utf-8")
+
+            result = parse_fidelity_positions_xlsx(str(path), path.name)
+
+        self.assertEqual(result["summary"]["holdings"], 1)
+        self.assertEqual(result["summary"]["filtered"], 0)
+        self.assertEqual(result["positions"][0]["ticker"], "AVDV")
 
     def test_shear_group_positions_accepts_csv_export(self):
         content = "\n".join([

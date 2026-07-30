@@ -820,6 +820,41 @@ def _fidelity_row_record(header, row):
     return _row_record(header, row)
 
 
+def _fidelity_clean_position_rows(rows, header_idx, header):
+    """Keep only actual Fidelity position/cash rows after the header.
+
+    Fidelity CSV exports append legal disclaimers and a download timestamp in
+    the first column.  Because that column is normally the account number,
+    those footer rows must be removed before account validation.  Clean
+    exports pass through unchanged.
+    """
+    cleaned_rows = []
+    filtered_count = 0
+
+    for row in rows[header_idx + 1:]:
+        if not _row_has_values(row):
+            continue
+
+        record = _fidelity_row_record(header, row)
+        ticker = str(record.get("Symbol") or "").strip().upper()
+        holding_type = str(record.get("Type") or "").strip().lower()
+        quantity = _safe_float(record.get("Quantity"))
+        is_cash = holding_type == "cash" or ticker.endswith("**")
+        is_position = bool(
+            ticker
+            and TICKER_RE.match(ticker)
+            and quantity is not None
+            and quantity > 0
+        )
+
+        if is_cash or is_position:
+            cleaned_rows.append(row)
+        else:
+            filtered_count += 1
+
+    return cleaned_rows, filtered_count
+
+
 def _fidelity_parse_percent_fraction(raw):
     if isinstance(raw, str) and raw.strip().endswith("%"):
         return _safe_float(raw.strip().rstrip("%"))
@@ -878,15 +913,13 @@ def parse_fidelity_positions_xlsx(file_path, filename):
             "Make sure this is a Fidelity positions export or a table with Symbol and Quantity columns."
         )
 
+    position_rows, filtered_count = _fidelity_clean_position_rows(rows, header_idx, header)
     positions = []
-    filtered_count = 0
     cash_value = 0.0
     account_names = set()
     account_numbers = set()
 
-    for row in rows[header_idx + 1:]:
-        if not any(v is not None and str(v).strip() != "" for v in row):
-            continue
+    for row in position_rows:
         record = _fidelity_row_record(header, row)
         account_name = (str(record.get("Account Name") or "")).strip()
         account_number = (str(record.get("Account Number") or "")).strip()
@@ -901,12 +934,8 @@ def parse_fidelity_positions_xlsx(file_path, filename):
         current_value = _safe_float(record.get("Current value"))
         quantity = _safe_float(record.get("Quantity"))
 
-        if holding_type.lower() == "cash" or ticker.endswith("**") or quantity is None or quantity <= 0:
+        if holding_type.lower() == "cash" or ticker.endswith("**"):
             cash_value += current_value or 0.0
-            filtered_count += 1
-            continue
-
-        if not ticker or not TICKER_RE.match(ticker):
             filtered_count += 1
             continue
 
