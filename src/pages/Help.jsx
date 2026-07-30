@@ -26,6 +26,7 @@ const GROUPS = [
       { id: 'bull-put-spread-scanner', label: 'Bull Put Spread Scanner' },
       { id: 'covered-call-scanner', label: 'Covered Call Scanner' },
       { id: 'bear-put-spread-scanner', label: 'Bear Put Spread Scanner' },
+      { id: 'bear-call-spread-scanner', label: 'Bear Call Spread Scanner' },
     ],
   },
   {
@@ -6497,6 +6498,166 @@ function BearPutSpreadScannerHelp() {
   )
 }
 
+function BearCallSpreadScannerHelp() {
+  return (
+    <div>
+      <h2>Bear Call Spread Scanner</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The fifth screen in the options family, and the bearish way to <em>collect</em> premium rather than pay it. A
+        bear call spread sells a lower-strike call and buys a higher-strike call in the same expiration: the credit is
+        the entire reward, the width minus the credit is the entire risk, and down, sideways, or up a little all win.
+        Only a rally loses. The scanner finds rallies that have been <em>refused</em> under overhead supply, then prices
+        a specific vertical on each one.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Why this is not the Covered Call Scanner without the shares
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The obvious screen &mdash; &ldquo;find the most overbought names, their call premium is fattest&rdquo; &mdash;
+        is the Covered Call Scanner&rsquo;s setup, and that screen already warns overbought alone is a trap. Here the
+        failure is <em>categorically</em> worse. A covered call writer who gets run over delivers shares they already
+        own: a capped gain, an opportunity cost, an annoyance. This trade owns nothing, so a rally through the short
+        strike is a realized cash loss up to the full width. The identical setup that merely disappoints a call writer
+        genuinely loses money here &mdash; which is why accelerating momentum, fresh 52-week highs, market leadership,
+        and a hard run off the recent low are all <strong>excluded by default</strong> rather than merely flagged.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The second temptation, &ldquo;sell calls on whatever just crashed, the implied vol is huge&rdquo;, fails twice
+        over. The sharpest rallies in the market happen inside downtrends, and a short squeeze runs to the full width
+        while the credit caps the gain at a nickel. And after a capitulation the <em>call</em> skew flattens or inverts
+        &mdash; puts are bid, calls are cheap &mdash; so you are paid least exactly where the realized upside risk is
+        highest. When a name is genuinely breaking down, the Bear Put Spread Scanner pays you for the move instead of
+        capping you at a credit.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        So this screen asks for the awkward middle: a bounce that has <strong>stopped</strong>. Rally size is scored as
+        a <strong>band</strong> rather than a ramp &mdash; roughly 0.75&ndash;2&sigma; earns full credit and credit
+        falls away above 3&sigma; &mdash; and relative performance is gated as a <em>maximum</em>, the only screen in
+        the family where outperformance disqualifies a candidate.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How candidates are scored</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Rejection (30 points)</strong> — a band on the rally size earns 0&ndash;8. Structure is worth 7: the last week failing to take out the fortnight&rsquo;s high (4) and this rally topping below the previous one (3). Momentum rolling over earns 7, cooling momentum 0&ndash;4, and lagging the market 0&ndash;4. Then the penalties, which are heavy on purpose: fresh highs cost 10, acceleration up to 6, leadership up to 6, a squeeze off the low up to 8, and overbought-and-still-rising 5. The axis floors at zero.</li>
+        <li><strong>Ceiling (20 points)</strong> — a band on the distance to the nearest overhead level earns 0&ndash;8, peaking when the wall is 0.5&ndash;6% above. A confirmed downtrend earns 4, sitting under a flat-or-falling 50-day earns 4, and a band on position in the 52-week range gives the last 4, peaking mid-range.</li>
+        <li><strong>Credit (25 points)</strong> — needs a live chain. IV/RV from 0.95 to 1.45 earns 0&ndash;8, edge over realized-vol fair value from 0% to +35% earns 0&ndash;7, annualized return on risk from 15% to 55% earns 0&ndash;6, and credit as a share of width from 15% to 35% earns 0&ndash;4.</li>
+        <li><strong>Safety (25 points)</strong> — size (3) and share liquidity (3) need no chain. The rest does: P(OTM) 0&ndash;5, breakeven cushion 0&ndash;4, two-leg slippage 0&ndash;3, open interest on the thinner leg 0&ndash;2, a credit that survives crossing both markets 2, and a short strike above the wall 3. Deductions: earnings before expiry 8, a dividend inviting early assignment 6 (3 if merely elevated), and an upside wing above 1.05 up to 4.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Grades are <strong>A &ge; 80, B &ge; 70, C &ge; 60, D &ge; 50</strong>, otherwise F, calibrated against the
+        other four option screens so a C means the same thing on all five. A grade with an asterisk and a dashed outline
+        had no option chain, so it is rescaled from the 56 points that could still be scored, and partial scores always
+        sort below fully priced ones.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        The ceiling: where the short strike goes
+      </h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Unique to this screen. Rather than taking whatever strike the target delta lands on, the scanner identifies every
+        overhead level above the current price &mdash; a flat or declining 20-, 50-, or 200-day average, the 20-day or
+        3-month swing high, the 52-week high &mdash; and prefers pairs whose short strike sits <em>above</em> the nearest
+        one, so price has to break something structural before the trade starts losing. It is the Covered Call
+        Scanner&rsquo;s cost-basis strike floor applied to a technical level, and it relaxes the same way when no listed
+        strike clears it. Crucially a moving average only counts as resistance when it is flat or <em>falling</em>: a
+        rising average price has just slipped under is support about to be reclaimed, and treating it as a ceiling would
+        put the short strike directly in the path of the next leg up &mdash; which is the Bull Put Spread
+        Scanner&rsquo;s setup, not this one.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Why IV/RV and the volatility wing both flip sign here
+      </h3>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>IV/RV</strong> reads the opposite way to the Bear Put Spread Scanner. There you are the buyer, so
+        implied vol above realized is a cost, coloured red. Here you are the seller, so rich implied vol is the point,
+        coloured green. The volatility <strong>wing</strong> inverts too. The bear put screen treats a steep put skew as
+        its one structural gift, because you sell the fatter vol. Here a steep upside wing is a <em>warning</em>, because
+        it prices the exact move that costs you the width. <strong>Upside tail</strong> is the median implied vol of the far
+        out-of-the-money calls against at-the-money; above about 1.05 the market is paying for a jump, which is the
+        closest thing to a squeeze or takeover warning available from chain data alone. It needs at least five genuinely
+        quoted far strikes to be reported at all — below that it reads as a dash and is charged nothing, because far
+        strikes on thin chains carry stale marks rather than prices.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        That comparison is made against at-the-money rather than between the two legs for a measured reason. Sampling
+        live chains at the 25- and 10-delta calls, the leg-to-leg ratio straddles 1.0 with a median near 0.97 for single
+        names: the equity call wing turns back <em>up</em> at far strikes rather than sloping down, so only broad index
+        funds show the clean downward call skew the textbooks describe (SPY around 1.12, most single names below parity).
+        A &ldquo;the nearer leg should carry more vol&rdquo; test would fire on most of the market and mean nothing. The
+        leg-to-leg ratio is still shown as <strong>Call skew (legs)</strong> for context, but it is not scored.
+        <strong> Edge</strong> compares the credit to a realized-volatility fair value; because pricing a call spread
+        with no drift flatters the seller slightly, the scoring ramp for edge starts at zero rather than below it.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        The two risks only a short call faces
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Early assignment for a dividend.</strong> A call holder exercises early only to capture a dividend, and
+        only once the remaining extrinsic value is worth less than that dividend &mdash; which happens the day before
+        the ex-date. In a covered call that means delivering shares you already own. In a spread it leaves you
+        <em> short 100 shares you never owned</em>, holding a long call, and owing the dividend. The exposure is
+        therefore measured as the dividend against the credit collected rather than against today&rsquo;s moneyness, and
+        when it is material the exit plan sets a hard <strong>Close before</strong> date. That is the one risk on this
+        screen with an exact calendar answer.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Earnings inside the trade.</strong> A report can gap the stock through the short strike overnight, and
+        the pre-announcement implied vol is precisely what made the credit look generous. The scanner prefers an
+        expiration closing before the report; with the earnings skip enabled a stock whose report falls inside Target
+        DTE plus the buffer is removed entirely rather than given a very short expiration instead. A third gap risk has
+        no technical signal at all &mdash; a takeover bid &mdash; which is why the small-cap floor here is higher than on
+        the Bear Put Spread Scanner and why the warning is named <em>Gap risk</em>.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Trade math and management</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Maximum profit</strong> is the credit received.</li>
+        <li><strong>Maximum loss</strong> is the strike width minus the credit &mdash; size the position from this, never from the premium.</li>
+        <li><strong>Breakeven</strong> at expiration is the short strike plus the credit; everything below it wins.</li>
+        <li><strong>Cushion</strong> is the distance up to that breakeven, shown as a percentage and as a multiple of the expected move over the life of the trade.</li>
+        <li><strong>Two probabilities</strong> are shown and they deliberately disagree: P(OTM) comes off the short leg&rsquo;s delta, the conventional and slightly conservative reading, while Chance of max profit is the exact terminal probability. Delta always understates how often price finishes past a strike.</li>
+        <li><strong>Buy back at</strong> captures 50&ndash;65% of the credit depending on setup quality; <strong>Stop at</strong> is roughly twice the credit, capped just inside the width so the spread can still trade; <strong>Invalidate above</strong> is the overhead level the strike was placed behind, reached long before the defined loss is.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>If you already own the shares</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        The <strong>Shares</strong> column shows any position you hold and how many contracts it would cover. That
+        changes what the trade <em>is</em>: with 100 shares behind it the short leg is covered, so assignment delivers
+        stock you already hold rather than opening a short position, and the long call simply caps the tail. It becomes a
+        covered call with the upside disaster hedged &mdash; materially safer than the same two legs with nothing behind
+        them.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to Use</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Pick a <strong>preset</strong>. <strong>Downtrend rips</strong> is the highest-probability version: only names already in a confirmed downtrend that have just bounced into a declining average.</li>
+        <li>Add <strong>Index ETFs</strong> or <strong>Sector &amp; commodity ETFs</strong> with the independent Include checkboxes. Index funds are the one underlying here with no takeover risk and nothing to squeeze.</li>
+        <li>Click <strong>Run Scan</strong>. The first run pulls a year of history and takes roughly 20&ndash;40 seconds; the price <em>and</em> call-chain caches are shared with the Covered Call Scanner, so running one after the other is much faster.</li>
+        <li>Click any row for the score breakdown, both legs with their quotes, the exit plan including any close-before date, and the rejection metrics.</li>
+        <li>Click the ticker to pull up its price chart with moving averages, MACD, and RSI.</li>
+      </ol>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
+        <strong>No trades execute here.</strong> The scanner rates setups from public market data and scores are not
+        advice. A bear call spread has a defined maximum loss that is several times the credit collected, so size from
+        the max loss and never from the premium. Short calls can be assigned before expiration and pin risk rises near
+        expiry, so monitoring and an early closing plan are part of the setup rather than an afterthought.
+      </div>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        If a scan returns nothing, that is usually correct rather than broken &mdash; in a strong market very few names
+        qualify, and that is the screen working. Raise <strong>Max vs market</strong>, widen the RSI band, untick
+        <strong> Require 50-day below 200-day</strong> or <strong>Require resistance overhead</strong>, or widen the
+        universe. If candidates appear but none get a spread, lower <strong>Min credit</strong> or
+        <strong> Min cushion</strong>.
+      </div>
+    </div>
+  )
+}
+
 function ETFProviderUpdateHelp() {
   return (
     <div>
@@ -8079,6 +8240,7 @@ const CONTENT_MAP = {
   'bull-put-spread-scanner': BullPutSpreadScannerHelp,
   'covered-call-scanner': CoveredCallScannerHelp,
   'bear-put-spread-scanner': BearPutSpreadScannerHelp,
+  'bear-call-spread-scanner': BearCallSpreadScannerHelp,
   import: ImportHelp,
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,
