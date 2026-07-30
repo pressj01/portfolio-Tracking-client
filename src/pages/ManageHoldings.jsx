@@ -1068,6 +1068,7 @@ const normalizeDivSource = (source) => {
   if (value.startsWith('robinhood')) return 'robinhood'
   if (value.startsWith('snowball')) return 'snowball'
   if (value.startsWith('shear_group') || value.startsWith('shear group')) return 'shear_group'
+  if (value.startsWith('generic')) return 'imported'
   return value
 }
 

@@ -896,6 +896,135 @@ _FIDELITY_TRANSACTION_ALIASES = {
 }
 
 
+_GENERIC_TRANSACTION_ALIASES = {
+    "Date": ["Transaction Date", "Trade Date", "Activity Date", "Payment Date"],
+    "Type": ["Transaction Type", "Action", "Activity", "Event"],
+    "Ticker": ["Symbol", "Stock", "ETF"],
+    "Shares": ["Quantity", "Qty", "Units"],
+    "Price Per Share": ["Price", "Share Price", "Price/Share", "Price Per Share ($)"],
+    "Fees": ["Fee", "Commission", "Commissions", "Fees & Commissions"],
+    "Dividend Amount": ["Dividend", "Amount", "Cash Amount", "Income Amount"],
+    "Notes": ["Note", "Description", "Memo"],
+}
+
+
+def parse_generic_transactions(file_path, filename):
+    """Parse the app's generic transaction XLSX/CSV format."""
+    rows = _read_table_rows(file_path, filename, "Transactions")
+    if not rows:
+        raise ValueError("The generic transactions file is empty.")
+
+    header_idx, header = _find_header_row(
+        rows,
+        _GENERIC_TRANSACTION_ALIASES,
+        required={"Date", "Type", "Ticker"},
+    )
+    if header_idx is None:
+        raise ValueError(
+            "Could not find the generic transaction columns. "
+            "Use the Generic Transactions template with Date, Type, and Ticker columns."
+        )
+
+    buy_actions = {"buy", "bought", "purchase", "purchased"}
+    sell_actions = {"sell", "sold", "sale"}
+    dividend_actions = {
+        "dividend", "cash dividend", "distribution",
+        "capital gain", "capital gain distribution", "cap gain",
+    }
+    drip_actions = {
+        "drip", "reinvest", "reinvestment",
+        "dividend reinvestment", "reinvest dividend",
+    }
+
+    kept = []
+    filtered_count = 0
+
+    for row in rows[header_idx + 1:]:
+        if not _row_has_values(row):
+            continue
+
+        record = _row_record(header, row)
+        action = str(record.get("Type") or "").strip()
+        action_key = re.sub(r"[^a-z0-9]+", " ", action.casefold()).strip()
+        ticker = str(record.get("Ticker") or "").strip().upper()
+        date_str = _parse_date_str(record.get("Date"))
+        shares = _safe_float(record.get("Shares"))
+        price = _safe_float(record.get("Price Per Share"))
+        fees = abs(_safe_float(record.get("Fees")) or 0.0)
+        dividend_amount = _safe_float(record.get("Dividend Amount"))
+        notes = str(record.get("Notes") or "").strip()
+
+        if not ticker or not TICKER_RE.match(ticker) or not date_str:
+            filtered_count += 1
+            continue
+
+        if action_key in buy_actions or action_key in sell_actions or action_key in drip_actions:
+            if shares is None or shares == 0 or price is None or price <= 0:
+                filtered_count += 1
+                continue
+
+            is_drip = action_key in drip_actions
+            if is_drip:
+                notes = f"[DRIP] {notes or 'Dividend Reinvestment'}"
+            kept.append({
+                "type": "SELL" if action_key in sell_actions else "BUY",
+                "ticker": ticker,
+                "date": date_str,
+                "shares": abs(shares),
+                "price_per_share": abs(price),
+                "fees": round(fees, 2),
+                "dividend_amount": None,
+                "notes": notes,
+            })
+            continue
+
+        if action_key in dividend_actions:
+            if dividend_amount is None or dividend_amount == 0:
+                filtered_count += 1
+                continue
+            kept.append({
+                "type": "DIVIDEND",
+                "ticker": ticker,
+                "date": date_str,
+                "shares": None,
+                "price_per_share": None,
+                "fees": 0.0,
+                "dividend_amount": round(abs(dividend_amount), 2),
+                "notes": notes or action.title(),
+            })
+            continue
+
+        filtered_count += 1
+
+    if not kept:
+        raise ValueError(
+            "No valid transactions were found. BUY, SELL, and DRIP rows require "
+            "Date, Ticker, Shares, and Price Per Share; DIVIDEND rows require "
+            "Date, Ticker, and Dividend Amount."
+        )
+
+    buys = sum(1 for txn in kept if txn["type"] == "BUY")
+    sells = sum(1 for txn in kept if txn["type"] == "SELL")
+    dividends = sum(1 for txn in kept if txn["type"] == "DIVIDEND")
+    drip_count = sum(
+        1 for txn in kept
+        if txn["type"] == "BUY" and "[DRIP]" in (txn["notes"] or "")
+    )
+
+    return {
+        "transactions": kept,
+        "summary": {
+            "buys": buys,
+            "sells": sells,
+            "dividends": dividends,
+            "filtered": filtered_count,
+            "drip_detected": drip_count,
+            "splits_applied": 0,
+        },
+        "source_format": "generic_transactions",
+    }
+
+
 def parse_fidelity_positions_xlsx(file_path, filename):
     """Parse a Fidelity positions XLSX/XLS/CSV export."""
     rows = _fidelity_read_rows(file_path, filename, "Position")
@@ -2242,6 +2371,7 @@ def parse_etrade_transactions_xlsx(file_path, filename):
 
 
 PARSERS = {
+    "generic_transactions": parse_generic_transactions,
     "snowball": parse_snowball_csv,
     "snowball_holdings": parse_snowball_holdings_csv,
     "schwab": parse_schwab_csv,
@@ -2258,6 +2388,7 @@ PARSERS = {
 
 # Labels shown in the UI format dropdown
 PARSER_LABELS = {
+    "generic_transactions": "Generic Transactions",
     "snowball": "Snowball Analytics",
     "snowball_holdings": "Snowball Holdings (Migration)",
     "schwab": "Charles Schwab (Positions)",

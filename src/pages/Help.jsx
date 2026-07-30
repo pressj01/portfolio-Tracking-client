@@ -169,7 +169,7 @@ function ImportHelp() {
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
         <strong>Brokerage templates:</strong> The Generic Upload area also includes downloadable brokerage-position templates.
         Use the matching template if you want to paste or export positions from a broker first, then import them into the app.
-        The app currently provides templates for <strong>E*TRADE</strong>, <strong>Charles Schwab</strong>, <strong>Fidelity</strong>, and <strong>Robinhood</strong>, plus a generic template and Snowball holdings migration template.
+        The app currently provides templates for <strong>E*TRADE</strong>, <strong>Charles Schwab</strong>, <strong>Fidelity</strong>, and <strong>Robinhood</strong>, plus generic holdings and generic transaction templates and a Snowball holdings migration template.
       </div>
 
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
@@ -199,6 +199,7 @@ function ImportHelp() {
         <li><strong>Robinhood Transactions template</strong> — a CSV with the exact activity columns this importer reads for buys, sells, dividends, capital gains, and ACAT share transfers.</li>
         <li><strong>Snowball Holdings template</strong> — use this for a migration-style holdings snapshot when moving from Snowball into the app.</li>
         <li><strong>Generic template</strong> — use this when your source does not match a brokerage template and you want the broadest flexible import format.</li>
+        <li><strong>Generic Transactions template</strong> — use this broker-neutral XLSX for one-row-per-event BUY, SELL, DIVIDEND, and DRIP history.</li>
       </ul>
 
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem', marginTop: '0.5rem' }}>
@@ -241,7 +242,7 @@ function ImportHelp() {
         <strong>Recommended workflow:</strong>
         <ol style={{ paddingLeft: '1.5rem', marginTop: '0.5rem', marginBottom: 0 }}>
           <li>Import a <strong>Positions</strong> file first (Schwab, E*TRADE, Fidelity, or Robinhood) to set accurate current holdings, share counts, and cost basis.</li>
-          <li>Then import <strong>Transaction History</strong> (Schwab Transactions, E*TRADE Transactions, Fidelity Transactions, Robinhood Transactions, or Snowball Transactions) for dividend tracking and realized gain records.</li>
+          <li>Then import <strong>Transaction History</strong> (Generic Transactions, Schwab Transactions, E*TRADE Transactions, Fidelity Transactions, Robinhood Transactions, or Snowball Transactions) for dividend tracking and realized gain records.</li>
           <li>Run <strong>Refresh Prices &amp; Divs</strong> to update market data, dividend fields, and pay-date estimates.</li>
         </ol>
         When a Positions import has been done first, transaction imports store history without overwriting your holdings data.
@@ -269,6 +270,16 @@ function ImportHelp() {
         Positions file first (see recommended workflow above). A database backup is created automatically before
         every import and dividend repair so you can restore if needed.
       </div>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Generic Transactions</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Select <strong>Generic Transactions</strong>, then download the XLSX template and replace its sample rows.</li>
+        <li>Required on every row: <strong>Date</strong>, <strong>Type</strong>, and <strong>Ticker</strong>.</li>
+        <li>BUY, SELL, and DRIP rows also require <strong>Shares</strong> and <strong>Price Per Share</strong>. DIVIDEND rows require <strong>Dividend Amount</strong>.</li>
+        <li>Supported types are BUY, SELL, DIVIDEND, and DRIP. Fees and Notes are optional.</li>
+        <li>The importer previews the normalized events, skips transactions already imported, rolls BUY/SELL/DRIP activity into positions when appropriate, and records dividend payments and realized gains.</li>
+        <li>Import one selected portfolio at a time. The same headers are also accepted in a CSV file.</li>
+      </ul>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Charles Schwab (Transactions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -465,6 +476,7 @@ function ImportHelp() {
           give you matching columns for supported broker export/paste workflows. Fill in at least the Ticker and Shares columns. Optional columns include:
           Price Paid, Current Price, Dividend, Frequency, Ex-Div Date, Pay Date, DRIP, Category, Purchase Date,
           Dividends Paid, YTD Divs, Total Divs Received, and more.
+          Use the separate <strong>Generic Transactions</strong> tab to download the transaction template, preview every event, and import it into the selected portfolio.
           <div style={{ marginBottom: '0.75rem', marginTop: '0.75rem' }}>
             <img src="./help-screenshots/import/generic-portfolio-template-download.jpg" alt="Upload Your Portfolio section with Download Template button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
           </div>

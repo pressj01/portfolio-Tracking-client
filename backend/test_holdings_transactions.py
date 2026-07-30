@@ -824,6 +824,118 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_generic_transactions_import_builds_positions_and_deduplicates_reimports(self):
+        import io
+
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (40, 'Manual Transactions', 'other', 0, 0)"
+        )
+        content = (
+            "Date,Type,Ticker,Shares,Price Per Share,Fees,Dividend Amount,Notes\n"
+            "2026-01-15,BUY,ABC,10,20.00,0,,Initial purchase\n"
+            "2026-02-01,BUY,ABC,5,22.00,0,,Second lot\n"
+            "2026-03-01,SELL,ABC,3,25.00,0,,Partial sale\n"
+            "2026-03-15,DIVIDEND,ABC,,,,6.00,Cash dividend\n"
+        )
+
+        orig_income = app_module.populate_income_tracking
+        orig_snapshot = app_module._snapshot_nav_after_profile_update
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+        try:
+            preview = self.client.post(
+                "/api/import/transactions/preview?profile_id=40",
+                data={
+                    "format": "generic_transactions",
+                    "file": (io.BytesIO(content.encode()), "generic-transactions.csv"),
+                },
+                content_type="multipart/form-data",
+            )
+
+            def post():
+                return self.client.post(
+                    "/api/import/transactions?profile_id=40",
+                    data={
+                        "format": "generic_transactions",
+                        "file": (io.BytesIO(content.encode()), "generic-transactions.csv"),
+                    },
+                    content_type="multipart/form-data",
+                )
+
+            first = post()
+            second = post()
+        finally:
+            app_module.populate_income_tracking = orig_income
+            app_module._snapshot_nav_after_profile_update = orig_snapshot
+
+        self.assertEqual(preview.status_code, 200, preview.get_data(as_text=True))
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        self.assertEqual(second.status_code, 200, second.get_data(as_text=True))
+        preview_data = preview.get_json()
+        first_data = first.get_json()
+        second_data = second.get_json()
+        self.assertEqual(preview_data["summary"]["buys"], 2)
+        self.assertEqual(preview_data["summary"]["sells"], 1)
+        self.assertEqual(preview_data["summary"]["dividends"], 1)
+        self.assertEqual(first_data["inserted_buys"], 2)
+        self.assertEqual(first_data["inserted_sells"], 1)
+        self.assertEqual(first_data["dividends_applied"], 1)
+        self.assertEqual(second_data["duplicates_skipped"], 4)
+
+        conn = self._get_connection()
+        try:
+            holding = conn.execute(
+                "SELECT quantity, price_paid, purchase_value, realized_gains, "
+                "total_divs_received, dividend_actuals_source "
+                "FROM all_account_info WHERE ticker = 'ABC' AND profile_id = 40"
+            ).fetchone()
+            txn_count = conn.execute(
+                "SELECT COUNT(*) FROM transactions WHERE ticker = 'ABC' AND profile_id = 40"
+            ).fetchone()[0]
+            dividend_count = conn.execute(
+                "SELECT COUNT(*) FROM dividend_payments WHERE ticker = 'ABC' AND profile_id = 40"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+        self.assertAlmostEqual(holding["quantity"], 12.0, places=4)
+        self.assertAlmostEqual(holding["price_paid"], 250.0 / 12.0, places=4)
+        self.assertAlmostEqual(holding["purchase_value"], 250.0, places=2)
+        self.assertAlmostEqual(holding["realized_gains"], 15.0, places=2)
+        self.assertAlmostEqual(holding["total_divs_received"], 6.0, places=2)
+        self.assertEqual(holding["dividend_actuals_source"], "generic_transactions")
+        self.assertEqual(txn_count, 3)
+        self.assertEqual(dividend_count, 1)
+
+    def test_generic_transactions_template_download_contains_expected_sheets_and_headers(self):
+        import io
+        import openpyxl
+
+        response = self.client.get("/api/template/generic-transactions-download")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "generic_transactions_template.xlsx",
+            response.headers.get("Content-Disposition", ""),
+        )
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(response.data), read_only=True, data_only=True)
+            try:
+                self.assertEqual(wb.sheetnames, ["Transactions", "Instructions"])
+                headers = [cell.value for cell in next(wb["Transactions"].iter_rows(max_row=1))]
+            finally:
+                wb.close()
+        finally:
+            response.close()
+        self.assertEqual(
+            headers,
+            [
+                "Date", "Type", "Ticker", "Shares", "Price Per Share",
+                "Fees", "Dividend Amount", "Notes",
+            ],
+        )
+
     def test_layered_broker_then_snowball_then_broker_does_not_double_count(self):
         """Positions → Snowball txns → broker txns must not double-count the same
         real-world buys and dividends when the two feeds disagree on small details

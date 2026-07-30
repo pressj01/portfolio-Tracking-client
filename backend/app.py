@@ -13489,6 +13489,25 @@ def download_template():
     )
 
 
+@app.route("/api/template/generic-transactions-download", methods=["GET"])
+def download_generic_transactions_template():
+    template_path = os.path.join(
+        os.path.dirname(__file__),
+        '..',
+        'templates',
+        'generic_transactions_template.xlsx',
+    )
+    if not os.path.exists(template_path):
+        from create_template import create_generic_transactions_template
+        create_generic_transactions_template()
+    return send_file(
+        os.path.abspath(template_path),
+        as_attachment=True,
+        download_name='generic_transactions_template.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+
+
 @app.route("/api/template/etrade-download", methods=["GET"])
 def download_etrade_template():
     template_path = os.path.join(os.path.dirname(__file__), '..', 'templates', 'etrade_positions_template.csv')

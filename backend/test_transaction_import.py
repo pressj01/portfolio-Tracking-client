@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from transaction_import import (
     parse_etrade_transactions_xlsx,
     parse_fidelity_positions_xlsx,
+    parse_generic_transactions,
     parse_schwab_csv,
     parse_shear_group_activity,
     parse_shear_group_positions,
@@ -188,6 +189,58 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(result["summary"]["holdings"], 1)
         self.assertEqual(result["summary"]["filtered"], 0)
         self.assertEqual(result["positions"][0]["ticker"], "AVDV")
+
+    def test_generic_transactions_csv_parses_trades_dividends_and_drips(self):
+        content = "\n".join([
+            "Date,Type,Ticker,Shares,Price Per Share,Fees,Dividend Amount,Notes",
+            "2026-01-15,BUY,SCHD,10,27.50,0,,Initial purchase",
+            "2026-02-03,DIVIDEND,SCHD,,,,8.25,Cash dividend",
+            "2026-02-03,DRIP,SCHD,0.30,27.50,0,,Reinvested shares",
+            "2026-03-10,SELL,SCHD,2,29.00,0.05,,Partial sale",
+            "not-a-date,BUY,SCHD,1,30.00,0,,Invalid row",
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "generic-transactions.csv"
+            path.write_text(content, encoding="utf-8")
+
+            result = parse_generic_transactions(str(path), path.name)
+
+        self.assertEqual(result["summary"]["buys"], 2)
+        self.assertEqual(result["summary"]["sells"], 1)
+        self.assertEqual(result["summary"]["dividends"], 1)
+        self.assertEqual(result["summary"]["drip_detected"], 1)
+        self.assertEqual(result["summary"]["filtered"], 1)
+        self.assertEqual(result["source_format"], "generic_transactions")
+        self.assertEqual(result["transactions"][0]["date"], "2026-01-15")
+        self.assertEqual(result["transactions"][1]["dividend_amount"], 8.25)
+        self.assertEqual(result["transactions"][2]["notes"], "[DRIP] Reinvested shares")
+        self.assertEqual(result["transactions"][3]["fees"], 0.05)
+
+    def test_generic_transactions_xlsx_accepts_friendly_header_aliases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "generic-transactions.xlsx"
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Transactions"
+            ws.append([
+                "Transaction Date", "Action", "Symbol", "Quantity",
+                "Price/Share", "Commission", "Cash Amount", "Memo",
+            ])
+            ws.append([
+                "04/15/2026", "capital gain distribution", "JEPI",
+                None, None, None, 12.34, "Long-term capital gain",
+            ])
+            wb.save(path)
+            wb.close()
+
+            result = parse_generic_transactions(str(path), path.name)
+
+        self.assertEqual(result["summary"]["dividends"], 1)
+        txn = result["transactions"][0]
+        self.assertEqual(txn["type"], "DIVIDEND")
+        self.assertEqual(txn["ticker"], "JEPI")
+        self.assertEqual(txn["dividend_amount"], 12.34)
 
     def test_shear_group_positions_accepts_csv_export(self):
         content = "\n".join([

@@ -135,6 +135,16 @@ export default function Import() {
     setTxnNavOnly(false)
   }
 
+  const handleGenericTransactionsTab = () => {
+    handleTabChange('txnHistory')
+    setTxnFormat('generic_transactions')
+  }
+
+  const handleBrokerageImportTab = () => {
+    handleTabChange('txnHistory')
+    if (txnFormat === 'generic_transactions') setTxnFormat('snowball')
+  }
+
   const uploadFile = async (endpoint, extraFields = {}) => {
     if (!file) return
     setLoading(true)
@@ -247,6 +257,10 @@ export default function Import() {
     window.open(`${API_BASE}/api/template/download`, '_blank')
   }
 
+  const handleDownloadGenericTransactionsTemplate = () => {
+    window.open(`${API_BASE}/api/template/generic-transactions-download`, '_blank')
+  }
+
   const handleDownloadEtradeTemplate = () => {
     window.open(`${API_BASE}/api/template/etrade-download`, '_blank')
   }
@@ -354,13 +368,19 @@ export default function Import() {
           className={`tab ${activeTab === 'generic' ? 'active' : ''}`}
           onClick={() => handleTabChange('generic')}
         >
-          Generic Upload
+          Generic Positions
         </button>
         <button
-          className={`tab ${activeTab === 'txnHistory' ? 'active' : ''}`}
-          onClick={() => handleTabChange('txnHistory')}
+          className={`tab ${activeTab === 'txnHistory' && txnFormat === 'generic_transactions' ? 'active' : ''}`}
+          onClick={handleGenericTransactionsTab}
         >
-          Import Brokerage Positions and Snowball Data
+          Generic Transactions
+        </button>
+        <button
+          className={`tab ${activeTab === 'txnHistory' && txnFormat !== 'generic_transactions' ? 'active' : ''}`}
+          onClick={handleBrokerageImportTab}
+        >
+          Brokerage &amp; Export Import
         </button>
       </div>
 
@@ -472,9 +492,9 @@ export default function Import() {
             The template includes up to 12 portfolio tabs.
           </p>
 
-          <div style={{ marginBottom: '1rem' }}>
+          <div style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
             <button className="btn btn-secondary" onClick={handleDownloadTemplate}>
-              Download Template
+              Download Holdings Template
             </button>
           </div>
 
@@ -577,10 +597,16 @@ export default function Import() {
       {/* ── Transaction History Import ─────────────────────────────────── */}
       {activeTab === 'txnHistory' && (
         <div className="card">
-          <h2>Import Brokerage Positions, Transactions, and Snowball Data</h2>
+          <h2>
+            {txnFormat === 'generic_transactions'
+              ? 'Import Generic Transactions'
+              : 'Import Brokerage Positions, Transactions, and Snowball Data'}
+          </h2>
           <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
             {txnFormat === 'portfolio_export'
               ? <>Import the app's <strong>Holdings + Transactions Excel export</strong>. Preview shows the portfolio sheets and the Transactions sheet, then import restores both together from one file.</>
+            : txnFormat === 'generic_transactions'
+              ? <>Import broker-neutral transaction history from the app's <strong>Generic Transactions XLSX or CSV</strong> format. BUY, SELL, DIVIDEND, and DRIP rows use the same preview, duplicate protection, position rollup, dividend tracking, and realized-gain workflow as broker transaction imports.</>
             : txnFormat === 'schwab'
               ? <>Import current positions from a Schwab <strong>Positions CSV or XLSX</strong> export. In Schwab, go to Accounts {'>'} Positions, then export to CSV or Excel. This sets holdings, cost basis, and current prices directly.</>
               : txnFormat === 'snowball_holdings'
@@ -608,7 +634,7 @@ export default function Import() {
             }
           </p>
 
-          {['snowball', 'schwab_transactions', 'etrade_transactions', 'fidelity_transactions', 'robinhood_transactions', 'shear_group_activity'].includes(txnFormat) && (
+          {['generic_transactions', 'snowball', 'schwab_transactions', 'etrade_transactions', 'fidelity_transactions', 'robinhood_transactions', 'shear_group_activity'].includes(txnFormat) && (
             <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
               <strong>Partial history warning:</strong> If this file does not cover the full account history
               (e.g. only the last 1–2 years), imported buy/sell transactions will recalculate your share
@@ -624,6 +650,17 @@ export default function Import() {
               <br /><br />
               A database backup is created automatically before every import and dividend repair — you can restore from the
               bottom of this page if needed.
+            </div>
+          )}
+
+          {txnFormat === 'generic_transactions' && (
+            <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+              <strong>Generic transactions template available:</strong> download the XLSX template, replace the sample rows, and keep one transaction per row. CSV files with the same headers are also supported.
+              <div style={{ marginTop: '0.75rem' }}>
+                <button className="btn btn-secondary" onClick={handleDownloadGenericTransactionsTemplate}>
+                  Download Generic Transactions Template
+                </button>
+              </div>
             </div>
           )}
 
@@ -736,6 +773,7 @@ export default function Import() {
               style={{ width: '250px' }}
             >
               <option value="portfolio_export">Portfolio Export (Holdings + Transactions)</option>
+              <option value="generic_transactions">Generic Transactions</option>
               <option value="snowball_holdings">Snowball Holdings (Migration)</option>
               <option value="snowball">Snowball Transactions</option>
               <option value="schwab">Charles Schwab (Positions)</option>

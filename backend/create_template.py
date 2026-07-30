@@ -1,10 +1,14 @@
 """Generate downloadable import templates."""
 import csv
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from datetime import date
 import os
 
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.worksheet.datavalidation import DataValidation
+
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'portfolio_upload_template.xlsx')
+GENERIC_TRANSACTIONS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'generic_transactions_template.xlsx')
 ETRADE_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'etrade_positions_template.csv')
 SCHWAB_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'schwab_positions_template.csv')
 SCHWAB_TRANSACTIONS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'schwab_transactions_template.csv')
@@ -247,6 +251,148 @@ def create_template():
     os.makedirs(os.path.dirname(TEMPLATE_PATH), exist_ok=True)
     wb.save(TEMPLATE_PATH)
     return TEMPLATE_PATH
+
+
+def create_generic_transactions_template():
+    """Create the broker-neutral transaction history workbook."""
+    os.makedirs(os.path.dirname(GENERIC_TRANSACTIONS_TEMPLATE_PATH), exist_ok=True)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Transactions"
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "A2"
+
+    headers = [
+        "Date",
+        "Type",
+        "Ticker",
+        "Shares",
+        "Price Per Share",
+        "Fees",
+        "Dividend Amount",
+        "Notes",
+    ]
+    sample_rows = [
+        [date(2026, 1, 15), "BUY", "SCHD", 10, 27.50, 0.00, None, "Initial purchase"],
+        [date(2026, 2, 3), "DIVIDEND", "SCHD", None, None, None, 8.25, "Cash dividend received"],
+        [date(2026, 2, 3), "DRIP", "SCHD", 0.30, 27.50, 0.00, None, "Dividend reinvestment shares"],
+        [date(2026, 3, 10), "SELL", "SCHD", 2, 29.00, 0.05, None, "Partial sale"],
+    ]
+
+    header_fill = PatternFill(start_color="0F3D63", end_color="0F3D63", fill_type="solid")
+    header_font = Font(name="Aptos", bold=True, color="FFFFFF", size=11)
+    input_font = Font(name="Aptos", color="0000FF", size=10)
+    bottom_border = Border(bottom=Side(style="thin", color="B8C7D1"))
+
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+
+    for row_idx, row in enumerate(sample_rows, 2):
+        for col_idx, value in enumerate(row, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.font = input_font
+            cell.border = bottom_border
+            cell.alignment = Alignment(
+                horizontal="left" if col_idx in {2, 3, 8} else "right"
+            )
+
+    ws.auto_filter.ref = f"A1:H{len(sample_rows) + 1}"
+    ws.column_dimensions["A"].width = 14
+    ws.column_dimensions["B"].width = 16
+    ws.column_dimensions["C"].width = 12
+    ws.column_dimensions["D"].width = 14
+    ws.column_dimensions["E"].width = 18
+    ws.column_dimensions["F"].width = 12
+    ws.column_dimensions["G"].width = 19
+    ws.column_dimensions["H"].width = 34
+    ws.column_dimensions["A"].number_format = "yyyy-mm-dd"
+    for row_idx in range(2, len(sample_rows) + 2):
+        ws.cell(row=row_idx, column=1).number_format = "yyyy-mm-dd"
+        ws.cell(row=row_idx, column=4).number_format = "#,##0.0000"
+        for col_idx in (5, 6, 7):
+            ws.cell(row=row_idx, column=col_idx).number_format = "$#,##0.00;[Red]($#,##0.00);-"
+
+    type_validation = DataValidation(
+        type="list",
+        formula1='"BUY,SELL,DIVIDEND,DRIP"',
+        allow_blank=False,
+    )
+    type_validation.error = "Choose BUY, SELL, DIVIDEND, or DRIP."
+    type_validation.errorTitle = "Invalid transaction type"
+    type_validation.prompt = "Select the kind of transaction."
+    type_validation.promptTitle = "Transaction type"
+    ws.add_data_validation(type_validation)
+    type_validation.add("B2:B1001")
+
+    ins = wb.create_sheet("Instructions")
+    ins.sheet_view.showGridLines = False
+    ins.freeze_panes = "A6"
+    ins.merge_cells("A1:D1")
+    ins["A1"] = "Generic Transactions Import Template"
+    ins["A1"].fill = header_fill
+    ins["A1"].font = Font(name="Aptos Display", bold=True, color="FFFFFF", size=16)
+    ins["A1"].alignment = Alignment(horizontal="left")
+    ins.row_dimensions[1].height = 28
+
+    ins.merge_cells("A3:D3")
+    ins["A3"] = (
+        "Import one portfolio at a time. Select the destination portfolio in the app, "
+        "preview the file, then import it."
+    )
+    ins["A3"].fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+    ins["A3"].font = Font(name="Aptos", bold=True, color="7F6000")
+    ins["A3"].alignment = Alignment(wrap_text=True, vertical="center")
+    ins.row_dimensions[3].height = 34
+
+    instruction_headers = ["Column", "Required", "How it is used", "Accepted values / example"]
+    instruction_rows = [
+        ["Date", "Yes", "Transaction, trade, or payment date.", "2026-01-15 or 01/15/2026"],
+        ["Type", "Yes", "Determines how the row affects holdings and income.", "BUY, SELL, DIVIDEND, or DRIP"],
+        ["Ticker", "Yes", "Security ticker. It is trimmed and converted to uppercase.", "SCHD"],
+        ["Shares", "Trades only", "Positive share quantity for BUY, SELL, and DRIP.", "10 or 0.3250"],
+        ["Price Per Share", "Trades only", "Execution price for BUY, SELL, and DRIP.", "27.50"],
+        ["Fees", "No", "Commission or transaction fee; blank defaults to zero.", "0.00"],
+        ["Dividend Amount", "Dividends only", "Total cash received for a DIVIDEND row.", "8.25"],
+        ["Notes", "No", "Optional description saved with the transaction.", "Initial purchase"],
+    ]
+    for col_idx, value in enumerate(instruction_headers, 1):
+        cell = ins.cell(row=5, column=col_idx, value=value)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+
+    for row_idx, row in enumerate(instruction_rows, 6):
+        for col_idx, value in enumerate(row, 1):
+            cell = ins.cell(row=row_idx, column=col_idx, value=value)
+            cell.font = Font(name="Aptos", size=10)
+            cell.border = bottom_border
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    note_row = 15
+    ins.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=4)
+    ins.cell(row=note_row, column=1, value=(
+        "BUY, SELL, and DRIP rows update positions when the transaction ledger is the "
+        "portfolio's source of truth. If current holdings already exist, the import keeps "
+        "those share counts and adds the transactions for history, cost-basis support, "
+        "dividend tracking, and realized gains—matching broker transaction imports."
+    ))
+    ins.cell(row=note_row, column=1).fill = PatternFill(
+        start_color="DDEBF7", end_color="DDEBF7", fill_type="solid"
+    )
+    ins.cell(row=note_row, column=1).alignment = Alignment(wrap_text=True, vertical="top")
+    ins.row_dimensions[note_row].height = 58
+
+    ins.column_dimensions["A"].width = 22
+    ins.column_dimensions["B"].width = 16
+    ins.column_dimensions["C"].width = 58
+    ins.column_dimensions["D"].width = 34
+
+    wb.save(GENERIC_TRANSACTIONS_TEMPLATE_PATH)
+    return GENERIC_TRANSACTIONS_TEMPLATE_PATH
 
 
 def create_etrade_template():
@@ -750,6 +896,8 @@ def create_robinhood_holdings_template():
 if __name__ == "__main__":
     path = create_template()
     print(f"Template created at: {path}")
+    generic_txn_path = create_generic_transactions_template()
+    print(f"Generic transactions template created at: {generic_txn_path}")
     etrade_path = create_etrade_template()
     print(f"E*TRADE template created at: {etrade_path}")
     schwab_path = create_schwab_template()
