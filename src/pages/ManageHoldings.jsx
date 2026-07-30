@@ -18,11 +18,14 @@ const EMPTY_HOLDING = {
   shares_bought_from_dividend: '',
 }
 
-function normalizeHoldingRow(row) {
-  return {
-    ...row,
-    div_frequency: row?.div_frequency || EMPTY_HOLDING.div_frequency,
-  }
+// Payments per year by frequency code. '' is a deliberate "no distributions"
+// (a growth stock, a non-payer like a penny stock) and must annualize to zero
+// rather than falling back to a default cadence, or the holding is credited
+// with income it never pays.
+const FREQ_PAYMENTS_PER_YEAR = { W: 52, M: 12, Q: 4, SA: 2, A: 1 }
+
+function paymentsPerYear(freq) {
+  return FREQ_PAYMENTS_PER_YEAR[String(freq || '').toUpperCase()] || 0
 }
 
 function invalidateDashboardCache() {
@@ -96,7 +99,8 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
     for (const key of Object.keys(EMPTY_HOLDING)) {
       f[key] = holding[key] != null ? holding[key] : ''
     }
-    f.div_frequency = f.div_frequency || EMPTY_HOLDING.div_frequency
+    // An existing holding keeps a blank frequency as "no distributions".
+    // Only a brand-new holding falls back to the EMPTY_HOLDING default.
     return f
   })
   const [looking, setLooking] = useState(false)
@@ -124,9 +128,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
       const div = parseFloat(next.div) || 0
       const qty = parseFloat(next.quantity) || 0
       const price = parseFloat(next.current_price) || 0
-      const freqMult = { W: 52, M: 12, Q: 4, SA: 2, A: 1 }
-      const mult = freqMult[(next.div_frequency || 'M').toUpperCase()] || 12
-      const annual = div * qty * mult
+      const annual = div * qty * paymentsPerYear(next.div_frequency)
       if (next.reinvest === 'Y' && annual > 0 && price > 0) {
         next.shares_bought_from_dividend = parseFloat((annual / price).toFixed(3))
       } else if (next.reinvest === 'N') {
@@ -175,7 +177,9 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
     if (!form.ticker.trim()) return
 
     const payload = { ...form }
-    payload.div_frequency = payload.div_frequency || EMPTY_HOLDING.div_frequency
+    // Send a blank frequency through untouched: it is the user choosing "no
+    // distributions", and coercing it to a default here is what made that
+    // choice impossible to express.
     const numericFields = [
       'quantity', 'price_paid', 'current_price', 'div',
       'dividend_paid', 'ytd_divs', 'total_divs_received', 'paid_for_itself',
@@ -201,11 +205,15 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
         ? payload.gain_or_loss / payload.purchase_value : 0
       payload.percent_change = payload.gain_or_loss_percentage
     }
-    if (payload.div && payload.quantity) {
-      const freqMult = { W: 52, M: 12, Q: 4, SA: 2, A: 1 }
-      const mult = freqMult[(payload.div_frequency || 'M').toUpperCase()] || 12
+    const mult = paymentsPerYear(payload.div_frequency)
+    if (payload.div && payload.quantity && mult) {
       payload.estim_payment_per_year = parseFloat((payload.div * payload.quantity * mult).toFixed(3))
       payload.approx_monthly_income = parseFloat((payload.estim_payment_per_year / 12).toFixed(3))
+    } else if (!mult) {
+      // No cadence means no projected income, so clear any figure carried over
+      // from when the holding was marked as a payer.
+      payload.estim_payment_per_year = 0
+      payload.approx_monthly_income = 0
     }
     if (payload.estim_payment_per_year && payload.current_price && payload.reinvest === 'Y') {
       payload.shares_bought_from_dividend = parseFloat((payload.estim_payment_per_year / payload.current_price).toFixed(3))
@@ -321,7 +329,8 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
             </div>
             <div className="form-group">
               <label>Frequency</label>
-              <select value={form.div_frequency || 'M'} onChange={(e) => set('div_frequency', e.target.value)} style={{ width: '100%' }}>
+              <select value={form.div_frequency || ''} onChange={(e) => set('div_frequency', e.target.value)} style={{ width: '100%' }}>
+                <option value="">None — no distributions</option>
                 <option value="W">Weekly</option>
                 <option value="M">Monthly</option>
                 <option value="Q">Quarterly</option>
@@ -1296,7 +1305,9 @@ export default function ManageHoldings() {
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Failed to load holdings')
       if (requestId !== holdingsRequestRef.current) return
-      setHoldings(Array.isArray(data) ? data.map(normalizeHoldingRow) : [])
+      // Rows are shown as stored: a blank frequency reads as "no distributions"
+      // in the grid instead of being displayed as Monthly.
+      setHoldings(Array.isArray(data) ? data : [])
       setError(null)
     } catch (e) {
       if (requestId !== holdingsRequestRef.current) return

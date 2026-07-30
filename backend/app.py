@@ -1822,6 +1822,12 @@ def _cumulative_invested_cost_by_ticker(conn, profile_ids):
     could show a *lower* total return than price return (invested inflated
     above the tiny fresh cost basis), which is never mathematically valid when
     dividends are non-negative.
+
+    Transfer rows are excluded for the same reason they are in
+    _realized_gains_by_ticker: an inter-account/inter-broker move is not
+    out-of-pocket capital. Shares that leave on a '[Transfer out]' and come
+    back on a '[Transfer in]' would otherwise be paid for twice, inflating the
+    denominator and pushing total return away from price return.
     """
     ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
     if not ids:
@@ -1836,6 +1842,7 @@ def _cumulative_invested_cost_by_ticker(conn, profile_ids):
               AND UPPER(t.transaction_type) = 'BUY'
               AND COALESCE(t.notes, '') NOT LIKE '%DRIP%'
               AND COALESCE(t.notes, '') NOT LIKE '%reinvest%'
+              AND INSTR(LOWER(COALESCE(t.notes, '')), '[transfer') = 0
               AND (a.purchase_date IS NULL OR t.transaction_date >= a.purchase_date)
             GROUP BY t.ticker""",
         ids,
@@ -2123,10 +2130,17 @@ def _ensure_basis_columns(conn):
         "original_purchase_value": "REAL",
         "broker_price_paid": "REAL",
         "broker_purchase_value": "REAL",
+        # Set when a frequency is chosen by hand on the holdings screen. The
+        # market refresh re-derives cadence from observed payment spacing and
+        # writes it back on every run, so without this flag a manual correction
+        # (SEPI pays monthly, Yahoo's history says quarterly) is reverted within
+        # minutes, and "no distributions" could never be expressed at all.
+        "div_frequency_locked": "INTEGER DEFAULT 0",
     }
     for col, col_type in needed.items():
         if col not in cols:
             conn.execute(f"ALTER TABLE all_account_info ADD COLUMN {col} {col_type}")
+    conn.execute("UPDATE all_account_info SET div_frequency_locked = 0 WHERE div_frequency_locked IS NULL")
     conn.execute("""
         UPDATE all_account_info
            SET original_price_paid = COALESCE(original_price_paid, price_paid),
@@ -3235,6 +3249,105 @@ def _recompute_position_income_fields(
             profile_id,
         ),
     )
+
+
+# Facts about the SECURITY rather than about one account's lot. Two accounts
+# holding the same ticker cannot legitimately disagree about how often the fund
+# distributes or what it is called, so an edit to any of these belongs to every
+# row for that ticker.
+_SECURITY_LEVEL_HOLDING_FIELDS = (
+    "description",
+    "classification_type",
+    "div_frequency",
+    "ex_div_date",
+    "div_pay_date",
+)
+
+
+def _propagate_security_level_fields(conn, ticker, data, source_profile_id):
+    """Copy security-level metadata from one holding row to every other one.
+
+    update_holding writes a single row: the selected profile, or for an
+    aggregate the largest member that _resolve_aggregate_profile picks. That is
+    right for quantity and cost basis, which really are per-account, but it left
+    security-level metadata inconsistent across rows — and the aggregate read
+    then resolved the conflict alphabetically via MAX(). Setting SEPI to monthly
+    from a combined view updated one account to 'M', left the others at 'Q', and
+    the dashboard kept showing MAX('M','Q') = 'Q', so the edit looked ignored.
+
+    Imports cause the same divergence without any manual edit, since each
+    account's sheet carries its own frequency, so the read side is fixed
+    separately in _security_level_metadata_by_ticker.
+
+    Returns the profile ids updated.
+    """
+    shared = {f: data[f] for f in _SECURITY_LEVEL_HOLDING_FIELDS if f in data}
+    if not shared:
+        return []
+    if "div_frequency" in shared:
+        # Carry the pin with the value, or the refresh would re-derive a cadence
+        # for every account except the one that was edited.
+        shared["div_frequency_locked"] = 1
+
+    rows = conn.execute(
+        "SELECT profile_id FROM all_account_info WHERE ticker = ? AND profile_id != ?",
+        (ticker, source_profile_id),
+    ).fetchall()
+    targets = [r["profile_id"] if hasattr(r, "keys") else r[0] for r in rows]
+    if not targets:
+        return []
+
+    assignments = ", ".join(f"{field} = ?" for field in shared)
+    values = list(shared.values())
+    for pid in targets:
+        conn.execute(
+            f"UPDATE all_account_info SET {assignments} WHERE ticker = ? AND profile_id = ?",
+            values + [ticker, pid],
+        )
+        # div_frequency is the payments-per-year multiplier behind
+        # estim_payment_per_year, so a copied cadence has to rebuild the income
+        # fields on that row too or the account keeps quoting quarterly income
+        # while displaying a monthly cadence.
+        _recompute_position_income_fields(conn, pid, ticker)
+    return targets
+
+
+def _security_level_metadata_by_ticker(conn, profile_ids):
+    """Per-ticker security metadata taken from the largest holding of it.
+
+    The aggregate holdings query folds duplicate tickers with MAX(), which for
+    these text columns is alphabetical order and carries no meaning: MAX over
+    {'M','Q'} is 'Q' and MAX over dates stored 'MM/DD/YY' prefers December of
+    any year. Resolve the conflict the same way writes do — the profile holding
+    the most shares wins — so the aggregate agrees with the account rows it is
+    built from. One query for the whole result set, rather than a correlated
+    subquery per column.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT ticker, div_frequency, ex_div_date, div_pay_date
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND COALESCE(quantity, 0) > 1e-9
+            ORDER BY ticker, quantity DESC""",
+        ids,
+    ).fetchall()
+    metadata = {}
+    for row in rows:
+        ticker = row["ticker"]
+        entry = metadata.setdefault(ticker, {})
+        # Rows arrive largest-position-first, so the biggest holder decides.
+        # NULL means the field was never recorded for that account and falls
+        # through to a smaller one; '' is an explicit "no distributions" chosen
+        # on the holdings screen and has to win, or a non-payer would inherit a
+        # cadence from whichever account still had a stale one.
+        for field in ("div_frequency", "ex_div_date", "div_pay_date"):
+            if field not in entry and row[field] is not None:
+                entry[field] = row[field]
+    return metadata
 
 
 def _assign_position_category(conn, profile_id, ticker, category_name):
@@ -7444,6 +7557,17 @@ def _build_repair_metadata_from_snapshot(holding, snapshot):
     }
 
 
+def _holding_frequency_locked(holding):
+    """True when this holding's cadence was pinned by hand on the holdings screen."""
+    if holding is None:
+        return False
+    try:
+        keys = holding.keys()
+    except AttributeError:
+        return False
+    return "div_frequency_locked" in keys and bool(holding["div_frequency_locked"])
+
+
 def _apply_dividend_repair_metadata(conn, profile_id, ticker, holding, metadata):
     if not metadata:
         return False
@@ -7495,7 +7619,9 @@ def _apply_dividend_repair_metadata(conn, profile_id, ticker, holding, metadata)
     optional_fields = [
         ("ex_div_date", new_exdiv),
         ("div_pay_date", new_pay_date),
-        ("div_frequency", new_freq),
+        # Unlike the metrics pass next door, this one had no guard at all and
+        # overwrote a hand-picked cadence on every repair run.
+        ("div_frequency", None if _holding_frequency_locked(holding) else new_freq),
     ]
     for field, value in optional_fields:
         if value:
@@ -7602,9 +7728,11 @@ def _recompute_dividend_fields_from_payments(
         for pid in profile_ids
     }
 
+    _ensure_basis_columns(conn)  # div_frequency_locked is read below
     holdings = conn.execute(
         f"""SELECT ticker, profile_id, quantity, purchase_value, current_value,
-                  purchase_date, div_frequency, total_divs_received,
+                  purchase_date, div_frequency, div_frequency_locked,
+                  total_divs_received,
                   ytd_divs, current_month_income, paid_for_itself,
                   dividend_actuals_source, description, ex_div_date,
                   div_pay_date
@@ -10017,6 +10145,7 @@ def refresh_market_data():
     from datetime import datetime as _dt, timedelta as _td
 
     conn = get_connection()
+    _ensure_basis_columns(conn)  # div_frequency_locked is read below
     refresh_info = _get_refresh_target_info(conn)
     scope = refresh_info["scope"]
     source_pids = refresh_info["source_profile_ids"]
@@ -10027,7 +10156,7 @@ def refresh_market_data():
     # - Owner: source accounts that feed Owner
     # - Aggregate: aggregate member profiles
     all_rows = conn.execute(
-        "SELECT profile_id, ticker, description, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date, ex_div_date, div_pay_date, div_frequency, div, dividend_paid, estim_payment_per_year, approx_monthly_income, current_value, ytd_divs, current_month_income FROM all_account_info WHERE profile_id IN ({})".format(
+        "SELECT profile_id, ticker, description, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date, ex_div_date, div_pay_date, div_frequency, div_frequency_locked, div, dividend_paid, estim_payment_per_year, approx_monthly_income, current_value, ytd_divs, current_month_income FROM all_account_info WHERE profile_id IN ({})".format(
             ",".join("?" * len(source_pids))
         ) + " AND quantity > 0",
         source_pids,
@@ -10081,6 +10210,7 @@ def refresh_market_data():
             "ex_div_date": r["ex_div_date"] or None,
             "div_pay_date": r["div_pay_date"] or None,
             "div_frequency": r["div_frequency"] or None,
+            "div_frequency_locked": bool(r["div_frequency_locked"]),
             "div": r["div"] or 0,
             "dividend_paid": r["dividend_paid"] or 0,
             "estim_payment_per_year": r["estim_payment_per_year"] or 0,
@@ -10499,6 +10629,11 @@ def refresh_market_data():
             old_exdiv = h["ex_div_date"]
             old_pay_date = h["div_pay_date"]
             old_freq = h["div_frequency"]
+            # A hand-picked cadence outranks the one inferred from history:
+            # Yahoo's spacing for SEPI reads quarterly while the broker pays it
+            # monthly, and re-deriving on every refresh silently undid the fix.
+            if h["div_frequency_locked"]:
+                new_freq = old_freq
             existing_estim_annual = float(h.get("estim_payment_per_year") or 0)
             # Preserve the existing income estimate when:
             #  (a) this profile is positions-managed (broker-supplied income)
@@ -11598,6 +11733,14 @@ def list_holdings():
 
     # Recalculate percent_of_account
     results = rows_to_dicts(rows)
+    if is_agg and len(pids) > 1:
+        # Replace the aggregate query's MAX() picks for security-level text
+        # columns, which order alphabetically and so can report a quarterly
+        # cadence for a fund every account records as monthly.
+        security_metadata = _security_level_metadata_by_ticker(conn, pids)
+        for r in results:
+            for field, value in security_metadata.get(r.get("ticker"), {}).items():
+                r[field] = value
     payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, pids)
     _apply_dividend_payment_total_floor(
         results,
@@ -11853,6 +11996,13 @@ def update_holding(ticker):
             updates.append(f"{field} = ?")
             vals.append(data[field])
 
+    # A frequency picked on the holdings screen is a deliberate correction of
+    # what the refresh infers, so pin it. Includes the blank "no distributions"
+    # choice, which the refresh would otherwise fill back in from Yahoo.
+    if "div_frequency" in data:
+        updates.append("div_frequency_locked = ?")
+        vals.append(1)
+
     # When quantity is manually changed, reset base_quantity and import_date
     # so DRIP simulation restarts from this point (the user's new share count
     # already accounts for any DRIP up to now)
@@ -11897,10 +12047,12 @@ def update_holding(ticker):
         previous_quantity=previous_quantity,
         previous_annual_income=previous_annual_income,
     )
+    propagated_pids = _propagate_security_level_fields(conn, ticker, data, profile_id)
     conn.commit()
 
-    populate_holdings(profile_id)
-    populate_dividends(profile_id)
+    for pid in [profile_id] + propagated_pids:
+        populate_holdings(pid)
+        populate_dividends(pid)
     conn.close()
     return jsonify({"ticker": ticker, "message": f"{ticker} updated"})
 
@@ -12126,6 +12278,7 @@ def _refresh_transaction_realized_gains(ticker, profile_id, conn):
         if (_val(r, "transaction_type", 1) or "BUY").upper() == "SELL"
     ]
     alloc_map = _load_lot_alloc_map(conn, sell_ids)
+    untracked_basis = _untracked_share_basis(conn, ticker, profile_id)
 
     lots = []
     share_deficit = 0.0
@@ -12154,10 +12307,11 @@ def _refresh_transaction_realized_gains(ticker, profile_id, conn):
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
         else:
             sell_proceeds = (shares * price) - fees
-            cost_of_sold, sell_remaining = _consume_sell_lots(
+            cost_of_sold, sell_remaining = _consume_sell_lots_with_fallback(
                 lots,
                 shares,
                 alloc_map.get(txn_id),
+                untracked_basis,
             )
             share_deficit += sell_remaining
             conn.execute(
@@ -12318,7 +12472,7 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
     """Update original basis from transaction lots when they reconcile to broker shares."""
     _ensure_basis_columns(conn)
     rows = conn.execute(
-        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
+        "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date, notes "
         "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
         (ticker, profile_id),
     ).fetchall()
@@ -12343,6 +12497,7 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
         if (_val(r, "transaction_type", 1) or "BUY").upper() == "SELL"
     ]
     alloc_map = _load_lot_alloc_map(conn, sell_ids)
+    untracked_basis = _untracked_share_basis(conn, ticker, profile_id)
 
     lots = []
     share_deficit = 0.0
@@ -12355,6 +12510,7 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
         price = _val(r, "price_per_share", 3) or 0
         fees = _val(r, "fees", 4) or 0
         tdate = _val(r, "transaction_date", 5)
+        notes = _val(r, "notes", 6)
 
         if txn_type == "BUY":
             if share_deficit > 1e-9:
@@ -12365,12 +12521,21 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
             if shares > 1e-9 and tdate and (earliest_buy is None or tdate < earliest_buy):
                 earliest_buy = tdate
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
+        elif _is_transfer_txn(notes):
+            # Same non-economic move the other two rebuild passes already skip.
+            # Without this branch a transfer-out was priced as an ordinary $0
+            # SELL here, writing back a realized loss equal to the whole
+            # transferred basis and undoing what those passes had corrected.
+            _, sell_remaining = _consume_sell_lots(lots, shares, alloc_map.get(txn_id))
+            share_deficit += sell_remaining
+            conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
         else:
             sell_proceeds = (shares * price) - fees
-            cost_of_sold, sell_remaining = _consume_sell_lots(
+            cost_of_sold, sell_remaining = _consume_sell_lots_with_fallback(
                 lots,
                 shares,
                 alloc_map.get(txn_id),
+                untracked_basis,
             )
             share_deficit += sell_remaining
             realized = sell_proceeds - cost_of_sold
@@ -12544,6 +12709,10 @@ def _rollup_transactions(ticker, profile_id, conn):
         if (_val(r, "transaction_type", 1) or "BUY").upper() == "SELL"
     ]
     alloc_map = _load_lot_alloc_map(conn, all_sell_ids)
+    # Read before the rollup rewrites price_paid below, so this is the broker's
+    # own basis for the position rather than one derived from the lots we are
+    # about to rebuild.
+    untracked_basis = _untracked_share_basis(conn, ticker, profile_id)
 
     # Build lot queue and compute realized gains
     lots = []  # each lot: { id, shares, cost_per_share (incl. fees), date }
@@ -12579,10 +12748,11 @@ def _rollup_transactions(ticker, profile_id, conn):
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
         else:  # SELL
             sell_proceeds = (shares * price) - fees  # fees reduce proceeds
-            cost_of_sold, sell_remaining = _consume_sell_lots(
+            cost_of_sold, sell_remaining = _consume_sell_lots_with_fallback(
                 lots,
                 shares,
                 alloc_map.get(txn_id),
+                untracked_basis,
             )
             share_deficit += sell_remaining
 
@@ -12747,6 +12917,50 @@ def _consume_sell_lots(lots, sell_shares, allocations=None):
 
     lots[:] = [lot for lot in lots if lot["shares"] > 1e-9]
     return cost_of_sold, max(0.0, sell_remaining)
+
+
+def _untracked_share_basis(conn, ticker, profile_id):
+    """Per-share cost to charge sell shares the lot queue cannot account for.
+
+    A '[Transfer out]' consumes the whole lot queue without a matching
+    '[Transfer in]' ever being recorded (broker migrations export the leg that
+    leaves but not the one that arrives). Every later SELL then finds an empty
+    queue, and _consume_sell_lots returns a cost of $0 — so the entire sale
+    proceeds get booked as realized gain. RDGL showed +10.8% total return
+    against a -58.4% price return that way: 6,000 shares sold at ~$0.14 on a
+    $0.14 basis were recorded as $825.88 of pure profit.
+
+    The broker's own cost per share on the surviving position is the best
+    available basis for those shares, so charge the uncovered remainder at that
+    rate instead of at zero. Returns None when there is nothing to fall back on
+    (no holding row, or no basis recorded), which preserves the old behaviour
+    rather than inventing a number.
+    """
+    row = conn.execute(
+        """SELECT COALESCE(price_paid, broker_price_paid, original_price_paid) AS basis
+           FROM all_account_info WHERE ticker = ? AND profile_id = ?""",
+        (ticker, profile_id),
+    ).fetchone()
+    if not row:
+        return None
+    basis = row["basis"] if isinstance(row, dict) or hasattr(row, "keys") else row[0]
+    try:
+        basis = float(basis)
+    except (TypeError, ValueError):
+        return None
+    return basis if basis > 0 else None
+
+
+def _consume_sell_lots_with_fallback(lots, shares, allocations, fallback_cost_per_share):
+    """_consume_sell_lots, but uncovered shares cost `fallback_cost_per_share`.
+
+    Returns (cost_of_sold, sell_remaining). `sell_remaining` is still reported
+    so callers keep their share-deficit bookkeeping — only the cost changes.
+    """
+    cost_of_sold, sell_remaining = _consume_sell_lots(lots, shares, allocations)
+    if sell_remaining > 1e-9 and fallback_cost_per_share:
+        cost_of_sold += sell_remaining * fallback_cost_per_share
+    return cost_of_sold, sell_remaining
 
 
 def _apply_buy_to_lots(lots, shares, price, fees, txn_id=None, txn_date=None):

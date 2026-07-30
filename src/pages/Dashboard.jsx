@@ -6,7 +6,7 @@ import { useMarketRefresh } from '../context/MarketRefreshContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
 import { returnVsYield } from '../utils/returnVsYield'
-import { readDashboardCache, writeDashboardCache } from '../utils/dashboardCache'
+import { readDashboardCache, writeDashboardCache, dashboardCacheKey as buildDashboardCacheKey } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
 import {
   PERFORMANCE_PERIODS,
@@ -132,13 +132,10 @@ const sharesFromDrip = (income, h) => {
   const price = dripSharePrice(h)
   return price > 0 ? Number(income || 0) / price : 0
 }
-const normalizeDashboardHolding = (holding) => ({
-  ...holding,
-  div_frequency: holding?.div_frequency || 'M',
-})
-const normalizeDashboardHoldings = (rows) => Array.isArray(rows)
-  ? rows.map(normalizeDashboardHolding)
-  : []
+// Rows are shown as stored. A blank frequency means the holding pays nothing
+// (a growth stock, a non-payer), so it renders as — rather than being defaulted
+// to Monthly, which invented a cadence for securities that have no dividend.
+const normalizeDashboardHoldings = (rows) => Array.isArray(rows) ? rows : []
 const shortDate = (value) => {
   if (!value) return ''
   const d = new Date(`${value}T00:00:00`)
@@ -807,7 +804,7 @@ export default function Dashboard() {
   const holdingsTableRef = useRef(null)
   const holdingsHeadRowRef = useRef(null)
   const navChartRef = useRef(null)
-  const dashboardCacheKey = useMemo(() => `portfolio_dashboard_v17_${selection}_${basisMode}`, [selection, basisMode])
+  const dashboardCacheKey = useMemo(() => buildDashboardCacheKey(selection, basisMode), [selection, basisMode])
   const currentProfile = useMemo(
     () => profiles.find(p => p.id === profileId) || null,
     [profiles, profileId],

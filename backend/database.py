@@ -233,6 +233,9 @@ def ensure_tables_exist(conn=None):
             gain_or_loss               REAL,
             gain_or_loss_percentage    REAL,
             div_frequency              TEXT,
+            -- Set when div_frequency is chosen by hand on the holdings screen,
+            -- so the market refresh stops re-deriving it from payment spacing.
+            div_frequency_locked       INTEGER DEFAULT 0,
             reinvest                   TEXT,
             ex_div_date                TEXT,
             div_pay_date               TEXT,

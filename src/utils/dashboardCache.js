@@ -1,4 +1,13 @@
-const CACHE_PREFIX = 'portfolio_dashboard_v16_'
+// Bumped whenever the cached payload shape changes, which retires old entries.
+// Dashboard.jsx must build its key from dashboardCacheKey() rather than
+// repeating the literal: when it moved to v17 on its own, every clear helper
+// here kept filtering for v16 and silently matched nothing, so an edit on the
+// Manage Holdings screen never actually dropped the Dashboard's cached copy.
+export const CACHE_PREFIX = 'portfolio_dashboard_v17_'
+
+export function dashboardCacheKey(selection, basisMode) {
+  return `${CACHE_PREFIX}${selection}_${basisMode}`
+}
 
 const DASHBOARD_CACHE_TTL_MS = 60 * 60 * 1000
 
