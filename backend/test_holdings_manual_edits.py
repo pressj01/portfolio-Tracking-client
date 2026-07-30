@@ -438,7 +438,7 @@ class ManualHoldingEditApiTest(unittest.TestCase):
                 "original_purchase_value, broker_price_paid, broker_purchase_value, reinvest, "
                 "dividend_paid, estim_payment_per_year, approx_monthly_income) "
                 "VALUES ('OVL', 6, 16, 56.45, 57.52, 903.2, 920.32, "
-                "17.12, 0.018955, 0.018955, 56.445, 903.12, 56.45, 903.2, 'N', 0, 0, 0)"
+                "17.12, 0.018955, 0.018955, 56.445, 903.12, 56.45, 903.2, 'N', 0, 100, 8.333333)"
             )
             conn.execute(
                 "INSERT INTO all_account_info "
@@ -447,7 +447,7 @@ class ManualHoldingEditApiTest(unittest.TestCase):
                 "original_purchase_value, broker_price_paid, broker_purchase_value, reinvest, "
                 "dividend_paid, estim_payment_per_year, approx_monthly_income) "
                 "VALUES ('OVL', 7, 105, 56.54, 57.52, 5986.15, 6039.6, "
-                "53.45, 0.008928, 0.008928, 57.0138, 5986.35, 56.535, 5986.15, 'N', 0, 0, 0)"
+                "53.45, 0.008928, 0.008928, 57.0138, 5986.35, 56.535, 5986.15, 'N', 0, 300, 25)"
             )
             conn.commit()
         finally:
@@ -458,7 +458,8 @@ class ManualHoldingEditApiTest(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         row = self._row(
             "SELECT quantity, purchase_value, original_price_paid, original_purchase_value, "
-            "broker_price_paid, broker_purchase_value "
+            "broker_price_paid, broker_purchase_value, estim_payment_per_year, "
+            "annual_yield_on_cost, current_annual_yield "
             "FROM all_account_info WHERE ticker = 'OVL' AND profile_id = 1"
         )
         self.assertEqual(row["quantity"], 121)
@@ -467,6 +468,9 @@ class ManualHoldingEditApiTest(unittest.TestCase):
         self.assertAlmostEqual(row["original_price_paid"], 6889.47 / 121, places=6)
         self.assertAlmostEqual(row["broker_purchase_value"], 6889.35, places=2)
         self.assertAlmostEqual(row["broker_price_paid"], 6889.35 / 121, places=6)
+        self.assertAlmostEqual(row["estim_payment_per_year"], 400, places=6)
+        self.assertAlmostEqual(row["annual_yield_on_cost"], 400 / 6889.35, places=8)
+        self.assertAlmostEqual(row["current_annual_yield"], 400 / 6959.92, places=8)
 
     def test_update_quantity_to_zero_clears_stale_position_values(self):
         self._execute(

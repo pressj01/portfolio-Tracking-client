@@ -4,67 +4,26 @@ import {
   distributionPeriodsPerYear,
   distributionYieldPeriodLabel,
 } from '../utils/distributionPeriod'
+import { annualDistributionEstimate } from '../utils/approxYield'
 import { getCurrencyLabel } from '../utils/money'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-// Infer how many times per year a fund distributes from the median gap between
-// its most recent payments. Used only for the single-distribution fallback.
-function inferAnnualMultiplier(distDesc) {
-  if (distDesc.length < 2) return 4
-  const gaps = []
-  for (let i = 0; i < Math.min(distDesc.length - 1, 6); i++) {
-    gaps.push(Math.abs(distDesc[i].t - distDesc[i + 1].t) / 86400000)
-  }
-  gaps.sort((a, b) => a - b)
-  const gap = gaps[Math.floor(gaps.length / 2)]
-  if (gap <= 10) return 52
-  if (gap <= 45) return 12
-  if (gap <= 115) return 4
-  if (gap <= 240) return 2
-  return 1
-}
-
-// Estimate a forward annual yield from the most current distributions: sum the
-// distributions paid in the last 3 months and annualize (×4). If none fall in
-// that window (insufficient recent data), fall back to the most recent single
-// distribution annualized by its inferred frequency. Returns null when there is
-// no usable price or no distribution data at all ("No data").
-export function estimateForwardYield(history, price) {
+// Estimate an annual yield from the latest completed distribution cycle.
+// Quarterly funds use four payments instead of multiplying one unusually high
+// or low quarter by four.
+export function estimateForwardYield(history, price, frequency = null) {
   const priceNum = Number(price)
   if (!Number.isFinite(priceNum) || priceNum <= 0) return null
 
-  const dist = (Array.isArray(history) ? history : [])
-    .map(item => ({ amount: Number(item?.amount), t: Date.parse(String(item?.date).slice(0, 10)) }))
-    .filter(d => Number.isFinite(d.amount) && d.amount > 0 && Number.isFinite(d.t))
-    .sort((a, b) => b.t - a.t)
-
-  if (!dist.length) return null
-
-  const cutoff = new Date()
-  cutoff.setMonth(cutoff.getMonth() - 3)
-  const cutoffMs = cutoff.getTime()
-  const recent = dist.filter(d => d.t >= cutoffMs)
-
-  if (recent.length) {
-    const annual = recent.reduce((s, d) => s + d.amount, 0) * 4
-    return {
-      yieldPct: (annual / priceNum) * 100,
-      annual,
-      basis: `${recent.length} distribution${recent.length > 1 ? 's' : ''} in last 3 months × 4`,
-    }
-  }
-
-  // Not enough recent data — use the most recent distribution, annualized.
-  const latest = dist[0]
-  const mult = inferAnnualMultiplier(dist)
-  const annual = latest.amount * mult
+  const estimate = annualDistributionEstimate(history, frequency)
+  if (!estimate) return null
   return {
-    yieldPct: (annual / priceNum) * 100,
-    annual,
-    basis: `latest distribution annualized (×${mult})`,
+    yieldPct: (estimate.annual / priceNum) * 100,
+    annual: estimate.annual,
+    basis: estimate.basis,
   }
 }
 
@@ -99,10 +58,18 @@ export function buildDistributionChart(history, ticker, price, pctMode = false, 
   const periodLabel = distributionYieldPeriodLabel(sortedMonths.map(([key]) => key), frequency)
   const periodsPerYear = distributionPeriodsPerYear(periodLabel)
   const isAnnualized = Boolean(annual && periodsPerYear)
-  const annualMult = isAnnualized ? periodsPerYear : 1
-  const values = showPct ? dollarValues.map(v => (v / priceNum) * 100 * annualMult) : dollarValues
+  const annualizedDollars = isAnnualized
+    ? dollarValues.map((_, idx) => {
+        const window = dollarValues.slice(Math.max(0, idx - periodsPerYear + 1), idx + 1)
+        const total = window.reduce((sum, value) => sum + value, 0)
+        return window.length >= periodsPerYear
+          ? total
+          : (total / window.length) * periodsPerYear
+      })
+    : dollarValues
+  const values = showPct ? annualizedDollars.map(v => (v / priceNum) * 100) : dollarValues
   const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
-  const pctLabel = isAnnualized ? 'Annual Yield %' : `${periodLabel} Yield %`
+  const pctLabel = isAnnualized ? 'Trailing Annual Yield %' : `${periodLabel} Yield %`
   const titleSuffix = showPct ? ` (${pctLabel})` : ''
 
   return {
@@ -176,8 +143,8 @@ export default function DistributionHistoryChart({
     [history, ticker, price, pctMode, annual, emptyLabel, theme, frequency],
   )
   const estimate = useMemo(
-    () => (showEstimatedYield ? estimateForwardYield(history, price) : null),
-    [showEstimatedYield, history, price],
+    () => (showEstimatedYield ? estimateForwardYield(history, price, frequency) : null),
+    [showEstimatedYield, history, price, frequency],
   )
   const hasToolbar = toolbarStart || chart.canShowPct || source || showEstimatedYield
 

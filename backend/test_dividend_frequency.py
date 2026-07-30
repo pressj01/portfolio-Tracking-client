@@ -70,6 +70,47 @@ class DividendFrequencyTest(unittest.TestCase):
 
         self.assertEqual(app_module._div_calc_infer_frequency(divs), "Q")
 
+    def test_variable_quarterly_yield_uses_full_distribution_cycle(self):
+        divs = pd.Series(
+            [0.4012, 0.4015, 0.4818, 0.2391],
+            index=pd.to_datetime([
+                "2025-10-01", "2025-12-29", "2026-04-01", "2026-07-01",
+            ]),
+        )
+
+        annual, _ttm, source = app_module._div_calc_annual_dividend(divs, "Q")
+
+        self.assertAlmostEqual(annual, 1.5236, places=4)
+        self.assertEqual(source, "trailing_12_month")
+
+    def test_refresh_metadata_uses_quarterly_cycle_instead_of_latest_payment(self):
+        quantity = 130.6035
+        price = 12.36
+        history = pd.Series(
+            [0.4012, 0.4015, 0.4818, 0.2391],
+            index=pd.to_datetime([
+                "2025-10-01", "2025-12-29", "2026-04-01", "2026-07-01",
+            ]),
+        )
+
+        metrics = app_module._build_repair_metadata_from_snapshot(
+            {
+                "quantity": quantity,
+                "purchase_value": quantity * 16.56,
+                "current_value": quantity * price,
+                "div_frequency": "Q",
+            },
+            {
+                "has_dividend": True,
+                "div": 0.2391,
+                "freq": "Q",
+                "history": history,
+            },
+        )
+
+        self.assertAlmostEqual(metrics["estim_payment_per_year"], 198.99, places=2)
+        self.assertAlmostEqual(metrics["current_annual_yield"], 0.1233, places=4)
+
     def test_one_shifted_monthly_payment_does_not_break_cadence(self):
         divs = _distributions([
             "2026-01-02", "2026-01-30", "2026-03-06", "2026-04-03",

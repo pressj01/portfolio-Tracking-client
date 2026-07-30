@@ -3499,9 +3499,9 @@ function SecurityResearchHelp() {
         Below the average return chart, a <strong>Distribution History</strong> bar chart shows recent dividend
         or distribution payments for the looked-up ticker. When the chart is in <strong>Yield %</strong> mode,
         an <strong>Annual / Monthly</strong> toggle appears. <em>Monthly</em> shows the per-period yield
-        (distribution ÷ price × 100). <em>Annual</em> multiplies by 12 for an annualized approximation,
-        making payers of different frequencies easier to compare. Switching back to <strong>$ Amount</strong>
-        resets to Monthly.
+        (distribution ÷ price × 100). <em>Annual</em> uses the latest completed distribution cycle—such as
+        four payments for a quarterly fund or twelve months for a monthly fund—so one unusually high or low
+        payment does not distort the annual yield. Switching back to <strong>$ Amount</strong> resets to Monthly.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>When to Use It</h3>
@@ -6910,9 +6910,10 @@ function ETFComparerHelp() {
       <p style={{ marginBottom: '0.75rem' }}>
         When the chart is in <strong>Yield %</strong> mode, an <strong>Annual / Monthly</strong> toggle appears.
         <em>Monthly</em> shows each distribution's per-period yield (distribution ÷ price × 100).
-        <em>Annual</em> multiplies the per-period yield by 12 to approximate an annualized rate, making monthly
-        and less-frequent payers directly comparable. Switching back to <strong>$ Amount</strong> mode
-        resets the toggle to Monthly automatically.
+        <em>Annual</em> uses a rolling completed distribution cycle—four payments for quarterly funds,
+        twelve months for monthly funds, and the equivalent cycle for other schedules. This keeps one
+        unusually high or low payment from distorting the annual yield. Switching back to
+        <strong>$ Amount</strong> mode resets the toggle to Monthly automatically.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="./help-screenshots/etf-comparer/distribution-history.jpg" alt="ETF Comparer distribution history chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />

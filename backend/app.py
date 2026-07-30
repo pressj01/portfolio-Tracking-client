@@ -3388,9 +3388,9 @@ def _auto_reconcile_owner():
     """Silently reconcile Owner (profile 1) from sub-profiles after any import.
 
     Only runs if the Owner import has been used (owner_import_used setting).
-    Syncs quantities, prices, and income fields while preserving Owner-only
-    data (ytd_divs, total_divs_received, paid_for_itself, current_month_income,
-    estim_payment_per_year, approx_monthly_income).
+    Syncs quantities, prices, yield, and income fields while preserving
+    Owner-only data (ytd_divs, total_divs_received, paid_for_itself,
+    current_month_income).
     """
     from datetime import date as _date
 
@@ -3440,6 +3440,12 @@ def _auto_reconcile_owner():
             SUM(dividend_paid) as dividend_paid,
             SUM(estim_payment_per_year) as estim_payment_per_year,
             SUM(approx_monthly_income) as approx_monthly_income,
+            CASE WHEN SUM(purchase_value) > 0
+                 THEN SUM(estim_payment_per_year) / SUM(purchase_value)
+                 ELSE 0 END as annual_yield_on_cost,
+            CASE WHEN SUM(current_value) > 0
+                 THEN SUM(estim_payment_per_year) / SUM(current_value)
+                 ELSE 0 END as current_annual_yield,
             SUM(withdraw_8pct_cost_annually) as withdraw_8pct_cost_annually,
             SUM(withdraw_8pct_per_month) as withdraw_8pct_per_month,
             SUM(cash_not_reinvested) as cash_not_reinvested,
@@ -3470,6 +3476,7 @@ def _auto_reconcile_owner():
         "gain_or_loss_percentage", "percent_change", "div_frequency", "reinvest",
         "ex_div_date", "div_pay_date", "div", "dividend_paid",
         "estim_payment_per_year", "approx_monthly_income",
+        "annual_yield_on_cost", "current_annual_yield",
         "withdraw_8pct_cost_annually", "withdraw_8pct_per_month",
         "cash_not_reinvested", "total_cash_reinvested",
         "shares_bought_from_dividend", "shares_bought_in_year", "shares_in_month",
@@ -3787,6 +3794,12 @@ def reconcile_owner():
             SUM(dividend_paid) as dividend_paid,
             SUM(estim_payment_per_year) as estim_payment_per_year,
             SUM(approx_monthly_income) as approx_monthly_income,
+            CASE WHEN SUM(purchase_value) > 0
+                 THEN SUM(estim_payment_per_year) / SUM(purchase_value)
+                 ELSE 0 END as annual_yield_on_cost,
+            CASE WHEN SUM(current_value) > 0
+                 THEN SUM(estim_payment_per_year) / SUM(current_value)
+                 ELSE 0 END as current_annual_yield,
             SUM(withdraw_8pct_cost_annually) as withdraw_8pct_cost_annually,
             SUM(withdraw_8pct_per_month) as withdraw_8pct_per_month,
             SUM(cash_not_reinvested) as cash_not_reinvested,
@@ -3828,6 +3841,7 @@ def reconcile_owner():
         "gain_or_loss_percentage", "percent_change", "div_frequency", "reinvest",
         "ex_div_date", "div_pay_date", "div", "dividend_paid",
         "estim_payment_per_year", "approx_monthly_income",
+        "annual_yield_on_cost", "current_annual_yield",
         "withdraw_8pct_cost_annually", "withdraw_8pct_per_month",
         "cash_not_reinvested", "total_cash_reinvested",
         "shares_bought_from_dividend", "shares_bought_in_year", "shares_in_month",
@@ -6603,9 +6617,11 @@ def _div_calc_positive_dividends(divs):
 def _div_calc_annual_dividend(divs, freq_code):
     """Return an annual dividend estimate for the calculator.
 
-    Prefer a completed trailing-12-month total when enough payments exist. For
-    variable weekly/monthly option-income funds, annualizing only the latest
-    payout can wildly overstate the baseline projection.
+    Prefer a completed distribution cycle when enough payments exist. This is
+    especially important for variable quarterly funds: annualizing only the
+    latest payout can materially understate or overstate their sustainable
+    yield. For variable weekly/monthly option-income funds, prefer a completed
+    trailing-12-month total.
     """
     pos = _div_calc_positive_dividends(divs)
     if pos.empty:
@@ -6619,6 +6635,13 @@ def _div_calc_annual_dividend(divs, freq_code):
 
     last_div = float(pos.iloc[-1])
     run_rate_div = last_div * per_year
+
+    if freq_code in ("Q", "SA", "A"):
+        recent_cycle = pos.tail(per_year)
+        if len(recent_cycle) >= per_year:
+            return float(recent_cycle.sum()), ttm_div, "trailing_12_month"
+        annualized_avg = float(recent_cycle.mean()) * per_year
+        return annualized_avg, ttm_div, "annualized_recent_distributions"
 
     if freq_code in ("W", "M"):
         min_full_year_payments = max(1, int(per_year * 0.75))
@@ -7369,22 +7392,41 @@ def _apply_dividend_repair_metrics(conn, profile_id, ticker, metrics, existing_f
     )
 
 
-def _build_repair_metadata_from_snapshot(holding, snapshot):
-    """Build current dividend metadata from an official issuer snapshot."""
+def _annual_dividend_per_share_from_snapshot(snapshot, fallback_frequency=None):
+    """Return a cycle-aware annual distribution from a market snapshot."""
     if not snapshot or not snapshot.get("has_dividend"):
-        return None
+        return 0.0
 
     div = float(snapshot.get("div") or 0)
     if div <= 0:
+        return 0.0
+
+    freq = (snapshot.get("freq") or fallback_frequency or "Q").upper()
+    freq_mult = {"W": 52, "52": 52, "M": 12, "Q": 4, "SA": 2, "A": 1}
+    annual_per_share = div * freq_mult.get(freq, 4)
+    history = snapshot.get("history")
+    if history is not None and not getattr(history, "empty", True):
+        estimated, _ttm, _source = _div_calc_annual_dividend(history, freq)
+        if estimated > 0:
+            annual_per_share = estimated
+    return annual_per_share
+
+
+def _build_repair_metadata_from_snapshot(holding, snapshot):
+    """Build current dividend metadata from an official issuer snapshot."""
+    annual_per_share = _annual_dividend_per_share_from_snapshot(
+        snapshot,
+        holding["div_frequency"],
+    )
+    if annual_per_share <= 0:
         return None
 
+    div = float(snapshot.get("div") or 0)
     quantity = float(holding["quantity"] or 0)
     purchase_value = float(holding["purchase_value"] or 0)
     current_value = float(holding["current_value"] or 0)
     freq = (snapshot.get("freq") or holding["div_frequency"] or "Q").upper()
-    freq_mult = {"W": 52, "52": 52, "M": 12, "Q": 4, "SA": 2, "A": 1}
-    mult = freq_mult.get(freq, 4)
-    annual_cash = div * quantity * mult
+    annual_cash = annual_per_share * quantity
     dividend_paid = div * quantity
 
     return {
@@ -10607,8 +10649,10 @@ def refresh_market_data():
 
                 if new_div:
                     cur_freq = (new_freq or 'Q').upper()
-                    mult = _refresh_frequency_multiplier(cur_freq)
-                    annual_div = new_div * mult
+                    annual_div = _annual_dividend_per_share_from_snapshot(
+                        snapshot,
+                        cur_freq,
+                    )
                     if preserve_income_estimate:
                         estim_annual = float(h.get("estim_payment_per_year") or 0)
                         estim_monthly = float(h.get("approx_monthly_income") or 0) or (
@@ -10621,7 +10665,7 @@ def refresh_market_data():
                     else:
                         yoc = (annual_div / price_paid) if price_paid else 0
                         cur_yield = (annual_div / new_price) if new_price else 0
-                        estim_annual = new_div * qty * mult
+                        estim_annual = annual_div * qty
                         estim_monthly = estim_annual / 12 if estim_annual else 0
                     sets.extend(["div = ?", "annual_yield_on_cost = ?", "current_annual_yield = ?",
                                  "estim_payment_per_year = ?", "approx_monthly_income = ?"])

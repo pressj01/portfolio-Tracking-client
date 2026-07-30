@@ -24,25 +24,63 @@ export function annualDistributionMultiplier(frequency, history) {
   return 1
 }
 
-export function approxYieldFromCurrentDistributions(profile) {
-  const price = Number(profile?.price)
-  if (!Number.isFinite(price) || price <= 0) return null
-
-  const latest = (Array.isArray(profile?.distribution_history) ? profile.distribution_history : [])
+export function annualDistributionEstimate(history, frequency) {
+  const distributions = (Array.isArray(history) ? history : [])
     .map(item => ({
       amount: Number(item?.amount),
       dateValue: new Date(item?.date).getTime(),
     }))
-    .filter(item => Number.isFinite(item.amount) && item.amount > 0)
-    .sort((a, b) => {
-      const aDate = Number.isFinite(a.dateValue) ? a.dateValue : 0
-      const bDate = Number.isFinite(b.dateValue) ? b.dateValue : 0
-      return bDate - aDate
-    })
-    .slice(0, 10)
+    .filter(item => (
+      Number.isFinite(item.amount)
+      && item.amount > 0
+      && Number.isFinite(item.dateValue)
+    ))
+    .sort((a, b) => b.dateValue - a.dateValue)
 
-  if (!latest.length) return null
-  const avgDistribution = latest.reduce((sum, item) => sum + item.amount, 0) / latest.length
-  const multiplier = annualDistributionMultiplier(profile?.distribution_frequency, profile?.distribution_history)
-  return (avgDistribution * multiplier / price) * 100
+  if (!distributions.length) return null
+
+  const multiplier = annualDistributionMultiplier(frequency, history)
+  // A fund that recently changed to weekly/monthly should use only the
+  // uninterrupted run at its current cadence; older quarterly payments would
+  // otherwise dilute the estimate.
+  let recentRun = distributions
+  if (multiplier === 52 || multiplier === 12) {
+    const [minGap, maxGap] = multiplier === 52 ? [3, 14] : [15, 45]
+    recentRun = [distributions[0]]
+    for (let idx = 1; idx < distributions.length; idx += 1) {
+      const gapDays = Math.abs(
+        distributions[idx - 1].dateValue - distributions[idx].dateValue,
+      ) / 86400000
+      if (gapDays < minGap || gapDays > maxGap) break
+      recentRun.push(distributions[idx])
+    }
+  }
+
+  const fullCycle = recentRun.slice(0, multiplier)
+  if (fullCycle.length >= multiplier) {
+    return {
+      annual: fullCycle.reduce((sum, item) => sum + item.amount, 0),
+      basis: `latest ${multiplier} distributions`,
+      multiplier,
+    }
+  }
+
+  const sample = recentRun.slice(0, 10)
+  const average = sample.reduce((sum, item) => sum + item.amount, 0) / sample.length
+  return {
+    annual: average * multiplier,
+    basis: `${sample.length} recent distribution${sample.length === 1 ? '' : 's'} annualized (×${multiplier})`,
+    multiplier,
+  }
+}
+
+export function approxYieldFromCurrentDistributions(profile) {
+  const price = Number(profile?.price)
+  if (!Number.isFinite(price) || price <= 0) return null
+
+  const estimate = annualDistributionEstimate(
+    profile?.distribution_history,
+    profile?.distribution_frequency,
+  )
+  return estimate ? (estimate.annual / price) * 100 : null
 }
