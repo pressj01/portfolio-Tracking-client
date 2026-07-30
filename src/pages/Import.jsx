@@ -59,6 +59,33 @@ function FileUpload({ onFileSelect, accept, file }) {
   )
 }
 
+function GenericImportTypeSwitch({ activeType, onPositions, onTransactions }) {
+  return (
+    <div
+      className="alert alert-info"
+      style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}
+    >
+      <strong>Choose what you are importing:</strong>
+      <button
+        type="button"
+        className={`btn ${activeType === 'positions' ? 'btn-primary' : 'btn-secondary'}`}
+        onClick={onPositions}
+        aria-pressed={activeType === 'positions'}
+      >
+        Positions
+      </button>
+      <button
+        type="button"
+        className={`btn ${activeType === 'transactions' ? 'btn-primary' : 'btn-secondary'}`}
+        onClick={onTransactions}
+        aria-pressed={activeType === 'transactions'}
+      >
+        Transactions
+      </button>
+    </div>
+  )
+}
+
 export default function Import() {
   const pf = useProfileFetch()
   const { isRefreshing: marketRefreshing, waitForMarketRefresh } = useMarketRefresh()
@@ -484,7 +511,11 @@ export default function Import() {
       {/* ── Generic Upload ─────────────────────────────────────────────── */}
       {activeTab === 'generic' && (
         <div className="card">
-          <h2>Upload Your Portfolio</h2>
+          <h2>Import Generic Positions</h2>
+          <GenericImportTypeSwitch
+            activeType="positions"
+            onTransactions={handleGenericTransactionsTab}
+          />
           <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
             Upload an Excel file with at minimum <strong>Ticker</strong> and <strong>Shares</strong> columns.
             Optional columns: Price Paid, Dividend, Frequency, Ex-Div Date, DRIP.
@@ -602,6 +633,12 @@ export default function Import() {
               ? 'Import Generic Transactions'
               : 'Import Brokerage Positions, Transactions, and Snowball Data'}
           </h2>
+          {txnFormat === 'generic_transactions' && (
+            <GenericImportTypeSwitch
+              activeType="transactions"
+              onPositions={() => handleTabChange('generic')}
+            />
+          )}
           <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
             {txnFormat === 'portfolio_export'
               ? <>Import the app's <strong>Holdings + Transactions Excel export</strong>. Preview shows the portfolio sheets and the Transactions sheet, then import restores both together from one file.</>
