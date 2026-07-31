@@ -8560,7 +8560,97 @@ def _xfunds_headers(accept="text/html,*/*"):
     }
 
 
-def _fetch_xfunds_distribution_snapshot(ticker):
+def _xfunds_distribution_frequency_from_page(page_html):
+    """Return the issuer's distribution-frequency code from fund-page metadata."""
+    page_html = str(page_html or "")
+    class_match = re.search(
+        r"distribution-frequency-taxonomy-([a-z-]+)",
+        page_html,
+        flags=re.IGNORECASE,
+    )
+    value = class_match.group(1).lower() if class_match else ""
+    mapping = {
+        "weekly": "W",
+        "monthly": "M",
+        "quarterly": "Q",
+        "semi-annual": "SA",
+        "semiannual": "SA",
+        "annual": "A",
+    }
+    if value in mapping:
+        return mapping[value]
+
+    # Keep a text fallback for pages that omit the WordPress taxonomy class.
+    visible_text = re.sub(r"(?is)<(script|style).*?</\1>", " ", page_html)
+    visible_text = re.sub(r"(?s)<[^>]+>", " ", visible_text)
+    visible_text = re.sub(r"\s+", " ", visible_text).lower()
+    for label, code in (
+        ("weekly", "W"),
+        ("monthly", "M"),
+        ("quarterly", "Q"),
+        ("semi-annual", "SA"),
+        ("semiannual", "SA"),
+        ("annual", "A"),
+    ):
+        if re.search(rf"\b{re.escape(label)}\s+(?:income|distribution)", visible_text):
+            return code
+    return None
+
+
+def _xfunds_distribution_schedule_from_page(page_html):
+    """Extract XFUNDS' published declaration/ex/payable schedule."""
+    schedule = []
+    for table_html in re.findall(r"(?is)<table\b[^>]*>(.*?)</table>", str(page_html or "")):
+        rows = _research_html_table_rows(table_html)
+        if not rows:
+            continue
+        header = [re.sub(r"[^a-z]", "", value.lower()) for value in rows[0]]
+        if not (
+            any(value.startswith("declarationdate") for value in header)
+            and any(value.startswith("exrecorddate") for value in header)
+            and any(value.startswith("payabledate") for value in header)
+        ):
+            continue
+        for row in rows[1:]:
+            if len(row) < 3:
+                continue
+            declaration = pd.to_datetime(row[0], errors="coerce")
+            ex_date = pd.to_datetime(row[1], errors="coerce")
+            payable = pd.to_datetime(row[2], errors="coerce")
+            if pd.isna(ex_date):
+                continue
+            schedule.append({
+                "declaration_date": declaration.strftime("%Y-%m-%d") if not pd.isna(declaration) else None,
+                "ex_dividend_date": ex_date.strftime("%Y-%m-%d"),
+                "payable_date": payable.strftime("%Y-%m-%d") if not pd.isna(payable) else None,
+            })
+        break
+    return schedule
+
+
+def _merge_official_distribution_snapshot(snapshot, official):
+    """Overlay issuer data while retaining Yahoo values for official gaps."""
+    merged = dict(snapshot or {})
+    if not official:
+        return merged
+    if official.get("has_dividend"):
+        merged.update(official)
+        return merged
+
+    # A newly launched fund can publish its cadence and future schedule before
+    # declaring an amount. Apply that metadata without replacing Yahoo history,
+    # last amount, or the fact that Yahoo may already know a distribution.
+    for key in (
+        "freq", "ex_div_date", "div_pay_date", "future_schedule",
+        "source", "source_url",
+    ):
+        value = official.get(key)
+        if value not in (None, "", []):
+            merged[key] = value
+    return merged
+
+
+def _fetch_xfunds_distribution_snapshot(ticker, session=None):
     """Fetch official X Funds distributions, with support for both site formats.
 
     Older pages publish a static ``TidalFG_Distribution_<TICKER>.csv`` file.
@@ -8582,8 +8672,9 @@ def _fetch_xfunds_distribution_snapshot(ticker):
         "https://nicholasx.com/wp-content/uploads/data/"
         f"TidalFG_Distribution_{ticker}.csv"
     )
-    session = requests.Session()
+    session = session or requests.Session()
     body = ""
+    page_html = ""
     try:
         resp = session.get(
             static_url,
@@ -8595,28 +8686,65 @@ def _fetch_xfunds_distribution_snapshot(ticker):
     except Exception:
         body = ""
 
+    try:
+        page_resp = session.get(page_url, timeout=10, headers=_xfunds_headers())
+        page_resp.raise_for_status()
+        page_html = page_resp.content.decode("utf-8", errors="replace")
+    except Exception:
+        page_html = ""
+
     if not body or "ex date" not in body.splitlines()[0].lower():
+        body = ""
         try:
-            page_resp = session.get(page_url, timeout=10, headers=_xfunds_headers())
-            page_resp.raise_for_status()
-            page_html = page_resp.content.decode("utf-8", errors="replace")
             match = re.search(r'distributionCsvUrl\s*=\s*"([^"]+)"', page_html, flags=re.I)
-            if not match:
-                return None
-            download_url = html_lib.unescape(match.group(1))
-            download_url = download_url.replace("\\/", "/").replace("\\u0026", "&")
-            resp = session.get(
-                download_url,
-                timeout=10,
-                headers={**_xfunds_headers("text/csv,*/*"), "Referer": page_url},
-            )
-            resp.raise_for_status()
-            body = (resp.text or "").strip()
+            if match:
+                download_url = html_lib.unescape(match.group(1))
+                download_url = download_url.replace("\\/", "/").replace("\\u0026", "&")
+                resp = session.get(
+                    download_url,
+                    timeout=10,
+                    headers={**_xfunds_headers("text/csv,*/*"), "Referer": page_url},
+                )
+                resp.raise_for_status()
+                body = (resp.text or "").strip()
         except Exception:
-            return None
+            body = ""
+
+    page_freq = _xfunds_distribution_frequency_from_page(page_html)
+    future_schedule = _xfunds_distribution_schedule_from_page(page_html)
+    schedule_freq = _infer_dividend_frequency_from_dates(
+        [row["ex_dividend_date"] for row in future_schedule]
+    ) if future_schedule else None
+    official_freq = page_freq or schedule_freq
 
     if not body:
-        return None
+        if not official_freq and not future_schedule:
+            return None
+        next_row = next(
+            (
+                row for row in future_schedule
+                if pd.Timestamp(row["ex_dividend_date"]) >= pd.Timestamp.now().normalize()
+            ),
+            future_schedule[-1] if future_schedule else None,
+        )
+        return {
+            "known": True,
+            "has_dividend": False,
+            "div": None,
+            "ex_div_date": (
+                pd.Timestamp(next_row["ex_dividend_date"]).strftime("%m/%d/%y")
+                if next_row else None
+            ),
+            "div_pay_date": (
+                pd.Timestamp(next_row["payable_date"]).strftime("%m/%d/%y")
+                if next_row and next_row.get("payable_date") else None
+            ),
+            "freq": official_freq,
+            "history": pd.Series(dtype=float),
+            "future_schedule": future_schedule,
+            "source": "X Funds",
+            "source_url": page_url,
+        }
 
     try:
         reader = csv.DictReader(StringIO(body))
@@ -8652,7 +8780,20 @@ def _fetch_xfunds_distribution_snapshot(ticker):
         entries.append((ex_ts, amt, pay_ts))
 
     if not entries:
-        return None
+        if not official_freq and not future_schedule:
+            return None
+        return {
+            "known": True,
+            "has_dividend": False,
+            "div": None,
+            "ex_div_date": None,
+            "div_pay_date": None,
+            "freq": official_freq,
+            "history": pd.Series(dtype=float),
+            "future_schedule": future_schedule,
+            "source": "X Funds",
+            "source_url": page_url,
+        }
 
     entries.sort(key=lambda item: item[0])
     history = pd.Series(
@@ -8690,8 +8831,9 @@ def _fetch_xfunds_distribution_snapshot(ticker):
         "div": float(history.iloc[-1]),
         "ex_div_date": latest_ex.strftime("%m/%d/%y"),
         "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
-        "freq": freq,
+        "freq": official_freq or freq,
         "history": history,
+        "future_schedule": future_schedule,
         "source": "X Funds",
         "source_url": page_url,
     }
@@ -9935,7 +10077,7 @@ def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
     official_pay_date = None
 
     if official:
-        snapshot.update(official)
+        snapshot = _merge_official_distribution_snapshot(snapshot, official)
         official_pay_date = official.get("div_pay_date")
 
     if not official_pay_date:
@@ -9981,8 +10123,7 @@ def _apply_official_snapshot_override(ticker, snapshot, description=None):
     if not official:
         return snapshot
 
-    snapshot.update(official)
-    return snapshot
+    return _merge_official_distribution_snapshot(snapshot, official)
 
 
 def _simulate_drip_refresh(div_series, close_series, base_qty, start_date=None, today=None):
@@ -10561,7 +10702,7 @@ def refresh_market_data():
         )
 
         snapshot = div_snapshot_map[t]
-        if snapshot.get("has_dividend"):
+        if snapshot.get("has_dividend") or snapshot.get("freq"):
             effective_freq[t] = _resolve_refresh_dividend_frequency(
                 t,
                 snapshot.get("freq"),
@@ -17277,6 +17418,12 @@ def _fetch_xfunds_etf_profile(ticker, session=None, use_cache=True):
 
     summary = _xfunds_page_section(page_html, "Fund Summary", max_paragraphs=2)
     objective = _xfunds_page_section(page_html, "Fund Objective", max_paragraphs=2)
+    frequency_code = _xfunds_distribution_frequency_from_page(page_html)
+    future_schedule = _xfunds_distribution_schedule_from_page(page_html)
+    if not frequency_code and future_schedule:
+        frequency_code = _infer_dividend_frequency_from_dates(
+            [row["ex_dividend_date"] for row in future_schedule]
+        )
     distribution_rate = _research_pct(_xfunds_map_value(fund_info, "distribution rate"))
     sec_yield = _research_pct(_xfunds_map_value(fund_info, "30 day sec yield", "30-day sec yield"))
     net_assets = holdings_meta.get("net_assets") or _xfunds_money(_xfunds_map_value(daily_nav, "net assets"))
@@ -17295,6 +17442,11 @@ def _fetch_xfunds_etf_profile(ticker, session=None, use_cache=True):
         "nav_price": _xfunds_money(_xfunds_map_value(daily_nav, "nav")),
         "nav_label": "NAV",
         "inception_date": _xfunds_iso_date(_xfunds_map_value(fund_info, "fund inception", "inception")),
+        "dividend_frequency": {
+            "W": "Weekly", "M": "Monthly", "Q": "Quarterly",
+            "SA": "Semi-Annual", "A": "Annual",
+        }.get(frequency_code),
+        "future_distribution_schedule": future_schedule,
         "estimated_yield_pct": distribution_rate,
         "distribution_rate_pct": distribution_rate,
         "sec_30_day_yield_pct": sec_yield,
@@ -17844,6 +17996,14 @@ def security_research(kind, ticker):
             pass
 
         dist_history_series = None
+        if official_snapshot:
+            if official_snapshot.get("freq"):
+                response["dividend_frequency"] = {
+                    "W": "Weekly", "M": "Monthly", "Q": "Quarterly",
+                    "SA": "Semi-Annual", "A": "Annual",
+                }.get(official_snapshot["freq"], response.get("dividend_frequency"))
+            if official_snapshot.get("future_schedule"):
+                response["future_distribution_schedule"] = official_snapshot["future_schedule"]
         if official_snapshot and official_snapshot.get("history") is not None:
             h = official_snapshot["history"]
             if hasattr(h, "empty") and not h.empty:
@@ -22545,6 +22705,226 @@ def total_return_compare():
 
 # ── Gains & Losses ─────────────────────────────────────────────────────────────
 
+def _gains_losses_dividend_allocation(conn, profile_ids):
+    """Allocate imported dividends once between sold lots and open shares.
+
+    Broker transaction imports all write cash distributions to
+    ``dividend_payments``. The older G&L implementation instead read the
+    current-holdings ``dividends`` mirror and copied its ticker total onto every
+    SELL row. Besides duplicating income for multi-fill sales, that loses the
+    dividend history entirely when the last holding row is removed.
+
+    This replay follows the same specific-lot/FIFO order as the transaction
+    rollup. A payment is spread across the lots open on its payment date, and a
+    later sale carries only the dividend credit belonging to the shares it
+    consumes. Snapshot-only totals remain with the current holding, while ledger
+    payments that pre-date the available lot history are apportioned across the
+    remaining open shares and recorded sales as a conservative fallback. Every
+    supported import format therefore uses the same non-duplicating path.
+    """
+    profile_ids = sorted({int(pid) for pid in (profile_ids or [])})
+    empty = {
+        "sell_dividends": {},
+        "open_dividends": {},
+        "effective_totals": {},
+        "current_position_keys": set(),
+    }
+    if not profile_ids:
+        return empty
+
+    placeholders = ",".join("?" * len(profile_ids))
+    transaction_rows = [
+        dict(row) for row in conn.execute(
+            f"""SELECT id, ticker, profile_id, transaction_type,
+                       transaction_date, shares, notes
+                FROM transactions
+                WHERE profile_id IN ({placeholders})
+                  AND transaction_type IN ('BUY', 'SELL')
+                ORDER BY ticker, profile_id, transaction_date, id""",
+            profile_ids,
+        ).fetchall()
+    ]
+    payment_rows = [
+        dict(row) for row in conn.execute(
+            f"""SELECT id, ticker, profile_id, payment_date, amount
+                FROM dividend_payments
+                WHERE profile_id IN ({placeholders})
+                ORDER BY ticker, profile_id, payment_date, id""",
+            profile_ids,
+        ).fetchall()
+    ]
+    holding_rows = [
+        dict(row) for row in conn.execute(
+            f"""SELECT ticker, profile_id,
+                       SUM(COALESCE(quantity, 0)) AS quantity,
+                       SUM(COALESCE(total_divs_received, 0)) AS total_divs_received
+                FROM all_account_info
+                WHERE profile_id IN ({placeholders})
+                  AND COALESCE(quantity, 0) > 1e-9
+                GROUP BY ticker, profile_id""",
+            profile_ids,
+        ).fetchall()
+    ]
+
+    grouped_transactions = {}
+    sell_ids = []
+    for row in transaction_rows:
+        key = (row["ticker"], int(row["profile_id"]))
+        grouped_transactions.setdefault(key, []).append(row)
+        if row["transaction_type"] == "SELL":
+            sell_ids.append(row["id"])
+
+    grouped_payments = {}
+    for row in payment_rows:
+        key = (row["ticker"], int(row["profile_id"]))
+        grouped_payments.setdefault(key, []).append(row)
+
+    holdings = {
+        (row["ticker"], int(row["profile_id"])): {
+            "quantity": max(0.0, float(row.get("quantity") or 0)),
+            "total_divs_received": max(0.0, float(row.get("total_divs_received") or 0)),
+        }
+        for row in holding_rows
+    }
+    alloc_map = _load_lot_alloc_map(conn, sell_ids)
+    sell_dividends = {}
+    open_dividends = {}
+    effective_totals = {}
+
+    def consume_lots(lots, shares, allocations=None):
+        """Consume dividend-bearing lots and return (credit, uncovered shares)."""
+        remaining = max(0.0, float(shares or 0))
+        credit = 0.0
+
+        def consume_from(lot, requested):
+            nonlocal credit
+            before = float(lot["shares"] or 0)
+            take = min(max(0.0, requested), before)
+            if take <= 1e-9 or before <= 1e-9:
+                return 0.0
+            lot_credit = float(lot.get("dividend_credit") or 0)
+            moved_credit = lot_credit * (take / before)
+            credit += moved_credit
+            lot["dividend_credit"] = lot_credit - moved_credit
+            lot["shares"] = before - take
+            return take
+
+        if allocations:
+            for allocation in allocations:
+                requested = min(
+                    remaining,
+                    max(0.0, float(allocation.get("shares") or 0)),
+                )
+                if requested <= 1e-9:
+                    continue
+                for lot in lots:
+                    if lot["id"] == allocation.get("buy_txn_id"):
+                        remaining -= consume_from(lot, requested)
+                        break
+        else:
+            while remaining > 1e-9 and lots:
+                lot = lots[0]
+                remaining -= consume_from(lot, remaining)
+                if lot["shares"] <= 1e-9:
+                    lots.pop(0)
+
+        lots[:] = [lot for lot in lots if lot["shares"] > 1e-9]
+        return credit, max(0.0, remaining)
+
+    all_keys = set(grouped_transactions) | set(grouped_payments) | set(holdings)
+    for key in all_keys:
+        transactions = grouped_transactions.get(key, [])
+        payments = grouped_payments.get(key, [])
+        holding = holdings.get(key, {})
+        current_shares = float(holding.get("quantity") or 0)
+        snapshot_total = float(holding.get("total_divs_received") or 0)
+        payment_total = sum(max(0.0, float(row.get("amount") or 0)) for row in payments)
+        effective_total = max(payment_total, snapshot_total)
+        if effective_total > 1e-9:
+            effective_totals[key] = effective_total
+
+        real_sells = [
+            row for row in transactions
+            if row["transaction_type"] == "SELL" and not _is_transfer_txn(row.get("notes"))
+        ]
+        for row in real_sells:
+            sell_dividends.setdefault(row["id"], 0.0)
+
+        events = []
+        for row in payments:
+            # A payment received on a sale date belongs to the pre-sale shares;
+            # processing payments before same-day transactions preserves it.
+            events.append((str(row.get("payment_date") or ""), 0, int(row["id"]), "PAYMENT", row))
+        for row in transactions:
+            events.append((str(row.get("transaction_date") or ""), 1, int(row["id"]), "TRANSACTION", row))
+        events.sort(key=lambda event: event[:3])
+
+        lots = []
+        share_deficit = 0.0
+        for _, _, _, event_type, row in events:
+            if event_type == "PAYMENT":
+                amount = max(0.0, float(row.get("amount") or 0))
+                open_shares = sum(float(lot["shares"] or 0) for lot in lots)
+                if amount > 0 and open_shares > 1e-9:
+                    for lot in lots:
+                        lot["dividend_credit"] += amount * float(lot["shares"] or 0) / open_shares
+                continue
+
+            shares = abs(float(row.get("shares") or 0))
+            if row["transaction_type"] == "BUY":
+                if share_deficit > 1e-9:
+                    covered = min(share_deficit, shares)
+                    share_deficit -= covered
+                    shares -= covered
+                if shares > 1e-9:
+                    lots.append({
+                        "id": row["id"],
+                        "shares": shares,
+                        "dividend_credit": 0.0,
+                    })
+                continue
+
+            credit, uncovered = consume_lots(lots, shares, alloc_map.get(row["id"]))
+            share_deficit += uncovered
+            if not _is_transfer_txn(row.get("notes")):
+                sell_dividends[row["id"]] = sell_dividends.get(row["id"], 0.0) + credit
+
+        tracked_ledger_open = (
+            sum(float(lot.get("dividend_credit") or 0) for lot in lots)
+            if current_shares > 1e-9 else 0.0
+        )
+        # A holdings snapshot's lifetime total describes the still-open
+        # position. Preserve any portion that is not backed by itemized payment
+        # history instead of inventing realized income for an older sale.
+        snapshot_only_open = (
+            max(0.0, snapshot_total - payment_total)
+            if current_shares > 1e-9 else 0.0
+        )
+        tracked_open = tracked_ledger_open + snapshot_only_open
+        open_dividends[key] = tracked_open
+        tracked_sold = sum(sell_dividends.get(row["id"], 0.0) for row in real_sells)
+        residual = max(0.0, payment_total - tracked_ledger_open - tracked_sold)
+
+        # Missing early lots are common in bounded broker exports. Allocate only
+        # the otherwise-unclaimed residual, using share counts as the neutral
+        # fallback, so the imported cash total is still conserved exactly once.
+        if residual > 1e-9:
+            sell_weight = sum(abs(float(row.get("shares") or 0)) for row in real_sells)
+            total_weight = sell_weight + current_shares
+            if total_weight > 1e-9:
+                for row in real_sells:
+                    weight = abs(float(row.get("shares") or 0))
+                    sell_dividends[row["id"]] += residual * weight / total_weight
+                open_dividends[key] += residual * current_shares / total_weight
+
+    return {
+        "sell_dividends": sell_dividends,
+        "open_dividends": open_dividends,
+        "effective_totals": effective_totals,
+        "current_position_keys": set(holdings),
+    }
+
+
 @app.route("/api/gains-losses/summary", methods=["GET"])
 def gains_losses_summary():
     """Unified unrealized + realized gains/losses with price-only and total (price+divs) columns."""
@@ -22605,6 +22985,29 @@ def gains_losses_summary():
     ).fetchall()
     udf = pd.DataFrame([dict(r) for r in rows])
 
+    dividend_allocation = _gains_losses_dividend_allocation(
+        conn,
+        set(holding_profile_ids) | set(transaction_profile_ids),
+    )
+    allocated_open_by_ticker = {}
+    allocated_open_tickers = set()
+    holding_profile_id_set = set(holding_profile_ids)
+    for key in dividend_allocation["current_position_keys"]:
+        ticker, allocated_profile_id = key
+        if allocated_profile_id not in holding_profile_id_set:
+            continue
+        if key in dividend_allocation["effective_totals"]:
+            allocated_open_tickers.add(ticker)
+            allocated_open_by_ticker[ticker] = (
+                allocated_open_by_ticker.get(ticker, 0.0)
+                + dividend_allocation["open_dividends"].get(key, 0.0)
+            )
+    if not udf.empty and allocated_open_tickers:
+        allocated_mask = udf["ticker"].isin(allocated_open_tickers)
+        udf.loc[allocated_mask, "total_divs_received"] = (
+            udf.loc[allocated_mask, "ticker"].map(allocated_open_by_ticker).fillna(0.0)
+        )
+
     # Enrich category names
     if not udf.empty:
         try:
@@ -22644,9 +23047,9 @@ def gains_losses_summary():
 
     # 2) Transactions-based SELL records for the selected account scope.
     txn_sell_rows = conn.execute(
-        f"""SELECT t.ticker, t.profile_id, t.price_per_share AS sell_price,
-                  t.shares AS shares_sold, t.transaction_date AS sell_date,
-                  t.realized_gain, t.fees, t.notes
+        f"""SELECT t.id AS sell_txn_id, t.ticker, t.profile_id, t.price_per_share AS sell_price,
+                   t.shares AS shares_sold, t.transaction_date AS sell_date,
+                   t.realized_gain, t.fees, t.notes
            FROM transactions t
            WHERE t.transaction_type = 'SELL'
              AND t.profile_id IN ({txn_placeholders})
@@ -22654,26 +23057,18 @@ def gains_losses_summary():
         transaction_profile_ids,
     ).fetchall()
     if txn_sell_rows:
-        # Look up total_divs_received per ticker/profile from dividends table
-        div_lookup = {}
-        div_rows = conn.execute(
-            "SELECT ticker, profile_id, total_divs_received FROM dividends"
-        ).fetchall()
-        for dr in div_rows:
-            dr = dict(dr)
-            div_lookup[(dr["ticker"], dr["profile_id"])] = float(dr.get("total_divs_received") or 0)
-
         txn_rows = []
         for tr in txn_sell_rows:
             tr = dict(tr)
+            if _is_transfer_txn(tr.get("notes")):
+                continue
             sp = float(tr.get("sell_price") or 0)
             sh = float(tr.get("shares_sold") or 0)
             rg = float(tr.get("realized_gain") or 0)
-            fees = float(tr.get("fees") or 0)
             proceeds = sp * sh
-            cost = proceeds - rg + fees
+            cost = proceeds - rg
             bp = cost / sh if sh else 0
-            divs = div_lookup.get((tr["ticker"], tr["profile_id"]), 0)
+            divs = dividend_allocation["sell_dividends"].get(tr["sell_txn_id"], 0.0)
             txn_rows.append({
                 "ticker": tr["ticker"],
                 "buy_price": bp,
@@ -22683,8 +23078,9 @@ def gains_losses_summary():
                 "divs_received": divs,
                 "notes": tr.get("notes") or "",
             })
-        txn_df = pd.DataFrame(txn_rows)
-        rdf = pd.concat([rdf, txn_df], ignore_index=True) if not rdf.empty else txn_df
+        if txn_rows:
+            txn_df = pd.DataFrame(txn_rows)
+            rdf = pd.concat([rdf, txn_df], ignore_index=True) if not rdf.empty else txn_df
 
     conn.close()
 
@@ -22905,6 +23301,29 @@ def gains_losses_chart():
         conn.close()
         return jsonify({"error": "No portfolio data"}), 404
 
+    dividend_allocation = _gains_losses_dividend_allocation(
+        conn,
+        set(holding_profile_ids) | set(transaction_profile_ids),
+    )
+    allocated_open_by_ticker = {}
+    allocated_open_tickers = set()
+    holding_profile_id_set = set(holding_profile_ids)
+    for key in dividend_allocation["current_position_keys"]:
+        ticker, allocated_profile_id = key
+        if allocated_profile_id not in holding_profile_id_set:
+            continue
+        if key in dividend_allocation["effective_totals"]:
+            allocated_open_tickers.add(ticker)
+            allocated_open_by_ticker[ticker] = (
+                allocated_open_by_ticker.get(ticker, 0.0)
+                + dividend_allocation["open_dividends"].get(key, 0.0)
+            )
+    if allocated_open_tickers:
+        allocated_mask = hdf["ticker"].isin(allocated_open_tickers)
+        hdf.loc[allocated_mask, "total_divs_received"] = (
+            hdf.loc[allocated_mask, "ticker"].map(allocated_open_by_ticker).fillna(0.0)
+        )
+
     # Category / sub-category filter
     if cat_ids or sub_ids:
         try:
@@ -22961,8 +23380,8 @@ def gains_losses_chart():
 
     # Also include SELL transactions for the selected account scope.
     txn_sell = conn.execute(
-        f"""SELECT t.ticker, t.profile_id, t.price_per_share, t.shares,
-                  t.transaction_date, t.realized_gain
+        f"""SELECT t.id AS sell_txn_id, t.ticker, t.profile_id, t.price_per_share, t.shares,
+                   t.transaction_date, t.realized_gain, t.notes
            FROM transactions t
            WHERE t.transaction_type = 'SELL'
              AND t.profile_id IN ({txn_placeholders})
@@ -22970,20 +23389,14 @@ def gains_losses_chart():
            ORDER BY t.transaction_date""",
         transaction_profile_ids,
     ).fetchall()
-    # Look up dividends for total G/L
-    chart_div_lookup = {}
-    chart_div_rows = conn.execute(
-        "SELECT ticker, profile_id, total_divs_received FROM dividends"
-    ).fetchall()
-    for dr in chart_div_rows:
-        dr = dict(dr)
-        chart_div_lookup[(dr["ticker"], dr["profile_id"])] = float(dr.get("total_divs_received") or 0)
 
     for tr in txn_sell:
         tr = dict(tr)
+        if _is_transfer_txn(tr.get("notes")):
+            continue
         try:
             rg = float(tr.get("realized_gain") or 0)
-            divs = chart_div_lookup.get((tr["ticker"], tr["profile_id"]), 0)
+            divs = dividend_allocation["sell_dividends"].get(tr["sell_txn_id"], 0.0)
             realized_events.append({
                 "date": tr["transaction_date"], "ticker": tr["ticker"],
                 "price_gl": round(rg, 2), "total_gl": round(rg + divs, 2),
@@ -24529,6 +24942,8 @@ def etf_screen_data():
                     official_snapshot = _fetch_official_distribution_snapshot(dl_sym, description_text)
                 except Exception:
                     official_snapshot = None
+            if official_snapshot and official_snapshot.get("freq"):
+                distribution_frequency = official_snapshot.get("freq")
             if official_snapshot and official_snapshot.get("has_dividend"):
                 official_source = official_snapshot.get("source") or "Fund Site"
                 official_history = official_snapshot.get("history")
@@ -24602,7 +25017,11 @@ def etf_screen_data():
                                 continue
                         if distribution_history:
                             distribution_source = "Yahoo Finance"
-                            distribution_frequency = freq_code or _div_calc_infer_frequency(yahoo_history)
+                            distribution_frequency = (
+                                distribution_frequency
+                                or freq_code
+                                or _div_calc_infer_frequency(yahoo_history)
+                            )
                 except Exception:
                     pass
             try:

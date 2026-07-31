@@ -1367,6 +1367,137 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(data["totals"]["unrealized_total_gl"], 52)
         self.assertEqual(data["realized"][0]["price_gl"], 12)
 
+    def test_gains_losses_uses_import_payment_ledger_for_fully_closed_position(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Fidelity Trust', 0)")
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, realized_gain) "
+            "VALUES ('OXLC', 20, 'BUY', '2024-12-01', 100, 50, 0, NULL)"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('OXLC', 20, '2025-04-02', 356.40, 'fidelity_transactions', 'Dividend Received')"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('OXLC', 20, '2025-05-01', 882.49, 'fidelity_transactions', 'Dividend Received')"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, realized_gain) "
+            "VALUES ('OXLC', 20, 'SELL', '2026-02-01', 100, 40, 0, -1000)"
+        )
+
+        # Deliberately do not create a current holding or dividends-mirror row.
+        # Closed positions retain their imported cash history only in this ledger.
+        res = self.client.get("/api/gains-losses/summary?profile_id=20")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(len(data["realized"]), 1)
+        self.assertEqual(data["realized"][0]["ticker"], "OXLC")
+        self.assertAlmostEqual(data["realized"][0]["divs_received"], 1238.89, places=2)
+        self.assertAlmostEqual(data["combined"][0]["realized_divs"], 1238.89, places=2)
+        self.assertAlmostEqual(data["totals"]["realized_divs"], 1238.89, places=2)
+
+    def test_gains_losses_allocates_ticker_dividends_once_across_multiple_sell_rows(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Imported Account', 0)")
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, realized_gain) "
+            "VALUES ('SRV', 20, 'BUY', '2025-01-01', 798, 46.64, 0, NULL)"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('SRV', 20, '2025-12-15', 13114.76, 'generic_transactions', 'Imported dividend')"
+        )
+        for shares, price, realized_gain in (
+            (1, 41.04, -5.60),
+            (26, 40.95, -147.94),
+            (771, 40.95, -4387.99),
+        ):
+            self._execute(
+                "INSERT INTO transactions "
+                "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, realized_gain) "
+                "VALUES ('SRV', 20, 'SELL', '2026-02-03', ?, ?, 0, ?)",
+                (shares, price, realized_gain),
+            )
+
+        res = self.client.get("/api/gains-losses/summary?profile_id=20")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        srv_rows = [row for row in data["realized"] if row["ticker"] == "SRV"]
+        self.assertEqual(len(srv_rows), 3)
+        self.assertAlmostEqual(sum(row["divs_received"] for row in srv_rows), 13114.76, places=2)
+        self.assertTrue(all(row["divs_received"] < 13114.76 for row in srv_rows))
+        per_share_dividend = 13114.76 / 798
+        for row in srv_rows:
+            self.assertAlmostEqual(
+                row["divs_received"],
+                row["shares_sold"] * per_share_dividend,
+                places=2,
+            )
+        combined = next(row for row in data["combined"] if row["ticker"] == "SRV")
+        self.assertAlmostEqual(combined["realized_divs"], 13114.76, places=2)
+
+    def test_gains_losses_splits_dividends_between_sold_and_still_open_shares(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Any Broker', 0)")
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, purchase_value, current_price, current_value, gain_or_loss, total_divs_received) "
+            "VALUES ('PART', 20, 'Partial Position', 40, 10, 400, 12, 480, 80, 100)"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, realized_gain) "
+            "VALUES ('PART', 20, 'BUY', '2025-01-01', 100, 10, 0, NULL)"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('PART', 20, '2025-06-01', 100, 'schwab_transactions', 'Cash Dividend')"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, realized_gain) "
+            "VALUES ('PART', 20, 'SELL', '2026-01-01', 60, 11, 0, 60)"
+        )
+
+        res = self.client.get("/api/gains-losses/summary?profile_id=20")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertAlmostEqual(data["unrealized"][0]["divs_received"], 40, places=2)
+        self.assertAlmostEqual(data["realized"][0]["divs_received"], 60, places=2)
+        combined = next(row for row in data["combined"] if row["ticker"] == "PART")
+        self.assertAlmostEqual(combined["unrealized_divs"], 40, places=2)
+        self.assertAlmostEqual(combined["realized_divs"], 60, places=2)
+        self.assertAlmostEqual(combined["net_divs"], 100, places=2)
+
+    def test_gains_losses_does_not_treat_transfer_out_as_realized_sale(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Transfer Account', 0)")
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes, realized_gain) "
+            "VALUES ('MOVE', 20, 'BUY', '2025-01-01', 10, 10, 0, '', NULL)"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('MOVE', 20, '2025-06-01', 5, 'etrade_transactions', 'Cash Dividend')"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes, realized_gain) "
+            "VALUES ('MOVE', 20, 'SELL', '2026-01-01', 10, 0, 0, '[Transfer out] ACAT', NULL)"
+        )
+
+        res = self.client.get("/api/gains-losses/summary?profile_id=20")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data["realized"], [])
+        self.assertFalse(any(row["ticker"] == "MOVE" for row in data["combined"]))
+
     def test_single_sheet_portfolio_export_imports_into_selected_profile(self):
         import pandas as pd
 
