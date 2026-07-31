@@ -11,6 +11,7 @@ venv/
 *.db
 *.db-shm
 *.db-wal
+*.db.before_*
 !backend/seed/
 !backend/seed/etf_providers.db
 

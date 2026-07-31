@@ -4687,6 +4687,7 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
             if not ticker or not date_str or amount is None:
                 continue
             notes = txn.get("notes") or "Imported from portfolio export"
+            div_freq = _ticker_div_frequency(conn, ticker, profile_id)
             existing = conn.execute(
                 "SELECT id, source FROM dividend_payments WHERE ticker = ? AND profile_id = ? AND payment_date = ?",
                 (ticker, profile_id, date_str),
@@ -4701,6 +4702,9 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
                     dividend_tickers_by_profile.setdefault(profile_id, set()).add(ticker)
                 else:
                     duplicates_skipped += 1
+                _prune_superseded_refresh_estimates(
+                    conn, ticker, profile_id, date_str, div_freq
+                )
                 continue
             conn.execute(
                 "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
@@ -4709,6 +4713,8 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
             )
             dividends_applied += 1
             dividend_tickers_by_profile.setdefault(profile_id, set()).add(ticker)
+            # The projection this payment settles almost never shares its date.
+            _prune_superseded_refresh_estimates(conn, ticker, profile_id, date_str, div_freq)
 
         for txn in non_div_txns:
             profile_key = str(txn.get("profile") or "").strip().lower()
@@ -5188,6 +5194,75 @@ def _record_positions_nav_only(parsed, profile_id, nav_date):
 _LAYERED_DIV_WINDOW_DAYS = 3
 
 
+# Half-width of the window that identifies "the same distribution" for a payout
+# frequency. Kept under half the payout period so two consecutive real
+# distributions never collapse into one, while a projected pay date that drifts
+# by a few days still matches the distribution it was projecting.
+_DISTRIBUTION_WINDOW_DAYS = {"W": 3, "BW": 6, "SM": 6, "M": 12, "Q": 40, "SA": 75, "A": 150}
+_DEFAULT_DISTRIBUTION_WINDOW_DAYS = 12
+
+
+def _distribution_window_days(frequency):
+    """Days either side of a pay date that still count as the same distribution."""
+    key = str(frequency or "").strip().upper()
+    return _DISTRIBUTION_WINDOW_DAYS.get(key, _DEFAULT_DISTRIBUTION_WINDOW_DAYS)
+
+
+def _find_distribution_period_rows(conn, ticker, profile_id, pay_date, frequency):
+    """Return existing dividend_payments rows for the same distribution period.
+
+    The (ticker, profile_id, payment_date) unique key only catches an exact date
+    collision. One distribution reaches us on several dates — the projected pay
+    date moves as the fund declares it, and the broker settles it on a different
+    day again — so period matching is what actually identifies a duplicate.
+    """
+    try:
+        d = datetime.date.fromisoformat(str(pay_date))
+    except (TypeError, ValueError):
+        return []
+    window = datetime.timedelta(days=_distribution_window_days(frequency))
+    rows = conn.execute(
+        "SELECT id, payment_date, amount, source, notes FROM dividend_payments "
+        "WHERE ticker = ? AND profile_id = ? AND payment_date BETWEEN ? AND ? "
+        "ORDER BY payment_date",
+        (ticker, profile_id, (d - window).isoformat(), (d + window).isoformat()),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _is_refresh_estimate_row(row):
+    return str(row.get("source") or "").strip().lower() == REFRESH_ESTIMATE_DIVIDEND_SOURCE
+
+
+def _prune_superseded_refresh_estimates(conn, ticker, profile_id, pay_date, frequency):
+    """Drop projected payments that a real payment now covers.
+
+    Broker feeds land days after Refresh Prices & Divs has already projected the
+    distribution, and almost never on the projected date, so the exact-date
+    replacement the importers do leaves the projection behind as a second
+    payment. Returns the number of rows removed.
+    """
+    removed = 0
+    for row in _find_distribution_period_rows(conn, ticker, profile_id, pay_date, frequency):
+        if not _is_refresh_estimate_row(row):
+            continue
+        conn.execute("DELETE FROM dividend_payments WHERE id = ?", (row["id"],))
+        removed += 1
+    return removed
+
+
+def _ticker_div_frequency(conn, ticker, profile_id):
+    """Payout frequency for a holding, used to size the distribution window."""
+    row = conn.execute(
+        "SELECT div_frequency FROM all_account_info "
+        "WHERE ticker = ? AND profile_id = ? AND div_frequency IS NOT NULL LIMIT 1",
+        (ticker, profile_id),
+    ).fetchone()
+    if not row:
+        return None
+    return row["div_frequency"] if isinstance(row, dict) else row[0]
+
+
 def _layered_dividend_duplicate(conn, ticker, profile_id, date_str, amount):
     """Return True if a near-duplicate dividend already exists for this ticker.
 
@@ -5333,6 +5408,7 @@ def api_import_transactions():
     try:
         # Insert aggregated dividends
         for (ticker, date_str), info in div_agg.items():
+            div_freq = _ticker_div_frequency(conn, ticker, profile_id)
             dup = conn.execute(
                 "SELECT id, source FROM dividend_payments WHERE ticker = ? AND profile_id = ? AND payment_date = ?",
                 (ticker, profile_id, date_str),
@@ -5348,6 +5424,9 @@ def api_import_transactions():
                     tickers_with_divs.add(ticker)
                 else:
                     duplicates_skipped += 1
+                _prune_superseded_refresh_estimates(
+                    conn, ticker, profile_id, date_str, div_freq
+                )
                 continue
 
             # Layered imports: the same payment can arrive from a second feed
@@ -5357,6 +5436,9 @@ def api_import_transactions():
                 conn, ticker, profile_id, date_str, info["amount"]
             ):
                 duplicates_skipped += 1
+                _prune_superseded_refresh_estimates(
+                    conn, ticker, profile_id, date_str, div_freq
+                )
                 continue
 
             notes = "; ".join(dict.fromkeys(info["notes_parts"]))  # dedupe note parts
@@ -5367,6 +5449,8 @@ def api_import_transactions():
             )
             dividends_applied += 1
             tickers_with_divs.add(ticker)
+            # The projection this payment settles almost never shares its date.
+            _prune_superseded_refresh_estimates(conn, ticker, profile_id, date_str, div_freq)
 
         # Insert BUY/SELL transactions
         for txn in non_div_txns:
@@ -10964,27 +11048,45 @@ def refresh_market_data():
             amount = float(item["amount"] or 0)
             if amount <= 0:
                 continue
-            existing = conn.execute(
-                "SELECT id, source, amount, notes FROM dividend_payments WHERE ticker = ? AND profile_id = ? AND payment_date = ?",
-                (ticker, pid, pay_date),
-            ).fetchone()
             notes = (
                 f"Recorded by Refresh Prices & Divs; div/share {item['div']}; "
                 f"quantity {item['quantity']}; frequency {item['frequency'] or 'unknown'}"
             )
-            if existing:
-                if (existing["source"] or "").lower() == "refresh_estimate":
-                    rounded_amount = round(amount, 2)
-                    existing_amount = round(float(existing["amount"] or 0), 2)
-                    if existing_amount != rounded_amount or (existing["notes"] or "") != notes:
-                        conn.execute(
-                            "UPDATE dividend_payments SET amount = ?, notes = ? WHERE id = ?",
-                            (rounded_amount, notes, existing["id"]),
-                        )
-                        history_payments_recorded_by_profile[pid] = history_payments_recorded_by_profile.get(pid, 0) + 1
-                        history_payments_updated_by_profile[pid] = history_payments_updated_by_profile.get(pid, 0) + 1
-                    else:
-                        history_payments_existing_by_profile[pid] = history_payments_existing_by_profile.get(pid, 0) + 1
+            rounded_amount = round(amount, 2)
+            # Match the whole distribution period rather than the exact pay date.
+            # The projected date moves between refreshes as the fund declares it,
+            # so date-keyed dedupe files each projection of one distribution as a
+            # separate payment, and stacks those on top of the broker's real row.
+            period_rows = _find_distribution_period_rows(
+                conn, ticker, pid, pay_date, item["frequency"]
+            )
+            estimates = [r for r in period_rows if _is_refresh_estimate_row(r)]
+            actual = next((r for r in period_rows if not _is_refresh_estimate_row(r)), None)
+            if actual:
+                # A real payment already covers this distribution. Never estimate
+                # over recorded cash, and clear projections it supersedes.
+                for stale in estimates:
+                    conn.execute("DELETE FROM dividend_payments WHERE id = ?", (stale["id"],))
+                history_payments_existing_by_profile[pid] = history_payments_existing_by_profile.get(pid, 0) + 1
+                continue
+            if estimates:
+                # Keep one projection per distribution and move it onto the
+                # current date; drop any extras left by earlier refreshes.
+                keep = estimates[0]
+                for stale in estimates[1:]:
+                    conn.execute("DELETE FROM dividend_payments WHERE id = ?", (stale["id"],))
+                existing_amount = round(float(keep["amount"] or 0), 2)
+                if (
+                    keep["payment_date"] != pay_date
+                    or existing_amount != rounded_amount
+                    or (keep["notes"] or "") != notes
+                ):
+                    conn.execute(
+                        "UPDATE dividend_payments SET payment_date = ?, amount = ?, notes = ? WHERE id = ?",
+                        (pay_date, rounded_amount, notes, keep["id"]),
+                    )
+                    history_payments_recorded_by_profile[pid] = history_payments_recorded_by_profile.get(pid, 0) + 1
+                    history_payments_updated_by_profile[pid] = history_payments_updated_by_profile.get(pid, 0) + 1
                 else:
                     history_payments_existing_by_profile[pid] = history_payments_existing_by_profile.get(pid, 0) + 1
                 continue
