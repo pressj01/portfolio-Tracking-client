@@ -4,6 +4,7 @@ import PriceChartModal from '../components/PriceChartModal'
 import RiskGraphButton from '../components/RiskGraphButton'
 import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
+import { findActivePreset } from '../utils/activePreset'
 
 const STORAGE_KEY = 'bull-put-spread-scanner-filters'
 
@@ -294,6 +295,7 @@ export default function BullPutSpreadScanner() {
   useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(filters)) }, [filters])
 
   const set = (key, value) => setFilters(current => ({ ...current, [key]: value }))
+  const activePreset = useMemo(() => findActivePreset(PRESETS, filters), [filters])
   const anyFunds = !!(filters.include_index_etfs || filters.include_sector_etfs)
   const nothingSelected = !filters.include_stocks && !anyFunds
 
@@ -427,7 +429,9 @@ export default function BullPutSpreadScanner() {
 
       <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.7rem' }}>
         <span style={{ color: 'var(--text-dim)', fontSize: '0.76rem' }}>Preset:</span>
-        {Object.entries(PRESETS).map(([key, preset]) => <button key={key} className="btn btn-xs btn-outline"
+        {Object.entries(PRESETS).map(([key, preset]) => <button key={key}
+          className={`btn btn-xs ${key === activePreset ? 'btn-scan' : 'btn-outline'}`}
+          aria-pressed={key === activePreset}
           title={preset.tip} onClick={() => setFilters(current => ({ ...current, ...preset.filters }))}>
           {preset.label}
         </button>)}

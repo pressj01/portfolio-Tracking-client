@@ -4,6 +4,7 @@ import PriceChartModal from '../components/PriceChartModal'
 import RiskGraphButton from '../components/RiskGraphButton'
 import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
+import { findActivePreset } from '../utils/activePreset'
 
 const STORAGE_KEY = 'bear-put-spread-scanner-filters'
 
@@ -839,6 +840,7 @@ export default function BearPutSpreadScanner() {
   const applyPreset = (key) => {
     setFilters(f => ({ ...f, ...PRESETS[key].filters }))
   }
+  const activePreset = useMemo(() => findActivePreset(PRESETS, filters), [filters])
 
   const anyFunds = !!(filters.include_index_etfs || filters.include_sector_etfs)
   const nothingSelected = !filters.include_stocks && !anyFunds
@@ -985,7 +987,8 @@ export default function BearPutSpreadScanner() {
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
         <span style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>Preset:</span>
         {Object.entries(PRESETS).map(([key, p]) => (
-          <button key={key} className="btn btn-xs btn-outline" title={p.tip} onClick={() => applyPreset(key)}>
+          <button key={key} className={`btn btn-xs ${key === activePreset ? 'btn-scan' : 'btn-outline'}`}
+            aria-pressed={key === activePreset} title={p.tip} onClick={() => applyPreset(key)}>
             {p.label}
           </button>
         ))}
