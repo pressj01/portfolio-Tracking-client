@@ -143,6 +143,7 @@ def _modeled_butterfly_pl(
     lower_long: dict,
     quantity: int,
     dividend_yield: float,
+    lower_long_quantity_multiplier: int = 1,
 ) -> float | None:
     """Theoretical total-tranche P/L in option points at one future price."""
     if exit_spot <= 0 or remaining_dte < 0:
@@ -152,7 +153,7 @@ def _modeled_butterfly_pl(
     for leg, signed_quantity in (
         (upper_long, quantity),
         (body_short, -2 * quantity),
-        (lower_long, quantity),
+        (lower_long, lower_long_quantity_multiplier * quantity),
     ):
         strike = _num(leg.get("strike"))
         volatility = _num(leg.get("iv"))
@@ -340,9 +341,17 @@ def _build_butterfly(
     dte: int,
     upper_long_target: float,
     tranche_quantity: int = 4,
+    lower_long_quantity_multiplier: int = 1,
+    lower_long_target: float | None = None,
+    structure_kind: str = "unbalanced_butterfly",
     dividend_yield: float = 0.0,
 ) -> dict | None:
-    """Calculate greeks, execution, payoff, and probabilities for one BWB."""
+    """Calculate greeks, execution, payoff, and probabilities for one BWB.
+
+    The default lower-long multiplier preserves this scanner's 4/-8/4
+    structure. A multiplier of two prices the 4/-8/+8 structure used by the
+    document-based 488 scanner, including its recovering downside tail.
+    """
     upper_strike = _num(upper_long.get("strike"))
     body_strike = _num(body_short.get("strike"))
     lower_strike = _num(lower_long.get("strike"))
@@ -360,17 +369,29 @@ def _build_butterfly(
         return None
 
     quantity = max(1, int(tranche_quantity))
+    lower_multiplier = max(1, int(lower_long_quantity_multiplier))
+    lower_quantity = lower_multiplier * quantity
     upper_mid = _num(upper_long.get("mid"), 0.0) or 0.0
     body_mid = _num(body_short.get("mid"), 0.0) or 0.0
     lower_mid = _num(lower_long.get("mid"), 0.0) or 0.0
-    entry_credit_per_fly = 2.0 * body_mid - upper_mid - lower_mid
+    entry_credit_per_fly = (
+        2.0 * body_mid - upper_mid - lower_multiplier * lower_mid
+    )
     entry_credit = quantity * entry_credit_per_fly
 
     upper_flat = entry_credit
     peak_profit = entry_credit + quantity * upper_width
-    lower_flat = entry_credit + quantity * (upper_width - lower_width)
-    max_profit = max(upper_flat, peak_profit, lower_flat)
-    max_loss = max(0.0, -min(upper_flat, peak_profit, lower_flat))
+    lower_corner = entry_credit + quantity * (upper_width - lower_width)
+    zero_price_tail = entry_credit + (
+        quantity * upper_strike
+        - 2 * quantity * body_strike
+        + lower_quantity * lower_strike
+    )
+    max_profit = max(upper_flat, peak_profit, lower_corner, zero_price_tail)
+    max_loss = max(
+        0.0,
+        -min(upper_flat, peak_profit, lower_corner, zero_price_tail),
+    )
     if max_profit <= 0:
         return None
 
@@ -378,8 +399,14 @@ def _build_butterfly(
     if upper_flat < 0 < peak_profit:
         upper_breakeven = upper_strike + entry_credit / quantity
     lower_breakeven = None
-    if lower_flat < 0 < peak_profit:
+    if lower_corner < 0 < peak_profit:
         lower_breakeven = body_strike - peak_profit / quantity
+    downside_breakeven = None
+    if lower_multiplier > 1 and lower_corner < 0 < zero_price_tail:
+        downside_breakeven = (
+            lower_strike
+            + lower_corner / (quantity * (lower_multiplier - 1))
+        )
 
     legs = (upper_long, body_short, lower_long)
     all_legs_live = all(_quotable(leg) for leg in legs)
@@ -392,12 +419,14 @@ def _build_butterfly(
         lower_bid = _num(lower_long.get("bid"), 0.0) or 0.0
         lower_ask = _num(lower_long.get("ask"), 0.0) or 0.0
         natural_credit = quantity * (
-            2.0 * body_bid - upper_ask - lower_ask
+            2.0 * body_bid
+            - upper_ask
+            - lower_multiplier * lower_ask
         )
         execution_cost = quantity * (
             (upper_ask - upper_bid)
             + 2.0 * (body_ask - body_bid)
-            + (lower_ask - lower_bid)
+            + lower_multiplier * (lower_ask - lower_bid)
         )
     else:
         # Do not invent an executable natural price or quoted width from
@@ -408,11 +437,15 @@ def _build_butterfly(
     actual_upper_delta = abs(_num(upper_long.get("delta"), 0.0) or 0.0)
     actual_body_delta = abs(_num(body_short.get("delta"), 0.0) or 0.0)
     actual_lower_delta = abs(_num(lower_long.get("delta"), 0.0) or 0.0)
-    lower_target = _lower_long_target(upper_long_target)
+    lower_target = (
+        _lower_long_target(upper_long_target)
+        if lower_long_target is None
+        else float(lower_long_target)
+    )
     raw_position_delta = quantity * (
         (_num(upper_long.get("delta"), 0.0) or 0.0)
         - 2.0 * (_num(body_short.get("delta"), 0.0) or 0.0)
-        + (_num(lower_long.get("delta"), 0.0) or 0.0)
+        + lower_multiplier * (_num(lower_long.get("delta"), 0.0) or 0.0)
     )
     position_delta = raw_position_delta * CONTRACT_MULTIPLIER
 
@@ -423,7 +456,7 @@ def _build_butterfly(
     theta_dollars = None
     if None not in (upper_theta, body_theta, lower_theta):
         theta_dollars = quantity * (
-            upper_theta - 2.0 * body_theta + lower_theta
+            upper_theta - 2.0 * body_theta + lower_multiplier * lower_theta
         ) * CONTRACT_MULTIPLIER
 
     front_iv = _num(upper_long.get("iv"))
@@ -533,7 +566,7 @@ def _build_butterfly(
             "option_type": "put",
             "strike": lower_strike,
             "iv": _num(lower_long.get("iv")),
-            "quantity": quantity,
+            "quantity": lower_quantity,
         },
     ]
     probability_schedule = profit_probability_schedule(
@@ -569,6 +602,7 @@ def _build_butterfly(
             lower_long=lower_long,
             quantity=quantity,
             dividend_yield=dividend_yield,
+            lower_long_quantity_multiplier=lower_multiplier,
         )
         upper_long_pl = _modeled_butterfly_pl(
             exit_spot=upper_strike,
@@ -579,6 +613,7 @@ def _build_butterfly(
             lower_long=lower_long,
             quantity=quantity,
             dividend_yield=dividend_yield,
+            lower_long_quantity_multiplier=lower_multiplier,
         )
         body_pl = _modeled_butterfly_pl(
             exit_spot=body_strike,
@@ -589,6 +624,7 @@ def _build_butterfly(
             lower_long=lower_long,
             quantity=quantity,
             dividend_yield=dividend_yield,
+            lower_long_quantity_multiplier=lower_multiplier,
         )
         point.update({
             "unchanged_spot_pl_dollars": (
@@ -634,6 +670,7 @@ def _build_butterfly(
 
     return {
         "expiration": expiration,
+        "structure_kind": structure_kind,
         "dte": int(dte),
         "upper_long_delta_mode": str(int(round(upper_long_target * 100))),
         "target_upper_long_delta": upper_long_target,
@@ -660,7 +697,8 @@ def _build_butterfly(
         "tranche_quantity": quantity,
         "upper_long_quantity": quantity,
         "body_short_quantity": 2 * quantity,
-        "lower_long_quantity": quantity,
+        "lower_long_quantity": lower_quantity,
+        "lower_long_quantity_multiplier": lower_multiplier,
         "entry_credit_per_fly": entry_credit_per_fly,
         "entry_credit": entry_credit,
         "entry_debit": max(0.0, -entry_credit),
@@ -682,10 +720,14 @@ def _build_butterfly(
         "uses_last_trade_prices": uses_last_trade_prices,
         "upper_flat_outcome": upper_flat,
         "center_max_profit": peak_profit,
-        "lower_flat_outcome": lower_flat,
+        "lower_flat_outcome": lower_corner,
+        "lower_corner_outcome": lower_corner,
+        "zero_price_tail_outcome": zero_price_tail,
         "upper_flat_dollars": upper_flat * CONTRACT_MULTIPLIER,
         "center_max_profit_dollars": peak_profit * CONTRACT_MULTIPLIER,
-        "lower_flat_dollars": lower_flat * CONTRACT_MULTIPLIER,
+        "lower_flat_dollars": lower_corner * CONTRACT_MULTIPLIER,
+        "lower_corner_dollars": lower_corner * CONTRACT_MULTIPLIER,
+        "zero_price_tail_dollars": zero_price_tail * CONTRACT_MULTIPLIER,
         "max_profit": max_profit,
         "max_loss": max_loss,
         "max_profit_dollars": max_profit * CONTRACT_MULTIPLIER,
@@ -694,6 +736,7 @@ def _build_butterfly(
             max_profit / max_loss * 100.0 if max_loss > 0 else None
         ),
         "lower_breakeven": lower_breakeven,
+        "downside_breakeven": downside_breakeven,
         "upper_breakeven": upper_breakeven,
         "lower_breakeven_cushion_pct": (
             (spot - lower_breakeven) / spot * 100.0
@@ -995,15 +1038,20 @@ def _round_candidate(candidate: dict) -> dict:
         ("upper_flat_outcome", 2),
         ("center_max_profit", 2),
         ("lower_flat_outcome", 2),
+        ("lower_corner_outcome", 2),
+        ("zero_price_tail_outcome", 2),
         ("upper_flat_dollars", 0),
         ("center_max_profit_dollars", 0),
         ("lower_flat_dollars", 0),
+        ("lower_corner_dollars", 0),
+        ("zero_price_tail_dollars", 0),
         ("max_profit", 2),
         ("max_loss", 2),
         ("max_profit_dollars", 0),
         ("max_loss_dollars", 0),
         ("return_on_risk_pct", 1),
         ("lower_breakeven", 2),
+        ("downside_breakeven", 2),
         ("upper_breakeven", 2),
         ("lower_breakeven_cushion_pct", 1),
         ("prob_touch_upper_long_pct", 1),

@@ -5,6 +5,7 @@ import {
   applyVolatilitySurfaceShock,
   buildVolatilityScenarioLeg,
   clampVolatilitySurfaceShock,
+  CRASH_VOLATILITY_PRESET,
   downsideMoneynessUnits,
   estimateVolatilitySkewByExpiration,
   MAX_VOLATILITY_SURFACE_SHOCK_PCT,
@@ -57,6 +58,26 @@ test('downside skew steepening raises lower-strike IV and lowers upper-strike IV
   assert.ok(downsideMoneynessUnits(110, 100) < 0)
   assert.ok(lower.modeledIv > 0.25)
   assert.ok(upper.modeledIv < 0.25)
+})
+
+test('crash preset gives the far-downside hedge the largest IV-point increase', () => {
+  const spot = 748.18
+  const legs = [
+    { strike: 355, expiration: '2027-01-15', iv: 0.4919 },
+    { strike: 655, expiration: '2027-01-15', iv: 0.2124 },
+    { strike: 710, expiration: '2027-01-15', iv: 0.1687 },
+  ]
+  const scenarios = legs.map(leg => buildVolatilityScenarioLeg(leg, {
+    spot,
+    surfaceShockPct: CRASH_VOLATILITY_PRESET.surfaceShockPct,
+    skewPoints: CRASH_VOLATILITY_PRESET.skewPoints,
+    termShocks: {},
+  }))
+
+  assert.equal(CRASH_VOLATILITY_PRESET.surfaceShockPct, 50)
+  assert.equal(CRASH_VOLATILITY_PRESET.skewPoints, 2)
+  assert.ok(scenarios[0].totalChangePoints > scenarios[1].totalChangePoints)
+  assert.ok(scenarios[1].totalChangePoints > scenarios[2].totalChangePoints)
 })
 
 test('expiration-specific term shocks affect only their matching legs', () => {

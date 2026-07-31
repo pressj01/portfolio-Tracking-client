@@ -228,6 +228,42 @@ const GUIDES = {
       ],
     },
   ],
+  'double-hedge-put-butterfly': [
+    {
+      title: 'Underlying and documented structure',
+      items: [
+        ['Tickers', 'Comma-separated liquid index ETFs. SPY, QQQ, and IWM are the smaller-scale defaults; they adapt the documentâ€™s SPX structure without pretending the products have identical notional exposure.'],
+        ['STFS market bias', 'Applies the documented per-tranche delta band: bearish −3 to −1, neutral −1 to +1, or bullish +1 to +3 share equivalents.'],
+        ['Target / Minimum / Maximum DTE', 'Selects the standard monthly nearest 200 DTE inside the document’s 160–230 DTE range. Weekly expirations are excluded.'],
+        ['Upper-long qty', 'Scales the full 1/−2/+2 contract ratio. The default 4 produces 4 upper longs, 8 body shorts, and 8 lower longs.'],
+        ['Leg Δ tolerance', 'Maximum miss from the 25-delta upper long, 15-delta body, and 2.5-delta lower hedge. The lower strike is also shifted to fit the STFS bias.'],
+        ['Min lower-wing ratio', 'Requires the body-to-lower-long strike distance to remain wider than the upper-long-to-body distance.'],
+        ['Minimum leg OI', 'Minimum open interest on each of the three unique strikes.'],
+      ],
+    },
+    {
+      title: 'Entry trio and upper line',
+      items: [
+        ['Minimum theta', 'Minimum complete-tranche ATM theta in dollars per day. The document’s default is greater than +$10.'],
+        ['Minimum T+0 −20%', 'Lowest acceptable modeled P/L after an immediate 20% underlying decline. The document’s default floor is −$10,000 per base tranche.'],
+        ['UEL tolerance', 'Preferred dollar distance of the upper expiration line from $0. This ranks entry quality and warns; it is not a mathematical loss limit.'],
+        ['T+0 −15% diagnostic', 'Shows the modeled mark emphasized for option-buying-power monitoring. Broker portfolio-margin scenarios and the full account still govern actual buying power.'],
+        ['Expiration geometry', 'Shows the upper flat, body peak, lower-strike loss valley, and the recovering crash tail created by the doubled lower hedge.'],
+      ],
+    },
+    {
+      title: 'Entry monitors and campaign state',
+      items: [
+        ['Structure-price / Concavity / Skew monitor', 'Manual favorable, unfavorable, or unconfirmed states from the document’s historical blue/green and magenta/red monitors. A current chain snapshot cannot reproduce their historical standard-deviation signals.'],
+        ['Current-chain context', 'Body richness versus a linear interpolation of the long strikes and the current put-skew slope are displayed as transparent diagnostics, separate from the historical monitor states.'],
+        ['Warning signals', 'Count from the document’s OBV, ATR, STFS, Force Index, and term-structure monitor. Four or five active warnings prohibit a new tranche.'],
+        ['Awaiting 8/34 all-clear', 'After a four- or five-warning event, keep this checked until a bullish 8/34 EMA crossover occurs on the 30-minute chart.'],
+        ['Campaign capital / Capital per tranche / Open tranches', 'Enforces the document’s campaign-capacity ceiling. The default $150,000 ÷ $12,500 permits at most 12 open tranches.'],
+        ['LPTA context', 'At four warnings, the document calls for one roughly 30-DTE 2-delta long put per three open tranches; at five warnings, two. Reassess coverage at 7 DTE.'],
+        ['Fixed and theta references', 'Shows the $1,000 target, roughly $800 expected profit, $2,500 management loss, 12-week average holding period, $20,000 learning reserve, and appendix 120×/71× theta references. The document favors conservative tiered fixed targets rather than theta alone.'],
+      ],
+    },
+  ],
   'unbalanced-butterfly': [
     {
       title: 'Universe and expiration',

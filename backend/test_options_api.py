@@ -1,4 +1,5 @@
 import sys
+import math
 import sqlite3
 import tempfile
 import unittest
@@ -514,6 +515,52 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
             data["curves"]["today"],
             sticky_strike_response.get_json()["curves"]["today"],
         )
+
+    @patch("options_api._fetch_quote", return_value={"last": 748.18, "div_yield": 0.0041})
+    def test_crash_level_and_skew_lift_double_hedge_put_marks(self, _quote):
+        expiration = self.today + timedelta(days=168)
+        spot = 748.18
+        base_legs = [
+            {"side": "BUY", "qty": 8, "opt_type": "PUT", "strike": 355,
+             "expiration": expiration.isoformat(), "entry_price": 0, "iv": 0.4919},
+            {"side": "SELL", "qty": 8, "opt_type": "PUT", "strike": 655,
+             "expiration": expiration.isoformat(), "entry_price": 0, "iv": 0.2124},
+            {"side": "BUY", "qty": 4, "opt_type": "PUT", "strike": 710,
+             "expiration": expiration.isoformat(), "entry_price": 0, "iv": 0.1687},
+        ]
+        payload = {
+            "underlying": "SPY",
+            "spot_override": spot,
+            "eval_date": self.today.isoformat(),
+            "model": "black-scholes",
+            "rate": 0.0375,
+            "div_yield": 0.0041,
+            "price_range": {"low": 300, "high": 800, "steps": 101},
+            "price_slices": [{"s": spot}, {"s": 600}],
+            "legs": base_legs,
+        }
+        baseline_response = self.client.post("/api/options/risk-graph", json=payload)
+
+        crash_legs = []
+        for leg in base_legs:
+            downside_units = -math.log(leg["strike"] / spot) / math.log(1.1)
+            crash_legs.append({
+                **leg,
+                # Same assumptions as the client preset: +50% parallel IV and
+                # +2 volatility points per 10% lower strike.
+                "iv": leg["iv"] * 1.5 + downside_units * 0.02,
+            })
+        crash_response = self.client.post(
+            "/api/options/risk-graph",
+            json={**payload, "legs": crash_legs},
+        )
+
+        self.assertEqual(baseline_response.status_code, 200)
+        self.assertEqual(crash_response.status_code, 200)
+        baseline_slices = baseline_response.get_json()["price_slices"]
+        crash_slices = crash_response.get_json()["price_slices"]
+        self.assertGreater(crash_slices[0]["pnl_open"], baseline_slices[0]["pnl_open"])
+        self.assertGreater(crash_slices[1]["pnl_open"], baseline_slices[1]["pnl_open"])
 
     @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
     def test_probability_mode_returns_adjustable_band_and_touch_probability(self, _quote):

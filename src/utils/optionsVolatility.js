@@ -11,6 +11,16 @@ export const VOLATILITY_DYNAMICS = Object.freeze({
   STICKY_DELTA: 'sticky-delta',
 })
 
+// A transparent, deliberately modest joint crash scenario. A volatility event
+// is not only a parallel level change: downside put skew normally steepens as
+// well. Keeping this preset explicit avoids silently coupling two independent
+// controls while still making the combined scenario one click away.
+export const CRASH_VOLATILITY_PRESET = Object.freeze({
+  surfaceShockPct: 50,
+  skewPoints: 2,
+  dynamics: VOLATILITY_DYNAMICS.STICKY_STRIKE,
+})
+
 export const clampVolatilitySurfaceShock = value => Math.min(
   MAX_VOLATILITY_SURFACE_SHOCK_PCT,
   Math.max(MIN_VOLATILITY_SURFACE_SHOCK_PCT, Number(value) || 0),

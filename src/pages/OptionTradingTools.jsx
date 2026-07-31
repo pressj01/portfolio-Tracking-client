@@ -12,6 +12,7 @@ import {
   clampVolatilitySkewPoints,
   clampVolatilitySurfaceShock,
   clampVolatilityTermPoints,
+  CRASH_VOLATILITY_PRESET,
   estimateVolatilitySkewByExpiration,
   MAX_VOLATILITY_SURFACE_SHOCK_PCT,
   MAX_VOLATILITY_SKEW_POINTS,
@@ -1559,6 +1560,13 @@ export default function OptionTradingTools() {
     setVolatilityTermShocks({})
   }, [])
 
+  const applyCrashVolatilityPreset = useCallback(() => {
+    setVolatilitySurfaceShock(CRASH_VOLATILITY_PRESET.surfaceShockPct)
+    setVolatilitySkewPoints(CRASH_VOLATILITY_PRESET.skewPoints)
+    setVolatilityDynamics(CRASH_VOLATILITY_PRESET.dynamics)
+    setVolatilityTermShocks({})
+  }, [])
+
   const setAnalysisIvPct = value => {
     if (!probabilityAnchor) return
     const desiredIvPct = Math.max(0.01, Number(value) || 0.01)
@@ -2192,7 +2200,10 @@ export default function OptionTradingTools() {
           {!!activeOptionLegs.length && <div className="opt-volatility-scenario-panel">
             <div className="opt-volatility-scenario-heading">
               <div><span>Volatility scenario</span><strong>Model the whole surface, skew and expiration curve</strong></div>
-              <button type="button" onClick={resetVolatilityScenario}>Reset to current surface</button>
+              <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                <button type="button" onClick={applyCrashVolatilityPreset} title="Apply a +50% parallel IV move plus 2 volatility points of additional downside skew per 10% lower strike">Apply crash-vol spike</button>
+                <button type="button" onClick={resetVolatilityScenario}>Reset to current surface</button>
+              </div>
             </div>
             <div className="opt-volatility-scenario-controls">
               <label>
@@ -2223,6 +2234,9 @@ export default function OptionTradingTools() {
                 ? 'Sticky delta moves the modeled surface with the underlying. As each fixed strike moves through moneyness, its IV follows the modeled skew for that expiration. An expiration with fewer than two distinct strikes falls back to fixed strike IV.'
                 : 'Sticky strike keeps each contract\'s modeled IV fixed as the chart sweeps underlying prices.'}
               {' '}The current chain supplies the underlying-specific baseline. Scenario changes are manual assumptions, not a historical IV calibration.
+              {Number(risk?.portfolio_greeks?.vega) < 0 && volatilitySurfaceShockValue > 0 && volatilitySkewPointsValue === 0
+                ? <><strong> This position is short vega near the live price, so a parallel IV increase alone is not expected to lift the purple curve there.</strong> Apply the crash-vol spike or enter a positive downside-skew change to model the combined level-and-skew move seen in a selloff.</>
+                : null}
             </p>
             <div className="opt-table-wrap opt-volatility-table-wrap"><table className="opt-volatility-table"><thead><tr><th>Leg</th><th>Expiration</th><th>Market IV</th><th>After leg adj</th><th>Parallel</th><th>Skew</th><th>Term</th><th>Modeled IV</th></tr></thead><tbody>{activeOptionLegs.map(leg => {
               const scenario = legVolatilityScenarios[leg.local_id]
