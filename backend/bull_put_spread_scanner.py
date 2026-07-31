@@ -28,11 +28,13 @@ from datetime import date, datetime, timedelta
 import yfinance as yf
 from flask import jsonify, request
 
+from option_probability import profit_probability_schedule
 from put_scanner import (
     CURATED_STOCK_SET,
     INDEX_ETF_SET,
     MAX_TARGET_DTE,
     MIN_TARGET_DTE,
+    RISK_FREE,
     SECTOR_ETF_SET,
     UNIVERSE_CHOICES,
     _benchmark_returns,
@@ -860,9 +862,49 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
             dropped_for_earnings += 1
             continue
         if spread:
+            management = recommend_management(spread, rating)
+            div_yield = dividend_yield_for_pricing(fund, tech.get("price"))
+            probability_schedule = profit_probability_schedule(
+                spot=tech.get("price"),
+                dte=spread.get("dte"),
+                expiration=spread.get("expiration"),
+                distribution_iv=spread.get("atm_iv") or (
+                    spread.get("short_leg") or {}
+                ).get("iv"),
+                entry_cashflow=spread.get("credit"),
+                legs=[
+                    {
+                        "option_type": "put",
+                        "strike": (spread.get("short_leg") or {}).get("strike"),
+                        "iv": (spread.get("short_leg") or {}).get("iv"),
+                        "quantity": -1,
+                    },
+                    {
+                        "option_type": "put",
+                        "strike": (spread.get("long_leg") or {}).get("strike"),
+                        "iv": (spread.get("long_leg") or {}).get("iv"),
+                        "quantity": 1,
+                    },
+                ],
+                exit_points=[
+                    {
+                        "kind": "reassess",
+                        "label": "Reassess",
+                        "remaining_dte": (management or {}).get("reassess_dte"),
+                    },
+                    {
+                        "kind": "close_by",
+                        "label": "Close by",
+                        "remaining_dte": (management or {}).get("close_by_dte"),
+                    },
+                ],
+                risk_free_rate=RISK_FREE,
+                dividend_yield=div_yield,
+            )
             spread = {
                 **spread,
-                "management": recommend_management(spread, rating),
+                "management": management,
+                "probability_schedule": probability_schedule,
             }
 
         if spread and not spread.get("constraints_relaxed"):

@@ -75,6 +75,7 @@ import BullPutSpreadScanner from './pages/BullPutSpreadScanner'
 import BearCallSpreadScanner from './pages/BearCallSpreadScanner'
 import IronCondorScanner from './pages/IronCondorScanner'
 import UnbalancedPutCondorScanner from './pages/UnbalancedPutCondorScanner'
+import UnbalancedButterflyScanner from './pages/UnbalancedButterflyScanner'
 import GreeksGuide from './pages/GreeksGuide'
 
 function PlotlyThemeBridge() {
@@ -241,6 +242,7 @@ function App() {
         <Route path="/bear-call-spread-scanner" element={<BearCallSpreadScanner />} />
         <Route path="/iron-condor-scanner" element={<IronCondorScanner />} />
         <Route path="/unbalanced-put-condor-scanner" element={<UnbalancedPutCondorScanner />} />
+        <Route path="/unbalanced-butterfly-scanner" element={<UnbalancedButterflyScanner />} />
         <Route path="/option-education" element={<OptionEducation />} />
         <Route path="/option-greeks" element={<GreeksGuide />} />
         <Route path="/help" element={<Help />} />
@@ -313,6 +315,7 @@ function Nav() {
         <NavLink to="/bear-call-spread-scanner">Bear Call Spread Scanner</NavLink>
         <NavLink to="/iron-condor-scanner">Iron Condor Scanner</NavLink>
         <NavLink to="/unbalanced-put-condor-scanner">Unbalanced Put Condor Scanner</NavLink>
+        <NavLink to="/unbalanced-butterfly-scanner">Unbalanced Butterfly Scanner</NavLink>
         <NavLink to="/option-education">Option Strategy Education</NavLink>
         <NavLink to="/option-greeks">Understanding the Greeks</NavLink>
       </NavDropdown>

@@ -1,0 +1,331 @@
+import React from 'react'
+
+const universeItems = [
+  ['Include', 'Chooses whether the scan covers stocks, broad index ETFs, and/or sector and commodity ETFs.'],
+  ['Stock universe / Tickers', 'Selects a built-in stock list or a comma-separated custom list. It does not change the ETF lists.'],
+  ['Preset', 'Loads a coordinated set of filters. Changing any loaded value makes the setup custom.'],
+]
+
+const commonMarketItems = [
+  ['Min market cap / ETF min AUM', 'Minimum company equity value or fund assets. These are separate because funds do not have a market capitalization.'],
+  ['Min $ volume', 'Minimum average daily share-price × share-volume. Higher values usually lead to more liquid option chains.'],
+  ['Lookback', 'Trading-day window used for the scanner’s move, volatility, momentum, and relative-strength measurements.'],
+  ['Target DTE', 'Preferred calendar days to expiration. The scanner selects the nearest listed expiration in its allowed window.'],
+]
+
+const commonEventItems = [
+  ['Skip earnings inside trade', 'Rejects stocks whose next report falls inside the target trade horizon plus its safety buffer.'],
+  ['Skip leveraged / inverse ETFs', 'Removes path-dependent funds whose daily reset, decay, and gaps can distort the strategy.'],
+]
+
+const GUIDES = {
+  'put-selling': [
+    { title: 'Universe', items: universeItems },
+    {
+      title: 'Setup filters',
+      items: [
+        ['Min drop / ETF min drop', 'Minimum decline from the 52-week high. Funds use a separate, normally lower threshold.'],
+        ['Min stretch / ETF min stretch', 'Minimum decline in standard deviations of the underlying’s own normal lookback move.'],
+        ['Max RSI', 'Highest allowed 14-day RSI. Lower values require a more oversold candidate.'],
+        ...commonMarketItems,
+      ],
+    },
+    {
+      title: 'Put selection and gates',
+      items: [
+        ['Target delta', 'Absolute delta sought for the short put. It is also a rough assignment-probability anchor.'],
+        ['Profitable only', 'For stocks, requires positive trailing earnings; it does not apply to funds.'],
+        ['Skip fresh 52-week lows', 'Rejects names still making new lows, where the decline may not have stabilized.'],
+        ...commonEventItems,
+      ],
+    },
+  ],
+  'covered-call': [
+    { title: 'Universe', items: universeItems },
+    {
+      title: 'Setup filters',
+      items: [
+        ['Min run / ETF min run', 'Minimum advance over the lookback. Funds use a separate, normally lower threshold.'],
+        ['Min stretch / ETF min stretch', 'Minimum advance in standard deviations of the underlying’s own normal move.'],
+        ['Min RSI', 'Lowest allowed 14-day RSI. Higher values require a more extended candidate.'],
+        ['Min % of range', 'Minimum position between the 52-week low (0%) and high (100%).'],
+        ['Small-cap min cap', 'Separate size floor used when a small-cap universe is selected.'],
+        ...commonMarketItems,
+      ],
+    },
+    {
+      title: 'Call selection and ownership gates',
+      items: [
+        ['Target delta', 'Delta sought for the short call; it is a rough chance that the call finishes in the money.'],
+        ['Min OTM', 'Minimum percentage the short-call strike must sit above the current share price.'],
+        ['Only where I hold 100+ shares', 'Requires enough owned shares to cover at least one 100-share call contract.'],
+        ['Keep strike above my cost basis', 'Avoids a suggested strike below the portfolio’s average cost per share.'],
+        ['Skip fresh 52-week highs', 'Rejects names still breaking out, where upside assignment risk is greatest.'],
+        ...commonEventItems,
+      ],
+    },
+  ],
+  'bull-put-spread': [
+    { title: 'Universe', items: universeItems },
+    {
+      title: 'Bullish setup',
+      items: [
+        ['Min / max pullback', 'Allowed stock decline from the recent high; ETFs have their own min/max band.'],
+        ['Min / max stretch', 'Allowed pullback measured in standard deviations of the underlying’s normal move.'],
+        ['Min / max RSI', 'Allowed 14-day RSI band: weak enough to offer premium, but not a falling knife.'],
+        ['Require price above 200-day', 'Keeps the long-term trend bullish.'],
+        ['Require 50-day above 200-day', 'Requires a confirmed moving-average uptrend.'],
+        ['Profitable only', 'For stocks, requires positive trailing earnings.'],
+        ['Skip fresh 52-week lows', 'Rejects active breakdowns.'],
+        ...commonMarketItems,
+        ...commonEventItems,
+      ],
+    },
+    {
+      title: 'Spread structure',
+      items: [
+        ['Short delta', 'Places the higher-strike put that is sold. Lower delta is farther OTM and normally safer.'],
+        ['Long delta', 'Places the lower-strike protective put. Lower delta normally creates a wider wing.'],
+        ['Min / max width', 'Allowed strike distance as a percentage of spot.'],
+        ['Min credit', 'Minimum net credit as a percentage of spread width.'],
+        ['Min cushion', 'Minimum distance from spot down to the expiration breakeven.'],
+        ['Min leg OI', 'Minimum open interest on the thinner of the two option legs.'],
+        ['Max slippage', 'Maximum combined bid/ask cost as a percentage of the entry credit.'],
+      ],
+    },
+  ],
+  'bear-put-spread': [
+    { title: 'Universe', items: universeItems },
+    {
+      title: 'Bearish setup',
+      items: [
+        ['Min / max stretch', 'Allowed decline in standard deviations: enough to confirm a break, but not a finished crash.'],
+        ['Min / max RSI', 'Momentum band that rejects both unbroken strength and deeply washed-out bounce risk.'],
+        ['Min vs market / ETF min vs market', 'Minimum beta-adjusted underperformance. Funds have a separate threshold.'],
+        ['Max drawdown', 'Rejects names already too far below their 52-week high.'],
+        ['Min above low', 'Requires room below the current price before the 52-week low caps the thesis.'],
+        ['Small-cap min cap', 'Separate size floor when a small-cap universe is selected.'],
+        ['Require price below 50-day', 'Requires the first moving-average trend break.'],
+        ['Require 50-day below 200-day', 'Requires a confirmed longer-term downtrend.'],
+        ['Skip fresh 52-week lows', 'Avoids paying peak downside volatility after most of the move has happened.'],
+        ...commonMarketItems,
+        ...commonEventItems,
+      ],
+    },
+    {
+      title: 'Spread structure',
+      items: [
+        ['Long delta', 'Places the higher-strike put that is bought; 0.50 is approximately at the money.'],
+        ['Short delta', 'Places the lower-strike put that is sold to finance the trade and cap its payoff.'],
+        ['Max debit', 'Maximum entry debit as a percentage of spread width.'],
+        ['Min R:R', 'Minimum maximum-profit ÷ maximum-loss ratio.'],
+        ['Max move needed', 'Largest allowed move to the short strike in expected-move standard deviations.'],
+      ],
+    },
+  ],
+  'bear-call-spread': [
+    { title: 'Universe', items: universeItems },
+    {
+      title: 'Rejected-rally setup',
+      items: [
+        ['Min / max rally', 'Allowed bounce in standard deviations: large enough to reject, but not a momentum thrust.'],
+        ['Max vs market / ETF max vs market', 'Maximum beta-adjusted relative strength; leaders are excluded.'],
+        ['Min / max RSI', 'Momentum band for a rally that is rolling over rather than already washed out or still surging.'],
+        ['Max acceleration', 'Maximum recent five-day improvement versus the preceding five days.'],
+        ['Max run off low', 'Rejects squeeze-like rallies already far above the 20-day low.'],
+        ['Max % of range', 'Maximum position in the 52-week range so overhead supply still exists.'],
+        ['Require a rolled-over high', 'Requires the recent rally to fail below its 20-day high.'],
+        ['Require resistance overhead', 'Requires an identifiable moving average or swing-high ceiling.'],
+        ['Place strike above resistance', 'Prefers a short call above the identified ceiling, not only near target delta.'],
+        ['Require price below 50-day / 50-day below 200-day', 'Optional moving-average confirmation of a broken or established downtrend.'],
+        ['Skip fresh 52-week highs', 'Rejects names with no demonstrated overhead ceiling.'],
+        ['Small-cap min cap', 'Separate size floor used for small-cap universes because takeover gaps are short-call risks.'],
+        ...commonMarketItems,
+        ...commonEventItems,
+      ],
+    },
+    {
+      title: 'Spread structure',
+      items: [
+        ['Short delta', 'Places the lower-strike call that is sold. Lower delta is farther OTM.'],
+        ['Long delta', 'Places the higher-strike protective call that caps the loss.'],
+        ['Min strike OTM', 'Minimum percentage the short strike must sit above spot.'],
+        ['Min credit', 'Minimum net credit as a percentage of spread width.'],
+        ['Min cushion', 'Minimum distance from spot up to the expiration breakeven.'],
+        ['Min open interest', 'Minimum OI on the thinner option leg.'],
+        ['Max slippage', 'Maximum combined bid/ask cost as a percentage of the credit.'],
+      ],
+    },
+  ],
+  'iron-condor': [
+    { title: 'Universe', items: universeItems },
+    {
+      title: 'Range and volatility setup',
+      items: [
+        ['Max efficiency', 'Maximum net distance ÷ total path length. Lower values indicate more back-and-forth movement.'],
+        ['Max drift', 'Maximum absolute net move over the lookback in standard deviations.'],
+        ['Max variance ratio', 'Below 1 suggests mean reversion; above 1 suggests moves compound into a trend.'],
+        ['Max MA slope', 'Maximum absolute slope of the 20- or 50-day average.'],
+        ['Min / max RSI', 'Allowed neutral-momentum band.'],
+        ['Max relative strength', 'Maximum absolute beta-adjusted leadership; a condor wants neither direction to dominate.'],
+        ['Min / max range position', 'Allowed location within the observed range, where 0% is the low and 100% the high.'],
+        ['Skip fresh 52-week extremes', 'Rejects new highs and new lows because either tail can break the condor.'],
+        ...commonMarketItems,
+        ...commonEventItems,
+      ],
+    },
+    {
+      title: 'Four-leg structure',
+      items: [
+        ['Short delta', 'Targets both sold strikes. Lower values place them farther from spot.'],
+        ['Long delta', 'Targets both protective wings.'],
+        ['Min / max width', 'Allowed width of each vertical as a percentage of spot.'],
+        ['Min credit', 'Minimum total credit as a percentage of the wider wing.'],
+        ['Min cushion', 'Minimum nearer-breakeven distance in expected-move standard deviations.'],
+        ['Min OTM', 'Minimum raw distance from spot to either short strike.'],
+        ['Max wing skew', 'Largest allowed percentage difference between put- and call-wing widths.'],
+        ['Max delta gap', 'Largest allowed difference between the absolute deltas of the two short strikes.'],
+        ['Min leg OI', 'Minimum open interest on the least-liquid of all four legs.'],
+        ['Max slippage', 'Maximum sum of all four bid/ask spreads as a percentage of net credit.'],
+      ],
+    },
+  ],
+  'unbalanced-put-condor': [
+    {
+      title: 'Universe and expiration',
+      items: [
+        ['Tickers', 'Comma-separated underlyings to scan.'],
+        ['Short-delta pair', 'Chooses the front/back short-put delta targets: 15/5, 20/10, 25/15, or all three.'],
+        ['Target DTE', 'Preferred days to expiration.'],
+        ['Minimum / Maximum DTE', 'Hard calendar-day bounds for eligible listed expirations.'],
+      ],
+    },
+    {
+      title: 'Widths, quantities, and delta',
+      items: [
+        ['Bought width', 'Strike width of the upper long-put/short-put debit vertical.'],
+        ['Sold width', 'Strike width of the lower short-put/long-put credit vertical.'],
+        ['Bought / Sold qty', 'Contract ratio between the upper debit vertical and lower credit vertical.'],
+        ['Target net Δ', 'Desired total position delta in one-share equivalents; positive is bullish and negative bearish.'],
+        ['Net Δ tolerance', 'Maximum allowed difference between actual and target position delta.'],
+        ['Leg Δ tolerance', 'Maximum allowed miss from either selected short-leg delta target.'],
+        ['Width tolerance', 'Maximum percentage miss when listed strikes cannot exactly match the requested widths.'],
+        ['Minimum leg OI', 'Minimum open interest required on every one of the four legs.'],
+        ['Require upper-tail credit', 'Requires the flat payoff above the front long strike to begin with a net credit.'],
+        ['Quick delta lean / quantity ratio', 'Buttons that load common target-delta and contract-ratio combinations.'],
+      ],
+    },
+    {
+      title: 'Upside-only adjustment mechanics',
+      items: [
+        ['When it is eligible', 'Only after price has moved up and away from every put strike while the structure remains untested. Do not sell more credit spreads while price is falling toward the trade.'],
+        ['How the upper line rises', 'Additional sold put credit spreads add net credit. Above the upper long, every put expires worthless, so that added credit raises the upper expiration-line payoff dollar for dollar before costs.'],
+        ['Why it becomes more bullish', 'More short put spreads add positive delta. They can also add positive theta, but increase short-gamma exposure and make a downside reversal more damaging.'],
+        ['Quantity-ratio change', 'The adjustment increases the sold-spread quantity without increasing the purchased-spread quantity—for example, a 5:10 package may become 5:11. Recalculate the whole package rather than judging the new spread alone.'],
+        ['Risk exchanged for credit', 'Each added credit spread usually worsens the lower flat and maximum loss, consumes buying power, and adds assignment, liquidity, and gap risk. Raising the upper line is not the same as locking in profit.'],
+        ['Required recheck', 'Verify the adjusted upper line, center maximum, lower flat, net delta, theta, maximum loss, buying power, bid/ask execution, and every probability card. Use the smallest size that reaches the intended upper-line or delta target.'],
+        ['If price reverses', 'A move back down toward the puts invalidates the reason for adding bullish exposure. Reduce or close according to the risk plan instead of selling progressively more spreads.'],
+      ],
+    },
+  ],
+  'unbalanced-butterfly': [
+    {
+      title: 'Universe and expiration',
+      items: [
+        ['Tickers', 'Comma-separated underlyings to scan. Use the market-data symbol expected by Yahoo Finance, such as SPY or ^SPX.'],
+        ['Upper-long delta', 'Scans a 20-delta upper long, the course-original 25-delta upper long, or both as separate candidates.'],
+        ['Market bias', 'Applies the course tranche-delta range: bearish −3 to −1, neutral −1 to +1, or bullish +1 to +3 share equivalents.'],
+        ['Target DTE', 'Preferred calendar days to expiration. The default is 180 DTE, matching the Unbalanced Put Condor.'],
+        ['Minimum / Maximum DTE', 'Hard bounds for eligible standard monthly expirations. The 120–240 DTE defaults match the Unbalanced Put Condor; weekly expirations are excluded.'],
+      ],
+    },
+    {
+      title: 'Structure and course fit',
+      items: [
+        ['Tranche long qty', 'Quantity of each long-put wing. The body quantity is twice this number, so the course default 4 creates 4/−8/4 contracts.'],
+        ['Leg Δ tolerance', 'Maximum miss from the selected upper-long, 15-delta body-short, and balancing lower-long targets.'],
+        ['Target theta', 'Preferred complete-tranche daily theta in dollars; the course target is approximately +$20 at entry.'],
+        ['Theta tolerance', 'Allowed distance above or below the target theta before the candidate receives a warning.'],
+        ['UEL tolerance', 'Maximum preferred dollar distance of the upper expiration line from $0. It is an entry-quality warning, not a risk limit.'],
+        ['Min lower-wing ratio', 'Requires the body-to-lower-long wing to be wider than the upper-long-to-body wing. Values above 1 preserve a broken wing.'],
+        ['Minimum leg OI', 'Minimum open interest required on each of the three unique strikes.'],
+      ],
+    },
+    {
+      title: 'Cards and management',
+      items: [
+        ['Probability of success / failure', 'Success includes the untested region above the upper long. Inside the structure it follows the time-evolved, $0-or-better modeled profit tent; failure is the exact downside complement at the halfway review, two-thirds review, and expiration.'],
+        ['Time-evolution card', 'Reprices the complete butterfly at the halfway review, two-thirds review, and expiration. It shows success/failure plus modeled P/L if price is unchanged, at the upper long, and at the body/tent peak.'],
+        ['Reach / never touches', 'First-passage probability that price reaches the upper long, plus its complement, over the same halfway and two-thirds management windows and through expiration.'],
+        ['Body and lower-tail risk', 'Shows the chance of touching or finishing below the double-short body and lower long.'],
+        ['Course targets', 'Compares the candidate with the $1,000 profit target, $2,000 management loss limit, roughly 16-week course harvest expectation, near-zero UEL, and +$20 theta goal. The probability checkpoints still match the Condor.'],
+        ['When narrowing is eligible', 'Only after price has moved up and away from the butterfly, leaving every put farther out of the money. Never narrow the front wing while price is falling toward or into the structure.'],
+        ['How narrowing raises the UEL', 'A net-credit roll that reduces the distance between the upper long and double-short body adds cash to the position. Above the upper long, the puts expire worthless, so the added net credit raises the upper expiration line before costs.'],
+        ['Why narrowing is bullish', 'Moving the front strikes closer together reduces put protection or adds short-put exposure, shifting the complete position toward positive delta. The exact Greek change depends on which front leg is rolled.'],
+        ['Adjustment trade-off', 'The raised upper line is purchased with changed tent geometry and risk: the peak can shrink or move, the downside flat and breakeven can change, and bullish delta, short gamma, slippage, and assignment exposure can rise.'],
+        ['Required recheck', 'Reprice the entire adjusted butterfly—not just the rolled leg—and verify the upper line, tent peak, lower flat, breakeven, delta, theta, maximum loss, liquidity, and all success/failure and touch probabilities. Use the smallest qualifying net-credit roll.'],
+        ['If price reverses', 'A reversal down toward the puts removes the reason for the adjustment. Reduce or close according to the risk plan rather than repeatedly narrowing and adding bullish exposure.'],
+      ],
+    },
+  ],
+}
+
+export default function ScannerParameterGuide({ scanner }) {
+  const groups = GUIDES[scanner]
+  if (!groups) return null
+  return (
+    <details style={{
+      margin: '0 0 0.75rem',
+      padding: '0.65rem 0.85rem',
+      background: 'var(--surface-sunken)',
+      border: '1px solid var(--border)',
+      borderRadius: 6,
+    }}>
+      <summary style={{
+        color: 'var(--accent-bright)',
+        cursor: 'pointer',
+        fontWeight: 700,
+        fontSize: '0.82rem',
+      }}>
+        Parameter guide
+      </summary>
+      <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', margin: '0.6rem 0' }}>
+        Open this guide whenever you need the meaning of an input. The scanner&rsquo;s presets set these
+        controls together; changing a value only changes the filter or structure described below.
+      </p>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))',
+        gap: '0.75rem',
+      }}>
+        {groups.map(group => (
+          <section
+            key={group.title}
+            style={{
+              padding: '0.65rem 0.75rem',
+              background: 'var(--surface-inset)',
+              borderRadius: 5,
+              border: '1px solid var(--border)',
+            }}
+          >
+            <h3 style={{ color: 'var(--text-strong)', fontSize: '0.78rem', margin: '0 0 0.45rem' }}>
+              {group.title}
+            </h3>
+            <dl style={{ margin: 0, display: 'grid', gap: '0.45rem' }}>
+              {group.items.map(([name, description]) => (
+                <div key={name}>
+                  <dt style={{ color: 'var(--text-strong)', fontSize: '0.72rem', fontWeight: 700 }}>
+                    {name}
+                  </dt>
+                  <dd style={{ color: 'var(--text-muted)', fontSize: '0.7rem', margin: '0.1rem 0 0', lineHeight: 1.4 }}>
+                    {description}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        ))}
+      </div>
+    </details>
+  )
+}

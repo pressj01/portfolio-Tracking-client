@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import PriceChartModal from '../components/PriceChartModal'
+import OptionProbabilityCards from '../components/OptionProbabilityCards'
 import RiskGraphButton from '../components/RiskGraphButton'
+import ScannerParameterGuide from '../components/ScannerParameterGuide'
 import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
 import { findActivePreset } from '../utils/activePreset'
@@ -431,6 +433,15 @@ function DetailRow({ row, colSpan, onShowChart }) {
                 )}
               </div>
             )}
+            {p && (
+              <OptionProbabilityCards
+                schedule={p.probability_schedule}
+                successHeadline="The short put has positive modeled P/L when closed"
+                failureHeadline="The short put has negative modeled P/L when closed"
+                successFooter="Success means the put can be bought back for less than the entry credit, or expires with a payoff smaller than that credit."
+                failureFooter="Failure is the complement: buying it back or settling it at expiration costs at least the entry credit."
+              />
+            )}
             {p?.buyback && (
               <div style={{
                 padding: '0.7rem 0.85rem', marginBottom: '0.8rem', borderRadius: '5px',
@@ -693,6 +704,7 @@ export default function PutSellingScanner() {
       <ScannerRiskNotice />
 
       {showHelp && <HelpPanel />}
+      <ScannerParameterGuide scanner="put-selling" />
 
       {/* What to scan. Each group is independent — unchecking Stocks skips the
           stock universe entirely rather than filtering it out afterwards. */}

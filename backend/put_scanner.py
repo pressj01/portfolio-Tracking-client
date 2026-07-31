@@ -35,6 +35,7 @@ import yfinance as yf
 from flask import jsonify, request
 
 from config import get_connection
+from option_probability import profit_probability_schedule
 from options_pricing import black_scholes
 
 # ---------------------------------------------------------------------------
@@ -1577,7 +1578,33 @@ def run_put_scan(payload: dict) -> dict:
             dropped_for_earnings += 1
             continue
         if put:
-            put = {**put, "buyback": recommend_buyback(put, rating)}
+            buyback = recommend_buyback(put, rating)
+            div_yield = dividend_yield_for_pricing(fund, tech.get("price"))
+            probability_schedule = profit_probability_schedule(
+                spot=tech.get("price"),
+                dte=put.get("dte"),
+                expiration=put.get("expiration"),
+                distribution_iv=put.get("atm_iv") or put.get("iv"),
+                entry_cashflow=put.get("mid"),
+                legs=[{
+                    "option_type": "put",
+                    "strike": put.get("strike"),
+                    "iv": put.get("iv"),
+                    "quantity": -1,
+                }],
+                exit_points=[{
+                    "kind": "reassess",
+                    "label": "Reassess / exit",
+                    "remaining_dte": (buyback or {}).get("reassess_dte"),
+                }],
+                risk_free_rate=RISK_FREE,
+                dividend_yield=div_yield,
+            )
+            put = {
+                **put,
+                "buyback": buyback,
+                "probability_schedule": probability_schedule,
+            }
 
         row = {
             "ticker": tech["ticker"],

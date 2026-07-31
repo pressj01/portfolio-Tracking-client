@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import PriceChartModal from '../components/PriceChartModal'
+import OptionProbabilityCards from '../components/OptionProbabilityCards'
 import RiskGraphButton from '../components/RiskGraphButton'
+import ScannerParameterGuide from '../components/ScannerParameterGuide'
 import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
 import { findActivePreset } from '../utils/activePreset'
@@ -193,6 +195,13 @@ function DetailRow({ row, colSpan }) {
           <RiskGraphButton kind="bull-put-spread" row={row} source="Bull Put Spread Scanner" />
         </div>
         <p style={{ maxWidth: '1100px', margin: '0 0 0.7rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>{row.verdict}</p>
+        {spread && (
+          <OptionProbabilityCards
+            schedule={spread.probability_schedule}
+            successHeadline="The complete put spread has positive modeled P/L"
+            failureHeadline="The complete put spread has negative modeled P/L"
+          />
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 0.7fr) minmax(420px, 2fr)', gap: '1rem' }}>
           <div>
             <ScoreBar label="Setup" value={row.components?.setup} max={30} />
@@ -413,6 +422,7 @@ export default function BullPutSpreadScanner() {
       </p>
       <ScannerRiskNotice />
       {showHelp && <HelpPanel />}
+      <ScannerParameterGuide scanner="bull-put-spread" />
 
       <div style={{
         display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', padding: '0.6rem 0.85rem',

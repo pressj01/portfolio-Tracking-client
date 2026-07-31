@@ -52,6 +52,7 @@ import yfinance as yf
 from flask import jsonify, request
 
 from config import get_connection
+from option_probability import profit_probability_schedule
 from options_pricing import black_scholes
 from put_scanner import (
     BENCHMARK,
@@ -1291,7 +1292,52 @@ def run_call_scan(payload: dict) -> dict:
             dropped_for_earnings += 1
             continue
         if call:
-            call = {**call, "management": recommend_management(call, rating)}
+            management = recommend_management(call, rating)
+            div_yield = dividend_yield_for_pricing(fund, tech.get("price"))
+            ex_dividend_exit = None
+            early_level = (call.get("early_assignment") or {}).get("level")
+            ex_dividend_date = _parse_date(call.get("ex_dividend_date"))
+            if (
+                ex_dividend_date
+                and call.get("ex_dividend_inside")
+                and early_level in {"elevated", "high"}
+            ):
+                ex_dividend_exit = (
+                    ex_dividend_date - timedelta(days=1)
+                ).isoformat()
+            probability_schedule = profit_probability_schedule(
+                spot=tech.get("price"),
+                dte=call.get("dte"),
+                expiration=call.get("expiration"),
+                distribution_iv=call.get("atm_iv") or call.get("iv"),
+                entry_cashflow=call.get("mid"),
+                legs=[{
+                    "option_type": "call",
+                    "strike": call.get("strike"),
+                    "iv": call.get("iv"),
+                    "quantity": -1,
+                }],
+                exit_points=[
+                    {
+                        "kind": "reassess",
+                        "label": "Reassess / exit",
+                        "remaining_dte": (management or {}).get("reassess_dte"),
+                    },
+                    {
+                        "kind": "ex_dividend",
+                        "label": "Exit before ex-dividend",
+                        "exit_date": ex_dividend_exit,
+                    },
+                ],
+                risk_free_rate=RISK_FREE,
+                dividend_yield=div_yield,
+                underlying_quantity=1,
+            )
+            call = {
+                **call,
+                "management": management,
+                "probability_schedule": probability_schedule,
+            }
 
         pos = positions.get(ticker) or {}
         row = {

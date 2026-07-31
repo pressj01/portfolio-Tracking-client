@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import RiskGraphButton from '../components/RiskGraphButton'
+import ScannerParameterGuide from '../components/ScannerParameterGuide'
 import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
 
@@ -73,13 +74,31 @@ function HelpPanel() {
         targets a flat package; +1.5 is slightly bullish; −1.5 is slightly bearish. The
         achieved value nets all four option deltas using their buy/sell signs.
       </p>
-      <p style={{ marginBottom: 0 }}>
+      <p>
         Bought and sold widths are independent. A 5/10 or 10/20 point construction has
         unequal downside risk; 5/5 or 10/10 points is also valid. Contract quantities are
         separate again: buying five debit spreads and selling ten credit spreads is a 5:10
         quantity ratio, and every payoff and delta is weighted by those quantities. Both
         tails remain horizontal at expiration, and the result table shows the upper flat
         outcome, center maximum profit, and lower flat outcome separately.
+      </p>
+      <p>
+        <strong>Upside-only adjustment: raise the upper expiration line by selling
+        additional credit spreads.</strong> Consider this only after the underlying
+        has rallied away from the put structure—up and farther above every put strike.
+        The added net credit lifts the payoff above the upper long because all puts
+        expire worthless there and the accumulated entry and adjustment credits remain.
+        The additional short-put spreads also make the complete position more bullish.
+      </p>
+      <p style={{ marginBottom: 0 }}>
+        This is not free profit. Every additional credit spread increases downside
+        exposure, positive delta, short-gamma risk, assignment exposure, and usually
+        the lower-tail maximum loss. Never add them while price is falling toward the
+        structure. Before adjusting, rebuild the complete payoff and verify the new
+        upper line, center peak, lower flat, net delta, theta, maximum loss, buying
+        power, liquidity, and probability cards. Use the smallest size that reaches
+        the intended upper-line or delta target, and treat a reversal back toward the
+        puts as a reason to reduce or close—not to keep adding.
       </p>
     </div>
   )
@@ -553,6 +572,7 @@ export default function UnbalancedPutCondorScanner() {
       </p>
       <ScannerRiskNotice />
       {showHelp && <HelpPanel />}
+      <ScannerParameterGuide scanner="unbalanced-put-condor" />
 
       <div style={{
         display: 'flex', flexWrap: 'wrap', gap: '0.85rem', alignItems: 'flex-end',

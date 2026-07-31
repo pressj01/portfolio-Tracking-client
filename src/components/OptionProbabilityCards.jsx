@@ -1,0 +1,172 @@
+import React from 'react'
+
+const pct = value => value == null || !Number.isFinite(Number(value))
+  ? '—'
+  : `${Number(value).toFixed(1)}%`
+
+function formatDate(value) {
+  if (!value) return '—'
+  const date = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+function failureProbability(point) {
+  if (point?.probability_failure_pct != null) return point.probability_failure_pct
+  if (point?.probability_success_pct == null) return null
+  return Math.max(0, Math.min(100, 100 - Number(point.probability_success_pct)))
+}
+
+function ProbabilityCard({
+  label,
+  accent,
+  probability,
+  headline,
+  context,
+  schedule,
+  valueForPoint,
+  footer,
+}) {
+  return (
+    <div style={{
+      flex: '1 1 330px',
+      background: 'var(--surface-inset)',
+      border: `1px solid ${accent}`,
+      borderRadius: 7,
+      padding: '0.85rem 1rem',
+    }}>
+      <div style={{
+        color: 'var(--text-dim)',
+        fontSize: '0.66rem',
+        textTransform: 'uppercase',
+        letterSpacing: '0.04em',
+      }}>
+        {label} <span style={{ color: accent, fontWeight: 700 }}>· by expiration</span>
+      </div>
+      <div style={{
+        color: accent,
+        fontSize: '2rem',
+        lineHeight: 1.05,
+        fontWeight: 850,
+        marginTop: '0.2rem',
+      }}>
+        {pct(probability)}
+      </div>
+      <div style={{ color: 'var(--text-strong)', fontWeight: 700, marginTop: '0.2rem' }}>
+        {headline}
+      </div>
+      <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginTop: '0.25rem' }}>
+        {context}
+      </div>
+      {!!schedule.length && (
+        <div style={{
+          borderTop: '1px solid var(--border)',
+          marginTop: '0.6rem',
+          paddingTop: '0.5rem',
+        }}>
+          <div style={{
+            color: 'var(--text-dim)',
+            fontSize: '0.63rem',
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em',
+            marginBottom: '0.35rem',
+          }}>
+            At the recommended management dates
+          </div>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: '0.6rem',
+          }}>
+            {schedule.map(point => (
+              <div
+                key={`${point.kind}-${point.remaining_dte}`}
+                style={{ borderLeft: `3px solid ${accent}`, paddingLeft: '0.6rem' }}
+              >
+                <div style={{
+                  color: 'var(--text-dim)',
+                  fontSize: '0.63rem',
+                  textTransform: 'uppercase',
+                }}>
+                  {point.label}
+                </div>
+                <strong style={{ fontSize: '1.15rem', color: accent }}>
+                  {pct(valueForPoint(point))}
+                </strong>
+                <div style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>
+                  {formatDate(point.exit_date)} · {point.remaining_dte} DTE
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{
+        borderTop: '1px solid var(--border)',
+        marginTop: '0.6rem',
+        paddingTop: '0.5rem',
+        color: 'var(--text-muted)',
+        fontSize: '0.72rem',
+      }}>
+        {footer}
+      </div>
+    </div>
+  )
+}
+
+export default function OptionProbabilityCards({
+  schedule,
+  successHeadline = 'The complete position has positive modeled P/L',
+  failureHeadline = 'The complete position has negative modeled P/L',
+  successFooter = 'Success means the complete position can be closed for more than $0 modeled P/L.',
+  failureFooter = 'Failure is the complement: the complete position closes at or below $0 modeled P/L.',
+  methodNote,
+}) {
+  const points = Array.isArray(schedule) ? schedule : []
+  const expiration = points.find(point => point.kind === 'expiration' || point.remaining_dte === 0)
+  if (!expiration) return null
+  const plannedExits = points.filter(point => point !== expiration)
+  const success = expiration.probability_success_pct
+  const failure = failureProbability(expiration)
+  const expirationContext = `${formatDate(expiration.exit_date)} · modeled from today through expiration`
+
+  return (
+    <div style={{ marginBottom: '0.9rem' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <ProbabilityCard
+          label="Probability of success"
+          accent="var(--pos-strong)"
+          probability={success}
+          headline={successHeadline}
+          context={expirationContext}
+          schedule={plannedExits}
+          valueForPoint={point => point.probability_success_pct}
+          footer={successFooter}
+        />
+        <ProbabilityCard
+          label="Probability of failure"
+          accent="var(--neg-strong)"
+          probability={failure}
+          headline={failureHeadline}
+          context={expirationContext}
+          schedule={plannedExits}
+          valueForPoint={failureProbability}
+          footer={failureFooter}
+        />
+      </div>
+      <div style={{ color: 'var(--text-dim)', fontSize: '0.67rem', marginTop: '0.5rem' }}>
+        {methodNote || (
+          <>
+            Option-implied, risk-neutral estimates using current implied volatility with each leg&rsquo;s IV
+            held constant. Success and failure are complements at every date. Values exclude commissions
+            and slippage and are risk gauges, not forecasts.
+          </>
+        )}
+      </div>
+    </div>
+  )
+}

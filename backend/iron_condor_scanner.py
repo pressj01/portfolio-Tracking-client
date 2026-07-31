@@ -84,6 +84,7 @@ import pandas as pd
 import yfinance as yf
 from flask import jsonify, request
 
+from option_probability import profit_probability_schedule
 from call_scanner import (
     _load_call_chain,
     assess_early_assignment,
@@ -1823,7 +1824,73 @@ def run_iron_condor_scan(payload: dict) -> dict:
             dropped_for_earnings += 1
             continue
         if condor:
-            condor = {**condor, "management": recommend_management(condor, rating, tech)}
+            management = recommend_management(condor, rating, tech)
+            div_yield = dividend_yield_for_pricing(fund, tech.get("price"))
+            probability_schedule = profit_probability_schedule(
+                spot=tech.get("price"),
+                dte=condor.get("dte"),
+                expiration=condor.get("expiration"),
+                distribution_iv=condor.get("atm_iv") or max(
+                    _num((condor.get("put_leg_short") or {}).get("iv"), 0.0) or 0.0,
+                    _num((condor.get("call_leg_short") or {}).get("iv"), 0.0) or 0.0,
+                ),
+                entry_cashflow=condor.get("credit"),
+                legs=[
+                    {
+                        "option_type": "put",
+                        "strike": (condor.get("put_leg_long") or {}).get("strike"),
+                        "iv": (condor.get("put_leg_long") or {}).get("iv"),
+                        "quantity": 1,
+                    },
+                    {
+                        "option_type": "put",
+                        "strike": (condor.get("put_leg_short") or {}).get("strike"),
+                        "iv": (condor.get("put_leg_short") or {}).get("iv"),
+                        "quantity": -1,
+                    },
+                    {
+                        "option_type": "call",
+                        "strike": (condor.get("call_leg_short") or {}).get("strike"),
+                        "iv": (condor.get("call_leg_short") or {}).get("iv"),
+                        "quantity": -1,
+                    },
+                    {
+                        "option_type": "call",
+                        "strike": (condor.get("call_leg_long") or {}).get("strike"),
+                        "iv": (condor.get("call_leg_long") or {}).get("iv"),
+                        "quantity": 1,
+                    },
+                ],
+                exit_points=[
+                    {
+                        "kind": "reassess",
+                        "label": "Reassess",
+                        "remaining_dte": (management or {}).get("reassess_dte"),
+                    },
+                    {
+                        "kind": "close_by",
+                        "label": "Close by",
+                        "remaining_dte": (management or {}).get("close_by_dte"),
+                    },
+                    {
+                        "kind": "ex_dividend",
+                        "label": "Exit before ex-dividend",
+                        "exit_date": (
+                            _parse_date((management or {}).get("close_before"))
+                            - timedelta(days=1)
+                        ).isoformat()
+                        if _parse_date((management or {}).get("close_before"))
+                        else None,
+                    },
+                ],
+                risk_free_rate=RISK_FREE,
+                dividend_yield=div_yield,
+            )
+            condor = {
+                **condor,
+                "management": management,
+                "probability_schedule": probability_schedule,
+            }
 
         if condor and not condor.get("constraints_relaxed"):
             chain_status = "actionable"

@@ -29,6 +29,7 @@ const GROUPS = [
       { id: 'bear-call-spread-scanner', label: 'Bear Call Spread Scanner' },
       { id: 'iron-condor-scanner', label: 'Iron Condor Scanner' },
       { id: 'unbalanced-put-condor-scanner', label: 'Unbalanced Put Condor Scanner' },
+      { id: 'unbalanced-butterfly-scanner', label: 'Unbalanced Butterfly Scanner' },
     ],
   },
   {
@@ -6948,6 +6949,56 @@ function UnbalancedPutCondorScannerHelp() {
         <li><strong>Finish below</strong> probabilities are terminal estimates and are normally lower than the corresponding touch probabilities.</li>
       </ul>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Raising the upper expiration line after an upside move
+      </h3>
+      <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+        <strong>This is an upside-only adjustment.</strong> “Price moved away from the trade” means the
+        underlying moved <strong>up</strong>, leaving the upper long and both short puts farther below the
+        market. Do not use this adjustment while price is flat, falling, testing the upper long, or moving
+        toward either short put.
+      </div>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The upper expiration line is the position&rsquo;s payoff above the highest put strike. At that
+        price every put expires worthless, so the result is the cumulative net cash received or paid for
+        the entire position. Selling one or more additional lower put credit spreads brings in another
+        net credit. Before transaction costs, that credit raises the upper expiration line dollar for
+        dollar. For example, one additional credit spread sold for $0.50 raises the upper line by $50.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The same adjustment makes the complete condor more bullish because a short put spread normally
+        carries positive delta. It may also add positive theta while price remains safely above the
+        strikes. The quantity ratio changes at the same time: a package with five purchased debit spreads
+        and ten sold credit spreads becomes 5:11 after one additional sale. From that point forward, every
+        payoff, Greek, probability, and buying-power figure must be calculated from the new 5:11 package,
+        not from the original scan and not from the added spread in isolation.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The new credit is compensation for accepting more downside risk. Below the added credit spread,
+        its maximum loss is approximately its width minus the credit received. The lower expiration line
+        therefore normally moves down, maximum loss and buying-power usage rise, and a downside reversal
+        becomes more damaging. The position also becomes more short gamma: positive delta can grow quickly
+        as price falls toward the short puts. Assignment, gap, volatility, and four-leg execution risks
+        remain, and the small premium available after a large rally may not justify the added tail risk.
+      </p>
+      <h4 style={{ color: 'var(--text-strong)', marginBottom: '0.4rem' }}>
+        Adjustment decision sequence
+      </h4>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Confirm direction:</strong> price has moved up and away from all puts; the structure is untested and the original thesis remains intact.</li>
+        <li><strong>Define a target:</strong> specify the upper-line dollar amount or bullish-delta range you are trying to reach. “Collect more credit” by itself is not a risk rule.</li>
+        <li><strong>Use the smallest size:</strong> model one added credit spread first, then increase only if the complete package still fits the target delta and capital limits.</li>
+        <li><strong>Price the actual market:</strong> use the net executable credit after bid/ask spread and commissions, not a theoretical mid that may not fill.</li>
+        <li><strong>Rebuild the whole payoff:</strong> verify the adjusted upper line, center maximum, lower flat, breakeven, maximum loss, and buying-power requirement.</li>
+        <li><strong>Recalculate the Greeks and probabilities:</strong> review delta, theta, gamma, vega, the success/failure cards, and every touch/finish probability using the adjusted quantities.</li>
+        <li><strong>Plan the reversal response:</strong> if price turns down toward the puts, reduce or close according to the risk plan. Do not keep selling progressively more spreads to repair the mark.</li>
+      </ol>
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        Raising the upper expiration line is <strong>not</strong> the same as locking in profit. It exchanges
+        additional downside capacity for current credit. If the updated maximum loss, bullish delta, or
+        lower-tail probability is outside the trade plan, skip the adjustment even though price has moved up.
+      </div>
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to use it</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Enter one or more liquid tickers and choose one delta pair or scan all three.</li>
@@ -6975,6 +7026,139 @@ function UnbalancedPutCondorScannerHelp() {
           OIC Profit &amp; Loss Simulator
         </a>
       </p>
+    </div>
+  )
+}
+
+function UnbalancedButterflyScannerHelp() {
+  return (
+    <div>
+      <h2>Unbalanced Butterfly Scanner</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        This scanner builds the long-dated put broken-wing butterfly as a 4/−8/4 tranche:
+        buy four upper puts, sell eight body puts, and buy four lower puts at the same
+        expiration. The lower wing is wider than the front wing. The scanner can start
+        with either a 20- or 25-delta upper long, keeps the body near 15 delta, and searches
+        the lower long and adjacent listed strikes for the selected bearish, neutral, or
+        bullish complete-position delta.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Payoff geometry and how the tent develops
+      </h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Upper expiration line:</strong> above the upper long, all three put strikes expire worthless. The result is the cumulative net debit or credit from entry and every later adjustment. The course seeks this line near $0 initially.</li>
+        <li><strong>Front wing:</strong> the distance from the upper long to the double-short body. This side determines how rapidly the expiration payoff rises into the tent.</li>
+        <li><strong>Body or tent peak:</strong> expiration near the double-short strike produces the largest payoff because the upper longs have intrinsic value while the body and lower longs are at or out of the money.</li>
+        <li><strong>Lower wing and lower flat:</strong> the body-to-lower-long distance is deliberately wider. Below the lower long, the payoff becomes horizontal again, often at the maximum-loss result.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Before expiration the position does not have a sharp intrinsic-value triangle. Every leg still
+        contains time value, so its mark-to-model P/L is a rounded, lower tent. Positive theta generally
+        raises and sharpens that tent as time passes. The halfway, two-thirds, and expiration bubbles
+        reprice all three strikes at the remaining DTE so the screen shows this evolution instead of
+        applying the expiration diagram to every date.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        The successful region is intentionally asymmetric. Price above the upper long is an untested,
+        acceptable outcome even when the upper line is approximately flat. Inside the structure,
+        success means the complete tranche has modeled P/L of $0 or better on that date. Failure is the
+        exact complement: the downside region where the entire adjusted tranche has negative modeled
+        P/L. More elapsed time can widen the tent while the probability still moves slightly in either
+        direction, because the underlying distribution also has more time to spread into the downside tail.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Reading the probability cards
+      </h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Success and failure:</strong> shown at the halfway review, two-thirds review, and expiration. The two values always total 100% at each date.</li>
+        <li><strong>Time evolution:</strong> shows theoretical P/L if price is unchanged, at the upper long, and at the body/tent peak, plus the successful underlying range at each checkpoint.</li>
+        <li><strong>Reach the structure / never touches:</strong> estimates whether price ever reaches the upper long before the relevant date, not merely where price finishes.</li>
+        <li><strong>Finish below the upper long:</strong> can be smaller than the touch probability because price may test the structure and recover.</li>
+        <li><strong>Body and lower-tail cards:</strong> separate touching the double-short body, finishing below it, touching the lower long, and finishing in the lower tail.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Raising the upper expiration line by narrowing the front wing
+      </h3>
+      <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+        <strong>This is an upside-only adjustment.</strong> It is eligible only after the underlying
+        has moved <strong>up and away</strong> from the butterfly, leaving the upper long and body
+        farther out of the money. Do not narrow the front wing while price is flat, falling, testing
+        the upper long, or moving into the butterfly.
+      </div>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Narrowing means reducing the strike distance between the upper long and the double-short body.
+        The roll must produce a <strong>net credit</strong> if its purpose is to raise the upper
+        expiration line. That credit becomes part of the trade&rsquo;s cumulative cashflow. Above the
+        upper long, where the puts expire worthless, the upper line rises by the net adjustment credit
+        after commissions and slippage. For example, collecting $0.40 per 1/−2/1 unit across four
+        units raises the upper line by $160 before costs.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        There is more than one way to reduce the front-wing width. An upper long can be rolled down
+        toward the body, a body can be rolled up toward the upper long, or both front strikes can be
+        repositioned. These are not equivalent. Rolling the long down usually removes put protection;
+        rolling eight body contracts can have a much larger Greek and downside-payoff effect than rolling
+        four upper longs. The order must therefore be modeled as the exact closing and opening legs that
+        will be sent to the broker, not described only as “narrow the wing.”
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The adjustment makes the complete position more bullish. Reducing long-put exposure or adding
+        higher-strike short-put exposure shifts delta in the positive direction. That is why the rally
+        is a prerequisite: the trade is using distance created by the upside move to accept more bullish
+        exposure. If price is already moving down, the same adjustment removes protection or adds short
+        puts precisely when their delta and gamma are increasing.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The raised upper line is not free. A narrower front wing changes the tent&rsquo;s height and
+        location. Depending on the legs rolled, the body peak may shrink or move, the lower wing may
+        effectively become wider, the downside flat and breakeven may worsen, and maximum loss or buying
+        power may rise. Positive theta can improve, but short-gamma and volatility exposure can become
+        less forgiving. The roll also crosses additional bid/ask markets, so a theoretical credit that
+        disappears at executable prices does not raise the real upper line.
+      </p>
+
+      <h4 style={{ color: 'var(--text-strong)', marginBottom: '0.4rem' }}>
+        Adjustment decision sequence
+      </h4>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Confirm the rally:</strong> price is higher and farther from the upper long; none of the puts is being tested and the original trade thesis remains valid.</li>
+        <li><strong>Set the objective:</strong> choose a specific upper-line dollar target or allowed bullish-delta range. Do not adjust merely because a credit is available.</li>
+        <li><strong>Model the exact roll:</strong> identify every closing and opening strike and quantity. Confirm that the executable order is a net credit after costs.</li>
+        <li><strong>Use the smallest change:</strong> test the narrowest qualifying roll first. Large or repeated rolls can transform the original risk profile.</li>
+        <li><strong>Rebuild the complete payoff:</strong> recalculate the cumulative upper line, body peak, lower flat, breakeven, maximum profit, maximum loss, and buying power.</li>
+        <li><strong>Recalculate the Greeks:</strong> check total delta, theta, gamma, and vega. The new delta must remain inside the intended bullish limit rather than simply becoming “more positive.”</li>
+        <li><strong>Refresh every probability:</strong> recompute success/failure at all three dates and the upper-long, body, and lower-tail touch and finish probabilities from the adjusted structure.</li>
+        <li><strong>Define the reversal response:</strong> if price turns back down toward the puts, reduce or close according to the management plan. Do not keep narrowing to repair an adverse mark.</li>
+      </ol>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        Raising the upper expiration line is an exchange: the trade receives current credit and becomes
+        more bullish while giving up some downside capacity or tent geometry. It does not lock in profit.
+        Skip the adjustment whenever the updated maximum loss, delta, liquidity, or downside probability
+        falls outside the trade plan—even if the underlying has rallied.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Practical workflow
+      </h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Scan both 20- and 25-delta upper-long variants in the 120–240 DTE window around the 180 DTE target.</li>
+        <li>Choose the desired market-bias range and compare the complete-position delta, theta, upper line, execution, and maximum loss.</li>
+        <li>Expand a result to review success/failure, time-evolved tent values, reach/never-touch, and lower-tail risk.</li>
+        <li>Use the risk graph and verify the exact 4/−8/4 strikes and quantities before entry.</li>
+        <li>At the halfway and two-thirds reviews, compare the live mark and Greeks with the original plan. An upside-only narrowing adjustment is optional, not automatic.</li>
+        <li>If an adjustment is modeled, save and manage the revised structure as one complete position with its new cashflow and quantities.</li>
+      </ol>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        <strong>Trade at your own risk.</strong> Probability and theoretical P/L are model estimates.
+        Volatility, skew, gaps, dividends, early assignment, commissions, liquidity, and multi-leg
+        execution can materially change the result. Verify the complete adjusted order and size from
+        its worst credible loss.
+      </div>
     </div>
   )
 }
@@ -8565,6 +8749,7 @@ const CONTENT_MAP = {
   'bear-call-spread-scanner': BearCallSpreadScannerHelp,
   'iron-condor-scanner': IronCondorScannerHelp,
   'unbalanced-put-condor-scanner': UnbalancedPutCondorScannerHelp,
+  'unbalanced-butterfly-scanner': UnbalancedButterflyScannerHelp,
   import: ImportHelp,
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,

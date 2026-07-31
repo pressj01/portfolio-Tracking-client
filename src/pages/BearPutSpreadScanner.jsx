@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import PriceChartModal from '../components/PriceChartModal'
+import OptionProbabilityCards from '../components/OptionProbabilityCards'
 import RiskGraphButton from '../components/RiskGraphButton'
+import ScannerParameterGuide from '../components/ScannerParameterGuide'
 import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
 import { findActivePreset } from '../utils/activePreset'
@@ -637,6 +639,13 @@ function DetailRow({ row, colSpan, onShowChart }) {
               </div>
             )}
 
+            {s && (
+              <OptionProbabilityCards
+                schedule={s.probability_schedule}
+                successHeadline="The complete bear put spread has positive modeled P/L"
+                failureHeadline="The complete bear put spread has negative modeled P/L"
+              />
+            )}
             {plan && (
               <div style={{
                 padding: '0.7rem 0.85rem', marginBottom: '0.8rem', borderRadius: '5px',
@@ -953,6 +962,7 @@ export default function BearPutSpreadScanner() {
       <ScannerRiskNotice />
 
       {showHelp && <HelpPanel />}
+      <ScannerParameterGuide scanner="bear-put-spread" />
 
       {/* What to scan. Each group is independent — unchecking Stocks skips the
           stock universe entirely rather than filtering it out afterwards. */}

@@ -69,6 +69,7 @@ import pandas as pd
 import yfinance as yf
 from flask import jsonify, request
 
+from option_probability import profit_probability_schedule
 from options_pricing import black_scholes
 from call_scanner import SMALL_CAP_SET, SMALL_CAP_UNIVERSE, held_positions
 from put_scanner import (
@@ -1413,7 +1414,43 @@ def run_spread_scan(payload: dict) -> dict:
             dropped_for_earnings += 1
             continue
         if spread:
-            spread = {**spread, "plan": recommend_plan(spread, rating, tech)}
+            plan = recommend_plan(spread, rating, tech)
+            div_yield = dividend_yield_for_pricing(fund, tech.get("price"))
+            probability_schedule = profit_probability_schedule(
+                spot=tech.get("price"),
+                dte=spread.get("dte"),
+                expiration=spread.get("expiration"),
+                distribution_iv=spread.get("atm_iv") or (
+                    spread.get("long_leg") or {}
+                ).get("iv"),
+                entry_cashflow=-(_num(spread.get("debit"), 0.0) or 0.0),
+                legs=[
+                    {
+                        "option_type": "put",
+                        "strike": (spread.get("long_leg") or {}).get("strike"),
+                        "iv": (spread.get("long_leg") or {}).get("iv"),
+                        "quantity": 1,
+                    },
+                    {
+                        "option_type": "put",
+                        "strike": (spread.get("short_leg") or {}).get("strike"),
+                        "iv": (spread.get("short_leg") or {}).get("iv"),
+                        "quantity": -1,
+                    },
+                ],
+                exit_points=[{
+                    "kind": "reassess",
+                    "label": "Time-stop exit",
+                    "remaining_dte": (plan or {}).get("reassess_dte"),
+                }],
+                risk_free_rate=RISK_FREE,
+                dividend_yield=div_yield,
+            )
+            spread = {
+                **spread,
+                "plan": plan,
+                "probability_schedule": probability_schedule,
+            }
 
         if spread and not spread.get("constraints_relaxed"):
             chain_status = "actionable"

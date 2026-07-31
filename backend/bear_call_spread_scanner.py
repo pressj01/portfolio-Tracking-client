@@ -93,6 +93,7 @@ import pandas as pd
 import yfinance as yf
 from flask import jsonify, request
 
+from option_probability import profit_probability_schedule
 from options_pricing import black_scholes
 from call_scanner import (
     SMALL_CAP_SET,
@@ -1817,7 +1818,60 @@ def run_bear_call_spread_scan(payload: dict) -> dict:
             dropped_for_earnings += 1
             continue
         if spread:
-            spread = {**spread, "management": recommend_management(spread, rating, tech)}
+            management = recommend_management(spread, rating, tech)
+            div_yield = dividend_yield_for_pricing(fund, tech.get("price"))
+            probability_schedule = profit_probability_schedule(
+                spot=tech.get("price"),
+                dte=spread.get("dte"),
+                expiration=spread.get("expiration"),
+                distribution_iv=spread.get("atm_iv") or (
+                    spread.get("short_leg") or {}
+                ).get("iv"),
+                entry_cashflow=spread.get("credit"),
+                legs=[
+                    {
+                        "option_type": "call",
+                        "strike": (spread.get("short_leg") or {}).get("strike"),
+                        "iv": (spread.get("short_leg") or {}).get("iv"),
+                        "quantity": -1,
+                    },
+                    {
+                        "option_type": "call",
+                        "strike": (spread.get("long_leg") or {}).get("strike"),
+                        "iv": (spread.get("long_leg") or {}).get("iv"),
+                        "quantity": 1,
+                    },
+                ],
+                exit_points=[
+                    {
+                        "kind": "reassess",
+                        "label": "Reassess",
+                        "remaining_dte": (management or {}).get("reassess_dte"),
+                    },
+                    {
+                        "kind": "close_by",
+                        "label": "Close by",
+                        "remaining_dte": (management or {}).get("close_by_dte"),
+                    },
+                    {
+                        "kind": "ex_dividend",
+                        "label": "Exit before ex-dividend",
+                        "exit_date": (
+                            _parse_date((management or {}).get("close_before"))
+                            - timedelta(days=1)
+                        ).isoformat()
+                        if _parse_date((management or {}).get("close_before"))
+                        else None,
+                    },
+                ],
+                risk_free_rate=RISK_FREE,
+                dividend_yield=div_yield,
+            )
+            spread = {
+                **spread,
+                "management": management,
+                "probability_schedule": probability_schedule,
+            }
 
         if spread and not spread.get("constraints_relaxed"):
             chain_status = "actionable"
