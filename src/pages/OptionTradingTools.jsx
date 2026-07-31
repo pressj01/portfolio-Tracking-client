@@ -6,6 +6,12 @@ import { assignBrokerImportSides, mapBrokerOptionUnderlying, parseBrokerOptionDe
 import { chartTheme } from '../utils/chartTheme'
 import { resizeOptionStructure } from '../utils/optionsStrategy'
 import { scannerTradeKey, takeScannerTrade } from '../utils/optionTradeHandoff'
+import {
+  applyVolatilitySurfaceShock,
+  clampVolatilitySurfaceShock,
+  MAX_VOLATILITY_SURFACE_SHOCK_PCT,
+  MIN_VOLATILITY_SURFACE_SHOCK_PCT,
+} from '../utils/optionsVolatility'
 import GreekSurfaceExplorer from '../components/GreekSurfaceExplorer'
 import OptionBacktest from '../components/OptionBacktest'
 
@@ -106,11 +112,10 @@ const compareRiskLegs = (a, b) => {
   if (quantityOrder) return quantityOrder
   return Number(a?.entry_price || 0) - Number(b?.entry_price || 0)
 }
-const modeledLegIv = (leg, globalAdjustment = 0) => Math.max(
-  0.0001,
-  (Number(leg.iv) || 0.2)
-    + (Number(leg.iv_adjustment) || 0) / 100
-    + (Number(globalAdjustment) || 0) / 100,
+const modeledLegIv = (leg, surfaceShockPct = 0) => applyVolatilitySurfaceShock(
+  leg.iv,
+  leg.iv_adjustment,
+  surfaceShockPct,
 )
 const contractEntryPrice = (contract, side, fallback = 0) => Number(
   (side === 'BUY' ? contract?.ask : contract?.bid)
@@ -930,7 +935,7 @@ export default function OptionTradingTools() {
   const [model, setModel] = useState('black-scholes')
   const [ratePct, setRatePct] = useState(3.75)
   const [evaluationDate, setEvaluationDate] = useState(TODAY)
-  const [volatilityShift, setVolatilityShift] = useState(0)
+  const [volatilitySurfaceShock, setVolatilitySurfaceShock] = useState(0)
   const [showProbabilityRange, setShowProbabilityRange] = useState(true)
   const [probabilityAnchorId, setProbabilityAnchorId] = useState('')
   const [probabilityRangeMode, setProbabilityRangeMode] = useState('moneyness')
@@ -963,6 +968,9 @@ export default function OptionTradingTools() {
   const [brokerChartRefresh, setBrokerChartRefresh] = useState(0)
 
   const [scannerTrade, setScannerTrade] = useState(null)
+  const scannerTradeUsesEstimatedPrices = scannerTrade?.legs?.some(
+    leg => leg.quote_source && leg.quote_source !== 'live_bid_ask',
+  )
   const [showRiskPriceChart, setShowRiskPriceChart] = useState(() => {
     try { return localStorage.getItem(RISK_PRICE_CHART_PREF_KEY) === 'on' } catch { return false }
   })
@@ -1070,7 +1078,7 @@ export default function OptionTradingTools() {
     setNotes(staged.source ? `Suggested by the ${staged.source}.` : '')
     setChainTargetLegId(null)
     setEvaluationDate(TODAY())
-    setVolatilityShift(0)
+    setVolatilitySurfaceShock(0)
     setShowRiskPriceChart(true)
     setWorkspace('risk')
   }, [])
@@ -1145,8 +1153,8 @@ export default function OptionTradingTools() {
     strike: isStockLeg(leg) ? 0 : Number(leg.strike),
     expiration: isStockLeg(leg) ? '' : leg.expiration,
     entry_price: Number(leg.entry_price) || 0,
-    iv: isStockLeg(leg) ? 0 : modeledLegIv(leg, volatilityShift),
-  })), [activeLegs, volatilityShift])
+    iv: isStockLeg(leg) ? 0 : modeledLegIv(leg, volatilitySurfaceShock),
+  })), [activeLegs, volatilitySurfaceShock])
   const greekPositionStrikeChoices = useMemo(() => Object.fromEntries(activeOptionLegs.map(leg => {
     const legChain = monthChains[leg.expiration]
       || (chain?.expiration === leg.expiration ? chain : null)
@@ -1209,12 +1217,12 @@ export default function OptionTradingTools() {
       otm_pct: otmPct,
       lower_label: `${isCall ? otmPct : itmPct}% ${isCall ? 'OTM' : 'ITM'}`,
       upper_label: `${isCall ? itmPct : otmPct}% ${isCall ? 'ITM' : 'OTM'}`,
-      iv: modeledLegIv(probabilityAnchor, volatilityShift),
+      iv: modeledLegIv(probabilityAnchor, volatilitySurfaceShock),
       range_mode: probabilityRangeMode,
       probability_mode: probabilityMode,
       range_pct: Math.min(99.9, Math.max(1, Number(probabilityMassPct) || 68.27)),
     }
-  }, [probabilityAnchor, itmRangePct, otmRangePct, volatilityShift, probabilityRangeMode, probabilityMode, probabilityMassPct])
+  }, [probabilityAnchor, itmRangePct, otmRangePct, volatilitySurfaceShock, probabilityRangeMode, probabilityMode, probabilityMassPct])
   const strikeStructure = useMemo(() => {
     const strikes = [...new Set(activeLegs.filter(leg => !isStockLeg(leg)).map(leg => Number(leg.strike)).filter(Number.isFinite))].sort((a, b) => a - b)
     if (strikes.length < 2) return null
@@ -1233,6 +1241,8 @@ export default function OptionTradingTools() {
   const hasMixedExpirations = activeExpirations.length > 1
   const evolutionDays = daysBetween(TODAY(), analysisHorizon)
   const evaluationOffset = Math.min(evolutionDays, daysBetween(TODAY(), evaluationDate))
+  const volatilitySurfaceShockValue = clampVolatilitySurfaceShock(volatilitySurfaceShock)
+  const volatilitySurfaceShockLabel = `${volatilitySurfaceShockValue > 0 ? '+' : ''}${volatilitySurfaceShockValue}%`
 
   useEffect(() => {
     if (evaluationDate > analysisHorizon) setEvaluationDate(analysisHorizon)
@@ -1287,7 +1297,7 @@ export default function OptionTradingTools() {
             strike: isStockLeg(leg) ? 0 : Number(leg.strike),
             expiration: isStockLeg(leg) ? '' : leg.expiration,
             entry_price: Number(leg.entry_price) || 0,
-            iv: isStockLeg(leg) ? 0 : modeledLegIv(leg, volatilityShift),
+            iv: isStockLeg(leg) ? 0 : modeledLegIv(leg, volatilitySurfaceShock),
           })),
         }),
         })
@@ -1308,7 +1318,7 @@ export default function OptionTradingTools() {
       clearTimeout(timer)
       controller.abort()
     }
-  }, [activeLegs, spot, ticker, model, ratePct, quote?.div_yield, evaluationDate, priceRangePct, dayStep, sliceOffsets, volatilityShift, showProbabilityRange, probabilityRange])
+  }, [activeLegs, spot, ticker, model, ratePct, quote?.div_yield, evaluationDate, priceRangePct, dayStep, sliceOffsets, volatilitySurfaceShock, showProbabilityRange, probabilityRange])
 
   const submitTicker = event => {
     event.preventDefault()
@@ -1487,8 +1497,11 @@ export default function OptionTradingTools() {
   const setAnalysisIvPct = value => {
     if (!probabilityAnchor) return
     const desiredIvPct = Math.max(0.01, Number(value) || 0.01)
-    const anchorIvBeforeGlobalShift = modeledLegIv(probabilityAnchor, 0) * 100
-    setVolatilityShift(Math.round((desiredIvPct - anchorIvBeforeGlobalShift) * 100) / 100)
+    const anchorBaseIvPct = modeledLegIv(probabilityAnchor, 0) * 100
+    const surfaceShock = ((desiredIvPct / anchorBaseIvPct) - 1) * 100
+    setVolatilitySurfaceShock(
+      Math.round(clampVolatilitySurfaceShock(surfaceShock) * 100) / 100,
+    )
   }
 
   const nearestContract = useCallback((type, target, offset = 0) => {
@@ -1766,7 +1779,7 @@ export default function OptionTradingTools() {
       scanner_key: strategy.scanner_key,
     } : null)
     setEvaluationDate(TODAY())
-    setVolatilityShift(0)
+    setVolatilitySurfaceShock(0)
     setChainTargetLegId(null)
     setWorkspace(targetWorkspace)
     setSaveStatus(`Loaded ${strategy.name}`)
@@ -1790,7 +1803,7 @@ export default function OptionTradingTools() {
     setNotes('')
     setLegs([])
     setEvaluationDate(TODAY())
-    setVolatilityShift(0)
+    setVolatilitySurfaceShock(0)
     setChainTargetLegId(null)
     setScannerTrade(null)
     setSaveStatus('New strategy')
@@ -2066,9 +2079,13 @@ export default function OptionTradingTools() {
             <div>
               <strong>{scannerTrade.name}</strong>
               <span>
-                Loaded from the {scannerTrade.source || 'scanner'}. Legs are entered at the mid quotes the scan
-                priced, so the profile below matches the numbers on the scanner card. Edit quantity, strikes or
-                entry price in the position table to explore variations.
+                {scannerTradeUsesEstimatedPrices
+                  ? <>Loaded from the {scannerTrade.source || 'scanner'}. At least one leg uses a recent-trade
+                    estimate because no live bid/ask was available. The profile matches the scanner estimate;
+                    verify every live quote before trading.</>
+                  : <>Loaded from the {scannerTrade.source || 'scanner'}. Legs are entered at the mid quotes the
+                    scan priced, so the profile below matches the numbers on the scanner card. Edit quantity,
+                    strikes or entry price in the position table to explore variations.</>}
               </span>
             </div>
             <div className="opt-scanner-handoff-actions">
@@ -2081,7 +2098,22 @@ export default function OptionTradingTools() {
           <div className="opt-risk-controls">
             <label><span>Analysis date</span><input type="date" min={TODAY()} max={analysisHorizon} value={evaluationDate} onInput={event => setBoundedEvaluationDate(event.target.value)} onChange={event => setBoundedEvaluationDate(event.target.value)} /></label>
             <label className="opt-time-slider"><span>Move through time · day {evaluationOffset} of {evolutionDays}</span><input type="range" min="0" max={evolutionDays} value={evaluationOffset} onInput={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} onChange={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} /></label>
-            <label><span>Global vol adjustment</span><div className="opt-suffix-input"><input type="number" step="0.5" value={volatilityShift} onChange={event => setVolatilityShift(event.target.value)} title="Add or subtract volatility points from every leg" /><b>pts</b></div></label>
+            <label className="opt-volatility-slider">
+              <span>Vol surface · {volatilitySurfaceShockLabel}</span>
+              <input
+                type="range"
+                min={MIN_VOLATILITY_SURFACE_SHOCK_PCT}
+                max={MAX_VOLATILITY_SURFACE_SHOCK_PCT}
+                step="1"
+                value={volatilitySurfaceShockValue}
+                onInput={event => setVolatilitySurfaceShock(Number(event.target.value))}
+                onChange={event => setVolatilitySurfaceShock(Number(event.target.value))}
+                aria-label="Volatility surface adjustment"
+                aria-valuetext={volatilitySurfaceShockLabel}
+                title="Proportionally raise or lower every option leg's own modeled IV while preserving the current skew"
+              />
+              <small className="opt-volatility-scale"><span>−50%</span><span>0</span><span>+50%</span></small>
+            </label>
             <label><span>Price range</span><div className="opt-suffix-input"><input type="number" min="5" max="100" value={priceRangePct} onChange={event => setPriceRangePct(event.target.value)} /><b>±%</b></div></label>
             <label><span>Day-step lines</span><select value={dayStep} onChange={event => setDayStep(Number(event.target.value))}><option value="0">Off</option><option value="1">Every day</option><option value="3">Every 3 days</option><option value="5">Every 5 days</option><option value="7">Every 7 days</option><option value="14">Every 14 days</option></select></label>
           </div>
@@ -2096,7 +2128,7 @@ export default function OptionTradingTools() {
                 <label><span>In the money</span><div className="opt-suffix-input"><input type="number" min="1" step="1" value={itmRangePct} onChange={event => setItmRangePct(event.target.value)} onBlur={event => setItmRangePct(Math.max(1, Number(event.target.value) || 1))} disabled={!probabilityAnchor} /><b>%</b></div></label>
                 <label><span>Out of the money</span><div className="opt-suffix-input"><input type="number" min="1" step="1" value={otmRangePct} onChange={event => setOtmRangePct(event.target.value)} onBlur={event => setOtmRangePct(Math.max(1, Number(event.target.value) || 1))} disabled={!probabilityAnchor} /><b>%</b></div></label>
               </>}
-            <label><span>Analysis volatility</span><div className="opt-suffix-input"><input type="number" min="0.01" step="0.5" value={probabilityAnchor ? (modeledLegIv(probabilityAnchor, volatilityShift) * 100).toFixed(2) : ''} onChange={event => setAnalysisIvPct(event.target.value)} disabled={!probabilityAnchor} title="Sets the effective IV for the reference leg and shifts every option leg by the same number of volatility points" /><b>%</b></div></label>
+            <label><span>Analysis volatility</span><div className="opt-suffix-input"><input type="number" min="0.01" step="0.5" value={probabilityAnchor ? (modeledLegIv(probabilityAnchor, volatilitySurfaceShock) * 100).toFixed(2) : ''} onChange={event => setAnalysisIvPct(event.target.value)} disabled={!probabilityAnchor} title="Sets the reference leg's effective IV and proportionally scales the other legs while preserving the current skew" /><b>%</b></div></label>
             <div className="opt-probability-readout">
               {risk?.probability_range ? <>
                 <span className={probabilityMode === 'ITM' ? 'selected itm' : ''}><small>Probability ITM</small><strong>{fmt(risk.probability_range.probability_itm_pct, 1)}%</strong></span>
@@ -2193,7 +2225,7 @@ export default function OptionTradingTools() {
                 <td><input type="number" min="0" step="0.01" value={leg.entry_price} onChange={event => updateLeg(leg.local_id, 'entry_price', event.target.value)} title={stockLeg ? 'Stock cost basis per share' : 'Option premium per share'} /></td>
                 <td>{stockLeg ? <span className="opt-not-applicable">—</span> : percent(leg.iv)}</td>
                 <td>{stockLeg ? <span className="opt-not-applicable">—</span> : <div className="opt-inline-suffix"><input type="number" step="0.5" value={leg.iv_adjustment ?? 0} onChange={event => updateLeg(leg.local_id, 'iv_adjustment', event.target.value)} aria-label={`${legLabel} volatility adjustment`} title="Manual volatility-point adjustment for this leg" /><span>pts</span></div>}</td>
-                <td title={stockLeg ? undefined : 'Market IV plus the leg and global volatility adjustments'}>{stockLeg ? <span className="opt-not-applicable">—</span> : percent(modeledLegIv(leg, volatilityShift))}</td>
+                <td title={stockLeg ? undefined : 'Market IV plus the leg adjustment, proportionally scaled by the volatility-surface scenario'}>{stockLeg ? <span className="opt-not-applicable">—</span> : percent(modeledLegIv(leg, volatilitySurfaceShock))}</td>
                 <td>{fmt(leg.delta, 3)}</td>
                 <td><div className="opt-row-actions">{!stockLeg && <button className="opt-open-chain" type="button" onClick={() => openLegChain(leg)} aria-label={`Open ${formatExpiration(leg.expiration)} option chain for ${legLabel}`} title="Open this expiration and replace the leg from the chain">Chain</button>}<button className="opt-remove-leg" type="button" onClick={() => removeLeg(leg.local_id)} aria-label="Remove leg">×</button></div></td>
               </tr>

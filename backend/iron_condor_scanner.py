@@ -115,6 +115,8 @@ from put_scanner import (
     _num,
     _parse_date,
     _pick_expiration,
+    _prepare_option_quote,
+    _prepare_put_quote,
     _ramp,
     _round,
     _ticker_frame,
@@ -542,6 +544,7 @@ def _leg_view(leg: dict) -> dict:
         "strike": leg["strike"], "bid": leg["bid"], "ask": leg["ask"],
         "mid": leg["mid"], "iv": leg["iv"], "delta": leg["delta"],
         "open_interest": leg["open_interest"], "volume": leg["volume"],
+        "quote_source": leg.get("quote_source", "live_bid_ask"),
     }
 
 
@@ -594,15 +597,27 @@ def _build_condor(put_short: dict, put_long: dict, call_short: dict, call_long: 
     # A single four-leg limit near the mid is the displayed entry. The natural
     # credit is what is left after crossing all four markets, and on a condor
     # that gap is wide enough to decide whether the trade is worth doing.
+    legs = (put_short, put_long, call_short, call_long)
+    all_live = all(_quotable(leg) for leg in legs)
     natural_credit = (
-        (_num(put_short.get("bid"), 0.0) or 0.0) - (_num(put_long.get("ask"), 0.0) or 0.0)
-        + (_num(call_short.get("bid"), 0.0) or 0.0) - (_num(call_long.get("ask"), 0.0) or 0.0)
+        (_num(put_short.get("bid"), 0.0) or 0.0)
+        - (_num(put_long.get("ask"), 0.0) or 0.0)
+        + (_num(call_short.get("bid"), 0.0) or 0.0)
+        - (_num(call_long.get("ask"), 0.0) or 0.0)
+        if all_live else None
     )
-    exec_cost = sum(
-        (_num(leg.get("ask"), 0.0) or 0.0) - (_num(leg.get("bid"), 0.0) or 0.0)
-        for leg in (put_short, put_long, call_short, call_long)
+    exec_cost = (
+        sum(
+            (_num(leg.get("ask"), 0.0) or 0.0)
+            - (_num(leg.get("bid"), 0.0) or 0.0)
+            for leg in legs
+        )
+        if all_live else None
     )
-    exec_cost_pct = (exec_cost / net_credit * 100.0) if net_credit > 0 else None
+    exec_cost_pct = (
+        exec_cost / net_credit * 100.0
+        if exec_cost is not None and net_credit > 0 else None
+    )
 
     credit_pct_of_width = net_credit / max_wing * 100.0
     return_on_risk = (net_credit / max_loss * 100.0) if max_loss > 0 else None
@@ -708,6 +723,8 @@ def _build_condor(put_short: dict, put_long: dict, call_short: dict, call_long: 
         "put_share_of_credit_pct": put_share_of_credit_pct,
         "credit": net_credit,
         "natural_credit": natural_credit,
+        "quote_source": "live_bid_ask" if all_live else "last_trade_estimate",
+        "uses_last_trade_prices": not all_live,
         "credit_pct_of_width": credit_pct_of_width,
         "max_profit": net_credit,
         "max_loss": max_loss,
@@ -825,15 +842,23 @@ def _side_pairs(legs: list[dict], short_pool: list[dict], long_pool: list[dict],
                 int(_num(short_leg.get("open_interest"), 0) or 0),
                 int(_num(long_leg.get("open_interest"), 0) or 0),
             )
-            cost = sum(
-                (_num(leg.get("ask"), 0.0) or 0.0) - (_num(leg.get("bid"), 0.0) or 0.0)
-                for leg in (short_leg, long_leg)
+            all_live = _quotable(short_leg) and _quotable(long_leg)
+            cost = (
+                sum(
+                    (_num(leg.get("ask"), 0.0) or 0.0)
+                    - (_num(leg.get("bid"), 0.0) or 0.0)
+                    for leg in (short_leg, long_leg)
+                )
+                if all_live else None
             )
             entry = {
                 "short": short_leg, "long": long_leg, "width": width,
                 "credit": credit, "credit_pct_of_width": credit / width * 100.0,
                 "open_interest_min": oi,
-                "exec_cost_pct": (cost / credit * 100.0) if credit > 0 else None,
+                "exec_cost_pct": (
+                    cost / credit * 100.0
+                    if cost is not None and credit > 0 else None
+                ),
                 "preferred": (short_leg["strike"], long_leg["strike"]) in preferred,
             }
             if lo_width <= width <= hi_width and oi >= min_open_interest:
@@ -916,12 +941,41 @@ def _suggest_iron_condor(
     # test, so it is applied when filtering pairs rather than here — a chain that
     # only offers a 1.5%-OTM short against a 2% floor should surface as a relaxed
     # watchlist candidate, not as "no condor exists".
+    prepared_puts = [
+        quote for quote in (
+            _prepare_put_quote(
+                leg,
+                spot=spot,
+                dte=dte_eff,
+                dividend_yield=div_yield,
+            )
+            for leg in puts
+            if leg["strike"] < spot
+        )
+        if quote is not None
+    ]
+    prepared_calls = [
+        quote for quote in (
+            _prepare_option_quote(
+                leg,
+                option_type="call",
+                spot=spot,
+                dte=dte_eff,
+                dividend_yield=div_yield,
+            )
+            for leg in calls
+            if leg["strike"] > spot
+        )
+        if quote is not None
+    ]
+    live_puts = [leg for leg in prepared_puts if _quotable(leg)]
+    live_calls = [leg for leg in prepared_calls if _quotable(leg)]
     put_legs = sorted(
-        (leg for leg in puts if _quotable(leg) and leg["strike"] < spot),
+        live_puts if len(live_puts) >= 2 else prepared_puts,
         key=lambda leg: leg["strike"],
     )
     call_legs = sorted(
-        (leg for leg in calls if _quotable(leg) and leg["strike"] > spot),
+        live_calls if len(live_calls) >= 2 else prepared_calls,
         key=lambda leg: leg["strike"],
     )
     if len(put_legs) < 2 or len(call_legs) < 2:
@@ -957,12 +1011,15 @@ def _suggest_iron_condor(
             if condor is None:
                 continue
             all_condors.append(condor)
+            estimated = condor["uses_last_trade_prices"]
+            if estimated:
+                continue
 
             if not (put_ok and call_ok):
                 continue
             if condor["credit_pct_of_width"] < min_credit_pct_of_width:
                 continue
-            if condor["natural_credit"] <= 0:
+            if not estimated and condor["natural_credit"] <= 0:
                 continue
             if (
                 condor["put_otm_pct"] is not None
@@ -994,7 +1051,7 @@ def _suggest_iron_condor(
                 continue
             if condor["open_interest_min"] < min_open_interest:
                 continue
-            if (
+            if not estimated and (
                 condor["exec_cost_pct"] is None
                 or condor["exec_cost_pct"] > max_exec_cost_pct
             ):
@@ -1013,8 +1070,8 @@ def _suggest_iron_condor(
     # does not contaminate the vol-level reading. Averaged across the put and
     # call sides because a condor sells both, and put skew alone would overstate
     # what the structure is really being paid.
-    atm_put = min(puts, key=lambda leg: abs(leg["strike"] - spot))
-    atm_call = min(calls, key=lambda leg: abs(leg["strike"] - spot))
+    atm_put = min(prepared_puts, key=lambda leg: abs(leg["strike"] - spot))
+    atm_call = min(prepared_calls, key=lambda leg: abs(leg["strike"] - spot))
     atm_ivs = [leg["iv"] for leg in (atm_put, atm_call) if leg["iv"] and leg["iv"] > 0]
     atm_iv = (sum(atm_ivs) / len(atm_ivs)) if atm_ivs else 0.0
 
@@ -1227,6 +1284,9 @@ def score_candidate(tech: dict, fund: dict, condor: dict | None,
 
     early_level = None
     if condor:
+        estimated = bool(condor.get("uses_last_trade_prices"))
+        if estimated:
+            flags.append("Recent trade estimates — no live bid/ask")
         # Four-leg slippage (6). Roughly double the weight the two-leg screens
         # give it, and the term most likely to decide whether a condor that looks
         # good on paper is worth opening: four markets to cross on the way in and
@@ -1249,11 +1309,14 @@ def score_candidate(tech: dict, fund: dict, condor: dict | None,
         if (condor.get("wing_skew_pct") or 100) <= 10:
             safety += 2
 
-        if cost_pct is None or cost_pct > 45:
+        if not estimated and (cost_pct is None or cost_pct > 45):
             flags.append("Four-leg slippage is high")
         if (condor.get("open_interest_min") or 0) < 50:
             flags.append("Thin open interest on one leg")
-        if (_num(condor.get("natural_credit"), 0.0) or 0.0) <= 0:
+        if (
+            not estimated
+            and (_num(condor.get("natural_credit"), 0.0) or 0.0) <= 0
+        ):
             flags.append("No credit after crossing all four markets")
         if condor.get("constraints_relaxed"):
             flags.append("No structure met every filter")

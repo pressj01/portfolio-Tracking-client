@@ -36,6 +36,7 @@ const optionLeg = (leg, side, optType, expiration, strike, qty = 1) => {
     entry_price: entryPrice(leg),
     iv: num(leg?.iv) ?? 0.2,
     delta: num(leg?.delta),
+    quote_source: leg?.quote_source || null,
   }
 }
 
@@ -177,6 +178,9 @@ export function scannerTradeKey(kind, ticker) {
 export function buildScannerStrategyPayload(kind, row, source) {
   const built = buildScannerTrade(kind, row)
   if (!built) return null
+  const usesEstimatedPrices = built.legs.some(
+    leg => leg.quote_source && leg.quote_source !== 'live_bid_ask',
+  )
   const expirations = built.legs
     .filter(leg => leg.opt_type !== 'STOCK' && leg.expiration)
     .map(leg => leg.expiration)
@@ -188,7 +192,9 @@ export function buildScannerStrategyPayload(kind, row, source) {
     underlying: built.ticker,
     model: 'black-scholes',
     rate: 0.0375,
-    notes: source ? `Suggested by the ${source}.` : 'Saved from an option scanner.',
+    notes: `${source ? `Suggested by the ${source}.` : 'Saved from an option scanner.'}${
+      usesEstimatedPrices ? ' Entry prices are recent-trade estimates; verify live bid/ask before trading.' : ''
+    }`,
     origin: 'scanner',
     scanner_kind: kind,
     scanner_source: source || null,

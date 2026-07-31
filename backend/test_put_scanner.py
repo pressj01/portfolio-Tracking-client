@@ -154,6 +154,77 @@ class ExpirationTests(unittest.TestCase):
         self.assertEqual(dte, 124)
 
 
+class PutQuotePreparationTests(unittest.TestCase):
+    def test_live_two_sided_quote_keeps_market_iv_and_delta(self):
+        prepared = ps._prepare_put_quote(
+            {
+                "strike": 90.0,
+                "bid": 2.0,
+                "ask": 2.2,
+                "mid": 2.1,
+                "iv": 0.32,
+                "delta": -0.24,
+                "volume": 0,
+            },
+            spot=100.0,
+            dte=35,
+            dividend_yield=0.0,
+        )
+
+        self.assertEqual(prepared["quote_source"], "live_bid_ask")
+        self.assertEqual(prepared["iv"], 0.32)
+        self.assertEqual(prepared["delta"], -0.24)
+
+    def test_same_session_last_trade_recomputes_iv_and_delta(self):
+        dte = 35
+        years = dte / 365.0
+        market = ps.black_scholes(
+            100.0,
+            90.0,
+            years,
+            ps.RISK_FREE,
+            0.0,
+            0.30,
+            "put",
+        )
+        prepared = ps._prepare_put_quote(
+            {
+                "strike": 90.0,
+                "bid": 0.0,
+                "ask": 0.0,
+                "mid": market["price"],
+                "iv": 0.001,
+                "delta": -0.001,
+                "volume": 25,
+            },
+            spot=100.0,
+            dte=dte,
+            dividend_yield=0.0,
+        )
+
+        self.assertEqual(prepared["quote_source"], "last_trade_estimate")
+        self.assertAlmostEqual(prepared["iv"], 0.30, places=3)
+        self.assertAlmostEqual(prepared["delta"], market["delta"], places=3)
+
+    def test_untraded_contract_without_live_quote_is_rejected(self):
+        prepared = ps._prepare_put_quote(
+            {
+                "strike": 90.0,
+                "bid": 0.0,
+                "ask": 0.0,
+                "mid": 2.0,
+                "iv": 0.30,
+                "delta": -0.20,
+                "volume": 0,
+            },
+            spot=100.0,
+            dte=35,
+            dividend_yield=0.0,
+        )
+
+        self.assertIsNone(prepared)
+
+
 class EarningsTargetWindowTests(unittest.TestCase):
     def setUp(self):
         self.as_of = date(2026, 7, 29)
@@ -329,6 +400,14 @@ class ScoringTests(unittest.TestCase):
         )
         self.assertIn("Wide bid/ask spread", r["flags"])
         self.assertIn("Thin open interest", r["flags"])
+
+    def test_recent_trade_estimate_is_explicitly_flagged(self):
+        r = ps.score_candidate(
+            self.base_tech(),
+            self.base_fund(),
+            self.base_put(quote_source="last_trade_estimate"),
+        )
+        self.assertIn("Recent trade estimate — no live bid/ask", r["flags"])
 
     def test_score_never_exceeds_100(self):
         r = ps.score_candidate(

@@ -96,6 +96,7 @@ from put_scanner import (
     _num,
     _parse_date,
     _pick_expiration,
+    _prepare_put_quote,
     _ramp,
     _round,
     _ticker_frame,
@@ -471,9 +472,20 @@ def _build_pair(long_leg: dict, short_leg: dict, spot: float, dte: int, T: float
 
     # What it costs if both legs fill at the worst side of their quotes, which is
     # the number that decides whether a paper 2:1 survives the fill.
-    debit_worst = long_leg["ask"] - short_leg["bid"]
-    exec_cost = (long_leg["ask"] - long_leg["bid"]) + (short_leg["ask"] - short_leg["bid"])
-    exec_cost_pct = (exec_cost / debit * 100.0) if debit > 0 else None
+    all_live = _quotable(long_leg) and _quotable(short_leg)
+    debit_worst = (
+        long_leg["ask"] - short_leg["bid"]
+        if all_live else None
+    )
+    exec_cost = (
+        (long_leg["ask"] - long_leg["bid"])
+        + (short_leg["ask"] - short_leg["bid"])
+        if all_live else None
+    )
+    exec_cost_pct = (
+        exec_cost / debit * 100.0
+        if exec_cost is not None and debit > 0 else None
+    )
 
     # How far the stock has to travel, expressed in its own expected move over the
     # life of the trade. This is the number that separates a plausible target from
@@ -513,6 +525,8 @@ def _build_pair(long_leg: dict, short_leg: dict, spot: float, dte: int, T: float
         "width": width,
         "debit": debit,
         "debit_worst_case": debit_worst,
+        "quote_source": "live_bid_ask" if all_live else "last_trade_estimate",
+        "uses_last_trade_prices": not all_live,
         "debit_pct_of_width": debit / width * 100.0,
         "max_profit": max_profit,
         "max_loss": debit,
@@ -544,11 +558,13 @@ def _build_pair(long_leg: dict, short_leg: dict, spot: float, dte: int, T: float
             "strike": long_strike, "bid": long_leg["bid"], "ask": long_leg["ask"],
             "mid": long_mid, "iv": long_leg["iv"], "delta": long_leg["delta"],
             "open_interest": long_leg["open_interest"], "volume": long_leg["volume"],
+            "quote_source": long_leg.get("quote_source", "live_bid_ask"),
         },
         "short_leg": {
             "strike": short_strike, "bid": short_leg["bid"], "ask": short_leg["ask"],
             "mid": short_mid, "iv": short_leg["iv"], "delta": short_leg["delta"],
             "open_interest": short_leg["open_interest"], "volume": short_leg["volume"],
+            "quote_source": short_leg.get("quote_source", "live_bid_ask"),
         },
     }
 
@@ -593,7 +609,20 @@ def _suggest_spread(ticker: str, spot: float, div_yield: float, forecast_vol: fl
     dte_eff = max(dte or 1, 1)
     T = dte_eff / 365.0
 
-    legs = [p for p in puts if _quotable(p)]
+    prepared = [
+        quote for quote in (
+            _prepare_put_quote(
+                leg,
+                spot=spot,
+                dte=dte_eff,
+                dividend_yield=div_yield,
+            )
+            for leg in puts
+        )
+        if quote is not None
+    ]
+    live = [leg for leg in prepared if _quotable(leg)]
+    legs = live if len(live) >= 2 else prepared
     if len(legs) < 2:
         return None
 
@@ -612,6 +641,8 @@ def _suggest_spread(ticker: str, spot: float, div_yield: float, forecast_vol: fl
             if pair["width"] < lo_w or pair["width"] > hi_w:
                 continue
             all_pairs.append(pair)
+            if pair["uses_last_trade_prices"]:
+                continue
             if pair["debit_pct_of_width"] > max_debit_pct_of_width:
                 continue
             if pair["reward_risk"] < min_reward_risk:
@@ -635,7 +666,7 @@ def _suggest_spread(ticker: str, spot: float, div_yield: float, forecast_vol: fl
 
     # At-the-money IV for the IV/RV comparison, off the whole chain rather than
     # the chosen strikes, so skew does not contaminate the vol-level reading.
-    atm = min(puts, key=lambda p: abs(p["strike"] - spot))
+    atm = min(prepared, key=lambda p: abs(p["strike"] - spot))
     atm_iv = atm["iv"] if atm["iv"] > 0 else best["long_leg"]["iv"]
 
     expiry_d = datetime.strptime(expiration, "%Y-%m-%d").date()
@@ -792,11 +823,14 @@ def score_candidate(tech: dict, fund: dict, spread: dict | None,
         flags.append("Thin share liquidity")
 
     if spread:
+        estimated = bool(spread.get("uses_last_trade_prices"))
+        if estimated:
+            flags.append("Recent trade estimates — no live bid/ask")
         # Combined leg slippage (7). The single most under-appreciated cost in a
         # defined-risk vertical: two spreads to cross, both out of the debit.
         cost_pct = _num(spread.get("exec_cost_pct"))
         execution += _ramp(-(cost_pct if cost_pct is not None else 60.0), -40, -8, 7)
-        if cost_pct is not None and cost_pct > 25:
+        if not estimated and cost_pct is not None and cost_pct > 25:
             flags.append("Leg slippage eats the edge")
 
         # Open interest on the weaker leg (5). A vertical is only as liquid as

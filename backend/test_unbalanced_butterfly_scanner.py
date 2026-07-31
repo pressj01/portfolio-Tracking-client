@@ -4,6 +4,9 @@ from datetime import date, timedelta
 import os
 import sys
 import unittest
+from unittest.mock import patch
+
+import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -68,6 +71,39 @@ class TargetConstruction(unittest.TestCase):
         self.assertEqual(scanner._target_names("both"), ["20", "25"])
         self.assertEqual(scanner._target_names("20"), ["20"])
         self.assertEqual(scanner._target_names("25"), ["25"])
+
+    def test_doubling_contracts_scales_course_dollar_recommendations(self):
+        result = scanner._build_butterfly(
+            leg(100, 10, -0.20),
+            leg(90, 6, -0.15),
+            leg(70, 2, -0.10),
+            spot=110,
+            expiration=expiration_in(200),
+            dte=200,
+            upper_long_target=0.20,
+            tranche_quantity=8,
+        )
+
+        self.assertEqual(result["upper_long_quantity"], 8)
+        self.assertEqual(result["body_short_quantity"], 16)
+        self.assertEqual(result["lower_long_quantity"], 8)
+        self.assertAlmostEqual(result["course_quantity_scale"], 2.0)
+        self.assertAlmostEqual(
+            result["course_profit_target_dollars"],
+            scanner.COURSE_PROFIT_TARGET_DOLLARS * 2,
+        )
+        self.assertAlmostEqual(
+            result["course_max_loss_target_dollars"],
+            scanner.COURSE_MAX_LOSS_TARGET_DOLLARS * 2,
+        )
+        self.assertAlmostEqual(
+            result["course_planned_capital_low_dollars"],
+            scanner.COURSE_PLANNED_CAPITAL_LOW_DOLLARS * 2,
+        )
+        self.assertAlmostEqual(
+            result["course_planned_capital_high_dollars"],
+            scanner.COURSE_PLANNED_CAPITAL_HIGH_DOLLARS * 2,
+        )
 
 
 class PayoffArithmetic(unittest.TestCase):
@@ -260,6 +296,100 @@ class MonthlyExpirationSelection(unittest.TestCase):
         self.assertFalse(scanner._is_standard_monthly(
             (third_friday - timedelta(days=4)).isoformat()
         ))
+
+    def test_scan_tries_next_monthly_when_nearest_has_no_structure(self):
+        today = date.today()
+        monthlies = []
+        year, month = today.year, today.month
+        while len(monthlies) < 2:
+            month += 1
+            if month > 12:
+                month = 1
+                year += 1
+            expiration = scanner._third_friday(year, month)
+            dte = (expiration - today).days
+            if dte >= 120:
+                monthlies.append((expiration.isoformat(), dte))
+        nearest, fallback = monthlies
+
+        fallback_candidate = scanner._build_butterfly(
+            leg(100, 10, -0.20),
+            leg(90, 6, -0.15),
+            leg(70, 2, -0.10),
+            spot=110,
+            expiration=fallback[0],
+            dte=fallback[1],
+            upper_long_target=0.20,
+            tranche_quantity=4,
+        )
+
+        class FakeTicker:
+            options = [nearest[0], fallback[0]]
+
+        def candidates_for_expiration(
+            _puts,
+            *,
+            expiration,
+            **_kwargs,
+        ):
+            return [] if expiration == nearest[0] else [fallback_candidate]
+
+        with (
+            patch.object(scanner, "_load_history", return_value=object()),
+            patch.object(
+                scanner,
+                "_ticker_frame",
+                return_value=pd.DataFrame({"Close": [110.0]}),
+            ),
+            patch.object(
+                scanner,
+                "_fetch_fundamentals_bulk",
+                return_value={"SPY": {}},
+            ),
+            patch.object(scanner.yf, "Ticker", return_value=FakeTicker()),
+            patch.object(
+                scanner,
+                "_load_put_chain",
+                side_effect=lambda _ticker, expiration, *_args: [
+                    {"expiration": expiration}
+                ],
+            ),
+            patch.object(
+                scanner,
+                "_candidates_for_target",
+                side_effect=candidates_for_expiration,
+            ),
+        ):
+            result = scanner.run_unbalanced_butterfly_scan({
+                "tickers": "SPY",
+                "upper_long_delta": "20",
+                "target_dte": nearest[1],
+                "min_dte": nearest[1],
+                "max_dte": fallback[1],
+                "tranche_quantity": 8,
+            })
+
+        self.assertEqual(len(result["rows"]), 1)
+        self.assertEqual(result["rows"][0]["expiration"], fallback[0])
+        self.assertEqual(result["stats"]["expirations_priced"], 2)
+        self.assertEqual(result["params"]["bias_delta_min"], -2.0)
+        self.assertEqual(result["params"]["bias_delta_max"], 2.0)
+
+    def test_recent_trade_price_is_an_estimate_not_a_live_quote(self):
+        stale = leg(100, 10, -0.20)
+        stale.update({"bid": 0.0, "ask": 0.0, "volume": 25})
+
+        prepared = scanner._prepare_scan_leg(
+            stale,
+            spot=110,
+            dte=200,
+            dividend_yield=0.0,
+        )
+
+        self.assertIsNotNone(prepared)
+        self.assertEqual(prepared["quote_source"], "last_trade")
+        self.assertGreater(prepared["iv"], 0)
+        self.assertLess(prepared["delta"], 0)
 
 
 if __name__ == "__main__":

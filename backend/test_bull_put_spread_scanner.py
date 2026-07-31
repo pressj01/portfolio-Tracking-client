@@ -197,7 +197,7 @@ class PairSelectionTests(unittest.TestCase):
         picked = self._scan(min_credit_pct_of_width=80.0)
         self.assertTrue(picked["constraints_relaxed"])
 
-    def test_unusable_two_sided_quotes_return_nothing(self):
+    def test_recent_trades_keep_after_hours_analysis_available(self):
         broken = [leg(95, 0, 2.0, -0.25), leg(90, 0.5, 0.4, -0.10)]
         with patch.object(bps.yf, "Ticker", return_value=type(
             "FakeTicker", (), {"options": [self.expiration]}
@@ -205,7 +205,12 @@ class PairSelectionTests(unittest.TestCase):
             picked = bps._suggest_bull_put_spread(
                 "XYZ", 100, 0, 0.24, 35, 1, 1095
             )
-        self.assertIsNone(picked)
+        self.assertIsNotNone(picked)
+        self.assertTrue(picked["uses_last_trade_prices"])
+        self.assertEqual(picked["quote_source"], "last_trade_estimate")
+        self.assertTrue(picked["constraints_relaxed"])
+        self.assertIsNone(picked["natural_credit"])
+        self.assertIsNone(picked["exec_cost_pct"])
 
     def test_long_dated_target_is_not_clipped(self):
         long_exp = (date.today() + timedelta(days=400)).isoformat()

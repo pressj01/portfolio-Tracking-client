@@ -80,6 +80,7 @@ from put_scanner import (
     _num,
     _parse_date,
     _pick_expiration,
+    _prepare_option_quote,
     _quoted_spread_pct,
     _ramp,
     _round,
@@ -437,6 +438,7 @@ def _load_call_chain(ticker: str, expiration: str, spot: float, div_yield: float
             "strike": strike,
             "bid": bid,
             "ask": ask,
+            "last": last,
             "mid": mid,
             "iv": iv,
             "delta": delta,
@@ -482,10 +484,29 @@ def _suggest_call(ticker: str, spot: float, div_yield: float, target_dte: int,
     if not calls:
         return None
 
-    # Out-of-the-money calls with a live bid. A call with no bid cannot be sold,
-    # and writing in the money caps the position below today's price.
+    # Prefer a live market. After hours Yahoo commonly zeroes bid/ask while
+    # retaining the session's last trade and volume; when no live candidate
+    # exists, keep analysis available from those explicitly labeled estimates.
     floor_strike = spot * (1.0 + max(0.0, min_otm_pct) / 100.0)
-    tradable = [c for c in calls if c["strike"] > floor_strike and c["bid"] > 0 and c["mid"] > 0]
+    prepared = [
+        quote for quote in (
+            _prepare_option_quote(
+                call,
+                option_type="call",
+                spot=spot,
+                dte=dte or 0,
+                dividend_yield=div_yield,
+            )
+            for call in calls
+            if call["strike"] > floor_strike
+        )
+        if quote is not None
+    ]
+    live = [
+        call for call in prepared
+        if call.get("quote_source") == "live_bid_ask"
+    ]
+    tradable = live or prepared
     if not tradable:
         return None
 
@@ -507,7 +528,7 @@ def _suggest_call(ticker: str, spot: float, div_yield: float, target_dte: int,
         pick = min(pool, key=lambda c: abs(c["strike"] - want))
 
     # At-the-money IV drives the IV/RV comparison, not the OTM strike's skew.
-    atm = min(calls, key=lambda c: abs(c["strike"] - spot))
+    atm = min(prepared, key=lambda c: abs(c["strike"] - spot))
     atm_iv = atm["iv"] if atm["iv"] > 0 else pick["iv"]
 
     strike = pick["strike"]
@@ -523,7 +544,10 @@ def _suggest_call(ticker: str, spot: float, div_yield: float, target_dte: int,
     if_called_pct = (mid + strike - spot) / spot * 100.0
     if_called_annualized = if_called_pct * (365.0 / dte_eff)
 
-    spread_pct = _quoted_spread_pct(pick["bid"], pick["ask"], pick["mid"])
+    spread_pct = (
+        _quoted_spread_pct(pick["bid"], pick["ask"], pick["mid"])
+        if pick.get("quote_source") == "live_bid_ask" else None
+    )
 
     ex_div_iso, ex_div_estimated = next_ex_dividend(fund or {})
     ex_div_d = _parse_date(ex_div_iso)
@@ -553,6 +577,7 @@ def _suggest_call(ticker: str, spot: float, div_yield: float, target_dte: int,
         "prob_keep_shares": (1.0 - pick["delta"]) * 100.0 if pick["delta"] is not None else None,
         "open_interest": pick["open_interest"],
         "volume": pick["volume"],
+        "quote_source": pick.get("quote_source", "live_bid_ask"),
         "spread_pct": spread_pct,
         "premium_yield_pct": premium_yield,
         "annualized_pct": annualized,
@@ -610,6 +635,8 @@ def score_candidate(tech: dict, fund: dict, call: dict | None,
     iv_rv = None
     iv_rank = None
     if call:
+        if call.get("quote_source") == "last_trade_estimate":
+            flags.append("Recent trade estimate — no live bid/ask")
         atm_iv = _num(call.get("atm_iv"))
         rv30 = _num(tech.get("rv_30")) or _num(tech.get("rv_252"))
         if atm_iv and rv30 and rv30 > 0:

@@ -7,6 +7,7 @@ import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
 
 const STORAGE_KEY = 'unbalanced-butterfly-scanner-filters'
+const COURSE_BASE_LONG_QUANTITY = 4
 const FALLBACK_DEFAULTS = {
   tickers: 'SPY,QQQ,IWM',
   upper_long_delta: 'both',
@@ -82,8 +83,9 @@ function HelpPanel() {
     }}>
       <p style={{ marginTop: 0 }}>
         This scanner implements the course&rsquo;s STT broken-wing butterfly as one
-        4/−8/4 put tranche in the standard monthly expiration nearest 180 DTE,
-        using the same 120–240 DTE window as the Unbalanced Put Condor.
+        4/−8/4 put tranche, starting with the standard monthly expiration
+        nearest 180 DTE and then checking the rest of the selected 120–240 DTE
+        window when that chain cannot form the structure.
         It buys the upper long, sells twice as many body puts, and buys the lower
         long with a wider downside wing.
       </p>
@@ -93,6 +95,12 @@ function HelpPanel() {
         20-delta upper long begins nearer 10 delta. The scanner searches adjacent
         lower strikes because the complete tranche must land in the selected
         bearish, neutral, or bullish delta range.
+      </p>
+      <p>
+        Changing the long quantity scales the full 1/−2/1 ratio. For example,
+        doubling 4/−8/4 produces 8/−16/8. Per-leg delta targets stay the same,
+        while total debit or credit, payoff, theta, whole-position delta range,
+        course profit and loss guidance, and planned capital scale with size.
       </p>
       <p>
         Candidate ranking follows the documented priorities: fit the tranche
@@ -463,7 +471,10 @@ function CourseTargetsCard({ row }) {
       <div style={{ color: 'var(--text-dim)', fontSize: '0.67rem', marginTop: '0.6rem' }}>
         Suggested planned capital: {usd(row.course_planned_capital_low_dollars, 0)}
         {' '}to {usd(row.course_planned_capital_high_dollars, 0)} per tranche.
-        Management targets require active monitoring and do not cap gap or
+        {row.course_quantity_scale === 1
+          ? ''
+          : ` Scaled ${num(row.course_quantity_scale, 2)}× from the default 4/−8/4 tranche.`}
+        {' '}Management targets require active monitoring and do not cap gap or
         execution risk.
       </div>
     </div>
@@ -498,9 +509,10 @@ function TimeEvolutionCard({ row }) {
         How the profit tent builds through time
       </strong>
       <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginTop: '0.25rem' }}>
-        Each checkpoint reprices the complete 4/−8/4 tranche with its remaining
-        time. Above the upper long remains a successful, untested outcome; inside
-        the structure, success follows the growing $0-or-better modeled tent.
+        Each checkpoint reprices the complete {row.upper_long_quantity}/−{row.body_short_quantity}/
+        {row.lower_long_quantity} tranche with its remaining time. Above the
+        upper long remains a successful, untested outcome; inside the structure,
+        success follows the growing $0-or-better modeled tent.
       </div>
       <div style={{
         display: 'grid',
@@ -602,7 +614,9 @@ function Detail({ row, colSpan }) {
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', alignItems: 'flex-start' }}>
             <div>
               <div style={{ color: 'var(--text-dim)', fontSize: '0.66rem', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
-                Entry at mid
+                {row.uses_last_trade_prices
+                  ? 'Entry estimate from recent trades'
+                  : 'Entry at live mid'}
               </div>
               <div>
                 Per 1/−2/1 fly: <strong>{row.entry_credit_per_fly >= 0
@@ -701,7 +715,15 @@ export default function UnbalancedButterflyScanner() {
 
   const set = (key, value) => setFilters(current => ({ ...current, [key]: value }))
   const numberField = (label, key, options = {}) => {
-    const { step = 1, min, max, suffix = '', width = 76, tip } = options
+    const {
+      step = 1,
+      min,
+      max,
+      suffix = '',
+      width = 76,
+      tip,
+      onValueChange,
+    } = options
     return (
       <label title={tip} style={{
         display: 'flex',
@@ -718,7 +740,11 @@ export default function UnbalancedButterflyScanner() {
             min={min}
             max={max}
             value={filters[key]}
-            onChange={event => set(key, Number(event.target.value))}
+            onChange={event => {
+              const value = Number(event.target.value)
+              if (onValueChange) onValueChange(value)
+              else set(key, value)
+            }}
             style={{
               width,
               padding: '0.32rem 0.4rem',
@@ -800,6 +826,38 @@ export default function UnbalancedButterflyScanner() {
       setSortAsc(true)
     }
   }
+
+  const setTrancheQuantity = value => {
+    setFilters(current => {
+      const previous = Math.max(
+        1,
+        Number(current.tranche_quantity) || COURSE_BASE_LONG_QUANTITY,
+      )
+      const next = Math.max(1, Number(value) || 1)
+      const ratio = next / previous
+      const scale = field => Math.round(
+        (Number(current[field]) || 0) * ratio * 1000,
+      ) / 1000
+      return {
+        ...current,
+        tranche_quantity: value,
+        target_theta_dollars: scale('target_theta_dollars'),
+        theta_tolerance_dollars: scale('theta_tolerance_dollars'),
+        uel_tolerance_dollars: scale('uel_tolerance_dollars'),
+      }
+    })
+  }
+
+  const quantityScale = Math.max(
+    1,
+    Number(filters.tranche_quantity) || COURSE_BASE_LONG_QUANTITY,
+  ) / COURSE_BASE_LONG_QUANTITY
+  const scaledBias = value => {
+    const scaled = value * quantityScale
+    const digits = Number.isInteger(scaled) ? 0 : 1
+    return signed(scaled, digits)
+  }
+
   const heading = (label, key, style) => (
     <th onClick={() => sort(key)} style={{ cursor: 'pointer', ...style }}>
       {label}{sortKey === key ? (sortAsc ? ' ▲' : ' ▼') : ''}
@@ -892,15 +950,27 @@ export default function UnbalancedButterflyScanner() {
               borderRadius: 4,
             }}
           >
-            <option value="bearish">Bearish (−3 to −1 Δ)</option>
-            <option value="neutral">Neutral (−1 to +1 Δ)</option>
-            <option value="bullish">Bullish (+1 to +3 Δ)</option>
+            <option value="bearish">
+              {`Bearish (${scaledBias(-3)} to ${scaledBias(-1)} Δ)`}
+            </option>
+            <option value="neutral">
+              {`Neutral (${scaledBias(-1)} to ${scaledBias(1)} Δ)`}
+            </option>
+            <option value="bullish">
+              {`Bullish (${scaledBias(1)} to ${scaledBias(3)} Δ)`}
+            </option>
           </select>
         </label>
         {numberField('Target DTE', 'target_dte', { min: 1, max: 1095 })}
         {numberField('Minimum DTE', 'min_dte', { min: 1, max: 1095 })}
         {numberField('Maximum DTE', 'max_dte', { min: 1, max: 1095 })}
-        {numberField('Tranche long qty', 'tranche_quantity', { min: 1, max: 100, width: 65 })}
+        {numberField('Tranche long qty', 'tranche_quantity', {
+          min: 1,
+          max: 100,
+          width: 65,
+          onValueChange: setTrancheQuantity,
+          tip: 'Changing quantity scales the dollar targets and whole-position delta range.',
+        })}
         {numberField('Leg Δ tolerance', 'delta_tolerance', { step: 0.005, min: 0.005, max: 0.15 })}
         {numberField('Target theta', 'target_theta_dollars', { step: 1, min: -1000, max: 1000, suffix: '$/day' })}
         {numberField('Theta tolerance', 'theta_tolerance_dollars', { step: 1, min: 0, max: 1000, suffix: '$' })}
@@ -933,8 +1003,9 @@ export default function UnbalancedButterflyScanner() {
       {error && <div className="alert alert-error">{error}</div>}
       {loading && (
         <p style={{ color: 'var(--text-dim)' }}>
-          Loading the monthly expiration nearest 180 DTE and balancing nearby 20/15/lower
-          or 25/15/5-delta put combinations…
+          Starting with the monthly expiration nearest the target DTE, then
+          checking the rest of the selected window while balancing nearby
+          20/15/lower or 25/15/5-delta put combinations…
         </p>
       )}
       {stats && !loading && (
@@ -956,7 +1027,7 @@ export default function UnbalancedButterflyScanner() {
                 {heading('Ticker', 'ticker')}
                 {heading('Upper Δ', 'delta')}
                 {heading('Expiration', 'dte')}
-                <th>4/−8/4 structure</th>
+                <th>Structure</th>
                 <th>Wing widths</th>
                 {heading('Net delta', 'fit', { textAlign: 'right' })}
                 {heading('Upper line', 'uel', { textAlign: 'right' })}
@@ -1024,7 +1095,9 @@ export default function UnbalancedButterflyScanner() {
                         }}>
                           {signedUsd(row.theta_dollars_per_day, 0)}
                         </strong>
-                        <div style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>per day · target +$20</div>
+                        <div style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>
+                          per day · target {signedUsd(row.target_theta_dollars, 0)}
+                        </div>
                       </td>
                       <td>
                         <div style={{ display: 'flex', gap: '0.75rem' }}>
@@ -1057,7 +1130,8 @@ export default function UnbalancedButterflyScanner() {
 
       {!loading && stats && !sortedRows.length && !error && (
         <p style={{ color: 'var(--text-dim)', textAlign: 'center', marginTop: '2rem' }}>
-          No quotable broken-wing butterflies were available in the selected monthly-expiration window.
+          No live or recent-trade broken-wing butterflies were available in the
+          selected monthly-expiration window.
         </p>
       )}
 

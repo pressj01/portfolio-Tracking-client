@@ -127,6 +127,7 @@ from put_scanner import (
     _num,
     _parse_date,
     _pick_expiration,
+    _prepare_option_quote,
     _ramp,
     _round,
     _ticker_frame,
@@ -588,12 +589,23 @@ def _build_credit_pair(short_leg: dict, long_leg: dict, spot: float, dte: int,
 
     # A simultaneous limit near the mid is the displayed entry. The natural credit
     # shows whether crossing both markets still leaves a credit at all.
-    natural_credit = (_num(short_leg.get("bid"), 0.0) or 0.0) - (_num(long_leg.get("ask"), 0.0) or 0.0)
-    exec_cost = (
-        (_num(short_leg.get("ask"), 0.0) or 0.0) - (_num(short_leg.get("bid"), 0.0) or 0.0)
-        + (_num(long_leg.get("ask"), 0.0) or 0.0) - (_num(long_leg.get("bid"), 0.0) or 0.0)
+    all_live = _quotable(short_leg) and _quotable(long_leg)
+    natural_credit = (
+        (_num(short_leg.get("bid"), 0.0) or 0.0)
+        - (_num(long_leg.get("ask"), 0.0) or 0.0)
+        if all_live else None
     )
-    exec_cost_pct = (exec_cost / credit * 100.0) if credit > 0 else None
+    exec_cost = (
+        (_num(short_leg.get("ask"), 0.0) or 0.0)
+        - (_num(short_leg.get("bid"), 0.0) or 0.0)
+        + (_num(long_leg.get("ask"), 0.0) or 0.0)
+        - (_num(long_leg.get("bid"), 0.0) or 0.0)
+        if all_live else None
+    )
+    exec_cost_pct = (
+        exec_cost / credit * 100.0
+        if exec_cost is not None and credit > 0 else None
+    )
 
     credit_pct_of_width = credit / width * 100.0
     return_on_risk = (credit / max_loss * 100.0) if max_loss > 0 else None
@@ -669,6 +681,8 @@ def _build_credit_pair(short_leg: dict, long_leg: dict, spot: float, dte: int,
         "width": width,
         "credit": credit,
         "natural_credit": natural_credit,
+        "quote_source": "live_bid_ask" if all_live else "last_trade_estimate",
+        "uses_last_trade_prices": not all_live,
         "credit_pct_of_width": credit_pct_of_width,
         "max_profit": credit,
         "max_loss": max_loss,
@@ -708,11 +722,13 @@ def _build_credit_pair(short_leg: dict, long_leg: dict, spot: float, dte: int,
             "strike": short_strike, "bid": short_leg["bid"], "ask": short_leg["ask"],
             "mid": short_mid, "iv": short_leg["iv"], "delta": short_leg["delta"],
             "open_interest": short_leg["open_interest"], "volume": short_leg["volume"],
+            "quote_source": short_leg.get("quote_source", "live_bid_ask"),
         },
         "long_leg": {
             "strike": long_strike, "bid": long_leg["bid"], "ask": long_leg["ask"],
             "mid": long_mid, "iv": long_leg["iv"], "delta": long_leg["delta"],
             "open_interest": long_leg["open_interest"], "volume": long_leg["volume"],
+            "quote_source": long_leg.get("quote_source", "live_bid_ask"),
         },
     }
 
@@ -807,8 +823,23 @@ def _suggest_bear_call_spread(
     # chain only offers (say) a 0.7%-OTM short against the requested 1% floor, we
     # should return that pair as a relaxed watchlist candidate instead of falsely
     # reporting that no two-leg market exists.
+    prepared = [
+        quote for quote in (
+            _prepare_option_quote(
+                leg,
+                option_type="call",
+                spot=spot,
+                dte=dte_eff,
+                dividend_yield=div_yield,
+            )
+            for leg in calls
+            if leg["strike"] > spot
+        )
+        if quote is not None
+    ]
+    live = [leg for leg in prepared if _quotable(leg)]
     legs = sorted(
-        (c for c in calls if _quotable(c) and c["strike"] > spot),
+        live if len(live) >= 2 else prepared,
         key=lambda c: c["strike"],
     )
     if len(legs) < 2:
@@ -868,6 +899,9 @@ def _suggest_bear_call_spread(
             if pair is None:
                 continue
             all_pairs.append(pair)
+            estimated = pair["uses_last_trade_prices"]
+            if estimated:
+                continue
             if pair["width"] < lo_width or pair["width"] > hi_width:
                 continue
             if (
@@ -882,7 +916,7 @@ def _suggest_bear_call_spread(
                 and not pair.get("clears_resistance")
             ):
                 continue
-            if pair["natural_credit"] <= 0:
+            if not estimated and pair["natural_credit"] <= 0:
                 continue
             if pair["credit_pct_of_width"] < min_credit_pct_of_width:
                 continue
@@ -893,7 +927,10 @@ def _suggest_bear_call_spread(
                 continue
             if pair["open_interest_min"] < min_open_interest:
                 continue
-            if pair["exec_cost_pct"] is None or pair["exec_cost_pct"] > max_exec_cost_pct:
+            if not estimated and (
+                pair["exec_cost_pct"] is None
+                or pair["exec_cost_pct"] > max_exec_cost_pct
+            ):
                 continue
             passing.append(pair)
 
@@ -918,10 +955,10 @@ def _suggest_bear_call_spread(
 
     # At-the-money IV for the IV/RV comparison, off the whole chain rather than
     # the chosen strikes, so skew does not contaminate the vol-level reading.
-    atm = min(calls, key=lambda c: abs(c["strike"] - spot))
+    atm = min(prepared, key=lambda c: abs(c["strike"] - spot))
     atm_iv = atm["iv"] if atm["iv"] > 0 else best["short_leg"]["iv"]
 
-    upside_tail_ratio, tail_strikes = _upside_wing(calls, atm_iv)
+    upside_tail_ratio, tail_strikes = _upside_wing(prepared, atm_iv)
 
     expiry_d = datetime.strptime(expiration, "%Y-%m-%d").date()
 
@@ -1137,6 +1174,9 @@ def score_candidate(tech: dict, fund: dict, spread: dict | None,
 
     early_level = None
     if spread:
+        estimated = bool(spread.get("uses_last_trade_prices"))
+        if estimated:
+            flags.append("Recent trade estimates — no live bid/ask")
         # Probability the short strike is never reached (5).
         safety += _ramp(spread.get("prob_otm"), 65, 88, 5)
         # Cushion above spot (4) — the room the stock has to rally before this
@@ -1155,13 +1195,16 @@ def score_candidate(tech: dict, fund: dict, spread: dict | None,
         if spread.get("clears_resistance"):
             safety += 3
 
-        if cost_pct is None or cost_pct > 30:
+        if not estimated and (cost_pct is None or cost_pct > 30):
             flags.append("Two-leg slippage is high")
         if (spread.get("open_interest_min") or 0) < 50:
             flags.append("Thin open interest on one leg")
         if (spread.get("prob_otm") or 100) < 65:
             flags.append("Short strike is too close")
-        if (_num(spread.get("natural_credit"), 0.0) or 0.0) <= 0:
+        if (
+            not estimated
+            and (_num(spread.get("natural_credit"), 0.0) or 0.0) <= 0
+        ):
             flags.append("No credit after crossing both markets")
         if spread.get("clears_resistance") is False:
             flags.append("Short strike sits below resistance")

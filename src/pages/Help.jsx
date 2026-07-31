@@ -5941,10 +5941,24 @@ function OptionsHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Risk Profile</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Risk Profile combines every active stock, call, and put leg into one profit-and-loss graph. Move the analysis
-        date forward, adjust volatility, widen the displayed price range, and compare the open-position curve with
-        expiration payoff. Summary cards show entry debit or credit, theoretical maximum profit and loss,
+        date forward, move the <strong>Vol surface</strong> bar, widen the displayed price range, and compare the
+        open-position curve with expiration payoff. Summary cards show entry debit or credit, theoretical maximum profit and loss,
         breakevens, and portfolio Greeks. Probability shading and draggable strike handles make it easier to test
         how the structure changes.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The volatility bar applies a proportional scenario to each leg&rsquo;s own modeled IV instead of forcing every
+        strike to the same volatility. For example, a <strong>+10%</strong> surface move changes 20%, 25%, and 32% IV
+        legs to 22%, 27.5%, and 35.2%. That preserves the position&rsquo;s current strike skew and expiration differences
+        while every leg, Greek, probability, and pre-expiration P/L curve is repriced. It is a risk scenario, not a
+        forecast of how the live volatility surface will move.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Scanner handoffs prefer live two-sided quotes. When the data feed clears bid/ask outside market hours, every
+        option scanner may keep the risk graph available from a recent traded price with a prominent estimate warning.
+        Bid/ask-dependent values such as natural credit and slippage are then left blank, and multi-leg structures stay
+        in the research/watchlist group rather than being labeled actionable. Always refresh and verify every live leg
+        before placing an order.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
         Use <strong>Zoom</strong> and drag over the graph to inspect a narrower underlying-price region, or choose
@@ -5960,7 +5974,7 @@ function OptionsHelp() {
         safe padding above the highest payoff and below the lowest loss so neither edge is clipped by an earlier zoom.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/options/options-risk-profile.png" alt="Expanded Options Risk Profile showing zoom, pan, Fit, Contract, strike markers, and the complete profit-and-loss graph" style={imageStyle} />
+        <img src="./help-screenshots/options/options-risk-profile.png" alt="Options Risk Profile controls showing the analysis-date and proportional Vol surface bars, probability settings, and modeled scenario inputs" style={imageStyle} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Price &amp; Moneyness</h3>
@@ -6674,6 +6688,13 @@ function BearCallSpreadScannerHelp() {
 }
 
 function IronCondorScannerHelp() {
+  const screenshotStyle = {
+    maxWidth: '100%',
+    height: 'auto',
+    borderRadius: '4px',
+    border: '1px solid var(--p-333)',
+  }
+
   return (
     <div>
       <h2>Iron Condor Scanner</h2>
@@ -6684,6 +6705,19 @@ function IronCondorScannerHelp() {
         scanner finds names that are going <em>nowhere</em> and whose options are expensive relative to how far they
         actually travel, then prices a specific four-leg structure on each one.
       </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/iron-condor-scanner/01-parameter-presets.png"
+          alt="Iron Condor Scanner showing the Balanced preset, universe controls, range filters, strike targets, and execution limits"
+          style={screenshotStyle}
+        />
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          Start with Conservative, Balanced, or Aggressive, then refine the range, premium,
+          strike, liquidity, and event-risk gates. The scan summary shows how many names passed
+          each stage before a four-leg structure was considered actionable.
+        </p>
+      </div>
 
       <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
         <strong>Maximum loss is the wider wing minus the credit &mdash; not the sum of both wings.</strong> Price can
@@ -6787,6 +6821,19 @@ function IronCondorScannerHelp() {
         sort below fully priced ones.
       </p>
 
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/iron-condor-scanner/02-expanded-candidate.png"
+          alt="Expanded Iron Condor Scanner watchlist candidate showing status warnings and probability of success"
+          style={screenshotStyle}
+        />
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          Expand a result to see the probability cards, score components, quotes, trade math,
+          and management plan. This example is deliberately a watchlist candidate: the yellow
+          status and warning chips mean it did not satisfy every enabled risk gate.
+        </p>
+      </div>
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         The quiet killer: four markets, twice
       </h3>
@@ -6811,6 +6858,31 @@ function IronCondorScannerHelp() {
         <li><strong>Reassess at 21 DTE.</strong> Inside three weeks a short condor&rsquo;s gamma rises sharply, and a strike that was comfortably distant becomes one a single session can reach.</li>
         <li><strong>Stop at</strong> roughly twice the credit, capped just inside the wing so the structure can still trade.</li>
       </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Using the risk graph
+      </h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Click <strong>Risk graph</strong> on an expanded row to load the exact four legs into
+        Strategy Lab. Confirm both breakevens, the flat maximum-profit zone between the short
+        strikes, and the loss slope toward each long strike. The current-date curve shows how
+        time value rounds the expiration shape. Move the analysis date or drag the
+        <strong> Vol surface</strong> bar to test how theta, gamma, and vega alter the position
+        before expiration. The bar proportionally shocks each leg&rsquo;s own IV so the current
+        put/call skew remains visible; the graph is a modeled scenario, not an executable closing quote.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/iron-condor-scanner/03-risk-graph.png"
+          alt="Iron condor risk graph showing the current-date curve, expiration payoff, both breakevens, strike markers, and position metrics"
+          style={screenshotStyle}
+        />
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          The cyan expiration line shows the defined-risk condor: maximum profit between the
+          short strikes and maximum loss beyond a long strike. The purple current-date curve
+          includes remaining time value.
+        </p>
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Defending a tested side</h3>
       <p style={{ marginBottom: '1rem' }}>
@@ -7031,17 +7103,75 @@ function UnbalancedPutCondorScannerHelp() {
 }
 
 function UnbalancedButterflyScannerHelp() {
+  const screenshotStyle = {
+    maxWidth: '100%',
+    height: 'auto',
+    borderRadius: '4px',
+    border: '1px solid var(--p-333)',
+  }
+
   return (
     <div>
       <h2>Unbalanced Butterfly Scanner</h2>
       <p style={{ marginBottom: '1rem' }}>
-        This scanner builds the long-dated put broken-wing butterfly as a 4/−8/4 tranche:
-        buy four upper puts, sell eight body puts, and buy four lower puts at the same
-        expiration. The lower wing is wider than the front wing. The scanner can start
-        with either a 20- or 25-delta upper long, keeps the body near 15 delta, and searches
-        the lower long and adjacent listed strikes for the selected bearish, neutral, or
-        bullish complete-position delta.
+        This scanner builds the long-dated put broken-wing butterfly from a 4/−8/4 base
+        tranche: buy upper puts, sell twice as many body puts, and buy the same number of
+        lower puts at one expiration. The lower wing is wider than the front wing. The
+        scanner can start with either a 20- or 25-delta upper long, keeps the body near
+        15 delta, and searches the lower long and adjacent listed strikes for the selected
+        bearish, neutral, or bullish complete-position delta.
       </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/unbalanced-butterfly-scanner/01-scanner-overview.png"
+          alt="Unbalanced Butterfly Scanner controls and ranked near-match results using the four-contract base tranche"
+          style={screenshotStyle}
+        />
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          The scanner starts with the monthly expiration nearest the target DTE and continues through
+          the allowed monthly window when needed. Exact matches satisfy every enabled constraint; near
+          matches show the closest listed construction and explain which target or quote check was missed.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Scaling the complete structure
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Changing <strong>Tranche long qty</strong> preserves the 1/−2/1 relationship. For example,
+        increasing it from 4 to 8 changes the order from 4/−8/4 to 8/−16/8. The 20- or 25-delta
+        upper-long target and the approximately 15-delta body target remain per-contract strike-selection
+        rules, so they do not double. The complete-position delta and theta do double for the same strikes,
+        which is why the scanner scales the bearish, neutral, or bullish net-delta range, target theta,
+        theta tolerance, and upper-expiration-line tolerance by the same quantity factor.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Modeled dollar outcomes also scale with the number of complete units: entry cost or credit,
+        upper line, tent peak, lower flat, planned profit and loss targets, maximum profit, maximum loss,
+        and planned capital all rise proportionally before commissions, slippage, or fill differences.
+        Probability percentages do not mechanically double because they describe price paths rather than
+        contract count.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/unbalanced-butterfly-scanner/03-quantity-scaling.png"
+          alt="Unbalanced Butterfly Scanner doubled to an eight-contract long quantity with an 8 minus 16 plus 8 structure and scaled theta and delta targets"
+          style={screenshotStyle}
+        />
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          In this doubled example, each row uses 8/−16/8, the neutral range becomes −2 to +2,
+          and the target theta becomes +$40 per day. The selected 20- and 25-delta strike rules
+          remain unchanged.
+        </p>
+      </div>
+
+      <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+        When live bid and ask quotes are unavailable after hours, the scanner can use recent traded
+        option prices to estimate volatility, delta, and structure geometry. Those rows are clearly
+        marked as <strong>near matches</strong>; their natural price and executable width remain
+        unavailable. Refresh during market hours and verify a live multi-leg quote before trading.
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Payoff geometry and how the tent develops
@@ -7078,6 +7208,45 @@ function UnbalancedButterflyScannerHelp() {
         <li><strong>Finish below the upper long:</strong> can be smaller than the touch probability because price may test the structure and recover.</li>
         <li><strong>Body and lower-tail cards:</strong> separate touching the double-short body, finishing below it, touching the lower long, and finishing in the lower tail.</li>
       </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/unbalanced-butterfly-scanner/02-expanded-analysis.png"
+          alt="Expanded Unbalanced Butterfly Scanner result showing success and failure probabilities, time evolution, and touch probabilities"
+          style={screenshotStyle}
+        />
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          Expand a row to compare success and failure as exact complements, see the rounded tent
+          develop through time, and separate the chance of touching a strike from the chance of
+          finishing beyond it.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Using the risk graph
+      </h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Click <strong>Risk graph</strong> on an expanded result to load the exact strikes,
+        quantities, and entry estimate into Strategy Lab. Confirm the nearly flat upper line,
+        the body peak, the wider lower wing, the lower breakeven, and the maximum-loss tail.
+        The current-date curve shows the rounded pre-expiration tent; the expiration curve shows
+        the completed intrinsic-value payoff. Move the analysis date or drag the
+        <strong> Vol surface</strong> bar to test how the tent develops. The bar proportionally
+        shocks every leg from its own starting IV, preserving the structure&rsquo;s current skew,
+        but every plotted value remains a model estimate.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/unbalanced-butterfly-scanner/04-risk-graph.png"
+          alt="Unbalanced butterfly risk graph showing the current-date curve, expiration tent, lower breakeven, strike markers, and position metrics"
+          style={screenshotStyle}
+        />
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          The cyan expiration line forms the broken-wing tent, while the purple current-date
+          curve includes remaining time value. The metrics above the graph should agree with the
+          scanner row for the same strikes, quantities, and entry estimate.
+        </p>
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Raising the upper expiration line by narrowing the front wing
@@ -7145,10 +7314,10 @@ function UnbalancedButterflyScannerHelp() {
         Practical workflow
       </h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Scan both 20- and 25-delta upper-long variants in the 120–240 DTE window around the 180 DTE target.</li>
+        <li>Choose the complete-position quantity, then scan both 20- and 25-delta upper-long variants in the 120–240 DTE window around the 180 DTE target.</li>
         <li>Choose the desired market-bias range and compare the complete-position delta, theta, upper line, execution, and maximum loss.</li>
         <li>Expand a result to review success/failure, time-evolved tent values, reach/never-touch, and lower-tail risk.</li>
-        <li>Use the risk graph and verify the exact 4/−8/4 strikes and quantities before entry.</li>
+        <li>Use the risk graph and verify the exact displayed strikes and quantities before entry.</li>
         <li>At the halfway and two-thirds reviews, compare the live mark and Greeks with the original plan. An upside-only narrowing adjustment is optional, not automatic.</li>
         <li>If an adjustment is modeled, save and manage the revised structure as one complete position with its new cashflow and quantities.</li>
       </ol>

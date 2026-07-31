@@ -49,6 +49,7 @@ from put_scanner import (
     _num,
     _parse_date,
     _pick_expiration,
+    _prepare_put_quote,
     _ramp,
     _round,
     _ticker_frame,
@@ -120,16 +121,23 @@ def _build_credit_pair(short_leg: dict, long_leg: dict, spot: float, dte: int,
 
     # A simultaneous limit near the mid is the displayed entry.  The natural
     # credit shows whether crossing both markets still produces a credit.
-    natural_credit = (_num(short_leg.get("bid"), 0.0) or 0.0) - (
-        _num(long_leg.get("ask"), 0.0) or 0.0
+    all_live = _quotable(short_leg) and _quotable(long_leg)
+    natural_credit = (
+        (_num(short_leg.get("bid"), 0.0) or 0.0)
+        - (_num(long_leg.get("ask"), 0.0) or 0.0)
+        if all_live else None
     )
     exec_cost = (
         (_num(short_leg.get("ask"), 0.0) or 0.0)
         - (_num(short_leg.get("bid"), 0.0) or 0.0)
         + (_num(long_leg.get("ask"), 0.0) or 0.0)
         - (_num(long_leg.get("bid"), 0.0) or 0.0)
+        if all_live else None
     )
-    exec_cost_pct = exec_cost / credit * 100.0 if credit > 0 else None
+    exec_cost_pct = (
+        exec_cost / credit * 100.0
+        if exec_cost is not None and credit > 0 else None
+    )
 
     credit_pct_width = credit / width * 100.0
     return_on_risk = credit / max_loss * 100.0 if max_loss > 0 else None
@@ -166,6 +174,8 @@ def _build_credit_pair(short_leg: dict, long_leg: dict, spot: float, dte: int,
         "width": width,
         "credit": credit,
         "natural_credit": natural_credit,
+        "quote_source": "live_bid_ask" if all_live else "last_trade_estimate",
+        "uses_last_trade_prices": not all_live,
         "credit_pct_of_width": credit_pct_width,
         "max_profit": credit,
         "max_loss": max_loss,
@@ -194,6 +204,7 @@ def _build_credit_pair(short_leg: dict, long_leg: dict, spot: float, dte: int,
             "delta": short_leg["delta"],
             "open_interest": short_leg["open_interest"],
             "volume": short_leg["volume"],
+            "quote_source": short_leg.get("quote_source", "live_bid_ask"),
         },
         "long_leg": {
             "strike": long_strike,
@@ -204,6 +215,7 @@ def _build_credit_pair(short_leg: dict, long_leg: dict, spot: float, dte: int,
             "delta": long_leg["delta"],
             "open_interest": long_leg["open_interest"],
             "volume": long_leg["volume"],
+            "quote_source": long_leg.get("quote_source", "live_bid_ask"),
         },
     }
 
@@ -261,10 +273,21 @@ def _suggest_bull_put_spread(
     if not puts:
         return None
 
-    legs = [
-        leg for leg in puts
-        if _quotable(leg) and (_num(leg.get("strike")) or spot) < spot
+    prepared = [
+        quote for quote in (
+            _prepare_put_quote(
+                leg,
+                spot=spot,
+                dte=dte or 0,
+                dividend_yield=div_yield,
+            )
+            for leg in puts
+            if (_num(leg.get("strike")) or spot) < spot
+        )
+        if quote is not None
     ]
+    live = [leg for leg in prepared if _quotable(leg)]
+    legs = live if len(live) >= 2 else prepared
     if len(legs) < 2:
         return None
 
@@ -292,7 +315,10 @@ def _suggest_bull_put_spread(
             if pair["width"] < lo_width or pair["width"] > hi_width:
                 continue
             all_pairs.append(pair)
-            if pair["natural_credit"] <= 0:
+            estimated = pair["uses_last_trade_prices"]
+            if estimated:
+                continue
+            if not estimated and pair["natural_credit"] <= 0:
                 continue
             if pair["credit_pct_of_width"] < min_credit_pct_of_width:
                 continue
@@ -303,7 +329,7 @@ def _suggest_bull_put_spread(
                 continue
             if pair["open_interest_min"] < min_open_interest:
                 continue
-            if (
+            if not estimated and (
                 pair["exec_cost_pct"] is None
                 or pair["exec_cost_pct"] > max_exec_cost_pct
             ):
@@ -315,7 +341,7 @@ def _suggest_bull_put_spread(
         return None
     best = max(pool, key=_pair_quality)
 
-    atm = min(puts, key=lambda leg: abs(leg["strike"] - spot))
+    atm = min(prepared, key=lambda leg: abs(leg["strike"] - spot))
     atm_iv = atm["iv"] if atm["iv"] > 0 else best["short_leg"]["iv"]
     expiry_d = datetime.strptime(expiration, "%Y-%m-%d").date()
     return {
@@ -383,6 +409,9 @@ def score_candidate(tech: dict, fund: dict, spread: dict | None,
     iv_rv = None
     earnings_before_expiry = None
     if spread:
+        estimated = bool(spread.get("uses_last_trade_prices"))
+        if estimated:
+            flags.append("Recent trade estimates — no live bid/ask")
         atm_iv = _num(spread.get("atm_iv"))
         rv = _num(tech.get("rv_30")) or _num(tech.get("rv_252"))
         if atm_iv and rv and rv > 0:
@@ -405,7 +434,7 @@ def score_candidate(tech: dict, fund: dict, spread: dict | None,
 
         if (spread.get("credit_pct_of_width") or 0) < 20:
             flags.append("Credit too small for the defined risk")
-        if exec_cost is None or exec_cost > 30:
+        if not estimated and (exec_cost is None or exec_cost > 30):
             flags.append("Two-leg slippage is high")
         if (spread.get("open_interest_min") or 0) < 50:
             flags.append("Thin open interest on one leg")

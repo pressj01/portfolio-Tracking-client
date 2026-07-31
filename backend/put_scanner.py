@@ -36,7 +36,7 @@ from flask import jsonify, request
 
 from config import get_connection
 from option_probability import profit_probability_schedule
-from options_pricing import black_scholes
+from options_pricing import black_scholes, implied_vol
 
 # ---------------------------------------------------------------------------
 # Universes
@@ -764,6 +764,7 @@ def _load_put_chain(ticker: str, expiration: str, spot: float, div_yield: float)
             "strike": strike,
             "bid": bid,
             "ask": ask,
+            "last": last,
             "mid": mid,
             "iv": iv,
             "delta": delta,
@@ -774,6 +775,95 @@ def _load_put_chain(ticker: str, expiration: str, spot: float, div_yield: float)
 
     _cache_set(_put_chain_cache, key, rows)
     return rows
+
+
+def _prepare_option_quote(
+    leg: dict,
+    *,
+    option_type: str,
+    spot: float,
+    dte: int,
+    dividend_yield: float,
+) -> dict | None:
+    """Make a live quote or recent-session last trade usable for screening.
+
+    Yahoo commonly clears bid/ask after the close while retaining that day's
+    last trade and volume. Live two-sided quotes always take priority. A last
+    trade is accepted only when the contract reports positive current-session
+    volume, and its IV/delta are recomputed so placeholder after-hours IVs do
+    not distort strike selection. The caller labels this as a non-live estimate.
+    """
+    if option_type not in {"put", "call"}:
+        raise ValueError(f"Unsupported option type: {option_type}")
+
+    prepared = dict(leg)
+    bid = _num(prepared.get("bid"), 0.0) or 0.0
+    ask = _num(prepared.get("ask"), 0.0) or 0.0
+    mid = _num(prepared.get("mid"), 0.0) or 0.0
+    if bid > 0 and ask >= bid and mid > 0:
+        prepared["quote_source"] = "live_bid_ask"
+        return prepared
+
+    volume = int(_num(prepared.get("volume"), 0) or 0)
+    strike = _num(prepared.get("strike"))
+    if (
+        mid <= 0
+        or volume <= 0
+        or strike is None
+        or strike <= 0
+        or spot <= 0
+        or dte <= 0
+    ):
+        return None
+
+    years = dte / 365.0
+    volatility = implied_vol(
+        mid,
+        spot,
+        strike,
+        years,
+        RISK_FREE,
+        dividend_yield,
+        option_type,
+    )
+    if volatility is None or not 0.005 <= volatility <= 5.0:
+        return None
+    modeled = black_scholes(
+        spot,
+        strike,
+        years,
+        RISK_FREE,
+        dividend_yield,
+        volatility,
+        option_type,
+    )
+    delta = _num(modeled.get("delta"))
+    if delta is None:
+        return None
+
+    prepared.update({
+        "iv": volatility,
+        "delta": delta,
+        "quote_source": "last_trade_estimate",
+    })
+    return prepared
+
+
+def _prepare_put_quote(
+    leg: dict,
+    *,
+    spot: float,
+    dte: int,
+    dividend_yield: float,
+) -> dict | None:
+    """Put-specific wrapper retained for scanner and test call sites."""
+    return _prepare_option_quote(
+        leg,
+        option_type="put",
+        spot=spot,
+        dte=dte,
+        dividend_yield=dividend_yield,
+    )
 
 
 def _pick_expiration(expirations: list[str], target_dte: int, min_dte: int, max_dte: int,
@@ -853,11 +943,37 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
         return None
 
     puts = _load_put_chain(ticker, expiration, spot, div_yield)
-    if not puts:
+    prepared_puts = [
+        prepared
+        for leg in puts
+        if (
+            prepared := _prepare_put_quote(
+                leg,
+                spot=spot,
+                dte=dte,
+                dividend_yield=div_yield,
+            )
+        ) is not None
+    ]
+    if not prepared_puts:
         return None
 
-    # Out-of-the-money puts with a live bid. A put with no bid cannot be sold.
-    tradable = [p for p in puts if p["strike"] < spot and p["bid"] > 0 and p["mid"] > 0]
+    # Prefer executable two-sided markets. When Yahoo has cleared the entire
+    # chain after hours, retain recent traded contracts as estimates instead of
+    # disabling every scanner handoff.
+    live_tradable = [
+        p for p in prepared_puts
+        if p["strike"] < spot
+        and p["mid"] > 0
+        and p.get("quote_source") == "live_bid_ask"
+    ]
+    estimated_tradable = [
+        p for p in prepared_puts
+        if p["strike"] < spot
+        and p["mid"] > 0
+        and p.get("quote_source") == "last_trade_estimate"
+    ]
+    tradable = live_tradable or estimated_tradable
     if not tradable:
         return None
 
@@ -870,7 +986,7 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
         pick = min(tradable, key=lambda p: abs(p["strike"] - want))
 
     # At-the-money IV drives the IV/RV comparison, not the OTM strike's skew.
-    atm = min(puts, key=lambda p: abs(p["strike"] - spot))
+    atm = min(prepared_puts, key=lambda p: abs(p["strike"] - spot))
     atm_iv = atm["iv"] if atm["iv"] > 0 else pick["iv"]
 
     strike = pick["strike"]
@@ -879,7 +995,10 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
     premium_yield = mid / strike * 100.0
     annualized = premium_yield * (365.0 / dte_eff)
     effective_basis = strike - mid
-    spread_pct = _quoted_spread_pct(pick["bid"], pick["ask"], pick["mid"])
+    spread_pct = (
+        _quoted_spread_pct(pick["bid"], pick["ask"], pick["mid"])
+        if pick.get("quote_source") == "live_bid_ask" else None
+    )
 
     return {
         "expiration": expiration,
@@ -895,6 +1014,7 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
         "open_interest": pick["open_interest"],
         "volume": pick["volume"],
         "spread_pct": spread_pct,
+        "quote_source": pick.get("quote_source", "live_bid_ask"),
         "premium_yield_pct": premium_yield,
         "annualized_pct": annualized,
         "cash_required": strike * 100.0,
@@ -962,6 +1082,8 @@ def score_candidate(tech: dict, fund: dict, put: dict | None,
             flags.append("Wide bid/ask spread")
         if (put.get("open_interest") or 0) < 50:
             flags.append("Thin open interest")
+        if put.get("quote_source") == "last_trade_estimate":
+            flags.append("Recent trade estimate — no live bid/ask")
 
     # ── Quality ───────────────────────────────────────────────────────────
     # Same 25-point budget for both, but a fund has no earnings or balance

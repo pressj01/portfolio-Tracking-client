@@ -3,6 +3,8 @@
 import os
 import sys
 import unittest
+from datetime import date, timedelta
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -452,6 +454,223 @@ class DeltaSelection(unittest.TestCase):
         acceptable = self.candidate(1.0)
         chosen = self.choose([perfect_delta_but_wrong_leg, acceptable], 0.0)
         self.assertIs(chosen, acceptable)
+
+
+class StaleChainHandling(unittest.TestCase):
+    """A snapshot with no live markets is a data outage, not a verdict.
+
+    Outside market hours the feed zeroes bid/ask on nearly every contract and
+    reports a placeholder implied vol from its failed solver.  The scanner used
+    to answer that in one of two wrong ways: "no quotable four-put combination",
+    which reads as though the market has no such trade, or - when a handful of
+    strikes survived - a fully rendered structure built from the only strikes
+    left, with probability cards priced off vols that were never quoted.
+    """
+
+    def test_placeholder_implied_vol_is_not_a_tradable_leg(self):
+        # 0.062509 is one term of the feed's 0.5, 0.25, ... halving sequence.
+        # The vol floor cannot be raised to catch this term without rejecting
+        # genuinely low-vol underlyings, so what disqualifies the leg is the
+        # missing quote that produced the placeholder in the first place.
+        stale = leg(600, 5.0, -0.05)
+        stale["iv"] = 0.062509
+        stale["bid"], stale["ask"] = 0.0, 0.0
+
+        self.assertFalse(scanner._tradable_leg(stale, spot=741.69))
+
+    def test_degenerate_vol_is_rejected_even_if_a_quote_exists(self):
+        # The tail of the same sequence would put absurd greeks and touch
+        # probabilities on a leg that does carry a two-sided market.
+        degenerate = leg(600, 5.0, -0.05)
+        degenerate["iv"] = 0.000010
+
+        self.assertFalse(scanner._has_credible_iv(degenerate))
+        self.assertFalse(scanner._tradable_leg(degenerate, spot=741.69))
+
+    def test_quoted_leg_with_a_real_vol_is_tradable(self):
+        live = leg(636, 9.155, -0.1261)
+        live["iv"] = 0.2404
+
+        self.assertTrue(scanner._tradable_leg(live, spot=741.69))
+
+    def test_zero_bid_leg_is_not_tradable_even_with_a_real_vol(self):
+        no_market = leg(636, 9.155, -0.1261)
+        no_market["iv"] = 0.2404
+        no_market["bid"] = 0.0
+
+        self.assertFalse(scanner._tradable_leg(no_market, spot=741.69))
+
+    def test_chain_quality_counts_only_live_strikes_below_spot(self):
+        live = leg(700, 16.0, -0.26)
+        dead = leg(600, 5.0, -0.05)
+        dead["bid"], dead["ask"], dead["iv"] = 0.0, 0.0, 0.062509
+        above_spot = leg(800, 60.0, -0.90)
+
+        quality = scanner._chain_quality([live, dead, above_spot], spot=741.69)
+
+        self.assertEqual(quality["strikes"], 3)
+        self.assertEqual(quality["strikes_below_spot"], 2)
+        self.assertEqual(quality["quoted_below_spot"], 1)
+
+    def test_scan_reports_the_outage_instead_of_inventing_a_structure(self):
+        # The real 2026-12-31 SPY snapshot: five live strikes in a $10 band,
+        # everything else quoteless.  Those five are the exact legs the scanner
+        # used to publish as a "20/10" structure.
+        survivors = [
+            (636.0, 9.155, -0.1261, 0.2404),
+            (634.0, 8.970, -0.1233, 0.2421),
+            (632.0, 7.245, -0.1077, 0.2286),
+            (631.0, 8.695, -0.1193, 0.2444),
+            (626.0, 8.260, -0.1129, 0.2485),
+        ]
+        chain = []
+        for strike, mid, delta, iv in survivors:
+            live = leg(strike, mid, delta, spread=0.05)
+            live["iv"] = iv
+            chain.append(live)
+        for strike in range(560, 741, 5):
+            dead = leg(strike, 0.0, -0.05, volume=0)
+            dead["bid"], dead["ask"], dead["mid"] = 0.0, 0.0, 7.5
+            dead["iv"] = 0.062509
+            chain.append(dead)
+
+        expiration = (date.today() + timedelta(days=154)).isoformat()
+        with patch.object(scanner, "_load_history"), \
+                patch.object(scanner, "_fetch_fundamentals_bulk", return_value={}), \
+                patch.object(scanner, "_load_put_chain", return_value=chain), \
+                patch.object(scanner, "_ticker_frame"), \
+                patch.object(scanner, "dividend_yield_for_pricing", return_value=0.0), \
+                patch.object(scanner.yf, "Ticker") as ticker:
+            ticker.return_value.options = [expiration]
+            scanner._ticker_frame.return_value = {
+                "Close": _CloseSeries(741.69)
+            }
+            result = scanner.run_unbalanced_put_condor_scan({
+                "tickers": "SPY",
+                "target_dte": 154,
+                "min_dte": 120,
+                "max_dte": 240,
+            })
+
+        self.assertEqual(result["rows"], [])
+        self.assertEqual(len(result["unavailable"]), 1)
+        outage = result["unavailable"][0]
+        self.assertIn("No usable quotes", outage["reason"])
+        self.assertIn("defensible live or recent-trade prices", outage["reason"])
+        self.assertEqual(outage["chain_quality"]["quoted_below_spot"], 5)
+        self.assertEqual(outage["chain_quality"]["usable_below_spot"], 5)
+
+
+class _CloseSeries:
+    """Minimal stand-in for the close column of a price frame."""
+
+    def __init__(self, last):
+        self._last = last
+
+    def dropna(self):
+        return self
+
+    @property
+    def empty(self):
+        return False
+
+    @property
+    def iloc(self):
+        return [self._last]
+
+
+class StructuralSanity(unittest.TestCase):
+    """Strike order alone does not make four puts an unbalanced condor."""
+
+    def test_non_monotonic_deltas_are_rejected(self):
+        # The published 636/632/631/626 structure: the 631 short carried more
+        # delta than the 632 short above it, which no real vol surface allows.
+        self.assertIsNone(scanner._build_put_condor(
+            upper_long=leg(636, 9.155, -0.1261),
+            upper_short=leg(632, 7.245, -0.1077),
+            lower_short=leg(631, 8.695, -0.1193),
+            lower_long=leg(626, 8.260, -0.1129),
+            spot=741.69,
+            expiration="2026-12-31",
+            dte=154,
+            preset="20/10",
+            target_upper_delta=0.20,
+            target_lower_delta=0.10,
+        ))
+
+    def test_inverted_shorts_are_rejected(self):
+        self.assertFalse(scanner._deltas_are_ordered(
+            leg(105, 5.0, -0.30),
+            leg(100, 3.0, -0.15),
+            leg(90, 1.5, -0.16),
+            leg(85, 0.5, -0.10),
+        ))
+
+    def test_ordinary_structure_passes(self):
+        self.assertTrue(scanner._deltas_are_ordered(
+            leg(105, 5.0, -0.30),
+            leg(100, 3.0, -0.25),
+            leg(90, 1.5, -0.15),
+            leg(85, 0.5, -0.10),
+        ))
+
+    def test_adjacent_strike_quote_noise_is_tolerated(self):
+        # A hair of inversion between neighbouring strikes is quote noise, not
+        # a broken surface, and must not throw away a real structure.
+        self.assertTrue(scanner._deltas_are_ordered(
+            leg(105, 5.0, -0.300),
+            leg(100, 3.0, -0.302),
+            leg(90, 1.5, -0.150),
+            leg(85, 0.5, -0.100),
+        ))
+
+    def test_shorts_one_strike_apart_do_not_form_a_condor(self):
+        chain = []
+        for strike, delta in (
+            (640, -0.30), (636, -0.26), (632, -0.22), (631, -0.21),
+            (626, -0.17), (621, -0.13), (616, -0.10), (611, -0.08),
+        ):
+            # Puts get cheaper as the strike falls, so the debit and credit
+            # spreads both price positive.
+            live = leg(strike, (strike - 600) / 5.0, delta, spread=0.05)
+            chain.append(live)
+
+        candidates = scanner._candidates_for_preset(
+            chain, 741.69, "2026-12-31", 154, "20/10",
+            bought_width=5.0, sold_width=10.0,
+            bought_quantity=1, sold_quantity=1, dividend_yield=0.0,
+        )
+
+        self.assertTrue(candidates)
+        for candidate in candidates:
+            gap = candidate["upper_short_strike"] - candidate["lower_short_strike"]
+            self.assertGreaterEqual(gap, 5.0)
+
+
+class ExpirationFallback(unittest.TestCase):
+    def test_expirations_are_ranked_by_closeness_to_target(self):
+        today = date.today()
+        expirations = [
+            (today + timedelta(days=offset)).isoformat()
+            for offset in (100, 130, 154, 169, 250)
+        ]
+
+        ranked = scanner._ranked_expirations(
+            expirations, target_dte=161, min_dte=120, max_dte=240,
+        )
+
+        # 100 and 250 are outside the window; 154 beats 169 by one day.
+        self.assertEqual([dte for _, dte in ranked], [154, 169, 130])
+
+    def test_window_with_no_listed_expiration_is_empty(self):
+        today = date.today()
+        self.assertEqual(
+            scanner._ranked_expirations(
+                [(today + timedelta(days=30)).isoformat()],
+                target_dte=180, min_dte=120, max_dte=240,
+            ),
+            [],
+        )
 
 
 class Presets(unittest.TestCase):

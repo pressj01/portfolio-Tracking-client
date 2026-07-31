@@ -42,7 +42,7 @@ from put_scanner import (
     _load_history,
     _load_put_chain,
     _num,
-    _pick_expiration,
+    _prepare_put_quote,
     _round,
     _ticker_frame,
     dividend_yield_for_pricing,
@@ -56,6 +56,20 @@ DELTA_PRESETS = {
     "20/10": (0.20, 0.10),
     "25/15": (0.25, 0.15),
 }
+# When the upstream IV solver cannot converge - which is every contract without
+# a live quote, so most of the chain outside market hours - it reports a halving
+# sequence (0.5, 0.25, ... 1e-5) instead of failing.  Those are not market vols,
+# and a delta or touch probability derived from one is fiction dressed as data.
+MIN_CREDIBLE_IV = 0.02
+# Choosing a four-leg structure needs a pool to choose from.  Below this many
+# live strikes under spot, the "best" candidate is just the only combination
+# that happened to survive, not a selection.
+MIN_QUOTED_LEGS_BELOW_SPOT = 8
+# One thin expiration should not end the scan when a neighbour in the same
+# window is fully quoted.
+MAX_EXPIRATION_ATTEMPTS = 4
+# Slack for adjacent-strike IV noise when checking that delta falls with strike.
+DELTA_MONOTONICITY_SLACK = 0.005
 DEFAULT_TICKERS = ["SPY", "IWM", "GLD", "QQQ"]
 DEFAULTS = {
     "tickers": ",".join(DEFAULT_TICKERS),
@@ -92,6 +106,63 @@ def _quotable(leg: dict) -> bool:
     )
 
 
+def _has_credible_iv(leg: dict) -> bool:
+    """False for the placeholder vols the feed emits when its solver fails."""
+    iv = _num(leg.get("iv"))
+    return iv is not None and iv >= MIN_CREDIBLE_IV
+
+
+def _tradable_leg(leg: dict, spot: float) -> bool:
+    """A leg this snapshot can analyze with a live or labeled estimated price."""
+    strike = _num(leg.get("strike"))
+    return bool(
+        (
+            _quotable(leg)
+            or leg.get("quote_source") == "last_trade_estimate"
+        )
+        and _has_credible_iv(leg)
+        and leg.get("delta") is not None
+        and strike is not None
+        and 0 < strike < spot
+    )
+
+
+def _chain_quality(puts: list[dict], spot: float) -> dict:
+    """How much of a chain snapshot is actually usable, for honest reporting."""
+    below_spot = [
+        leg for leg in puts
+        if (_num(leg.get("strike")) or 0) > 0
+        and (_num(leg.get("strike")) or 0) < spot
+    ]
+    return {
+        "strikes": len(puts),
+        "strikes_below_spot": len(below_spot),
+        "quoted_below_spot": sum(
+            1 for leg in below_spot
+            if _quotable(leg) and _has_credible_iv(leg)
+        ),
+        "usable_below_spot": sum(
+            1 for leg in below_spot if _tradable_leg(leg, spot)
+        ),
+    }
+
+
+def _stale_chain_reason(expirations_tried: list[tuple[str, dict]]) -> str:
+    """Explain an empty scan as a data outage rather than an absent trade."""
+    best_expiration, best_quality = max(
+        expirations_tried,
+        key=lambda item: item[1]["usable_below_spot"],
+    )
+    return (
+        f"No usable quotes: the best of {len(expirations_tried)} expirations "
+        f"tried ({best_expiration}) had defensible live or recent-trade prices "
+        f"on only {best_quality['usable_below_spot']} of "
+        f"{best_quality['strikes_below_spot']} put strikes below spot, short of "
+        f"the {MIN_QUOTED_LEGS_BELOW_SPOT} needed to choose a four-leg "
+        f"structure."
+    )
+
+
 def _leg_view(leg: dict) -> dict:
     return {
         "strike": _round(leg.get("strike")),
@@ -105,6 +176,7 @@ def _leg_view(leg: dict) -> dict:
         "delta": _round(leg.get("delta"), 4),
         "open_interest": int(_num(leg.get("open_interest"), 0) or 0),
         "volume": int(_num(leg.get("volume"), 0) or 0),
+        "quote_source": leg.get("quote_source", "live_bid_ask"),
     }
 
 
@@ -322,6 +394,34 @@ def _early_close_estimate(
     }
 
 
+def _deltas_are_ordered(
+    upper_long: dict,
+    upper_short: dict,
+    lower_short: dict,
+    lower_long: dict,
+) -> bool:
+    """Reject structures whose deltas contradict their strikes.
+
+    Put delta must fall as strike falls.  When a snapshot is thin enough that
+    the surviving strikes carry stale or interpolated vols, the fitted deltas go
+    out of order and the search happily pairs a "20 delta" short above a short
+    with more delta than it.  That is not an unbalanced condor, so it must never
+    reach the results table with a preset label on it.
+    """
+    deltas = []
+    for leg in (upper_long, upper_short, lower_short, lower_long):
+        delta = _num(leg.get("delta"))
+        if delta is None:
+            return False
+        deltas.append(abs(delta))
+    for higher, lower in zip(deltas, deltas[1:]):
+        if lower > higher + DELTA_MONOTONICITY_SLACK:
+            return False
+    # The two shorts define the structure, so their ordering is not negotiable
+    # and they sit far enough apart that quote noise cannot explain a tie.
+    return deltas[1] > deltas[2]
+
+
 def _build_put_condor(
     upper_long: dict,
     upper_short: dict,
@@ -345,6 +445,8 @@ def _build_put_condor(
     if not all(value is not None and value > 0 for value in (k1, k2, k3, k4)):
         return None
     if not (k4 < k3 < k2 < k1):
+        return None
+    if not _deltas_are_ordered(upper_long, upper_short, lower_short, lower_long):
         return None
 
     bought_width = k1 - k2
@@ -385,6 +487,8 @@ def _build_put_condor(
     if upper_flat < 0 < center_profit:
         upper_breakeven = k1 + entry_credit / bought_quantity
 
+    structure_legs = (upper_long, upper_short, lower_short, lower_long)
+    all_live = all(_quotable(leg) for leg in structure_legs)
     natural_credit = (
         bought_quantity * (
             (_num(upper_short.get("bid"), 0.0) or 0.0)
@@ -394,6 +498,7 @@ def _build_put_condor(
             (_num(lower_short.get("bid"), 0.0) or 0.0)
             - (_num(lower_long.get("ask"), 0.0) or 0.0)
         )
+        if all_live else None
     )
     execution_cost = (
         bought_quantity * sum(
@@ -406,6 +511,7 @@ def _build_put_condor(
             - (_num(leg.get("bid"), 0.0) or 0.0)
             for leg in (lower_short, lower_long)
         )
+        if all_live else None
     )
 
     actual_upper_delta = abs(_num(upper_short.get("delta"), 0.0) or 0.0)
@@ -563,12 +669,20 @@ def _build_put_condor(
         "entry_debit": max(0.0, -entry_credit),
         "natural_credit": natural_credit,
         "execution_cost": execution_cost,
+        "quote_source": "live_bid_ask" if all_live else "last_trade_estimate",
+        "uses_last_trade_prices": not all_live,
         "bought_debit_dollars": bought_debit * CONTRACT_MULTIPLIER,
         "sold_credit_dollars": sold_credit * CONTRACT_MULTIPLIER,
         "entry_credit_dollars": entry_credit * CONTRACT_MULTIPLIER,
         "entry_debit_dollars": max(0.0, -entry_credit) * CONTRACT_MULTIPLIER,
-        "natural_credit_dollars": natural_credit * CONTRACT_MULTIPLIER,
-        "execution_cost_dollars": execution_cost * CONTRACT_MULTIPLIER,
+        "natural_credit_dollars": (
+            natural_credit * CONTRACT_MULTIPLIER
+            if natural_credit is not None else None
+        ),
+        "execution_cost_dollars": (
+            execution_cost * CONTRACT_MULTIPLIER
+            if execution_cost is not None else None
+        ),
         "upper_flat_outcome": upper_flat,
         "center_max_profit": center_profit,
         "lower_flat_outcome": lower_flat,
@@ -666,7 +780,10 @@ def _candidate_quality(candidate: dict) -> tuple:
     return (
         candidate["upper_delta_error"] + candidate["lower_delta_error"],
         candidate["width_error_pct"],
-        0 if candidate["natural_credit"] >= 0 else 1,
+        0 if (
+            candidate.get("natural_credit") is None
+            or candidate["natural_credit"] >= 0
+        ) else 1,
         -candidate["open_interest_min"],
         -candidate["center_max_profit"],
     )
@@ -721,14 +838,13 @@ def _candidates_for_preset(
     dividend_yield: float,
 ) -> list[dict]:
     target_upper, target_lower = DELTA_PRESETS[preset]
-    legs = [
-        leg for leg in puts
-        if _quotable(leg)
-        and leg.get("delta") is not None
-        and 0 < leg["strike"] < spot
-    ]
+    legs = [leg for leg in puts if _tradable_leg(leg, spot)]
     if len(legs) < 4:
         return []
+    # A condor needs a body.  Without this the search will pair shorts one
+    # strike apart whenever the delta fit is poor, collapsing the structure into
+    # something that only looks like the requested trade in the strike column.
+    min_short_separation = min(bought_width, sold_width)
 
     upper_shorts = sorted(
         legs,
@@ -750,7 +866,10 @@ def _candidates_for_preset(
         if not upper_long:
             continue
         for lower_short in lower_shorts:
-            if lower_short["strike"] >= upper_short["strike"]:
+            if (
+                upper_short["strike"] - lower_short["strike"]
+                < min_short_separation
+            ):
                 continue
             lower_long = _nearest_width_leg(
                 legs,
@@ -887,6 +1006,32 @@ def _ticker_list(raw) -> list[str]:
     return tickers[:50]
 
 
+def _ranked_expirations(
+    expirations: list[str],
+    target_dte: int,
+    min_dte: int,
+    max_dte: int,
+) -> list[tuple[str, int]]:
+    """In-window expirations ordered by closeness to the target DTE.
+
+    The head of this list is the expiration the scanner has always chosen; the
+    tail lets a thinly quoted chain fall through to its neighbour instead of
+    ending the scan.
+    """
+    today = date.today()
+    pool = []
+    for expiration in expirations:
+        try:
+            expiration_date = datetime.strptime(expiration, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        dte = (expiration_date - today).days
+        if min_dte <= dte <= max_dte:
+            pool.append((abs(dte - target_dte), expiration, dte))
+    pool.sort()
+    return [(expiration, dte) for _, expiration, dte in pool]
+
+
 def run_unbalanced_put_condor_scan(payload: dict) -> dict:
     p = {**DEFAULTS, **{k: v for k, v in (payload or {}).items() if v is not None}}
     tickers = _ticker_list(p.get("tickers"))
@@ -970,10 +1115,8 @@ def run_unbalanced_put_condor_scan(payload: dict) -> dict:
             expirations = list(yf.Ticker(ticker).options or [])
         except Exception:
             expirations = []
-        expiration, dte, _ = _pick_expiration(
-            expirations, target_dte, min_dte, max_dte,
-        )
-        if not expiration:
+        ranked = _ranked_expirations(expirations, target_dte, min_dte, max_dte)
+        if not ranked:
             return {
                 "ticker": ticker,
                 "price": _round(spot),
@@ -985,107 +1128,190 @@ def run_unbalanced_put_condor_scan(payload: dict) -> dict:
             }
         fund = fundamentals.get(ticker, {})
         div_yield = dividend_yield_for_pricing(fund, spot)
-        puts = _load_put_chain(ticker, expiration, spot, div_yield)
-        if not puts:
+
+        def evaluate(expiration: str, dte: int, puts: list[dict]) -> tuple[list, list]:
+            chosen = []
+            missing = []
+            for preset in presets:
+                candidates = _candidates_for_preset(
+                    puts,
+                    spot,
+                    expiration,
+                    dte,
+                    preset,
+                    bought_width,
+                    sold_width,
+                    bought_quantity,
+                    sold_quantity,
+                    div_yield,
+                )
+                if not candidates:
+                    missing.append(
+                        f"{preset}: no four-put combination held its delta order"
+                    )
+                    continue
+
+                # Net position delta is the governing choice.  The named delta
+                # pair locates the neighborhood; nearby listed strikes are
+                # searched for the complete four-leg package whose delta best
+                # matches the user's neutral, bullish, or bearish target.
+                best = _choose_candidate(
+                    candidates,
+                    target_position_delta=target_position_delta,
+                    delta_tolerance=delta_tolerance,
+                    width_tolerance_pct=width_tolerance_pct,
+                    min_open_interest=min_open_interest,
+                    require_upside_credit=require_upside_credit,
+                )
+                best["target_position_delta"] = target_position_delta
+                best["position_delta_error"] = abs(
+                    (best.get("position_delta") or 0.0) - target_position_delta
+                )
+                flags = []
+                blocking_flags = []
+                if best["upper_delta_error"] > delta_tolerance:
+                    blocking_flags.append("Upper short delta outside tolerance")
+                if best["lower_delta_error"] > delta_tolerance:
+                    blocking_flags.append("Lower short delta outside tolerance")
+                if best["width_error_pct"] > width_tolerance_pct:
+                    blocking_flags.append("Listed strikes miss the requested width")
+                if best["open_interest_min"] < min_open_interest:
+                    blocking_flags.append(
+                        "One or more legs are below minimum open interest"
+                    )
+                if require_upside_credit and best["entry_credit"] < 0:
+                    blocking_flags.append("Upper flat outcome is a debit")
+                if best["position_delta_error"] > position_delta_tolerance:
+                    blocking_flags.append("Net position delta is outside tolerance")
+                if best.get("uses_last_trade_prices"):
+                    blocking_flags.append(
+                        "Live bid/ask unavailable — analysis only"
+                    )
+                flags.extend(blocking_flags)
+                estimated = bool(best.get("uses_last_trade_prices"))
+                if estimated:
+                    flags.append("Recent trade estimates — no live bid/ask")
+                if (
+                    not estimated
+                    and best["natural_credit"] < 0 <= best["entry_credit"]
+                ):
+                    flags.append(
+                        "Mid shows a credit but the natural market is a debit"
+                    )
+
+                actionable = not blocking_flags
+                best.update({
+                    "ticker": ticker,
+                    "name": fund.get("name"),
+                    "price": spot,
+                    "status": "actionable" if actionable else "near_match",
+                    "flags": flags,
+                    "scanner_variant": (
+                        f"{preset.replace('/', '-')}-{bought_width:g}x{sold_width:g}"
+                        f"-q{bought_quantity}x{sold_quantity}"
+                    ),
+                })
+                best["early_close_estimates"] = [
+                    estimate
+                    for fraction in EARLY_CLOSE_FRACTIONS
+                    if (
+                        estimate := _early_close_estimate(
+                            best,
+                            spot,
+                            dte,
+                            fraction,
+                            div_yield,
+                        )
+                    ) is not None
+                ]
+                chosen.append(_round_candidate(best))
+            return chosen, missing
+
+        # Walk out from the target DTE.  A single thinly quoted expiration is a
+        # data condition, not a verdict on the trade, so it must not end the
+        # scan while a fully quoted neighbour sits inside the same window.
+        too_thin = []
+        last_attempt = None
+        for expiration, dte in ranked[:MAX_EXPIRATION_ATTEMPTS]:
+            raw_puts = _load_put_chain(ticker, expiration, spot, div_yield)
+            prepared = [
+                quote for quote in (
+                    _prepare_put_quote(
+                        leg,
+                        spot=spot,
+                        dte=dte,
+                        dividend_yield=div_yield,
+                    )
+                    for leg in raw_puts
+                    if 0 < (_num(leg.get("strike")) or 0) < spot
+                )
+                if quote is not None
+            ]
+            prepared_by_strike = {
+                _num(leg.get("strike")): leg for leg in prepared
+            }
+            quality_legs = [
+                prepared_by_strike.get(_num(leg.get("strike")), leg)
+                for leg in raw_puts
+            ]
+            live = [leg for leg in prepared if _quotable(leg)]
+            puts = (
+                live
+                if len(live) >= MIN_QUOTED_LEGS_BELOW_SPOT
+                else prepared
+            )
+            quality = _chain_quality(quality_legs, spot)
+            if quality["usable_below_spot"] < MIN_QUOTED_LEGS_BELOW_SPOT:
+                too_thin.append((expiration, quality))
+                continue
+            chosen, missing = evaluate(expiration, dte, puts)
+            last_attempt = (expiration, dte, missing)
+            if chosen:
+                return {
+                    "ticker": ticker,
+                    "name": fund.get("name"),
+                    "price": _round(spot),
+                    "expiration": expiration,
+                    "dte": dte,
+                    "chain_quality": quality,
+                    "priced": True,
+                    "status": "found",
+                    "reason": None,
+                    "candidates": chosen,
+                }
+
+        # Nothing matched.  Say which of the two it was: a chain with no live
+        # markets to read, or real quotes that simply did not form the structure.
+        if last_attempt is not None:
+            expiration, dte, missing = last_attempt
             return {
                 "ticker": ticker,
+                "name": fund.get("name"),
                 "price": _round(spot),
                 "expiration": expiration,
                 "dte": dte,
+                "priced": True,
                 "status": "unavailable",
-                "reason": "The selected expiration has no usable put chain.",
+                "reason": "; ".join(missing),
                 "candidates": [],
             }
-
-        chosen = []
-        missing = []
-        for preset in presets:
-            candidates = _candidates_for_preset(
-                puts,
-                spot,
-                expiration,
-                dte,
-                preset,
-                bought_width,
-                sold_width,
-                bought_quantity,
-                sold_quantity,
-                div_yield,
-            )
-            if not candidates:
-                missing.append(f"{preset}: no quotable four-put combination")
-                continue
-
-            # Net position delta is the governing choice.  The named delta pair
-            # locates the neighborhood; nearby listed strikes are searched for
-            # the complete four-leg package whose delta best matches the user's
-            # neutral, bullish, or bearish target.
-            best = _choose_candidate(
-                candidates,
-                target_position_delta=target_position_delta,
-                delta_tolerance=delta_tolerance,
-                width_tolerance_pct=width_tolerance_pct,
-                min_open_interest=min_open_interest,
-                require_upside_credit=require_upside_credit,
-            )
-            best["target_position_delta"] = target_position_delta
-            best["position_delta_error"] = abs(
-                (best.get("position_delta") or 0.0) - target_position_delta
-            )
-            flags = []
-            blocking_flags = []
-            if best["upper_delta_error"] > delta_tolerance:
-                blocking_flags.append("Upper short delta outside tolerance")
-            if best["lower_delta_error"] > delta_tolerance:
-                blocking_flags.append("Lower short delta outside tolerance")
-            if best["width_error_pct"] > width_tolerance_pct:
-                blocking_flags.append("Listed strikes miss the requested width")
-            if best["open_interest_min"] < min_open_interest:
-                blocking_flags.append("One or more legs are below minimum open interest")
-            if require_upside_credit and best["entry_credit"] < 0:
-                blocking_flags.append("Upper flat outcome is a debit")
-            if best["position_delta_error"] > position_delta_tolerance:
-                blocking_flags.append("Net position delta is outside tolerance")
-            flags.extend(blocking_flags)
-            if best["natural_credit"] < 0 <= best["entry_credit"]:
-                flags.append("Mid shows a credit but the natural market is a debit")
-
-            actionable = not blocking_flags
-            best.update({
-                "ticker": ticker,
-                "name": fund.get("name"),
-                "price": spot,
-                "status": "actionable" if actionable else "near_match",
-                "flags": flags,
-                "scanner_variant": (
-                    f"{preset.replace('/', '-')}-{bought_width:g}x{sold_width:g}"
-                    f"-q{bought_quantity}x{sold_quantity}"
-                ),
-            })
-            best["early_close_estimates"] = [
-                estimate
-                for fraction in EARLY_CLOSE_FRACTIONS
-                if (
-                    estimate := _early_close_estimate(
-                        best,
-                        spot,
-                        dte,
-                        fraction,
-                        div_yield,
-                    )
-                ) is not None
-            ]
-            chosen.append(_round_candidate(best))
-
+        expiration, quality = (
+            max(too_thin, key=lambda item: item[1]["usable_below_spot"])
+            if too_thin else (None, None)
+        )
         return {
             "ticker": ticker,
             "name": fund.get("name"),
             "price": _round(spot),
             "expiration": expiration,
-            "dte": dte,
-            "status": "found" if chosen else "unavailable",
-            "reason": "; ".join(missing) if not chosen else None,
-            "candidates": chosen,
+            "dte": next((d for e, d in ranked if e == expiration), None),
+            "chain_quality": quality,
+            "status": "unavailable",
+            "reason": (
+                _stale_chain_reason(too_thin) if too_thin
+                else "The selected expiration has no usable put chain."
+            ),
+            "candidates": [],
         }
 
     scan_results = []
@@ -1111,6 +1337,7 @@ def run_unbalanced_put_condor_scan(payload: dict) -> dict:
             "price": result.get("price"),
             "expiration": result.get("expiration"),
             "dte": result.get("dte"),
+            "chain_quality": result.get("chain_quality"),
             "reason": result.get("reason"),
         }
         for result in scan_results
@@ -1122,8 +1349,11 @@ def run_unbalanced_put_condor_scan(payload: dict) -> dict:
         "unavailable": unavailable,
         "stats": {
             "tickers": len(tickers),
+            # Only expirations whose chain was quoted well enough to evaluate.
+            # A stale snapshot names the expiration it rejected, so counting a
+            # non-empty expiration field here would report work never done.
             "expirations_priced": sum(
-                1 for result in scan_results if result.get("expiration")
+                1 for result in scan_results if result.get("priced")
             ),
             "structures_found": len(rows),
             "actionable": sum(1 for row in rows if row["status"] == "actionable"),

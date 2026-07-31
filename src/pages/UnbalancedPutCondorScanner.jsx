@@ -524,6 +524,19 @@ export default function UnbalancedPutCondorScanner() {
       .finally(() => setLoading(false))
   }, [filters, pf, saveScan])
 
+  // An empty scan has two very different causes.  When the feed reported no
+  // live markets to read, say that instead of implying the market has no such
+  // trade — the widest-quoted expiration tried is the honest one to cite.
+  const staleChain = useMemo(() => {
+    const outages = unavailable.filter(row => row.chain_quality)
+    if (!outages.length) return null
+    return outages.reduce((widest, row) => (
+      row.chain_quality.quoted_below_spot < widest.chain_quality.quoted_below_spot
+        ? row
+        : widest
+    ))
+  }, [unavailable])
+
   const sortedRows = useMemo(() => {
     const accessors = {
       ticker: row => row.ticker,
@@ -797,9 +810,22 @@ export default function UnbalancedPutCondorScanner() {
       )}
 
       {!loading && stats && !sortedRows.length && !error && (
-        <p style={{ color: 'var(--text-dim)', textAlign: 'center', marginTop: '2rem' }}>
-          No four-put structures were available in the selected DTE window.
-        </p>
+        staleChain ? (
+          <div className="alert alert-warning" style={{ marginTop: '1.2rem' }}>
+            <strong>No live option quotes to scan.</strong>
+            <div style={{ marginTop: '0.35rem' }}>
+              The chain snapshot has two-sided markets on only{' '}
+              <strong>{staleChain.chain_quality.quoted_below_spot}</strong> of{' '}
+              <strong>{staleChain.chain_quality.strikes_below_spot}</strong> put strikes
+              below spot, so no four-leg structure can be priced. Quotes are normally
+              zeroed outside regular trading hours — rerun while the market is open.
+            </div>
+          </div>
+        ) : (
+          <p style={{ color: 'var(--text-dim)', textAlign: 'center', marginTop: '2rem' }}>
+            No four-put structures were available in the selected DTE window.
+          </p>
+        )
       )}
 
       {!loading && unavailable.length > 0 && (

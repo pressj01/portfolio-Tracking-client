@@ -525,6 +525,21 @@ class PairSelectionTests(unittest.TestCase):
         self.assertFalse(spread["resistance_floor_binding"])
         self.assertTrue(spread["constraints_relaxed"])
 
+    def test_recent_trades_keep_after_hours_analysis_available(self):
+        calls = [
+            {**a_leg(105.0, 3.00, 3.40, iv=0.32, delta=0.41), "bid": 0.0},
+            {**a_leg(110.0, 1.00, 1.20, iv=0.29, delta=0.24), "bid": 0.0},
+        ]
+
+        spread = self.suggest_from(calls)
+
+        self.assertIsNotNone(spread)
+        self.assertTrue(spread["uses_last_trade_prices"])
+        self.assertEqual(spread["quote_source"], "last_trade_estimate")
+        self.assertTrue(spread["constraints_relaxed"])
+        self.assertIsNone(spread["natural_credit"])
+        self.assertIsNone(spread["exec_cost_pct"])
+
 
 class ScanControlFlowTests(unittest.TestCase):
     def run_with_earnings_setting(self, exclude_earnings):

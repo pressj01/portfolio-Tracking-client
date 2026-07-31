@@ -161,6 +161,25 @@ class RiskArithmetic(unittest.TestCase):
         self.assertAlmostEqual(condor["natural_credit"], 1.80, places=6)
         self.assertLess(condor["natural_credit"], condor["credit"])
 
+    def test_recent_trade_estimates_do_not_invent_execution_prices(self):
+        put_short = {**leg(90, 1.45, 1.55, delta=-0.16), "bid": 0.0}
+        put_long = {**leg(80, 0.45, 0.55, delta=-0.07), "bid": 0.0}
+        call_short = {**leg(110, 1.45, 1.55, delta=0.16), "bid": 0.0}
+        call_long = {**leg(120, 0.45, 0.55, delta=0.07), "bid": 0.0}
+
+        condor = standard_condor(
+            put_short=put_short,
+            put_long=put_long,
+            call_short=call_short,
+            call_long=call_long,
+        )
+
+        self.assertIsNotNone(condor)
+        self.assertTrue(condor["uses_last_trade_prices"])
+        self.assertEqual(condor["quote_source"], "last_trade_estimate")
+        self.assertIsNone(condor["natural_credit"])
+        self.assertIsNone(condor["exec_cost_pct"])
+
     def test_credit_at_or_above_the_wing_is_rejected(self):
         """A credit exceeding the wing implies risk-free money, i.e. bad data."""
         self.assertIsNone(standard_condor(

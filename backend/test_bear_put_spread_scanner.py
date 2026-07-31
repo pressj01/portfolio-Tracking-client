@@ -426,9 +426,15 @@ class PairSelectionTests(unittest.TestCase):
         s = self._suggest(min_reward_risk=2.0)
         self.assertGreaterEqual(s["reward_risk"], 2.0)
 
-    def test_a_chain_with_no_two_sided_quotes_yields_nothing(self):
+    def test_recent_trades_keep_after_hours_analysis_available(self):
         chain = [{**r, "bid": 0.0} for r in self._chain()]
-        self.assertIsNone(self._suggest(chain=chain))
+        spread = self._suggest(chain=chain)
+        self.assertIsNotNone(spread)
+        self.assertTrue(spread["uses_last_trade_prices"])
+        self.assertEqual(spread["quote_source"], "last_trade_estimate")
+        self.assertTrue(spread["constraints_relaxed"])
+        self.assertIsNone(spread["debit_worst_case"])
+        self.assertIsNone(spread["exec_cost_pct"])
 
     def test_a_chain_with_no_implied_vols_still_places_the_strikes(self):
         """The delta-inversion fallback: no IV means no per-strike delta."""

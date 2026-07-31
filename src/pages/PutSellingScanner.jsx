@@ -151,6 +151,7 @@ function ScoreBar({ label, value, max, tip }) {
 // full wording stays on hover and in the expanded row.
 const FLAG_SHORT = {
   'Option chain unavailable': 'No chain',
+  'Recent trade estimate — no live bid/ask': 'Last trade',
   'Wide bid/ask spread': 'Wide spread',
   'Thin open interest': 'Thin OI',
   'Making fresh 52-week lows': 'Fresh lows',
@@ -334,6 +335,7 @@ function HelpPanel() {
           ['Earnings +Nd', 'Earnings fall shortly after expiry — only matters if you plan to roll.'],
           ['Wide spread', 'The bid/ask on the suggested put is wide, so the quoted credit is optimistic.'],
           ['Thin OI', 'Low open interest — harder to get filled or to close early.'],
+          ['Last trade', 'Bid/ask was unavailable after hours, so the scanner used a recent-session trade as an estimate. Verify a live quote before trading.'],
           ['No chain', 'No option chain came back, so the Premium axis could not be scored.'],
           ['Unprofitable', 'No positive trailing earnings or margin.'],
           ['High debt', 'Debt-to-equity above 300%.'],
@@ -405,8 +407,15 @@ function DetailRow({ row, colSpan, onShowChart }) {
             {p && (
               <div style={{
                 padding: '0.6rem 0.8rem', marginBottom: '0.8rem', borderRadius: '5px',
-                background: 'var(--surface-inset)', borderLeft: '3px solid var(--pos-strong)',
+                background: 'var(--surface-inset)',
+                borderLeft: `3px solid ${p.quote_source === 'last_trade_estimate' ? 'var(--warning)' : 'var(--pos-strong)'}`,
               }}>
+                {p.quote_source === 'last_trade_estimate' && (
+                  <div style={{ color: 'var(--warning-text)', fontSize: '0.78rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                    After-hours estimate: no live bid/ask was available. Pricing uses a recent-session last trade;
+                    verify every live quote before placing an order.
+                  </div>
+                )}
                 <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   The trade
                 </div>
@@ -414,7 +423,8 @@ function DetailRow({ row, colSpan, onShowChart }) {
                   Sell 1 {row.ticker} {p.expiration} ${p.strike} put
                 </div>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                  Collect about {usd(p.premium_dollars, 0)} now · set aside {usd(p.cash_required, 0)} ·
+                  {p.quote_source === 'last_trade_estimate' ? 'Estimated credit' : 'Collect about'} {usd(p.premium_dollars, 0)} ·
+                  {' '}set aside {usd(p.cash_required, 0)} ·
                   {' '}keep it all if {row.ticker} stays above ${p.strike} through {p.expiration}
                 </div>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
@@ -471,7 +481,9 @@ function DetailRow({ row, colSpan, onShowChart }) {
             {p && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '0.7rem', marginBottom: '0.9rem' }}>
                 {cell('Days to expiry', p.dte)}
-                {cell('Bid / Ask', `${num(p.bid)} / ${num(p.ask)}`)}
+                {cell('Bid / Ask', p.quote_source === 'last_trade_estimate'
+                  ? `No live quote · last ${usd(p.mid)}`
+                  : `${num(p.bid)} / ${num(p.ask)}`)}
                 {cell('Premium', `${usd(p.premium_dollars, 0)} per contract`)}
                 {cell('Cash secured', usd(p.cash_required, 0))}
                 {cell('Return on cash', `${pct(p.premium_yield_pct, 2)} (${pct(p.annualized_pct, 0)} ann.)`)}
@@ -901,7 +913,7 @@ export default function PutSellingScanner() {
                               exp {r.put.expiration}
                             </div>
                             <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
-                              {pct(r.put.otm_pct, 0)} below · {usd(r.put.mid)} credit
+                              {pct(r.put.otm_pct, 0)} below · {usd(r.put.mid)} {r.put.quote_source === 'last_trade_estimate' ? 'est.' : 'credit'}
                             </div>
                           </div>
                         ) : '—'}

@@ -27,7 +27,7 @@ import yfinance as yf
 from flask import jsonify, request
 
 from option_probability import profit_probability_schedule
-from options_pricing import black_scholes
+from options_pricing import black_scholes, implied_vol
 from put_scanner import (
     MAX_TARGET_DTE,
     MIN_TARGET_DTE,
@@ -37,7 +37,6 @@ from put_scanner import (
     _load_history,
     _load_put_chain,
     _num,
-    _pick_expiration,
     _round,
     _ticker_frame,
     dividend_yield_for_pricing,
@@ -63,6 +62,7 @@ COURSE_PROFIT_TARGET_DOLLARS = 1000.0
 COURSE_MAX_LOSS_TARGET_DOLLARS = 2000.0
 COURSE_PLANNED_CAPITAL_LOW_DOLLARS = 5000.0
 COURSE_PLANNED_CAPITAL_HIGH_DOLLARS = 7000.0
+COURSE_BASE_LONG_QUANTITY = 4
 BIAS_RANGES = {
     "bearish": (-3.0, -1.0),
     "neutral": (-1.0, 1.0),
@@ -205,8 +205,113 @@ def _pick_monthly_expiration(
     min_dte: int,
     max_dte: int,
 ) -> tuple[str | None, int | None, bool]:
-    monthlies = [expiration for expiration in expirations if _is_standard_monthly(expiration)]
-    return _pick_expiration(monthlies, target_dte, min_dte, max_dte)
+    monthlies = _monthly_expirations_in_window(
+        expirations,
+        target_dte,
+        min_dte,
+        max_dte,
+    )
+    if not monthlies:
+        return None, None, False
+    expiration, dte = monthlies[0]
+    return expiration, dte, True
+
+
+def _monthly_expirations_in_window(
+    expirations: list[str],
+    target_dte: int,
+    min_dte: int,
+    max_dte: int,
+) -> list[tuple[str, int]]:
+    """Standard monthlies in-range, nearest the requested DTE first."""
+    today = date.today()
+    choices = []
+    for expiration in expirations:
+        if not _is_standard_monthly(expiration):
+            continue
+        try:
+            expiration_date = datetime.strptime(
+                expiration,
+                "%Y-%m-%d",
+            ).date()
+        except (TypeError, ValueError):
+            continue
+        dte = (expiration_date - today).days
+        if min_dte <= dte <= max_dte:
+            choices.append((expiration, dte))
+    choices.sort(key=lambda choice: (
+        abs(choice[1] - target_dte),
+        choice[1],
+        choice[0],
+    ))
+    return choices
+
+
+def _prepare_scan_leg(
+    leg: dict,
+    *,
+    spot: float,
+    dte: int,
+    dividend_yield: float,
+) -> dict | None:
+    """Return a leg usable for scanning during or after market hours.
+
+    Yahoo commonly clears bid/ask and reports a placeholder IV after the
+    session, even when the option traded that day. In that case, use the
+    reported last trade as an explicitly non-live estimate and back out an IV
+    so strike deltas remain internally consistent. These candidates are later
+    marked as near matches and never represented as executable live quotes.
+    """
+    prepared = dict(leg)
+    if _quotable(prepared):
+        prepared["quote_source"] = "live_bid_ask"
+        return prepared
+
+    market_price = _num(prepared.get("mid"))
+    volume = int(_num(prepared.get("volume"), 0) or 0)
+    strike = _num(prepared.get("strike"))
+    if (
+        market_price is None
+        or market_price <= 0
+        or volume <= 0
+        or strike is None
+        or strike <= 0
+        or spot <= 0
+        or dte <= 0
+    ):
+        return None
+
+    years = dte / 365.0
+    volatility = implied_vol(
+        market_price,
+        spot,
+        strike,
+        years,
+        RISK_FREE,
+        dividend_yield,
+        "put",
+    )
+    if volatility is None or not 0.005 <= volatility <= 5.0:
+        return None
+    modeled = black_scholes(
+        spot,
+        strike,
+        years,
+        RISK_FREE,
+        dividend_yield,
+        volatility,
+        "put",
+    )
+    delta = _num(modeled.get("delta"))
+    if delta is None:
+        return None
+
+    prepared.update({
+        "iv": volatility,
+        "delta": delta,
+        "quote_source": "last_trade",
+    })
+    return prepared
 
 
 def _management_exit_points(dte: int) -> list[dict]:
@@ -276,18 +381,29 @@ def _build_butterfly(
     if lower_flat < 0 < peak_profit:
         lower_breakeven = body_strike - peak_profit / quantity
 
-    upper_bid = _num(upper_long.get("bid"), 0.0) or 0.0
-    upper_ask = _num(upper_long.get("ask"), 0.0) or 0.0
-    body_bid = _num(body_short.get("bid"), 0.0) or 0.0
-    body_ask = _num(body_short.get("ask"), 0.0) or 0.0
-    lower_bid = _num(lower_long.get("bid"), 0.0) or 0.0
-    lower_ask = _num(lower_long.get("ask"), 0.0) or 0.0
-    natural_credit = quantity * (2.0 * body_bid - upper_ask - lower_ask)
-    execution_cost = quantity * (
-        (upper_ask - upper_bid)
-        + 2.0 * (body_ask - body_bid)
-        + (lower_ask - lower_bid)
-    )
+    legs = (upper_long, body_short, lower_long)
+    all_legs_live = all(_quotable(leg) for leg in legs)
+    uses_last_trade_prices = not all_legs_live
+    if all_legs_live:
+        upper_bid = _num(upper_long.get("bid"), 0.0) or 0.0
+        upper_ask = _num(upper_long.get("ask"), 0.0) or 0.0
+        body_bid = _num(body_short.get("bid"), 0.0) or 0.0
+        body_ask = _num(body_short.get("ask"), 0.0) or 0.0
+        lower_bid = _num(lower_long.get("bid"), 0.0) or 0.0
+        lower_ask = _num(lower_long.get("ask"), 0.0) or 0.0
+        natural_credit = quantity * (
+            2.0 * body_bid - upper_ask - lower_ask
+        )
+        execution_cost = quantity * (
+            (upper_ask - upper_bid)
+            + 2.0 * (body_ask - body_bid)
+            + (lower_ask - lower_bid)
+        )
+    else:
+        # Do not invent an executable natural price or quoted width from
+        # last-trade marks. The mid-based payoff remains an estimate.
+        natural_credit = None
+        execution_cost = None
 
     actual_upper_delta = abs(_num(upper_long.get("delta"), 0.0) or 0.0)
     actual_body_delta = abs(_num(body_short.get("delta"), 0.0) or 0.0)
@@ -508,12 +624,13 @@ def _build_butterfly(
 
     oi_min = min(
         int(_num(leg.get("open_interest"), 0) or 0)
-        for leg in (upper_long, body_short, lower_long)
+        for leg in legs
     )
     volume_min = min(
         int(_num(leg.get("volume"), 0) or 0)
-        for leg in (upper_long, body_short, lower_long)
+        for leg in legs
     )
+    course_quantity_scale = quantity / COURSE_BASE_LONG_QUANTITY
 
     return {
         "expiration": expiration,
@@ -551,8 +668,18 @@ def _build_butterfly(
         "execution_cost": execution_cost,
         "entry_credit_dollars": entry_credit * CONTRACT_MULTIPLIER,
         "entry_debit_dollars": max(0.0, -entry_credit) * CONTRACT_MULTIPLIER,
-        "natural_credit_dollars": natural_credit * CONTRACT_MULTIPLIER,
-        "execution_cost_dollars": execution_cost * CONTRACT_MULTIPLIER,
+        "natural_credit_dollars": (
+            natural_credit * CONTRACT_MULTIPLIER
+            if natural_credit is not None else None
+        ),
+        "execution_cost_dollars": (
+            execution_cost * CONTRACT_MULTIPLIER
+            if execution_cost is not None else None
+        ),
+        "quote_source": (
+            "live_bid_ask" if all_legs_live else "last_trade_estimate"
+        ),
+        "uses_last_trade_prices": uses_last_trade_prices,
         "upper_flat_outcome": upper_flat,
         "center_max_profit": peak_profit,
         "lower_flat_outcome": lower_flat,
@@ -625,10 +752,19 @@ def _build_butterfly(
         "probability_schedule": probability_schedule,
         "early_close_estimates": early_close_estimates,
         "course_expected_hold_days": COURSE_EXPECTED_HOLD_DAYS,
-        "course_profit_target_dollars": COURSE_PROFIT_TARGET_DOLLARS,
-        "course_max_loss_target_dollars": COURSE_MAX_LOSS_TARGET_DOLLARS,
-        "course_planned_capital_low_dollars": COURSE_PLANNED_CAPITAL_LOW_DOLLARS,
-        "course_planned_capital_high_dollars": COURSE_PLANNED_CAPITAL_HIGH_DOLLARS,
+        "course_quantity_scale": course_quantity_scale,
+        "course_profit_target_dollars": (
+            COURSE_PROFIT_TARGET_DOLLARS * course_quantity_scale
+        ),
+        "course_max_loss_target_dollars": (
+            COURSE_MAX_LOSS_TARGET_DOLLARS * course_quantity_scale
+        ),
+        "course_planned_capital_low_dollars": (
+            COURSE_PLANNED_CAPITAL_LOW_DOLLARS * course_quantity_scale
+        ),
+        "course_planned_capital_high_dollars": (
+            COURSE_PLANNED_CAPITAL_HIGH_DOLLARS * course_quantity_scale
+        ),
         "open_interest_min": oi_min,
         "volume_min": volume_min,
         "upper_long_leg": _leg_view(upper_long),
@@ -695,23 +831,40 @@ def _candidates_for_target(
     bias_high: float,
     target_theta_dollars: float,
 ) -> list[dict]:
-    legs = [
-        leg for leg in puts
-        if (
-            _quotable(leg)
-            and leg.get("delta") is not None
-            and 0 < leg["strike"] < spot
-            and _num(leg.get("iv"), 0.0) > 0
+    legs = []
+    for leg in puts:
+        prepared = _prepare_scan_leg(
+            leg,
+            spot=spot,
+            dte=dte,
+            dividend_yield=dividend_yield,
         )
-    ]
+        if (
+            prepared is not None
+            and prepared.get("delta") is not None
+            and 0 < prepared["strike"] < spot
+            and _num(prepared.get("iv"), 0.0) > 0
+        ):
+            legs.append(prepared)
     if len(legs) < 3:
         return []
+
+    # Live chains are already sparse after quote validation. Last-trade chains
+    # can contain hundreds of usable marks, so keep their search bounded before
+    # running the comparatively expensive probability model on each structure.
+    has_estimated_leg = any(
+        leg.get("quote_source") == "last_trade"
+        for leg in legs
+    )
+    upper_limit = 4 if has_estimated_leg else 10
+    body_limit = 6 if has_estimated_leg else 14
+    lower_limit = 10 if has_estimated_leg else 24
 
     lower_target = _lower_long_target(upper_long_target)
     upper_longs = sorted(
         legs,
         key=lambda leg: abs(abs(leg["delta"]) - upper_long_target),
-    )[:10]
+    )[:upper_limit]
     candidates = []
     seen = set()
     for upper_long in upper_longs:
@@ -721,7 +874,7 @@ def _candidates_for_target(
                 if leg["strike"] < upper_long["strike"]
             ],
             key=lambda leg: abs(abs(leg["delta"]) - BODY_SHORT_TARGET),
-        )[:14]
+        )[:body_limit]
         for body_short in body_shorts:
             upper_width = upper_long["strike"] - body_short["strike"]
             lower_longs = sorted(
@@ -743,7 +896,7 @@ def _candidates_for_target(
                         ) * CONTRACT_MULTIPLIER
                     ),
                 ),
-            )[:24]
+            )[:lower_limit]
             for lower_long in lower_longs:
                 key = (
                     upper_long["strike"],
@@ -929,7 +1082,6 @@ def run_unbalanced_butterfly_scan(payload: dict) -> dict:
 
     target_names = _target_names(p.get("upper_long_delta"))
     market_bias = _bias_name(p.get("market_bias"))
-    bias_low, bias_high = BIAS_RANGES[market_bias]
     target_dte = max(
         MIN_TARGET_DTE,
         min(MAX_TARGET_DTE, int(_num(p.get("target_dte"), 180) or 180)),
@@ -947,6 +1099,10 @@ def run_unbalanced_butterfly_scan(payload: dict) -> dict:
         1,
         min(100, int(_num(p.get("tranche_quantity"), 4) or 4)),
     )
+    quantity_scale = tranche_quantity / COURSE_BASE_LONG_QUANTITY
+    base_bias_low, base_bias_high = BIAS_RANGES[market_bias]
+    bias_low = base_bias_low * quantity_scale
+    bias_high = base_bias_high * quantity_scale
     delta_tolerance = min(
         0.15,
         max(0.005, _num(p.get("delta_tolerance"), 0.035) or 0.035),
@@ -1009,13 +1165,13 @@ def run_unbalanced_butterfly_scan(payload: dict) -> dict:
             expirations = list(yf.Ticker(ticker).options or [])
         except Exception:
             expirations = []
-        expiration, dte, _ = _pick_monthly_expiration(
+        monthly_expirations = _monthly_expirations_in_window(
             expirations,
             target_dte,
             min_dte,
             max_dte,
         )
-        if not expiration:
+        if not monthly_expirations:
             return {
                 "ticker": ticker,
                 "price": _round(spot),
@@ -1029,112 +1185,163 @@ def run_unbalanced_butterfly_scan(payload: dict) -> dict:
 
         fund = fundamentals.get(ticker, {})
         dividend_yield = dividend_yield_for_pricing(fund, spot)
-        puts = _load_put_chain(ticker, expiration, spot, dividend_yield)
-        if not puts:
-            return {
-                "ticker": ticker,
-                "price": _round(spot),
-                "expiration": expiration,
-                "dte": dte,
-                "status": "unavailable",
-                "reason": "The selected monthly expiration has no usable put chain.",
-                "candidates": [],
-            }
-
-        chosen = []
-        missing = []
-        for target_name in target_names:
-            upper_long_target = UPPER_LONG_TARGETS[target_name]
-            candidates = _candidates_for_target(
-                puts,
-                spot=spot,
-                expiration=expiration,
-                dte=dte,
-                upper_long_target=upper_long_target,
-                tranche_quantity=tranche_quantity,
-                min_lower_wing_ratio=min_lower_wing_ratio,
-                dividend_yield=dividend_yield,
-                bias_low=bias_low,
-                bias_high=bias_high,
-                target_theta_dollars=target_theta_dollars,
+        chosen_by_target = {}
+        expirations_priced = 0
+        usable_chains = 0
+        for expiration, dte in monthly_expirations:
+            puts = _load_put_chain(
+                ticker,
+                expiration,
+                spot,
+                dividend_yield,
             )
-            if not candidates:
-                missing.append(
-                    f"{target_name}-delta: no quotable broken-wing combination"
-                )
+            expirations_priced += 1
+            if not puts:
                 continue
-            best = _choose_candidate(
-                candidates,
-                bias_low=bias_low,
-                bias_high=bias_high,
-                delta_tolerance=delta_tolerance,
-                min_open_interest=min_open_interest,
-                target_theta_dollars=target_theta_dollars,
+            usable_chains += 1
+
+            for target_name in target_names:
+                if target_name in chosen_by_target:
+                    continue
+                upper_long_target = UPPER_LONG_TARGETS[target_name]
+                candidates = _candidates_for_target(
+                    puts,
+                    spot=spot,
+                    expiration=expiration,
+                    dte=dte,
+                    upper_long_target=upper_long_target,
+                    tranche_quantity=tranche_quantity,
+                    min_lower_wing_ratio=min_lower_wing_ratio,
+                    dividend_yield=dividend_yield,
+                    bias_low=bias_low,
+                    bias_high=bias_high,
+                    target_theta_dollars=target_theta_dollars,
+                )
+                if not candidates:
+                    continue
+                best = _choose_candidate(
+                    candidates,
+                    bias_low=bias_low,
+                    bias_high=bias_high,
+                    delta_tolerance=delta_tolerance,
+                    min_open_interest=min_open_interest,
+                    target_theta_dollars=target_theta_dollars,
+                )
+                best["market_bias"] = market_bias
+                best["bias_delta_min"] = bias_low
+                best["bias_delta_max"] = bias_high
+                best["position_delta_error"] = _distance_to_range(
+                    best.get("position_delta"),
+                    bias_low,
+                    bias_high,
+                )
+
+                blocking_flags = []
+                advisory_flags = []
+                if best["upper_long_delta_error"] > delta_tolerance:
+                    blocking_flags.append(
+                        "Upper long delta outside tolerance"
+                    )
+                if best["body_short_delta_error"] > delta_tolerance:
+                    blocking_flags.append(
+                        "Body short delta outside tolerance"
+                    )
+                if best["lower_long_delta_error"] > delta_tolerance:
+                    blocking_flags.append(
+                        "Balancing lower long delta outside tolerance"
+                    )
+                if best["position_delta_error"] > 0:
+                    blocking_flags.append(
+                        f"Position delta is outside the scaled "
+                        f"{market_bias} course range"
+                    )
+                if best["open_interest_min"] < min_open_interest:
+                    blocking_flags.append(
+                        "One or more legs are below minimum open interest"
+                    )
+                if best.get("uses_last_trade_prices"):
+                    blocking_flags.append(
+                        "Live bid/ask unavailable on one or more legs; "
+                        "entry values use recent trades"
+                    )
+                if (
+                    abs(best["entry_credit_dollars"])
+                    > uel_tolerance_dollars
+                ):
+                    advisory_flags.append(
+                        "Upper expiration line is outside the preferred "
+                        "zero band"
+                    )
+                theta_value = best.get("theta_dollars_per_day")
+                if (
+                    theta_value is None
+                    or abs(theta_value - target_theta_dollars)
+                    > theta_tolerance_dollars
+                ):
+                    advisory_flags.append(
+                        "Theta is outside the preferred entry band"
+                    )
+                natural_credit = best.get("natural_credit")
+                if (
+                    natural_credit is not None
+                    and natural_credit < 0 <= best["entry_credit"]
+                ):
+                    advisory_flags.append(
+                        "Mid shows a credit but the natural market is a debit"
+                    )
+
+                best.update({
+                    "ticker": ticker,
+                    "name": fund.get("name"),
+                    "price": spot,
+                    "status": (
+                        "actionable" if not blocking_flags else "near_match"
+                    ),
+                    "flags": [*blocking_flags, *advisory_flags],
+                    "blocking_flags": blocking_flags,
+                    "scanner_variant": (
+                        f"{target_name}-delta-{market_bias}"
+                        f"-q{tranche_quantity}"
+                    ),
+                    "target_theta_dollars": target_theta_dollars,
+                    "theta_tolerance_dollars": theta_tolerance_dollars,
+                    "uel_tolerance_dollars": uel_tolerance_dollars,
+                })
+                chosen_by_target[target_name] = _round_candidate(best)
+
+            if len(chosen_by_target) == len(target_names):
+                break
+
+        chosen = [
+            chosen_by_target[target_name]
+            for target_name in target_names
+            if target_name in chosen_by_target
+        ]
+        first_expiration, first_dte = monthly_expirations[0]
+        selected_expiration = (
+            chosen[0].get("expiration") if chosen else first_expiration
+        )
+        selected_dte = chosen[0].get("dte") if chosen else first_dte
+        missing = [
+            (
+                f"{target_name}-delta: no live or recent-trade "
+                f"broken-wing combination across "
+                f"{len(monthly_expirations)} standard monthlies"
             )
-            best["market_bias"] = market_bias
-            best["bias_delta_min"] = bias_low
-            best["bias_delta_max"] = bias_high
-            best["position_delta_error"] = _distance_to_range(
-                best.get("position_delta"),
-                bias_low,
-                bias_high,
-            )
-
-            blocking_flags = []
-            advisory_flags = []
-            if best["upper_long_delta_error"] > delta_tolerance:
-                blocking_flags.append("Upper long delta outside tolerance")
-            if best["body_short_delta_error"] > delta_tolerance:
-                blocking_flags.append("Body short delta outside tolerance")
-            if best["lower_long_delta_error"] > delta_tolerance:
-                blocking_flags.append("Balancing lower long delta outside tolerance")
-            if best["position_delta_error"] > 0:
-                blocking_flags.append(
-                    f"Tranche delta is outside the {market_bias} course range"
-                )
-            if best["open_interest_min"] < min_open_interest:
-                blocking_flags.append(
-                    "One or more legs are below minimum open interest"
-                )
-            if abs(best["entry_credit_dollars"]) > uel_tolerance_dollars:
-                advisory_flags.append(
-                    "Upper expiration line is outside the preferred zero band"
-                )
-            theta_value = best.get("theta_dollars_per_day")
-            if (
-                theta_value is None
-                or abs(theta_value - target_theta_dollars)
-                > theta_tolerance_dollars
-            ):
-                advisory_flags.append("Theta is outside the preferred entry band")
-            if best["natural_credit"] < 0 <= best["entry_credit"]:
-                advisory_flags.append(
-                    "Mid shows a credit but the natural market is a debit"
-                )
-
-            best.update({
-                "ticker": ticker,
-                "name": fund.get("name"),
-                "price": spot,
-                "status": "actionable" if not blocking_flags else "near_match",
-                "flags": [*blocking_flags, *advisory_flags],
-                "blocking_flags": blocking_flags,
-                "scanner_variant": (
-                    f"{target_name}-delta-{market_bias}"
-                    f"-q{tranche_quantity}"
-                ),
-                "target_theta_dollars": target_theta_dollars,
-                "theta_tolerance_dollars": theta_tolerance_dollars,
-                "uel_tolerance_dollars": uel_tolerance_dollars,
-            })
-            chosen.append(_round_candidate(best))
-
+            for target_name in target_names
+            if target_name not in chosen_by_target
+        ]
+        if not chosen and usable_chains == 0:
+            missing = [
+                "The selected monthly-expiration window has no usable put chain."
+            ]
         return {
             "ticker": ticker,
             "name": fund.get("name"),
             "price": _round(spot),
-            "expiration": expiration,
-            "dte": dte,
+            "expiration": selected_expiration,
+            "dte": selected_dte,
+            "expirations_priced": expirations_priced,
             "status": "found" if chosen else "unavailable",
             "reason": "; ".join(missing) if not chosen else None,
             "candidates": chosen,
@@ -1179,7 +1386,8 @@ def run_unbalanced_butterfly_scan(payload: dict) -> dict:
         "stats": {
             "tickers": len(tickers),
             "expirations_priced": sum(
-                1 for result in scan_results if result.get("expiration")
+                result.get("expirations_priced", 0)
+                for result in scan_results
             ),
             "structures_found": len(rows),
             "actionable": sum(

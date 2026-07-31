@@ -496,7 +496,7 @@ class SuggestCallSelectionTests(unittest.TestCase):
 
     def _suggest(self, **over):
         """Run _suggest_call with the network calls stubbed out."""
-        chain = self._chain()
+        chain = over.pop("chain", self._chain())
         expiration = (date.today() + timedelta(days=35)).isoformat()
 
         class FakeTicker:
@@ -579,6 +579,15 @@ class SuggestCallSelectionTests(unittest.TestCase):
         pick = self._suggest(earnings_date=soon, earnings_buffer_days=5)
         self.assertFalse(pick["avoids_earnings"])
         self.assertEqual(pick["earnings_date"], soon)
+
+    def test_recent_trades_keep_after_hours_analysis_available(self):
+        chain = [{**leg, "bid": 0.0} for leg in self._chain()]
+        pick = self._suggest(chain=chain)
+
+        self.assertIsNotNone(pick)
+        self.assertEqual(pick["quote_source"], "last_trade_estimate")
+        self.assertGreater(pick["iv"], 0)
+        self.assertIsNotNone(pick["delta"])
 
 
 class HeldPositionTests(unittest.TestCase):
