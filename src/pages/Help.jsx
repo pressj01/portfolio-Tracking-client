@@ -5953,6 +5953,22 @@ function OptionsHelp() {
         while every leg, Greek, probability, and pre-expiration P/L curve is repriced. It is a risk scenario, not a
         forecast of how the live volatility surface will move.
       </p>
+      <p style={{ marginBottom: '0.5rem' }}>
+        The <strong>Volatility scenario</strong> panel below the main controls extends that parallel move without
+        changing any selected strike or quantity:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Downside skew change</strong> is entered in volatility points per 10% move below spot. A positive value steepens downside skew by adding more IV to lower strikes and less—or negative—IV to higher strikes. A negative value flattens or reverses that incremental skew.</li>
+        <li><strong>Expiration-specific IV change</strong> adds or subtracts volatility points only from the named expiration after the parallel and skew changes. Mixed-expiration trades therefore can model a near-term event crush without forcing the back month to fall by the same amount.</li>
+        <li><strong>Sticky strike</strong> keeps each contract&rsquo;s final modeled IV fixed as the risk chart sweeps underlying prices. This is the conservative, transparent default and matches the earlier risk-profile behavior.</li>
+        <li><strong>Sticky delta</strong> moves the modeled surface with the underlying. A fixed strike samples a different point on the position&rsquo;s modeled skew as its moneyness changes. The slope is estimated separately from the modeled legs in each expiration; an expiration with fewer than two distinct strikes safely falls back to sticky strike.</li>
+        <li><strong>Per-leg reconciliation</strong> shows market IV, the result after any manual leg adjustment, and the separate parallel, skew, and term contributions before the final modeled IV. The bubble cards repeat the active assumptions, and <strong>Reset to current surface</strong> clears every scenario change.</li>
+      </ul>
+      <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
+        The current chain supplies the ticker-specific starting surface. The scenario controls are explicit manual
+        assumptions, not a calibration from historical option surfaces. Historical stock prices alone cannot
+        reconstruct past implied-volatility skew or term structure.
+      </div>
       <p style={{ marginBottom: '0.75rem' }}>
         Scanner handoffs prefer live two-sided quotes. When the data feed clears bid/ask outside market hours, every
         option scanner may keep the risk graph available from a recent traded price with a prominent estimate warning.
@@ -7232,8 +7248,11 @@ function UnbalancedButterflyScannerHelp() {
         The current-date curve shows the rounded pre-expiration tent; the expiration curve shows
         the completed intrinsic-value payoff. Move the analysis date or drag the
         <strong> Vol surface</strong> bar to test how the tent develops. The bar proportionally
-        shocks every leg from its own starting IV, preserving the structure&rsquo;s current skew,
-        but every plotted value remains a model estimate.
+        shocks every leg from its own starting IV. Open the volatility-scenario panel to steepen
+        or flatten downside skew, shock the butterfly&rsquo;s expiration independently, switch between
+        sticky-strike and sticky-delta price paths, and verify each leg&rsquo;s market-to-modeled IV
+        reconciliation. These settings reprice the rounded pre-expiration tent; the intrinsic-value
+        expiration line itself is unchanged by IV. Every plotted value remains a model estimate.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
         <img

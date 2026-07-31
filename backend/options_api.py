@@ -832,6 +832,30 @@ def _build_greek_surface(payload: dict) -> dict:
 # Risk graph math
 # ---------------------------------------------------------------------------
 
+def _leg_scenario_iv(S: float, leg: dict) -> float:
+    """Return the leg IV at a scenario price under the selected surface rule.
+
+    Sticky-strike keeps the submitted strike IV fixed. Sticky-delta lets a
+    fixed strike move across the submitted downside-skew slope as spot moves.
+    The submitted IV is always the modeled IV at ``iv_reference_spot``.
+    """
+    sigma = max(float(leg.get('iv') or 0.0), 1e-4)
+    dynamics = str(leg.get('vol_dynamics') or 'sticky-strike').lower()
+    if dynamics != 'sticky-delta':
+        return sigma
+
+    strike = float(leg.get('strike') or 0.0)
+    reference_spot = float(leg.get('iv_reference_spot') or 0.0)
+    skew_points = float(leg.get('vol_skew_points_per_10pct') or 0.0)
+    if S <= 0 or strike <= 0 or reference_spot <= 0 or abs(skew_points) <= 1e-12:
+        return sigma
+
+    scale = math.log(1.1)
+    reference_moneyness = -math.log(strike / reference_spot) / scale
+    scenario_moneyness = -math.log(strike / S) / scale
+    return max(sigma + (scenario_moneyness - reference_moneyness) * skew_points / 100.0, 1e-4)
+
+
 def _leg_pnl_at(S: float, leg: dict, eval_T_years: float, r: float, q: float,
                 model: str) -> tuple[float, dict]:
     """Return (per-position-unit P/L at spot S, Greeks) for a single leg.
@@ -848,7 +872,7 @@ def _leg_pnl_at(S: float, leg: dict, eval_T_years: float, r: float, q: float,
         return (S - entry) * sign, greeks
 
     K = float(leg['strike'])
-    sigma = float(leg['iv'])
+    sigma = _leg_scenario_iv(S, leg)
 
     if eval_T_years <= 1e-8:
         theo = max(S - K, 0.0) if opt_type == 'call' else max(K - S, 0.0)
@@ -1077,6 +1101,11 @@ def register_routes(app):
         # active expiration. Past that date an expired leg's realized value
         # depends on the underlying price at its own expiration, not the later
         # scenario price. Clamp the analysis horizon accordingly.
+        vol_surface_in = payload.get('vol_surface') or {}
+        default_vol_dynamics = str(vol_surface_in.get('dynamics') or 'sticky-strike').lower()
+        if default_vol_dynamics not in ('sticky-strike', 'sticky-delta'):
+            default_vol_dynamics = 'sticky-strike'
+
         legs: list[dict] = []
         expiration_dates: list[date] = []
         for leg in legs_in:
@@ -1089,6 +1118,9 @@ def register_routes(app):
                     pass
             iv = float(leg.get('iv') if leg.get('iv') is not None else (leg.get('iv_override') or 0.0))
             entry = float(leg.get('entry_price') if leg.get('entry_price') is not None else 0.0)
+            vol_dynamics = str(leg.get('vol_dynamics') or default_vol_dynamics).lower()
+            if vol_dynamics not in ('sticky-strike', 'sticky-delta'):
+                vol_dynamics = default_vol_dynamics
             legs.append({
                 'side': leg.get('side', 'BUY').upper(),
                 'qty': int(leg.get('qty') or 1),
@@ -1097,6 +1129,14 @@ def register_routes(app):
                 'expiration': exp,
                 'iv': iv,
                 'entry_price': entry,
+                'market_iv': float(leg.get('market_iv') if leg.get('market_iv') is not None else iv),
+                'adjusted_iv': float(leg.get('adjusted_iv') if leg.get('adjusted_iv') is not None else iv),
+                'vol_dynamics': vol_dynamics,
+                'iv_reference_spot': float(leg.get('iv_reference_spot') or spot),
+                'vol_skew_points_per_10pct': float(leg.get('vol_skew_points_per_10pct') or 0.0),
+                'parallel_change_points': float(leg.get('parallel_change_points') or 0.0),
+                'skew_change_points': float(leg.get('skew_change_points') or 0.0),
+                'term_change_points': float(leg.get('term_change_points') or 0.0),
             })
 
         horizon_d = min(expiration_dates) if expiration_dates else requested_eval_d
@@ -1231,6 +1271,13 @@ def register_routes(app):
                 'strike': leg['strike'],
                 'expiration': leg['expiration'],
                 'iv': leg['iv'],
+                'market_iv': leg['market_iv'],
+                'adjusted_iv': leg['adjusted_iv'],
+                'vol_dynamics': leg['vol_dynamics'],
+                'vol_skew_points_per_10pct': leg['vol_skew_points_per_10pct'],
+                'parallel_change_points': round(leg['parallel_change_points'], 4),
+                'skew_change_points': round(leg['skew_change_points'], 4),
+                'term_change_points': round(leg['term_change_points'], 4),
                 'entry_price': leg['entry_price'],
                 'theo_pnl_today': round(leg['qty'] * pnl_t, 2),
                 'delta': round(sign * g['delta'], 4),
@@ -1314,6 +1361,14 @@ def register_routes(app):
             **payoff_bounds,
             'price_slices': slices_out,
             'probability_range': probability_out,
+            'volatility_surface': {
+                'dynamics': default_vol_dynamics,
+                'parallel_shock_pct': float(vol_surface_in.get('parallel_shock_pct') or 0.0),
+                'downside_skew_change_points': float(vol_surface_in.get('downside_skew_change_points') or 0.0),
+                'term_shocks': vol_surface_in.get('term_shocks') or {},
+                'reference_spot': spot,
+                'sticky_delta_fallback': 'sticky-strike when an expiration has fewer than two distinct option strikes',
+            },
         })
 
     # ────────────────────────────────────────────────────────────────
