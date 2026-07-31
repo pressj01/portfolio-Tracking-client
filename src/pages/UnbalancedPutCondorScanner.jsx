@@ -120,6 +120,116 @@ function Structure({ row }) {
   )
 }
 
+function StructureCard({ label, accent, probability, headline, context, schedule, scheduleLabel, footer }) {
+  return (
+    <div style={{
+      flex: '1 1 330px', background: 'var(--surface-inset)', border: `1px solid ${accent}`,
+      borderRadius: 7, padding: '0.85rem 1rem',
+    }}>
+      <div style={{ color: 'var(--text-dim)', fontSize: '0.66rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+        {label} <span style={{ color: accent, fontWeight: 700 }}>· by expiration</span>
+      </div>
+      <div style={{ color: accent, fontSize: '2rem', lineHeight: 1.05, fontWeight: 850, marginTop: '0.2rem' }}>
+        {pct(probability)}
+      </div>
+      <div style={{ color: 'var(--text-strong)', fontWeight: 700, marginTop: '0.2rem' }}>
+        {headline}
+      </div>
+      <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem', marginTop: '0.25rem' }}>
+        {context}
+      </div>
+      {!!schedule?.length && (
+        <div style={{
+          borderTop: '1px solid var(--border)', marginTop: '0.6rem', paddingTop: '0.5rem',
+        }}>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.63rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>
+            {scheduleLabel}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.6rem' }}>
+            {schedule.map(step => (
+              <div key={step.elapsed_days} style={{ borderLeft: `3px solid ${accent}`, paddingLeft: '0.6rem' }}>
+                <div style={{ color: 'var(--text-dim)', fontSize: '0.63rem', textTransform: 'uppercase' }}>
+                  By {Math.round(step.elapsed_fraction * 100)}% of DTE
+                </div>
+                <strong style={{ fontSize: '1.15rem', color: accent }}>{pct(step.value)}</strong>
+                <div style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>
+                  {step.elapsed_days} days held · {step.remaining_dte} DTE remaining
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{
+        borderTop: '1px solid var(--border)', marginTop: '0.6rem', paddingTop: '0.5rem',
+        color: 'var(--text-muted)', fontSize: '0.72rem',
+      }}>
+        {footer}
+      </div>
+    </div>
+  )
+}
+
+function ReachStructureCards({ row }) {
+  const touch = row.prob_touch_upper_long_pct
+  if (touch == null) return null
+  const finishBelow = row.prob_finish_below_upper_long_pct
+  const strike = usd(row.upper_long_strike)
+  const flatColor = row.upper_flat_outcome >= 0 ? 'var(--pos-strong)' : 'var(--neg-strong)'
+  const schedule = row.upper_long_touch_schedule || []
+  const touchBy = schedule.map(step => ({ ...step, value: step.prob_touch_pct }))
+  const untouchedBy = schedule.map(step => ({ ...step, value: 100 - step.prob_touch_pct }))
+  return (
+    <div style={{ marginBottom: '0.9rem' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <StructureCard
+          label="Reach the structure"
+          accent="var(--accent-bright)"
+          probability={touch}
+          headline={`Touch the ${strike} front long at any time through the ${row.expiration} expiration`}
+          context={`${pct(row.upper_long_distance_pct)} below spot · ${num(row.upper_long_distance_sigma, 2)}σ away · ${row.dte} DTE`}
+          schedule={touchBy}
+          scheduleLabel="Touched by the earlier close dates"
+          footer={
+            <>
+              <strong style={{ color: 'var(--accent-bright)' }}>{pct(finishBelow)}</strong>
+              {' '}finish below {strike} at expiration
+            </>
+          }
+        />
+        <StructureCard
+          label="Never touches it"
+          accent="var(--amber)"
+          probability={100 - touch}
+          headline={`Stays above ${strike} for all ${row.dte} days to the ${row.expiration} expiration`}
+          context="The four puts expire untested and the position never leaves its upper flat outcome."
+          schedule={untouchedBy}
+          scheduleLabel="Still untouched at the earlier close dates"
+          footer={
+            <>
+              P/L is then the upper flat outcome{' '}
+              <strong style={{ color: flatColor }}>{signedUsd(row.upper_flat_dollars, 0)}</strong>
+              {finishBelow == null ? '' : ` · ${pct(100 - finishBelow)} simply finish above ${strike}`}
+            </>
+          }
+        />
+      </div>
+      <div style={{ color: 'var(--text-dim)', fontSize: '0.67rem', marginTop: '0.5rem' }}>
+        The front long is the first put this position owns below spot: above it the expiration payoff is flat.
+        The two headline figures run the full term to expiration and are complements—one is the chance the trade
+        gets tested at all, the other the chance it never is. The smaller figures use the same two planned close
+        dates as the profitable-close card above, over the shorter window from today to that date only.
+        Finishing above the front long is likelier than never touching it because the terminal figure also counts paths
+        that dipped below and recovered. Same first-passage model as the downside card, but priced off the front
+        long&rsquo;s own {pct(
+          row.upper_long_probability_iv == null ? null : row.upper_long_probability_iv * 100,
+          1,
+        )} IV rather than the far out-of-the-money back short&rsquo;s, so put skew does not inflate it.
+      </div>
+    </div>
+  )
+}
+
 function DownsideRiskCard({ row }) {
   const touch = row.prob_touch_lower_short_pct
   const riskColor = touch == null
@@ -240,8 +350,19 @@ function EarlyCloseWinCard({ row }) {
 function Detail({ row, colSpan }) {
   return (
     <tr>
-      <td colSpan={colSpan} style={{ background: 'var(--surface-sunken)', padding: '0.8rem 1rem' }}>
+      {/* .sst td sets white-space: nowrap for the data columns, which this
+          panel inherits: every card headline and footnote became one
+          unwrappable line and stretched the table to nearly three screens.
+          The sticky wrapper then keeps the panel inside the visible width so
+          no card is scrolled off the right edge. */}
+      <td colSpan={colSpan} style={{ background: 'var(--surface-sunken)', padding: 0, whiteSpace: 'normal' }}>
+        <div style={{
+          position: 'sticky', left: 0,
+          maxWidth: 'calc(min(100vw, 1900px) - 4rem)',
+          padding: '0.8rem 1rem',
+        }}>
         <EarlyCloseWinCard row={row} />
+        <ReachStructureCards row={row} />
         <DownsideRiskCard row={row} />
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', alignItems: 'flex-start' }}>
           <div>
@@ -295,6 +416,7 @@ function Detail({ row, colSpan }) {
             row={row}
             source="Unbalanced Put Condor Scanner"
           />
+        </div>
         </div>
       </td>
     </tr>

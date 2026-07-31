@@ -183,6 +183,130 @@ class DownsideProbabilities(unittest.TestCase):
             1.0,
         )
 
+    def test_front_long_is_easier_to_reach_than_the_back_short(self):
+        result = scanner._build_put_condor(
+            upper_long=leg(710, 17.94, -0.30),
+            upper_short=leg(700, 16.08, -0.26),
+            lower_short=leg(665, 11.24, -0.17),
+            lower_long=leg(645, 9.24, -0.14),
+            spot=740.13,
+            expiration="2027-01-15",
+            dte=170,
+            preset="25/15",
+            target_upper_delta=0.25,
+            target_lower_delta=0.15,
+        )
+
+        self.assertGreater(
+            result["prob_touch_upper_long_pct"],
+            result["prob_touch_lower_short_pct"],
+        )
+        self.assertGreaterEqual(
+            result["prob_touch_upper_long_pct"],
+            result["prob_finish_below_upper_long_pct"],
+        )
+        self.assertAlmostEqual(result["upper_long_distance_pct"], 4.07, places=2)
+
+    def test_touch_schedule_shares_the_early_close_dates_and_rises_over_time(self):
+        candidate = scanner._build_put_condor(
+            upper_long=leg(710, 17.94, -0.30),
+            upper_short=leg(700, 16.08, -0.26),
+            lower_short=leg(665, 11.24, -0.17),
+            lower_long=leg(645, 9.24, -0.14),
+            spot=740.13,
+            expiration="2027-01-15",
+            dte=169,
+            preset="25/15",
+            target_upper_delta=0.25,
+            target_lower_delta=0.15,
+        )
+        schedule = candidate["upper_long_touch_schedule"]
+
+        # The card labels these dates, so they must match the early-close card.
+        self.assertEqual(
+            [step["elapsed_days"] for step in schedule],
+            [
+                scanner._early_close_estimate(candidate, 740.13, 169, fraction)["elapsed_days"]
+                for fraction in scanner.EARLY_CLOSE_FRACTIONS
+            ],
+        )
+        self.assertEqual([step["remaining_dte"] for step in schedule], [85, 56])
+        # A longer window can only add first-passage paths, never remove them.
+        self.assertLess(
+            schedule[0]["prob_touch_pct"],
+            schedule[1]["prob_touch_pct"],
+        )
+        self.assertLess(
+            schedule[1]["prob_touch_pct"],
+            candidate["prob_touch_upper_long_pct"],
+        )
+
+    def test_touch_schedule_is_empty_when_the_expiration_is_too_close(self):
+        candidate = scanner._build_put_condor(
+            upper_long=leg(105, 5.0, -0.30),
+            upper_short=leg(100, 3.0, -0.25),
+            lower_short=leg(90, 1.5, -0.15),
+            lower_long=leg(85, 0.5, -0.10),
+            spot=110,
+            expiration="2026-08-01",
+            dte=1,
+            preset="25/15",
+            target_upper_delta=0.25,
+            target_lower_delta=0.15,
+        )
+
+        self.assertEqual(candidate["upper_long_touch_schedule"], [])
+        self.assertIsNotNone(candidate["prob_touch_upper_long_pct"])
+
+    def test_front_long_probability_uses_its_own_iv_not_the_back_short_skew(self):
+        upper_long = leg(710, 17.94, -0.30)
+        upper_long["iv"] = 0.18
+        skewed_back_short = leg(665, 11.24, -0.17)
+        skewed_back_short["iv"] = 0.35
+        result = scanner._build_put_condor(
+            upper_long=upper_long,
+            upper_short=leg(700, 16.08, -0.26),
+            lower_short=skewed_back_short,
+            lower_long=leg(645, 9.24, -0.14),
+            spot=740.13,
+            expiration="2027-01-15",
+            dte=170,
+            preset="25/15",
+            target_upper_delta=0.25,
+            target_lower_delta=0.15,
+        )
+        expected = scanner._prob_touch_lower(
+            spot=740.13,
+            barrier=710,
+            years=170 / 365,
+            volatility=0.18,
+        )
+
+        self.assertAlmostEqual(result["upper_long_probability_iv"], 0.18)
+        self.assertAlmostEqual(
+            result["prob_touch_upper_long_pct"],
+            expected * 100.0,
+        )
+
+    def test_missing_front_long_iv_falls_back_to_the_shared_distribution(self):
+        upper_long = leg(105, 5.0, -0.30)
+        upper_long["iv"] = None
+        result = scanner._build_put_condor(
+            upper_long=upper_long,
+            upper_short=leg(100, 3.0, -0.25),
+            lower_short=leg(90, 1.5, -0.15),
+            lower_long=leg(85, 0.5, -0.10),
+            spot=110,
+            expiration="2027-01-15",
+            dte=170,
+            preset="25/15",
+            target_upper_delta=0.25,
+            target_lower_delta=0.15,
+        )
+
+        self.assertAlmostEqual(result["upper_long_probability_iv"], 0.20)
+        self.assertGreater(result["prob_touch_upper_long_pct"], 0.0)
+
     def test_missing_iv_does_not_publish_a_false_zero_probability(self):
         lower_short = leg(90, 1.5, -0.15)
         lower_short["iv"] = None

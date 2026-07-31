@@ -6926,7 +6926,8 @@ function UnbalancedPutCondorScannerHelp() {
           style={screenshotStyle}
         />
         <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
-          The upper card answers whether the whole trade can be closed profitably at the planned dates. The lower
+          The first card answers whether the whole trade can be closed profitably at the planned dates. The middle
+          card answers whether the underlying ever falls far enough to reach the structure at all. The last
           card separates touching the back short, reaching the back long where the expiration max-loss area begins,
           and actually finishing below those strikes.
         </p>
@@ -6939,6 +6940,9 @@ function UnbalancedPutCondorScannerHelp() {
         <li><strong>Upper flat</strong> is the expiration result above the highest strike. This is why the upper expiration line should begin flat.</li>
         <li><strong>Center max</strong> is the best expiration outcome between the two short puts.</li>
         <li><strong>Lower flat</strong> is the expiration result below the back long. With unequal widths or quantities, this can be much worse than the upper flat outcome.</li>
+        <li><strong>Reach the structure</strong> estimates the chance of touching the front long—the highest strike, the first put the position owns below the current price—at any time before expiration. Above that strike the payoff is flat, so this is the probability the trade ever leaves its upper flat outcome. It is measured with the front long&rsquo;s own implied volatility instead of the far out-of-the-money back short&rsquo;s, because put skew would otherwise overstate a barrier this close to the money.</li>
+        <li><strong>Never touches it</strong> is the complement of that figure: the chance the underlying stays above the front long for the entire holding period, in which case the four puts expire untested and the result is the upper flat outcome shown on the card. Note that it is normally smaller than the chance of simply <em>finishing</em> above the front long, because the terminal figure also counts paths that dipped below and recovered.</li>
+        <li><strong>By expiration versus the earlier close dates.</strong> Both headline percentages on those two cards run the full term to expiration, which is what the &ldquo;· by expiration&rdquo; tag next to each title marks. Beneath each one, the same probability is repeated for the two planned close dates used by the profitable-close card—50% and 67% of the original days to expiration—measured over the shorter window from today to that date only. A touch becomes likelier the longer the position is held, so those interim figures are always below the headline.</li>
         <li><strong>Touch back short</strong> estimates the chance of reaching the sold lower put at any time before expiration.</li>
         <li><strong>Reach max-loss area</strong> estimates the chance of touching the back long before expiration—the price boundary where the expiration payoff becomes flat at its lower-tail result.</li>
         <li><strong>Finish below</strong> probabilities are terminal estimates and are normally lower than the corresponding touch probabilities.</li>

@@ -169,6 +169,17 @@ def _prob_touch_lower(
     return min(1.0, max(0.0, terminal_below + reflection))
 
 
+def _elapsed_days_for_fraction(dte: int, fraction: float) -> int | None:
+    """Whole days held at a planned close date some fraction of the way in.
+
+    Shared by the early-close estimate and the touch schedule so both label the
+    same close date with the same day count.
+    """
+    if dte < 2 or not 0 < fraction < 1:
+        return None
+    return max(1, min(dte - 1, int(round(dte * fraction))))
+
+
 def _position_pl_at_exit(
     candidate: dict,
     exit_spot: float,
@@ -214,16 +225,15 @@ def _early_close_estimate(
 ) -> dict | None:
     """Risk-neutral chance the full position has positive modeled P/L at exit."""
     distribution_iv = _num(candidate.get("probability_iv"))
+    elapsed_days = _elapsed_days_for_fraction(dte, elapsed_fraction)
     if (
         spot <= 0
-        or dte < 2
+        or elapsed_days is None
         or distribution_iv is None
         or distribution_iv <= 0
-        or not 0 < elapsed_fraction < 1
     ):
         return None
 
-    elapsed_days = max(1, min(dte - 1, int(round(dte * elapsed_fraction))))
     remaining_dte = dte - elapsed_days
     elapsed_years = elapsed_days / 365.0
     remaining_years = remaining_dte / 365.0
@@ -418,6 +428,62 @@ def _build_put_condor(
     )
     probability_iv = _num(lower_short.get("iv"))
     years = max(int(dte), 0) / 365.0
+    # The highest strike is the first put the position owns below spot, so the
+    # chance of reaching it is measured with that strike's own implied vol.
+    # Borrowing the far-out-of-the-money lower short's IV would inherit the put
+    # skew and materially overstate a touch this close to the money.
+    front_iv = _num(upper_long.get("iv"))
+    if front_iv is None or front_iv <= 0:
+        front_iv = probability_iv
+    if front_iv is not None and front_iv > 0:
+        prob_touch_upper_long = _prob_touch_lower(
+            spot,
+            k1,
+            years,
+            front_iv,
+            RISK_FREE,
+            dividend_yield,
+        )
+        prob_finish_below_upper_long = _prob_finish_below(
+            spot,
+            k1,
+            years,
+            front_iv,
+            RISK_FREE,
+            dividend_yield,
+        )
+    else:
+        prob_touch_upper_long = None
+        prob_finish_below_upper_long = None
+    upper_long_distance_sigma = (
+        math.log(spot / k1) / (front_iv * math.sqrt(years))
+        if spot > k1 and front_iv is not None and front_iv > 0 and years > 0 else None
+    )
+    # The same planned close dates the early-close card uses.  A touch by an
+    # interim date is a shorter first-passage window than a touch by expiration,
+    # so the two cannot be read off one number.
+    upper_long_touch_schedule = []
+    if front_iv is not None and front_iv > 0:
+        for fraction in EARLY_CLOSE_FRACTIONS:
+            elapsed_days = _elapsed_days_for_fraction(int(dte), fraction)
+            if elapsed_days is None:
+                continue
+            probability = _prob_touch_lower(
+                spot,
+                k1,
+                elapsed_days / 365.0,
+                front_iv,
+                RISK_FREE,
+                dividend_yield,
+            )
+            if probability is None:
+                continue
+            upper_long_touch_schedule.append({
+                "elapsed_fraction": elapsed_days / int(dte),
+                "elapsed_days": elapsed_days,
+                "remaining_dte": int(dte) - elapsed_days,
+                "prob_touch_pct": probability * 100.0,
+            })
     if probability_iv is not None and probability_iv > 0:
         prob_touch_lower_short = _prob_touch_lower(
             spot,
@@ -521,6 +587,20 @@ def _build_put_condor(
             (spot - lower_breakeven) / spot * 100.0
             if lower_breakeven is not None and spot > 0 else None
         ),
+        "prob_touch_upper_long_pct": (
+            prob_touch_upper_long * 100.0
+            if prob_touch_upper_long is not None else None
+        ),
+        "prob_finish_below_upper_long_pct": (
+            prob_finish_below_upper_long * 100.0
+            if prob_finish_below_upper_long is not None else None
+        ),
+        "upper_long_touch_schedule": upper_long_touch_schedule,
+        "upper_long_probability_iv": front_iv,
+        "upper_long_distance_pct": (
+            (spot - k1) / spot * 100.0 if spot > 0 else None
+        ),
+        "upper_long_distance_sigma": upper_long_distance_sigma,
         "prob_touch_lower_short_pct": (
             prob_touch_lower_short * 100.0
             if prob_touch_lower_short is not None else None
@@ -756,15 +836,28 @@ def _round_candidate(candidate: dict) -> dict:
         ("lower_breakeven", 2),
         ("upper_breakeven", 2),
         ("lower_breakeven_cushion_pct", 1),
+        ("prob_touch_upper_long_pct", 1),
+        ("prob_finish_below_upper_long_pct", 1),
         ("prob_touch_lower_short_pct", 1),
         ("prob_touch_lower_long_pct", 1),
         ("prob_finish_below_lower_short_pct", 1),
         ("prob_finish_below_lower_long_pct", 1),
         ("probability_iv", 4),
+        ("upper_long_probability_iv", 4),
+        ("upper_long_distance_pct", 1),
+        ("upper_long_distance_sigma", 2),
         ("lower_short_distance_pct", 1),
         ("lower_short_distance_sigma", 2),
     ):
         out[key] = _round(out.get(key), decimals)
+    out["upper_long_touch_schedule"] = [
+        {
+            **step,
+            "elapsed_fraction": _round(step.get("elapsed_fraction"), 3),
+            "prob_touch_pct": _round(step.get("prob_touch_pct"), 1),
+        }
+        for step in out.get("upper_long_touch_schedule", [])
+    ]
     out["early_close_estimates"] = [
         {
             **estimate,
