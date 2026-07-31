@@ -343,14 +343,24 @@ def _build_butterfly(
     tranche_quantity: int = 4,
     lower_long_quantity_multiplier: int = 1,
     lower_long_target: float | None = None,
+    body_short_target: float | None = None,
     structure_kind: str = "unbalanced_butterfly",
     dividend_yield: float = 0.0,
+    always_success_above_upper: bool = True,
+    exit_points: list[dict] | None = None,
 ) -> dict | None:
     """Calculate greeks, execution, payoff, and probabilities for one BWB.
 
     The default lower-long multiplier preserves this scanner's 4/-8/4
     structure. A multiplier of two prices the 4/-8/+8 structure used by the
     document-based 488 scanner, including its recovering downside tail.
+
+    ``body_short_target``, ``always_success_above_upper`` and ``exit_points``
+    default to this scanner's own course values. The Road Trip screen supplies
+    its near-the-money body and its own close-window labels. Although that trade
+    enters for a debit, it also keeps the upper success region because its
+    prescribed reverse-Harvey process manages a rally until the right side is
+    flat or slightly profitable.
     """
     upper_strike = _num(upper_long.get("strike"))
     body_strike = _num(body_short.get("strike"))
@@ -442,6 +452,11 @@ def _build_butterfly(
         if lower_long_target is None
         else float(lower_long_target)
     )
+    body_target = (
+        BODY_SHORT_TARGET
+        if body_short_target is None
+        else float(body_short_target)
+    )
     raw_position_delta = quantity * (
         (_num(upper_long.get("delta"), 0.0) or 0.0)
         - 2.0 * (_num(body_short.get("delta"), 0.0) or 0.0)
@@ -526,7 +541,8 @@ def _build_butterfly(
         prob_finish_below_body = None
         prob_finish_below_lower_long = None
 
-    exit_points = _management_exit_points(int(dte))
+    if exit_points is None:
+        exit_points = _management_exit_points(int(dte))
     upper_long_touch_schedule = []
     if front_iv is not None and front_iv > 0:
         for point in exit_points:
@@ -583,8 +599,9 @@ def _build_butterfly(
         # trade. Inside the structure, the time-evolved theoretical P/L tent
         # decides success. At expiration the near-$0 upper line therefore
         # counts as success rather than swallowing the whole upper tail into
-        # the failure complement.
-        always_success_above=upper_strike,
+        # the failure complement. Managed debit structures may also opt into
+        # this region when their trading plan explicitly repairs the upper line.
+        always_success_above=upper_strike if always_success_above_upper else None,
         include_breakeven=True,
     )
     # Show how the tent develops instead of reducing the trade to one terminal
@@ -674,13 +691,13 @@ def _build_butterfly(
         "dte": int(dte),
         "upper_long_delta_mode": str(int(round(upper_long_target * 100))),
         "target_upper_long_delta": upper_long_target,
-        "target_body_short_delta": BODY_SHORT_TARGET,
+        "target_body_short_delta": body_target,
         "target_lower_long_delta": lower_target,
         "actual_upper_long_delta": actual_upper_delta,
         "actual_body_short_delta": actual_body_delta,
         "actual_lower_long_delta": actual_lower_delta,
         "upper_long_delta_error": abs(actual_upper_delta - upper_long_target),
-        "body_short_delta_error": abs(actual_body_delta - BODY_SHORT_TARGET),
+        "body_short_delta_error": abs(actual_body_delta - body_target),
         "lower_long_delta_error": abs(actual_lower_delta - lower_target),
         "position_delta": position_delta,
         "position_delta_per_share": raw_position_delta,

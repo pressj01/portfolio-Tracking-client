@@ -312,6 +312,30 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
         self.assertEqual(data["per_leg"][0]["opt_type"], "stock")
         self.assertIn("stock", data["supported_leg_types"])
 
+    @patch("options_api._fetch_quote", return_value={"last": 747.03, "div_yield": 0.011})
+    def test_broken_wing_butterfly_breakevens_are_exact_across_coarse_grid(self, _quote):
+        expiration = self.today + timedelta(days=77)
+        payload = self.payload(self.today)
+        payload["spot_override"] = 747.03
+        payload["price_range"] = {"low": 650, "high": 850, "steps": 9}
+        payload["day_step"] = 0
+        payload["legs"] = [
+            {"side": "BUY", "qty": 5, "opt_type": "PUT", "strike": 738,
+             "expiration": expiration.isoformat(), "entry_price": 20.0, "iv": 0.1403},
+            {"side": "SELL", "qty": 10, "opt_type": "PUT", "strike": 723,
+             "expiration": expiration.isoformat(), "entry_price": 12.0, "iv": 0.1561},
+            {"side": "BUY", "qty": 5, "opt_type": "PUT", "strike": 702,
+             "expiration": expiration.isoformat(), "entry_price": 4.24, "iv": 0.1783},
+        ]
+
+        response = self.client.post("/api/options/risk-graph", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["breakevens"], [708.24, 737.76])
+        self.assertEqual(data["theoretical_max_profit"], 7380.0)
+        self.assertEqual(data["theoretical_max_loss"], -3120.0)
+
     @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
     def test_covered_call_combines_stock_and_option_payoffs(self, _quote):
         expiration = self.today + timedelta(days=30)

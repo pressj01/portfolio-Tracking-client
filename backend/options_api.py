@@ -892,7 +892,13 @@ def _leg_greek_multiplier(leg: dict) -> float:
 
 
 def _expiration_payoff_bounds(legs: list[dict]) -> dict:
-    """Return whole-domain expiration P/L bounds for one-expiration trades."""
+    """Return exact whole-domain expiration metrics for one-expiration trades.
+
+    Expiration payoff is piecewise linear with kinks at the strikes. Evaluating
+    those exact kinks also gives exact breakevens; deriving them from the chart
+    grid can place a crossing on the wrong side of a strike when a coarse grid
+    interval straddles the kink.
+    """
     expirations = {
         leg.get('expiration') for leg in legs
         if leg.get('opt_type', '').lower() != 'stock' and leg.get('expiration')
@@ -903,6 +909,7 @@ def _expiration_payoff_bounds(legs: list[dict]) -> dict:
             'theoretical_max_loss': None,
             'max_profit_unlimited': False,
             'max_loss_unlimited': False,
+            'breakevens': None,
         }
 
     strikes = {
@@ -918,6 +925,16 @@ def _expiration_payoff_bounds(legs: list[dict]) -> dict:
             total += int(leg.get('qty') or 1) * leg_pnl
         candidate_pnls.append(total)
 
+    breakevens = []
+    for index in range(1, len(candidates)):
+        x0, x1 = candidates[index - 1], candidates[index]
+        y0, y1 = candidate_pnls[index - 1], candidate_pnls[index]
+        if abs(y0) <= 1e-9:
+            breakevens.append(x0)
+        elif (y0 < 0) != (y1 < 0):
+            root = x0 + (0.0 - y0) * (x1 - x0) / (y1 - y0)
+            breakevens.append(root)
+
     high_price_slope = 0.0
     for leg in legs:
         direction = 1.0 if str(leg.get('side')).upper() == 'BUY' else -1.0
@@ -928,11 +945,26 @@ def _expiration_payoff_bounds(legs: list[dict]) -> dict:
         elif opt_type == 'call':
             high_price_slope += direction * qty * 100.0
 
+    last_price = candidates[-1]
+    last_pnl = candidate_pnls[-1]
+    if abs(last_pnl) <= 1e-9:
+        breakevens.append(last_price)
+    elif abs(high_price_slope) > 1e-9:
+        high_tail_root = last_price - last_pnl / high_price_slope
+        if high_tail_root > last_price + 1e-9:
+            breakevens.append(high_tail_root)
+
+    exact_breakevens = []
+    for value in sorted(round(root, 2) for root in breakevens if root >= 0):
+        if not exact_breakevens or abs(value - exact_breakevens[-1]) > 0.01:
+            exact_breakevens.append(value)
+
     return {
         'theoretical_max_profit': None if high_price_slope > 1e-9 else round(max(candidate_pnls), 2),
         'theoretical_max_loss': None if high_price_slope < -1e-9 else round(min(candidate_pnls), 2),
         'max_profit_unlimited': high_price_slope > 1e-9,
         'max_loss_unlimited': high_price_slope < -1e-9,
+        'breakevens': exact_breakevens,
     }
 
 
@@ -1303,6 +1335,9 @@ def register_routes(app):
         max_profit = max(p['pnl'] for p in exp_curve)
         max_loss = min(p['pnl'] for p in exp_curve)
         payoff_bounds = _expiration_payoff_bounds(legs)
+        exact_breakevens = payoff_bounds.pop('breakevens', None)
+        if exact_breakevens is not None:
+            breakevens = exact_breakevens
 
         # Price slices: 3 scenarios (-10%, 0%, +10%) by default; user can override on client
         slice_requests = payload.get('price_slices') or [

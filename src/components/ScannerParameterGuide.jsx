@@ -264,6 +264,46 @@ const GUIDES = {
       ],
     },
   ],
+  'road-trip-butterfly': [
+    {
+      title: 'Underlying, expiration, and placement',
+      items: [
+        ['Tickers', 'Comma-separated underlyings. SPY, QQQ, and IWM stand in for the SPX, ES, and RUT the article trades; the shape travels but the notional exposure does not match.'],
+        ['Target / Minimum / Maximum DTE', 'The article chooses expirations 70 to 85 days out. Unlike the two STT butterfly screens, weekly expirations are eligible because the model runs on SPX and ES weeklies.'],
+        ['Contracts', 'Upper-long count, which sets the whole 1/−2/+1 ratio. Typical sizes are 5x10x5 and 6x12x6; a 2x4x2 works and needs even fewer adjustments.'],
+        ['Behind market', 'How far below spot the upper long sits. This is the article’s signature: the highest strike is placed behind the market rather than at it. The SPX example with the index at 2000 uses 1975, or 1.25% back.'],
+        ['± tolerance', 'How far the upper long may drift from that placement before the candidate is rejected.'],
+        ['Upper wing / Lower wing', 'Wing widths as a percentage of spot. The example’s 45 and 55 points on a 2000 index are 2.25% and 2.75%. The lower wing must be the wider one, which is what makes the wing broken.'],
+        ['Wing ± tolerance', 'How far the wings may stray from those targets. Widen it when the debit rule cannot be satisfied at the example widths.'],
+        ['Min wing ratio', 'Requires the lower wing to stay wider than the upper wing. Values above 1 preserve the broken wing.'],
+        ['Minimum leg OI', 'Minimum open interest on each of the three unique strikes.'],
+      ],
+    },
+    {
+      title: 'The price rule and structure gates',
+      items: [
+        ['Max debit / margin', 'The article’s governing rule: the entry debit must be under 5% of initial margin, its own example being 487 / 12,732 = 3.8%. An expensive entry makes upside profitability too hard to reach later.'],
+        ['How margin is computed', 'Initial margin is the broken-wing downside risk — (lower wing − upper wing) × 100 × contracts — plus the debit paid. It is the same number the profit target and stop are percentages of.'],
+        ['When placement and price conflict', 'The price rule wins. A narrow broken wing risks little, so its margin base is small and its debit ratio is very sensitive, while a wider lower wing raises margin and cheapens the lower long at once. Expect a wider gap than the illustrative 45/55.'],
+        ['Market bias', 'Net delta band in share equivalents per butterfly, scaled by contract count. The trade aims to be roughly delta neutral; unlike the STT ladder its strikes do not cancel to zero by construction.'],
+        ['Minimum theta', 'Minimum daily theta for the whole position. This is a decay trade, so positive theta at entry is the point.'],
+        ['Selection', 'Candidates are chosen on the article’s geometry, not a delta ladder. The deltas the structure lands on are reported rather than targeted.'],
+      ],
+    },
+    {
+      title: 'Management, adjustments, and laddering',
+      items: [
+        ['Profit target low / high', 'Take-profit band as a percentage of capital at risk. The article aims for 7% to 15% per trade.'],
+        ['Stop', 'Exit if the loss passes this share of utilized capital. The article uses 4% to 5% and treats such an exit as a good trade, not a failure.'],
+        ['Article exit backstop', 'The article plans to be out 15 to 20 days before expiration. The probability cards lead with the earlier halfway-to-two-thirds close window, when the time-value profit zone is broad; this input remains the latest planned exit.'],
+        ['Hands-off window', 'The first 21 to 30 days are left alone so theta can work. That is the stretch the trade is named for.'],
+        ['Reverse Harvey roll', 'One priced step of the upside adjustment: sell the upper long and buy the next strike down toward the body for a credit, lifting the upper expiration line. Because entry is a debit, that line starts below zero. The managed probability counts prices above the upper long as success because the strategy continues these rolls until the right side is flat or slightly profitable; the unadjusted expiration odds remain disclosed separately.'],
+        ['Downside trigger and hedge width', 'A GTC conditional entered in advance at the body strike, where the risk curve turns back down from its peak. It adds a long put debit spread — buy the higher strike, sell below it — whose width is set here as a percentage of spot. Close it at 50–75% of the debit paid so a whipsaw does not cost the whole hedge.'],
+        ['Require preferred entry session', 'The article prefers a down day with volatility up, but says timing is not critical, so this is advisory unless checked. Elevation is graded from 20-day realized volatility and its one-year percentile, not from VIX, VVIX, SKEW, or term structure.'],
+        ['Open positions / Max concurrent / Entry interval / Days since last', 'The model adds a position every two weeks and runs four or five at once for time diversification. These inputs flag a ladder that is full or an entry that is too soon.'],
+      ],
+    },
+  ],
   'unbalanced-butterfly': [
     {
       title: 'Universe and expiration',

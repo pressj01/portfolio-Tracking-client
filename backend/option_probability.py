@@ -163,6 +163,7 @@ def _probability_at_exit(
     boundaries = [-math.inf, *roots, math.inf]
     profitable_ranges = []
     success_probability = 0.0
+    unadjusted_success_probability = 0.0
     for index in range(1, len(boundaries)):
         low_z, high_z = boundaries[index - 1], boundaries[index]
         if math.isinf(low_z) and math.isinf(high_z):
@@ -186,12 +187,15 @@ def _probability_at_exit(
             always_success_above is not None
             and probe_spot >= always_success_above
         )
+        low_probability = 0.0 if math.isinf(low_z) else _NORM.cdf(low_z)
+        high_probability = 1.0 if math.isinf(high_z) else _NORM.cdf(high_z)
+        interval_probability = high_probability - low_probability
+        if profit_is_success:
+            unadjusted_success_probability += interval_probability
         if not profit_is_success and not upper_region_is_success:
             continue
 
-        low_probability = 0.0 if math.isinf(low_z) else _NORM.cdf(low_z)
-        high_probability = 1.0 if math.isinf(high_z) else _NORM.cdf(high_z)
-        success_probability += high_probability - low_probability
+        success_probability += interval_probability
         successful_range = {
             "lower": None if math.isinf(low_z) else round(spot_at_z(low_z), 2),
             "upper": None if math.isinf(high_z) else round(spot_at_z(high_z), 2),
@@ -214,12 +218,31 @@ def _probability_at_exit(
             profitable_ranges.append(successful_range)
 
     success_pct = min(100.0, max(0.0, success_probability * 100.0))
+    unadjusted_success_pct = min(
+        100.0,
+        max(0.0, unadjusted_success_probability * 100.0),
+    )
     rounded_success = round(success_pct, 1)
+    rounded_unadjusted_success = round(unadjusted_success_pct, 1)
     return {
         "elapsed_days": elapsed_days,
         "remaining_dte": remaining_dte,
         "probability_success_pct": rounded_success,
         "probability_failure_pct": round(100.0 - rounded_success, 1),
+        # A managed strategy may designate an otherwise losing region as a
+        # successful outcome (for example, the Road Trip trade uses a reverse
+        # Harvey above its upper long). Keep the raw, unattended P/L odds next
+        # to the managed odds so callers can explain that distinction instead
+        # of silently presenting the adjustment as intrinsic profitability.
+        "probability_unadjusted_success_pct": rounded_unadjusted_success,
+        "probability_unadjusted_failure_pct": round(
+            100.0 - rounded_unadjusted_success,
+            1,
+        ),
+        "probability_managed_upside_pct": round(
+            max(0.0, success_pct - unadjusted_success_pct),
+            1,
+        ),
         "profitable_ranges": profitable_ranges,
     }
 

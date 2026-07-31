@@ -30,6 +30,7 @@ const GROUPS = [
       { id: 'iron-condor-scanner', label: 'Iron Condor Scanner' },
       { id: 'unbalanced-put-condor-scanner', label: 'Unbalanced Put Condor Scanner' },
       { id: 'unbalanced-butterfly-scanner', label: 'Unbalanced Butterfly Scanner' },
+      { id: 'road-trip-butterfly-scanner', label: 'Road Trip Butterfly Scanner' },
     ],
   },
   {
@@ -7119,6 +7120,157 @@ function UnbalancedPutCondorScannerHelp() {
   )
 }
 
+function RoadTripButterflyScannerHelp() {
+  const screenshotStyle = {
+    maxWidth: '100%',
+    height: 'auto',
+    borderRadius: '4px',
+    border: '1px solid var(--p-333)',
+  }
+
+  const captionStyle = {
+    margin: '0.45rem 0 0',
+    color: 'var(--text-muted)',
+    fontSize: '0.82rem',
+  }
+
+  return (
+    <div>
+      <h2>Road Trip Unbalanced Butterfly Scanner</h2>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This scanner builds the Harvey/Nunamaker road-trip put butterfly: buy one upper put,
+        sell two body puts, and buy one lower put at the same expiration. The default five-unit
+        position is therefore <strong>5/−10/5</strong>. It looks 70–85 days out, places the upper
+        long about 1.25% behind the market, and makes the lower wing wider than the upper wing.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        The governing entry rule is price, not a particular delta ladder. The net debit must stay
+        below 5% of initial margin, the complete position should be near delta neutral with positive
+        theta, and every result reports the exact strikes, quantities, debit, margin, Greeks, close
+        window, target, stop, and adjustment plan.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/road-trip-butterfly-scanner/01-scanner-overview.png"
+          alt="Road Trip Butterfly Scanner settings and ranked IWM QQQ and SPY results with structure, debit-to-margin, Greeks, two-thirds value, plan, and status"
+          style={screenshotStyle}
+        />
+        <p style={captionStyle}>
+          Start with the article defaults, then run the scan. A green <strong>Entry ready</strong>
+          row fits the structure and price gates; expand it before acting. Live strikes and dollar
+          values change with the option chain, so the pictured SPY trade is an example, not a fixed recommendation.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Reading the probability cards
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The headline probability is the <strong>two-thirds close</strong>, not expiration. The two
+        checkpoints bracket the preferred close window: halfway through the trade and two-thirds
+        through it. At each checkpoint all three option legs are repriced with their current implied
+        volatilities held constant, creating the broad rounded T+0 profit zone that exists before the
+        sharp expiration tent forms.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Success:</strong> positive modeled closing P/L plus the rally region above the upper long, where the planned reverse Harvey is continued until the right side is at least flat.</li>
+        <li><strong>Failure:</strong> the exact complementary downside loss region. Success and failure always total 100% at the same checkpoint.</li>
+        <li><strong>Unadjusted expiration tent:</strong> shown separately as context. It is deliberately not the headline because the strategy is managed and normally closed earlier.</li>
+        <li><strong>Model limitation:</strong> these are theoretical price-distribution estimates, not historical win rates or guarantees. A volatility, skew, fill, or gap change can alter the real outcome.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/road-trip-butterfly-scanner/02-probability-cards.png"
+          alt="Expanded SPY Road Trip result showing 88.4 percent managed success at halfway and 86.6 percent at two-thirds, with exact complementary failure probabilities"
+          style={screenshotStyle}
+        />
+        <p style={captionStyle}>
+          In the pictured SPY example, managed success is 88.4% at halfway and 86.6% at
+          two-thirds. The unadjusted expiration tent is only 19.7%; that lower number answers a
+          different question because it ignores both the earlier close and the reverse-Harvey rally management.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Entry math and the close plan
+      </h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Debit ÷ initial margin:</strong> must remain below 5%. Initial margin is the broken-wing downside risk—lower-wing width minus upper-wing width, times 100 and the upper-long quantity—plus the debit paid.</li>
+        <li><strong>Hands-off window:</strong> leave the trade alone for the first 21–30 days so theta can work.</li>
+        <li><strong>Preferred close window:</strong> manage the exit from halfway through two-thirds through the trade, while the time-value profit zone remains broad.</li>
+        <li><strong>Article exit backstop:</strong> the 15–20 DTE date is the latest planned exit, not the probability headline or the start of the preferred close window.</li>
+        <li><strong>Profit and stop:</strong> the defaults seek 7%–15% of utilized capital and stop near a 4%–5% loss, well before the expiration maximum loss.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Pre-planned adjustments
+      </h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Reverse Harvey on a rally:</strong> sell the upper long and buy the next lower strike toward the body for a credit. Repeat only as needed to lift the right-side expiration line to flat or slightly profitable. Reprice the complete position after every roll.</li>
+        <li><strong>Downside trigger:</strong> place the planned conditional near the body, where the curve turns back down, rather than improvising after the decline.</li>
+        <li><strong>Put debit-spread hedge:</strong> buy the higher strike and sell the lower strike. The screen prices one current-chain example and shows the planned 50%–75% hedge close; actual size and execution still require judgment.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/road-trip-butterfly-scanner/03-management-adjustments.png"
+          alt="Road Trip SPY result showing debit and margin checks, halfway and two-thirds close values, article backstop, reverse Harvey roll, and downside put-spread hedge"
+          style={screenshotStyle}
+        />
+        <p style={captionStyle}>
+          The example paid a $120 debit on $3,120 of initial margin, modeled +$256 unchanged at
+          halfway and +$419 at two-thirds, and priced one $738-to-$737 reverse Harvey roll that
+          would lift the upper line from −$120 to +$25 before costs.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Confirming the payoff in Strategy Lab
+      </h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Click <strong>Risk graph</strong> to load the exact strikes, quantities, entry prices, and
+        per-leg implied volatilities into Strategy Lab. The cyan expiration line should show the
+        broken-wing tent and lower loss flat; the purple pre-expiration curve should show the wider,
+        rounded time-value zone. Confirm that Strategy Lab agrees with the scanner before using any
+        target or stop. For the pictured 738/723/702 SPY example, the exact expiration breakevens are
+        $708.24 and $737.76, maximum profit is $7,380 at the body, and maximum loss is $3,120 below
+        the lower long.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/road-trip-butterfly-scanner/04-risk-graph.png"
+          alt="Strategy Lab risk graph for the 738 723 702 SPY Road Trip butterfly showing the rounded current curve, expiration tent, and exact 708.24 and 737.76 breakevens"
+          style={screenshotStyle}
+        />
+        <p style={captionStyle}>
+          The graph makes the timing distinction visible: the expiration payoff is narrow and sharp,
+          while the earlier model curve spreads positive time value across a much wider price range.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Suggested workflow
+      </h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Scan liquid index ETFs with the article defaults and confirm the selected expiration is inside 70–85 DTE.</li>
+        <li>Reject any row above the 5% debit-to-margin ceiling or outside the selected net-delta, theta, liquidity, and wing-ratio gates.</li>
+        <li>Expand the row and compare halfway and two-thirds success, unchanged P/L, targets, stop, close window, and both adjustments.</li>
+        <li>Open the risk graph and reconcile the entry debit, breakevens, maximum profit, maximum loss, strikes, quantities, and expiration.</li>
+        <li>Verify a live multi-leg quote at the broker. Use the planned stop and schedule; do not substitute the displayed model for executable prices.</li>
+      </ol>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        <strong>Trade at your own risk.</strong> The reverse Harvey prevents the modeled upside line
+        from remaining a loss only when the required rolls are available and executed as planned.
+        Slippage, volatility and skew changes, gaps, assignment, commissions, liquidity, and delayed
+        execution can all produce a different result. Size from the full expiration maximum loss.
+      </div>
+    </div>
+  )
+}
+
 function UnbalancedButterflyScannerHelp() {
   const screenshotStyle = {
     maxWidth: '100%',
@@ -8939,6 +9091,7 @@ const CONTENT_MAP = {
   'iron-condor-scanner': IronCondorScannerHelp,
   'unbalanced-put-condor-scanner': UnbalancedPutCondorScannerHelp,
   'unbalanced-butterfly-scanner': UnbalancedButterflyScannerHelp,
+  'road-trip-butterfly-scanner': RoadTripButterflyScannerHelp,
   import: ImportHelp,
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,

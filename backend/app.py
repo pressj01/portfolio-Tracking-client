@@ -87,6 +87,7 @@ from iron_condor_scanner import register_routes as register_iron_condor_scanner_
 from unbalanced_put_condor_scanner import register_routes as register_unbalanced_put_condor_scanner_routes
 from unbalanced_butterfly_scanner import register_routes as register_unbalanced_butterfly_scanner_routes
 from four_eight_eight_scanner import register_routes as register_four_eight_eight_scanner_routes
+from road_trip_butterfly_scanner import register_routes as register_road_trip_butterfly_scanner_routes
 from market_symbols import yahoo_symbol_for_ticker as _yahoo_symbol_for_ticker
 from market_calendar import (
     is_nyse_trading_day,
@@ -41117,6 +41118,7 @@ register_iron_condor_scanner_routes(app)
 register_unbalanced_put_condor_scanner_routes(app)
 register_unbalanced_butterfly_scanner_routes(app)
 register_four_eight_eight_scanner_routes(app)
+register_road_trip_butterfly_scanner_routes(app)
 
 
 # ── Portfolio Growth 2 ──────────────────────────────────────────────────────────
