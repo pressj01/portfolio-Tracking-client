@@ -7615,8 +7615,8 @@ function IronCondorScannerHelp() {
           <circle cx="507" cy="150" r="4" fill="var(--amber)" />
 
           <text x="365" y="92" textAnchor="middle" fill="var(--pos)" fontSize="11.5" fontWeight="700">Max profit +$290 (the credit)</text>
-          <text x="223" y="168" textAnchor="middle" fill="var(--amber)" fontSize="10">BE $277.10</text>
-          <text x="507" y="168" textAnchor="middle" fill="var(--amber)" fontSize="10">BE $306.90</text>
+          <text x="223" y="168" textAnchor="middle" fill="var(--amber)" fontSize="10">BE $277.09</text>
+          <text x="507" y="168" textAnchor="middle" fill="var(--amber)" fontSize="10">BE $306.91</text>
 
           <text x="105" y="250" textAnchor="middle" fill="var(--neg)" fontSize="11.5" fontWeight="700">−$709</text>
           <text x="105" y="234" textAnchor="middle" fill="var(--text-dim)" fontSize="10">put wing</text>
