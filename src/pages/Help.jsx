@@ -130,6 +130,36 @@ const GROUPS = [
   },
 ]
 
+// Help screenshots are captured separately from the code, so a section can be
+// written and shipped before its images exist. Rather than render a broken
+// image icon and a caption describing something the reader cannot see, hide
+// the whole figure when the file is missing. Dropping the PNG into
+// public/help-screenshots/ is all that is needed to make it appear.
+function HelpScreenshot({ src, alt, caption }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) return null
+  return (
+    <div style={{ marginBottom: '1.5rem' }}>
+      <img
+        src={src}
+        alt={alt}
+        onError={() => setFailed(true)}
+        style={{
+          maxWidth: '100%',
+          height: 'auto',
+          borderRadius: '4px',
+          border: '1px solid var(--p-333)',
+        }}
+      />
+      {caption && (
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          {caption}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function Overview() {
   return (
     <div>
@@ -166,8 +196,9 @@ function ImportHelp() {
       <h2>Import Brokerage Positions, Transactions, and Snowball Data</h2>
       <p style={{ marginBottom: '1rem' }}>
         The <strong>Import Brokerage Positions and Snowball Data</strong> page lets you bulk-load holdings into a portfolio from an Excel or CSV file.
-        There are two main import modes, each on its own tab: <strong>My Spreadsheet</strong> (owner format) and <strong>Generic Upload</strong>.
-        Both support merge mode — if the portfolio already has data, existing tickers are updated and new tickers are added,
+        Use <strong>Generic Positions</strong> for flexible spreadsheet uploads, <strong>Generic Transactions</strong> for broker-neutral history,
+        or <strong>Brokerage &amp; Export Import</strong> for supported brokerage and app exports.
+        Position imports support merge mode — if the portfolio already has data, existing tickers are updated and new tickers are added,
         while app-only fields (like DRIP toggles or pay dates you edited manually) are preserved unless the spreadsheet provides them.
       </p>
 
@@ -396,66 +427,8 @@ function ImportHelp() {
         <img src="./help-screenshots/import/automatic-backup-notice.jpg" alt="Automatic database backup notice shown before each import" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      {/* ── My Spreadsheet ──────────────────────────────────────── */}
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: My Spreadsheet (Owner Format)</h3>
-
-      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/owner-spreadsheet-import.jpg" alt="My Spreadsheet tab showing the owner-format import interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
-      </div>
-
-      <p style={{ marginBottom: '0.75rem' }}>
-        This mode is designed for the developer's personal dividend-tracking Excel file. It expects a specific column layout
-        (the "All Accounts" sheet) and can also import auxiliary sheets for weekly payouts, monthly payouts, and dividend-month data.
-      </p>
-
-      <h4 style={{ marginBottom: '0.4rem' }}>Step-by-Step</h4>
-      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
-        <li>
-          <strong>Select the correct portfolio</strong> from the navbar dropdown at the top-right. The page shows
-          "Importing into: <em>Portfolio Name</em>" to confirm your target.
-        </li>
-        <li>
-          <strong>Click "My Spreadsheet" tab</strong> (selected by default).
-        </li>
-        <li>
-          <strong>Drag & drop your Excel file</strong> (.xlsx or .xlsm) onto the drop zone, or click it to browse.
-          The filename appears once selected.
-        </li>
-        <li>
-          <strong>Choose single-sheet or multi-sheet mode:</strong>
-          <ul style={{ paddingLeft: '1.5rem', marginTop: '0.25rem' }}>
-            <li><strong>Single sheet (default)</strong> — the "Sheet Name" field defaults to "All Accounts". If your Excel file uses a different tab name, you <strong>must</strong> update this field to match the exact tab name in your workbook, otherwise the import will fail with a "sheet not found" error. Only the named sheet is imported into the currently selected portfolio.</li>
-            <li><strong>Multi-sheet</strong> — check "Import all sheets as separate portfolios". Each sheet becomes its own portfolio, named after the sheet tab. This ignores the Sheet Name field.</li>
-          </ul>
-        </li>
-        <li>
-          <strong>Toggle auxiliary imports</strong> (all on by default):
-          <ul style={{ paddingLeft: '1.5rem', marginTop: '0.25rem' }}>
-            <li><em>Import Weekly Payouts</em> — reads the "Weekly_Payers" sheet.</li>
-            <li><em>Import Monthly Payouts</em> — reads the "Monthly Tracking" sheet.</li>
-            <li><em>Import Dividend Months</em> — reads the "DivMonths" sheet.</li>
-          </ul>
-          Uncheck any you don't need. If a sheet is missing, that step reports an error but the main import still succeeds.
-        </li>
-        <li>
-          <strong>Import as Transactions (optional)</strong> — check "Import rows as transactions" if you want each row
-          compared against the current position. The app calculates the share difference and creates a BUY or SELL transaction
-          for the delta rather than overwriting the position directly. This is useful for tracking lot-level cost basis.
-        </li>
-        <li>
-          <strong>Click "Import Spreadsheet"</strong> (or "Merge Spreadsheet" if the portfolio already has data).
-          A spinner shows while processing. Results appear at the bottom — green for success, red for errors.
-        </li>
-      </ol>
-
-      <div className="alert alert-info" style={{ marginTop: '1rem', marginBottom: '1.5rem' }}>
-        <strong>Merge Mode:</strong> When the portfolio already contains holdings, the button label changes to "Merge Spreadsheet".
-        Existing tickers are updated with spreadsheet values. New tickers are added. Fields you've edited only in the app
-        (DRIP, pay dates, etc.) are kept unless the spreadsheet also provides those columns.
-      </div>
-
       {/* ── Generic Upload ──────────────────────────────────────── */}
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 2: Generic Upload</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Generic Positions</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
         <img src="./help-screenshots/import/generic-upload-tab.jpg" alt="Generic Upload tab showing portfolio upload and watchlist import sections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
@@ -856,7 +829,7 @@ function DashboardHelp() {
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '1rem' }}>
         <li><strong>Record NAV button</strong> — click at any time to save today's portfolio value using the prices already refreshed on page load. No import required. The button records a snapshot for the active portfolio and, if it is a sub-portfolio, also records one for Owner automatically.</li>
-        <li><strong>Import trigger</strong> — any holdings import (Owner spreadsheet, generic upload, broker positions, or broker transactions) automatically records a snapshot for the imported portfolio and Owner.</li>
+        <li><strong>Import trigger</strong> — any holdings import (generic upload, broker positions, or broker transactions) automatically records a snapshot for the imported portfolio and Owner.</li>
         <li><strong>One snapshot per day</strong> — clicking the button or importing multiple times on the same day simply updates that day's value rather than creating duplicates.</li>
         <li><strong>Accuracy</strong> — snapshots from the button and from imports use identical logic. Both reflect the prices currently stored in the database, which are refreshed from yfinance on each page load or import.</li>
       </ul>
@@ -6315,13 +6288,6 @@ function PutSellingScannerHelp() {
 }
 
 function CoveredCallScannerHelp() {
-  const screenshotStyle = {
-    maxWidth: '100%',
-    height: 'auto',
-    borderRadius: '4px',
-    border: '1px solid var(--p-333)',
-  }
-
   const captionStyle = {
     margin: '0.45rem 0 0',
     color: 'var(--text-muted)',
@@ -6573,17 +6539,14 @@ function CoveredCallScannerHelp() {
         <strong> Skip leveraged / inverse ETFs</strong>.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/covered-call-scanner/01-scanner-overview.png"
-          alt="Covered Call Scanner showing the include row, the four presets, the filter panel, the scan stats line, and the ranked results table with score, shares held, percent of range, run, stretch, versus market, RSI, IV over RV, the suggested call, annualized return, if called, and buy-back price"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/covered-call-scanner/01-scanner-overview.png"
+        alt="Covered Call Scanner showing the include row, the four presets, the filter panel, the scan stats line, and the ranked results table with score, shares held, percent of range, run, stretch, versus market, RSI, IV over RV, the suggested call, annualized return, if called, and buy-back price"
+        caption={<>
           Each row names a specific contract &mdash; strike, expiration, how far above the price it sits, and the
           credit &mdash; alongside the extension metrics that justified it and any warnings.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Reading the columns and the warnings
@@ -6601,17 +6564,14 @@ function CoveredCallScannerHelp() {
         a loosened preset. <em>Div assign likely</em> means the dividend inside the trade exceeds the whole premium, so
         expect early assignment. Any of these can invalidate an otherwise attractive row.
       </p>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/covered-call-scanner/02-expanded-row.png"
-          alt="Expanded Covered Call row showing the score breakdown by axis, the full suggested trade with effective sale price and downside breakeven, the management plan with buy back and defend levels, and the dividend and earnings detail"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/covered-call-scanner/02-expanded-row.png"
+        alt="Expanded Covered Call row showing the score breakdown by axis, the full suggested trade with effective sale price and downside breakeven, the management plan with buy back and defend levels, and the dividend and earnings detail"
+        caption={<>
           The expansion gives the score breakdown, the effective sale price, the downside breakeven, the gain against
           your own basis if called, and the ex-dividend and earnings dates that could take the shares early.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -6654,13 +6614,6 @@ function CoveredCallScannerHelp() {
 }
 
 function BullPutSpreadScannerHelp() {
-  const screenshotStyle = {
-    maxWidth: '100%',
-    height: 'auto',
-    borderRadius: '4px',
-    border: '1px solid var(--p-333)',
-  }
-
   const captionStyle = {
     margin: '0.45rem 0 0',
     color: 'var(--text-muted)',
@@ -6820,17 +6773,14 @@ function BullPutSpreadScannerHelp() {
         inverse ETFs. The earnings skip removes the ticker entirely rather than working around the report.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/bull-put-spread-scanner/01-scanner-overview.png"
-          alt="Bull Put Spread Scanner showing the include row, presets, the full filter panel, the scan funnel stats line, and the actionable spreads table with suggested strikes, credit, risk, cushion, probability out of the money, and buy-back price"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/bull-put-spread-scanner/01-scanner-overview.png"
+        alt="Bull Put Spread Scanner showing the include row, presets, the full filter panel, the scan funnel stats line, and the actionable spreads table with suggested strikes, credit, risk, cushion, probability out of the money, and buy-back price"
+        caption={<>
           The live screen. Each actionable row names the exact spread to sell, the credit, maximum profit against
           maximum loss, the breakeven cushion, modeled probability out of the money, and the buy-back limit.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Reading a row and its expansion
@@ -6851,17 +6801,14 @@ function BullPutSpreadScannerHelp() {
         open interest, and whether the natural fill is still a credit). A dashed grade badge with an asterisk means no
         live spread could be priced, and those partial scores always sort below fully priced ones.
       </p>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/bull-put-spread-scanner/02-expanded-row.png"
-          alt="Expanded Bull Put Spread row showing the verdict, probability cards, Setup Quality Premium and Safety score bars, both leg quotes, mid versus natural credit, breakeven and cushion, and the management plan"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/bull-put-spread-scanner/02-expanded-row.png"
+        alt="Expanded Bull Put Spread row showing the verdict, probability cards, Setup Quality Premium and Safety score bars, both leg quotes, mid versus natural credit, breakeven and cushion, and the management plan"
+        caption={<>
           Check <strong>Mid / natural credit</strong> before anything else. The scanner ranks on the mid; the natural is
           what you would actually get by hitting the market, and the gap between them is your real execution cost.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Actionable versus watchlist
@@ -6878,17 +6825,14 @@ function BullPutSpreadScannerHelp() {
         distinction matters &mdash; &ldquo;structure limits missed&rdquo; is a filter you could reasonably loosen,
         while &ldquo;no quotable spread&rdquo; means the market is not there to trade.
       </p>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/bull-put-spread-scanner/03-watchlist.png"
-          alt="Bull Put Spread Scanner watchlist candidates table showing per-ticker status reasons such as earnings inside trade, structure limits missed, and no quotable spread"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/bull-put-spread-scanner/03-watchlist.png"
+        alt="Bull Put Spread Scanner watchlist candidates table showing per-ticker status reasons such as earnings inside trade, structure limits missed, and no quotable spread"
+        caption={<>
           The watchlist is usually far longer than the actionable table, and it is where you learn which gate is
           binding on your current settings.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Management</h3>
       <p style={{ marginBottom: '1rem' }}>
@@ -6920,13 +6864,6 @@ function BullPutSpreadScannerHelp() {
 }
 
 function BearPutSpreadScannerHelp() {
-  const screenshotStyle = {
-    maxWidth: '100%',
-    height: 'auto',
-    borderRadius: '4px',
-    border: '1px solid var(--p-333)',
-  }
-
   const captionStyle = {
     margin: '0.45rem 0 0',
     color: 'var(--text-muted)',
@@ -7169,18 +7106,15 @@ function BearPutSpreadScannerHelp() {
         <strong> Skip leveraged / inverse ETFs</strong>.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/bear-put-spread-scanner/01-scanner-overview.png"
-          alt="Bear Put Spread Scanner showing the four presets, the filter panel, the scan funnel stats line, and the actionable spreads table with trend lights, move in sigma, versus market, RSI, IV over RV, the suggested spread, risk and reward, the move needed, edge, and exit plan"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/bear-put-spread-scanner/01-scanner-overview.png"
+        alt="Bear Put Spread Scanner showing the four presets, the filter panel, the scan funnel stats line, and the actionable spreads table with trend lights, move in sigma, versus market, RSI, IV over RV, the suggested spread, risk and reward, the move needed, edge, and exit plan"
+        caption={<>
           The live screen. The <strong>Trend</strong> cell is three lights (20-day, 50-day, downtrend), <strong>Move</strong>
           carries the σ underneath the percentage, and <strong>Needs</strong> gives the distance to the short strike both
           as a percentage and in expected moves.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Reading a row
@@ -7197,17 +7131,14 @@ function BearPutSpreadScannerHelp() {
         results, and on a debit trade slippage comes straight out of the reward-to-risk you were sold on.
         <em> Bounced</em> means the name has already started recovering off its low.
       </p>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/bear-put-spread-scanner/02-expanded-row.png"
-          alt="Expanded Bear Put Spread row showing the four score bars, both leg quotes with deltas, the debit against realized-volatility fair value, and the exit plan with take profit, stop, reassess by, and invalidate above levels"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/bear-put-spread-scanner/02-expanded-row.png"
+        alt="Expanded Bear Put Spread row showing the four score bars, both leg quotes with deltas, the debit against realized-volatility fair value, and the exit plan with take profit, stop, reassess by, and invalidate above levels"
+        caption={<>
           The expansion carries the score breakdown, both leg quotes, and the four-part exit plan &mdash; take profit,
           stop, reassess by, and the price that invalidates the thesis outright.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -7237,13 +7168,6 @@ function BearPutSpreadScannerHelp() {
 }
 
 function BearCallSpreadScannerHelp() {
-  const screenshotStyle = {
-    maxWidth: '100%',
-    height: 'auto',
-    borderRadius: '4px',
-    border: '1px solid var(--p-333)',
-  }
-
   const captionStyle = {
     margin: '0.45rem 0 0',
     color: 'var(--text-muted)',
@@ -7517,18 +7441,15 @@ function BearCallSpreadScannerHelp() {
         nearest wall rather than taking whatever the target delta lands on). The rest match the other screens.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/bear-call-spread-scanner/01-scanner-overview.png"
-          alt="Bear Call Spread Scanner showing the four presets, the full filter panel, the scan stats line including how many strikes were placed above resistance, and the results table with setup lights, rally size, versus market, RSI, the ceiling level, IV over RV, the suggested spread, credit and risk, cushion, edge, and exit"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/bear-call-spread-scanner/01-scanner-overview.png"
+        alt="Bear Call Spread Scanner showing the four presets, the full filter panel, the scan stats line including how many strikes were placed above resistance, and the results table with setup lights, rally size, versus market, RSI, the ceiling level, IV over RV, the suggested spread, credit and risk, cushion, edge, and exit"
+        caption={<>
           The <strong>Ceiling</strong> column names the actual overhead level and how far above price it sits &mdash;
           &ldquo;0.6% &middot; 200-day average&rdquo; &mdash; and the stats line reports how many strikes the scanner
           managed to place above one.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Reading a row, and taking the warnings seriously
@@ -7547,17 +7468,14 @@ function BearCallSpreadScannerHelp() {
         credit does not compensate. A row carrying four or five of these is telling you something even when the grade
         looks acceptable.
       </p>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/bear-call-spread-scanner/02-expanded-row.png"
-          alt="Expanded Bear Call Spread row showing the four score axes, both call leg quotes, the upside tail and call skew diagnostics, the dividend close-before date, and the exit plan"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/bear-call-spread-scanner/02-expanded-row.png"
+        alt="Expanded Bear Call Spread row showing the four score axes, both call leg quotes, the upside tail and call skew diagnostics, the dividend close-before date, and the exit plan"
+        caption={<>
           The expansion carries both leg quotes, the upside-tail and call-skew diagnostics, any dividend
           <strong> Close before</strong> date, and the exit plan.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         What a real scan looks like, and the trap in loosening it
@@ -7576,17 +7494,14 @@ function BearCallSpreadScannerHelp() {
         graded the results honestly. Three actionable F-grade rows are not three trades &mdash; they are the screen
         telling you the setup does not exist today.
       </p>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/bear-call-spread-scanner/03-empty-scan.png"
-          alt="Bear Call Spread Scanner after a Balanced run showing 443 tickers scanned, only 2 rallies rejected, zero actionable spreads, and the watchlist explaining which limit each candidate missed"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/bear-call-spread-scanner/03-empty-scan.png"
+        alt="Bear Call Spread Scanner after a Balanced run showing 443 tickers scanned, only 2 rallies rejected, zero actionable spreads, and the watchlist explaining which limit each candidate missed"
+        caption={<>
           An empty actionable table with a short watchlist is a normal, correct outcome for this screen. The watchlist
           Status column tells you which gate each candidate missed.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -8466,13 +8381,6 @@ function RoadTripButterflyScannerHelp() {
 }
 
 function DoubleHedgePutButterflyScannerHelp() {
-  const screenshotStyle = {
-    maxWidth: '100%',
-    height: 'auto',
-    borderRadius: '4px',
-    border: '1px solid var(--p-333)',
-  }
-
   const captionStyle = {
     margin: '0.45rem 0 0',
     color: 'var(--text-muted)',
@@ -8602,18 +8510,15 @@ function DoubleHedgePutButterflyScannerHelp() {
         </p>
       </div>
 
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/double-hedge-put-butterfly-scanner/01-scanner-overview.png"
-          alt="Double-Hedge Put Butterfly Scanner showing the structure panel, the monitor and campaign panel, and ranked SPY QQQ and IWM results with structure, net delta, theta, T plus zero stress, upper line, and expiration geometry"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/double-hedge-put-butterfly-scanner/01-scanner-overview.png"
+        alt="Double-Hedge Put Butterfly Scanner showing the structure panel, the monitor and campaign panel, and ranked SPY QQQ and IWM results with structure, net delta, theta, T plus zero stress, upper line, and expiration geometry"
+        caption={<>
           The live screen. Top panel sets the structure, bottom panel carries the monitors, campaign
           capital, and the <strong>Run scan</strong> button. Strikes and dollar values move with the
           option chain, so every figure pictured here is an example, not a recommendation.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Setting up the scan, control by control
@@ -8664,19 +8569,16 @@ function DoubleHedgePutButterflyScannerHelp() {
         <li><strong>Expiration geometry:</strong> peak, valley, and crash tail &mdash; the same three landmarks as the diagram above.</li>
         <li><strong>Entry readiness:</strong> Entry ready or Needs review on top, <em>Structure matched</em> or <em>near_match</em> underneath, warning count last. Always read both lines; they fail independently.</li>
       </ul>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/double-hedge-put-butterfly-scanner/02-entry-trio.png"
-          alt="Expanded Double-Hedge result showing the probability cards and the entry trio metrics for tranche delta, ATM theta, T plus zero after a twenty percent and fifteen percent decline, and the upper expiration line"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/double-hedge-put-butterfly-scanner/02-entry-trio.png"
+        alt="Expanded Double-Hedge result showing the probability cards and the entry trio metrics for tranche delta, ATM theta, T plus zero after a twenty percent and fifteen percent decline, and the upper expiration line"
+        caption={<>
           Expanding a row leads with the probability cards, then the entry trio. Success counts both
           the tent and the recovered crash tail; failure is the exact complement, so the pair always
           sums to 100% at the same checkpoint. These are model estimates from a price distribution,
           not historical win rates.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Geometry, monitors, and the campaign panel
@@ -8688,17 +8590,14 @@ function DoubleHedgePutButterflyScannerHelp() {
         <li><strong>LPTA context:</strong> at 4 warnings the plan calls for one roughly 30-DTE, 2-delta long put per three <em>already open</em> tranches; at 5 warnings, two. It hedges the campaign you have, and is not part of this entry order.</li>
         <li><strong>Theta references:</strong> the 120× and 71× appendix figures are shown as context. The source plan preferred conservative tiered fixed targets, so do not treat them as exits.</li>
       </ul>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/double-hedge-put-butterfly-scanner/03-geometry-campaign.png"
-          alt="Double-Hedge expanded row showing the expiration geometry landmarks, the monitor confirmation states with body richness and put skew context, and the campaign sizing and LPTA card"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/double-hedge-put-butterfly-scanner/03-geometry-campaign.png"
+        alt="Double-Hedge expanded row showing the expiration geometry landmarks, the monitor confirmation states with body richness and put skew context, and the campaign sizing and LPTA card"
+        caption={<>
           The monitor card shows why a clean structure still reads Needs review: three
           <em> Unconfirmed</em> states. Set them only after you have actually checked the signals.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Confirming it in Strategy Lab
@@ -8710,17 +8609,14 @@ function DoubleHedgePutButterflyScannerHelp() {
         expiration line should show the sharp tent and the long descent into the lower strike; the
         pre-expiration curve is much rounder and is where the trade actually lives for its first months.
       </p>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img
-          src="./help-screenshots/double-hedge-put-butterfly-scanner/04-risk-graph.png"
-          alt="Strategy Lab risk graph of the scanned double-hedge put butterfly showing the expiration tent, the descent to the lower strike valley, and the rounded pre-expiration curve"
-          style={screenshotStyle}
-        />
-        <p style={captionStyle}>
+      <HelpScreenshot
+        src="./help-screenshots/double-hedge-put-butterfly-scanner/04-risk-graph.png"
+        alt="Strategy Lab risk graph of the scanned double-hedge put butterfly showing the expiration tent, the descent to the lower strike valley, and the rounded pre-expiration curve"
+        caption={<>
           Strategy Lab is the reconciliation step. If the two screens disagree on a breakeven or a
           maximum loss, stop and find out why before routing anything.
-        </p>
-      </div>
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Suggested workflow
