@@ -54,7 +54,13 @@
           ]
         }
       ],
-      "icon": "public/app-icon.ico"
+      "icon": "public/app-icon.ico",
+      "azureSignOptions": {
+        "publisherName": "James Presser",
+        "endpoint": "https://eus.codesigning.azure.net/",
+        "codeSigningAccountName": "PortfolioTrackerSigning2",
+        "certificateProfileName": "portfolio-tracker-public"
+      }
     },
     "nsis": {
       "oneClick": false,
