@@ -5922,6 +5922,14 @@ function OptionsHelp() {
         how the structure changes.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
+        Choose <strong>Add from option chain</strong> without leaving Risk Profile to build on a scanner trade or any
+        simulated position. Every listed expiration is available with its DTE; select <strong>All strikes</strong> for
+        far-out-of-the-money contracts, then click an ask to add a bought leg or a bid to add a sold leg. You can open
+        another expiration and keep adding legs, so the same graph can model calendars, diagonals, near-term trades
+        with longer-dated protection, and other mixed-expiration positions. The scanner return controls stay visible
+        while you edit the trade or replace a leg from its Chain button.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
         The volatility bar applies a proportional scenario to each leg&rsquo;s own modeled IV instead of forcing every
         strike to the same volatility. For example, a <strong>+10%</strong> surface move changes 20%, 25%, and 32% IV
         legs to 22%, 27.5%, and 35.2%. That preserves the position&rsquo;s current strike skew and expiration differences
@@ -10693,4 +10701,3 @@ export default function Help() {
     </div>
   )
 }
-

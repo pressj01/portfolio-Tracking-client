@@ -891,6 +891,96 @@ function ChainCells({ contract, itm, onAdd, optType, columns }) {
   )
 }
 
+function OptionChainPicker({
+  sectionRef,
+  ticker,
+  expirations,
+  expandedExpiration,
+  onToggleExpiration,
+  chainTargetLeg,
+  onCancelTarget,
+  strikeRange,
+  onStrikeRangeChange,
+  visibleColumns,
+  mirroredPutColumns,
+  onSetColumnIds,
+  chainLoading,
+  chainRows,
+  spot,
+  onAdd,
+  expirationBrowserRef,
+  expandedChainWrapRef,
+  riskMode = false,
+  onClose,
+}) {
+  return (
+    <section ref={sectionRef} className={`card opt-chain-card opt-simulated-trades${riskMode ? ' opt-risk-chain-picker' : ''}`}>
+      <div className="opt-section-heading">
+        <div>
+          <span>{riskMode ? 'Add to risk graph' : 'Add simulated trades'}</span>
+          <h2>{riskMode ? 'Choose any expiration, strike, bid or ask' : 'Open an expiration to choose a strike'}</h2>
+          {riskMode && <small className="opt-risk-chain-caption">Open multiple expirations to combine near-term and longer-dated legs in the same trade.</small>}
+        </div>
+        <div className="opt-chain-controls">
+          <label><span>Strikes</span><select value={strikeRange} onChange={event => onStrikeRangeChange(event.target.value)}><option value="10">ATM ±10%</option><option value="20">ATM ±20%</option><option value="40">ATM ±40%</option><option value="all">All strikes</option></select></label>
+          <details className="opt-chain-column-picker">
+            <summary>Columns <span>{visibleColumns.length}</span></summary>
+            <div className="opt-chain-column-panel">
+              <div className="opt-chain-column-presets">
+                {Object.entries(CHAIN_COLUMN_PRESETS).map(([name, ids]) => <button key={name} type="button" onClick={() => onSetColumnIds(ids)}>{name}</button>)}
+              </div>
+              <div className="opt-chain-column-options">
+                {CHAIN_COLUMNS.map(column => (
+                  <label key={column.id} title={column.tip}>
+                    <input type="checkbox" checked={visibleColumns.some(item => item.id === column.id)} onChange={() => onSetColumnIds(previous => {
+                      if (previous.includes(column.id)) {
+                        const next = previous.filter(value => value !== column.id)
+                        return next.length ? next : previous
+                      }
+                      return [...previous, column.id]
+                    })} />
+                    <span><strong>{column.label}</strong><small>{column.name}</small></span>
+                  </label>
+                ))}
+              </div>
+              <small className="opt-chain-columns-saved">Selections save automatically on this device.</small>
+            </div>
+          </details>
+          {onClose && <button type="button" className="btn btn-secondary opt-risk-chain-done" onClick={onClose}>Done — View risk graph</button>}
+        </div>
+      </div>
+      {chainTargetLeg && <div className="opt-chain-target"><span>Replacing <strong>{chainTargetLeg.side} {chainTargetLeg.qty} {ticker} {formatExpiration(chainTargetLeg.expiration)} {fmt(chainTargetLeg.strike)} {chainTargetLeg.opt_type}</strong>. Click a bid or ask in the opened chain.</span><button type="button" onClick={onCancelTarget}>Cancel</button></div>}
+      <div className="opt-expiration-browser" ref={expirationBrowserRef}>
+        {expirations.map(expiration => {
+          const expanded = expandedExpiration === expiration
+          const dte = daysBetween(TODAY(), expiration)
+          return <div key={expiration} className={`opt-expiration-series${expanded ? ' expanded' : ''}`}>
+            <button type="button" className="opt-expiration-row" onClick={() => onToggleExpiration(expiration)} aria-expanded={expanded}>
+              <span aria-hidden="true">{expanded ? '▾' : '›'}</span>
+              <strong>{formatExpiration(expiration)}</strong>
+              <small>{dte} DTE</small>
+              <em>{expirationSeriesLabel(expiration)}</em>
+            </button>
+            {expanded && <div className="opt-expiration-chain">
+              <div className="opt-chain-help"><span className="opt-buy-dot" /> Click an ask to buy <span className="opt-sell-dot" /> Click a bid to sell{riskMode ? ' · open another expiration to add another timeframe' : ''}</div>
+              {chainLoading ? <div className="opt-loading-line"><span /> Loading {formatExpiration(expiration)} chain…</div> : <div className="opt-chain-wrap" ref={expandedChainWrapRef}>
+                <table className="opt-chain-table">
+                  <thead><tr><th colSpan={visibleColumns.length} className="opt-call-head">Calls</th><th className="opt-strike-head">Strike</th><th colSpan={visibleColumns.length} className="opt-put-head">Puts</th></tr><tr>{visibleColumns.map(column => <th key={`call-${column.id}`} title={column.tip}>{column.label}</th>)}<th className="opt-strike-head">Price</th>{mirroredPutColumns.map(column => <th key={`put-${column.id}`} title={column.tip}>{column.label}</th>)}</tr></thead>
+                  <tbody>
+                    {chainRows.map(row => <tr key={row.strike} className={Math.abs(row.strike - spot) === Math.min(...chainRows.map(item => Math.abs(item.strike - spot))) ? 'opt-atm-row' : ''}><ChainCells contract={row.call} itm={row.strike < spot} onAdd={onAdd} optType="CALL" columns={visibleColumns} /><td className="opt-strike-cell">{fmt(row.strike, row.strike >= 100 ? 0 : 1)}</td><ChainCells contract={row.put} itm={row.strike > spot} onAdd={onAdd} optType="PUT" columns={mirroredPutColumns} /></tr>)}
+                    {!chainRows.length && !chainLoading && <tr><td colSpan={visibleColumns.length * 2 + 1} className="opt-empty-row">No option contracts are available in this range.</td></tr>}
+                  </tbody>
+                </table>
+              </div>}
+            </div>}
+          </div>
+        })}
+        {!expirations.length && <div className="opt-empty-row">No expirations are available for {ticker}.</div>}
+      </div>
+    </section>
+  )
+}
+
 export default function OptionTradingTools() {
   const navigate = useNavigate()
   const [workspace, setWorkspace] = useState('trades')
@@ -904,6 +994,7 @@ export default function OptionTradingTools() {
   const [monthChains, setMonthChains] = useState({})
   const [chainTargetLegId, setChainTargetLegId] = useState(null)
   const [expandedTradeExpiration, setExpandedTradeExpiration] = useState('')
+  const [showRiskChainPicker, setShowRiskChainPicker] = useState(false)
   const [marketLoading, setMarketLoading] = useState(false)
   const [chainLoading, setChainLoading] = useState(false)
   const [marketError, setMarketError] = useState('')
@@ -948,6 +1039,7 @@ export default function OptionTradingTools() {
   const [riskError, setRiskError] = useState('')
   const riskRequestId = useRef(0)
   const chainCardRef = useRef(null)
+  const riskControlsRef = useRef(null)
   const expirationBrowserRef = useRef(null)
   const expandedChainWrapRef = useRef(null)
 
@@ -993,14 +1085,6 @@ export default function OptionTradingTools() {
     [chainColumnIds],
   )
   const mirroredPutColumns = useMemo(() => [...visibleChainColumns].reverse(), [visibleChainColumns])
-  const toggleChainColumn = id => setChainColumnIds(previous => {
-    if (previous.includes(id)) {
-      const next = previous.filter(value => value !== id)
-      return next.length ? next : previous
-    }
-    return [...previous, id]
-  })
-
   useEffect(() => {
     if (!ticker) return undefined
     let cancelled = false
@@ -1244,6 +1328,25 @@ export default function OptionTradingTools() {
     () => [...new Set(activeLegs.filter(leg => !isStockLeg(leg)).map(leg => leg.expiration).filter(Boolean))].sort(),
     [activeLegs],
   )
+  const openRiskChainPicker = () => {
+    const preferredExpiration = activeExpirations.find(expiration => expirations.includes(expiration))
+      || selectedExpiration
+      || expirations[0]
+      || ''
+    setChainTargetLegId(null)
+    if (preferredExpiration) {
+      setSelectedExpiration(preferredExpiration)
+      setExpandedTradeExpiration(preferredExpiration)
+    }
+    setStrikeRange('all')
+    setShowRiskChainPicker(true)
+    setTimeout(() => chainCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
+  }
+  const closeRiskChainPicker = () => {
+    setChainTargetLegId(null)
+    setShowRiskChainPicker(false)
+    setTimeout(() => riskControlsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
+  }
   const analysisHorizon = useMemo(() => {
     const earliest = activeExpirations[0] || selectedExpiration || TODAY()
     return earliest < TODAY() ? TODAY() : earliest
@@ -1506,7 +1609,8 @@ export default function OptionTradingTools() {
     setSelectedExpiration(leg.expiration)
     setExpandedTradeExpiration(leg.expiration)
     setChainTargetLegId(leg.local_id)
-    setWorkspace('trades')
+    if (workspace === 'risk') setShowRiskChainPicker(true)
+    else setWorkspace('trades')
     setTimeout(() => chainCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
   }
   const resizeLegStructure = useCallback((edge, proposedStrike) => {
@@ -1657,6 +1761,7 @@ export default function OptionTradingTools() {
     setStrategyName(name)
     setStrategyId(null)
     setChainTargetLegId(null)
+    setShowRiskChainPicker(false)
     resetVolatilityScenario()
     setWorkspace('risk')
   }
@@ -1764,6 +1869,7 @@ export default function OptionTradingTools() {
         ? `${mapped[0].mappedFrom || proxyTicker} covered call + put protection`
         : `${mapped[0].mappedFrom || proxyTicker} broker import`)
       setChainTargetLegId(null)
+      setShowRiskChainPicker(false)
       resetVolatilityScenario()
       setBrokerImportPreview(preview)
       const notes = []
@@ -1845,6 +1951,7 @@ export default function OptionTradingTools() {
     setEvaluationDate(TODAY())
     resetVolatilityScenario()
     setChainTargetLegId(null)
+    setShowRiskChainPicker(false)
     setWorkspace(targetWorkspace)
     setSaveStatus(`Loaded ${strategy.name}`)
   }
@@ -1869,6 +1976,7 @@ export default function OptionTradingTools() {
     setEvaluationDate(TODAY())
     resetVolatilityScenario()
     setChainTargetLegId(null)
+    setShowRiskChainPicker(false)
     setScannerTrade(null)
     setSaveStatus('New strategy')
     setWorkspace('trades')
@@ -1933,6 +2041,27 @@ export default function OptionTradingTools() {
         <label><span>Saved trades &amp; scenarios</span><select aria-label="Saved strategy" value={strategyId == null ? '' : String(strategyId)} onChange={event => { const saved = savedStrategies.find(item => String(item.id) === event.target.value); if (saved) loadStrategy(saved) }}><option value="" disabled>Select a saved trade or strategy…</option>{savedStrategies.map(item => <option key={item.id} value={item.id}>{item.origin === 'scanner' ? `Scanner trade · ${item.name} · expires ${formatExpiration(item.expires_on)}` : `${item.name} · ${item.underlying}`}</option>)}</select></label>
         {strategyId && <button type="button" className="opt-delete-saved" onClick={() => { const saved = savedStrategies.find(item => item.id === strategyId); if (saved) deleteStrategy(saved) }}>{scannerTrade?.kind ? 'Delete saved trade' : 'Delete strategy'}</button>}
       </section>}
+
+      {!['greeks', 'backtest'].includes(workspace) && scannerTrade && <div className="opt-scanner-handoff">
+        <div>
+          <strong>{scannerTrade.name || `${ticker} scanner trade`}</strong>
+          <span>
+            {scannerTradeUsesEstimatedPrices
+              ? <>Loaded from the {scannerTrade.source || 'scanner'}. At least one leg uses a recent-trade
+                estimate because no live bid/ask was available. The active trade keeps your scanner legs while
+                you add or replace contracts; verify every live quote before trading.</>
+              : <>Loaded from the {scannerTrade.source || 'scanner'}. Legs are entered at the mid quotes the
+                scan priced. You can add contracts from other strikes and expirations without losing the
+                original scanner trade.</>}
+          </span>
+        </div>
+        <div className="opt-scanner-handoff-actions">
+          {scannerTrade.return_to && <button type="button" className="is-back" onClick={() => navigate(scannerTrade.return_to)}>
+            ← Back to the {scannerTrade.source || 'scanner'}
+          </button>}
+          <button type="button" onClick={() => setScannerTrade(null)}>Dismiss</button>
+        </div>
+      </div>}
 
       {workspace === 'greeks' ? (
         <GreekSurfaceExplorer
@@ -2025,59 +2154,26 @@ export default function OptionTradingTools() {
             )}
           </section>
 
-          <section ref={chainCardRef} className="card opt-chain-card opt-simulated-trades">
-            <div className="opt-section-heading">
-              <div><span>Add simulated trades</span><h2>Open an expiration to choose a strike</h2></div>
-              <div className="opt-chain-controls">
-                <label><span>Strikes</span><select value={strikeRange} onChange={event => setStrikeRange(event.target.value)}><option value="10">ATM ±10%</option><option value="20">ATM ±20%</option><option value="40">ATM ±40%</option><option value="all">All strikes</option></select></label>
-                <details className="opt-chain-column-picker">
-                  <summary>Columns <span>{visibleChainColumns.length}</span></summary>
-                  <div className="opt-chain-column-panel">
-                    <div className="opt-chain-column-presets">
-                      {Object.entries(CHAIN_COLUMN_PRESETS).map(([name, ids]) => <button key={name} type="button" onClick={() => setChainColumnIds(ids)}>{name}</button>)}
-                    </div>
-                    <div className="opt-chain-column-options">
-                      {CHAIN_COLUMNS.map(column => (
-                        <label key={column.id} title={column.tip}>
-                          <input type="checkbox" checked={chainColumnIds.includes(column.id)} onChange={() => toggleChainColumn(column.id)} />
-                          <span><strong>{column.label}</strong><small>{column.name}</small></span>
-                        </label>
-                      ))}
-                    </div>
-                    <small className="opt-chain-columns-saved">Selections save automatically on this device.</small>
-                  </div>
-                </details>
-              </div>
-            </div>
-            {chainTargetLeg && <div className="opt-chain-target"><span>Replacing <strong>{chainTargetLeg.side} {chainTargetLeg.qty} {ticker} {formatExpiration(chainTargetLeg.expiration)} {fmt(chainTargetLeg.strike)} {chainTargetLeg.opt_type}</strong>. Click a bid or ask in the opened chain.</span><button type="button" onClick={() => setChainTargetLegId(null)}>Cancel</button></div>}
-            <div className="opt-expiration-browser" ref={expirationBrowserRef}>
-              {expirations.map(expiration => {
-                const expanded = expandedTradeExpiration === expiration
-                const dte = daysBetween(TODAY(), expiration)
-                return <div key={expiration} className={`opt-expiration-series${expanded ? ' expanded' : ''}`}>
-                  <button type="button" className="opt-expiration-row" onClick={() => toggleTradeExpiration(expiration)} aria-expanded={expanded}>
-                    <span aria-hidden="true">{expanded ? '▾' : '›'}</span>
-                    <strong>{formatExpiration(expiration)}</strong>
-                    <small>{dte} DTE</small>
-                    <em>{expirationSeriesLabel(expiration)}</em>
-                  </button>
-                  {expanded && <div className="opt-expiration-chain">
-                    <div className="opt-chain-help"><span className="opt-buy-dot" /> Click an ask to buy <span className="opt-sell-dot" /> Click a bid to sell</div>
-                    {chainLoading ? <div className="opt-loading-line"><span /> Loading {formatExpiration(expiration)} chain…</div> : <div className="opt-chain-wrap" ref={expandedChainWrapRef}>
-                      <table className="opt-chain-table">
-                        <thead><tr><th colSpan={visibleChainColumns.length} className="opt-call-head">Calls</th><th className="opt-strike-head">Strike</th><th colSpan={visibleChainColumns.length} className="opt-put-head">Puts</th></tr><tr>{visibleChainColumns.map(column => <th key={`call-${column.id}`} title={column.tip}>{column.label}</th>)}<th className="opt-strike-head">Price</th>{mirroredPutColumns.map(column => <th key={`put-${column.id}`} title={column.tip}>{column.label}</th>)}</tr></thead>
-                        <tbody>
-                          {chainRows.map(row => <tr key={row.strike} className={Math.abs(row.strike - spot) === Math.min(...chainRows.map(item => Math.abs(item.strike - spot))) ? 'opt-atm-row' : ''}><ChainCells contract={row.call} itm={row.strike < spot} onAdd={addLeg} optType="CALL" columns={visibleChainColumns} /><td className="opt-strike-cell">{fmt(row.strike, row.strike >= 100 ? 0 : 1)}</td><ChainCells contract={row.put} itm={row.strike > spot} onAdd={addLeg} optType="PUT" columns={mirroredPutColumns} /></tr>)}
-                          {!chainRows.length && !chainLoading && <tr><td colSpan={visibleChainColumns.length * 2 + 1} className="opt-empty-row">No option contracts are available in this range.</td></tr>}
-                        </tbody>
-                      </table>
-                    </div>}
-                  </div>}
-                </div>
-              })}
-              {!expirations.length && !marketLoading && <div className="opt-empty-row">No expirations are available for {ticker}.</div>}
-            </div>
-          </section>
+          <OptionChainPicker
+            sectionRef={chainCardRef}
+            ticker={ticker}
+            expirations={expirations}
+            expandedExpiration={expandedTradeExpiration}
+            onToggleExpiration={toggleTradeExpiration}
+            chainTargetLeg={chainTargetLeg}
+            onCancelTarget={() => setChainTargetLegId(null)}
+            strikeRange={strikeRange}
+            onStrikeRangeChange={setStrikeRange}
+            visibleColumns={visibleChainColumns}
+            mirroredPutColumns={mirroredPutColumns}
+            onSetColumnIds={setChainColumnIds}
+            chainLoading={chainLoading}
+            chainRows={chainRows}
+            spot={spot}
+            onAdd={addLeg}
+            expirationBrowserRef={expirationBrowserRef}
+            expandedChainWrapRef={expandedChainWrapRef}
+          />
 
           <section className="card opt-templates">
             <div><span>Quick learning templates</span><small>Templates replace the simulated legs below using contracts near the current price.</small></div>
@@ -2139,27 +2235,35 @@ export default function OptionTradingTools() {
         </section>
       ) : (
         <section className={`card opt-risk-workspace${riskLoading && risk ? ' is-repricing' : ''}`} aria-busy={riskLoading}>
-          {scannerTrade && <div className="opt-scanner-handoff">
-            <div>
-              <strong>{scannerTrade.name}</strong>
-              <span>
-                {scannerTradeUsesEstimatedPrices
-                  ? <>Loaded from the {scannerTrade.source || 'scanner'}. At least one leg uses a recent-trade
-                    estimate because no live bid/ask was available. The profile matches the scanner estimate;
-                    verify every live quote before trading.</>
-                  : <>Loaded from the {scannerTrade.source || 'scanner'}. Legs are entered at the mid quotes the
-                    scan priced, so the profile below matches the numbers on the scanner card. Edit quantity,
-                    strikes or entry price in the position table to explore variations.</>}
-              </span>
-            </div>
-            <div className="opt-scanner-handoff-actions">
-              {scannerTrade.return_to && <button type="button" className="is-back" onClick={() => navigate(scannerTrade.return_to)}>
-                ← Back to the {scannerTrade.source || 'scanner'}
-              </button>}
-              <button type="button" onClick={() => setScannerTrade(null)}>Dismiss</button>
-            </div>
-          </div>}
-          <div className="opt-risk-controls">
+          <div className="opt-risk-chain-entry">
+            <div><strong>Build on this trade</strong><span>Add protective puts, calls, or additional spreads from any listed expiration. The graph reprices every active leg together.</span></div>
+            <button type="button" className="btn btn-primary" onClick={showRiskChainPicker ? closeRiskChainPicker : openRiskChainPicker} disabled={!showRiskChainPicker && (!expirations.length || marketLoading)} aria-expanded={showRiskChainPicker}>
+              {showRiskChainPicker ? 'Hide option chain' : '+ Add from option chain'}
+            </button>
+          </div>
+          {showRiskChainPicker && <OptionChainPicker
+            sectionRef={chainCardRef}
+            ticker={ticker}
+            expirations={expirations}
+            expandedExpiration={expandedTradeExpiration}
+            onToggleExpiration={toggleTradeExpiration}
+            chainTargetLeg={chainTargetLeg}
+            onCancelTarget={() => setChainTargetLegId(null)}
+            strikeRange={strikeRange}
+            onStrikeRangeChange={setStrikeRange}
+            visibleColumns={visibleChainColumns}
+            mirroredPutColumns={mirroredPutColumns}
+            onSetColumnIds={setChainColumnIds}
+            chainLoading={chainLoading}
+            chainRows={chainRows}
+            spot={spot}
+            onAdd={addLeg}
+            expirationBrowserRef={expirationBrowserRef}
+            expandedChainWrapRef={expandedChainWrapRef}
+            riskMode
+            onClose={closeRiskChainPicker}
+          />}
+          <div className="opt-risk-controls" ref={riskControlsRef}>
             <label><span>Analysis date</span><input type="date" min={TODAY()} max={analysisHorizon} value={evaluationDate} onInput={event => setBoundedEvaluationDate(event.target.value)} onChange={event => setBoundedEvaluationDate(event.target.value)} /></label>
             <label className="opt-time-slider"><span>Move through time · day {evaluationOffset} of {evolutionDays}</span><input type="range" min="0" max={evolutionDays} value={evaluationOffset} onInput={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} onChange={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} /></label>
             <label className="opt-volatility-slider">
