@@ -9,7 +9,7 @@ const STORAGE_KEY = 'unbalanced-put-condor-scanner-filters'
 const FALLBACK_DEFAULTS = {
   tickers: 'SPY,IWM,GLD,QQQ',
   delta_preset: 'all',
-  target_dte: 180,
+  target_dte: 160,
   min_dte: 120,
   max_dte: 240,
   bought_width: 5,

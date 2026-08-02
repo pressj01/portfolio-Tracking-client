@@ -694,15 +694,17 @@ const SCANNER_TRADE_PLANS = [
     outlook: 'bullish',
     vega: 'mixed',
     diagram: {
-      points: [[0, -1.1], [2, -1.1], [3, 1], [6, 1], [7, 0], [10, 0]],
-      strikeMarkers: [{ x: 2, label: 'Lower LP' }, { x: 3, label: 'Lower SP' }, { x: 6, label: 'Upper SP' }, { x: 7, label: 'Upper LP' }],
+      points: [[0, -1.1], [1.2, -1.1], [2.1, 1], [3.4, 1], [4.2, 0], [10, 0]],
+      strikeMarkers: [{ x: 1.2, label: 'LL' }, { x: 2.1, label: 'LS' }, { x: 3.4, label: 'US' }, { x: 4.2, label: 'UL' }],
+      centerLabel: 'Spot (above tent)',
     },
     howItWorks: 'Use four puts in one expiration: a higher-strike debit spread plus a lower-strike credit spread, with independently sized widths or quantities. The result targets near-zero entry delta but creates asymmetric downside and a broad profit shelf.',
-    entry: 'Use the scanner’s 120–240 DTE window, centered near 180 DTE, and one of its 15/5, 20/10, or 25/15 short-delta presets. Enter only when the modeled total debit, margin, delta, and downside floor fit the campaign budget.',
-    profit: 'Set a dollar target before entry and close the entire package when it is reached. Use the scanner’s halfway and two-thirds-cycle estimates as formal harvest checkpoints; do not wait for expiration merely because the shelf looks favorable.',
+    entry: 'Start near 160 DTE inside the scanner’s 120–240 DTE window and use one of its 15/5, 20/10, or 25/15 short-delta presets. The upper long and tent should normally sit about 6%–10% below current price, leaving spot on the upper flat expiration line. Enter only when total debit, margin, delta, and downside floor fit the campaign budget.',
+    profit: 'Set a dollar target before entry and close the entire package when it is reached. If price enters the modeled shelf/tent and the position has a worthwhile profit, harvest it rather than waiting for the center or expiration. Use the scanner’s halfway and two-thirds-cycle estimates as formal checkpoints.',
     hold: 'Typically about 60–120 days for an entry in the scanner’s DTE window, with the intended decision window around halfway to two-thirds through the cycle. Exit earlier if the dollar target arrives.',
     adjustment: 'The scanner allows an upside-only adjustment after price has rallied safely above all puts: sell an additional put credit spread to raise the upper expiration line. This adds bullish delta and downside risk, so never add while price is falling toward the structure; reduce or close on a reversal.',
-    exit: 'Close or reduce if downside approaches faster than modeled, margin expands beyond plan, the risk graph no longer matches the thesis, or the trade reaches the two-thirds checkpoint without a compelling re-underwrite.',
+    exit: 'Treat a move below the upper long into the modeled shelf/tent as an immediate exit review. Close if tent entry arrives without adequate profit or price keeps moving toward the lower strikes. Also close or reduce if margin expands beyond plan, the risk graph no longer matches the thesis, or the two-thirds checkpoint arrives without a compelling re-underwrite.',
+    tentRule: 'At entry, spot belongs on the upper flat expiration line and the upper long—the entrance to the tent—should normally be 6%–10% below it. Reprice the complete position as soon as spot falls to that upper long. Take a satisfactory gain; otherwise favor closing before the move advances toward the body and lower-strike risk valley.',
   },
   {
     id: 'unbalanced-butterfly-scanner',
@@ -712,15 +714,17 @@ const SCANNER_TRADE_PLANS = [
     outlook: 'bullish',
     vega: 'mixed',
     diagram: {
-      points: [[0, -1.2], [3, -1.2], [6, 1.4], [7, 0], [10, 0]],
-      strikeMarkers: [{ x: 3, label: 'Lower long' }, { x: 6, label: 'Body' }, { x: 7, label: 'Upper long' }],
+      points: [[0, -1.2], [1.4, -1.2], [3.4, 1.4], [4.2, 0], [10, 0]],
+      strikeMarkers: [{ x: 1.4, label: 'Lower' }, { x: 3.4, label: 'B' }, { x: 4.2, label: 'U' }],
+      centerLabel: 'Spot (above tent)',
     },
     howItWorks: 'Buy four upper puts, sell eight body puts, and buy four lower puts. Unequal wing widths create a low-cost, near-flat upper line, a profit tent near the body, and a defined but larger downside risk zone.',
-    entry: 'Use the 120–240 DTE window near the 180-DTE target. The scanner typically places the upper puts near 20–25 delta, the body near 15 delta, and balances the lower wing near 10 or 5 delta. Confirm the full risk graph and planned $5,000–$7,000 campaign capital.',
-    profit: 'The course default is a $1,000 profit target, scaled with quantity. Take it whenever available; otherwise use the halfway and two-thirds probability checkpoints rather than waiting for the expiration peak.',
+    entry: 'Start near 160 DTE inside the 120–240 DTE window. The upper long and tent should normally sit about 6%–10% below current price, leaving spot on the upper flat expiration line. The scanner typically places the upper puts near 20–25 delta, the body near 15 delta, and the lower wing near 10 or 5 delta. Confirm the complete graph and planned $5,000–$7,000 capital.',
+    profit: 'The course default is a $1,000 profit target, scaled with quantity. Take it whenever available. If price enters the tent with a worthwhile gain before that target, closing early is valid; do not wait for the body or expiration peak.',
     hold: 'The modeled expectation is about 16 weeks (112 days), but a good trade should be closed earlier when the $1,000 scaled target is reached.',
     adjustment: 'After a rally away from all puts, an upside-only narrowing or roll for net credit may improve the upper line. Reprice the whole structure first. Never make that adjustment during a decline; if price reverses toward the puts, reduce or close.',
-    exit: 'Manage around the scanner’s $2,000 loss line, scaled by quantity, or exit sooner if downside risk accelerates, the campaign capital limit is exceeded, or the original skew/price thesis fails.',
+    exit: 'Treat a cross below the upper long into the tent as an immediate exit review. Close if the move enters without adequate profit or continues toward the short body. Also manage around the scanner’s $2,000 scaled loss line and exit sooner if downside risk accelerates, campaign capital is exceeded, or the original thesis fails.',
+    tentRule: 'At entry, spot belongs on the upper flat expiration line, normally 6%–10% above the upper long. Once price falls to that upper long and enters the tent, reprice the whole 4/-8/4 fly. Harvest an acceptable gain; otherwise favor closing before the body rather than relying on the narrow expiration peak.',
   },
   {
     id: 'double-hedge-put-butterfly-scanner',
@@ -730,15 +734,17 @@ const SCANNER_TRADE_PLANS = [
     outlook: 'bullish',
     vega: 'mixed',
     diagram: {
-      points: [[0, 1.1], [3, -1.3], [6, 1.4], [7, 0], [10, 0]],
-      strikeMarkers: [{ x: 3, label: '8 lower' }, { x: 6, label: '-8 body' }, { x: 7, label: '4 upper' }],
+      points: [[0, 1.1], [1.4, -1.3], [3.4, 1.4], [4.2, 0], [10, 0]],
+      strikeMarkers: [{ x: 1.4, label: '8L' }, { x: 3.4, label: '-8' }, { x: 4.2, label: '4U' }],
+      centerLabel: 'Spot (above tent)',
     },
     howItWorks: 'Buy four upper puts, sell eight body puts, and buy eight far-lower puts. The doubled crash hedge makes the far-left tail recover, but creates a loss valley between the body and lower hedge; the exact path and margin must be modeled before entry.',
-    entry: 'Use roughly 160–230 DTE, centered near 200 DTE, with guide deltas near 25/15/2.5. Enter only when the scanner’s price, concavity, and skew signals are favorable; four or five warning signals means no entry. Budget the full campaign capital—about $12,500 at the course base size.',
-    profit: 'Use $1,000 as the scaled target and $800 as the average-result checkpoint. Harvest the whole package when either the planned target or a favorable risk/reward checkpoint is reached.',
+    entry: 'Use roughly 160–230 DTE, centered near 200 DTE, with guide deltas near 25/15/2.5. Spot should begin on the upper flat line with the long-dated tent below it, commonly about 6%–10% away. Enter only when price, concavity, and skew signals are favorable; four or five warnings means no entry. Budget about $12,500 at the course base size.',
+    profit: 'Use $1,000 as the scaled target and $800 as the average-result checkpoint. Harvest the whole package when either is reached. If price enters the tent with a worthwhile gain, closing before the body is a valid winner exit.',
     hold: 'The modeled expectation is about 12 weeks (84 days). A winner can be much shorter; the calendar estimate is a review horizon, not a reason to ignore an early target.',
     adjustment: 'Because the structure is complex, reducing or exiting is the default. Only use the scanner-defined put credit/debit spreads or roll-down/roll-up reviews after repricing the complete position. Do not improvise a one-leg repair or add campaign capital automatically.',
-    exit: 'Use the scanner’s $2,500 scaled management-loss line and its loss-potential/technical-alert warnings. Close earlier if the hedge valley, margin, or warning count moves outside the plan.',
+    exit: 'Treat a cross below the upper long into the tent as an immediate exit review. Close if entry occurs without adequate profit or price continues toward the body and hedge valley. Use the scanner’s $2,500 scaled management-loss line and its loss-potential/technical-alert warnings as additional hard exits.',
+    tentRule: 'Spot should begin on the upper flat expiration line, commonly 6%–10% above the upper long. The doubled lower hedge does not make the path through the tent harmless; a loss valley still sits beyond the body. Reprice the entire 4/-8/8 structure at the upper long. Take an acceptable gain or favor closing before price migrates toward that valley.',
   },
   {
     id: 'road-trip-butterfly-scanner',
@@ -748,15 +754,17 @@ const SCANNER_TRADE_PLANS = [
     outlook: 'bullish',
     vega: 'mixed',
     diagram: {
-      points: [[0, -1.1], [3, -1.1], [6, 1.3], [7, -0.15], [10, -0.15]],
-      strikeMarkers: [{ x: 3, label: 'Lower long' }, { x: 6, label: 'Body' }, { x: 7, label: 'Upper long' }],
+      points: [[0, -1.1], [1.4, -1.1], [3.4, 1.3], [4.75, -0.15], [10, -0.15]],
+      strikeMarkers: [{ x: 1.4, label: 'Lower' }, { x: 3.4, label: 'B' }, { x: 4.75, label: 'U' }],
+      centerLabel: 'Spot (above tent)',
     },
     howItWorks: 'Buy one upper put, sell two body puts, and buy one farther-lower put, commonly in five-lot units. The broken wing seeks a low debit and efficient upside line while preserving a defined downside loss zone.',
     entry: 'Use 70–85 DTE, place the upper long about 1.25% below spot, and keep debit below 5% of initial margin. A down day with volatility up is preferred. Stagger entries about 14 days apart and cap the campaign at four or five open tranches.',
-    profit: 'Target about 7%–15% of capital at risk and close the entire tranche when reached. The preferred harvest window is halfway to two-thirds through the cycle; the latest planned exit is 15–20 DTE.',
+    profit: 'Target about 7%–15% of capital at risk and close the entire tranche when reached. If price enters the tent with a satisfactory gain, harvest it rather than waiting for the body. The preferred time window is halfway to two-thirds through the cycle; the latest planned exit is 15–20 DTE.',
     hold: 'Normally about 35–50 days for a healthy 70–85 DTE entry. Leave the position mostly hands-off for the first 21–30 days unless the predefined risk limit is hit.',
     adjustment: 'After the hands-off window, a rally can be managed with the scanner’s reverse-Harvey roll for credit until the upper line is flat or slightly profitable. At the body on a decline, use only the planned put-debit-spread hedge. Layer gradually and reprice the whole tranche.',
-    exit: 'Close near a 4%–5% loss of capital at risk, at 15–20 DTE, or whenever the staggered campaign exceeds its total risk budget. Do not average down by adding an unscheduled tranche.',
+    exit: 'Treat a move below the upper long into the tent as an immediate exit review. Under a conservative tent-entry plan, close if the tranche lacks a satisfactory profit or continues toward the body; this rule can override the 21–30 day hands-off preference. Also close near a 4%–5% loss, at 15–20 DTE, or when campaign risk is exceeded.',
+    tentRule: 'Spot begins on the upper flat line, but this shorter trade places the upper long only about 1.25% below it. Choose the rule before entry: once spot reaches that upper long, reprice the whole tranche. Take a satisfactory gain; otherwise close rather than waiting for the body. If you remain, the body-trigger put-debit-spread hedge is the next defense—not an invitation to average down.',
     reverseHarvey: {
       summary: 'A Reverse Harvey is the Road Trip’s upside adjustment. It rolls the upper long put one strike closer to the double-short body for a net credit. That credit raises the flat P&L line to the right of the tent, which normally begins slightly below zero because the butterfly was opened for a debit.',
       steps: [
@@ -884,6 +892,15 @@ function ScannerPlanCard({ strategy, isOpen, onToggle, number }) {
               <h3>How it works</h3>
               <p>{strategy.howItWorks}</p>
             </div>
+            {strategy.tentRule && (
+              <div className="opt-scanner-tent-rule">
+                <span className="opt-scanner-tent-icon" aria-hidden="true">⌁</span>
+                <div>
+                  <h3>Upper-line entry &amp; tent-exit rule</h3>
+                  <p>{strategy.tentRule}</p>
+                </div>
+              </div>
+            )}
             <div className="opt-scanner-plan-grid">
               <ScannerPlanItem label="Best entry">{strategy.entry}</ScannerPlanItem>
               <ScannerPlanItem label="Typical winning hold">{strategy.hold}</ScannerPlanItem>

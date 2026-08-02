@@ -8209,6 +8209,41 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   line-height: 1.55;
   margin: 0;
 }
+.opt-scanner-tent-rule {
+  align-items: flex-start;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--teal-2) 10%, var(--p-0d1b33)), var(--p-0d1b33));
+  border: 1px solid color-mix(in srgb, var(--teal-2) 38%, var(--p-243356));
+  border-radius: 8px;
+  display: flex;
+  gap: 0.7rem;
+  margin: 0 0 0.85rem;
+  padding: 0.75rem 0.8rem;
+}
+.opt-scanner-tent-icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--teal-2) 15%, var(--p-1a2744));
+  border: 1px solid color-mix(in srgb, var(--teal-2) 45%, var(--p-243356));
+  border-radius: 50%;
+  color: var(--teal-2);
+  display: flex;
+  flex: 0 0 28px;
+  font-size: 1.05rem;
+  font-weight: 800;
+  height: 28px;
+  justify-content: center;
+}
+.opt-scanner-tent-rule h3 {
+  color: var(--teal-2);
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  margin: 0 0 0.25rem;
+  text-transform: uppercase;
+}
+.opt-scanner-tent-rule p {
+  color: var(--p-b9c8de);
+  line-height: 1.5;
+  margin: 0;
+}
 .opt-scanner-plan-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

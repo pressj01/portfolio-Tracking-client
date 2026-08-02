@@ -74,7 +74,7 @@ DEFAULTS = {
     "upper_long_delta": "both",
     "market_bias": "neutral",
     # Match the Unbalanced Put Condor scanner's long-dated timing.
-    "target_dte": 180,
+    "target_dte": 160,
     "min_dte": 120,
     "max_dte": 240,
     "tranche_quantity": 4,
@@ -1154,7 +1154,7 @@ def run_unbalanced_butterfly_scan(payload: dict) -> dict:
     market_bias = _bias_name(p.get("market_bias"))
     target_dte = max(
         MIN_TARGET_DTE,
-        min(MAX_TARGET_DTE, int(_num(p.get("target_dte"), 180) or 180)),
+        min(MAX_TARGET_DTE, int(_num(p.get("target_dte"), 160) or 160)),
     )
     min_dte = max(
         MIN_TARGET_DTE,

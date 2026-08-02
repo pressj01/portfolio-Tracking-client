@@ -12,7 +12,7 @@ const FALLBACK_DEFAULTS = {
   tickers: 'SPY,QQQ,IWM',
   upper_long_delta: 'both',
   market_bias: 'neutral',
-  target_dte: 180,
+  target_dte: 160,
   min_dte: 120,
   max_dte: 240,
   tranche_quantity: 4,
@@ -84,7 +84,7 @@ function HelpPanel() {
       <p style={{ marginTop: 0 }}>
         This scanner implements the course&rsquo;s STT broken-wing butterfly as one
         4/−8/4 put tranche, starting with the standard monthly expiration
-        nearest 180 DTE and then checking the rest of the selected 120–240 DTE
+        nearest 160 DTE and then checking the rest of the selected 120–240 DTE
         window when that chain cannot form the structure.
         It buys the upper long, sells twice as many body puts, and buys the lower
         long with a wider downside wing.

@@ -196,7 +196,7 @@ const GUIDES = {
       items: [
         ['Tickers', 'Comma-separated underlyings to scan.'],
         ['Short-delta pair', 'Chooses the front/back short-put delta targets: 15/5, 20/10, 25/15, or all three.'],
-        ['Target DTE', 'Preferred days to expiration.'],
+        ['Target DTE', 'Preferred days to expiration. The default is 160 DTE.'],
         ['Minimum / Maximum DTE', 'Hard calendar-day bounds for eligible listed expirations.'],
       ],
     },
@@ -343,7 +343,7 @@ const GUIDES = {
         ['Tickers', 'Comma-separated underlyings to scan. Use the market-data symbol expected by Yahoo Finance, such as SPY or ^SPX.'],
         ['Upper-long delta', 'Scans a 20-delta upper long, the course-original 25-delta upper long, or both as separate candidates.'],
         ['Market bias', 'Applies the course tranche-delta range: bearish −3 to −1, neutral −1 to +1, or bullish +1 to +3 share equivalents.'],
-        ['Target DTE', 'Preferred calendar days to expiration. The default is 180 DTE, matching the Unbalanced Put Condor.'],
+        ['Target DTE', 'Preferred calendar days to expiration. The default is 160 DTE, matching the Unbalanced Put Condor.'],
         ['Minimum / Maximum DTE', 'Hard bounds for eligible standard monthly expirations. The 120–240 DTE defaults match the Unbalanced Put Condor; weekly expirations are excluded.'],
       ],
     },

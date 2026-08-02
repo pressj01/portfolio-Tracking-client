@@ -9011,7 +9011,7 @@ function UnbalancedButterflyScannerHelp() {
         Practical workflow
       </h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Choose the complete-position quantity, then scan both 20- and 25-delta upper-long variants in the 120–240 DTE window around the 180 DTE target.</li>
+        <li>Choose the complete-position quantity, then scan both 20- and 25-delta upper-long variants in the 120–240 DTE window around the 160 DTE target.</li>
         <li>Choose the desired market-bias range and compare the complete-position delta, theta, upper line, execution, and maximum loss.</li>
         <li>Expand a result to review success/failure, time-evolved tent values, reach/never-touch, and lower-tail risk.</li>
         <li>Use the risk graph and verify the exact displayed strikes and quantities before entry.</li>
