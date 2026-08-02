@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   comparerLogHoverData,
+  comparerReturnModeLabel,
   comparerStatsForMode,
   computeBlendTrace,
   selectComparerTraces,
@@ -123,6 +124,16 @@ test('automatically selects a log scale only for extreme visible wealth ranges',
     shouldUseComparerLogScale(extreme, ['MSFT', 'JNJ'], 'total', '2026-01-01', '2026-01-01'),
     false,
   )
+})
+
+test('labels comparer charts for the traces shown by each return mode', () => {
+  assert.equal(comparerReturnModeLabel('total'), 'Total Return')
+  assert.equal(comparerReturnModeLabel('price'), 'Price Only')
+  assert.equal(comparerReturnModeLabel('pricediv'), 'Price + Dividends')
+  assert.equal(comparerReturnModeLabel('both'), 'Total Return & Price Only')
+  assert.equal(comparerReturnModeLabel('all3'), 'Price Only, Reinvested & Total Return')
+  assert.equal(comparerReturnModeLabel('all4'), 'Price Only, Price + Dividends, Reinvested & Total Return')
+  assert.equal(comparerReturnModeLabel('unknown'), 'Total Return')
 })
 
 test('preformats log-scale hover values to two decimal places', () => {

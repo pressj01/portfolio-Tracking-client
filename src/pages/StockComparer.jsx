@@ -6,7 +6,7 @@ import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
-import { comparerLogHoverData, selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
+import { comparerLogHoverData, comparerReturnModeLabel, selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
 import ComparerTickerLibrary from '../components/ComparerTickerLibrary'
 import { uniqueTickers } from '../utils/comparerTickerLibrary'
 
@@ -679,9 +679,10 @@ export default function StockComparer() {
         yAxisRange = [yLo - pad, yHi + pad]
       }
     }
+    const returnModeLabel = comparerReturnModeLabel(returnMode)
     const baseTitle = titleWindow
-      ? `Cumulative Total Return — ${titleWindow[0]} → ${titleWindow[1]}`
-      : 'Cumulative Total Return (%)'
+      ? `Cumulative ${returnModeLabel} — ${titleWindow[0]} → ${titleWindow[1]}`
+      : `Cumulative ${returnModeLabel} (%)`
     const titleText = `${baseTitle}${logScaleActive ? ' — Log Scale' : ''}`
     const largeReturnDisplay = !logScaleActive && returnPctMode && visibleAbsMax >= 1000
     return {
@@ -706,7 +707,7 @@ export default function StockComparer() {
           type: logScaleActive ? 'log' : 'linear',
           title: logScaleActive
             ? 'Growth of $100 (log scale)'
-            : (returnPctMode ? 'Cumulative Total Return (%)' : 'Normalized Return (100 = start)'),
+            : (returnPctMode ? `Cumulative ${returnModeLabel} (%)` : 'Normalized Return (100 = start)'),
           ticksuffix: !logScaleActive && returnPctMode ? '%' : '',
           tickformat: logScaleActive ? ',.0f' : (returnPctMode ? (largeReturnDisplay ? ',.0f' : ',.2f') : ',.2f'),
           separatethousands: true,

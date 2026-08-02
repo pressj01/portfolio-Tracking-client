@@ -8,7 +8,7 @@ import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
-import { comparerLogHoverData, selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
+import { comparerLogHoverData, comparerReturnModeLabel, selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
 import ComparerTickerLibrary from '../components/ComparerTickerLibrary'
 import { uniqueTickers } from '../utils/comparerTickerLibrary'
 
@@ -649,7 +649,10 @@ export default function ETFComparer() {
         yAxisRange = [yLo - pad, yHi + pad]
       }
     }
-    const baseTitle = titleWindow ? `Total Return — ${titleWindow[0]} → ${titleWindow[1]}` : 'Total Return (%)'
+    const returnModeLabel = comparerReturnModeLabel(returnMode)
+    const baseTitle = titleWindow
+      ? `${returnModeLabel} — ${titleWindow[0]} → ${titleWindow[1]}`
+      : `${returnModeLabel} (%)`
     const titleText = `${baseTitle}${logScaleActive ? ' — Log Scale' : ''}`
     return {
       data: traces,
@@ -668,7 +671,7 @@ export default function ETFComparer() {
           type: logScaleActive ? 'log' : 'linear',
           title: logScaleActive
             ? 'Growth of $100 (log scale)'
-            : (returnPctMode ? 'Total Return (%)' : 'Normalized Return (100 = start)'),
+            : (returnPctMode ? `${returnModeLabel} (%)` : 'Normalized Return (100 = start)'),
           ticksuffix: !logScaleActive && returnPctMode ? '%' : '',
           tickformat: logScaleActive ? ',.0f' : ',.2f',
           gridcolor: '#333',
