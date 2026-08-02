@@ -1,9 +1,11 @@
 import React, { useState } from 'react'
+import { Link } from 'react-router-dom'
 import OptionPayoffDiagram from '../components/OptionPayoffDiagram'
 
 const TABS = [
   { id: 'basics', label: 'Puts & Calls Basics' },
   { id: 'strategies', label: 'Strategy Guide' },
+  { id: 'scanner-plans', label: 'Scanner Trade Plans' },
 ]
 
 const OUTLOOK_LABEL = {
@@ -22,10 +24,15 @@ function OutlookTag({ outlook }) {
 }
 
 function VegaTag({ vega }) {
-  const isLong = vega === 'long'
+  const label = vega === 'long'
+    ? 'Long volatility (net long vega)'
+    : vega === 'short'
+      ? 'Short volatility (net short vega)'
+      : 'Mixed / position-dependent vega'
+  const modifier = vega === 'long' ? 'longvega' : vega === 'short' ? 'shortvega' : 'neutralvega'
   return (
-    <span className={`opt-edu-tag opt-edu-tag--${isLong ? 'longvega' : 'shortvega'}`}>
-      <small>Vega</small>{isLong ? 'Long volatility (net long vega)' : 'Short volatility (net short vega)'}
+    <span className={`opt-edu-tag opt-edu-tag--${modifier}`}>
+      <small>Vega</small>{label}
     </span>
   )
 }
@@ -564,6 +571,223 @@ const STRATEGIES = [
   },
 ]
 
+const SCANNER_TRADE_PLANS = [
+  {
+    id: 'cash-secured-put-scanner',
+    name: 'Put Selling Scanner',
+    family: 'Cash-secured put',
+    route: '/put-selling-scanner',
+    outlook: 'bullish',
+    vega: 'short',
+    diagram: {
+      points: [[0, -2.2], [4, 0.5], [10, 0.5]],
+      strikeMarkers: [{ x: 4, label: 'Short put' }],
+    },
+    howItWorks: 'Sell an out-of-the-money put and reserve enough cash to buy 100 shares at the strike. The premium is the maximum profit; below the breakeven, the position behaves like a stock purchase and can lose substantially.',
+    entry: 'Start near the scanner default of 35 DTE and about 0.25 short-put delta. Favor a quality underlying after a stabilized pullback, with liquid options and adequate IV premium. Enter only when you would be comfortable owning the shares at strike minus credit; avoid fresh breakdowns and earnings unless that event risk is intentional.',
+    profit: 'Buy back the put after capturing the scanner target: typically 60% of credit for a defensive setup, 65% for a balanced setup, or 70% for a strong setup. Do not hold the last few dollars of premium merely to reach expiration.',
+    hold: 'Often 1–3 weeks from a roughly 35-DTE entry when the trade works promptly. Reassess at 21 DTE, or near the halfway point for a shorter initial cycle, and exit earlier whenever the target is reached.',
+    adjustment: 'The clean choices are assignment or exit. Accept assignment only if the original stock-ownership thesis still holds and the cash is available. A roll should be treated as closing one trade and opening a new one—use it only for a net credit with a still-valid thesis, never to hide a loss.',
+    exit: 'Buy it back if price action becomes a fresh breakdown, the ownership thesis fails, an unplanned event appears, or the position no longer fits the portfolio risk budget.',
+  },
+  {
+    id: 'covered-call-scanner',
+    name: 'Covered Call Scanner',
+    family: 'Covered call',
+    route: '/covered-call-scanner',
+    outlook: 'neutral',
+    vega: 'short',
+    diagram: {
+      points: [[0, -2.2], [6, 0.5], [10, 0.5]],
+      strikeMarkers: [{ x: 6, label: 'Short call' }],
+    },
+    howItWorks: 'Own 100 shares and sell one call against them. Premium cushions a small decline, but stock downside remains substantial; gains above the short strike are capped because assignment sells the shares at that strike.',
+    entry: 'Start near 35 DTE and about 0.30 call delta, normally at least 2% out of the money. Favor shares you already intend to hold after a stretched run, with liquid calls and useful premium. Check cost basis, earnings, and the next ex-dividend date before entry.',
+    profit: 'Buy back the call after capturing roughly 60%–70% of its credit, with 65% the balanced default. If the shares reach the strike and sale is acceptable, letting assignment occur is a valid planned outcome.',
+    hold: 'Usually 1–3 weeks in a healthy 35-DTE cycle. Reassess at 21 DTE or halfway through shorter cycles; close or roll as soon as the profit target arrives.',
+    adjustment: 'If the stock approaches the strike, either allow assignment or roll up and out for a net credit when you still want the shares. Avoid rolling to a worse strike merely to postpone a decision. Close or roll before ex-dividend when an in-the-money call creates unwanted early-assignment risk.',
+    exit: 'Close the call if the stock thesis changes, assignment would create an unacceptable tax or portfolio result, or the call becomes difficult to manage around earnings or a dividend.',
+  },
+  {
+    id: 'bull-put-spread-scanner',
+    name: 'Bull Put Spread Scanner',
+    family: 'Defined-risk credit spread',
+    route: '/bull-put-spread-scanner',
+    outlook: 'bullish',
+    vega: 'short',
+    diagram: {
+      points: [[0, -1], [3.5, -1], [4.5, 0.6], [10, 0.6]],
+      strikeMarkers: [{ x: 3.5, label: 'Long put' }, { x: 4.5, label: 'Short put' }],
+    },
+    howItWorks: 'Sell a higher-strike put and buy a lower-strike put in the same expiration. The net credit is maximum profit; the long put caps maximum loss at spread width minus credit.',
+    entry: 'Start near 35 DTE, with the short put near 0.25 delta and the long put near 0.10 delta. Favor an uptrend or a recovering pullback above meaningful support, liquid strikes, and no unplanned earnings event.',
+    profit: 'Close after keeping about 50% of credit for a defensive setup, 60% for balanced, or 65% for strong. The scanner’s risk line uses a buyback near 2× the opening credit as the default loss trigger, capped below the spread width.',
+    hold: 'Frequently 1–3 weeks. Reassess at 21 DTE for longer entries or when about 40% of the cycle remains; close no later than 3 DTE to avoid concentrated gamma and assignment risk.',
+    adjustment: 'Exit is usually cleaner when support breaks. If the bullish thesis remains valid, roll the entire spread out for a net credit without increasing width or size. Never remove the protective long put or turn a defined-risk trade into a naked short put.',
+    exit: 'Close when support or trend invalidates, the loss trigger is reached, liquidity deteriorates, or 3 DTE arrives—even if the spread is still out of the money.',
+  },
+  {
+    id: 'bear-put-spread-scanner',
+    name: 'Bear Put Spread Scanner',
+    family: 'Defined-risk debit spread',
+    route: '/bear-put-spread-scanner',
+    outlook: 'bearish',
+    vega: 'long',
+    diagram: {
+      points: [[0, 0.9], [4, 0.9], [5.5, -0.6], [10, -0.6]],
+      strikeMarkers: [{ x: 4, label: 'Short put' }, { x: 5.5, label: 'Long put' }],
+    },
+    howItWorks: 'Buy a higher-strike put and sell a lower-strike put in the same expiration. The debit is maximum loss; profit rises as price falls, but is capped once the underlying reaches the short put strike.',
+    entry: 'Start near 45 DTE, with the long put near 0.50 delta and the short put near 0.25 delta. Favor a confirmed breakdown or relative weakness below the 50-day trend, while avoiding a fresh low so oversold that bounce risk dominates.',
+    profit: 'Take roughly 50% of maximum profit on a defensive setup, 65% on balanced, or 75% on strong. The scanner’s loss plan generally exits after 40%–50% of the opening debit is lost rather than waiting for the debit to go to zero.',
+    hold: 'Commonly 1–4 weeks when the breakdown follows through. Reassess at 21 DTE for entries longer than 35 DTE, otherwise around the halfway point, and close immediately when the profit target is available.',
+    adjustment: 'This is already a defined-risk directional trade, so exiting is usually better than repairing it. A new spread should be justified independently; do not add contracts or widen risk simply because price bounced.',
+    exit: 'Close if price recovers above the nearest lost 20- or 50-day moving average, the loss limit is hit, the bearish catalyst disappears, or the spread approaches expiration without follow-through.',
+  },
+  {
+    id: 'bear-call-spread-scanner',
+    name: 'Bear Call Spread Scanner',
+    family: 'Defined-risk credit spread',
+    route: '/bear-call-spread-scanner',
+    outlook: 'bearish',
+    vega: 'short',
+    diagram: {
+      points: [[0, 0.6], [5.5, 0.6], [6.5, -1], [10, -1]],
+      strikeMarkers: [{ x: 5.5, label: 'Short call' }, { x: 6.5, label: 'Long call' }],
+    },
+    howItWorks: 'Sell a lower-strike call and buy a higher-strike call in the same expiration. The credit is maximum profit; the long call caps maximum loss if the underlying rallies through both strikes.',
+    entry: 'Start near 35 DTE after a rejected rally or rollover at identifiable resistance. Prefer liquid strikes, fading momentum, and no unplanned earnings event; avoid names sitting at fresh highs with squeeze risk.',
+    profit: 'Close after capturing about 50% of credit for a defensive setup, 60% for balanced, or 65% for strong. A buyback near 2× the opening credit is the scanner’s default loss trigger.',
+    hold: 'Often 1–3 weeks. Reassess at 21 DTE or with about 40% of the cycle left and close by 3 DTE rather than carrying pin and assignment risk.',
+    adjustment: 'When resistance fails, exit is normally best. If the bearish/neutral thesis remains intact, the entire spread may be rolled up and out for a net credit without increasing width or size. Never remove the long call.',
+    exit: 'Close above the resistance that justified entry, at the loss trigger, before an unwanted ex-dividend assignment window, or no later than 3 DTE.',
+  },
+  {
+    id: 'iron-condor-scanner',
+    name: 'Iron Condor Scanner & Variants',
+    family: 'Four-leg range trade',
+    route: '/iron-condor-scanner',
+    outlook: 'neutral',
+    vega: 'short',
+    diagram: {
+      points: [[0, -1], [3, -1], [4, 0.7], [6, 0.7], [7, -1], [10, -1]],
+      strikeMarkers: [{ x: 3, label: 'LP' }, { x: 4, label: 'SP' }, { x: 6, label: 'SC' }, { x: 7, label: 'LC' }],
+    },
+    howItWorks: 'Combine a bull put spread and bear call spread around the current price. Maximum profit is the credit when price finishes between the short strikes; either long wing caps loss beyond its side.',
+    entry: 'Start near 40 DTE, with short options around 0.16 delta and protective longs around 0.07 delta. Favor a liquid, range-bound underlying with elevated but not event-driven IV and no earnings inside the trade window.',
+    profit: 'Close after capturing about 40% of credit for a defensive setup, 50% for balanced, or 55% for strong. Use a whole-position buyback near 2× the opening credit as the default loss line.',
+    hold: 'Often 1–3 weeks. Reassess at 21 DTE and close by 7 DTE even when the shorts remain out of the money; late-cycle gamma can overwhelm the remaining credit.',
+    adjustment: 'If one side is tested while the range thesis survives, roll the untested short spread inward for additional credit without widening risk. Do not chase the tested side outward or add size. If both breakevens are threatened, close—the range thesis is gone.',
+    exit: 'Close at the loss trigger, after a decisive range breakout, before an unplanned event, or at 7 DTE.',
+    variants: [
+      'Balanced: symmetric wings and the clean flat profit shelf shown in the graph.',
+      'Strike tilt or centered-risk tilt: shifts the shelf and breakevens bullish or bearish.',
+      'Ratio tilt: changes contract counts, so one side can carry more loss; verify the scanner’s exact graph before entry.',
+      'Weirdor / hedged Weirdor / Jeep: add asymmetric ratios or a defensive put structure; manage from the scanner’s modeled total P&L, not from one leg in isolation.',
+    ],
+  },
+  {
+    id: 'unbalanced-put-condor-scanner',
+    name: 'Unbalanced Put Condor Scanner',
+    family: 'Long-dated asymmetric put condor',
+    route: '/unbalanced-put-condor-scanner',
+    outlook: 'bullish',
+    vega: 'mixed',
+    diagram: {
+      points: [[0, -1.1], [2, -1.1], [3, 1], [6, 1], [7, 0], [10, 0]],
+      strikeMarkers: [{ x: 2, label: 'Lower LP' }, { x: 3, label: 'Lower SP' }, { x: 6, label: 'Upper SP' }, { x: 7, label: 'Upper LP' }],
+    },
+    howItWorks: 'Use four puts in one expiration: a higher-strike debit spread plus a lower-strike credit spread, with independently sized widths or quantities. The result targets near-zero entry delta but creates asymmetric downside and a broad profit shelf.',
+    entry: 'Use the scanner’s 120–240 DTE window, centered near 180 DTE, and one of its 15/5, 20/10, or 25/15 short-delta presets. Enter only when the modeled total debit, margin, delta, and downside floor fit the campaign budget.',
+    profit: 'Set a dollar target before entry and close the entire package when it is reached. Use the scanner’s halfway and two-thirds-cycle estimates as formal harvest checkpoints; do not wait for expiration merely because the shelf looks favorable.',
+    hold: 'Typically about 60–120 days for an entry in the scanner’s DTE window, with the intended decision window around halfway to two-thirds through the cycle. Exit earlier if the dollar target arrives.',
+    adjustment: 'The scanner allows an upside-only adjustment after price has rallied safely above all puts: sell an additional put credit spread to raise the upper expiration line. This adds bullish delta and downside risk, so never add while price is falling toward the structure; reduce or close on a reversal.',
+    exit: 'Close or reduce if downside approaches faster than modeled, margin expands beyond plan, the risk graph no longer matches the thesis, or the trade reaches the two-thirds checkpoint without a compelling re-underwrite.',
+  },
+  {
+    id: 'unbalanced-butterfly-scanner',
+    name: 'Unbalanced Butterfly Scanner',
+    family: '4 / -8 / 4 long-dated put fly',
+    route: '/unbalanced-butterfly-scanner',
+    outlook: 'bullish',
+    vega: 'mixed',
+    diagram: {
+      points: [[0, -1.2], [3, -1.2], [6, 1.4], [7, 0], [10, 0]],
+      strikeMarkers: [{ x: 3, label: 'Lower long' }, { x: 6, label: 'Body' }, { x: 7, label: 'Upper long' }],
+    },
+    howItWorks: 'Buy four upper puts, sell eight body puts, and buy four lower puts. Unequal wing widths create a low-cost, near-flat upper line, a profit tent near the body, and a defined but larger downside risk zone.',
+    entry: 'Use the 120–240 DTE window near the 180-DTE target. The scanner typically places the upper puts near 20–25 delta, the body near 15 delta, and balances the lower wing near 10 or 5 delta. Confirm the full risk graph and planned $5,000–$7,000 campaign capital.',
+    profit: 'The course default is a $1,000 profit target, scaled with quantity. Take it whenever available; otherwise use the halfway and two-thirds probability checkpoints rather than waiting for the expiration peak.',
+    hold: 'The modeled expectation is about 16 weeks (112 days), but a good trade should be closed earlier when the $1,000 scaled target is reached.',
+    adjustment: 'After a rally away from all puts, an upside-only narrowing or roll for net credit may improve the upper line. Reprice the whole structure first. Never make that adjustment during a decline; if price reverses toward the puts, reduce or close.',
+    exit: 'Manage around the scanner’s $2,000 loss line, scaled by quantity, or exit sooner if downside risk accelerates, the campaign capital limit is exceeded, or the original skew/price thesis fails.',
+  },
+  {
+    id: 'double-hedge-put-butterfly-scanner',
+    name: 'Double-Hedge Put Butterfly Scanner',
+    family: '4 / -8 / 8 put butterfly',
+    route: '/double-hedge-put-butterfly-scanner',
+    outlook: 'bullish',
+    vega: 'mixed',
+    diagram: {
+      points: [[0, 1.1], [3, -1.3], [6, 1.4], [7, 0], [10, 0]],
+      strikeMarkers: [{ x: 3, label: '8 lower' }, { x: 6, label: '-8 body' }, { x: 7, label: '4 upper' }],
+    },
+    howItWorks: 'Buy four upper puts, sell eight body puts, and buy eight far-lower puts. The doubled crash hedge makes the far-left tail recover, but creates a loss valley between the body and lower hedge; the exact path and margin must be modeled before entry.',
+    entry: 'Use roughly 160–230 DTE, centered near 200 DTE, with guide deltas near 25/15/2.5. Enter only when the scanner’s price, concavity, and skew signals are favorable; four or five warning signals means no entry. Budget the full campaign capital—about $12,500 at the course base size.',
+    profit: 'Use $1,000 as the scaled target and $800 as the average-result checkpoint. Harvest the whole package when either the planned target or a favorable risk/reward checkpoint is reached.',
+    hold: 'The modeled expectation is about 12 weeks (84 days). A winner can be much shorter; the calendar estimate is a review horizon, not a reason to ignore an early target.',
+    adjustment: 'Because the structure is complex, reducing or exiting is the default. Only use the scanner-defined put credit/debit spreads or roll-down/roll-up reviews after repricing the complete position. Do not improvise a one-leg repair or add campaign capital automatically.',
+    exit: 'Use the scanner’s $2,500 scaled management-loss line and its loss-potential/technical-alert warnings. Close earlier if the hedge valley, margin, or warning count moves outside the plan.',
+  },
+  {
+    id: 'road-trip-butterfly-scanner',
+    name: 'Road Trip Unbalanced Butterfly Scanner',
+    family: 'Staggered broken-wing put butterfly',
+    route: '/road-trip-butterfly-scanner',
+    outlook: 'bullish',
+    vega: 'mixed',
+    diagram: {
+      points: [[0, -1.1], [3, -1.1], [6, 1.3], [7, -0.15], [10, -0.15]],
+      strikeMarkers: [{ x: 3, label: 'Lower long' }, { x: 6, label: 'Body' }, { x: 7, label: 'Upper long' }],
+    },
+    howItWorks: 'Buy one upper put, sell two body puts, and buy one farther-lower put, commonly in five-lot units. The broken wing seeks a low debit and efficient upside line while preserving a defined downside loss zone.',
+    entry: 'Use 70–85 DTE, place the upper long about 1.25% below spot, and keep debit below 5% of initial margin. A down day with volatility up is preferred. Stagger entries about 14 days apart and cap the campaign at four or five open tranches.',
+    profit: 'Target about 7%–15% of capital at risk and close the entire tranche when reached. The preferred harvest window is halfway to two-thirds through the cycle; the latest planned exit is 15–20 DTE.',
+    hold: 'Normally about 35–50 days for a healthy 70–85 DTE entry. Leave the position mostly hands-off for the first 21–30 days unless the predefined risk limit is hit.',
+    adjustment: 'After the hands-off window, a rally can be managed with the scanner’s reverse-Harvey roll for credit until the upper line is flat or slightly profitable. At the body on a decline, use only the planned put-debit-spread hedge. Layer gradually and reprice the whole tranche.',
+    exit: 'Close near a 4%–5% loss of capital at risk, at 15–20 DTE, or whenever the staggered campaign exceeds its total risk budget. Do not average down by adding an unscheduled tranche.',
+    reverseHarvey: {
+      summary: 'A Reverse Harvey is the Road Trip’s upside adjustment. It rolls the upper long put one strike closer to the double-short body for a net credit. That credit raises the flat P&L line to the right of the tent, which normally begins slightly below zero because the butterfly was opened for a debit.',
+      steps: [
+        'Wait until the 21–30 day hands-off period has passed and the underlying has rallied safely above the upper long put. Do not use it while price is falling toward the tent.',
+        'Enter one same-expiration roll order: sell-to-close the current upper long put and buy-to-open the next listed put strike down toward the body, in the same quantity. The new strike must remain above the body.',
+        'Require a net credit. Use the scanner’s “Reverse Harvey roll” and “Upper line after the roll” values to check the exact strikes, credit, and revised upper line before sending the order.',
+        'Repeat only one strike at a time on continued strength until the modeled upper line is flat or slightly profitable. Stop once that goal is reached.',
+      ],
+      risk: 'Narrowing the upper wing gives up part of the original tent height and changes delta, theta, margin, and breakevens. Use a single limit roll order so the upper long is not left unpaired, then reprice the entire butterfly. Skip the roll if it cannot be done for a credit or price has reversed toward the body.',
+    },
+  },
+  {
+    id: 'sixty-forty-twenty-fly-scanner',
+    name: '60/40/20 Fly Scanner',
+    family: 'Delta-selected put butterfly',
+    route: '/sixty-forty-twenty-fly-scanner',
+    outlook: 'neutral',
+    vega: 'mixed',
+    diagram: {
+      points: [[0, -0.5], [3, -0.5], [6, 1.4], [8, -0.5], [10, -0.5]],
+      strikeMarkers: [{ x: 3, label: '20Δ long' }, { x: 6, label: '40Δ short' }, { x: 8, label: '60Δ long' }],
+    },
+    howItWorks: 'Buy the put nearest 0.60 delta, sell two puts nearest 0.40 delta, and buy the put nearest 0.20 delta in one expiration. Delta-selected strikes aim for a near-zero entry delta and positive theta while creating a defined tent-shaped expiration payoff.',
+    entry: 'Use SPY, QQQ, IWM, or VOO at 60–80 DTE, centered near 70 DTE. Require liquid quotes, positive theta, near-zero net delta, and entry delta/theta below 50%. Record the exact original 60- and 40-delta contracts; they remain the monitored contracts after entry.',
+    profit: 'Review modeled P&L around days 8 and 14. The presentation examples harvested roughly 7.5%–10.8% on capital, so a practical educational target is the pre-entered dollar amount in that range—not a promise. Close the complete fly when that target arrives instead of waiting for the tent peak.',
+    hold: 'A well-behaved winner is commonly an 8–14 day trade. It may stay open longer if every monitor remains healthy, but 30 DTE is the mandatory exit regardless of P&L.',
+    adjustment: 'This rule set favors exit over adjustment. Treat a 20% delta change as caution: original 0.40 leg outside 0.32–0.48 or original 0.60 leg outside 0.48–0.72. Reduce or close rather than trying to rebuild the fly after the deltas migrate.',
+    exit: 'Exit when either monitored delta changes 30% from entry, delta/theta reaches 60%, liquidity fails, or 30 DTE arrives. The exact 30% bands are 0.28–0.52 for the original 0.40 leg and 0.42–0.78 for the original 0.60 leg.',
+  },
+]
+
 function StrategyCard({ strategy, isOpen, onToggle }) {
   return (
     <div className={`cef-guide-card${isOpen ? ' cef-guide-card--open' : ''}`}>
@@ -618,6 +842,143 @@ function StrategySection() {
   )
 }
 
+function ScannerPlanItem({ label, children, tone }) {
+  return (
+    <div className={`opt-scanner-plan-item${tone ? ` opt-scanner-plan-item--${tone}` : ''}`}>
+      <h4>{label}</h4>
+      <p>{children}</p>
+    </div>
+  )
+}
+
+function ScannerPlanCard({ strategy, isOpen, onToggle, number }) {
+  return (
+    <div className={`cef-guide-card opt-scanner-card${isOpen ? ' cef-guide-card--open' : ''}`}>
+      <button className="cef-guide-header" onClick={onToggle} aria-expanded={isOpen}>
+        <span className="cef-guide-number">{number}</span>
+        <span className="opt-scanner-card-title">
+          <span className="cef-guide-question">{strategy.name}</span>
+          <small>{strategy.family}</small>
+        </span>
+        <span className="cef-guide-chevron" aria-hidden="true">{isOpen ? '▲' : '▼'}</span>
+      </button>
+      {isOpen && (
+        <div className="opt-scanner-plan-card">
+          <div className="opt-edu-payoff-wrap">
+            <div className="opt-edu-tag-row">
+              <OutlookTag outlook={strategy.outlook} />
+              <VegaTag vega={strategy.vega} />
+            </div>
+            <OptionPayoffDiagram title={`${strategy.name} payoff at expiration`} {...strategy.diagram} />
+            <div className="opt-edu-legs-note">
+              <strong>Expiration risk shape.</strong> The live position can look materially different before
+              expiration as price, time, and IV change. Always use the scanner&apos;s modeled P&amp;L and exact contracts.
+            </div>
+            <Link className="btn btn-secondary opt-scanner-open-link" to={strategy.route}>
+              Open {strategy.name}
+            </Link>
+          </div>
+
+          <div className="opt-scanner-plan-copy">
+            <div className="opt-scanner-how">
+              <h3>How it works</h3>
+              <p>{strategy.howItWorks}</p>
+            </div>
+            <div className="opt-scanner-plan-grid">
+              <ScannerPlanItem label="Best entry">{strategy.entry}</ScannerPlanItem>
+              <ScannerPlanItem label="Typical winning hold">{strategy.hold}</ScannerPlanItem>
+              <ScannerPlanItem label="Adjustment or exit?">{strategy.adjustment}</ScannerPlanItem>
+            </div>
+            <div className="opt-scanner-exit-heading">
+              <span>Two ways out</span>
+              <small>Use the first condition that occurs.</small>
+            </div>
+            <div className="opt-scanner-exit-grid">
+              <ScannerPlanItem label="Good-market exit (winner)" tone="profit">{strategy.profit}</ScannerPlanItem>
+              <ScannerPlanItem label="Bad-market exit (loser)" tone="risk">{strategy.exit}</ScannerPlanItem>
+            </div>
+            {strategy.reverseHarvey && (
+              <div className="opt-scanner-adjustment-guide">
+                <div className="opt-scanner-adjustment-heading">
+                  <span>Road Trip adjustment</span>
+                  <h3>What is a Reverse Harvey?</h3>
+                  <p>{strategy.reverseHarvey.summary}</p>
+                </div>
+                <ol>
+                  {strategy.reverseHarvey.steps.map(step => <li key={step}>{step}</li>)}
+                </ol>
+                <div className="opt-scanner-adjustment-risk">
+                  <strong>What changes—and when to skip it</strong>
+                  <p>{strategy.reverseHarvey.risk}</p>
+                </div>
+              </div>
+            )}
+            {strategy.variants && (
+              <div className="opt-scanner-variants">
+                <h4>Scanner variants</h4>
+                <ul>
+                  {strategy.variants.map(variant => <li key={variant}>{variant}</li>)}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ScannerTradePlanSection() {
+  const [open, setOpen] = useState('cash-secured-put-scanner')
+  return (
+    <div className="cef-edu-section opt-scanner-section">
+      <div className="opt-scanner-intro">
+        <div>
+          <span className="opt-scanner-eyebrow">Entry → manage → exit</span>
+          <h2>Scanner-specific trade playbooks</h2>
+          <p>
+            These are educational default plans derived from each scanner&apos;s actual filters and management
+            fields. Set the dollar risk and order before entry. A target is permission to exit—not a guarantee—and
+            no adjustment is mandatory simply because it is listed.
+          </p>
+        </div>
+        <div className="opt-scanner-intro-rule">
+          <strong>One rule across every scanner</strong>
+          <span>When the original thesis fails, exit. Do not add size, remove a hedge, or create undefined risk to avoid realizing a loss.</span>
+        </div>
+      </div>
+
+      <div className="cef-guide-list opt-scanner-list">
+        {SCANNER_TRADE_PLANS.map((strategy, index) => (
+          <ScannerPlanCard
+            key={strategy.id}
+            strategy={strategy}
+            number={index + 1}
+            isOpen={open === strategy.id}
+            onToggle={() => setOpen(open === strategy.id ? null : strategy.id)}
+          />
+        ))}
+      </div>
+
+      <div className="opt-scanner-sources">
+        <h3>Risk, exercise, and assignment references</h3>
+        <p>
+          Scanner rules are portfolio defaults, not universal industry standards. Before trading, read the OCC
+          risk disclosure and understand that American-style equity and ETF options may be exercised or assigned
+          before expiration, especially around dividends or when deep in the money.
+        </p>
+        <div className="opt-scanner-source-links">
+          <a href="https://www.theocc.com/components/docs/riskstoc.pdf" target="_blank" rel="noreferrer">OCC: Characteristics and Risks of Standardized Options</a>
+          <a href="https://www.optionseducation.org/optionsoverview/exercising-options" target="_blank" rel="noreferrer">OIC: Exercise and assignment</a>
+          <a href="https://www.optionseducation.org/strategies/all-strategies/cash-secured-put" target="_blank" rel="noreferrer">OIC: Cash-secured puts</a>
+          <a href="https://www.optionseducation.org/strategies/all-strategies/covered-call-buy-write" target="_blank" rel="noreferrer">OIC: Covered calls</a>
+          <a href="https://www.optionseducation.org/strategies/all-strategies/long-put-butterfly" target="_blank" rel="noreferrer">OIC: Long put butterflies</a>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function OptionEducation() {
   const [activeTab, setActiveTab] = useState('basics')
 
@@ -626,7 +987,7 @@ export default function OptionEducation() {
       <div className="cef-title-row">
         <div>
           <h1>Option Strategy Education</h1>
-          <p>What puts and calls are, and how the most common option strategies behave across markets, time, and volatility.</p>
+          <p>Option foundations, risk graphs, and complete entry-to-exit playbooks for every strategy scanner.</p>
         </div>
       </div>
 
@@ -642,7 +1003,9 @@ export default function OptionEducation() {
         ))}
       </div>
 
-      {activeTab === 'basics' ? <BasicsSection /> : <StrategySection />}
+      {activeTab === 'basics' && <BasicsSection />}
+      {activeTab === 'strategies' && <StrategySection />}
+      {activeTab === 'scanner-plans' && <ScannerTradePlanSection />}
 
       <div className="cef-disclosure" style={{ marginTop: 32 }}>
         <strong>Disclaimer</strong>
