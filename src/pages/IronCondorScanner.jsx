@@ -72,8 +72,8 @@ const DEFAULT_FILTERS = {
   custom_tickers: '',
   market_bias: 'neutral',
   construction: 'balanced',
-  balanced_index_set: 'core',
-  balanced_tickers: 'SPY,QQQ,IWM',
+  index_set: 'core',
+  index_tickers: 'SPY,QQQ,IWM',
   tilt_strength: 0.25,
   ratio_contracts: 2,
   variant_width_pct: 5,
@@ -259,7 +259,6 @@ function StructurePicker({ filters, set }) {
   const direction = filters.market_bias || 'neutral'
   const construction = filters.construction || 'balanced'
   const isVariant = construction !== 'balanced'
-  const balancedIndexSet = filters.balanced_index_set || 'core'
   // A tilted construction has nothing to express without a direction, so
   // switching back to Neutral drops a directional structure to Balanced rather
   // than leaving the picker showing a selection the scan cannot honour.
@@ -309,34 +308,6 @@ function StructurePicker({ filters, set }) {
       <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
         {CONSTRUCTIONS.find(item => item.id === construction)?.tip}
       </div>
-
-      {construction === 'balanced' && (
-        <div style={{ display: 'flex', gap: '0.85rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
-            Balanced indexes
-            <select value={balancedIndexSet}
-              onChange={event => {
-                const next = event.target.value
-                set('balanced_index_set', next)
-                if (next === 'core') set('balanced_tickers', 'SPY,QQQ,IWM')
-              }}
-              style={{ width: 190, padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }}>
-              <option value="core">SPY, QQQ, IWM</option>
-              <option value="custom">Custom index tickers…</option>
-            </select>
-          </label>
-          {balancedIndexSet === 'custom' && <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
-            Index tickers
-            <input value={filters.balanced_tickers || ''}
-              onChange={event => set('balanced_tickers', event.target.value.toUpperCase())}
-              placeholder="SPY, QQQ, IWM"
-              style={{ width: 190, padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }} />
-          </label>}
-          <span style={{ color: 'var(--text-dim)', fontSize: '0.71rem', maxWidth: 430 }}>
-            Balanced condors use this index set only, so the scanner does not dilute the results with the broad stock universe.
-          </span>
-        </div>
-      )}
 
       {isVariant && (
         <div style={{ display: 'flex', gap: '0.85rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -680,16 +651,17 @@ export default function IronCondorScanner() {
   const activePreset = useMemo(() => findActivePreset(PRESETS, filters), [filters])
   const usesBalancedIndexes = filters.construction === 'balanced'
   const anyFunds = !!(filters.include_index_etfs || filters.include_sector_etfs)
-  const nothingSelected = !usesBalancedIndexes && !filters.include_stocks && !anyFunds
+  const nothingSelected = !filters.include_stocks && !anyFunds
 
   const runScan = useCallback(() => {
     setLoading(true)
     setError(null)
     setExpanded(null)
     const body = { ...filters }
-    if (body.construction === 'balanced') {
-      body.restrict_balanced_to_core = true
-      if (body.balanced_index_set === 'core') body.balanced_tickers = 'SPY,QQQ,IWM'
+    if (body.construction === 'balanced' && body.include_index_etfs) {
+      if (body.index_set === 'core') body.index_tickers = 'SPY,QQQ,IWM'
+    } else {
+      delete body.index_tickers
     }
     if (body.universe === 'custom') {
       body.custom_tickers = String(filters.custom_tickers || '').split(/[\s,]+/).filter(Boolean)
@@ -819,7 +791,7 @@ export default function IronCondorScanner() {
       {showHelp && <HelpPanel />}
       <ScannerParameterGuide scanner="iron-condor" />
 
-      {!usesBalancedIndexes && <div style={{
+      <div style={{
         display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', padding: '0.6rem 0.85rem',
         background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 6, marginBottom: '0.6rem',
       }}>
@@ -833,7 +805,7 @@ export default function IronCondorScanner() {
           Broad index funds are the classic condor underlying — they mean-revert, cannot be taken over, and never report earnings.
         </span>
         {nothingSelected && <span style={{ color: 'var(--neg-strong)' }}>Pick at least one.</span>}
-      </div>}
+      </div>
 
       <StructurePicker filters={filters} set={set} />
 
@@ -851,17 +823,34 @@ export default function IronCondorScanner() {
         display: 'flex', flexWrap: 'wrap', gap: '0.85rem', alignItems: 'flex-end', padding: '0.85rem',
         background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 6, marginBottom: '0.7rem',
       }}>
-        {!usesBalancedIndexes && <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', color: 'var(--text-dim)', fontSize: '0.75rem', opacity: filters.include_stocks ? 1 : 0.45 }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', color: 'var(--text-dim)', fontSize: '0.75rem', opacity: filters.include_stocks ? 1 : 0.45 }}>
           Stock universe
           <select value={filters.universe} disabled={!filters.include_stocks} onChange={event => set('universe', event.target.value)}
             style={{ minWidth: 155, padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }}>
             {universes.filter(item => !FUND_UNIVERSE_IDS.has(item.id)).map(item =>
               <option key={item.id} value={item.id}>{item.label}{item.count ? ` (${item.count})` : ''}</option>)}
           </select>
-        </label>}
-        {!usesBalancedIndexes && filters.include_stocks && filters.universe === 'custom' && <label style={{ flex: '1 1 230px', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+        </label>
+        {filters.include_stocks && filters.universe === 'custom' && <label style={{ flex: '1 1 230px', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
           Tickers<input value={filters.custom_tickers || ''} onChange={event => set('custom_tickers', event.target.value.toUpperCase())}
             placeholder="SPY, QQQ, IWM..." style={{ width: '100%', display: 'block', padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }} />
+        </label>}
+        {usesBalancedIndexes && <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', color: 'var(--text-dim)', fontSize: '0.75rem', opacity: filters.include_index_etfs ? 1 : 0.45 }}>
+          Index ETFs
+          <select value={filters.index_set || 'core'} disabled={!filters.include_index_etfs}
+            onChange={event => {
+              const next = event.target.value
+              set('index_set', next)
+              if (next === 'core') set('index_tickers', 'SPY,QQQ,IWM')
+            }}
+            style={{ minWidth: 155, padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }}>
+            <option value="core">SPY, QQQ, IWM</option>
+            <option value="custom">Custom index tickers…</option>
+          </select>
+        </label>}
+        {usesBalancedIndexes && filters.include_index_etfs && filters.index_set === 'custom' && <label style={{ flex: '1 1 190px', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+          Index tickers<input value={filters.index_tickers || ''} onChange={event => set('index_tickers', event.target.value.toUpperCase())}
+            placeholder="SPY, QQQ, IWM" style={{ width: '100%', display: 'block', padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }} />
         </label>}
         {numField('Max efficiency', 'max_efficiency_ratio', { step: 0.05, max: 1, tip: 'Net distance travelled over total path length. Lower is more range-bound; above ~0.5 the name is trending' })}
         {numField('Max drift', 'max_drift_sigma', { step: 0.25, suffix: 'σ', tip: 'Net move over the lookback, as a magnitude — direction is irrelevant to a condor' })}
@@ -872,7 +861,7 @@ export default function IronCondorScanner() {
         {numField('Max rel. strength', 'max_rel_strength_pct', { step: 0.5, suffix: '%', width: 72, tip: 'Beta-adjusted out- or under-performance. Leadership in either direction is a trend' })}
         {numField('Min range pos', 'min_range_position_pct', { suffix: '%', width: 72, tip: '0 is the bottom of the observed range, 100 the top. A condor wants the middle' })}
         {numField('Max range pos', 'max_range_position_pct', { suffix: '%', width: 72 })}
-        {!usesBalancedIndexes && filters.include_stocks && numField('Min mkt cap', 'min_market_cap', { scale: 1e9, suffix: 'B' })}
+        {filters.include_stocks && numField('Min mkt cap', 'min_market_cap', { scale: 1e9, suffix: 'B' })}
         {anyFunds && numField('ETF min AUM', 'fund_min_aum', { scale: 1e6, suffix: 'M' })}
         {numField('Min $ volume', 'min_avg_dollar_volume', { scale: 1e6, suffix: 'M' })}
         {numField('Lookback', 'lookback_days', { suffix: 'd' })}
@@ -890,7 +879,7 @@ export default function IronCondorScanner() {
         {numField('Max slippage', 'max_exec_cost_pct', { suffix: '% credit', tip: 'All four bid/ask spreads against the net credit' })}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
           {checkField('Skip fresh 52-week extremes', 'exclude_fresh_extremes', 'A condor is short both tails, so highs and lows are both disqualifying')}
-          {!usesBalancedIndexes && filters.include_stocks && checkField('Skip earnings inside trade', 'exclude_earnings_before_expiry', 'The implied vol that makes the credit look generous is the earnings premium itself, and the gap breaks whichever wing it points at')}
+          {filters.include_stocks && checkField('Skip earnings inside trade', 'exclude_earnings_before_expiry', 'The implied vol that makes the credit look generous is the earnings premium itself, and the gap breaks whichever wing it points at')}
           {anyFunds && checkField('Skip leveraged / inverse ETFs', 'exclude_leveraged_funds', 'Avoid path-dependent leveraged products')}
         </div>
         <button className="btn btn-sm btn-scan" onClick={runScan} disabled={loading || nothingSelected}>

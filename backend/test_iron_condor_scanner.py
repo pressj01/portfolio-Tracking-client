@@ -635,20 +635,22 @@ class ScoringEnvelope(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Balanced core-index universe
+# Balanced index universe
 # ---------------------------------------------------------------------------
 
-class BalancedCoreUniverse(unittest.TestCase):
+class BalancedIndexUniverse(unittest.TestCase):
 
-    def test_balanced_core_mode_uses_only_spy_qqq_and_iwm(self):
-        with patch.object(ic, "_load_history", return_value=pd.DataFrame()):
-            result = ic.run_iron_condor_scan({
-                "construction": "balanced",
-                "restrict_balanced_to_core": True,
-                "balanced_tickers": "SPY,QQQ,IWM",
+    def test_selected_indexes_are_combined_with_stock_universe(self):
+        with patch.object(ic, "resolve_universe", return_value=["AAPL", "MSFT"]):
+            tickers = ic.resolve_scan_universe({
+                "include_stocks": True,
+                "universe": "large_cap",
+                "include_index_etfs": True,
+                "index_tickers": "SPY,QQQ,IWM",
+                "include_sector_etfs": False,
             })
 
-        self.assertEqual(result["stats"]["universe"], 3)
+        self.assertEqual(tickers, ["AAPL", "MSFT", "SPY", "QQQ", "IWM"])
 
 
 # ---------------------------------------------------------------------------

@@ -49,6 +49,11 @@ from put_scanner import (
 
 CONTRACT_MULTIPLIER = 100.0
 DEFAULT_TICKERS = ["SPY", "QQQ", "IWM", "VOO"]
+# A broad option chain can have hundreds of strikes. These limits make the
+# no-override discovery search responsive while preserving all exact strikes
+# supplied by the user.
+BODY_SEARCH_LIMIT = 12
+WING_SEARCH_LIMIT = 10
 DEFAULTS = {
     "tickers": ",".join(DEFAULT_TICKERS),
     "target_dte": 45,
@@ -250,6 +255,7 @@ def _build_iron_butterfly(
     quantity: int,
     dividend_yield: float,
     exit_dte: int,
+    include_analysis: bool = True,
 ) -> dict | None:
     put_long_strike = _num(put_long.get("strike"))
     body_strike = _num(put_short.get("strike"))
@@ -315,25 +321,27 @@ def _build_iron_butterfly(
         for leg, _, quantity_sign in legs
     )
     position_delta = signed_delta * CONTRACT_MULTIPLIER
-    years = max(int(dte), 1) / 365.0
-    theta = 0.0
-    greeks_available = True
-    for leg, option_type, quantity_sign in legs:
-        strike = _num(leg.get("strike"))
-        volatility = _num(leg.get("iv"))
-        if strike is None or volatility is None or volatility <= 0:
-            greeks_available = False
-            break
-        theta += quantity_sign * black_scholes(
-            spot,
-            strike,
-            years,
-            RISK_FREE,
-            dividend_yield,
-            volatility,
-            option_type,
-        )["theta"]
-    theta_dollars = theta * CONTRACT_MULTIPLIER if greeks_available else None
+    theta_dollars = None
+    if include_analysis:
+        years = max(int(dte), 1) / 365.0
+        theta = 0.0
+        greeks_available = True
+        for leg, option_type, quantity_sign in legs:
+            strike = _num(leg.get("strike"))
+            volatility = _num(leg.get("iv"))
+            if strike is None or volatility is None or volatility <= 0:
+                greeks_available = False
+                break
+            theta += quantity_sign * black_scholes(
+                spot,
+                strike,
+                years,
+                RISK_FREE,
+                dividend_yield,
+                volatility,
+                option_type,
+            )["theta"]
+        theta_dollars = theta * CONTRACT_MULTIPLIER if greeks_available else None
 
     body_iv_values = [
         _num(put_short.get("iv")),
@@ -345,7 +353,7 @@ def _build_iron_butterfly(
         if body_iv_values else None
     )
     probability_schedule = []
-    if distribution_iv:
+    if include_analysis and distribution_iv:
         probability_schedule = profit_probability_schedule(
             spot=spot,
             dte=dte,
@@ -472,6 +480,7 @@ def _candidate_combinations(
     call_wing_strike: float | None,
     min_wing_width_pct: float,
     max_wing_width_pct: float,
+    include_analysis: bool = True,
 ) -> list[dict]:
     puts_by_strike = {round(leg["strike"], 4): leg for leg in puts}
     calls_by_strike = {round(leg["strike"], 4): leg for leg in calls}
@@ -481,10 +490,12 @@ def _candidate_combinations(
             key for key in body_keys
             if abs(key - body_strike) <= 0.011
         ]
-    # Prefer bodies near spot, but include the whole available body range when
-    # the chain is small and retain a broad evenly-spaced range when it is not.
-    body_keys = sorted(body_keys, key=lambda key: abs(key - spot))
-    body_keys = body_keys[:60]
+    # The no-override discovery search uses nearby bodies and evenly-spaced
+    # wings. A full chain can otherwise create hundreds of thousands of
+    # combinations per expiration. Any explicit strike remains unbounded: its
+    # exact listed value is always retained.
+    if body_strike is None and put_wing_strike is None and call_wing_strike is None:
+        body_keys = sorted(body_keys, key=lambda key: abs(key - spot))[:BODY_SEARCH_LIMIT]
 
     candidates = []
     for body_key in body_keys:
@@ -504,8 +515,10 @@ def _candidate_combinations(
         upper = _strike_match(upper, call_wing_strike)
         if not lower or not upper:
             continue
-        lower = _evenly_limited(lower, 60)
-        upper = _evenly_limited(upper, 60)
+        if put_wing_strike is None:
+            lower = _evenly_limited(lower, WING_SEARCH_LIMIT)
+        if call_wing_strike is None:
+            upper = _evenly_limited(upper, WING_SEARCH_LIMIT)
         for put_long in lower:
             for call_long in upper:
                 candidate = _build_iron_butterfly(
@@ -519,6 +532,7 @@ def _candidate_combinations(
                     quantity=quantity,
                     dividend_yield=dividend_yield,
                     exit_dte=exit_dte,
+                    include_analysis=include_analysis,
                 )
                 if candidate is not None:
                     candidates.append(candidate)
@@ -725,6 +739,7 @@ def run_iron_butterfly_scan(payload: dict) -> dict:
                 call_wing_strike=call_wing_strike,
                 min_wing_width_pct=min_wing_width_pct,
                 max_wing_width_pct=max_wing_width_pct,
+                include_analysis=False,
             ):
                 candidate.update({
                     "ticker": ticker,
@@ -756,6 +771,27 @@ def run_iron_butterfly_scan(payload: dict) -> dict:
             candidates,
             key=lambda item: _quality(item, target_dte, target_body_offset_pct),
         )
+        # The probability grid and theta calculation are intentionally run
+        # only for the displayed winner, not for every exploratory combination.
+        analyzed = _build_iron_butterfly(
+            best["put_long_leg"],
+            best["put_short_leg"],
+            best["call_short_leg"],
+            best["call_long_leg"],
+            spot=spot,
+            expiration=best["expiration"],
+            dte=best["dte"],
+            quantity=quantity,
+            dividend_yield=dividend_yield,
+            exit_dte=min(exit_dte, max(1, best["dte"] - 1)),
+        )
+        if analyzed is not None:
+            for key in (
+                "theta_dollars_per_day", "delta_theta_ratio_pct",
+                "distribution_iv", "probability_schedule", "prob_profit",
+                "management",
+            ):
+                best[key] = analyzed[key]
         return {
             "ticker": ticker,
             "name": fund.get("name"),

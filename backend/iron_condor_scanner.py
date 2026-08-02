@@ -192,7 +192,10 @@ def resolve_scan_universe(p: dict) -> list[str]:
             profile_id=p.get("profile_id"), aggregate_id=p.get("aggregate_id"),
         )
     if p.get("include_index_etfs"):
-        tickers += INDEX_ETF_UNIVERSE
+        selected_indexes = p.get("index_tickers")
+        if isinstance(selected_indexes, str):
+            selected_indexes = selected_indexes.replace(";", ",").split(",")
+        tickers += _clean_tickers(selected_indexes or INDEX_ETF_UNIVERSE)
     if p.get("include_sector_etfs"):
         tickers += SECTOR_ETF_UNIVERSE
     return _clean_tickers(tickers)
@@ -2240,11 +2243,6 @@ DEFAULTS = {
     # The core set intentionally uses only the three most liquid index ETF
     # chains: SPY, QQQ, and IWM.
     "variant_tickers": "SPY,QQQ,IWM",
-    # The balanced setup is intentionally scoped to the three liquid index ETFs
-    # when the frontend enables this flag. The standalone API remains flexible:
-    # callers can omit the flag and use the ordinary stock/ETF universe.
-    "restrict_balanced_to_core": False,
-    "balanced_tickers": "SPY,QQQ,IWM",
     "restrict_variants_to_core": True,
 }
 
@@ -2344,12 +2342,6 @@ def run_iron_condor_scan(payload: dict) -> dict:
     if core_only:
         tickers = _clean_tickers(
             str(p.get("variant_tickers") or "").replace(";", ",").split(",")
-        )
-        if not tickers:
-            tickers = resolve_scan_universe(p)
-    elif construction == "balanced" and p.get("restrict_balanced_to_core"):
-        tickers = _clean_tickers(
-            str(p.get("balanced_tickers") or "").replace(";", ",").split(",")
         )
         if not tickers:
             tickers = resolve_scan_universe(p)

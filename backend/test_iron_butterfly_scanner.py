@@ -119,3 +119,29 @@ class IronButterflyRules(unittest.TestCase):
         self.assertEqual(row["status"], "actionable")
         self.assertEqual(row["body_strike"], 100.0)
         self.assertEqual(row["dte"], DTE)
+
+    def test_discovery_defers_probability_model_until_a_candidate_is_chosen(self):
+        strikes = list(range(50, 151, 5))
+        puts = [leg(strike, max(0.5, (strike - 40) * 0.12), -0.25) for strike in strikes]
+        calls = [leg(strike, max(0.5, (160 - strike) * 0.12), 0.25) for strike in strikes]
+
+        with patch.object(scanner, "profit_probability_schedule") as probabilities:
+            candidates = scanner._candidate_combinations(
+                puts,
+                calls,
+                spot=100.0,
+                expiration=expiration_in(),
+                dte=DTE,
+                quantity=1,
+                dividend_yield=0.0,
+                exit_dte=21,
+                body_strike=None,
+                put_wing_strike=None,
+                call_wing_strike=None,
+                min_wing_width_pct=1.0,
+                max_wing_width_pct=50.0,
+                include_analysis=False,
+            )
+
+        self.assertTrue(candidates)
+        probabilities.assert_not_called()
