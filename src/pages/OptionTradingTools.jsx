@@ -4,6 +4,7 @@ import { API_BASE } from '../config'
 import { useTheme } from '../context/ThemeContext'
 import { assignBrokerImportSides, mapBrokerOptionUnderlying, parseBrokerOptionDescriptor } from '../utils/brokerOptions'
 import { chartTheme } from '../utils/chartTheme'
+import { riskChartViewRevision } from '../utils/optionsRiskChart'
 import { resizeOptionStructure } from '../utils/optionsStrategy'
 import { scannerTradeKey, takeScannerTrade } from '../utils/optionTradeHandoff'
 import {
@@ -135,8 +136,6 @@ const contractEntryPrice = (contract, side, fallback = 0) => Number(
   || 0,
 )
 const BROKER_IMPORT_EXAMPLE = 'NDX 260821C31250000\nNDX 260821P26800000\nNDX 260821P28775000'
-const RISK_VIEW_REVISION = 'risk-profile-view-v4'
-
 async function fetchJson(path, options) {
   const response = await fetch(`${API_BASE}${path}`, options)
   let data
@@ -267,22 +266,7 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
     const displayEvaluationDate = result.eval_date || evaluationDate
     const evaluationShortDate = formatShortDate(displayEvaluationDate)
     const horizonShortDate = formatShortDate(horizonDate)
-    const viewLegs = (result.per_leg || []).map(leg => [
-      leg.side,
-      leg.qty,
-      leg.opt_type,
-      leg.strike,
-      leg.expiration,
-      leg.entry_price,
-      leg.iv,
-    ]).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
-    const strategyViewRevision = JSON.stringify({
-      version: RISK_VIEW_REVISION,
-      underlying: result.underlying,
-      horizonDate,
-      priceRange: [evaluation[0]?.s, evaluation[evaluation.length - 1]?.s],
-      legs: viewLegs,
-    })
+    const strategyViewRevision = riskChartViewRevision(result, evaluation)
     const fixedPnlRange = riskPnlRange(result)
     const pnlSpan = fixedPnlRange[1] - fixedPnlRange[0]
     const strikeTickHalfHeight = Math.max(pnlSpan * 0.018, 1)
