@@ -336,6 +336,38 @@ const GUIDES = {
       ],
     },
   ],
+  'iron-butterfly': [
+    {
+      title: 'Expiration and strike search',
+      items: [
+        ['Target / Minimum / Maximum DTE', 'Accepts any target from 1 through 1,095 DTE and compares the nearest listed expirations inside the hard bounds.'],
+        ['Expirations', 'Number of nearest listed expirations to compare for each ticker.'],
+        ['Body strike', 'Optional exact strike for both the short put and short call. Leave blank to search every strike shared by the put and call chains.'],
+        ['Put / Call wing strike', 'Optional exact lower put or upper call strike. Leave blank to search all listed strikes on that side.'],
+        ['Min / Max wing width', 'Allowed distance from the shared body strike as a percentage of spot.'],
+      ],
+    },
+    {
+      title: 'Entry and risk gates',
+      items: [
+        ['Min credit', 'Minimum credit as a percentage of the narrower wing. The credit is the maximum profit of the iron butterfly.'],
+        ['Max wing skew', 'Largest allowed percentage difference between the put and call wing widths.'],
+        ['Target body offset', 'Ranking preference for an off-centre body; it does not reject other body strikes.'],
+        ['Max absolute net delta', 'Maximum complete-position delta in share equivalents.'],
+        ['Minimum leg OI / Max bid-ask', 'Liquidity gates applied to the least-liquid leg and widest quoted market. Recent-trade estimates remain review-only.'],
+      ],
+    },
+    {
+      title: 'Three-strike payoff',
+      items: [
+        ['Three strikes / four legs', 'Buy the lower put, sell the put and call at the shared body, and buy the upper call.'],
+        ['Maximum profit', 'The entry credit, earned when the underlying finishes at the shared body strike.'],
+        ['Maximum loss', 'The larger wing width minus the credit, multiplied by contract size and quantity.'],
+        ['Breakevens', 'Body strike minus and plus the per-unit credit.'],
+        ['Review DTE', 'A DTE-relative management review point. The scanner also models a halfway review and expiration.'],
+      ],
+    },
+  ],
   'unbalanced-butterfly': [
     {
       title: 'Universe and expiration',

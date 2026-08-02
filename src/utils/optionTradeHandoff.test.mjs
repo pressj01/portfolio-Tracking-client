@@ -96,3 +96,26 @@ test('builds the complete 60/40/20 fly for Strategy Lab', () => {
   assert.deepEqual(trade.legs.map(leg => leg.side), ['BUY', 'SELL', 'BUY'])
   assert.deepEqual(trade.legs.map(leg => leg.qty), [2, 4, 2])
 })
+
+test('builds the complete three-strike iron butterfly for Strategy Lab', () => {
+  const row = {
+    ticker: 'SPY',
+    price: 100,
+    expiration,
+    body_strike: 100,
+    legs: [
+      quote('put_long', 'put', 90, 1),
+      quote('put_short', 'put', 100, -1),
+      quote('call_short', 'call', 100, -1),
+      quote('call_long', 'call', 110, 1),
+    ],
+  }
+
+  const trade = buildScannerTrade('iron-butterfly', row)
+
+  assert.ok(trade)
+  assert.equal(trade.label, 'iron butterfly')
+  assert.deepEqual(trade.legs.map(leg => leg.side), ['BUY', 'SELL', 'SELL', 'BUY'])
+  assert.deepEqual(trade.legs.map(leg => leg.qty), [1, 1, 1, 1])
+  assert.deepEqual(trade.legs.map(leg => leg.strike), [90, 100, 100, 110])
+})

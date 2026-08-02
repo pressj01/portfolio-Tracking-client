@@ -79,6 +79,7 @@ import UnbalancedButterflyScanner from './pages/UnbalancedButterflyScanner'
 import DoubleHedgePutButterflyScanner from './pages/FourEightEightScanner'
 import RoadTripButterflyScanner from './pages/RoadTripButterflyScanner'
 import SixtyFortyTwentyFlyScanner from './pages/SixtyFortyTwentyFlyScanner'
+import IronButterflyScanner from './pages/IronButterflyScanner'
 import GreeksGuide from './pages/GreeksGuide'
 
 function PlotlyThemeBridge() {
@@ -249,6 +250,7 @@ function App() {
         <Route path="/double-hedge-put-butterfly-scanner" element={<DoubleHedgePutButterflyScanner />} />
         <Route path="/road-trip-butterfly-scanner" element={<RoadTripButterflyScanner />} />
         <Route path="/sixty-forty-twenty-fly-scanner" element={<SixtyFortyTwentyFlyScanner />} />
+        <Route path="/iron-butterfly-scanner" element={<IronButterflyScanner />} />
         <Route path="/option-education" element={<OptionEducation />} />
         <Route path="/option-greeks" element={<GreeksGuide />} />
         <Route path="/help" element={<Help />} />
@@ -325,6 +327,7 @@ function Nav() {
         <NavLink to="/double-hedge-put-butterfly-scanner">Double-Hedge Put Butterfly Scanner</NavLink>
         <NavLink to="/road-trip-butterfly-scanner">Road Trip Unbalanced Butterfly Scanner</NavLink>
         <NavLink to="/sixty-forty-twenty-fly-scanner">60/40/20 Fly Scanner</NavLink>
+        <NavLink to="/iron-butterfly-scanner">Iron Butterfly Scanner</NavLink>
         <NavLink to="/option-education">Option Strategy Education</NavLink>
         <NavLink to="/option-greeks">Understanding the Greeks</NavLink>
       </NavDropdown>

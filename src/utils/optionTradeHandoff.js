@@ -184,6 +184,27 @@ const BUILDERS = {
     ])
   },
 
+  'iron-butterfly': row => {
+    const butterfly = row
+    if (!butterfly?.expiration) return null
+    if (Array.isArray(butterfly.legs) && butterfly.legs.length) {
+      return trade(row, 'iron butterfly', butterfly.legs.map(leg => optionLeg(
+        leg,
+        leg.qty > 0 ? 'BUY' : 'SELL',
+        leg.option_type === 'call' ? 'CALL' : 'PUT',
+        butterfly.expiration,
+        leg.strike,
+        Math.abs(leg.qty),
+      )))
+    }
+    return trade(row, 'iron butterfly', [
+      optionLeg(butterfly.put_long_leg, 'BUY', 'PUT', butterfly.expiration, butterfly.put_long_strike),
+      optionLeg(butterfly.put_short_leg, 'SELL', 'PUT', butterfly.expiration, butterfly.body_strike),
+      optionLeg(butterfly.call_short_leg, 'SELL', 'CALL', butterfly.expiration, butterfly.body_strike),
+      optionLeg(butterfly.call_long_leg, 'BUY', 'CALL', butterfly.expiration, butterfly.call_long_strike),
+    ])
+  },
+
   'sixty-forty-twenty-fly': row => {
     if (!row?.expiration) return null
     return trade(row, '60/40/20 fly', [
@@ -206,6 +227,7 @@ export function buildScannerTrade(kind, row) {
     'bear-put-spread': 2,
     'bear-call-spread': 2,
     'iron-condor': 4,
+    'iron-butterfly': 4,
     'unbalanced-put-condor': 4,
     'unbalanced-butterfly': 3,
     'double-hedge-put-butterfly': 3,
