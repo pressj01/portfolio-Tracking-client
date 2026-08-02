@@ -5924,7 +5924,8 @@ function OptionsHelp() {
       <p style={{ marginBottom: '0.75rem' }}>
         Choose <strong>Add from option chain</strong> without leaving Risk Profile to build on a scanner trade or any
         simulated position. Every listed expiration is available with its DTE; select <strong>All strikes</strong> for
-        far-out-of-the-money contracts, then click an ask to add a bought leg or a bid to add a sold leg. You can open
+        far-out-of-the-money contracts. The Expiration / DTE selector includes every listed weekly, monthly, and LEAP;
+        choose any one, then click an ask to add a bought leg or a bid to add a sold leg. You can open
         another expiration and keep adding legs, so the same graph can model calendars, diagonals, near-term trades
         with longer-dated protection, and other mixed-expiration positions. The scanner return controls stay visible
         while you edit the trade or replace a leg from its Chain button.

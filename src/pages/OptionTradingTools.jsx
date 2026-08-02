@@ -918,11 +918,12 @@ function OptionChainPicker({
       <div className="opt-section-heading">
         <div>
           <span>{riskMode ? 'Add to risk graph' : 'Add simulated trades'}</span>
-          <h2>{riskMode ? 'Choose any expiration, strike, bid or ask' : 'Open an expiration to choose a strike'}</h2>
-          {riskMode && <small className="opt-risk-chain-caption">Open multiple expirations to combine near-term and longer-dated legs in the same trade.</small>}
+          <h2>{riskMode ? 'Choose any listed expiration, strike, bid or ask' : 'Choose any listed expiration and strike'}</h2>
+          <small className="opt-risk-chain-caption">Every listed DTE and strike is available, from near-term weeklies through LEAPS and deep out-of-the-money contracts.</small>
         </div>
         <div className="opt-chain-controls">
-          <label><span>Strikes</span><select value={strikeRange} onChange={event => onStrikeRangeChange(event.target.value)}><option value="10">ATM ±10%</option><option value="20">ATM ±20%</option><option value="40">ATM ±40%</option><option value="all">All strikes</option></select></label>
+          <label className="opt-chain-expiration-jump"><span>Expiration / DTE</span><select aria-label="Expiration / DTE" value={expandedExpiration || ''} onChange={event => { if (event.target.value && event.target.value !== expandedExpiration) onToggleExpiration(event.target.value) }}><option value="">Choose any listed expiration</option>{expirations.map(expiration => <option key={expiration} value={expiration}>{formatExpiration(expiration)} · {daysBetween(TODAY(), expiration)} DTE · {expirationSeriesLabel(expiration)}</option>)}</select></label>
+          <label><span>Strike view</span><select value={strikeRange} onChange={event => onStrikeRangeChange(event.target.value)}><option value="all">All listed strikes</option><option value="10">ATM ±10%</option><option value="20">ATM ±20%</option><option value="40">ATM ±40%</option></select></label>
           <details className="opt-chain-column-picker">
             <summary>Columns <span>{visibleColumns.length}</span></summary>
             <div className="opt-chain-column-panel">
@@ -998,7 +999,7 @@ export default function OptionTradingTools() {
   const [marketLoading, setMarketLoading] = useState(false)
   const [chainLoading, setChainLoading] = useState(false)
   const [marketError, setMarketError] = useState('')
-  const [strikeRange, setStrikeRange] = useState('20')
+  const [strikeRange, setStrikeRange] = useState('all')
   const [chainColumnIds, setChainColumnIds] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(OPTION_CHAIN_COLUMN_PREF_KEY) || 'null')
@@ -1608,6 +1609,7 @@ export default function OptionTradingTools() {
     if (!leg.expiration) return
     setSelectedExpiration(leg.expiration)
     setExpandedTradeExpiration(leg.expiration)
+    setStrikeRange('all')
     setChainTargetLegId(leg.local_id)
     if (workspace === 'risk') setShowRiskChainPicker(true)
     else setWorkspace('trades')
@@ -2236,7 +2238,7 @@ export default function OptionTradingTools() {
       ) : (
         <section className={`card opt-risk-workspace${riskLoading && risk ? ' is-repricing' : ''}`} aria-busy={riskLoading}>
           <div className="opt-risk-chain-entry">
-            <div><strong>Build on this trade</strong><span>Add protective puts, calls, or additional spreads from any listed expiration. The graph reprices every active leg together.</span></div>
+            <div><strong>Build on this trade</strong><span>Add any listed strike and DTE, including deep out-of-the-money options and LEAPS. The graph reprices every active leg together.</span></div>
             <button type="button" className="btn btn-primary" onClick={showRiskChainPicker ? closeRiskChainPicker : openRiskChainPicker} disabled={!showRiskChainPicker && (!expirations.length || marketLoading)} aria-expanded={showRiskChainPicker}>
               {showRiskChainPicker ? 'Hide option chain' : '+ Add from option chain'}
             </button>
@@ -2443,7 +2445,7 @@ export default function OptionTradingTools() {
                 <td title={stockLeg ? undefined : 'Net change from the parallel, downside-skew and expiration-specific scenario after the manual leg adjustment'}>{stockLeg ? <span className="opt-not-applicable">—</span> : <span className={Number(scenario?.totalChangePoints) >= 0 ? 'opt-positive' : 'opt-negative'}>{scenario?.totalChangePoints > 0 ? '+' : ''}{fmt(scenario?.totalChangePoints, 2)} pts</span>}</td>
                 <td title={stockLeg ? undefined : 'Final leg IV used by the risk graph at the current underlying price'}>{stockLeg ? <span className="opt-not-applicable">—</span> : percent(scenario?.modeledIv)}</td>
                 <td>{fmt(leg.delta, 3)}</td>
-                <td><div className="opt-row-actions">{!stockLeg && <button className="opt-open-chain" type="button" onClick={() => openLegChain(leg)} aria-label={`Open ${formatExpiration(leg.expiration)} option chain for ${legLabel}`} title="Open this expiration and replace the leg from the chain">Chain</button>}<button className="opt-remove-leg" type="button" onClick={() => removeLeg(leg.local_id)} aria-label="Remove leg">×</button></div></td>
+                <td><div className="opt-row-actions">{!stockLeg && <button className="opt-open-chain" type="button" onClick={() => openLegChain(leg)} aria-label={`Open ${formatExpiration(leg.expiration)} option chain for ${legLabel}`} title="Open every listed strike for this expiration and replace the leg from the chain">Chain</button>}<button className="opt-remove-leg" type="button" onClick={() => removeLeg(leg.local_id)} aria-label="Remove leg">×</button></div></td>
               </tr>
             })}
             {!legs.length && <tr><td colSpan="14" className="opt-empty-row">Add stock, click a bid or ask in the chain, or start with a learning template.</td></tr>}
