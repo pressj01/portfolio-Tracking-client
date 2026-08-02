@@ -687,6 +687,24 @@ const SCANNER_TRADE_PLANS = [
     ],
   },
   {
+    id: 'iron-butterfly-scanner',
+    name: 'Iron Butterfly Scanner',
+    family: 'Three-strike, four-leg range trade',
+    route: '/iron-butterfly-scanner',
+    outlook: 'neutral',
+    vega: 'short',
+    diagram: {
+      points: [[0, -1], [3, -1], [5, 1.4], [7, -1], [10, -1]],
+      strikeMarkers: [{ x: 3, label: 'Long put' }, { x: 5, label: 'Short put + call' }, { x: 7, label: 'Long call' }],
+    },
+    howItWorks: 'Buy a lower-strike put, sell a put and call at one shared body strike, and buy a higher-strike call in the same expiration. The opening credit is maximum profit at the body; each long wing defines the loss outside its side, and the wider wing determines worst-case loss.',
+    entry: 'Start near 40-45 DTE on SPY, QQQ, or IWM. Keep the body at the listed strike nearest spot and target both long wings near 0.16 absolute delta; the fixed delta automatically moves the strikes farther away as DTE increases. Require live two-sided quotes, acceptable wing skew and open interest, complete-position delta inside the scanner limit, and no unplanned event risk.',
+    profit: 'Close the complete four-leg position after capturing 50% of the opening credit, which is the balanced scanner target. Take an earlier gain when a volatility contraction produces it; the narrow expiration peak is not a reason to hold out for maximum profit.',
+    hold: 'Often several days to about three weeks from a 40-45 DTE entry. Reassess at 21 DTE and close by 7 DTE rather than carrying the position into concentrated gamma, pin, exercise, and assignment risk.',
+    adjustment: 'Closing the entire butterfly is the default when the range thesis fails. If the thesis still holds and sufficient DTE remains, close the original package and independently evaluate a newly centered butterfly. Do not move one wing merely to force neutral delta, remove either protective long, widen risk, or add contracts to rescue the trade.',
+    exit: 'Close when price reaches either breakeven, the complete-position loss reaches the predeclared dollar limit, IV expands enough to invalidate the short-volatility thesis, liquidity deteriorates, or 7 DTE arrives. A target-delta structure that exceeds the scanner net-delta limit is a near-match, not an entry.',
+  },
+  {
     id: 'unbalanced-put-condor-scanner',
     name: 'Unbalanced Put Condor Scanner',
     family: 'Long-dated asymmetric put condor',
@@ -989,6 +1007,7 @@ function ScannerTradePlanSection() {
           <a href="https://www.optionseducation.org/optionsoverview/exercising-options" target="_blank" rel="noreferrer">OIC: Exercise and assignment</a>
           <a href="https://www.optionseducation.org/strategies/all-strategies/cash-secured-put" target="_blank" rel="noreferrer">OIC: Cash-secured puts</a>
           <a href="https://www.optionseducation.org/strategies/all-strategies/covered-call-buy-write" target="_blank" rel="noreferrer">OIC: Covered calls</a>
+          <a href="https://www.optionseducation.org/strategies/all-strategies/short-iron-butterfly" target="_blank" rel="noreferrer">OIC: Short iron butterflies</a>
           <a href="https://www.optionseducation.org/strategies/all-strategies/long-put-butterfly" target="_blank" rel="noreferrer">OIC: Long put butterflies</a>
         </div>
       </div>

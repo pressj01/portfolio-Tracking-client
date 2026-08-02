@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import iron_condor_scanner as ic
 import bull_put_spread_scanner as bull
 import bear_call_spread_scanner as bcs
+from options_pricing import black_scholes
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +278,53 @@ class RiskArithmetic(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class Balance(unittest.TestCase):
+
+    def test_fixed_delta_strikes_move_farther_from_spot_with_dte(self):
+        def chain_for(dte, option_type):
+            rows = []
+            for strike in range(50, 151):
+                priced = black_scholes(
+                    100.0,
+                    float(strike),
+                    dte / 365.0,
+                    ic.RISK_FREE,
+                    0.0,
+                    0.20,
+                    option_type,
+                )
+                rows.append({"strike": float(strike), "delta": priced["delta"]})
+            return rows
+
+        near_put = ic._delta_pool(chain_for(30, "put"), 0.16, 0.0)[0]
+        far_put = ic._delta_pool(chain_for(120, "put"), 0.16, 0.0)[0]
+        near_call = ic._delta_pool(chain_for(30, "call"), 0.16, 0.0)[0]
+        far_call = ic._delta_pool(chain_for(120, "call"), 0.16, 0.0)[0]
+
+        self.assertLess(far_put["strike"], near_put["strike"])
+        self.assertGreater(far_call["strike"], near_call["strike"])
+
+    def test_pair_shortlist_prefers_closest_requested_deltas(self):
+        legs = [
+            leg(80, 0.45, 0.55, delta=-0.07),
+            leg(82, 0.55, 0.65, delta=-0.10, oi=2000),
+            leg(90, 1.45, 1.55, delta=-0.16),
+            leg(92, 1.75, 1.85, delta=-0.20, oi=2000),
+        ]
+        pairs, _ = ic._side_pairs(
+            legs,
+            short_pool=legs[2:],
+            long_pool=legs[:2],
+            is_put_side=True,
+            lo_width=1.0,
+            hi_width=20.0,
+            min_open_interest=0,
+            keep=4,
+            short_target=0.16,
+            long_target=0.07,
+        )
+
+        self.assertAlmostEqual(abs(pairs[0]["short"]["delta"]), 0.16)
+        self.assertAlmostEqual(abs(pairs[0]["long"]["delta"]), 0.07)
 
     def test_equal_deltas_are_balanced_and_equal_distances_need_not_be(self):
         balanced = standard_condor()

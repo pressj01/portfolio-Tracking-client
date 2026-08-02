@@ -145,3 +145,96 @@ class IronButterflyRules(unittest.TestCase):
 
         self.assertTrue(candidates)
         probabilities.assert_not_called()
+
+    def test_same_wing_target_gets_wider_as_dte_increases(self):
+        def chain_for(dte, option_type):
+            rows = []
+            for strike in range(60, 141):
+                priced = scanner.black_scholes(
+                    100.0,
+                    float(strike),
+                    dte / 365.0,
+                    scanner.RISK_FREE,
+                    0.0,
+                    0.20,
+                    option_type,
+                )
+                mid = max(0.02, priced["price"])
+                rows.append({
+                    "strike": float(strike),
+                    "bid": max(0.01, mid - 0.01),
+                    "ask": mid + 0.01,
+                    "mid": mid,
+                    "iv": 0.20,
+                    "delta": priced["delta"],
+                    "open_interest": 500,
+                    "volume": 100,
+                    "quote_source": "live_bid_ask",
+                })
+            return rows
+
+        def best_for(dte):
+            candidates = scanner._candidate_combinations(
+                chain_for(dte, "put"),
+                chain_for(dte, "call"),
+                spot=100.0,
+                expiration=expiration_in(dte),
+                dte=dte,
+                quantity=1,
+                dividend_yield=0.0,
+                exit_dte=min(21, dte - 1),
+                body_strike=100.0,
+                put_wing_strike=None,
+                call_wing_strike=None,
+                min_wing_width_pct=1.0,
+                max_wing_width_pct=50.0,
+                target_wing_delta=0.16,
+                include_analysis=False,
+            )
+            return min(candidates, key=lambda item: item["wing_delta_error"])
+
+        near = best_for(30)
+        far = best_for(120)
+
+        self.assertGreater(far["put_width"], near["put_width"])
+        self.assertGreater(far["call_width"], near["call_width"])
+        self.assertAlmostEqual(near["target_wing_delta"], 0.16)
+        self.assertAlmostEqual(far["target_wing_delta"], 0.16)
+        self.assertLess(near["wing_delta_error"], 0.02)
+        self.assertLess(far["wing_delta_error"], 0.02)
+
+    def test_default_universe_is_the_three_core_index_etfs(self):
+        self.assertEqual(scanner.DEFAULT_TICKERS, ["SPY", "QQQ", "IWM"])
+
+    def test_missing_bulk_price_falls_back_to_fast_info(self):
+        fake_ticker = type("FakeTicker", (), {
+            "fast_info": {"last_price": 512.25},
+        })()
+        with patch.object(scanner.yf, "Ticker", return_value=fake_ticker):
+            self.assertEqual(scanner._fallback_spot_price("SPY"), 512.25)
+
+    def test_target_dte_and_wing_delta_outrank_actionable_farther_trade(self):
+        requested = {
+            "dte": 40,
+            "body_offset_pct": 0.0,
+            "wing_delta_error": 0.001,
+            "status": "near_match",
+            "blocking_flags": ["wide market"],
+            "position_delta": 11.0,
+            "fit_score": 80.0,
+            "open_interest_min": 50,
+        }
+        farther = {
+            **requested,
+            "dte": 33,
+            "wing_delta_error": 0.03,
+            "status": "actionable",
+            "blocking_flags": [],
+            "position_delta": 8.0,
+            "fit_score": 100.0,
+        }
+
+        self.assertLess(
+            scanner._quality(requested, 40, 0.0),
+            scanner._quality(farther, 40, 0.0),
+        )

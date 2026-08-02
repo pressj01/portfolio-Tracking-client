@@ -29,6 +29,7 @@ import yfinance as yf
 from flask import jsonify, request
 
 from option_probability import profit_probability_schedule
+from option_strike_targets import strike_for_delta
 from put_scanner import (
     CURATED_STOCK_SET,
     INDEX_ETF_SET,
@@ -294,10 +295,10 @@ def _suggest_bull_put_spread(
     short_pool = _delta_pool(legs, short_delta, delta_tolerance)
     long_pool = _delta_pool(legs, long_delta, delta_tolerance)
     if not short_pool:
-        want = spot * (1.0 - short_delta * 0.4)
+        want = strike_for_delta(spot, short_delta, forecast_vol, dte, "put") or spot
         short_pool = sorted(legs, key=lambda leg: abs(leg["strike"] - want))[:4]
     if not long_pool:
-        want = spot * (1.0 - long_delta * 0.5)
+        want = strike_for_delta(spot, long_delta, forecast_vol, dte, "put") or spot
         long_pool = sorted(legs, key=lambda leg: abs(leg["strike"] - want))[:5]
 
     lo_width = spot * max(0.0, min_width_pct) / 100.0

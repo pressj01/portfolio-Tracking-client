@@ -61,6 +61,31 @@ def chain():
     return puts, calls
 
 
+def chain_for_dte(dte):
+    years = dte / 365.0
+
+    def build(option_type):
+        rows = []
+        for strike in range(40, 161):
+            priced = black_scholes(SPOT, float(strike), years, RATE, DIV, 0.25, option_type)
+            if priced["price"] < 0.01:
+                continue
+            rows.append({
+                "strike": float(strike),
+                "mid": priced["price"],
+                "bid": max(0.01, priced["price"] - 0.02),
+                "ask": priced["price"] + 0.02,
+                "iv": 0.25,
+                "delta": priced["delta"],
+                "open_interest": 800,
+                "volume": 200,
+                "quote_source": "live_bid_ask",
+            })
+        return rows
+
+    return build("put"), build("call")
+
+
 TECH = {"range_position_pct": 55.0, "drift_sigma": 0.4, "drift_direction": "up"}
 
 
@@ -229,6 +254,18 @@ def test_bullish_structure_sits_above_bearish(chain):
     bear = build_structure("strike_tilt", "bearish", puts, calls, SPOT, TECH)
     assert bull["put_short_strike"] > bear["put_short_strike"]
     assert bull["call_short_strike"] > bear["call_short_strike"]
+
+
+def test_variant_short_and_long_deltas_move_farther_with_dte():
+    near_puts, near_calls = chain_for_dte(30)
+    far_puts, far_calls = chain_for_dte(120)
+    near = build_structure("risk_ratio", "neutral", near_puts, near_calls, SPOT, TECH)
+    far = build_structure("risk_ratio", "neutral", far_puts, far_calls, SPOT, TECH)
+
+    assert far["put_short_strike"] < near["put_short_strike"]
+    assert far["put_long_strike"] < near["put_long_strike"]
+    assert far["call_short_strike"] > near["call_short_strike"]
+    assert far["call_long_strike"] > near["call_long_strike"]
 
 
 def test_ratio_tilt_puts_less_size_where_price_is_heading(chain):

@@ -421,6 +421,47 @@ def long_at_width(legs: list[dict], short_leg: dict, width: float, is_put: bool)
     return min(pool, key=lambda leg: abs(abs(float(leg["strike"]) - short_strike) - width))
 
 
+def matched_protective_longs(
+    put_legs: list[dict],
+    call_legs: list[dict],
+    put_short: dict,
+    call_short: dict,
+    target_delta: float,
+) -> tuple[dict | None, dict | None]:
+    """Choose near-target protective legs while retaining matched wing widths."""
+    put_short_strike = float(put_short["strike"])
+    call_short_strike = float(call_short["strike"])
+    puts = sorted(
+        [leg for leg in put_legs if float(leg["strike"]) < put_short_strike],
+        key=lambda leg: abs(abs(_num(leg.get("delta"), 0.0) or 0.0) - target_delta),
+    )[:16]
+    calls = sorted(
+        [leg for leg in call_legs if float(leg["strike"]) > call_short_strike],
+        key=lambda leg: abs(abs(_num(leg.get("delta"), 0.0) or 0.0) - target_delta),
+    )[:16]
+    if not puts or not calls:
+        return None, None
+
+    def quality(pair):
+        put_leg, call_leg = pair
+        put_width = put_short_strike - float(put_leg["strike"])
+        call_width = float(call_leg["strike"]) - call_short_strike
+        max_width = max(put_width, call_width, 0.01)
+        width_skew = abs(put_width - call_width) / max_width
+        delta_error = (
+            abs(abs(_num(put_leg.get("delta"), 0.0) or 0.0) - target_delta)
+            + abs(abs(_num(call_leg.get("delta"), 0.0) or 0.0) - target_delta)
+        )
+        # Equal risk widths are a structural constraint; among comparably
+        # matched widths, the requested long delta decides the strike distance.
+        return width_skew * 0.20 + delta_error, width_skew, delta_error
+
+    return min(
+        ((put_leg, call_leg) for put_leg in puts for call_leg in calls),
+        key=quality,
+    )
+
+
 def tilted_deltas(base_delta: float, direction: str,
                   tilt_strength: float = DEFAULT_TILT_STRENGTH) -> tuple[float, float]:
     """(put short delta, call short delta) for a directional lean.
@@ -607,7 +648,7 @@ def build_structure(
     if not put_legs or not call_legs or not spot or spot <= 0:
         return None
 
-    width = max(0.01, spot * max(0.1, width_pct) / 100.0)
+    fallback_width = max(0.01, spot * max(0.1, width_pct) / 100.0)
     notes: list[str] = []
     risk_reasons: list[str] = []
 
@@ -629,24 +670,39 @@ def build_structure(
     if not put_short or not call_short:
         return None
 
-    # Both wings are built to the same width, including on the Weirdor family.
-    # A reference Weirdor (RUT at 1161, Feb 2015) sells 20x the 1040/1020 put
-    # spread against 4x the 1250/1270 call spread — 20 points wide on both
-    # sides, with the entire asymmetry carried by the 5:1 contract count. Its
-    # stated max margin of $36,160 is 20 x 20 x 100 less the credit, which only
-    # reconciles if the put wing really is 20 wide.
-    #
-    # Severson does size his *hedge butterflies* 3-wide below and 2-wide above,
-    # but that is a statement about the moat, not about the condor's wings, and
-    # it belongs to `weirdor_hedged` alone.
-    put_long = long_at_width(put_legs, put_short, width, is_put=True)
-    call_long = long_at_width(call_legs, call_short, width, is_put=False)
+    # Protective legs retain the requested long delta. This makes their strike
+    # distance expand with the selected expiration instead of pinning the
+    # structure to a fixed percentage width. The legacy width remains a
+    # fallback for a chain that cannot provide usable deltas.
+    put_long, call_long = matched_protective_longs(
+        put_legs,
+        call_legs,
+        put_short,
+        call_short,
+        base_long_delta,
+    )
+    put_long = put_long or long_at_width(
+        put_legs, put_short, fallback_width, is_put=True,
+    )
+    call_long = call_long or long_at_width(
+        call_legs, call_short, fallback_width, is_put=False,
+    )
     if not put_long or not call_long:
         return None
     if float(put_long["strike"]) >= float(put_short["strike"]):
         return None
     if float(call_long["strike"]) <= float(call_short["strike"]):
         return None
+    # Auxiliary debit spreads and hedge butterflies inherit the actual
+    # expiration-aware primary-wing distance. Their geometry therefore expands
+    # with DTE while the requested leg deltas remain unchanged.
+    width = max(
+        0.01,
+        (
+            float(put_short["strike"]) - float(put_long["strike"])
+            + float(call_long["strike"]) - float(call_short["strike"])
+        ) / 2.0,
+    )
 
     # ── Contract counts ──────────────────────────────────────────────────
     put_qty, call_qty = 1, 1
@@ -786,6 +842,7 @@ def build_structure(
         "hedge_legs": len(hedges),
         "target_put_delta": put_delta,
         "target_call_delta": call_delta,
+        "target_long_delta": base_long_delta,
         "notes": notes,
         "risk_reasons": risk_reasons,
     }

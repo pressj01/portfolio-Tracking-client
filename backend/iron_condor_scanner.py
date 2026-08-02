@@ -842,12 +842,16 @@ def _condor_quality(condor: dict) -> float:
     q += _ramp(-(gap if gap is not None else 1.0), -0.12, -0.02, 8)
     skew = _num(condor.get("wing_skew_pct"))
     q += _ramp(-(skew if skew is not None else 100.0), -40, 0, 4)
+    target_error = _num(condor.get("target_delta_error"))
+    q += _ramp(-(target_error if target_error is not None else 1.0), -0.24, 0, 12)
     return q
 
 
 def _side_pairs(legs: list[dict], short_pool: list[dict], long_pool: list[dict],
                 is_put_side: bool, lo_width: float, hi_width: float,
-                min_open_interest: int, keep: int) -> tuple[list[dict], bool]:
+                min_open_interest: int, keep: int,
+                short_target: float | None = None,
+                long_target: float | None = None) -> tuple[list[dict], bool]:
     """Shortlist verticals for one wing. Returns (pairs, met_every_constraint).
 
     Delta pools express a preference rather than availability: on sparse chains
@@ -899,6 +903,12 @@ def _side_pairs(legs: list[dict], short_pool: list[dict], long_pool: list[dict],
                     if cost is not None and credit > 0 else None
                 ),
                 "preferred": (short_leg["strike"], long_leg["strike"]) in preferred,
+                "delta_error": (
+                    abs(abs(_num(short_leg.get("delta"), 0.0) or 0.0) - short_target)
+                    + abs(abs(_num(long_leg.get("delta"), 0.0) or 0.0) - long_target)
+                    if short_target is not None and long_target is not None
+                    else math.inf
+                ),
             }
             if lo_width <= width <= hi_width and oi >= min_open_interest:
                 passing.append(entry)
@@ -910,7 +920,11 @@ def _side_pairs(legs: list[dict], short_pool: list[dict], long_pool: list[dict],
         return [], False
     # Prefer target-delta structures, then quality, and keep only a handful so
     # the cross product with the other wing stays small.
-    pool.sort(key=lambda e: (not e["preferred"], -_wing_quality(e)))
+    pool.sort(key=lambda e: (
+        not e["preferred"],
+        e["delta_error"],
+        -_wing_quality(e),
+    ))
     return pool[:keep], met
 
 
@@ -1037,12 +1051,14 @@ def _suggest_iron_condor(
         _delta_pool(put_legs, short_delta, delta_tolerance),
         _delta_pool(put_legs, long_delta, delta_tolerance),
         True, lo_width, hi_width, min_open_interest, keep=6,
+        short_target=short_delta, long_target=long_delta,
     )
     call_pairs, call_ok = _side_pairs(
         call_legs,
         _delta_pool(call_legs, short_delta, delta_tolerance),
         _delta_pool(call_legs, long_delta, delta_tolerance),
         False, lo_width, hi_width, min_open_interest, keep=6,
+        short_target=short_delta, long_target=long_delta,
     )
     if not put_pairs or not call_pairs:
         return None
@@ -1059,6 +1075,9 @@ def _suggest_iron_condor(
             )
             if condor is None:
                 continue
+            condor["target_delta_error"] = (
+                put_pair["delta_error"] + call_pair["delta_error"]
+            )
             all_condors.append(condor)
             estimated = condor["uses_last_trade_prices"]
             if estimated:
@@ -2817,6 +2836,7 @@ def _round_condor(condor: dict | None) -> dict | None:
         ("prob_touch_put", 1), ("prob_touch_call", 1),
         ("fair_credit", 2), ("premium_edge", 2), ("premium_edge_pct", 1),
         ("delta_gap", 3), ("structure_delta", 3),
+        ("target_delta_error", 3),
         ("exec_cost", 2), ("exec_cost_pct", 1), ("atm_iv", 4),
         ("credit_dollars", 0), ("entry_cashflow_dollars", 0),
         ("entry_credit_dollars", 0), ("entry_debit_dollars", 0),

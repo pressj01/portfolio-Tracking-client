@@ -8,7 +8,7 @@ import { useScanCache } from '../utils/useScanCache'
 
 const STORAGE_KEY = 'iron-butterfly-scanner-filters'
 const FALLBACK_DEFAULTS = {
-  tickers: 'SPY,QQQ,IWM,VOO',
+  tickers: 'SPY,QQQ,IWM',
   target_dte: 45,
   min_dte: 1,
   max_dte: 1095,
@@ -19,6 +19,7 @@ const FALLBACK_DEFAULTS = {
   call_wing_strike: null,
   min_wing_width_pct: 1,
   max_wing_width_pct: 50,
+  target_wing_delta: 0.16,
   min_credit_pct_of_wing: 5,
   max_wing_skew_pct: 100,
   target_body_offset_pct: 0,
@@ -42,7 +43,11 @@ const signedUsd = (value, digits = 0) => value == null ? '—' : `${Number(value
 function readFilters() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
-    return { ...FALLBACK_DEFAULTS, ...(saved || {}) }
+    const merged = { ...FALLBACK_DEFAULTS, ...(saved || {}) }
+    if (String(merged.tickers || '').replace(/\s/g, '').toUpperCase() === 'SPY,QQQ,IWM,VOO') {
+      merged.tickers = FALLBACK_DEFAULTS.tickers
+    }
+    return merged
   } catch {
     return { ...FALLBACK_DEFAULTS }
   }
@@ -57,10 +62,9 @@ function HelpPanel() {
         the maximum profit; the wider wing determines the worst expiration loss.
       </p>
       <p>
-        This scanner is strike-driven, not delta-driven. It searches every listed body and
-        wing strike in the selected expiration window. Leave the optional strike fields
-        blank to search the chain, or enter exact listed strikes when you want a specific
-        three-strike structure.
+        The shared body stays near the selected offset while each long wing targets the
+        selected absolute delta. The target delta stays fixed, while farther expirations
+        naturally use strikes farther from the body. Exact listed strikes override it.
       </p>
       <p style={{ marginBottom: 0 }}>
         Target DTE is a preference, not a fixed strategy horizon. The scanner accepts any
@@ -151,7 +155,7 @@ function Detail({ row, colSpan }) {
 
 export default function IronButterflyScanner() {
   const pf = useProfileFetch()
-  const [cachedScan, saveScan] = useScanCache('iron-butterfly-v1')
+  const [cachedScan, saveScan] = useScanCache('iron-butterfly-v2')
   const [filters, setFilters] = useState(readFilters)
   const [rows, setRows] = useState(cachedScan?.rows || [])
   const [unavailable, setUnavailable] = useState(cachedScan?.unavailable || [])
@@ -236,7 +240,7 @@ export default function IronButterflyScanner() {
       <ScannerParameterGuide scanner="iron-butterfly" />
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.8rem', alignItems: 'flex-end', padding: '0.85rem', marginBottom: '0.7rem', background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 6 }}>
-        <label style={{ flex: '1 1 230px', color: 'var(--text-dim)', fontSize: '0.73rem' }}>Tickers<input value={filters.tickers} onChange={event => set('tickers', event.target.value.toUpperCase())} placeholder="SPY,QQQ,IWM,VOO" style={{ display: 'block', width: '100%', marginTop: '0.2rem', padding: '0.32rem 0.4rem', color: 'var(--text-strong)', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4 }} /></label>
+        <label style={{ flex: '1 1 230px', color: 'var(--text-dim)', fontSize: '0.73rem' }}>Tickers<input value={filters.tickers} onChange={event => set('tickers', event.target.value.toUpperCase())} placeholder="SPY,QQQ,IWM" style={{ display: 'block', width: '100%', marginTop: '0.2rem', padding: '0.32rem 0.4rem', color: 'var(--text-strong)', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4 }} /></label>
         {numberField('Target DTE', 'target_dte', { min: 1, max: 1095, tip: 'Any target DTE from 1 to 1,095; the nearest listed expiration is selected.' })}
         {numberField('Minimum DTE', 'min_dte', { min: 1, max: 1095 })}
         {numberField('Maximum DTE', 'max_dte', { min: 1, max: 1095 })}
@@ -244,6 +248,7 @@ export default function IronButterflyScanner() {
         {numberField('Quantity', 'quantity', { min: 1, max: 100, width: 64 })}
         {numberField('Min wing width', 'min_wing_width_pct', { step: 0.5, min: 0.01, max: 100, suffix: '%', width: 72 })}
         {numberField('Max wing width', 'max_wing_width_pct', { step: 0.5, min: 0.01, max: 100, suffix: '%', width: 72 })}
+        {numberField('Wing delta', 'target_wing_delta', { step: 0.01, min: 0.01, max: 0.49, suffix: 'Δ', width: 72, tip: 'Absolute delta target for both long wings. The delta stays fixed while strike distance expands with DTE.' })}
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.8rem', alignItems: 'flex-end', padding: '0.85rem', marginBottom: '0.7rem', background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 6 }}>
@@ -275,7 +280,7 @@ export default function IronButterflyScanner() {
               <td>{open ? '▼' : '▸'}</td>
               <td><strong style={{ color: 'var(--accent-bright)' }}>{row.ticker}</strong><div style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>{usd(row.price)}</div></td>
               <td><strong>{row.dte}</strong><div style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>{row.expiration}</div></td>
-              <td><Structure row={row} /><div style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>{pct(row.put_width / row.price * 100)} / {pct(row.call_width / row.price * 100)} wings</div></td>
+              <td><Structure row={row} /><div style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>{pct(row.put_width_pct)} / {pct(row.call_width_pct)} wings</div><div style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>wing Δ {num(row.put_wing_delta, 2)} / {num(row.call_wing_delta, 2)} · target {num(row.target_wing_delta, 2)}</div></td>
               <td style={{ textAlign: 'right' }}><strong style={{ color: 'var(--pos)' }}>{usd(row.entry_credit_dollars, 0)}</strong><div style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>{pct(row.credit_pct_of_min_wing)} of wing</div></td>
               <td style={{ textAlign: 'right' }}><strong style={{ color: 'var(--neg-strong)' }}>{usd(row.max_loss_dollars, 0)}</strong><div style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>{pct(row.return_on_risk_pct)} ROR</div></td>
               <td style={{ textAlign: 'right' }}><strong>{signed(row.position_delta)}</strong><div style={{ color: 'var(--text-dim)', fontSize: '0.66rem' }}>share eq.</div></td>

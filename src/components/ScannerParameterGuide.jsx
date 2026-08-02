@@ -232,7 +232,7 @@ const GUIDES = {
     {
       title: 'Underlying and documented structure',
       items: [
-        ['Tickers', 'Comma-separated liquid index ETFs. SPY, QQQ, and IWM are the smaller-scale defaults; they adapt the documentâ€™s SPX structure without pretending the products have identical notional exposure.'],
+        ['Tickers', "Comma-separated liquid index ETFs. SPY, QQQ, and IWM are the smaller-scale defaults; they adapt the document's SPX structure without pretending the products have identical notional exposure."],
         ['STFS market bias', 'Applies the documented per-tranche delta band: bearish −3 to −1, neutral −1 to +1, or bullish +1 to +3 share equivalents.'],
         ['Target / Minimum / Maximum DTE', 'Selects the standard monthly nearest 200 DTE inside the document’s 160–230 DTE range. Weekly expirations are excluded.'],
         ['Upper-long qty', 'Scales the full 1/−2/+2 contract ratio. The default 4 produces 4 upper longs, 8 body shorts, and 8 lower longs.'],
@@ -345,6 +345,7 @@ const GUIDES = {
         ['Body strike', 'Optional exact strike for both the short put and short call. Leave blank to search every strike shared by the put and call chains.'],
         ['Put / Call wing strike', 'Optional exact lower put or upper call strike. Leave blank to search all listed strikes on that side.'],
         ['Min / Max wing width', 'Allowed distance from the shared body strike as a percentage of spot.'],
+        ['Wing delta', 'Absolute delta target for both long wings. The delta remains unchanged while farther expirations move the selected strikes farther from the body. Exact wing strikes override it.'],
       ],
     },
     {

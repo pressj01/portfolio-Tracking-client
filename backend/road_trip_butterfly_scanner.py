@@ -45,6 +45,7 @@ import numpy as np
 import yfinance as yf
 from flask import jsonify, request
 
+from option_strike_targets import dte_distance_scale, dte_scaled_pct
 from put_scanner import (
     MAX_TARGET_DTE,
     MIN_TARGET_DTE,
@@ -77,6 +78,7 @@ from unbalanced_put_condor_scanner import (
 ARTICLE_UPPER_OFFSET_PCT = 1.25
 ARTICLE_UPPER_WING_PCT = 2.25
 ARTICLE_LOWER_WING_PCT = 2.75
+REFERENCE_DTE = 77
 BASE_QUANTITY = 5
 
 # Net delta per single butterfly, in share equivalents. Unlike the STT ladder,
@@ -985,6 +987,7 @@ def run_road_trip_butterfly_scan(payload: dict) -> dict:
             if not puts:
                 continue
             usable_chains += 1
+            distance_scale = dte_distance_scale(dte, REFERENCE_DTE)
             candidates = _candidates(
                 puts,
                 spot=spot,
@@ -992,11 +995,11 @@ def run_road_trip_butterfly_scan(payload: dict) -> dict:
                 expiration_date=datetime.strptime(expiration, "%Y-%m-%d").date(),
                 dte=dte,
                 quantity=quantity,
-                upper_offset_pct=upper_offset_pct,
-                offset_tolerance_pct=offset_tolerance_pct,
-                upper_wing_pct=upper_wing_pct,
-                lower_wing_pct=lower_wing_pct,
-                wing_tolerance_pct=wing_tolerance_pct,
+                upper_offset_pct=dte_scaled_pct(upper_offset_pct, dte, REFERENCE_DTE),
+                offset_tolerance_pct=dte_scaled_pct(offset_tolerance_pct, dte, REFERENCE_DTE),
+                upper_wing_pct=dte_scaled_pct(upper_wing_pct, dte, REFERENCE_DTE),
+                lower_wing_pct=dte_scaled_pct(lower_wing_pct, dte, REFERENCE_DTE),
+                wing_tolerance_pct=dte_scaled_pct(wing_tolerance_pct, dte, REFERENCE_DTE),
                 min_lower_wing_ratio=min_lower_wing_ratio,
                 dividend_yield=dividend_yield,
                 bias_low=bias_low,
@@ -1008,7 +1011,9 @@ def run_road_trip_butterfly_scan(payload: dict) -> dict:
                 profit_target_low_pct=profit_target_low_pct,
                 profit_target_high_pct=profit_target_high_pct,
                 max_loss_pct=max_loss_pct,
-                downside_hedge_width_pct=downside_hedge_width_pct,
+                downside_hedge_width_pct=dte_scaled_pct(
+                    downside_hedge_width_pct, dte, REFERENCE_DTE,
+                ),
             )
             if not candidates:
                 continue
@@ -1021,6 +1026,8 @@ def run_road_trip_butterfly_scan(payload: dict) -> dict:
                 min_open_interest=min_open_interest,
             )
             if chosen:
+                chosen["dte_distance_scale"] = distance_scale
+                chosen["reference_dte"] = REFERENCE_DTE
                 chosen_monthly = is_monthly
                 break
 
@@ -1217,6 +1224,8 @@ def run_road_trip_butterfly_scan(payload: dict) -> dict:
             "bias_delta_min": bias_low,
             "bias_delta_max": bias_high,
             "target_dte": target_dte,
+            "reference_dte": REFERENCE_DTE,
+            "dte_scaled_geometry": True,
             "min_dte": min_dte,
             "max_dte": max_dte,
             "tranche_quantity": quantity,
@@ -1262,6 +1271,7 @@ def register_routes(app):
                 "article_upper_offset_pct": ARTICLE_UPPER_OFFSET_PCT,
                 "article_upper_wing_pct": ARTICLE_UPPER_WING_PCT,
                 "article_lower_wing_pct": ARTICLE_LOWER_WING_PCT,
+                "reference_dte": REFERENCE_DTE,
             },
             market_biases=[
                 {

@@ -172,6 +172,16 @@ class ArticleDefaults(unittest.TestCase):
         self.assertAlmostEqual(scanner.DEFAULTS["upper_wing_pct"], 2.25)
         self.assertAlmostEqual(scanner.DEFAULTS["lower_wing_pct"], 2.75)
 
+    def test_reference_geometry_expands_with_dte(self):
+        self.assertAlmostEqual(
+            scanner.dte_scaled_pct(2.25, scanner.REFERENCE_DTE, scanner.REFERENCE_DTE),
+            2.25,
+        )
+        self.assertGreater(
+            scanner.dte_scaled_pct(2.25, 154, scanner.REFERENCE_DTE),
+            2.25,
+        )
+
 
 class ArticleStructure(unittest.TestCase):
     def test_broken_wing_geometry_and_margin_follow_the_article(self):

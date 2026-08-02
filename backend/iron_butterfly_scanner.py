@@ -8,11 +8,10 @@ risk:
     SELL 1 call at the same body strike
     BUY  1 call above the body
 
-This screen deliberately does not choose strikes by delta.  It considers the
-listed strikes in the requested expiration window, optionally accepts exact
-strike overrides, and ranks the resulting structures by neutrality, credit,
-execution quality, and liquidity.  That makes it useful for both a normal ATM
-iron butterfly and a user-specified skewed or off-centre structure.
+This screen keeps the shared body near the requested offset and selects listed
+long-wing strikes near a fixed absolute delta, so the strike distance expands
+with DTE while the target delta remains unchanged. Exact strike overrides are
+also supported for a user-specified skewed or off-centre structure.
 
 Endpoints:
   GET  /api/options/iron-butterfly-scan/defaults
@@ -27,6 +26,7 @@ import math
 import re
 
 from flask import jsonify, request
+import yfinance as yf
 
 from call_scanner import _load_call_chain
 from option_probability import profit_probability_schedule
@@ -48,7 +48,7 @@ from put_scanner import (
 
 
 CONTRACT_MULTIPLIER = 100.0
-DEFAULT_TICKERS = ["SPY", "QQQ", "IWM", "VOO"]
+DEFAULT_TICKERS = ["SPY", "QQQ", "IWM"]
 # A broad option chain can have hundreds of strikes. These limits make the
 # no-override discovery search responsive while preserving all exact strikes
 # supplied by the user.
@@ -68,6 +68,7 @@ DEFAULTS = {
     "call_wing_strike": None,
     "min_wing_width_pct": 1.0,
     "max_wing_width_pct": 50.0,
+    "target_wing_delta": 0.16,
     "min_credit_pct_of_wing": 5.0,
     "max_wing_skew_pct": 100.0,
     "target_body_offset_pct": 0.0,
@@ -97,6 +98,40 @@ def _optional_strike(value) -> float | None:
         return None
     parsed = _num(value)
     return parsed if parsed is not None and parsed > 0 else None
+
+
+def _fallback_spot_price(ticker: str) -> float | None:
+    """Recover a spot quote when Yahoo's bulk history omits one symbol."""
+    try:
+        instrument = yf.Ticker(ticker)
+    except Exception:
+        return None
+
+    try:
+        fast_info = instrument.fast_info
+    except Exception:
+        fast_info = None
+    for key in ("last_price", "lastPrice", "previous_close", "previousClose"):
+        try:
+            value = getattr(fast_info, key, None)
+            if value is None and hasattr(fast_info, "get"):
+                value = fast_info.get(key)
+        except Exception:
+            value = None
+        parsed = _num(value)
+        if parsed is not None and parsed > 0:
+            return parsed
+
+    try:
+        history = instrument.history(period="5d", auto_adjust=False)
+        close = history["Close"].dropna() if history is not None else None
+        if close is not None and not close.empty:
+            parsed = _num(close.iloc[-1])
+            if parsed is not None and parsed > 0:
+                return parsed
+    except Exception:
+        pass
+    return None
 
 
 def _expirations_in_window(
@@ -255,6 +290,7 @@ def _build_iron_butterfly(
     quantity: int,
     dividend_yield: float,
     exit_dte: int,
+    target_wing_delta: float = 0.16,
     include_analysis: bool = True,
 ) -> dict | None:
     put_long_strike = _num(put_long.get("strike"))
@@ -352,6 +388,20 @@ def _build_iron_butterfly(
         sum(body_iv_values) / len(body_iv_values)
         if body_iv_values else None
     )
+    put_width_pct = put_width / spot * 100.0 if spot else None
+    call_width_pct = call_width / spot * 100.0 if spot else None
+    put_delta_value = _num(put_long.get("delta"))
+    call_delta_value = _num(call_long.get("delta"))
+    put_wing_delta = abs(put_delta_value) if put_delta_value is not None else None
+    call_wing_delta = abs(call_delta_value) if call_delta_value is not None else None
+    wing_delta_error = (
+        (
+            abs(put_wing_delta - target_wing_delta)
+            + abs(call_wing_delta - target_wing_delta)
+        ) / 2.0
+        if put_wing_delta is not None and call_wing_delta is not None
+        else None
+    )
     probability_schedule = []
     if include_analysis and distribution_iv:
         probability_schedule = profit_probability_schedule(
@@ -398,8 +448,14 @@ def _build_iron_butterfly(
         "call_long_strike": call_long_strike,
         "put_width": put_width,
         "call_width": call_width,
+        "put_width_pct": put_width_pct,
+        "call_width_pct": call_width_pct,
         "max_wing": max(put_width, call_width),
         "wing_skew_pct": abs(put_width - call_width) / min(put_width, call_width) * 100.0,
+        "put_wing_delta": put_wing_delta,
+        "call_wing_delta": call_wing_delta,
+        "target_wing_delta": target_wing_delta,
+        "wing_delta_error": wing_delta_error,
         "body_offset_pct": (body_strike - spot) / spot * 100.0 if spot else None,
         "quantity": quantity,
         "entry_credit": entry_credit,
@@ -480,6 +536,7 @@ def _candidate_combinations(
     call_wing_strike: float | None,
     min_wing_width_pct: float,
     max_wing_width_pct: float,
+    target_wing_delta: float = 0.16,
     include_analysis: bool = True,
 ) -> list[dict]:
     puts_by_strike = {round(leg["strike"], 4): leg for leg in puts}
@@ -516,9 +573,27 @@ def _candidate_combinations(
         if not lower or not upper:
             continue
         if put_wing_strike is None:
-            lower = _evenly_limited(lower, WING_SEARCH_LIMIT)
+            lower = (
+                sorted(
+                    lower,
+                    key=lambda leg: abs(
+                        abs(_num(leg.get("delta")) or 0.0) - target_wing_delta
+                    ),
+                )[:WING_SEARCH_LIMIT]
+                if any(_num(leg.get("delta")) is not None for leg in lower)
+                else _evenly_limited(lower, WING_SEARCH_LIMIT)
+            )
         if call_wing_strike is None:
-            upper = _evenly_limited(upper, WING_SEARCH_LIMIT)
+            upper = (
+                sorted(
+                    upper,
+                    key=lambda leg: abs(
+                        abs(_num(leg.get("delta")) or 0.0) - target_wing_delta
+                    ),
+                )[:WING_SEARCH_LIMIT]
+                if any(_num(leg.get("delta")) is not None for leg in upper)
+                else _evenly_limited(upper, WING_SEARCH_LIMIT)
+            )
         for put_long in lower:
             for call_long in upper:
                 candidate = _build_iron_butterfly(
@@ -532,6 +607,7 @@ def _candidate_combinations(
                     quantity=quantity,
                     dividend_yield=dividend_yield,
                     exit_dte=exit_dte,
+                    target_wing_delta=target_wing_delta,
                     include_analysis=include_analysis,
                 )
                 if candidate is not None:
@@ -540,6 +616,7 @@ def _candidate_combinations(
     # Do not return hundreds of nearly identical strikes for a single ticker.
     candidates.sort(key=lambda item: (
         abs(item.get("body_offset_pct") or 0.0),
+        item.get("wing_delta_error") if item.get("wing_delta_error") is not None else math.inf,
         abs(item.get("position_delta") or 0.0),
         -(item.get("credit_pct_of_min_wing") or 0.0),
         item.get("max_leg_bid_ask_pct") if item.get("max_leg_bid_ask_pct") is not None else math.inf,
@@ -597,6 +674,7 @@ def _apply_status(
             100.0
             - min(35.0, abs(candidate.get("position_delta") or 0.0) * 1.5)
             - min(20.0, abs(candidate.get("body_offset_pct") or 0.0) * 1.5)
+            - min(20.0, (candidate.get("wing_delta_error") or 0.0) * 100.0)
             + min(20.0, max(0.0, (candidate.get("credit_pct_of_min_wing") or 0.0) - 10.0) * 0.4)
             - min(15.0, (candidate.get("max_leg_bid_ask_pct") or 0.0) * 0.25),
         ),
@@ -606,12 +684,13 @@ def _apply_status(
 
 def _quality(candidate: dict, target_dte: int, target_body_offset_pct: float) -> tuple:
     return (
+        abs(candidate.get("dte", target_dte) - target_dte),
+        abs((candidate.get("body_offset_pct") or 0.0) - target_body_offset_pct),
+        candidate.get("wing_delta_error") if candidate.get("wing_delta_error") is not None else math.inf,
         candidate.get("status") != "actionable",
         len(candidate.get("blocking_flags", [])),
-        abs((candidate.get("body_offset_pct") or 0.0) - target_body_offset_pct),
         abs(candidate.get("position_delta") or 0.0),
         -(candidate.get("fit_score") or 0.0),
-        abs(candidate.get("dte", target_dte) - target_dte),
         -(candidate.get("open_interest_min") or 0),
     )
 
@@ -620,7 +699,9 @@ def _round_candidate(candidate: dict) -> dict:
     out = dict(candidate)
     for key in (
         "body_strike", "put_long_strike", "call_long_strike", "put_width",
-        "call_width", "max_wing", "wing_skew_pct", "body_offset_pct",
+        "call_width", "put_width_pct", "call_width_pct", "max_wing",
+        "wing_skew_pct", "body_offset_pct", "put_wing_delta",
+        "call_wing_delta", "target_wing_delta", "wing_delta_error",
         "entry_credit", "entry_credit_per_unit", "entry_credit_dollars",
         "entry_price_dollars", "natural_credit", "natural_credit_dollars",
         "execution_cost", "execution_cost_dollars", "max_profit", "max_loss",
@@ -652,6 +733,9 @@ def run_iron_butterfly_scan(payload: dict) -> dict:
     quantity = int(_clamp(p.get("quantity"), 1, 1, 100))
     min_wing_width_pct = _clamp(p.get("min_wing_width_pct"), 1.0, 0.01, 100.0)
     max_wing_width_pct = _clamp(p.get("max_wing_width_pct"), 50.0, min_wing_width_pct, 100.0)
+    target_wing_delta = _clamp(
+        p.get("target_wing_delta"), 0.16, 0.01, 0.49,
+    )
     min_credit_pct_of_wing = _clamp(p.get("min_credit_pct_of_wing"), 5.0, 0.0, 100.0)
     max_wing_skew_pct = _clamp(p.get("max_wing_skew_pct"), 100.0, 0.0, 1000.0)
     target_body_offset_pct = _clamp(p.get("target_body_offset_pct"), 0.0, -100.0, 100.0)
@@ -674,6 +758,11 @@ def run_iron_butterfly_scan(payload: dict) -> dict:
         close = frame["Close"].dropna()
         if not close.empty:
             spots[ticker] = _num(close.iloc[-1])
+    for ticker in tickers:
+        if spots.get(ticker) is None or spots[ticker] <= 0:
+            fallback_spot = _fallback_spot_price(ticker)
+            if fallback_spot is not None:
+                spots[ticker] = fallback_spot
 
     def scan_ticker(ticker: str) -> dict:
         spot = spots.get(ticker)
@@ -685,7 +774,6 @@ def run_iron_butterfly_scan(payload: dict) -> dict:
                 "candidates": [],
             }
         try:
-            import yfinance as yf
             expirations = list(yf.Ticker(ticker).options or [])
         except Exception:
             expirations = []
@@ -739,6 +827,7 @@ def run_iron_butterfly_scan(payload: dict) -> dict:
                 call_wing_strike=call_wing_strike,
                 min_wing_width_pct=min_wing_width_pct,
                 max_wing_width_pct=max_wing_width_pct,
+                target_wing_delta=target_wing_delta,
                 include_analysis=False,
             ):
                 candidate.update({
@@ -784,6 +873,7 @@ def run_iron_butterfly_scan(payload: dict) -> dict:
             quantity=quantity,
             dividend_yield=dividend_yield,
             exit_dte=min(exit_dte, max(1, best["dte"] - 1)),
+            target_wing_delta=target_wing_delta,
         )
         if analyzed is not None:
             for key in (
@@ -844,6 +934,7 @@ def run_iron_butterfly_scan(payload: dict) -> dict:
             "call_wing_strike": call_wing_strike,
             "min_wing_width_pct": min_wing_width_pct,
             "max_wing_width_pct": max_wing_width_pct,
+            "target_wing_delta": target_wing_delta,
             "min_credit_pct_of_wing": min_credit_pct_of_wing,
             "max_wing_skew_pct": max_wing_skew_pct,
             "target_body_offset_pct": target_body_offset_pct,
