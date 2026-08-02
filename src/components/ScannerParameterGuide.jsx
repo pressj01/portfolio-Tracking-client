@@ -304,6 +304,38 @@ const GUIDES = {
       ],
     },
   ],
+  'sixty-forty-twenty-fly': [
+    {
+      title: 'Universe, expiration, and structure',
+      items: [
+        ['Tickers', 'SPY, QQQ, IWM, and VOO are the defaults. Every ticker uses its own live chain and the same entry gates; VOO is not assumed to have SPY liquidity.'],
+        ['Target / Minimum / Maximum DTE', 'Selects the listed expiration nearest 70 DTE inside the supplied 60-80 DTE entry window. Monthly and weekly expirations are both eligible.'],
+        ['Fly quantity', 'Scales the complete 1/-2/+1 put structure. One fly buys one upper put, sells two body puts, and buys one lower put.'],
+        ['Leg delta tolerance', 'Maximum miss from the absolute 60-delta upper long, 40-delta body short, and 20-delta lower long targets.'],
+        ['Max absolute net delta', 'Maximum share-equivalent delta for the complete position. The target ladder is algebraically neutral: -0.60 + 2(0.40) - 0.20 = 0.'],
+      ],
+    },
+    {
+      title: 'Liquidity and entry quality',
+      items: [
+        ['Minimum leg OI', 'Minimum open interest required at every unique strike. Increase this when you want to exclude thin VOO or other ETF contracts.'],
+        ['Max bid/ask width', 'Largest allowed spread as a percentage of the leg mid. Every leg must have a live two-sided quote to be entry-ready; recent-trade estimates are review-only.'],
+        ['Delta/theta at entry', 'Absolute complete-position delta divided by positive daily theta. A candidate already at or above the caution threshold is not entry-ready.'],
+        ['Ranking', 'Prefers entry-ready structures, then the smallest total delta miss, the smallest net delta, a lower delta/theta ratio, proximity to target DTE, and better liquidity.'],
+      ],
+    },
+    {
+      title: 'Monitoring and exit rules',
+      items: [
+        ['20% delta change', 'Caution band for the original upper-long and body-short contracts. The exact bands are 48-72 delta around the 60-delta leg and 32-48 delta around the 40-delta leg.'],
+        ['30% delta change', 'Exit when either original monitored leg reaches its exact 30% boundary: 42/78 delta for the upper long or 28/52 delta for the body. The presentation rounds these to roughly 40-80 and 30-50.'],
+        ['Delta/theta caution and exit', 'Defaults to caution above 50% and exit above 60%, matching the supplied 50-60% management range.'],
+        ['Mandatory exit', 'Close at 30 DTE regardless of price, P/L, or the other monitors.'],
+        ['8- and 14-day reviews', 'Reprices the complete fly at the two illustrated review dates and at 30 DTE with each entry leg IV held constant. These are scenario estimates, not promised returns.'],
+        ['Original contracts only', 'Monitor the deltas of the contracts opened at entry. Do not rerun the scanner and substitute newly selected 60- or 40-delta strikes when checking an existing position.'],
+      ],
+    },
+  ],
   'unbalanced-butterfly': [
     {
       title: 'Universe and expiration',

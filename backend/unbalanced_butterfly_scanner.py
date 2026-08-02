@@ -348,6 +348,7 @@ def _build_butterfly(
     dividend_yield: float = 0.0,
     always_success_above_upper: bool = True,
     exit_points: list[dict] | None = None,
+    require_lower_wing_wider: bool = True,
 ) -> dict | None:
     """Calculate greeks, execution, payoff, and probabilities for one BWB.
 
@@ -375,7 +376,11 @@ def _build_butterfly(
 
     upper_width = upper_strike - body_strike
     lower_width = body_strike - lower_strike
-    if upper_width <= 0 or lower_width <= upper_width:
+    if (
+        upper_width <= 0
+        or lower_width <= 0
+        or (require_lower_wing_wider and lower_width <= upper_width)
+    ):
         return None
 
     quantity = max(1, int(tranche_quantity))

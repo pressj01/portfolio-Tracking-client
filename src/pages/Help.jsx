@@ -32,6 +32,7 @@ const GROUPS = [
       { id: 'unbalanced-butterfly-scanner', label: 'Unbalanced Butterfly Scanner' },
       { id: 'double-hedge-put-butterfly-scanner', label: 'Double-Hedge Put Butterfly Scanner' },
       { id: 'road-trip-butterfly-scanner', label: 'Road Trip Butterfly Scanner' },
+      { id: 'sixty-forty-twenty-fly-scanner', label: '60/40/20 Fly Scanner' },
     ],
   },
   {
@@ -8144,6 +8145,45 @@ function UnbalancedPutCondorScannerHelp() {
   )
 }
 
+function SixtyFortyTwentyFlyScannerHelp() {
+  return (
+    <div>
+      <h2>60/40/20 Fly Scanner</h2>
+      <p>
+        This scanner builds a same-expiration <strong>1/−2/+1 put butterfly</strong> by
+        buying the put nearest 60 delta, selling two puts nearest 40 delta, and buying
+        the put nearest 20 delta. It searches listed expirations from 60 through 80 DTE.
+        At the target deltas, the three legs begin near delta neutral.
+      </p>
+      <p>
+        SPY, QQQ, IWM, and VOO are included by default. VOO must pass the same live-quote,
+        open-interest, bid/ask-width, delta-fit, theta, and net-delta gates as SPY. A thin
+        chain is shown as needing review or unavailable rather than treated as equivalent.
+      </p>
+      <h3>Reading the results</h3>
+      <ul>
+        <li><strong>Landed deltas</strong> compare the listed contracts with the 60/40/20 targets.</li>
+        <li><strong>Net delta</strong> is the complete position in share equivalents.</li>
+        <li><strong>Delta/theta</strong> is absolute position delta divided by positive daily theta.</li>
+        <li><strong>Liquidity</strong> shows the widest leg bid/ask percentage and minimum leg open interest.</li>
+        <li>Expand a row for probability cards, 8- and 14-day modeled P/L, expiration geometry, the risk graph, and the complete exit plan.</li>
+      </ul>
+      <h3>Management rules</h3>
+      <p>
+        Monitor the <em>original entry contracts</em>. A 20% change in either monitored
+        delta is caution: 48–72 delta for the upper long and 32–48 for the body short.
+        Exit at the exact 30% boundaries: 42/78 or 28/52. Also caution when delta/theta
+        exceeds 50%, exit above 60%, and close at 30 DTE regardless of price or P/L.
+      </p>
+      <div className="alert alert-warning">
+        Modeled probabilities and 8- or 14-day outcomes are estimates, not promised
+        returns. Verify the exact contracts, current Greeks, quotes, maximum loss, and
+        multi-leg execution before trading.
+      </div>
+    </div>
+  )
+}
+
 function RoadTripButterflyScannerHelp() {
   const screenshotStyle = {
     maxWidth: '100%',
@@ -10578,6 +10618,7 @@ const CONTENT_MAP = {
   'unbalanced-butterfly-scanner': UnbalancedButterflyScannerHelp,
   'double-hedge-put-butterfly-scanner': DoubleHedgePutButterflyScannerHelp,
   'road-trip-butterfly-scanner': RoadTripButterflyScannerHelp,
+  'sixty-forty-twenty-fly-scanner': SixtyFortyTwentyFlyScannerHelp,
   import: ImportHelp,
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,

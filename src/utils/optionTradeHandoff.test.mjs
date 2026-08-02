@@ -72,3 +72,27 @@ test('six-leg variants can also be saved from the scanner', () => {
   assert.equal(payload.legs.length, 6)
   assert.match(payload.notes, /recent-trade estimates/i)
 })
+
+test('builds the complete 60/40/20 fly for Strategy Lab', () => {
+  const row = {
+    ticker: 'SPY',
+    price: 650,
+    expiration,
+    upper_long_strike: 660,
+    body_short_strike: 640,
+    lower_long_strike: 610,
+    upper_long_quantity: 2,
+    body_short_quantity: 4,
+    lower_long_quantity: 2,
+    upper_long_leg: quote('upper_long', 'put', 660, 2),
+    body_short_leg: quote('body_short', 'put', 640, -4),
+    lower_long_leg: quote('lower_long', 'put', 610, 2),
+  }
+
+  const trade = buildScannerTrade('sixty-forty-twenty-fly', row)
+
+  assert.ok(trade)
+  assert.equal(trade.label, '60/40/20 fly')
+  assert.deepEqual(trade.legs.map(leg => leg.side), ['BUY', 'SELL', 'BUY'])
+  assert.deepEqual(trade.legs.map(leg => leg.qty), [2, 4, 2])
+})

@@ -183,6 +183,15 @@ const BUILDERS = {
       optionLeg(row.lower_long_leg, 'BUY', 'PUT', row.expiration, row.lower_long_strike, row.lower_long_quantity),
     ])
   },
+
+  'sixty-forty-twenty-fly': row => {
+    if (!row?.expiration) return null
+    return trade(row, '60/40/20 fly', [
+      optionLeg(row.upper_long_leg, 'BUY', 'PUT', row.expiration, row.upper_long_strike, row.upper_long_quantity),
+      optionLeg(row.body_short_leg, 'SELL', 'PUT', row.expiration, row.body_short_strike, row.body_short_quantity),
+      optionLeg(row.lower_long_leg, 'BUY', 'PUT', row.expiration, row.lower_long_strike, row.lower_long_quantity),
+    ])
+  },
 }
 
 /** The suggested trade as risk-graph legs, or null when the row has no option trade. */
@@ -201,6 +210,7 @@ export function buildScannerTrade(kind, row) {
     'unbalanced-butterfly': 3,
     'double-hedge-put-butterfly': 3,
     'road-trip-butterfly': 3,
+    'sixty-forty-twenty-fly': 3,
   }[kind]
   // Quantity-aware condor variants can contain four, six, or more actual legs.
   // Validate against the backend's complete leg list instead of rejecting every
