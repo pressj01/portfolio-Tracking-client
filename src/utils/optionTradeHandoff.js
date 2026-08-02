@@ -114,10 +114,32 @@ const BUILDERS = {
 
   // The condor scanner returns its structure under `spread`, the same key the
   // two-leg screens use — not `condor`.
+  //
+  // Variants carry their own signed-quantity leg list, which is the only shape
+  // that survives the trip: a ratio'd or hedged structure is four to ten legs at
+  // unequal counts, and rebuilding it from the four named strikes would draw a
+  // 1:1 condor the scanner never suggested — with a max loss off by the ratio.
   'iron-condor': row => {
     const condor = row?.spread
     if (!condor) return null
-    return trade(row, 'iron condor', [
+    const label = condor.variant_label
+      ? `${condor.variant_label.toLowerCase()}${
+          condor.direction && condor.direction !== 'neutral' ? ` (${condor.direction})` : ''
+        }`
+      : 'iron condor'
+
+    if (Array.isArray(condor.legs) && condor.legs.length) {
+      return trade(row, label, condor.legs.map(leg => optionLeg(
+        leg,
+        leg.qty > 0 ? 'BUY' : 'SELL',
+        leg.option_type === 'call' ? 'CALL' : 'PUT',
+        condor.expiration,
+        leg.strike,
+        Math.abs(leg.qty),
+      )))
+    }
+
+    return trade(row, label, [
       optionLeg(condor.put_leg_long, 'BUY', 'PUT', condor.expiration, condor.put_long_strike),
       optionLeg(condor.put_leg_short, 'SELL', 'PUT', condor.expiration, condor.put_short_strike),
       optionLeg(condor.call_leg_short, 'SELL', 'CALL', condor.expiration, condor.call_short_strike),
@@ -170,7 +192,7 @@ export function buildScannerTrade(kind, row) {
   const built = build(row)
   // A partial structure would draw a payoff the scanner never suggested.
   if (!built) return null
-  const expected = {
+  const fixedExpected = {
     'bull-put-spread': 2,
     'bear-put-spread': 2,
     'bear-call-spread': 2,
@@ -180,6 +202,12 @@ export function buildScannerTrade(kind, row) {
     'double-hedge-put-butterfly': 3,
     'road-trip-butterfly': 3,
   }[kind]
+  // Quantity-aware condor variants can contain four, six, or more actual legs.
+  // Validate against the backend's complete leg list instead of rejecting every
+  // non-four-leg structure (which disabled both Risk graph and Save trade).
+  const expected = kind === 'iron-condor' && Array.isArray(row?.spread?.legs)
+    ? row.spread.legs.length
+    : fixedExpected
   if (expected && built.legs.length !== expected) return null
   return built
 }

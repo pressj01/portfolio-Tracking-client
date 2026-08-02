@@ -27,6 +27,7 @@ import os
 import sys
 import unittest
 from datetime import date, timedelta
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -97,7 +98,13 @@ def synthetic_frame(kind="range", days=300, seed=11):
         close = 100.0 * np.exp(np.cumsum(legs + noise * 0.2))
     else:
         raise ValueError(kind)
-    index = pd.bdate_range(end=date.today(), periods=days)
+    # Pandas 3 may produce one fewer observation when an invalid weekend end is
+    # combined with `periods`. Normalize to the latest weekday so this pure-math
+    # fixture is stable regardless of which day the suite runs.
+    end = pd.Timestamp(date.today())
+    while end.weekday() >= 5:
+        end -= pd.Timedelta(days=1)
+    index = pd.bdate_range(end=end, periods=days)
     return pd.DataFrame({
         "Open": close * 0.999, "High": close * 1.006,
         "Low": close * 0.994, "Close": close,
@@ -179,6 +186,69 @@ class RiskArithmetic(unittest.TestCase):
         self.assertEqual(condor["quote_source"], "last_trade_estimate")
         self.assertIsNone(condor["natural_credit"])
         self.assertIsNone(condor["exec_cost_pct"])
+
+    def test_recent_trades_keep_the_complete_after_hours_scan_available(self):
+        expiration = (date.today() + timedelta(days=40)).isoformat()
+        puts = [
+            leg(80, 0.0, 1.0, volume=100),
+            leg(90, 0.0, 3.0, volume=100),
+        ]
+        calls = [
+            leg(110, 0.0, 3.0, volume=100),
+            leg(120, 0.0, 1.0, volume=100),
+        ]
+        fake_ticker = type("FakeTicker", (), {"options": [expiration]})()
+        with (
+            patch.object(ic.yf, "Ticker", return_value=fake_ticker),
+            patch.object(ic, "_load_put_chain", return_value=puts),
+            patch.object(ic, "_load_call_chain", return_value=calls),
+        ):
+            condor = ic._suggest_iron_condor(
+                "TEST", 100.0, 0.0, 0.20, 40, 1, 1095,
+                min_width_pct=1.0,
+                max_width_pct=20.0,
+                min_credit_pct_of_width=1.0,
+                min_cushion_sigma=0.0,
+                min_otm_pct=0.0,
+                min_open_interest=0,
+                max_exec_cost_pct=100.0,
+            )
+
+        self.assertIsNotNone(condor)
+        self.assertTrue(condor["uses_last_trade_prices"])
+        self.assertEqual(condor["quote_source"], "last_trade_estimate")
+        self.assertTrue(condor["constraints_relaxed"])
+        self.assertIsNone(condor["natural_cashflow"])
+
+    def test_row_probability_matches_the_expiration_probability_card(self):
+        distribution_iv = 0.18
+        condor = standard_condor(distribution_iv=distribution_iv)
+        expiration = (date.today() + timedelta(days=40)).isoformat()
+        schedule = ic.profit_probability_schedule(
+            spot=100.0,
+            dte=40,
+            expiration=expiration,
+            distribution_iv=distribution_iv,
+            entry_cashflow=condor["entry_cashflow"],
+            risk_free_rate=ic.RISK_FREE,
+            legs=[
+                {"option_type": "put", "strike": condor["put_long_strike"],
+                 "iv": condor["put_leg_long"]["iv"], "quantity": 1},
+                {"option_type": "put", "strike": condor["put_short_strike"],
+                 "iv": condor["put_leg_short"]["iv"], "quantity": -1},
+                {"option_type": "call", "strike": condor["call_short_strike"],
+                 "iv": condor["call_leg_short"]["iv"], "quantity": -1},
+                {"option_type": "call", "strike": condor["call_long_strike"],
+                 "iv": condor["call_leg_long"]["iv"], "quantity": 1},
+            ],
+        )
+
+        expiration_point = next(point for point in schedule if point["kind"] == "expiration")
+        self.assertAlmostEqual(
+            condor["prob_profit"],
+            expiration_point["probability_success_pct"],
+            delta=0.11,
+        )
 
     def test_credit_at_or_above_the_wing_is_rejected(self):
         """A credit exceeding the wing implies risk-free money, i.e. bad data."""

@@ -131,8 +131,25 @@ from put_scanner import (
 # primitives they all depend on.
 from bear_put_spread_scanner import _band, prob_below, vertical_fair_value
 from bear_call_spread_scanner import call_vertical_fair_value
+# The directional, ratio'd and hedged structures. Kept in their own module
+# because their payoff maths is quantity-aware and cannot reuse the closed-form
+# `max(wing) - credit` shortcut that only holds for the 1x symmetric condor.
+from iron_condor_variants import (
+    ASYMMETRIC_VARIANTS,
+    VARIANTS,
+    analyze_structure,
+    build_structure,
+    early_close_exits,
+    resolve_variants,
+    variant_choices,
+)
 
 CONTRACT_MULTIPLIER = 100.0
+
+# How much further a name may drift when it drifts *with* a directional scan's
+# lean. Wide enough that a bullish tilt can find names actually going up, tight
+# enough that it is still a condor screen and not a momentum screen.
+DIRECTIONAL_DRIFT_ALLOWANCE = 1.8
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +567,8 @@ def _leg_view(leg: dict) -> dict:
 
 def _build_condor(put_short: dict, put_long: dict, call_short: dict, call_long: dict,
                   spot: float, dte: int, forecast_vol: float | None,
-                  div_yield: float) -> dict | None:
+                  div_yield: float,
+                  distribution_iv: float | None = None) -> dict | None:
     """All the numbers for one four-strike condor, or None if the strikes are unusable."""
     ps = _num(put_short.get("strike"))
     pl = _num(put_long.get("strike"))
@@ -598,7 +616,11 @@ def _build_condor(put_short: dict, put_long: dict, call_short: dict, call_long: 
     # credit is what is left after crossing all four markets, and on a condor
     # that gap is wide enough to decide whether the trade is worth doing.
     legs = (put_short, put_long, call_short, call_long)
-    all_live = all(_quotable(leg) for leg in legs)
+    all_live = all(
+        leg.get("quote_source", "live_bid_ask") == "live_bid_ask"
+        and _quotable(leg)
+        for leg in legs
+    )
     natural_credit = (
         (_num(put_short.get("bid"), 0.0) or 0.0)
         - (_num(put_long.get("ask"), 0.0) or 0.0)
@@ -648,11 +670,16 @@ def _build_condor(put_short: dict, put_long: dict, call_short: dict, call_long: 
     # Probabilities from the chain's own implied vol. A condor's two outcomes
     # need two different numbers, and both come off where price lands, so both
     # use N(-d2) rather than a delta proxy.
-    pricing_iv = 0.0
-    for leg in (put_short, call_short):
-        iv = _num(leg.get("iv"), 0.0) or 0.0
-        if iv > 0:
-            pricing_iv = max(pricing_iv, iv)
+    # Use the same at-the-money volatility that drives the full-position
+    # probability schedule.  Previously this row used the larger short-leg IV
+    # while the expiration card used ATM IV, so the two "probability of profit"
+    # figures disagreed for the exact same trade (especially under put skew).
+    pricing_iv = _num(distribution_iv, 0.0) or 0.0
+    if pricing_iv <= 0:
+        for leg in (put_short, call_short):
+            iv = _num(leg.get("iv"), 0.0) or 0.0
+            if iv > 0:
+                pricing_iv = max(pricing_iv, iv)
     below_call_short = prob_below(spot, cs, T, pricing_iv, RISK_FREE, div_yield)
     below_put_short = prob_below(spot, ps, T, pricing_iv, RISK_FREE, div_yield)
     below_upper_be = prob_below(spot, upper_breakeven, T, pricing_iv, RISK_FREE, div_yield)
@@ -722,10 +749,16 @@ def _build_condor(put_short: dict, put_long: dict, call_short: dict, call_long: 
         "call_credit": call_credit,
         "put_share_of_credit_pct": put_share_of_credit_pct,
         "credit": net_credit,
+        "entry_cashflow": net_credit,
+        "entry_credit": net_credit,
+        "entry_debit": 0.0,
+        "is_net_debit": False,
         "natural_credit": natural_credit,
+        "natural_cashflow": natural_credit,
         "quote_source": "live_bid_ask" if all_live else "last_trade_estimate",
         "uses_last_trade_prices": not all_live,
         "credit_pct_of_width": credit_pct_of_width,
+        "max_profit_pct_of_range": credit_pct_of_width,
         "max_profit": net_credit,
         "max_loss": max_loss,
         "reward_risk": (net_credit / max_loss) if max_loss > 0 else None,
@@ -759,6 +792,9 @@ def _build_condor(put_short: dict, put_long: dict, call_short: dict, call_long: 
         "volume_min": volume_min,
         # Per-contract dollars, which is how the trade is actually sized.
         "credit_dollars": net_credit * CONTRACT_MULTIPLIER,
+        "entry_cashflow_dollars": net_credit * CONTRACT_MULTIPLIER,
+        "entry_credit_dollars": net_credit * CONTRACT_MULTIPLIER,
+        "entry_debit_dollars": 0.0,
         "max_profit_dollars": net_credit * CONTRACT_MULTIPLIER,
         "max_loss_dollars": max_loss * CONTRACT_MULTIPLIER,
         "put_leg_short": _leg_view(put_short),
@@ -981,6 +1017,15 @@ def _suggest_iron_condor(
     if len(put_legs) < 2 or len(call_legs) < 2:
         return None
 
+    # Establish the distribution volatility before structures are built so the
+    # row-level probability and the expiration probability card are calculated
+    # from the same distribution.  Leg IVs are still retained for marking each
+    # option at early-close dates.
+    atm_put = min(prepared_puts, key=lambda leg: abs(leg["strike"] - spot))
+    atm_call = min(prepared_calls, key=lambda leg: abs(leg["strike"] - spot))
+    atm_ivs = [leg["iv"] for leg in (atm_put, atm_call) if leg["iv"] and leg["iv"] > 0]
+    atm_iv = (sum(atm_ivs) / len(atm_ivs)) if atm_ivs else 0.0
+
     lo_width = spot * max(0.0, min_width_pct) / 100.0
     hi_width = spot * max(min_width_pct, max_width_pct) / 100.0
 
@@ -1007,6 +1052,7 @@ def _suggest_iron_condor(
                 put_pair["short"], put_pair["long"],
                 call_pair["short"], call_pair["long"],
                 spot, dte_eff, forecast_vol, div_yield,
+                distribution_iv=atm_iv,
             )
             if condor is None:
                 continue
@@ -1070,11 +1116,6 @@ def _suggest_iron_condor(
     # does not contaminate the vol-level reading. Averaged across the put and
     # call sides because a condor sells both, and put skew alone would overstate
     # what the structure is really being paid.
-    atm_put = min(prepared_puts, key=lambda leg: abs(leg["strike"] - spot))
-    atm_call = min(prepared_calls, key=lambda leg: abs(leg["strike"] - spot))
-    atm_ivs = [leg["iv"] for leg in (atm_put, atm_call) if leg["iv"] and leg["iv"] > 0]
-    atm_iv = (sum(atm_ivs) / len(atm_ivs)) if atm_ivs else 0.0
-
     expiry_d = datetime.strptime(expiration, "%Y-%m-%d").date()
 
     # The short call's dividend risk, the same term the bear call screen carries.
@@ -1108,6 +1149,448 @@ def _suggest_iron_condor(
 
 
 # ---------------------------------------------------------------------------
+# Variant structures
+# ---------------------------------------------------------------------------
+
+def _profitable_probability(legs: list[dict], cashflow: float, breakevens: list[float],
+                            spot: float, T: float, iv: float, div_yield: float) -> float | None:
+    """Odds of finishing in profit, summed over every profitable price interval.
+
+    The balanced condor has exactly one profit zone, so its odds are a single
+    subtraction. These structures do not: a hedged Weirdor's butterfly moat puts
+    a profit spike outside the main tent — the "Batman ears" shape — and a Jeep
+    has a raised shelf that is a different height from its base. Reading such a
+    payoff as "between the two outer breakevens" would count the losing gap in
+    the middle as profit.
+
+    So the intervals are walked one at a time, the sign of the payoff is read
+    inside each, and only the profitable ones contribute.
+    """
+    if not breakevens or not spot or spot <= 0 or T <= 0 or not iv or iv <= 0:
+        return None
+    from iron_condor_variants import payoff_at
+
+    bounds = [0.0] + sorted(breakevens) + [float("inf")]
+    total = 0.0
+    for lo, hi in zip(bounds, bounds[1:]):
+        probe = (lo + hi) / 2.0 if hi != float("inf") else lo + max(1.0, spot * 0.25)
+        if payoff_at(legs, cashflow, probe) <= 0:
+            continue
+        below_hi = 1.0 if hi == float("inf") else prob_below(spot, hi, T, iv, RISK_FREE, div_yield)
+        below_lo = 0.0 if lo <= 0 else prob_below(spot, lo, T, iv, RISK_FREE, div_yield)
+        if below_hi is None or below_lo is None:
+            continue
+        total += max(0.0, below_hi - below_lo)
+    return min(100.0, total * 100.0)
+
+
+def _structure_metrics(built: dict, analysis: dict, spot: float, dte: int,
+                       div_yield: float, forecast_vol: float | None,
+                       expiration: str, atm_iv: float) -> dict:
+    """Turn a built variant plus its payoff analysis into a scoreable structure."""
+    legs = built["legs"]
+    entry_cashflow = analysis["entry_cashflow"]
+    max_profit = analysis["max_profit"]
+    max_loss = analysis["max_loss"]
+    dte_eff = max(int(dte or 1), 1)
+    T = dte_eff / 365.0
+
+    # Quote provenance is part of the live test. A recent-trade estimate may
+    # still carry stale bid/ask fields from the chain payload, but it must not
+    # produce a natural fill or an execution-cost claim.
+    all_live = all(
+        leg.get("quote_source", "live_bid_ask") == "live_bid_ask"
+        and _quotable(leg)
+        for leg in legs
+    )
+    exec_cost = (
+        sum(
+            abs(int(leg["qty"]))
+            * ((_num(leg.get("ask"), 0.0) or 0.0) - (_num(leg.get("bid"), 0.0) or 0.0))
+            for leg in legs
+        )
+        if all_live else None
+    )
+    natural = None
+    if all_live:
+        natural = 0.0
+        for leg in legs:
+            qty = int(leg["qty"])
+            # Cross the market the wrong way on every leg: buy the ask, sell the bid.
+            price = _num(leg.get("ask"), 0.0) if qty > 0 else _num(leg.get("bid"), 0.0)
+            natural -= qty * (price or 0.0)
+
+    # Match the underlying-price distribution used by the probability card.
+    # Individual leg IVs still mark the options at early-close dates.
+    pricing_iv = _num(atm_iv, 0.0) or 0.0
+    if pricing_iv <= 0:
+        pricing_iv = max([_num(leg.get("iv"), 0.0) or 0.0 for leg in legs] + [0.0])
+    prob_profit = _profitable_probability(
+        legs, entry_cashflow, analysis["breakevens"], spot, T, pricing_iv, div_yield,
+    )
+
+    return_on_risk = (max_profit / max_loss * 100.0) if max_loss > 0 else None
+    lower_be = analysis["lower_breakeven"]
+    upper_be = analysis["upper_breakeven"]
+
+    # Entry credit and payoff efficiency are separate for variants. A Jeep or a
+    # hedged structure may intentionally pay a debit, so only a positive entry
+    # cashflow gets a credit ratio; max-profit share is reported separately.
+    span = max_profit + max_loss
+    credit_pct_of_width = (
+        entry_cashflow / span * 100.0
+        if span > 0 and entry_cashflow > 0 else None
+    )
+    max_profit_pct_of_range = (max_profit / span * 100.0) if span > 0 else None
+
+    # Where the payoff actually sits at its maximum. On a flat-topped structure
+    # this is a real zone; on the hedged Weirdor's butterfly peak it collapses to
+    # a point, which is why the scorer leans on prob_profit instead.
+    plateau = [x for x, value in analysis["curve"] if abs(value - max_profit) < 1e-9]
+    prob_max_profit = None
+    if len(plateau) >= 2 and spot > 0 and T > 0:
+        below_hi = prob_below(spot, max(plateau), T, pricing_iv, RISK_FREE, div_yield)
+        below_lo = prob_below(spot, min(plateau), T, pricing_iv, RISK_FREE, div_yield)
+        if below_hi is not None and below_lo is not None:
+            prob_max_profit = max(0.0, (below_hi - below_lo) * 100.0)
+
+    sigma_T = (
+        forecast_vol * math.sqrt(T)
+        if (forecast_vol and forecast_vol > 0 and T > 0) else None
+    )
+    lower_sigma = upper_sigma = min_sigma = None
+    if sigma_T and sigma_T > 0 and spot > 0:
+        if lower_be and lower_be > 0:
+            lower_sigma = abs(math.log(lower_be / spot) / sigma_T)
+        if upper_be and upper_be > 0:
+            upper_sigma = abs(math.log(upper_be / spot) / sigma_T)
+        if lower_sigma is not None and upper_sigma is not None:
+            min_sigma = min(lower_sigma, upper_sigma)
+
+    structure_delta = None
+    deltas = [_num(leg.get("delta")) for leg in legs]
+    if all(d is not None for d in deltas):
+        structure_delta = sum(int(leg["qty"]) * _num(leg["delta"]) for leg in legs)
+
+    oi_min = min(int(_num(leg.get("open_interest"), 0) or 0) for leg in legs)
+    volume_min = min(int(_num(leg.get("volume"), 0) or 0) for leg in legs)
+    total_contracts = sum(abs(int(leg["qty"])) for leg in legs)
+
+    put_width = built["put_short_strike"] - built["put_long_strike"]
+    call_width = built["call_long_strike"] - built["call_short_strike"]
+    max_wing = max(put_width, call_width)
+    put_cashflow = -sum(
+        int(leg["qty"]) * (_num(leg.get("mid"), 0.0) or 0.0)
+        for leg in legs if leg["option_type"] == "put"
+    )
+    call_cashflow = -sum(
+        int(leg["qty"]) * (_num(leg.get("mid"), 0.0) or 0.0)
+        for leg in legs if leg["option_type"] == "call"
+    )
+    lower_cushion_pct = (
+        (spot - lower_be) / spot * 100.0 if lower_be and spot else None
+    )
+    upper_cushion_pct = (
+        (upper_be - spot) / spot * 100.0 if upper_be and spot else None
+    )
+    serialized_legs = [
+        {
+            "role": leg["role"], "option_type": leg["option_type"],
+            "strike": _round(leg["strike"]), "qty": int(leg["qty"]),
+            "bid": _round(leg.get("bid")), "ask": _round(leg.get("ask")),
+            "mid": _round(leg.get("mid")), "iv": _round(leg.get("iv"), 4),
+            "delta": _round(leg.get("delta"), 3),
+            "open_interest": leg.get("open_interest"),
+            "volume": leg.get("volume"),
+            "quote_source": leg.get("quote_source"),
+        }
+        for leg in legs
+    ]
+    primary_by_role = {leg["role"]: leg for leg in serialized_legs}
+
+    spec = VARIANTS.get(built["variant"], {})
+    return {
+        "variant": built["variant"],
+        "direction": built["direction"],
+        "variant_label": spec.get("label", built["variant"]),
+        "variant_blurb": spec.get("blurb"),
+        "is_asymmetric": built["variant"] in ASYMMETRIC_VARIANTS,
+        "notes": built.get("notes") or [],
+        "risk_reasons": built.get("risk_reasons") or [],
+        "expiration": expiration,
+        "dte": dte,
+        "atm_iv": atm_iv,
+        "put_long_strike": built["put_long_strike"],
+        "put_short_strike": built["put_short_strike"],
+        "call_short_strike": built["call_short_strike"],
+        "call_long_strike": built["call_long_strike"],
+        "put_width": put_width,
+        "call_width": call_width,
+        # Geometry only. Variant max loss always comes from the complete,
+        # quantity-aware payoff curve rather than this single-wing width.
+        "max_wing": max_wing,
+        "put_quantity": built["put_quantity"],
+        "call_quantity": built["call_quantity"],
+        "front_debit": built.get("front_debit"),
+        "hedge_leg_count": built.get("hedge_legs", 0),
+        "leg_count": len(legs),
+        "total_contracts": total_contracts,
+        "legs": serialized_legs,
+        "put_leg_long": primary_by_role.get("put_long"),
+        "put_leg_short": primary_by_role.get("put_short"),
+        "call_leg_short": primary_by_role.get("call_short"),
+        "call_leg_long": primary_by_role.get("call_long"),
+        # Compatibility aliases remain signed. Consumers should prefer the
+        # explicit entry fields so a debit structure is never called a credit.
+        "credit": entry_cashflow,
+        "entry_cashflow": entry_cashflow,
+        "entry_credit": max(0.0, entry_cashflow),
+        "entry_debit": max(0.0, -entry_cashflow),
+        "is_net_debit": entry_cashflow < 0,
+        "natural_credit": natural,
+        "natural_cashflow": natural,
+        "quote_source": "live_bid_ask" if all_live else "last_trade_estimate",
+        "uses_last_trade_prices": not all_live,
+        "constraints_relaxed": not all_live,
+        "put_credit": put_cashflow,
+        "call_credit": call_cashflow,
+        "max_profit": max_profit,
+        "max_loss": max_loss,
+        "reward_risk": (max_profit / max_loss) if max_loss > 0 else None,
+        "return_on_risk_pct": return_on_risk,
+        "annualized_return_on_risk_pct": (
+            return_on_risk * 365.0 / dte_eff if return_on_risk is not None else None
+        ),
+        "credit_pct_of_width": credit_pct_of_width,
+        "max_profit_pct_of_range": max_profit_pct_of_range,
+        "entry_debit_pct_of_max_loss": (
+            -entry_cashflow / max_loss * 100.0
+            if entry_cashflow < 0 and max_loss > 0 else None
+        ),
+        "credit_dollars": entry_cashflow * CONTRACT_MULTIPLIER,
+        "entry_cashflow_dollars": entry_cashflow * CONTRACT_MULTIPLIER,
+        "entry_credit_dollars": max(0.0, entry_cashflow) * CONTRACT_MULTIPLIER,
+        "entry_debit_dollars": max(0.0, -entry_cashflow) * CONTRACT_MULTIPLIER,
+        "max_profit_dollars": max_profit * CONTRACT_MULTIPLIER,
+        "max_loss_dollars": max_loss * CONTRACT_MULTIPLIER,
+        "prob_max_profit": prob_max_profit,
+        "breakevens": analysis["breakevens"],
+        "lower_breakeven": lower_be,
+        "upper_breakeven": upper_be,
+        "profit_zone_width_pct": (
+            (upper_be - lower_be) / spot * 100.0
+            if lower_be and upper_be and spot else None
+        ),
+        "put_otm_pct": (
+            (spot - built["put_short_strike"]) / spot * 100.0 if spot else None
+        ),
+        "call_otm_pct": (
+            (built["call_short_strike"] - spot) / spot * 100.0 if spot else None
+        ),
+        "lower_cushion_pct": lower_cushion_pct,
+        "upper_cushion_pct": upper_cushion_pct,
+        "lower_cushion_sigma": lower_sigma,
+        "upper_cushion_sigma": upper_sigma,
+        "min_cushion_sigma": min_sigma,
+        "expected_move_pct_life": (sigma_T * 100.0) if sigma_T else None,
+        "prob_profit": prob_profit,
+        "structure_delta": structure_delta,
+        "exec_cost": exec_cost,
+        "exec_cost_pct": (
+            exec_cost / abs(entry_cashflow) * 100.0
+            if exec_cost is not None and abs(entry_cashflow) > 1e-9 else None
+        ),
+        "open_interest_min": oi_min,
+        "volume_min": volume_min,
+    }
+
+
+def _suggest_variant_structures(
+    ticker: str, spot: float, div_yield: float, forecast_vol: float | None,
+    target_dte: int, min_dte: int, max_dte: int,
+    wanted: list[tuple[str, str]], tech: dict,
+    short_delta: float = 0.16, long_delta: float = 0.07,
+    width_pct: float = 5.0, tilt_strength: float = 0.25, ratio: int = 2,
+    min_credit_pct_of_width: float = 15.0, min_cushion_sigma: float = 1.0,
+    min_otm_pct: float = 2.0, min_open_interest: int = 50,
+    max_exec_cost_pct: float = 45.0, earnings_date: str | None = None,
+    earnings_buffer_days: int = 5, fund: dict | None = None,
+) -> list[dict]:
+    """Every requested variant on one underlying, priced off one shared chain."""
+    try:
+        expirations = list(yf.Ticker(ticker).options or [])
+    except Exception:
+        return []
+
+    earnings_d = _parse_date(earnings_date)
+    cutoff = (
+        earnings_d - timedelta(days=max(0, earnings_buffer_days))
+        if earnings_d else None
+    )
+    expiration, dte, cleared = _pick_expiration(
+        expirations, target_dte, min_dte, max_dte, expire_before=cutoff,
+    )
+    if not expiration:
+        return []
+
+    puts = _load_put_chain(ticker, expiration, spot, div_yield)
+    calls = _load_call_chain(ticker, expiration, spot, div_yield)
+    if not puts or not calls:
+        return []
+
+    dte_eff = max(dte or 1, 1)
+    # The put pool deliberately runs a little *above* spot. The Jeep's front
+    # debit spread sits nearest the money, and clipping the pool at spot — which
+    # is right for a plain condor — squeezes that spread down to whatever single
+    # strike is left underneath, which is not the structure.
+    prepared_puts = [
+        q for q in (
+            _prepare_put_quote(leg, spot=spot, dte=dte_eff, dividend_yield=div_yield)
+            for leg in puts if leg["strike"] < spot * 1.03
+        ) if q is not None
+    ]
+    prepared_calls = [
+        q for q in (
+            _prepare_option_quote(leg, option_type="call", spot=spot, dte=dte_eff,
+                                  dividend_yield=div_yield)
+            for leg in calls if leg["strike"] > spot * 0.97
+        ) if q is not None
+    ]
+    live_puts = [leg for leg in prepared_puts if _quotable(leg)]
+    live_calls = [leg for leg in prepared_calls if _quotable(leg)]
+
+    def _pool(live: list[dict], prepared: list[dict], need: int) -> list[dict]:
+        """Legs to build from: liquid ones when there are enough, else all live ones.
+
+        The open-interest floor cannot be applied as a hard pre-filter here. A
+        40-DTE expiration is usually a *weekly*, and on a real SPY weekly only a
+        handful of strikes carry OI above the default 50 — measured at eight puts
+        and one call. Filtering the pool down to those does not produce a
+        stricter structure, it produces no structure at all, and the variant
+        silently disappears from a scan the user asked for.
+
+        The balanced path already handles this the right way: it prefers the
+        liquid pairs and falls back when none qualify. This mirrors it, and the
+        thin legs still surface honestly through `open_interest_min` and the
+        "Thin open interest on one leg" flag rather than being hidden.
+        """
+        base = live if len(live) >= need else prepared
+        liquid = [
+            leg for leg in base
+            if int(_num(leg.get("open_interest"), 0) or 0) >= min_open_interest
+        ]
+        # `need` is deliberately generous rather than the bare minimum to build.
+        # Eight liquid strikes scattered across a wide chain is not a pool to
+        # select from, it is whichever strikes happened to survive — the delta
+        # targets land nowhere near them and the structure fails to build at all.
+        # Preferring liquidity is only meaningful when enough of the chain
+        # survives to still choose within; below that, take the whole live chain
+        # and let `open_interest_min` report what was actually available.
+        return sorted(liquid if len(liquid) >= need else base, key=lambda leg: leg["strike"])
+
+    # The Jeep sites three verticals in the put chain, so the put side needs the
+    # deepest pool of the family; the call side only ever supplies one.
+    put_legs = _pool(live_puts, prepared_puts, 24)
+    call_legs = _pool(live_calls, prepared_calls, 12)
+    if len(put_legs) < 3 or len(call_legs) < 2:
+        return []
+
+    atm_put = min(prepared_puts, key=lambda leg: abs(leg["strike"] - spot))
+    atm_call = min(prepared_calls, key=lambda leg: abs(leg["strike"] - spot))
+    atm_ivs = [leg["iv"] for leg in (atm_put, atm_call) if leg["iv"] and leg["iv"] > 0]
+    atm_iv = (sum(atm_ivs) / len(atm_ivs)) if atm_ivs else 0.0
+    expiry_d = datetime.strptime(expiration, "%Y-%m-%d").date()
+
+    ex_div_iso, ex_div_estimated = next_ex_dividend(fund or {})
+    ex_div_d = _parse_date(ex_div_iso)
+    ex_div_inside = bool(ex_div_d and ex_div_d <= expiry_d)
+    dividend = expected_dividend_amount(fund or {}, spot)
+
+    out: list[dict] = []
+    for variant, direction in wanted:
+        built = build_structure(
+            variant, direction, put_legs, call_legs, spot, tech,
+            base_short_delta=short_delta, base_long_delta=long_delta,
+            tilt_strength=tilt_strength, ratio=ratio, width_pct=width_pct,
+        )
+        if not built:
+            continue
+        analysis = analyze_structure(built["legs"])
+        # None means the tails are not flat — the structure is net short options
+        # somewhere and its loss is unbounded. Never surfaced, never scored.
+        if not analysis:
+            continue
+        # Most of these are credit structures and a debit means something is
+        # wrong with the quotes. The two that buy something are exceptions: the
+        # hedged Weirdor pays for its butterfly moat, and the Jeep pays for its
+        # front debit spread — in the reference position that spread is expensive
+        # enough to turn the whole package into a small net debit, which is the
+        # cost of the raised shelf, not a pricing error.
+        if analysis["entry_cashflow"] <= 0 and variant not in {"weirdor_hedged", "jeep"}:
+            continue
+        if analysis["max_loss"] <= 0:
+            # Riskless and paid to hold is not a trade, it is stale quotes.
+            continue
+
+        metrics = _structure_metrics(
+            built, analysis, spot, dte_eff, div_yield, forecast_vol, expiration, atm_iv,
+        )
+        entry_is_credit = metrics["entry_cashflow"] > 0
+        constraints_relaxed = bool(metrics["uses_last_trade_prices"])
+        if entry_is_credit and (
+            metrics.get("credit_pct_of_width") is None
+            or metrics["credit_pct_of_width"] < min_credit_pct_of_width
+        ):
+            constraints_relaxed = True
+        if (
+            metrics.get("min_cushion_sigma") is not None
+            and metrics["min_cushion_sigma"] < min_cushion_sigma
+        ):
+            constraints_relaxed = True
+        if (
+            metrics.get("put_otm_pct") is not None
+            and metrics["put_otm_pct"] < min_otm_pct
+        ) or (
+            metrics.get("call_otm_pct") is not None
+            and metrics["call_otm_pct"] < min_otm_pct
+        ):
+            constraints_relaxed = True
+        if metrics["open_interest_min"] < min_open_interest:
+            constraints_relaxed = True
+        if not metrics["uses_last_trade_prices"] and (
+            metrics.get("exec_cost_pct") is None
+            or metrics["exec_cost_pct"] > max_exec_cost_pct
+        ):
+            constraints_relaxed = True
+        if (
+            entry_is_credit
+            and not metrics["uses_last_trade_prices"]
+            and (_num(metrics.get("natural_cashflow"), 0.0) or 0.0) <= 0
+        ):
+            constraints_relaxed = True
+        early = assess_early_assignment(
+            next((leg["mid"] for leg in metrics["legs"]
+                  if leg["role"] == "call_short"), None),
+            spot, metrics["call_short_strike"], dividend, ex_div_inside,
+        )
+        metrics.update({
+            "earnings_date": earnings_d.isoformat() if earnings_d else None,
+            "avoids_earnings": cleared if earnings_d else None,
+            "days_earnings_after_expiry": (
+                (earnings_d - expiry_d).days if earnings_d else None
+            ),
+            "ex_dividend_date": ex_div_iso,
+            "ex_dividend_estimated": ex_div_estimated,
+            "ex_dividend_inside": ex_div_inside,
+            "dividend_amount": _round(dividend),
+            "early_assignment": early,
+            "constraints_relaxed": constraints_relaxed,
+        })
+        out.append(metrics)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
 
@@ -1121,6 +1604,12 @@ def score_candidate(tech: dict, fund: dict, condor: dict | None,
     Safety    (25) - four legs, four markets, and both tails short.
     """
     flags: list[str] = []
+    # Which structure is being rated, and which way it leans if it leans. Read
+    # up front because the Range axis needs it too: a directional variant does
+    # not want the same underlying a neutral condor wants.
+    variant = (condor or {}).get("variant")
+    lean = (condor or {}).get("direction") or "neutral"
+    is_tilted = bool(variant) and variant != "balanced"
 
     # ── Range ─────────────────────────────────────────────────────────────
     range_score = 0.0
@@ -1161,10 +1650,20 @@ def score_candidate(tech: dict, fund: dict, condor: dict | None,
     if tech.get("fresh_low"):
         range_score -= 9
         flags.append("Making fresh 52-week lows")
+    # Leadership against the market is disqualifying for a neutral condor. For a
+    # tilted one it is only disqualifying when it runs the *wrong* way: a bullish
+    # tilt is built precisely for a name pulling ahead of the market, and
+    # charging it the neutral screen's penalty would rank the setups the variant
+    # exists to find below the ones it does not want.
     strength = _num(tech.get("rel_strength_pct"))
     if strength is not None and abs(strength) > 5:
-        range_score -= _ramp(abs(strength), 5, 15, 6)
-        flags.append("Trending against the market — not neutral")
+        with_the_lean = (
+            is_tilted
+            and ((lean == "bullish" and strength > 0) or (lean == "bearish" and strength < 0))
+        )
+        if not with_the_lean:
+            range_score -= _ramp(abs(strength), 5, 15, 6)
+            flags.append("Trending against the market — not neutral")
     if er is not None and er > 0.5:
         flags.append("Trending, not ranging")
     if vr is not None and vr > 1.2:
@@ -1221,22 +1720,52 @@ def score_candidate(tech: dict, fund: dict, condor: dict | None,
 
         # Delta balance (4). Near-equal short deltas is what makes it neutral;
         # equal *distances* do not, because of put skew.
+        #
+        # A tilted or ratio'd structure is *supposed* to be unbalanced — that is
+        # the entire point of picking a direction — so measuring it against
+        # neutrality would penalise it for succeeding. Those variants are scored
+        # on how flat the finished position's net delta is instead, which is the
+        # question that still has a right answer: a lean is intended, an
+        # accidental lean of unknown size is not.
+        variant = condor.get("variant")
         gap = _num(condor.get("delta_gap"))
-        structure += _ramp(-(gap if gap is not None else 1.0), -0.12, -0.02, 4)
+        if variant and variant != "balanced":
+            net = abs(_num(condor.get("structure_delta")) or 1.0)
+            structure += _ramp(-net, -0.60, -0.05, 4)
+        else:
+            structure += _ramp(-(gap if gap is not None else 1.0), -0.12, -0.02, 4)
 
-        # Credit against the wing width (5). The long-standing guideline is to
-        # collect about a third of the width, which is where this peaks.
-        structure += _ramp(condor.get("credit_pct_of_width"), 12, 33, 5)
+        # A classic condor is scored on credit/wing. Quantity-aware variants can
+        # be intentional debits, so they use maximum profit as a share of the
+        # complete payoff range instead of pretending the debit is a credit.
+        entry_efficiency = (
+            condor.get("max_profit_pct_of_range")
+            if variant and variant != "balanced"
+            else condor.get("credit_pct_of_width")
+        )
+        structure += _ramp(entry_efficiency, 12, 33, 5)
 
-        # Odds of finishing between the short strikes (3).
-        structure += _ramp(condor.get("prob_max_profit"), 45, 75, 3)
+        # Odds of finishing between the short strikes (3). A hedged structure's
+        # maximum sits on a butterfly peak rather than a plateau, so its exact
+        # max-profit probability is near zero by construction and says nothing
+        # about the trade. Those score on the odds of any profit at all.
+        if condor.get("prob_max_profit") is not None:
+            structure += _ramp(condor.get("prob_max_profit"), 45, 75, 3)
+        else:
+            structure += _ramp(condor.get("prob_profit"), 55, 85, 3)
 
         if (condor.get("min_cushion_sigma") or 0) < 1.0:
             flags.append("A breakeven sits inside the expected move")
-        if (condor.get("credit_pct_of_width") or 0) < 15:
+        if (
+            (_num(condor.get("entry_cashflow"), condor.get("credit")) or 0.0) > 0
+            and (condor.get("credit_pct_of_width") or 0) < 15
+        ):
             flags.append("Credit too small for the defined risk")
-        if gap is not None and gap > 0.08:
-            flags.append("Lopsided — this is a directional trade")
+        # Only a structure that was meant to be neutral can be accused of
+        # leaning. On a tilted or Weirdor-family variant the lean is the thesis.
+        if not variant or variant == "balanced":
+            if gap is not None and gap > 0.08:
+                flags.append("Lopsided — this is a directional trade")
         share = _num(condor.get("put_share_of_credit_pct"))
         if share is not None and (share > 75 or share < 25):
             flags.append("One wing supplies almost all the credit")
@@ -1306,19 +1835,30 @@ def score_candidate(tech: dict, fund: dict, condor: dict | None,
             safety += 3
 
         # Equal wings (2): the risk does not then depend on which side breaks.
-        if (condor.get("wing_skew_pct") or 100) <= 10:
+        # A ratio'd structure has deliberately unequal wings, so the two points
+        # go instead to how fillable it is — a 5:2 across six legs is a harder
+        # order to work than a 1:1 across four, and that cost is real.
+        if is_tilted:
+            contracts = int(_num(condor.get("total_contracts"), 99) or 99)
+            if contracts <= 4:
+                safety += 2
+            elif contracts <= 8:
+                safety += 1
+        elif (condor.get("wing_skew_pct") or 100) <= 10:
             safety += 2
 
         if not estimated and (cost_pct is None or cost_pct > 45):
             flags.append("Four-leg slippage is high")
         if (condor.get("open_interest_min") or 0) < 50:
             flags.append("Thin open interest on one leg")
+        entry_cashflow = _num(condor.get("entry_cashflow"), condor.get("credit")) or 0.0
         if (
-            not estimated
-            and (_num(condor.get("natural_credit"), 0.0) or 0.0) <= 0
+            entry_cashflow > 0
+            and not estimated
+            and (_num(condor.get("natural_cashflow"), condor.get("natural_credit")) or 0.0) <= 0
         ):
             flags.append("No credit after crossing all four markets")
-        if condor.get("constraints_relaxed"):
+        if condor.get("constraints_relaxed") and not estimated:
             flags.append("No structure met every filter")
 
         early = condor.get("early_assignment") or {}
@@ -1567,11 +2107,17 @@ def build_verdict(row: dict) -> str:
         if row.get("iv_percentile_vs_rv") is not None:
             lead += f" ({row['iv_percentile_vs_rv']:.0f}th percentile of its own year)"
 
-    if c.get("put_short_strike") and c.get("credit"):
+    entry_cashflow = _num(c.get("entry_cashflow"), c.get("credit"))
+    if c.get("put_short_strike") and entry_cashflow is not None:
+        entry_words = (
+            f"collect ${entry_cashflow:.2f} credit"
+            if entry_cashflow >= 0
+            else f"pay ${abs(entry_cashflow):.2f} debit"
+        )
         lead += (
-            f". Sell the {c['expiration']} ${c['put_long_strike']:g}/${c['put_short_strike']:g}"
-            f" – ${c['call_short_strike']:g}/${c['call_long_strike']:g} condor for about "
-            f"${c['credit']:.2f} — collect ${c['max_profit_dollars']:.0f} against "
+            f". Build the {c['expiration']} ${c['put_long_strike']:g}/${c['put_short_strike']:g}"
+            f" – ${c['call_short_strike']:g}/${c['call_long_strike']:g} structure: "
+            f"{entry_words} — maximum profit ${c['max_profit_dollars']:.0f} against "
             f"${c['max_loss_dollars']:.0f} of risk"
         )
         if c.get("prob_profit") is not None:
@@ -1668,6 +2214,37 @@ DEFAULTS = {
     "max_exec_cost_pct": 45.0,
     "chain_limit": 20,
     "max_results": 40,
+    # ── Structure variants ───────────────────────────────────────────────
+    # Neutral + balanced reproduces the screen exactly as it was, which is why
+    # both are the defaults: nobody who has not asked for a directional condor
+    # gets one.
+    "market_bias": "neutral",
+    "construction": "balanced",
+    # Severson biases a .30-delta condor to roughly .375/.225. Held as a
+    # fraction of the user's own short delta so the tilt scales with whatever
+    # probability they are trading rather than jumping to his.
+    "tilt_strength": 0.25,
+    # 2:1 is the ratio in the guide's worked bias examples.
+    "ratio_contracts": 2,
+    # The wing width variants build to, as a share of spot. The balanced path
+    # searches a min/max window instead; a variant has too many other moving
+    # parts to also enumerate widths.
+    "variant_width_pct": 5.0,
+    # These structures are index trades. The reference Weirdor is on RUT, the
+    # family was developed on SPX/RUT, and six legs at a workable ratio need the
+    # deepest chains in the market — a 5:1 ratio across three verticals is
+    # simply not fillable on a single name. Restricting the variant scan to the
+    # three big index ETFs is therefore a correctness constraint, not a
+    # shortcut. Override `variant_tickers` to widen it.
+    #
+    # VOO is included because it was asked for, but expect it to be filtered out
+    # rather than ranked: it tracks the same index as SPY while carrying a
+    # fraction of the option volume, so its chain rarely clears the open-interest
+    # and four-to-six-leg execution gates. That is the scanner answering
+    # honestly rather than refusing up front — when VOO does quote well enough,
+    # it will appear. SPY is the same exposure with a real options market.
+    "variant_tickers": "SPY,IWM,QQQ,VOO",
+    "restrict_variants_to_core": True,
 }
 
 
@@ -1724,8 +2301,53 @@ def run_iron_condor_scan(payload: dict) -> dict:
     earnings_buffer = max(0, min(30, int(_num(p["earnings_buffer_days"], 5) or 0)))
     chain_limit = max(0, min(60, int(_num(p["chain_limit"], 20) or 0)))
     max_results = max(1, min(200, int(_num(p["max_results"], 40) or 40)))
+    market_bias = str(p.get("market_bias") or "neutral").strip().lower()
+    construction = str(p.get("construction") or "balanced").strip().lower()
+    wanted_variants = resolve_variants(construction, market_bias)
+    # A scan is directional only when a lean was picked *and* at least one
+    # structure being built actually expresses it. Asking for the Jeep while
+    # nominally "bullish" does not loosen the neutrality gates, because the Jeep
+    # does not use the lean.
+    lean_direction = "up" if market_bias == "bullish" else "down" if market_bias == "bearish" else None
+    directional_scan = bool(
+        lean_direction
+        and any(VARIANTS.get(v, {}).get("directional") for v, _ in wanted_variants)
+    )
 
-    tickers = resolve_scan_universe(p)
+    def _strength_ok(value) -> bool:
+        """Relative-strength gate, read with the lean when there is one.
+
+        Same reasoning as the drift gate: outperformance *in the direction the
+        structure leans* is the setup, not a disqualification.
+        """
+        if value is None:
+            return True
+        if abs(value) <= max_strength:
+            return True
+        if not directional_scan:
+            return False
+        with_lean = (lean_direction == "up" and value > 0) or (
+            lean_direction == "down" and value < 0
+        )
+        return with_lean and abs(value) <= max_strength * DIRECTIONAL_DRIFT_ALLOWANCE
+    tilt_strength = min(0.75, max(0.0, _num(p["tilt_strength"], 0.25) or 0.25))
+    ratio_contracts = max(2, min(5, int(_num(p["ratio_contracts"], 2) or 2)))
+    variant_width = max(0.5, min(25.0, _num(p["variant_width_pct"], 5.0) or 5.0))
+
+    # A variant scan runs on the core index ETFs unless told otherwise. See the
+    # note on `variant_tickers`: the ratio'd and six-leg structures need chains
+    # only a handful of funds actually have.
+    core_only = bool(p.get("restrict_variants_to_core", True)) and any(
+        variant != "balanced" for variant, _ in wanted_variants
+    )
+    if core_only:
+        tickers = _clean_tickers(
+            str(p.get("variant_tickers") or "").replace(";", ",").split(",")
+        )
+        if not tickers:
+            tickers = resolve_scan_universe(p)
+    else:
+        tickers = resolve_scan_universe(p)
     empty_stats = {
         "universe": len(tickers), "priced": 0, "passed_price": 0,
         "passed_fundamentals": 0, "chains_fetched": 0,
@@ -1760,9 +2382,18 @@ def run_iron_condor_scan(payload: dict) -> dict:
         er = tech.get("efficiency_ratio")
         if er is not None and er > max_er:
             continue
+        # The neutrality gates are magnitude tests, which is right for a condor
+        # with no opinion and wrong for one with a lean. A bullish tilt is built
+        # for a name that is drifting *up*; rejecting it for drifting at all
+        # leaves the directional scans returning only the flat names the
+        # balanced screen already finds, which is the whole feature failing
+        # quietly. So drift with the lean is allowed to run further, drift
+        # against it is still judged at the original limit.
         drift = tech.get("drift_sigma")
-        if drift is not None and drift > max_drift:
-            continue
+        if drift is not None:
+            with_lean = directional_scan and tech.get("drift_direction") == lean_direction
+            if drift > (max_drift * DIRECTIONAL_DRIFT_ALLOWANCE if with_lean else max_drift):
+                continue
         vr = tech.get("variance_ratio")
         if vr is not None and vr > max_vr:
             continue
@@ -1785,9 +2416,8 @@ def run_iron_condor_scan(payload: dict) -> dict:
         # re-checked there.
         strength = tech.get("rel_strength_pct")
         if (
-            strength is not None
-            and (ticker in etf_hint or ticker in CURATED_STOCK_SET)
-            and abs(strength) > max_strength
+            (ticker in etf_hint or ticker in CURATED_STOCK_SET)
+            and not _strength_ok(strength)
         ):
             continue
 
@@ -1806,8 +2436,7 @@ def run_iron_condor_scan(payload: dict) -> dict:
         ticker = tech["ticker"]
         fund = fundamentals.get(ticker, {})
         is_fund = _is_fund(fund, ticker)
-        strength = tech.get("rel_strength_pct")
-        if strength is not None and abs(strength) > max_strength:
+        if not _strength_ok(tech.get("rel_strength_pct")):
             continue
 
         if is_fund:
@@ -1842,43 +2471,124 @@ def run_iron_condor_scan(payload: dict) -> dict:
     chain_target_tickers = {pair[0]["ticker"] for pair in chain_targets}
 
     def _chain_for(pair):
+        """Every requested structure for one underlying, as a list.
+
+        The balanced condor keeps its original code path untouched — it is the
+        default and it was already correct — and only the variants go through
+        the quantity-aware builder.
+        """
         tech, fund = pair
         div_y = dividend_yield_for_pricing(fund, tech.get("price"))
         forecast_vol = _num(tech.get("rv_30")) or _num(tech.get("rv_252"))
-        try:
-            return _suggest_iron_condor(
-                tech["ticker"], tech["price"], div_y, forecast_vol,
-                target_dte, min_dte, max_dte,
-                short_delta=short_delta, long_delta=long_delta,
-                delta_tolerance=delta_tol,
-                min_width_pct=min_width, max_width_pct=max_width,
-                min_credit_pct_of_width=min_credit,
-                min_cushion_sigma=min_cushion_sig,
-                min_otm_pct=min_otm,
-                max_wing_skew_pct=max_skew,
-                max_delta_gap=max_gap,
-                min_open_interest=min_oi,
-                max_exec_cost_pct=max_exec,
-                earnings_date=(
-                    fund.get("next_earnings")
-                    if p["exclude_earnings_before_expiry"] else None
-                ),
-                earnings_buffer_days=earnings_buffer,
-                fund=fund,
-            )
-        except Exception:
-            return None
+        earnings = (
+            fund.get("next_earnings")
+            if p["exclude_earnings_before_expiry"] else None
+        )
+        found: list[dict] = []
 
-    condors: dict[str, dict | None] = {}
+        if ("balanced", "neutral") in wanted_variants:
+            try:
+                base = _suggest_iron_condor(
+                    tech["ticker"], tech["price"], div_y, forecast_vol,
+                    target_dte, min_dte, max_dte,
+                    short_delta=short_delta, long_delta=long_delta,
+                    delta_tolerance=delta_tol,
+                    min_width_pct=min_width, max_width_pct=max_width,
+                    min_credit_pct_of_width=min_credit,
+                    min_cushion_sigma=min_cushion_sig,
+                    min_otm_pct=min_otm,
+                    max_wing_skew_pct=max_skew,
+                    max_delta_gap=max_gap,
+                    min_open_interest=min_oi,
+                    max_exec_cost_pct=max_exec,
+                    earnings_date=earnings,
+                    earnings_buffer_days=earnings_buffer,
+                    fund=fund,
+                )
+            except Exception:
+                base = None
+            if base:
+                spec = VARIANTS["balanced"]
+                found.append({
+                    **base,
+                    "variant": "balanced", "direction": "neutral",
+                    "variant_label": spec["label"], "variant_blurb": spec["blurb"],
+                    "is_asymmetric": False, "notes": [], "risk_reasons": [],
+                    "put_quantity": 1, "call_quantity": 1, "total_contracts": 4,
+                    "leg_count": 4, "hedge_leg_count": 0, "front_debit": None,
+                })
+
+        others = [pair_ for pair_ in wanted_variants if pair_ != ("balanced", "neutral")]
+        if others:
+            try:
+                found.extend(_suggest_variant_structures(
+                    tech["ticker"], tech["price"], div_y, forecast_vol,
+                    target_dte, min_dte, max_dte, others, tech,
+                    short_delta=short_delta, long_delta=long_delta,
+                    width_pct=variant_width, tilt_strength=tilt_strength,
+                    ratio=ratio_contracts,
+                    min_credit_pct_of_width=min_credit,
+                    min_cushion_sigma=min_cushion_sig,
+                    min_otm_pct=min_otm,
+                    min_open_interest=min_oi,
+                    max_exec_cost_pct=max_exec,
+                    earnings_date=earnings, earnings_buffer_days=earnings_buffer,
+                    fund=fund,
+                ))
+            except Exception:
+                pass
+        return found
+
+    condors: dict[str, list[dict]] = {}
     if chain_targets:
         with ThreadPoolExecutor(max_workers=8) as pool:
-            for pair, condor in zip(chain_targets, pool.map(_chain_for, chain_targets)):
-                condors[pair[0]["ticker"]] = condor
+            for pair, built in zip(chain_targets, pool.map(_chain_for, chain_targets)):
+                condors[pair[0]["ticker"]] = built or []
+
+    # One row per (ticker, structure). Asking for several constructions means
+    # asking to compare them, so each gets scored, ranked and handed off on its
+    # own rather than hiding behind whichever one happened to score best. A name
+    # whose chain produced nothing still contributes a single watchlist row.
+    expanded: list[tuple[dict, dict, dict | None]] = []
+    for tech, fund in survivors:
+        built = condors.get(tech["ticker"]) or []
+        if built:
+            expanded.extend((tech, fund, structure) for structure in built)
+        else:
+            expanded.append((tech, fund, None))
+
+    def _probability_legs(structure: dict) -> list[dict]:
+        """Legs in the shape `profit_probability_schedule` expects.
+
+        Variants carry a signed-quantity leg list; the balanced condor carries
+        four named legs at 1x. Both collapse to the same thing here.
+        """
+        if structure.get("legs"):
+            return [
+                {
+                    "option_type": leg["option_type"], "strike": leg["strike"],
+                    "iv": leg["iv"], "quantity": int(leg["qty"]),
+                }
+                for leg in structure["legs"]
+            ]
+        return [
+            {"option_type": "put",
+             "strike": (structure.get("put_leg_long") or {}).get("strike"),
+             "iv": (structure.get("put_leg_long") or {}).get("iv"), "quantity": 1},
+            {"option_type": "put",
+             "strike": (structure.get("put_leg_short") or {}).get("strike"),
+             "iv": (structure.get("put_leg_short") or {}).get("iv"), "quantity": -1},
+            {"option_type": "call",
+             "strike": (structure.get("call_leg_short") or {}).get("strike"),
+             "iv": (structure.get("call_leg_short") or {}).get("iv"), "quantity": -1},
+            {"option_type": "call",
+             "strike": (structure.get("call_leg_long") or {}).get("strike"),
+             "iv": (structure.get("call_leg_long") or {}).get("iv"), "quantity": 1},
+        ]
 
     rows: list[dict] = []
-    for tech, fund in survivors:
+    for tech, fund, condor in expanded:
         ticker = tech["ticker"]
-        condor = condors.get(ticker)
         rating = score_candidate(tech, fund, condor, earnings_buffer_days=earnings_buffer)
         excluded_for_earnings = bool(
             p["exclude_earnings_before_expiry"] and rating.get("earnings_before_expiry")
@@ -1898,33 +2608,15 @@ def run_iron_condor_scan(payload: dict) -> dict:
                     _num((condor.get("call_leg_short") or {}).get("iv"), 0.0) or 0.0,
                 ),
                 entry_cashflow=condor.get("credit"),
-                legs=[
-                    {
-                        "option_type": "put",
-                        "strike": (condor.get("put_leg_long") or {}).get("strike"),
-                        "iv": (condor.get("put_leg_long") or {}).get("iv"),
-                        "quantity": 1,
-                    },
-                    {
-                        "option_type": "put",
-                        "strike": (condor.get("put_leg_short") or {}).get("strike"),
-                        "iv": (condor.get("put_leg_short") or {}).get("iv"),
-                        "quantity": -1,
-                    },
-                    {
-                        "option_type": "call",
-                        "strike": (condor.get("call_leg_short") or {}).get("strike"),
-                        "iv": (condor.get("call_leg_short") or {}).get("iv"),
-                        "quantity": -1,
-                    },
-                    {
-                        "option_type": "call",
-                        "strike": (condor.get("call_leg_long") or {}).get("strike"),
-                        "iv": (condor.get("call_leg_long") or {}).get("iv"),
-                        "quantity": 1,
-                    },
-                ],
-                exit_points=[
+                legs=_probability_legs(condor),
+                # These structures are managed, not held. Severson takes profit
+                # well before expiration and the plan below reassesses at 21 DTE,
+                # so the odds that actually describe the trade are the odds at
+                # the close it specifies — roughly half to two-thirds of the way
+                # through the cycle. Expiration is still appended by the
+                # scheduler, so both readings are available and the UI can label
+                # which is which instead of implying the trade runs to the end.
+                exit_points=early_close_exits(condor.get("dte")) + [
                     {
                         "kind": "reassess",
                         "label": "Reassess",
@@ -1960,10 +2652,16 @@ def run_iron_condor_scan(payload: dict) -> dict:
             watchlist_reason = None
         elif condor:
             chain_status = "constraints_relaxed"
-            watchlist_reason = (
-                "A live structure was found, but it missed at least one selected "
-                "credit, cushion, balance, liquidity, or execution limit."
-            )
+            if condor.get("uses_last_trade_prices"):
+                watchlist_reason = (
+                    "Recent trades keep the structure available for after-hours "
+                    "analysis, but live bid/ask must be verified before trading."
+                )
+            else:
+                watchlist_reason = (
+                    "A live structure was found, but it missed at least one selected "
+                    "credit, cushion, balance, liquidity, or execution limit."
+                )
         elif ticker in chain_target_tickers:
             chain_status = "unavailable"
             watchlist_reason = (
@@ -2105,7 +2803,10 @@ def _round_condor(condor: dict | None) -> dict | None:
         ("call_short_strike", 2), ("call_long_strike", 2),
         ("put_width", 2), ("call_width", 2), ("max_wing", 2), ("wing_skew_pct", 1),
         ("put_credit", 2), ("call_credit", 2), ("put_share_of_credit_pct", 0),
-        ("credit", 2), ("natural_credit", 2), ("credit_pct_of_width", 1),
+        ("credit", 2), ("entry_cashflow", 2), ("entry_credit", 2),
+        ("entry_debit", 2), ("natural_credit", 2), ("natural_cashflow", 2),
+        ("credit_pct_of_width", 1), ("max_profit_pct_of_range", 1),
+        ("entry_debit_pct_of_max_loss", 1),
         ("max_profit", 2), ("max_loss", 2), ("reward_risk", 2),
         ("return_on_risk_pct", 1), ("annualized_return_on_risk_pct", 1),
         ("lower_breakeven", 2), ("upper_breakeven", 2),
@@ -2118,7 +2819,9 @@ def _round_condor(condor: dict | None) -> dict | None:
         ("fair_credit", 2), ("premium_edge", 2), ("premium_edge_pct", 1),
         ("delta_gap", 3), ("structure_delta", 3),
         ("exec_cost", 2), ("exec_cost_pct", 1), ("atm_iv", 4),
-        ("credit_dollars", 0), ("max_profit_dollars", 0), ("max_loss_dollars", 0),
+        ("credit_dollars", 0), ("entry_cashflow_dollars", 0),
+        ("entry_credit_dollars", 0), ("entry_debit_dollars", 0),
+        ("max_profit_dollars", 0), ("max_loss_dollars", 0),
     ):
         if key in out:
             out[key] = _round(out[key], decimals)
@@ -2155,6 +2858,26 @@ def register_routes(app):
                 for key, val in UNIVERSE_CHOICES.items()
             ],
             defaults=DEFAULTS,
+            variants=variant_choices(),
+            constructions=[
+                {
+                    "id": key,
+                    "label": spec["label"],
+                    "blurb": spec["blurb"],
+                    "directional": spec["directional"],
+                }
+                for key, spec in VARIANTS.items()
+            ],
+            directions=[
+                {"id": "neutral", "label": "Neutral",
+                 "blurb": "No opinion — the classic balanced condor."},
+                {"id": "bullish", "label": "Bullish",
+                 "blurb": "Expecting price up. Sells the call side further out "
+                          "and the put side closer in."},
+                {"id": "bearish", "label": "Bearish",
+                 "blurb": "Expecting price down. Sells the put side further out "
+                          "and the call side closer in."},
+            ],
         )
 
     @app.route("/api/options/iron-condor-scan", methods=["POST"])
