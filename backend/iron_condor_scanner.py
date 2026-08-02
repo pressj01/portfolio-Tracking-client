@@ -2237,13 +2237,14 @@ DEFAULTS = {
     # three big index ETFs is therefore a correctness constraint, not a
     # shortcut. Override `variant_tickers` to widen it.
     #
-    # VOO is included because it was asked for, but expect it to be filtered out
-    # rather than ranked: it tracks the same index as SPY while carrying a
-    # fraction of the option volume, so its chain rarely clears the open-interest
-    # and four-to-six-leg execution gates. That is the scanner answering
-    # honestly rather than refusing up front — when VOO does quote well enough,
-    # it will appear. SPY is the same exposure with a real options market.
-    "variant_tickers": "SPY,IWM,QQQ,VOO",
+    # The core set intentionally uses only the three most liquid index ETF
+    # chains: SPY, QQQ, and IWM.
+    "variant_tickers": "SPY,QQQ,IWM",
+    # The balanced setup is intentionally scoped to the three liquid index ETFs
+    # when the frontend enables this flag. The standalone API remains flexible:
+    # callers can omit the flag and use the ordinary stock/ETF universe.
+    "restrict_balanced_to_core": False,
+    "balanced_tickers": "SPY,QQQ,IWM",
     "restrict_variants_to_core": True,
 }
 
@@ -2343,6 +2344,12 @@ def run_iron_condor_scan(payload: dict) -> dict:
     if core_only:
         tickers = _clean_tickers(
             str(p.get("variant_tickers") or "").replace(";", ",").split(",")
+        )
+        if not tickers:
+            tickers = resolve_scan_universe(p)
+    elif construction == "balanced" and p.get("restrict_balanced_to_core"):
+        tickers = _clean_tickers(
+            str(p.get("balanced_tickers") or "").replace(";", ",").split(",")
         )
         if not tickers:
             tickers = resolve_scan_universe(p)

@@ -635,6 +635,23 @@ class ScoringEnvelope(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Balanced core-index universe
+# ---------------------------------------------------------------------------
+
+class BalancedCoreUniverse(unittest.TestCase):
+
+    def test_balanced_core_mode_uses_only_spy_qqq_and_iwm(self):
+        with patch.object(ic, "_load_history", return_value=pd.DataFrame()):
+            result = ic.run_iron_condor_scan({
+                "construction": "balanced",
+                "restrict_balanced_to_core": True,
+                "balanced_tickers": "SPY,QQQ,IWM",
+            })
+
+        self.assertEqual(result["stats"]["universe"], 3)
+
+
+# ---------------------------------------------------------------------------
 # Verdict
 # ---------------------------------------------------------------------------
 
