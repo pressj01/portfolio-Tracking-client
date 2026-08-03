@@ -28,6 +28,12 @@ const percent = (value) => {
   return Number.isFinite(number) ? `${number.toFixed(1)}%` : '—'
 }
 
+const signedMoney = (value) => {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '-'
+  return `${number > 0 ? '+' : ''}${money(number)}`
+}
+
 const shortDate = (value) => {
   if (!value) return '—'
   const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00`)
@@ -52,13 +58,85 @@ async function jsonOrError(response) {
   return data
 }
 
-function MetricCard({ label, value, detail, tone = '' }) {
+function InfoTip({ label, children }) {
+  return (
+    <span className="ot-info-tip" tabIndex="0" aria-label={`${label}: ${children}`}>
+      <span aria-hidden="true">?</span>
+      <span className="ot-info-tip-text" role="tooltip">{children}</span>
+    </span>
+  )
+}
+
+function MetricCard({ label, value, detail, explanation, tone = '' }) {
   return (
     <div className={`ot-metric ${tone ? `ot-metric-${tone}` : ''}`}>
-      <span>{label}</span>
+      <div className="ot-metric-label">
+        <span>{label}</span>
+        {explanation && <InfoTip label={label}>{explanation}</InfoTip>}
+      </div>
       <strong>{value}</strong>
       {detail && <small>{detail}</small>}
     </div>
+  )
+}
+
+function IncomeValue({ label, value, explanation, tone = '' }) {
+  return (
+    <span>
+      <small>{label}{explanation && <InfoTip label={label}>{explanation}</InfoTip>}</small>
+      <strong className={tone}>{value}</strong>
+    </span>
+  )
+}
+
+function OptionTradeHelp({ metrics, income, includeOptionsIncome }) {
+  const mtdEvents = metrics.realized_mtd_events || []
+  const ytdEvents = metrics.realized_ytd_events || []
+  return (
+    <details className="ot-help card">
+      <summary>
+        <span>How these numbers are calculated</span>
+        <small>Definitions, scope rules, and the current MTD audit</small>
+      </summary>
+      <div className="ot-help-content">
+        <section>
+          <h3>When option P/L becomes realized</h3>
+          <p>A leg is counted when all of its contracts are closed, expire, are assigned, or are exercised. Its realized amount is the leg's opening cash flow plus closing cash flow, less all recorded fees. A completed leg counts even when other legs keep the overall trade open.</p>
+          <p>Opening premium by itself and changing market value are unrealized, so neither is included. The date of the final closing execution determines the month and year. A summary-only imported trade uses its stored realized P/L and close date.</p>
+        </section>
+        <section>
+          <h3>Current MTD audit</h3>
+          {mtdEvents.length ? (
+            <div className="table-scroll">
+              <table className="ot-help-table">
+                <thead><tr><th>Date realized</th><th>Trade</th><th>Purpose</th><th>Amount</th></tr></thead>
+                <tbody>
+                  {mtdEvents.map((event, index) => (
+                    <tr key={`${event.trade_id}-${event.leg_id || event.source}-${index}`}>
+                      <td>{shortDate(event.date)}</td>
+                      <td><strong>{event.underlying}</strong><small>{event.strategy_type}{event.trade_status === 'OPEN' ? ' / trade still open' : ''}</small></td>
+                      <td>{event.purpose}</td>
+                      <td className={Number(event.amount) >= 0 ? 'ot-positive' : 'ot-negative'}>{signedMoney(event.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot><tr><th colSpan="3">Realized MTD</th><th className={Number(metrics.realized_mtd) >= 0 ? 'ot-positive' : 'ot-negative'}>{signedMoney(metrics.realized_mtd)}</th></tr></tfoot>
+              </table>
+            </div>
+          ) : <p>No option legs have a realization date in the current month.</p>}
+        </section>
+        <section>
+          <h3>Scope and income rules</h3>
+          <ul>
+            <li>The six summary cards use every option trade in the selected account or aggregate, not just the rows remaining after the table filters.</li>
+            <li>MTD runs from the first day of this calendar month through today. YTD runs from January 1 through today. The current YTD total contains {ytdEvents.length} realization event{ytdEvents.length === 1 ? '' : 's'}.</li>
+            <li>Win rate and profit factor use only fully closed trades. Realized legs from a still-open trade affect MTD/YTD but not those two statistics.</li>
+            <li>Only trades classified as <strong>Income</strong> can be added to fund income. The toggle is currently <strong>{includeOptionsIncome ? 'on' : 'off'}</strong>; it changes the selected income total but does not change the option ledger.</li>
+            <li>Fund YTD is currently sourced from <strong>{String(income?.ytd_income_source || 'the available income records').replaceAll('_', ' ')}</strong>. If recorded dividend payments are unavailable, the app falls back to monthly payouts or holding estimates.</li>
+          </ul>
+        </section>
+      </div>
+    </details>
   )
 }
 
@@ -427,12 +505,12 @@ export default function OptionTrades() {
       {error && <div className="ot-alert ot-alert-error">{error}</div>}
 
       <section className="ot-metrics" aria-label="Option trade summary">
-        <MetricCard label="Open trades" value={metrics.open_trades ?? 0} detail={`${metrics.open_risk_coverage ?? 0} with known risk`} />
-        <MetricCard label="Known open risk" value={money(metrics.known_open_risk, '$0.00')} detail="Entered or derived defined risk" />
-        <MetricCard label="Realized MTD" value={money(metrics.realized_mtd, '$0.00')} tone={Number(metrics.realized_mtd) >= 0 ? 'positive' : 'negative'} />
-        <MetricCard label="Realized YTD" value={money(metrics.realized_ytd, '$0.00')} tone={Number(metrics.realized_ytd) >= 0 ? 'positive' : 'negative'} />
-        <MetricCard label="Win rate" value={percent(metrics.win_rate_pct)} detail={`${metrics.closed_trades ?? 0} closed trades`} />
-        <MetricCard label="Profit factor" value={metrics.profit_factor == null ? '—' : Number(metrics.profit_factor).toFixed(2)} detail="Gross wins ÷ gross losses" />
+        <MetricCard label="Open trades" value={metrics.open_trades ?? 0} detail={`${metrics.open_risk_coverage ?? 0} with known risk`} explanation="Number of trades whose status is Open. The smaller line shows how many have an entered or derived maximum risk." />
+        <MetricCard label="Known open risk" value={money(metrics.known_open_risk, '$0.00')} detail="Entered or derived defined risk" explanation="Sum of maximum risk for open trades where risk is known. Trades with unlimited or unavailable risk are omitted, so this is not necessarily total account risk." />
+        <MetricCard label="Realized MTD" value={money(metrics.realized_mtd, '$0.00')} tone={Number(metrics.realized_mtd) >= 0 ? 'positive' : 'negative'} explanation="Net realized option P/L dated from the first day of this calendar month through today. It includes fully completed legs from trades that may still be open." />
+        <MetricCard label="Realized YTD" value={money(metrics.realized_ytd, '$0.00')} tone={Number(metrics.realized_ytd) >= 0 ? 'positive' : 'negative'} explanation="Net realized option P/L dated January 1 through today, across every trade purpose." />
+        <MetricCard label="Win rate" value={percent(metrics.win_rate_pct)} detail={`${metrics.closed_trades ?? 0} closed trades`} explanation="Fully closed winning trades divided by all fully closed trades. Open trades are excluded; breakeven trades remain in the closed-trade count." />
+        <MetricCard label="Profit factor" value={metrics.profit_factor == null ? '—' : Number(metrics.profit_factor).toFixed(2)} detail="Gross wins ÷ gross losses" explanation="Total profit from fully closed winning trades divided by the absolute total loss from fully closed losing trades. A dash means there are no closed losses yet." />
       </section>
 
       <section className="ot-income card">
@@ -443,14 +521,16 @@ export default function OptionTrades() {
         </div>
         <label className="ot-toggle">
           <input type="checkbox" checked={includeOptionsIncome} onChange={event => setIncludeOptionsIncome(event.target.checked)} />
-          <span>Include realized options</span>
+          <span>Include realized options <InfoTip label="Include realized options">Adds only realized P/L from trades classified as Income to the selected income total. It does not change option P/L, trade classification, or fund income.</InfoTip></span>
         </label>
         <div className="ot-income-values">
-          <span><small>Fund YTD</small><strong>{money(income?.fund_ytd_income, '$0.00')}</strong></span>
-          <span><small>Income options YTD</small><strong className={Number(income?.realized_option_pnl_ytd) >= 0 ? 'ot-positive' : 'ot-negative'}>{money(income?.realized_option_pnl_ytd, '$0.00')}</strong></span>
-          <span><small>Selected YTD total</small><strong>{money(incomeTotal, '$0.00')}</strong></span>
+          <IncomeValue label="Fund YTD" value={money(income?.fund_ytd_income, '$0.00')} explanation="Year-to-date fund and dividend income for the selected account. Recorded dividend payments are preferred; monthly payouts or holding estimates are used as fallbacks." />
+          <IncomeValue label="Income options YTD" value={money(income?.realized_option_pnl_ytd, '$0.00')} tone={Number(income?.realized_option_pnl_ytd) >= 0 ? 'ot-positive' : 'ot-negative'} explanation="Year-to-date realized option P/L only from trades whose purpose is Income. Directional, Hedge, Adjustment, and Other trades are excluded." />
+          <IncomeValue label="Selected YTD total" value={money(incomeTotal, '$0.00')} explanation="Fund YTD plus Income-options YTD when the toggle is on; Fund YTD alone when it is off." />
         </div>
       </section>
+
+      <OptionTradeHelp metrics={metrics} income={income} includeOptionsIncome={includeOptionsIncome} />
 
       {showAdd && <AddTradeForm onCancel={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); load() }} />}
 

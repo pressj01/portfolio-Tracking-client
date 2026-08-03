@@ -195,6 +195,17 @@ class OptionTradeLedgerTest(unittest.TestCase):
         partial_metrics = tracker.trade_metrics([adjusted], today=tracker.date(2026, 8, 3))
         self.assertEqual(partial_metrics["realized_mtd"], 100)
         self.assertEqual(partial_metrics["realized_ytd"], 100)
+        self.assertEqual(partial_metrics["realized_mtd_events"], [{
+            "date": "2026-08-03",
+            "amount": 100.0,
+            "source": "leg",
+            "leg_id": adjusted["legs"][0]["id"],
+            "trade_id": calendar_id,
+            "underlying": "QQQ",
+            "strategy_type": "Calendar",
+            "purpose": "Directional",
+            "trade_status": "OPEN",
+        }])
 
 
 class OptionTradeApiTest(unittest.TestCase):

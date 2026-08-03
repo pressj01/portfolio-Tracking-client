@@ -311,17 +311,33 @@ def trade_metrics(trades, today=None):
     gross_profit = sum(trade["realized_pnl"] for trade in wins)
     gross_loss = abs(sum(trade["realized_pnl"] for trade in losses))
     realized_events = [
-        {**event, "purpose": trade.get("purpose")}
+        {
+            **event,
+            "trade_id": trade.get("id"),
+            "underlying": trade.get("underlying"),
+            "strategy_type": trade.get("strategy_type"),
+            "purpose": trade.get("purpose"),
+            "trade_status": trade.get("status"),
+        }
         for trade in trades
         for event in trade.get("realized_events") or []
     ]
 
+    def events_in_window(start, purpose=None):
+        return sorted(
+            [
+                event
+                for event in realized_events
+                if start <= str(event.get("date") or "")[:10] <= today.isoformat()
+                and (purpose is None or event.get("purpose") == purpose)
+            ],
+            key=lambda event: (str(event.get("date") or ""), int(event.get("trade_id") or 0), int(event.get("leg_id") or 0)),
+        )
+
     def event_total(start, purpose=None):
         return sum(
             float(event.get("amount") or 0)
-            for event in realized_events
-            if start <= str(event.get("date") or "")[:10] <= today.isoformat()
-            and (purpose is None or event.get("purpose") == purpose)
+            for event in events_in_window(start, purpose)
         )
 
     return {
@@ -329,7 +345,9 @@ def trade_metrics(trades, today=None):
         "known_open_risk": round(sum(trade["max_risk"] or 0 for trade in trades if trade["status"] == "OPEN"), 2),
         "open_risk_coverage": sum(trade["max_risk"] is not None for trade in trades if trade["status"] == "OPEN"),
         "realized_mtd": round(event_total(month_start), 2),
+        "realized_mtd_events": events_in_window(month_start),
         "realized_ytd": round(event_total(year_start), 2),
+        "realized_ytd_events": events_in_window(year_start),
         "income_realized_ytd": round(event_total(year_start, "Income"), 2),
         "win_rate_pct": round(len(wins) / len(closed) * 100, 1) if closed else None,
         "average_winner": round(gross_profit / len(wins), 2) if wins else None,
