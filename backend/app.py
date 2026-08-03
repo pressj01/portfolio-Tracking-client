@@ -80,6 +80,10 @@ import tax_report
 import tax_loss
 from options_api import register_routes as register_options_routes
 from option_dashboard import register_routes as register_option_dashboard_routes
+from option_trade_tracker import (
+    realized_option_income,
+    register_routes as register_option_trade_routes,
+)
 from put_scanner import register_routes as register_put_scanner_routes
 from call_scanner import register_routes as register_call_scanner_routes
 from bear_put_spread_scanner import register_routes as register_bear_put_spread_scanner_routes
@@ -19051,12 +19055,35 @@ def income_summary():
         current_month_reinvested = round(total_month * reinvest_fraction, 2)
         current_month_not_reinvested = round(total_month - current_month_reinvested, 2)
 
+    # Owner can contain trades recorded directly on profile 1 as well as trades
+    # tracked in its source accounts. Include both scopes without double-counting.
+    option_income_pids = sorted(set(pids + payment_pids))
+    option_income_mtd = realized_option_income(conn, option_income_pids, month_start, today_iso)
+    option_income_ytd = realized_option_income(
+        conn,
+        option_income_pids,
+        today.replace(month=1, day=1).isoformat(),
+        today_iso,
+    )
+    include_options = str(request.args.get("include_options") or "").strip().lower() in {"1", "true", "yes"}
+    combined_month = round(total_month + option_income_mtd, 2)
+    combined_ytd = round(total_ytd + option_income_ytd, 2)
+
     conn.close()
     return jsonify({
         "ytd_income": total_ytd,
+        "fund_ytd_income": total_ytd,
+        "realized_option_pnl_ytd": option_income_ytd,
+        "combined_ytd_income": combined_ytd,
+        "selected_ytd_income": combined_ytd if include_options else total_ytd,
         "ytd_income_source": ytd_income_source,
         "ytd_payment_rows": ytd_payment_rows,
         "current_month_income": total_month,
+        "fund_current_month_income": total_month,
+        "realized_option_pnl_mtd": option_income_mtd,
+        "combined_current_month_income": combined_month,
+        "selected_current_month_income": combined_month if include_options else total_month,
+        "include_options": include_options,
         "current_month_income_reinvested": current_month_reinvested,
         "current_month_income_not_reinvested": current_month_not_reinvested,
         "current_month_income_source": current_month_income_source,
@@ -41375,6 +41402,7 @@ def cef_scan():
 
 register_options_routes(app)
 register_option_dashboard_routes(app, download_history=_chunked_yf_download)
+register_option_trade_routes(app, get_profile_filter=get_profile_filter, get_profile_id=get_profile_id)
 register_put_scanner_routes(app)
 register_call_scanner_routes(app)
 register_bear_put_spread_scanner_routes(app)

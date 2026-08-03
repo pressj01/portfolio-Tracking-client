@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   buildScannerStrategyPayload,
   buildScannerTrade,
+  buildTrackedTrade,
 } from './optionTradeHandoff.js'
 
 const expiration = '2026-09-11'
@@ -118,4 +119,55 @@ test('builds the complete three-strike iron butterfly for Strategy Lab', () => {
   assert.deepEqual(trade.legs.map(leg => leg.side), ['BUY', 'SELL', 'SELL', 'BUY'])
   assert.deepEqual(trade.legs.map(leg => leg.qty), [1, 1, 1, 1])
   assert.deepEqual(trade.legs.map(leg => leg.strike), [90, 100, 100, 110])
+})
+
+test('preserves unequal tracked quantities and net opening fills', () => {
+  const executions = (action, contracts, price, fees) => [{ action, contracts, price, fees }]
+  const trade = buildTrackedTrade({
+    id: 41,
+    underlying: 'SPY',
+    strategy_type: '60/40/20 Butterfly',
+    status: 'OPEN',
+    legs: [
+      { position_side: 'LONG', option_type: 'PUT', expiration, strike: 660, contracts: 2, open_contracts: 2, multiplier: 100, executions: executions('BTO', 2, 0.30, 1.30) },
+      { position_side: 'SHORT', option_type: 'PUT', expiration, strike: 640, contracts: 4, open_contracts: 4, multiplier: 100, executions: executions('STO', 4, 1.00, 2.60) },
+      { position_side: 'LONG', option_type: 'PUT', expiration, strike: 610, contracts: 2, open_contracts: 2, multiplier: 100, executions: executions('BTO', 2, 0.20, 1.30) },
+    ],
+  })
+
+  assert.ok(trade)
+  assert.deepEqual(trade.legs.map(leg => leg.qty), [2, 4, 2])
+  assert.deepEqual(trade.legs.map(leg => leg.side), ['BUY', 'SELL', 'BUY'])
+  assert.ok(Math.abs(trade.legs[0].entry_price - 0.3065) < 0.000001)
+  assert.ok(Math.abs(trade.legs[1].entry_price - 0.9935) < 0.000001)
+})
+
+test('adds linked account stock to a tracked covered-call risk graph', () => {
+  const trade = buildTrackedTrade({
+    id: 42,
+    underlying: 'QQQ',
+    strategy_type: 'Covered Call',
+    status: 'OPEN',
+    stock_position: {
+      shares: 100,
+      portfolio_shares: 150,
+      required_shares: 100,
+      shortfall_shares: 0,
+      covered: true,
+      cost_basis: 475.25,
+      cost_basis_source: 'broker',
+    },
+    legs: [{
+      position_side: 'SHORT', option_type: 'CALL', expiration, strike: 520,
+      contracts: 1, open_contracts: 1, multiplier: 100,
+      executions: [{ action: 'STO', contracts: 1, price: 1.50, fees: 0.65 }],
+    }],
+  })
+
+  assert.ok(trade)
+  assert.equal(trade.legs[0].opt_type, 'STOCK')
+  assert.equal(trade.legs[0].qty, 100)
+  assert.equal(trade.legs[0].entry_price, 475.25)
+  assert.equal(trade.legs[1].opt_type, 'CALL')
+  assert.equal(trade.stock_coverage.covered, true)
 })

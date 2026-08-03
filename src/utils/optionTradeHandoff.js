@@ -315,7 +315,105 @@ export function stageScannerTrade(kind, row, source, returnTo) {
   }
 }
 
-/** Read and clear a staged trade. Consumed once — a reload starts clean. */
+/** Net opening fill price after allocated opening fees. */
+const trackedEntryPrice = leg => {
+  const openings = (leg?.executions || []).filter(execution => ['BTO', 'STO'].includes(execution.action))
+  const contracts = openings.reduce((sum, execution) => sum + Math.max(0, Number(execution.contracts) || 0), 0)
+  if (!contracts) return 0
+  const multiplier = Math.max(1, Number(leg?.multiplier) || 100)
+  const gross = openings.reduce(
+    (sum, execution) => sum + (Math.max(0, Number(execution.price) || 0) * Math.max(0, Number(execution.contracts) || 0) * multiplier),
+    0,
+  )
+  const fees = openings.reduce((sum, execution) => sum + Math.abs(Number(execution.fees) || 0), 0)
+  const net = leg.position_side === 'SHORT' ? gross - fees : gross + fees
+  return Math.max(0, net / (contracts * multiplier))
+}
+
+/** Convert a permanent ledger trade into the Strategy Lab risk-graph shape. */
+export function buildTrackedTrade(row) {
+  const ticker = String(row?.underlying || '').trim().toUpperCase()
+  const allLegs = Array.isArray(row?.legs) ? row.legs : []
+  if (!ticker || !allLegs.length) return null
+  const openTrade = String(row?.status || '').toUpperCase() === 'OPEN'
+  const sourceLegs = openTrade
+    ? allLegs.filter(leg => Math.max(0, Number(leg?.open_contracts) || 0) > 0)
+    : allLegs
+  if (!sourceLegs.length) return null
+  const optionLegs = sourceLegs.map(leg => {
+    const optionType = String(leg?.option_type || '').toUpperCase()
+    const side = String(leg?.position_side || '').toUpperCase()
+    const strike = num(leg?.strike)
+    const expiration = String(leg?.expiration || '').slice(0, 10)
+    const qty = openTrade ? num(leg?.open_contracts) : num(leg?.contracts)
+    if (!['CALL', 'PUT'].includes(optionType) || !['LONG', 'SHORT'].includes(side) || !strike || !expiration || !qty) return null
+    return {
+      side: side === 'LONG' ? 'BUY' : 'SELL',
+      qty: Math.max(1, Math.round(qty)),
+      opt_type: optionType,
+      strike,
+      expiration,
+      entry_price: trackedEntryPrice(leg),
+      iv: 0.2,
+      delta: null,
+      quote_source: 'actual_fill',
+    }
+  }).filter(Boolean)
+  if (optionLegs.length !== sourceLegs.length) return null
+  const stock = row?.stock_position
+  const stockShares = Math.max(0, num(stock?.shares) ?? 0)
+  const stockBasis = num(stock?.cost_basis) ?? num(stock?.current_price) ?? 0
+  const stockHoldingLeg = stockShares > 0 ? {
+    side: 'BUY',
+    qty: stockShares,
+    opt_type: 'STOCK',
+    strike: 0,
+    expiration: '',
+    entry_price: stockBasis,
+    iv: null,
+    delta: 1,
+    quote_source: 'account_holding',
+  } : null
+  const legs = stockHoldingLeg ? [stockHoldingLeg, ...optionLegs] : optionLegs
+  const label = String(row?.strategy_type || 'tracked option trade').trim()
+  return {
+    ticker,
+    name: `${ticker} ${label}`,
+    label,
+    spot: null,
+    legs,
+    source: 'Option Trade Ledger',
+    entry_source: 'actual_fills',
+    tracked_trade_id: row?.id ?? null,
+    tracked_trade_status: row?.status || null,
+    stock_coverage: stock ? {
+      shares: stockShares,
+      portfolio_shares: num(stock.portfolio_shares) ?? 0,
+      required_shares: num(stock.required_shares) ?? 0,
+      shortfall_shares: num(stock.shortfall_shares) ?? 0,
+      covered: Boolean(stock.covered),
+      cost_basis_source: stock.cost_basis_source || null,
+    } : null,
+  }
+}
+
+/** Stage an account trade for Strategy Lab and preserve a return path. */
+export function stageTrackedTrade(row, returnTo = '/option-trades') {
+  const built = buildTrackedTrade(row)
+  if (!built) return false
+  try {
+    sessionStorage.setItem(HANDOFF_KEY, JSON.stringify({
+      ...built,
+      return_to: returnTo,
+      staged_at: Date.now(),
+    }))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Read and clear a staged trade. Consumed once; a reload starts clean. */
 export function takeScannerTrade() {
   let raw = null
   try {

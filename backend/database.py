@@ -1404,6 +1404,95 @@ def ensure_tables_exist(conn=None):
             FOREIGN KEY (strategy_id) REFERENCES option_strategies(id) ON DELETE CASCADE
         )
     """)
+
+    # ── option trade ledger ──────────────────────────────────────────────────
+    # Strategy Lab rows above are planning scenarios and scanner opportunities.
+    # The ledger below is intentionally separate: it stores actual account
+    # trades, their individual contracts, and every broker/manual execution.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS option_trades (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id           INTEGER NOT NULL DEFAULT 1,
+            underlying           TEXT NOT NULL,
+            strategy_type        TEXT NOT NULL DEFAULT 'Custom',
+            purpose              TEXT NOT NULL DEFAULT 'Income',
+            status               TEXT NOT NULL DEFAULT 'OPEN',
+            opened_at            TEXT,
+            closed_at            TEXT,
+            source               TEXT NOT NULL DEFAULT 'manual',
+            source_format        TEXT,
+            external_group_id    TEXT,
+            linked_strategy_id   INTEGER,
+            max_risk             REAL,
+            summary_realized_pnl REAL,
+            limited_history      INTEGER NOT NULL DEFAULT 0,
+            notes                TEXT,
+            created_at           TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at           TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
+            FOREIGN KEY (linked_strategy_id) REFERENCES option_strategies(id) ON DELETE SET NULL
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_option_trades_profile_status
+        ON option_trades (profile_id, status, opened_at)
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_option_trades_external_group
+        ON option_trades (profile_id, source_format, external_group_id)
+        WHERE external_group_id IS NOT NULL
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS option_trade_legs (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id       INTEGER NOT NULL,
+            option_type    TEXT NOT NULL,
+            position_side  TEXT NOT NULL,
+            expiration     TEXT NOT NULL,
+            strike         REAL NOT NULL,
+            contracts      INTEGER NOT NULL,
+            multiplier     INTEGER NOT NULL DEFAULT 100,
+            occ_symbol     TEXT,
+            status         TEXT NOT NULL DEFAULT 'OPEN',
+            sort_order     INTEGER NOT NULL DEFAULT 0,
+            created_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (trade_id) REFERENCES option_trades(id) ON DELETE CASCADE
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_option_trade_legs_trade
+        ON option_trade_legs (trade_id, expiration, strike)
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS option_executions (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id      INTEGER NOT NULL,
+            leg_id        INTEGER NOT NULL,
+            action        TEXT NOT NULL,
+            executed_at   TEXT NOT NULL,
+            contracts     INTEGER NOT NULL,
+            price         REAL NOT NULL DEFAULT 0,
+            fees          REAL NOT NULL DEFAULT 0,
+            external_id   TEXT,
+            dedupe_hash   TEXT,
+            source        TEXT NOT NULL DEFAULT 'manual',
+            notes         TEXT,
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (trade_id) REFERENCES option_trades(id) ON DELETE CASCADE,
+            FOREIGN KEY (leg_id) REFERENCES option_trade_legs(id) ON DELETE CASCADE
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_option_executions_trade_date
+        ON option_executions (trade_id, executed_at)
+    """)
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_option_executions_dedupe
+        ON option_executions (dedupe_hash)
+        WHERE dedupe_hash IS NOT NULL
+    """)
     # Scanner trades are live opportunities rather than permanent learning
     # scenarios. Remove them on the first application request after every option
     # leg has expired; manual strategies are intentionally retained.

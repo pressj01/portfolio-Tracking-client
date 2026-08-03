@@ -68,6 +68,8 @@ import OptionIncomeETFEvaluator from './pages/OptionIncomeETFEvaluator'
 import StockBuyingChecklist from './pages/StockBuyingChecklist'
 import OptionTradingTools from './pages/OptionTradingTools'
 import OptionDashboard from './pages/OptionDashboard'
+import OptionTrades from './pages/OptionTrades'
+import OptionTradeImport from './pages/OptionTradeImport'
 import OptionEducation from './pages/OptionEducation'
 import PutSellingScanner from './pages/PutSellingScanner'
 import CoveredCallScanner from './pages/CoveredCallScanner'
@@ -241,6 +243,8 @@ function App() {
         <Route path="/stock-buying-checklist" element={<StockBuyingChecklist />} />
         <Route path="/options" element={<OptionTradingTools />} />
         <Route path="/option-dashboard" element={<OptionDashboard />} />
+        <Route path="/option-trades" element={<OptionTrades />} />
+        <Route path="/option-trades/import" element={<OptionTradeImport />} />
         <Route path="/put-selling-scanner" element={<PutSellingScanner />} />
         <Route path="/bull-put-spread-scanner" element={<BullPutSpreadScanner />} />
         <Route path="/covered-call-scanner" element={<CoveredCallScanner />} />
@@ -318,6 +322,8 @@ function Nav() {
       <NavLink to="/action-center">Action Center</NavLink>
       <NavDropdown label="Options">
         <NavLink to="/option-dashboard">Options Dashboard</NavLink>
+        <NavLink to="/option-trades">Option Trades</NavLink>
+        <NavLink to="/option-trades/import">Import Option Trades</NavLink>
         <NavLink to="/options">Strategy Lab</NavLink>
         <NavLink to="/put-selling-scanner">Put Selling Scanner</NavLink>
         <NavLink to="/bull-put-spread-scanner">Bull Put Spread Scanner</NavLink>

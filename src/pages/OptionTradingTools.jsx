@@ -1059,7 +1059,7 @@ export default function OptionTradingTools() {
 
   const [scannerTrade, setScannerTrade] = useState(null)
   const scannerTradeUsesEstimatedPrices = scannerTrade?.legs?.some(
-    leg => leg.quote_source && leg.quote_source !== 'live_bid_ask',
+    leg => leg.quote_source && !['live_bid_ask', 'actual_fill', 'account_holding'].includes(leg.quote_source),
   )
   const [showRiskPriceChart, setShowRiskPriceChart] = useState(() => {
     try { return localStorage.getItem(RISK_PRICE_CHART_PREF_KEY) === 'on' } catch { return false }
@@ -1157,7 +1157,9 @@ export default function OptionTradingTools() {
     })))
     setStrategyId(null)
     setStrategyName(staged.name || `${staged.ticker} scanner trade`)
-    setNotes(staged.source ? `Suggested by the ${staged.source}.` : '')
+    setNotes(staged.entry_source === 'actual_fills'
+      ? `Loaded from tracked trade ${staged.tracked_trade_id ? `#${staged.tracked_trade_id}` : ''} using actual opening fills.`
+      : staged.source ? `Suggested by the ${staged.source}.` : '')
     setChainTargetLegId(null)
     setEvaluationDate(TODAY())
     setVolatilitySurfaceShock(0)
@@ -2048,7 +2050,12 @@ export default function OptionTradingTools() {
         <div>
           <strong>{scannerTrade.name || `${ticker} scanner trade`}</strong>
           <span>
-            {scannerTradeUsesEstimatedPrices
+            {scannerTrade.entry_source === 'actual_fills'
+              ? <>Loaded from the Option Trade Ledger using actual opening fills with allocated fees and the tracked leg quantities.
+                {scannerTrade.stock_coverage?.shares > 0
+                  ? ` The graph includes ${scannerTrade.stock_coverage.shares} linked shares from this account${scannerTrade.stock_coverage.covered ? '.' : `; ${scannerTrade.stock_coverage.shortfall_shares} more shares are required for full coverage.`}`
+                  : scannerTrade.stock_coverage ? ` No matching shares were found in this account, so the graph currently shows only the option legs; ${scannerTrade.stock_coverage.required_shares} shares are required for full coverage.` : ''}</>
+              : scannerTradeUsesEstimatedPrices
               ? <>Loaded from the {scannerTrade.source || 'scanner'}. At least one leg uses a recent-trade
                 estimate because no live bid/ask was available. The active trade keeps your scanner legs while
                 you add or replace contracts; verify every live quote before trading.</>
