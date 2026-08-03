@@ -298,7 +298,45 @@ def load_trades(conn, profile_ids, status=None, purpose=None, underlying=None):
         _trade_payload(row, legs_by_trade[int(row["id"])], executions_by_trade[int(row["id"])])
         for row in trade_rows
     ]
+    trade_profile_ids = sorted({int(trade["profile_id"]) for trade in trades})
+    profile_placeholders = ",".join("?" for _ in trade_profile_ids)
+    profile_rows = conn.execute(
+        f"SELECT id, name FROM profiles WHERE id IN ({profile_placeholders})",
+        trade_profile_ids,
+    ).fetchall()
+    profile_names = {int(row["id"]): row["name"] for row in profile_rows}
+    for trade in trades:
+        trade["profile_name"] = profile_names.get(int(trade["profile_id"]), f"Account {trade['profile_id']}")
     return _attach_stock_positions(conn, trades)
+
+
+def _option_trade_read_scope(conn, is_aggregate, profile_ids):
+    """Expand Owner reads to the same source accounts used by income totals."""
+    resolved_ids = list(dict.fromkeys(int(profile_id) for profile_id in (profile_ids or [1])))
+    scope_type = "aggregate" if is_aggregate else "profile"
+    if not is_aggregate and resolved_ids == [1]:
+        source_rows = conn.execute(
+            "SELECT id FROM profiles WHERE id != 1 AND include_in_owner = 1 ORDER BY id"
+        ).fetchall()
+        source_ids = [int(row["id"]) for row in source_rows]
+        if source_ids:
+            resolved_ids = [1, *source_ids]
+            scope_type = "owner"
+
+    placeholders = ",".join("?" for _ in resolved_ids)
+    name_rows = conn.execute(
+        f"SELECT id, name FROM profiles WHERE id IN ({placeholders}) ORDER BY id",
+        resolved_ids,
+    ).fetchall()
+    names = {int(row["id"]): row["name"] for row in name_rows}
+    return resolved_ids, {
+        "type": scope_type,
+        "profile_ids": resolved_ids,
+        "accounts": [
+            {"id": profile_id, "name": names.get(profile_id, f"Account {profile_id}")}
+            for profile_id in resolved_ids
+        ],
+    }
 
 
 def trade_metrics(trades, today=None):
@@ -314,6 +352,8 @@ def trade_metrics(trades, today=None):
         {
             **event,
             "trade_id": trade.get("id"),
+            "profile_id": trade.get("profile_id"),
+            "profile_name": trade.get("profile_name"),
             "underlying": trade.get("underlying"),
             "strategy_type": trade.get("strategy_type"),
             "purpose": trade.get("purpose"),
@@ -724,9 +764,10 @@ def annotate_import_preview(conn, profile_id, parsed):
 def register_routes(app, get_profile_filter, get_profile_id):
     @app.get("/api/option-trades")
     def api_option_trades():
-        _, profile_ids = get_profile_filter()
+        is_aggregate, profile_ids = get_profile_filter()
         conn = get_connection()
         try:
+            profile_ids, scope = _option_trade_read_scope(conn, is_aggregate, profile_ids)
             trades = load_trades(
                 conn,
                 profile_ids,
@@ -735,7 +776,12 @@ def register_routes(app, get_profile_filter, get_profile_id):
                 underlying=request.args.get("underlying"),
             )
             all_trades = load_trades(conn, profile_ids)
-            return jsonify({"trades": trades, "metrics": trade_metrics(all_trades), "count": len(trades)})
+            return jsonify({
+                "trades": trades,
+                "metrics": trade_metrics(all_trades),
+                "count": len(trades),
+                "scope": scope,
+            })
         finally:
             conn.close()
 

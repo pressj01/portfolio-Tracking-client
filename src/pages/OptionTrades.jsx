@@ -114,7 +114,7 @@ function OptionTradeHelp({ metrics, income, includeOptionsIncome }) {
                   {mtdEvents.map((event, index) => (
                     <tr key={`${event.trade_id}-${event.leg_id || event.source}-${index}`}>
                       <td>{shortDate(event.date)}</td>
-                      <td><strong>{event.underlying}</strong><small>{event.strategy_type}{event.trade_status === 'OPEN' ? ' / trade still open' : ''}</small></td>
+                      <td><strong>{event.underlying}</strong><small>{event.profile_name ? `${event.profile_name} · ` : ''}{event.strategy_type}{event.trade_status === 'OPEN' ? ' / trade still open' : ''}</small></td>
                       <td>{event.purpose}</td>
                       <td className={Number(event.amount) >= 0 ? 'ot-positive' : 'ot-negative'}>{signedMoney(event.amount)}</td>
                     </tr>
@@ -385,7 +385,7 @@ function TradeDetails({ trade }) {
 export default function OptionTrades() {
   const navigate = useNavigate()
   const pf = useProfileFetch()
-  const { currentProfileName, isAggregate } = useProfile()
+  const { currentProfileName, isAggregate, profileId } = useProfile()
   const [data, setData] = useState({ trades: [], metrics: {} })
   const [income, setIncome] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -428,6 +428,10 @@ export default function OptionTrades() {
 
   const metrics = data.metrics || {}
   const filteredTrades = data.trades || []
+  const scope = data.scope || { type: isAggregate ? 'aggregate' : 'profile', accounts: [] }
+  const isOwnerRollup = scope.type === 'owner'
+  const showsSourceAccounts = scope.type === 'owner' || scope.type === 'aggregate'
+  const ownerSourceAccounts = isOwnerRollup ? scope.accounts.filter(account => Number(account.id) !== Number(profileId)) : []
   const incomeTotal = includeOptionsIncome ? income?.combined_ytd_income : income?.fund_ytd_income
   const toggleExpanded = id => setExpanded(current => {
     const next = new Set(current)
@@ -502,6 +506,7 @@ export default function OptionTrades() {
       </header>
 
       {isAggregate && <div className="ot-alert">Aggregate view is read-only. Select an individual portfolio to add, close, import, or delete option trades.</div>}
+      {isOwnerRollup && <div className="ot-alert ot-alert-owner">Owner includes option trades from {ownerSourceAccounts.map(account => account.name).join(', ')}. Trades stored in those source accounts are read-only here; select the source account to edit or close them.</div>}
       {error && <div className="ot-alert ot-alert-error">{error}</div>}
 
       <section className="ot-metrics" aria-label="Option trade summary">
@@ -556,10 +561,11 @@ export default function OptionTrades() {
                 const expiredOpenLegCount = trade.status === 'OPEN' ? openExpirations.filter(value => String(value).slice(0, 10) <= todayIso()).length : 0
                 const needsClassification = !trade.strategy_type || trade.strategy_type === 'Custom' || trade.purpose === 'Other'
                 const displayedLegs = trade.legs.length + (trade.stock_position?.shares > 0 ? 1 : 0)
+                const canEditTrade = !isAggregate && Number(trade.profile_id) === Number(profileId)
                 return [
                   <tr key={`trade-${trade.id}`} className="ot-trade-row">
                     <td><button className="ot-expand" aria-label={`${expanded.has(trade.id) ? 'Collapse' : 'Expand'} ${trade.underlying} trade`} onClick={() => toggleExpanded(trade.id)}>{expanded.has(trade.id) ? '−' : '+'}</button></td>
-                    <td><strong className="ot-symbol">{trade.underlying}</strong><small>{displayedLegs} leg{displayedLegs === 1 ? '' : 's'}{trade.stock_position ? ' incl. stock' : ''}</small></td>
+                    <td><strong className="ot-symbol">{trade.underlying}</strong><small>{showsSourceAccounts && trade.profile_name ? `${trade.profile_name} · ` : ''}{displayedLegs} leg{displayedLegs === 1 ? '' : 's'}{trade.stock_position ? ' incl. stock' : ''}</small></td>
                     <td><strong>{trade.strategy_type}</strong><span className={`ot-purpose ot-purpose-${trade.purpose.toLowerCase()}`}>{trade.purpose}</span>{needsClassification && <span className="ot-needs-classification">Needs classification</span>}</td>
                     <td>{shortDate(trade.opened_at)}</td>
                     <td>{shortDate(expiration)}<small>{trade.status === 'OPEN' && trade.dte != null ? `${trade.dte} DTE` : trade.closed_at ? `Closed ${shortDate(trade.closed_at)}` : ''}</small></td>
@@ -568,10 +574,19 @@ export default function OptionTrades() {
                     <td className={trade.realized_pnl >= 0 ? 'ot-positive' : 'ot-negative'}>{trade.status === 'CLOSED' || trade.realized_pnl ? money(trade.realized_pnl) : '—'}{trade.outcome && <small>{trade.outcome}</small>}</td>
                     <td>{percent(trade.return_on_risk_pct)}</td>
                     <td><span className={`ot-status ot-status-${trade.status.toLowerCase()}`}>{trade.status}</span></td>
-                    <td><div className="ot-row-actions"><button className="btn btn-secondary" onClick={() => openRiskGraph(trade)}>Risk graph</button>{!isAggregate && <button className={needsClassification ? 'btn btn-primary' : 'btn btn-secondary'} onClick={() => setClassifyingId(classifyingId === trade.id ? null : trade.id)}>{needsClassification ? 'Classify' : 'Edit class'}</button>}{expiredOpenLegCount > 0 && !isAggregate && <button className={`btn ${expireConfirmId === trade.id ? 'btn-danger' : 'btn-secondary'}`} onClick={() => expireTrade(trade)} onBlur={() => setExpireConfirmId(null)}>{expireConfirmId === trade.id ? 'Confirm expire' : expiredOpenLegCount === 1 ? 'Mark expired' : `Expire ${expiredOpenLegCount} legs`}</button>}{trade.status === 'OPEN' && !isAggregate && <button className="btn btn-secondary" onClick={() => setClosingId(closingId === trade.id ? null : trade.id)}>Close</button>} {!isAggregate && <button className={`btn ${deleteConfirmId === trade.id ? 'btn-danger' : 'btn-secondary'}`} onClick={() => deleteTrade(trade.id)} onBlur={() => setDeleteConfirmId(null)}>{deleteConfirmId === trade.id ? 'Confirm delete' : 'Delete'}</button>}</div></td>
+                    <td>
+                      <div className="ot-row-actions">
+                        <button className="btn btn-secondary" onClick={() => openRiskGraph(trade)}>Risk graph</button>
+                        {canEditTrade && <button className={needsClassification ? 'btn btn-primary' : 'btn btn-secondary'} onClick={() => setClassifyingId(classifyingId === trade.id ? null : trade.id)}>{needsClassification ? 'Classify' : 'Edit class'}</button>}
+                        {expiredOpenLegCount > 0 && canEditTrade && <button className={`btn ${expireConfirmId === trade.id ? 'btn-danger' : 'btn-secondary'}`} onClick={() => expireTrade(trade)} onBlur={() => setExpireConfirmId(null)}>{expireConfirmId === trade.id ? 'Confirm expire' : expiredOpenLegCount === 1 ? 'Mark expired' : `Expire ${expiredOpenLegCount} legs`}</button>}
+                        {trade.status === 'OPEN' && canEditTrade && <button className="btn btn-secondary" onClick={() => setClosingId(closingId === trade.id ? null : trade.id)}>Close</button>}
+                        {canEditTrade && <button className={`btn ${deleteConfirmId === trade.id ? 'btn-danger' : 'btn-secondary'}`} onClick={() => deleteTrade(trade.id)} onBlur={() => setDeleteConfirmId(null)}>{deleteConfirmId === trade.id ? 'Confirm delete' : 'Delete'}</button>}
+                        {!canEditTrade && trade.profile_name && <span className="ot-source-readonly">Manage in {trade.profile_name}</span>}
+                      </div>
+                    </td>
                   </tr>,
-                  classifyingId === trade.id ? <tr key={`classify-${trade.id}`}><td colSpan="11"><ClassificationForm trade={trade} onCancel={() => setClassifyingId(null)} onSaved={() => { setClassifyingId(null); load() }} /></td></tr> : null,
-                  closingId === trade.id ? <tr key={`close-${trade.id}`}><td colSpan="11"><CloseTradeForm trade={trade} onCancel={() => setClosingId(null)} onSaved={() => { setClosingId(null); load() }} /></td></tr> : null,
+                  classifyingId === trade.id && canEditTrade ? <tr key={`classify-${trade.id}`}><td colSpan="11"><ClassificationForm trade={trade} onCancel={() => setClassifyingId(null)} onSaved={() => { setClassifyingId(null); load() }} /></td></tr> : null,
+                  closingId === trade.id && canEditTrade ? <tr key={`close-${trade.id}`}><td colSpan="11"><CloseTradeForm trade={trade} onCancel={() => setClosingId(null)} onSaved={() => { setClosingId(null); load() }} /></td></tr> : null,
                   expanded.has(trade.id) ? <tr key={`detail-${trade.id}`}><td colSpan="11"><TradeDetails trade={trade} /></td></tr> : null,
                 ]
               })}</tbody>

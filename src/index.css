@@ -8887,6 +8887,10 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   background: color-mix(in srgb, var(--pos) 10%, var(--surface));
   border-color: color-mix(in srgb, var(--pos) 50%, var(--border));
 }
+.ot-alert-owner {
+  background: color-mix(in srgb, var(--accent-bright) 9%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent-bright) 42%, var(--border));
+}
 .ot-metrics {
   display: grid;
   gap: .75rem;
@@ -9131,8 +9135,15 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 .ot-strategy-field input { margin-top: .15rem; }
 .ot-status-open { background: color-mix(in srgb, var(--accent-bright) 15%, var(--surface-inset)); color: var(--accent-bright); }
 .ot-status-closed { background: color-mix(in srgb, var(--text-muted) 14%, var(--surface-inset)); color: var(--text-dim); }
-.ot-row-actions { display: flex; gap: .35rem; }
+.ot-row-actions { align-items: center; display: flex; gap: .35rem; }
 .ot-row-actions .btn { font-size: .65rem; padding: .35rem .5rem; white-space: nowrap; }
+.ot-source-readonly {
+  color: var(--text-muted);
+  font-size: .61rem;
+  font-weight: 700;
+  line-height: 1.25;
+  max-width: 95px;
+}
 .ot-trade-detail, .ot-close-panel {
   background: var(--surface-inset);
   border: 1px solid var(--border);

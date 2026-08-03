@@ -201,6 +201,8 @@ class OptionTradeLedgerTest(unittest.TestCase):
             "source": "leg",
             "leg_id": adjusted["legs"][0]["id"],
             "trade_id": calendar_id,
+            "profile_id": 1,
+            "profile_name": adjusted["profile_name"],
             "underlying": "QQQ",
             "strategy_type": "Calendar",
             "purpose": "Directional",
@@ -215,6 +217,8 @@ class OptionTradeApiTest(unittest.TestCase):
         conn = self.connection()
         ensure_tables_exist(conn)
         conn.execute("INSERT OR IGNORE INTO profiles (id, name) VALUES (1, 'API Portfolio')")
+        conn.execute("INSERT OR IGNORE INTO profiles (id, name, include_in_owner) VALUES (2, 'Owner Source', 1)")
+        conn.execute("INSERT OR IGNORE INTO profiles (id, name, include_in_owner) VALUES (3, 'Separate Account', 0)")
         conn.commit()
         conn.close()
 
@@ -270,6 +274,32 @@ class OptionTradeApiTest(unittest.TestCase):
         self.assertEqual(classified_trade["purpose"], "Income")
         self.assertEqual(classified_trade["max_risk"], 2500)
         self.assertEqual(classified_trade["notes"], "Reviewed classification")
+
+    def test_owner_list_includes_only_accounts_marked_for_owner(self):
+        trade_payload = {
+            "underlying": "SPY",
+            "strategy_type": "Short Put",
+            "purpose": "Income",
+            "opened_at": "2026-08-03",
+            "legs": [{
+                "position_side": "SHORT", "option_type": "PUT", "expiration": "2026-09-18",
+                "strike": 600, "contracts": 1, "price": 1.25, "fees": 0,
+            }],
+        }
+        included = self.client.post("/api/option-trades?profile_id=2", json=trade_payload)
+        excluded = self.client.post("/api/option-trades?profile_id=3", json={**trade_payload, "underlying": "QQQ"})
+        self.assertEqual(included.status_code, 201)
+        self.assertEqual(excluded.status_code, 201)
+
+        listing = self.client.get("/api/option-trades?profile_id=1")
+        self.assertEqual(listing.status_code, 200)
+        payload = listing.get_json()
+        self.assertEqual(payload["scope"]["type"], "owner")
+        self.assertEqual(payload["scope"]["profile_ids"], [1, 2])
+        self.assertEqual(payload["metrics"]["open_trades"], 1)
+        self.assertEqual(len(payload["trades"]), 1)
+        self.assertEqual(payload["trades"][0]["profile_id"], 2)
+        self.assertEqual(payload["trades"][0]["profile_name"], "Owner Source")
 
 
 if __name__ == "__main__":
