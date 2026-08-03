@@ -9,7 +9,7 @@ const universeItems = [
 const commonMarketItems = [
   ['Min market cap / ETF min AUM', 'Minimum company equity value or fund assets. These are separate because funds do not have a market capitalization.'],
   ['Min $ volume', 'Minimum average daily share-price × share-volume. Higher values usually lead to more liquid option chains.'],
-  ['Lookback', 'Trading-day window used for the scanner’s move, volatility, momentum, and relative-strength measurements.'],
+  ['Lookback', 'Historical trading-day window used for the scanner’s move, volatility, momentum, and relative-strength measurements. It is independent of Target DTE.'],
   ['Target DTE', 'Preferred calendar days to expiration. The scanner selects the nearest listed expiration in its allowed window.'],
 ]
 
@@ -25,7 +25,7 @@ const GUIDES = {
       title: 'Setup filters',
       items: [
         ['Min drop / ETF min drop', 'Minimum decline from the 52-week high. Funds use a separate, normally lower threshold.'],
-        ['Min stretch / ETF min stretch', 'Minimum decline in standard deviations of the underlying’s own normal lookback move.'],
+        ['Min stretch / ETF min stretch', 'Minimum volatility-normalized decline. Stretch = recent log-return decline ÷ (prior daily volatility × √Lookback). For example, 1% daily volatility implies a normal 21-day move of about 4.6%, so a roughly 6.9% decline is about 1.5σ. Target DTE does not change it.'],
         ['Max RSI', 'Highest allowed 14-day RSI. Lower values require a more oversold candidate.'],
         ...commonMarketItems,
       ],
@@ -71,7 +71,7 @@ const GUIDES = {
       title: 'Bullish setup',
       items: [
         ['Min / max pullback', 'Allowed stock decline from the recent high; ETFs have their own min/max band.'],
-        ['Min / max stretch', 'Allowed pullback measured in standard deviations of the underlying’s normal move.'],
+        ['Min / max stretch', 'Allowed volatility-normalized pullback. Stretch = recent log-return decline ÷ (prior daily volatility × √Lookback). For example, 1% daily volatility implies a normal 21-day move of about 4.6%, so a roughly 6.9% decline is about 1.5σ. Target DTE does not change it.'],
         ['Min / max RSI', 'Allowed 14-day RSI band: weak enough to offer premium, but not a falling knife.'],
         ['Require price above 200-day', 'Keeps the long-term trend bullish.'],
         ['Require 50-day above 200-day', 'Requires a confirmed moving-average uptrend.'],

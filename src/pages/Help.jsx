@@ -6170,9 +6170,17 @@ function PutSellingScannerHelp() {
         A 20% drop means very different things for a utility and a semiconductor stock, so the scanner does not rank
         on the raw decline. For each stock it measures the daily volatility of the period <em>before</em> the selloff,
         works out how far that stock would ordinarily travel over the lookback window, and expresses the actual drop
-        as a multiple of that figure. This is the <strong>Stretch</strong> column, shown in standard deviations
-        (&sigma;). A stretch of 2.5&sigma; means the stock fell two and a half standard deviations further than its own
-        history says is routine.
+        as a multiple of that figure. This is the <strong>Sigma Stretch</strong> column, calculated as
+        <strong> recent log-return decline &divide; (prior daily volatility &times; &radic;Lookback)</strong>. A positive
+        result means the price fell; 2.5&sigma; is a decline equal to two and a half of its own normal lookback moves.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Example: if daily volatility is 1% and Lookback is 21 trading days, one normal move is approximately
+        1% &times; &radic;21 = 4.6%. A roughly 6.9% decline is therefore about 1.5&sigma;. Increasing
+        <strong> Lookback</strong> changes both the historical return being measured and the square-root scaling.
+        Increasing <strong>Target DTE</strong> does not change Stretch; it only changes the option expiration the
+        scanner seeks. This is also different from <strong>% Off High</strong>, which is simply the distance from the
+        52-week high and is not volatility-adjusted.
       </p>
       <p style={{ marginBottom: '1rem' }}>
         The scanner also subtracts the market&rsquo;s move times the stock&rsquo;s beta, reported as
@@ -6768,11 +6776,11 @@ function BullPutSpreadScannerHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Stock universe:</strong> large caps, large+mid, mid only, your holdings, your watchlist, or a custom ticker list. ETF inclusion is separate, via the Include checkboxes.</li>
         <li><strong>Min / Max pullback:</strong> the size of the dip, in percent, with separate lower ETF bounds since indexes move less than single names.</li>
-        <li><strong>Min / Max stretch (σ):</strong> the same volatility-normalized measure the put and call screens use. A 3% dip means something different for a utility and a semiconductor; σ makes them comparable. The maximum is the important half here &mdash; it rejects a dislocation too severe for a defined-risk trade.</li>
+        <li><strong>Min / Max stretch (σ):</strong> recent log-return decline &divide; (prior daily volatility &times; &radic;Lookback). With 1% daily volatility, a normal 21-day move is about 4.6%, so a roughly 6.9% dip is about 1.5&sigma;. The minimum requires a meaningful dip; the maximum rejects a dislocation too severe for a defined-risk trade.</li>
         <li><strong>Min / Max RSI:</strong> soft but not exhausted. Balanced uses 35&ndash;58.</li>
         <li><strong>Min mkt cap / ETF min AUM / Min $ volume:</strong> size and tradability floors. Dollar volume is the best single proxy for how tight the option market will be.</li>
-        <li><strong>Lookback:</strong> trading days in the pullback window, 21 by default.</li>
-        <li><strong>Target DTE:</strong> 35 by default. The scanner takes the listed expiration nearest this, and never substitutes a very short one to dodge an earnings report.</li>
+        <li><strong>Lookback:</strong> historical trading days in the pullback window, 21 by default. Raising it changes both the return being measured and the &radic;Lookback term in Sigma Stretch.</li>
+        <li><strong>Target DTE:</strong> 35 by default. It is independent of Lookback and Sigma Stretch; it only guides the listed expiration selected, and the scanner never substitutes a very short one to dodge an earnings report.</li>
         <li><strong>Short delta / Long delta:</strong> where the two legs sit. 0.25 short and 0.10 long is the Balanced pair. Raising short delta raises the credit and lowers the probability of keeping it &mdash; that trade is the whole strategy.</li>
         <li><strong>Min / Max width:</strong> strike width as a percentage of spot, which bounds the maximum loss.</li>
         <li><strong>Min credit (% width):</strong> the anti-token-premium gate. Below about 20% of width you are taking real defined risk for very little.</li>

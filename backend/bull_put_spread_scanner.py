@@ -38,7 +38,9 @@ from put_scanner import (
     RISK_FREE,
     SECTOR_ETF_SET,
     UNIVERSE_CHOICES,
+    LOW_CONFIDENCE_SELECTED_FUND_FLAG,
     _benchmark_returns,
+    _clean_tickers,
     _compute_technicals,
     _earnings_within_target_window,
     _fetch_fundamentals_bulk,
@@ -520,6 +522,7 @@ def recommend_management(spread: dict | None, rating: dict | None) -> dict | Non
         "Thin open interest on one leg",
         "Making fresh 52-week lows",
         "No pair met every spread filter",
+        LOW_CONFIDENCE_SELECTED_FUND_FLAG,
     }
     if grade == "A" and score >= 80 and not (flags & material):
         capture_pct = 65.0
@@ -590,6 +593,9 @@ DEFAULTS = {
     "include_stocks": True,
     "include_index_etfs": True,
     "include_sector_etfs": False,
+    "include_selected_funds": False,
+    "selected_fund_tickers": [],
+    "include_lower_confidence_selected_funds": True,
     "lookback_days": 21,
     "min_market_cap": 5e9,
     "min_drop_pct": 3.0,
@@ -631,6 +637,7 @@ def _partition_candidate_rows(rows: list[dict], max_results: int):
     watchlist = [row for row in rows if row.get("chain_status") != "actionable"]
     actionable.sort(key=lambda row: -(row.get("score") or 0))
     order = {
+        "underlying_filters_missed": -1,
         "earnings": 0,
         "constraints_relaxed": 1,
         "unavailable": 2,
@@ -699,6 +706,12 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
     max_results = max(1, min(200, int(_num(p["max_results"], 40) or 40)))
 
     tickers = resolve_scan_universe(p)
+    selected_fund_tickers = set(_clean_tickers(p.get("selected_fund_tickers"))) \
+        if p.get("include_selected_funds") else set()
+    allow_lower_confidence_selected_funds = bool(
+        selected_fund_tickers
+        and p.get("include_lower_confidence_selected_funds", True)
+    )
     empty_stats = {
         "universe": len(tickers),
         "priced": 0,
@@ -732,6 +745,7 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
     bench_ret = _benchmark_returns(hist)
     priced = 0
     price_pass: list[dict] = []
+    lower_confidence_price: list[dict] = []
     for ticker in tickers:
         sub = _ticker_frame(hist, ticker)
         if sub is None:
@@ -750,30 +764,41 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
         else:
             drop_floor = min(min_drop, fund_min_drop)
             drop_ceiling = max(max_drop, fund_max_drop)
-        if drop < drop_floor or drop > drop_ceiling:
-            continue
-        if stretch is None or stretch < min_stretch or stretch > max_stretch:
-            continue
+        passes_price_screen = drop_floor <= drop <= drop_ceiling
+        passes_price_screen = passes_price_screen and (
+            stretch is not None and min_stretch <= stretch <= max_stretch
+        )
         rsi = tech.get("rsi_14")
-        if rsi is not None and (rsi < min_rsi or rsi > max_rsi):
-            continue
-        if (tech.get("avg_dollar_volume") or 0.0) < min_adv:
-            continue
-        if p["exclude_fresh_lows"] and tech.get("fresh_low"):
-            continue
+        passes_price_screen = passes_price_screen and (
+            rsi is None or min_rsi <= rsi <= max_rsi
+        )
+        passes_price_screen = passes_price_screen and (
+            (tech.get("avg_dollar_volume") or 0.0) >= min_adv
+        )
+        passes_price_screen = passes_price_screen and not (
+            p["exclude_fresh_lows"] and tech.get("fresh_low")
+        )
         price = _num(tech.get("price"))
         sma50 = _num(tech.get("sma_50"))
         sma200 = _num(tech.get("sma_200"))
-        if p["require_above_sma200"] and (
+        passes_price_screen = passes_price_screen and not (
+            p["require_above_sma200"] and (
             not price or not sma200 or price < sma200
-        ):
-            continue
-        if p["require_confirmed_uptrend"] and (
+            )
+        )
+        passes_price_screen = passes_price_screen and not (
+            p["require_confirmed_uptrend"] and (
             not sma50 or not sma200 or sma50 < sma200
-        ):
-            continue
+            )
+        )
         tech["ticker"] = ticker
-        price_pass.append(tech)
+        if passes_price_screen:
+            price_pass.append(tech)
+        elif (
+            allow_lower_confidence_selected_funds
+            and ticker in selected_fund_tickers
+        ):
+            lower_confidence_price.append(tech)
 
     price_pass.sort(
         key=lambda tech: (
@@ -781,29 +806,50 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
             abs((tech.get("stretch_sigma") or 1.0) - 1.0),
         )
     )
+    lower_confidence_price.sort(
+        key=lambda tech: (
+            abs((tech.get("rsi_14") or 45.0) - 45.0),
+            abs((tech.get("stretch_sigma") or 1.0) - 1.0),
+        )
+    )
     fundamentals = _fetch_fundamentals_bulk([
-        tech["ticker"] for tech in price_pass
+        tech["ticker"] for tech in price_pass + lower_confidence_price
     ])
 
-    survivors: list[tuple[dict, dict]] = []
-    for tech in price_pass:
+    survivors: list[tuple[dict, dict, bool]] = []
+    lower_confidence_price_tickers = {
+        tech["ticker"] for tech in lower_confidence_price
+    }
+    for tech in price_pass + lower_confidence_price:
         ticker = tech["ticker"]
         fund = fundamentals.get(ticker, {})
         is_fund = _is_fund(fund, ticker)
+        lower_confidence = ticker in lower_confidence_price_tickers
         drop = -(tech.get("drawdown_pct") or 0.0)
+        selected_fund_fallback = (
+            allow_lower_confidence_selected_funds
+            and ticker in selected_fund_tickers
+            and is_fund
+            and _fund_kind(ticker, fund) != "leveraged"
+        )
         if is_fund:
-            if drop < fund_min_drop or drop > fund_max_drop:
-                continue
-            if (
-                fund_min_aum
-                and (_num(fund.get("total_assets")) or 0.0) < fund_min_aum
-            ):
-                continue
+            misses_fund_filters = (
+                drop < fund_min_drop
+                or drop > fund_max_drop
+                or (
+                    fund_min_aum
+                    and (_num(fund.get("total_assets")) or 0.0) < fund_min_aum
+                )
+            )
             if (
                 p["exclude_leveraged_funds"]
                 and _fund_kind(ticker, fund) == "leveraged"
             ):
                 continue
+            if misses_fund_filters:
+                if not selected_fund_fallback:
+                    continue
+                lower_confidence = True
         else:
             if drop < min_drop or drop > max_drop:
                 continue
@@ -817,13 +863,15 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
                     or (margin is not None and margin > 0)
                 ):
                     continue
-        survivors.append((tech, fund))
+        survivors.append((tech, fund, lower_confidence))
 
-    passed_fundamentals = len(survivors)
+    # Selected-fund fallbacks are not falsely reported as having passed the
+    # strict screen; they are retained only as lower-confidence comparisons.
+    passed_fundamentals = sum(1 for _, _, lower in survivors if not lower)
     dropped_for_earnings = 0
     if p["exclude_earnings_before_expiry"]:
         kept = []
-        for tech, fund in survivors:
+        for tech, fund, lower_confidence in survivors:
             if (
                 not _is_fund(fund, tech["ticker"])
                 and _earnings_within_target_window(
@@ -832,17 +880,21 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
             ):
                 dropped_for_earnings += 1
                 continue
-            kept.append((tech, fund))
+            kept.append((tech, fund, lower_confidence))
         survivors = kept
 
     survivors.sort(
-        key=lambda pair: -score_candidate(pair[0], pair[1], None)["score"]
+        key=lambda pair: (
+            0 if pair[0]["ticker"] in selected_fund_tickers else 1,
+            pair[2],
+            -score_candidate(pair[0], pair[1], None)["score"],
+        )
     )
     chain_targets = survivors[:chain_limit]
     chain_target_tickers = {pair[0]["ticker"] for pair in chain_targets}
 
     def _chain_for(pair):
-        tech, fund = pair
+        tech, fund, _ = pair
         div_yield = dividend_yield_for_pricing(fund, tech.get("price"))
         forecast_vol = _num(tech.get("rv_30")) or _num(tech.get("rv_252"))
         try:
@@ -878,12 +930,20 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
                 spreads[pair[0]["ticker"]] = spread
 
     rows: list[dict] = []
-    for tech, fund in survivors:
+    for tech, fund, lower_confidence in survivors:
         ticker = tech["ticker"]
         spread = spreads.get(ticker)
         rating = score_candidate(
             tech, fund, spread, earnings_buffer_days=earnings_buffer
         )
+        if lower_confidence:
+            rating = {
+                **rating,
+                "flags": list(dict.fromkeys([
+                    *rating.get("flags", []),
+                    LOW_CONFIDENCE_SELECTED_FUND_FLAG,
+                ])),
+            }
         excluded_for_earnings = bool(
             p["exclude_earnings_before_expiry"]
             and rating.get("earnings_before_expiry")
@@ -937,7 +997,14 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
                 "probability_schedule": probability_schedule,
             }
 
-        if spread and not spread.get("constraints_relaxed"):
+        if lower_confidence:
+            chain_status = "underlying_filters_missed"
+            watchlist_reason = (
+                "This selected index or commodity fund missed one or more "
+                "underlying setup filters. The suggested spread is shown for "
+                "comparison only; review its lower score and modeled probability."
+            )
+        elif spread and not spread.get("constraints_relaxed"):
             chain_status = "actionable"
             watchlist_reason = None
         elif spread:
@@ -996,6 +1063,9 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
             "target_mean_price": _round(fund.get("target_mean_price")),
             "next_earnings": fund.get("next_earnings"),
             "spread": _round_spread(spread),
+            "candidate_status": (
+                "lower_confidence" if lower_confidence else "qualified"
+            ),
             "chain_status": chain_status,
             "watchlist_reason": watchlist_reason,
             **rating,
@@ -1018,6 +1088,10 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
             "actionable": len(actionable_rows),
             "watchlist": len(watchlist_rows),
             "dropped_for_earnings": dropped_for_earnings,
+            "lower_confidence": sum(
+                1 for row in watchlist_rows
+                if row.get("candidate_status") == "lower_confidence"
+            ),
             "watchlist_earnings": 0,
             "watchlist_relaxed": sum(
                 1 for row in watchlist_rows
@@ -1038,6 +1112,11 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
             "include_stocks": bool(p["include_stocks"]),
             "include_index_etfs": bool(p["include_index_etfs"]),
             "include_sector_etfs": bool(p["include_sector_etfs"]),
+            "include_selected_funds": bool(p["include_selected_funds"]),
+            "selected_fund_tickers": sorted(selected_fund_tickers),
+            "include_lower_confidence_selected_funds": bool(
+                p.get("include_lower_confidence_selected_funds", True)
+            ),
             "lookback_days": lookback,
             "min_market_cap": min_cap,
             "min_drop_pct": min_drop,

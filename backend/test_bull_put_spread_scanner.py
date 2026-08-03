@@ -323,5 +323,54 @@ class DefaultsTests(unittest.TestCase):
         )
 
 
+class SelectedFundFallbackTests(unittest.TestCase):
+    def test_selected_etf_technical_near_miss_is_watchlist_only(self):
+        weak_tech = tech(
+            ticker="GLD", drawdown_pct=-0.2, stretch_sigma=0.1, rsi_14=75.0,
+            price=100.0, sma_50=99.0, sma_200=95.0,
+        )
+        commodity_fund = fund(
+            quote_type="ETF", market_cap=None, total_assets=100e9,
+            name="SPDR Gold Shares", category="Commodities Precious Metals",
+        )
+        quoted_spread = spread(
+            short_leg=leg(95, 2.0, 2.1, -0.25),
+            long_leg=leg(90, 0.75, 0.85, -0.10),
+            max_profit_dollars=125.0,
+            max_loss_dollars=375.0,
+        )
+        with (
+            patch.object(
+                bps, "_load_history",
+                return_value=type("History", (), {"empty": False})(),
+            ),
+            patch.object(bps, "_benchmark_returns", return_value=None),
+            patch.object(bps, "_ticker_frame", return_value=object()),
+            patch.object(bps, "_compute_technicals", return_value=weak_tech),
+            patch.object(bps, "_fetch_fundamentals_bulk", return_value={"GLD": commodity_fund}),
+            patch.object(bps, "_suggest_bull_put_spread", return_value=quoted_spread),
+            patch.object(bps, "profit_probability_schedule", return_value=[]),
+        ):
+            result = bps.run_bull_put_spread_scan({
+                "include_stocks": False,
+                "include_index_etfs": False,
+                "include_sector_etfs": False,
+                "include_selected_funds": True,
+                "selected_fund_tickers": "GLD",
+                "include_lower_confidence_selected_funds": True,
+            })
+
+        self.assertEqual(result["rows"], [])
+        self.assertEqual(result["watchlist_rows"][0]["ticker"], "GLD")
+        self.assertEqual(
+            result["watchlist_rows"][0]["chain_status"],
+            "underlying_filters_missed",
+        )
+        self.assertIn(
+            bps.LOW_CONFIDENCE_SELECTED_FUND_FLAG,
+            result["watchlist_rows"][0]["flags"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

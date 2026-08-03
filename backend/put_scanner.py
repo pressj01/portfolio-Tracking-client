@@ -154,6 +154,14 @@ ALL_ETF_UNIVERSE = INDEX_ETF_UNIVERSE + SECTOR_ETF_UNIVERSE
 INDEX_ETF_SET = frozenset(INDEX_ETF_UNIVERSE)
 SECTOR_ETF_SET = frozenset(SECTOR_ETF_UNIVERSE)
 
+# A selected-fund scan is intentionally allowed to show the best available
+# contract even when the technical screen has no fully qualifying result.  The
+# row remains clearly non-actionable: this flag reaches the UI, the verdict,
+# and the more defensive management plan.
+LOW_CONFIDENCE_SELECTED_FUND_FLAG = (
+    "Misses selected underlying filters — lower-confidence candidate"
+)
+
 # Tickers known to be single companies before any network call. The price stage
 # uses this to decide which thresholds to apply; anything in neither this set nor
 # the ETF sets (a holding, a watchlist name, a custom ticker) is unknown until
@@ -1299,6 +1307,7 @@ def recommend_buyback(put: dict | None, rating: dict | None) -> dict | None:
         "Earnings before expiration",
         "Wide bid/ask spread",
         "Thin open interest",
+        LOW_CONFIDENCE_SELECTED_FUND_FLAG,
     }
     has_material_risk = bool(flags & material_risk_flags)
 
@@ -1382,6 +1391,9 @@ def build_verdict(row: dict) -> str:
     else:
         lead = f"{'Marginal setup' if not row.get('is_fund') else subject + ', marginal setup'} {move}, {sigma}"
 
+    if row.get("candidate_status") == "lower_confidence":
+        lead += ". It missed one or more selected underlying filters, so this is a lower-confidence trade"
+
     if put.get("annualized_pct") and put.get("strike"):
         lead += (
             f". Selling the {put['expiration']} ${put['strike']:g} put pays "
@@ -1413,6 +1425,8 @@ def build_verdict(row: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _clean_tickers(raw) -> list[str]:
+    if isinstance(raw, str):
+        raw = re.split(r"[\s,;]+", raw)
     out, seen = [], set()
     for t in raw or []:
         if t is None:
@@ -1488,6 +1502,8 @@ def resolve_scan_universe(p: dict) -> list[str]:
         tickers += INDEX_ETF_UNIVERSE
     if p.get("include_sector_etfs"):
         tickers += SECTOR_ETF_UNIVERSE
+    if p.get("include_selected_funds"):
+        tickers += _clean_tickers(p.get("selected_fund_tickers"))
     return _clean_tickers(tickers)
 
 
@@ -1502,6 +1518,12 @@ DEFAULTS = {
     "include_stocks": True,
     "include_index_etfs": False,
     "include_sector_etfs": False,
+    # A short, user-selected universe such as SPY, QQQ, IWM, GLD.  These are
+    # independent of the broad ETF groups above, so a user can scan exactly
+    # the funds they name.
+    "include_selected_funds": False,
+    "selected_fund_tickers": [],
+    "include_lower_confidence_selected_funds": True,
     "lookback_days": 21,
     "min_market_cap": 10e9,
     "min_drop_pct": 12.0,
@@ -1557,6 +1579,12 @@ def run_put_scan(payload: dict) -> dict:
     max_results = max(1, min(200, int(_num(p["max_results"], 40))))
 
     tickers = resolve_scan_universe(p)
+    selected_fund_tickers = set(_clean_tickers(p.get("selected_fund_tickers"))) \
+        if p.get("include_selected_funds") else set()
+    allow_lower_confidence_selected_funds = bool(
+        selected_fund_tickers
+        and p.get("include_lower_confidence_selected_funds", True)
+    )
     if not tickers:
         return {
             "rows": [], "stats": {"universe": 0, "priced": 0, "passed_price": 0, "final": 0},
@@ -1576,7 +1604,7 @@ def run_put_scan(payload: dict) -> dict:
 
     bench_ret = _benchmark_returns(hist)
 
-    priced, price_pass = 0, []
+    priced, price_pass, lower_confidence_price = 0, [], []
     for ticker in tickers:
         sub = _ticker_frame(hist, ticker)
         if sub is None:
@@ -1603,41 +1631,78 @@ def run_put_scan(payload: dict) -> dict:
         else:
             drop_floor = min(min_drop, fund_min_drop)
             stretch_floor = min(min_stretch, fund_min_stretch)
-        if drop < drop_floor or stretch < stretch_floor:
-            continue
+        passes_price_screen = drop >= drop_floor and stretch >= stretch_floor
         rsi = tech.get("rsi_14")
-        if rsi is not None and rsi > max_rsi:
-            continue
-        if (tech.get("avg_dollar_volume") or 0.0) < min_adv:
-            continue
-        if p["exclude_fresh_lows"] and tech.get("fresh_low"):
-            continue
+        passes_price_screen = passes_price_screen and (
+            rsi is None or rsi <= max_rsi
+        )
+        passes_price_screen = passes_price_screen and (
+            (tech.get("avg_dollar_volume") or 0.0) >= min_adv
+        )
+        passes_price_screen = passes_price_screen and not (
+            p["exclude_fresh_lows"] and tech.get("fresh_low")
+        )
         tech["ticker"] = ticker
-        price_pass.append(tech)
+        if passes_price_screen:
+            price_pass.append(tech)
+        elif (
+            allow_lower_confidence_selected_funds
+            and ticker in selected_fund_tickers
+        ):
+            # This is a deliberately small, user-selected universe.  Let the
+            # full score and the option market describe the trade rather than
+            # hiding it behind a binary technical gate.
+            lower_confidence_price.append(tech)
 
     # Rank the price stage so the expensive stages only touch the best names.
     price_pass.sort(key=lambda t: -(t.get("stretch_sigma") or 0.0))
-    fundamentals = _fetch_fundamentals_bulk([t["ticker"] for t in price_pass])
+    lower_confidence_price.sort(
+        key=lambda t: -(t.get("stretch_sigma") or 0.0)
+    )
+    fundamentals = _fetch_fundamentals_bulk([
+        t["ticker"] for t in price_pass + lower_confidence_price
+    ])
 
     survivors = []
-    for tech in price_pass:
+    lower_confidence_price_tickers = {
+        tech["ticker"] for tech in lower_confidence_price
+    }
+    for tech in price_pass + lower_confidence_price:
         ticker = tech["ticker"]
         fund = fundamentals.get(ticker, {})
         is_fund = _is_fund(fund, ticker)
+        lower_confidence = ticker in lower_confidence_price_tickers
         drop = -(tech.get("drawdown_pct") or 0.0)
         stretch = tech.get("stretch_sigma") or 0.0
+        selected_fund_fallback = (
+            allow_lower_confidence_selected_funds
+            and ticker in selected_fund_tickers
+            and is_fund
+            and _fund_kind(ticker, fund) != "leveraged"
+        )
 
         # A fund reports AUM, not a market cap, and has no earnings or margins
         # to be profitable with — applying the stock gates would drop them all.
         # The drop/stretch floors are re-applied here because the price stage can
         # only guess at which set a non-curated ticker belongs to.
         if is_fund:
-            if drop < fund_min_drop or stretch < fund_min_stretch:
+            misses_fund_filters = (
+                drop < fund_min_drop
+                or stretch < fund_min_stretch
+                or (
+                    fund_min_aum
+                    and (_num(fund.get("total_assets")) or 0.0) < fund_min_aum
+                )
+            )
+            if (
+                p["exclude_leveraged_funds"]
+                and _fund_kind(ticker, fund) == "leveraged"
+            ):
                 continue
-            if fund_min_aum and (_num(fund.get("total_assets")) or 0.0) < fund_min_aum:
-                continue
-            if p["exclude_leveraged_funds"] and _fund_kind(ticker, fund) == "leveraged":
-                continue
+            if misses_fund_filters:
+                if not selected_fund_fallback:
+                    continue
+                lower_confidence = True
         else:
             if drop < min_drop or stretch < min_stretch:
                 continue
@@ -1649,13 +1714,15 @@ def run_put_scan(payload: dict) -> dict:
                 profitable = (eps is not None and eps > 0) or (margin is not None and margin > 0)
                 if not profitable:
                     continue
-        survivors.append((tech, fund))
+        survivors.append((tech, fund, lower_confidence))
 
-    passed_fundamentals = len(survivors)
+    # Keep the funnel truthful: selected-fund fallbacks are deliberately shown
+    # despite missing the normal screen, not counted as having passed it.
+    passed_fundamentals = sum(1 for _, _, lower in survivors if not lower)
     dropped_for_earnings = 0
     if p["exclude_earnings_before_expiry"]:
         kept = []
-        for tech, fund in survivors:
+        for tech, fund, lower_confidence in survivors:
             if (
                 not _is_fund(fund, tech["ticker"])
                 and _earnings_within_target_window(
@@ -1664,18 +1731,22 @@ def run_put_scan(payload: dict) -> dict:
             ):
                 dropped_for_earnings += 1
                 continue
-            kept.append((tech, fund))
+            kept.append((tech, fund, lower_confidence))
         survivors = kept
 
     # Provisional score without the chain, to choose who gets a chain lookup.
     survivors.sort(
-        key=lambda pair: -score_candidate(pair[0], pair[1], None)["score"]
+        key=lambda pair: (
+            0 if pair[0]["ticker"] in selected_fund_tickers else 1,
+            pair[2],
+            -score_candidate(pair[0], pair[1], None)["score"],
+        )
     )
 
     chain_targets = survivors[:chain_limit]
 
     def _chain_for(pair):
-        tech, fund = pair
+        tech, fund, _ = pair
         div_y = dividend_yield_for_pricing(fund, tech.get("price"))
         try:
             return _suggest_put(
@@ -1695,9 +1766,17 @@ def run_put_scan(payload: dict) -> dict:
                 puts[pair[0]["ticker"]] = put
 
     rows = []
-    for tech, fund in survivors:
+    for tech, fund, lower_confidence in survivors:
         put = puts.get(tech["ticker"])
         rating = score_candidate(tech, fund, put, earnings_buffer_days=earnings_buffer)
+        if lower_confidence:
+            rating = {
+                **rating,
+                "flags": list(dict.fromkeys([
+                    *rating.get("flags", []),
+                    LOW_CONFIDENCE_SELECTED_FUND_FLAG,
+                ])),
+            }
         # _suggest_put already tried to find an expiration that closes before the
         # report; reaching here means no expiration in the DTE window could.
         if p["exclude_earnings_before_expiry"] and rating.get("earnings_before_expiry"):
@@ -1771,6 +1850,9 @@ def run_put_scan(payload: dict) -> dict:
             "target_mean_price": _round(fund.get("target_mean_price")),
             "next_earnings": fund.get("next_earnings"),
             "put": _round_put(put),
+            "candidate_status": (
+                "lower_confidence" if lower_confidence else "qualified"
+            ),
             **rating,
         }
         row["verdict"] = build_verdict(row)
@@ -1790,6 +1872,10 @@ def run_put_scan(payload: dict) -> dict:
             "passed_fundamentals": passed_fundamentals,
             "chains_fetched": sum(1 for v in puts.values() if v),
             "dropped_for_earnings": dropped_for_earnings,
+            "lower_confidence": sum(
+                1 for row in rows
+                if row.get("candidate_status") == "lower_confidence"
+            ),
             "final": len(rows),
         },
         "params": {
@@ -1800,6 +1886,11 @@ def run_put_scan(payload: dict) -> dict:
             "include_stocks": bool(p["include_stocks"]),
             "include_index_etfs": bool(p["include_index_etfs"]),
             "include_sector_etfs": bool(p["include_sector_etfs"]),
+            "include_selected_funds": bool(p["include_selected_funds"]),
+            "selected_fund_tickers": sorted(selected_fund_tickers),
+            "include_lower_confidence_selected_funds": bool(
+                p.get("include_lower_confidence_selected_funds", True)
+            ),
             "fund_min_drop_pct": fund_min_drop,
             "fund_min_stretch_sigma": fund_min_stretch,
             "fund_min_aum": fund_min_aum,
