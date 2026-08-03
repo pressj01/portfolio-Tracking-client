@@ -4,6 +4,7 @@ import {
   buildScannerStrategyPayload,
   buildScannerTrade,
   buildTrackedTrade,
+  hydrateTrackedTradeLegs,
 } from './optionTradeHandoff.js'
 
 const expiration = '2026-09-11'
@@ -170,4 +171,24 @@ test('adds linked account stock to a tracked covered-call risk graph', () => {
   assert.equal(trade.legs[0].entry_price, 475.25)
   assert.equal(trade.legs[1].opt_type, 'CALL')
   assert.equal(trade.stock_coverage.covered, true)
+})
+
+test('hydrates tracked legs with live IV while preserving actual fills', () => {
+  const legs = [
+    { opt_type: 'PUT', strike: 265, expiration, entry_price: 2.9833, iv: 0.2, delta: null },
+    { opt_type: 'PUT', strike: 255, expiration, entry_price: 2.0866, iv: 0.2, delta: null },
+  ]
+  const hydrated = hydrateTrackedTradeLegs(legs, {
+    [expiration]: {
+      puts: [
+        { strike: 265, mid: 2.93, iv: 0.468, delta: -0.099 },
+        { strike: 255, mid: 2.015, iv: 0.484, delta: -0.070 },
+      ],
+    },
+  })
+
+  assert.deepEqual(hydrated.map(leg => leg.entry_price), [2.9833, 2.0866])
+  assert.deepEqual(hydrated.map(leg => leg.iv), [0.468, 0.484])
+  assert.deepEqual(hydrated.map(leg => leg.market_price), [2.93, 2.015])
+  assert.ok(hydrated.every(leg => leg.iv_source === 'live_chain'))
 })

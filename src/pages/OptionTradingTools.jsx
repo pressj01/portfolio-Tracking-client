@@ -6,7 +6,7 @@ import { assignBrokerImportSides, mapBrokerOptionUnderlying, parseBrokerOptionDe
 import { chartTheme } from '../utils/chartTheme'
 import { riskChartViewRevision } from '../utils/optionsRiskChart'
 import { resizeOptionStructure } from '../utils/optionsStrategy'
-import { scannerTradeKey, takeScannerTrade } from '../utils/optionTradeHandoff'
+import { hydrateTrackedTradeLegs, scannerTradeKey, takeScannerTrade } from '../utils/optionTradeHandoff'
 import {
   applyVolatilitySurfaceShock,
   buildVolatilityScenarioLeg,
@@ -1282,6 +1282,10 @@ export default function OptionTradingTools() {
       loadMonthChain(expiration).catch(error => setMarketError(error.message))
     })
   }, [activeOptionLegs, monthChains, loadMonthChain])
+  useEffect(() => {
+    if (scannerTrade?.entry_source !== 'actual_fills') return
+    setLegs(previous => hydrateTrackedTradeLegs(previous, monthChains))
+  }, [scannerTrade?.entry_source, monthChains])
   const probabilityAnchor = useMemo(() => {
     const selected = activeOptionLegs.find(leg => leg.local_id === probabilityAnchorId)
     if (selected) return selected

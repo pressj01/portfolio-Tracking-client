@@ -397,6 +397,39 @@ export function buildTrackedTrade(row) {
   }
 }
 
+/** Apply current chain IV/Greeks without replacing the trade's actual entry fills. */
+export function hydrateTrackedTradeLegs(legs, chainsByExpiration) {
+  if (!Array.isArray(legs) || !chainsByExpiration) return legs
+  let changed = false
+  const hydrated = legs.map(leg => {
+    if (String(leg?.opt_type || '').toUpperCase() === 'STOCK') return leg
+    const chain = chainsByExpiration[leg?.expiration]
+    const contracts = String(leg?.opt_type || '').toUpperCase() === 'PUT'
+      ? chain?.puts || []
+      : chain?.calls || []
+    const contract = contracts.find(item => Number(item?.strike) === Number(leg?.strike))
+    const marketIv = num(contract?.iv)
+    if (!contract || marketIv == null || marketIv <= 0) return leg
+    const marketDelta = num(contract.delta)
+    const marketPrice = num(contract.mid) ?? num(contract.last)
+    if (
+      Number(leg.iv) === marketIv
+      && leg.delta === marketDelta
+      && leg.market_price === marketPrice
+      && leg.iv_source === 'live_chain'
+    ) return leg
+    changed = true
+    return {
+      ...leg,
+      iv: marketIv,
+      delta: marketDelta,
+      market_price: marketPrice,
+      iv_source: 'live_chain',
+    }
+  })
+  return changed ? hydrated : legs
+}
+
 /** Stage an account trade for Strategy Lab and preserve a return path. */
 export function stageTrackedTrade(row, returnTo = '/option-trades') {
   const built = buildTrackedTrade(row)
