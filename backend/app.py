@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import time
+import threading
 import sqlite3
 import json
 import hashlib
@@ -104,6 +105,19 @@ from dividend_safety import (
 )
 from accumulation_sim import run_accumulation_comparison
 
+# yfinance stashes each download's frames in a module-level dict keyed by ticker
+# ALONE (yfinance.shared._DFS) — the date range is not part of the key. Two
+# yf.download calls running concurrently for overlapping tickers therefore read
+# each other's frames: ask for the Dashboard's 6M window while a 1Y download is
+# still in flight and BOTH come back holding the 1Y frame, so the grade / beta /
+# risk-ratio cards quietly report the wrong period instead of recalculating.
+# Serialize the yf.download calls — they are the only writers of that shared
+# state, and nothing in app.py fans them out across threads, so the only requests
+# that ever wait are the genuinely concurrent ones that would otherwise corrupt
+# each other.
+_YF_DOWNLOAD_LOCK = threading.Lock()
+
+
 def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     """Drop-in replacement for yf.download that batches large ticker lists.
 
@@ -126,7 +140,8 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     # Do NOT default group_by — preserve caller's intent
 
     if len(tickers) <= chunk_size:
-        return yf.download(tickers if len(tickers) > 1 else tickers[0], **kwargs)
+        with _YF_DOWNLOAD_LOCK:
+            return yf.download(tickers if len(tickers) > 1 else tickers[0], **kwargs)
 
     # Multi-chunk path: use caller's group_by (if any) in each chunk.
     # Single-ticker chunks return flat columns and must be normalized to match
@@ -139,7 +154,8 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
             _time.sleep(1)
         chunk = tickers[i:i + chunk_size]
         try:
-            raw = yf.download(chunk if len(chunk) > 1 else chunk[0], **kwargs)
+            with _YF_DOWNLOAD_LOCK:
+                raw = yf.download(chunk if len(chunk) > 1 else chunk[0], **kwargs)
             if not raw.empty:
                 if len(chunk) == 1 and not isinstance(raw.columns, pd.MultiIndex):
                     if caller_group_by == "ticker":
@@ -15740,7 +15756,13 @@ def portfolio_summary_data():
     import warnings
     import numpy as np
     import yfinance as yf
-    from grading import ticker_score, grade_portfolio, letter_grade, _beta
+    from grading import (
+        ticker_score,
+        grade_portfolio,
+        letter_grade,
+        min_observations_for_window,
+        _beta,
+    )
     warnings.filterwarnings("ignore")
 
     is_agg, pids = get_profile_filter()
@@ -15917,6 +15939,17 @@ def portfolio_summary_data():
     ticker_risk = {}
     available = []
 
+    # The ratio helpers default to needing 30 daily observations, which is more
+    # than a short window can ever hold — a 1-month grade would blank every card
+    # on a technicality rather than grade the month the user picked. Scale the
+    # floor to the history this window actually downloaded. None means even the
+    # absolute floor is out of reach (the 7-day window is ~5 trading days), which
+    # the response reports so the UI can say so instead of showing empty cards.
+    window_observations = max(len(close.index) - 1, 0)
+    min_obs = min_observations_for_window(window_observations)
+    window_too_short = min_obs is None
+    effective_min_obs = min_obs if min_obs is not None else 10 ** 9
+
     def _blank_risk():
         return {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
 
@@ -15927,20 +15960,26 @@ def portfolio_summary_data():
         the portfolio-level regression), False otherwise. Always populates
         ticker_grades[t] and ticker_risk[t].
         """
-        if tc is None or len(tc) < 30:
+        if tc is None or len(tc) < effective_min_obs:
             ticker_grades[t] = {"grade": "N/A", "score": None}
             ticker_risk[t] = _blank_risk()
             return False
         try:
             tr = tc.pct_change().dropna()
-            score, *_ = ticker_score(tc, tr, bench_ret)
+            score, *_ = ticker_score(tc, tr, bench_ret, min_obs=effective_min_obs)
             ticker_grades[t] = {"grade": letter_grade(score), "score": score}
+            # _best_fit_beta already regresses on a 15-observation floor, which
+            # is exactly the shortest window this endpoint will grade, so it
+            # needs no scaling of its own.
             computed_beta, beta_benchmark = _best_fit_beta(tc, benchmark_closes)
             delta_up = delta_down = None
             if beta_benchmark:
                 beta_close = dict(benchmark_closes).get(beta_benchmark)
                 if beta_close is not None:
-                    delta_up, delta_down = _capture_deltas(tc, beta_close)
+                    delta_up, delta_down = _capture_deltas(
+                        tc, beta_close,
+                        min_days=min(10, max(3, effective_min_obs // 3)),
+                    )
             ticker_risk[t] = {
                 "beta": computed_beta,
                 "beta_benchmark": beta_benchmark,
@@ -16009,7 +16048,7 @@ def portfolio_summary_data():
             returns_df = close[available].pct_change().fillna(0)
             val_map = {r["ticker"]: float(r["current_value"] or 0) for r in rows}
             weights_arr = np.array([val_map.get(t, 0.0) for t in available])
-            pm = grade_portfolio(returns_df, weights_arr, bench_ret)
+            pm = grade_portfolio(returns_df, weights_arr, bench_ret, min_obs=effective_min_obs)
             portfolio_grade_info = pm.get("grade", {})
             portfolio_grade_info["sharpe"] = pm.get("sharpe")
             portfolio_grade_info["sortino"] = pm.get("sortino")
@@ -16022,7 +16061,10 @@ def portfolio_summary_data():
             benchmark_betas = {}
             if portfolio_daily is not None:
                 for benchmark_key, benchmark_ret in benchmark_returns.items():
-                    benchmark_betas[benchmark_key] = _beta(portfolio_daily, benchmark_ret) if benchmark_ret is not None else None
+                    benchmark_betas[benchmark_key] = (
+                        _beta(portfolio_daily, benchmark_ret, min_obs=effective_min_obs)
+                        if benchmark_ret is not None else None
+                    )
             portfolio_grade_info["beta_nasdaq"] = benchmark_betas.get("nasdaq")
             portfolio_grade_info["benchmark_betas"] = benchmark_betas
         except Exception:
@@ -16053,10 +16095,14 @@ def portfolio_summary_data():
                     portfolio_grade_info[_k] = cached_pg.get(_k)
             benchmark_betas_present = True
 
+    # Prefer the graded tickers' own span, but fall back to the downloaded frame
+    # so a window that was too short to grade still reports the dates it covered
+    # — otherwise the UI is left rendering "Loading dates..." forever for a
+    # request that already finished.
     actual_range = (
         close[available].dropna(how="all")
         if available
-        else pd.DataFrame()
+        else close.dropna(how="all")
     )
     actual_start_date = (
         pd.Timestamp(actual_range.index[0]).strftime("%Y-%m-%d")
@@ -16074,6 +16120,9 @@ def portfolio_summary_data():
     portfolio_grade_info["requested_end_date"] = period_range["end_date"]
     portfolio_grade_info["actual_start_date"] = actual_start_date
     portfolio_grade_info["actual_end_date"] = actual_end_date
+    portfolio_grade_info["window_observations"] = window_observations
+    portfolio_grade_info["min_observations"] = min_obs
+    portfolio_grade_info["window_too_short"] = window_too_short
     response = {
         "ticker_grades": ticker_grades,
         "ticker_risk": ticker_risk,
@@ -16085,6 +16134,9 @@ def portfolio_summary_data():
         "requested_end_date": period_range["end_date"],
         "actual_start_date": actual_start_date,
         "actual_end_date": actual_end_date,
+        "window_observations": window_observations,
+        "min_observations": min_obs,
+        "window_too_short": window_too_short,
     }
     # Only cache a usable result. Caching an empty grade from a transient/partial
     # yfinance download would pin blank tiles for the full 30-min TTL, so the
@@ -16093,8 +16145,14 @@ def portfolio_summary_data():
     # as partial too, so a dropped SPY/QQQ doesn't pin a blank Beta card for the
     # full TTL — the next load retries the benchmark download. A genuinely
     # ungradeable portfolio (<2 priceable holdings) is still cached so we don't
-    # re-download on every load.
-    cacheable = (portfolio_grade_info and benchmark_betas_present) or len(tickers) < 2
+    # re-download on every load. A window too short to carry the ratios is cached
+    # for the same reason — that verdict is a property of the window, not a
+    # transient download failure, so re-downloading on every click buys nothing.
+    cacheable = (
+        (portfolio_grade_info and benchmark_betas_present)
+        or window_too_short
+        or len(tickers) < 2
+    )
     if cacheable:
         _PORTFOLIO_SUMMARY_CACHE[cache_key] = (time.time(), response)
     return jsonify(response)
