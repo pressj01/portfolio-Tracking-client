@@ -164,6 +164,270 @@ function SubcategoryModal({ subModal, onSave, onCancel }) {
   )
 }
 
+const norm = (s) => String(s || '').trim().toLowerCase()
+const subKey = (catName, subName) => `${norm(catName)}›${norm(subName)}`
+
+// Copying is additive by design, so an existing category always wins. Replacing
+// one with this account's version is a deliberate two-step: delete it there first.
+const REPLACE_HINT = 'To use this account’s version instead, delete the category in that account first, then copy again.'
+
+function CopyCategoriesModal({ pf, categories, sourceName, onCancel, onDone }) {
+  const [accounts, setAccounts] = useState(null) // null while loading
+  const [loadError, setLoadError] = useState(null)
+  const [pickedCats, setPickedCats] = useState(() => new Set(categories.map(c => c.id)))
+  const [pickedAccts, setPickedAccts] = useState(() => new Set())
+  const [includeSubs, setIncludeSubs] = useState(true)
+  const [includeTargets, setIncludeTargets] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let live = true
+    pf('/api/categories/copy-targets')
+      .then(async r => {
+        // A failed request must not read as "you have no other accounts".
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then(d => {
+        if (!live) return
+        if (!Array.isArray(d?.accounts)) throw new Error('bad payload')
+        setAccounts(d.accounts)
+      })
+      .catch(() => { if (live) { setAccounts([]); setLoadError('Could not load the other accounts.') } })
+    return () => { live = false }
+  }, [pf])
+
+  const toggle = (setter) => (id) => setter(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
+  const toggleCat = toggle(setPickedCats)
+  const toggleAcct = toggle(setPickedAccts)
+
+  const chosenCats = categories.filter(c => pickedCats.has(c.id))
+  const chosenAccts = (accounts || []).filter(a => pickedAccts.has(a.id))
+
+  // What each selected account is missing, so the button never promises work it
+  // will not do. Matches the backend: same-named categories are skipped whole,
+  // and only missing sub-categories are added underneath them.
+  const missingFor = (acct) => {
+    const have = new Set((acct.category_names || []).map(norm))
+    const haveSubs = new Set((acct.subcategory_keys || []).map(k => {
+      const [c, s] = String(k).split('›')
+      return subKey(c, s)
+    }))
+    let cats = 0, subs = 0, skipped = 0
+    chosenCats.forEach(c => {
+      have.has(norm(c.name)) ? skipped++ : cats++
+      if (includeSubs) {
+        (c.subcategories || []).forEach(s => {
+          if (!haveSubs.has(subKey(c.name, s.name))) subs++
+        })
+      }
+    })
+    return { cats, subs, skipped }
+  }
+
+  const totals = chosenAccts.reduce((acc, a) => {
+    const m = missingFor(a)
+    return { cats: acc.cats + m.cats, subs: acc.subs + m.subs, skipped: acc.skipped + m.skipped }
+  }, { cats: 0, subs: 0, skipped: 0 })
+
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
+  // Every picked account already has everything picked — copying would be a no-op.
+  const nothingToDo = chosenCats.length > 0 && chosenAccts.length > 0 && totals.cats === 0 && totals.subs === 0
+  const canSubmit = !busy && chosenCats.length > 0 && chosenAccts.length > 0 && !nothingToDo
+
+  const handleCopy = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await pf('/api/categories/copy-to-accounts', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category_ids: [...pickedCats],
+          target_profile_ids: [...pickedAccts],
+          include_subcategories: includeSubs,
+          include_targets: includeTargets,
+        }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setError(body.error || 'Could not copy the categories.')
+        return
+      }
+      const note = body.categories_skipped > 0 ? `\n\n${REPLACE_HINT}` : ''
+      onDone((body.message || 'Categories copied.') + note)
+    } catch (e) {
+      setError(e.message || 'Could not copy the categories.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const paneStyle = {
+    border: '1px solid var(--border)', background: 'var(--bg)', borderRadius: 6,
+    maxHeight: 260, overflowY: 'auto', padding: '0.4rem 0.5rem',
+  }
+  const rowStyle = { display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.22rem 0', fontSize: '0.85rem' }
+  const headStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.35rem' }
+  const labelStyle = { color: 'var(--text-dim)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.04em' }
+  const linkStyle = { background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.76rem', padding: 0 }
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-content" style={{ maxWidth: 780 }} onClick={e => e.stopPropagation()}>
+        <button className="modal-close" onClick={onCancel}>&times;</button>
+        <h2 style={{ marginBottom: '0.35rem' }}>Copy Categories to Accounts</h2>
+        <p style={{ color: 'var(--text-muted)', marginTop: 0, marginBottom: '1rem', fontSize: '0.85rem' }}>
+          Copies the category structure from <strong style={{ color: 'var(--accent-bright)' }}>{sourceName || 'this account'}</strong>.
+          No holdings are assigned — you still assign tickers inside each account. Categories that already
+          exist there are left exactly as they are.
+        </p>
+
+        {error && <div className="alert alert-error" style={{ marginBottom: '0.75rem' }}>{error}</div>}
+
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 300px', minWidth: 260 }}>
+            <div style={headStyle}>
+              <span style={labelStyle}>Categories to copy</span>
+              <button style={linkStyle} onClick={() => setPickedCats(
+                pickedCats.size === categories.length ? new Set() : new Set(categories.map(c => c.id))
+              )}>
+                {pickedCats.size === categories.length ? 'Clear all' : 'Select all'}
+              </button>
+            </div>
+            <div style={paneStyle}>
+              {categories.length === 0 && (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.84rem', padding: '0.4rem 0' }}>
+                  This account has no categories yet.
+                </div>
+              )}
+              {categories.map(c => (
+                <div key={c.id}>
+                  <label style={{ ...rowStyle, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={pickedCats.has(c.id)} onChange={() => toggleCat(c.id)} />
+                    <span style={{ fontWeight: 600 }}>{c.name}</span>
+                    {c.target_pct != null && (
+                      <span style={{ color: 'var(--text-dim-2)', fontSize: '0.74rem' }}>
+                        target {Number(c.target_pct).toFixed(1)}%
+                      </span>
+                    )}
+                  </label>
+                  {includeSubs && (c.subcategories || []).map(s => (
+                    <div key={s.id} style={{
+                      ...rowStyle, paddingLeft: '1.7rem', fontSize: '0.78rem',
+                      color: pickedCats.has(c.id) ? 'var(--text-muted)' : 'var(--text-dim-2)',
+                    }}>
+                      <span>&rsaquo; {s.name}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ flex: '1 1 300px', minWidth: 260 }}>
+            <div style={headStyle}>
+              <span style={labelStyle}>Copy into accounts</span>
+              {accounts?.length > 0 && (
+                <button style={linkStyle} onClick={() => setPickedAccts(
+                  pickedAccts.size === accounts.length ? new Set() : new Set(accounts.map(a => a.id))
+                )}>
+                  {pickedAccts.size === accounts.length ? 'Clear all' : 'Select all'}
+                </button>
+              )}
+            </div>
+            <div style={paneStyle}>
+              {accounts === null && <div style={{ padding: '0.6rem 0', textAlign: 'center' }}><span className="spinner" /></div>}
+              {loadError && <div style={{ color: 'var(--neg)', fontSize: '0.84rem', padding: '0.4rem 0' }}>{loadError}</div>}
+              {accounts?.length === 0 && !loadError && (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.84rem', padding: '0.4rem 0' }}>
+                  There are no other accounts to copy into.
+                </div>
+              )}
+              {(accounts || []).map(a => {
+                const m = missingFor(a)
+                return (
+                  <label key={a.id} style={{ ...rowStyle, cursor: 'pointer', justifyContent: 'space-between' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+                      <input type="checkbox" checked={pickedAccts.has(a.id)} onChange={() => toggleAcct(a.id)} />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.name}</span>
+                    </span>
+                    {chosenCats.length > 0 && (
+                      <span style={{ fontSize: '0.74rem', whiteSpace: 'nowrap', display: 'flex', gap: '0.4rem' }}>
+                        {m.cats > 0 && <span style={{ color: 'var(--amber)' }}>+{m.cats} new</span>}
+                        {m.cats > 0 && m.skipped > 0 && <span style={{ color: 'var(--text-dim-2)' }}>·</span>}
+                        {m.skipped > 0 && (
+                          <span style={{ color: 'var(--text-dim-2)' }}>
+                            {m.cats > 0 ? `${m.skipped} already there` : `already has all ${m.skipped}`}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap', margin: '0.9rem 0 0.6rem' }}>
+          <label style={{ ...rowStyle, cursor: 'pointer' }}>
+            <input type="checkbox" checked={includeSubs} onChange={e => setIncludeSubs(e.target.checked)} />
+            Include sub-categories
+          </label>
+          <label style={{ ...rowStyle, cursor: 'pointer' }}>
+            <input type="checkbox" checked={includeTargets} onChange={e => setIncludeTargets(e.target.checked)} />
+            <span>
+              Include target %
+              <span style={{ color: 'var(--text-dim-2)', fontSize: '0.75rem' }}>
+                {' '}— off means new categories arrive with no target
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <div style={{ border: '1px solid var(--border)', background: 'var(--bg)', borderRadius: 6, padding: '0.6rem 0.7rem', fontSize: '0.84rem' }}>
+          {chosenCats.length === 0 || chosenAccts.length === 0 ? (
+            <span style={{ color: 'var(--text-muted)' }}>Pick at least one category and one account.</span>
+          ) : nothingToDo ? (
+            <>
+              <div style={{ color: 'var(--pos-bright)', fontWeight: 600 }}>
+                {plural(chosenAccts.length, 'account', 'accounts')} already {chosenAccts.length === 1 ? 'has' : 'have'} every category you picked — nothing to copy.
+              </div>
+              <div style={{ color: 'var(--text-muted)', marginTop: '0.3rem' }}>{REPLACE_HINT}</div>
+            </>
+          ) : (
+            <>
+              <div style={{ color: 'var(--accent-bright)', fontWeight: 600 }}>
+                Creates {plural(totals.cats, 'category', 'categories')}
+                {includeSubs && ` and ${plural(totals.subs, 'sub-category', 'sub-categories')}`}
+                {' '}across {plural(chosenAccts.length, 'account', 'accounts')}.
+              </div>
+              {totals.skipped > 0 && (
+                <div style={{ color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                  {plural(totals.skipped, 'category', 'categories')} already {totals.skipped === 1 ? 'exists' : 'exist'} in {chosenAccts.length === 1 ? 'that account' : 'those accounts'} and will be skipped —
+                  {totals.skipped === 1 ? ' it keeps its' : ' they keep their'} own target %, sub-categories and holdings. Nothing is overwritten or removed. {REPLACE_HINT}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
+          <button className="btn btn-success" onClick={handleCopy} disabled={!canSubmit}>
+            {busy ? 'Copying…' : 'Copy Categories'}
+          </button>
+          <button className="btn btn-secondary" onClick={onCancel} disabled={busy}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function QualityDetailsModal({ row, onClose, fmt, fmtPct }) {
   if (!row) return null
   const tickers = row.quality?.tickers || []
@@ -500,7 +764,7 @@ function enrichCategoryData(categoryData, holdings = [], navCoverage = null) {
 
 export default function Categories() {
   const pf = useProfileFetch()
-  const { selection, profileId, isAggregate, currentProfileName } = useProfile()
+  const { selection, profileId, isAggregate, currentProfileName, profiles } = useProfile()
   const dialog = useDialog()
   const navigate = useNavigate()
   const [data, setData] = useState({ categories: [], unallocated: [], total_value: 0 })
@@ -524,11 +788,11 @@ export default function Categories() {
   })
   const [constraintsSeeded, setConstraintsSeeded] = useState(false)
   const [incomeFloorTouched, setIncomeFloorTouched] = useState(false)
+  const [showCopyModal, setShowCopyModal] = useState(false)
   const reloadSeq = useRef(0)
   const isOwnerProfile = !isAggregate && Number(profileId) === 1
-  // Only show "Push to Sub-accounts" when there are actually included sub-accounts
-  // to push to (owner-target-reference.profiles == include_in_owner accounts).
-  const hasSubaccounts = (data.owner_target_reference?.profiles?.length || 0) > 0
+  // "Copy to Accounts" only makes sense when there is somewhere else to copy into.
+  const hasOtherAccounts = (profiles?.length || 0) > 1
 
   const reload = useCallback(async () => {
     const seq = reloadSeq.current + 1
@@ -687,24 +951,10 @@ export default function Categories() {
     } catch (e) { setError(e.message) }
   }
 
-  const handlePushToSubaccounts = async () => {
-    const ok = await dialog.confirm(
-      'Push your categories and sub-categories (including target %) to every included sub-account?\n\n' +
-      'Same-named categories and sub-categories are matched and updated to your targets — existing ticker assignments are kept. Only sub-categories you no longer have are removed (their tickers fall back to unclassified within the category). Ticker→category assignments are never changed.'
-    )
-    if (!ok) return
+  const handleCopied = async (message) => {
+    setShowCopyModal(false)
     setError(null)
-    try {
-      const res = await pf('/api/categories/push-to-subaccounts', { method: 'POST' })
-      const body = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        setError(body.error || 'Could not push categories to sub-accounts.')
-        return
-      }
-      await dialog.alert(body.message || 'Categories pushed to sub-accounts.')
-    } catch (e) {
-      setError(e.message || 'Could not push categories to sub-accounts.')
-    }
+    await dialog.alert(message)
   }
 
   const handleDeleteSub = async (sub) => {
@@ -1123,14 +1373,24 @@ export default function Categories() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <h1>Categories</h1>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {isOwnerProfile && hasSubaccounts && (
-            <button className="btn btn-secondary" onClick={handlePushToSubaccounts} title="Copy your categories, sub-categories and targets down to every included sub-account">
-              Push to Sub-accounts
+          {hasOtherAccounts && data.categories.length > 0 && (
+            <button className="btn btn-secondary" onClick={() => setShowCopyModal(true)} title="Copy these categories into other accounts. Holdings are not assigned.">
+              Copy to Accounts…
             </button>
           )}
           <button className="btn btn-success" onClick={handleCreate}>+ New Category</button>
         </div>
       </div>
+
+      {showCopyModal && (
+        <CopyCategoriesModal
+          pf={pf}
+          categories={data.categories}
+          sourceName={currentProfileName}
+          onCancel={() => setShowCopyModal(false)}
+          onDone={handleCopied}
+        />
+      )}
 
       {error && <div className="alert alert-error">{error}</div>}
 

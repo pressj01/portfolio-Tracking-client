@@ -19715,106 +19715,202 @@ def delete_subcategory(sub_id):
     return jsonify({"message": "Sub-category deleted"})
 
 
-@app.route("/api/categories/push-to-subaccounts", methods=["POST"])
-def push_categories_to_subaccounts():
-    """Owner-only: copy the Owner's categories + sub-categories (incl. targets)
-    down to every included sub-account. Same-named categories are overwritten:
-    their target is reset to the Owner's and their sub-categories are rebuilt to
-    match the Owner's, so any ticker assigned to a removed sub-category falls back
-    to unclassified within its parent category. Ticker→category assignments and
-    categories the Owner does not define are left untouched."""
-    if _request_aggregate_id() is not None or get_profile_id() != 1:
-        return jsonify({"error": "Only the Owner profile can push categories to sub-accounts"}), 403
+@app.route("/api/categories/copy-targets", methods=["GET"])
+def category_copy_targets():
+    """Every other account you can copy categories into, with the category and
+    sub-category names it already has. Powers the account picker and its
+    "already has N of M" badge."""
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
+    source_id = get_profile_id()
+    conn = get_connection()
+    profiles = conn.execute(
+        "SELECT id, name, include_in_owner FROM profiles WHERE id != ? ORDER BY id",
+        (source_id,),
+    ).fetchall()
+    cat_names_by_profile = {}
+    for r in conn.execute("SELECT profile_id, name FROM categories").fetchall():
+        cat_names_by_profile.setdefault(r["profile_id"], []).append(r["name"])
+    # Sub-categories are keyed by "category name › sub name" so the frontend can
+    # tell which of the source's sub-categories a target account is missing
+    # without needing that account's category ids.
+    sub_keys_by_profile = {}
+    for r in conn.execute(
+        "SELECT s.profile_id AS profile_id, c.name AS cat_name, s.name AS sub_name "
+        "FROM subcategories s JOIN categories c ON c.id = s.category_id"
+    ).fetchall():
+        sub_keys_by_profile.setdefault(r["profile_id"], []).append(
+            f"{r['cat_name']}›{r['sub_name']}"
+        )
+    conn.close()
+    return jsonify({
+        "source_profile_id": source_id,
+        "accounts": [
+            {
+                "id": p["id"],
+                "name": p["name"],
+                "include_in_owner": bool(p["include_in_owner"]),
+                "category_names": cat_names_by_profile.get(p["id"], []),
+                "subcategory_keys": sub_keys_by_profile.get(p["id"], []),
+            }
+            for p in profiles
+        ],
+    })
+
+
+@app.route("/api/categories/copy-to-accounts", methods=["POST"])
+def copy_categories_to_accounts():
+    """Copy selected categories (optionally their sub-categories and targets)
+    from the current account into any other accounts.
+
+    Strictly additive: a same-named category in a target account is left exactly
+    as it is — its target is never rewritten and its sub-categories are never
+    deleted; only sub-categories it is missing get added. Ticker→category
+    assignments are never touched, so holdings still have to be assigned inside
+    each account."""
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
+    source_id = get_profile_id()
+    data = request.get_json() or {}
+
+    def _ints(raw):
+        out = []
+        for v in raw or []:
+            try:
+                out.append(int(v))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    category_ids = _ints(data.get("category_ids"))
+    target_ids = _ints(data.get("target_profile_ids"))
+    include_subs = bool(data.get("include_subcategories", True))
+    include_targets = bool(data.get("include_targets", False))
+
+    if not category_ids:
+        return jsonify({"error": "Select at least one category to copy"}), 400
+    target_ids = [pid for pid in dict.fromkeys(target_ids) if pid != source_id]
+    if not target_ids:
+        return jsonify({"error": "Select at least one account to copy into"}), 400
 
     conn = get_connection()
-    source_ids = _get_owner_source_profile_ids(conn)
-    if not source_ids:
-        conn.close()
-        return jsonify({"error": "No included sub-accounts to push to"}), 400
-
-    owner_cats = conn.execute(
-        "SELECT id, name, target_pct, sort_order FROM categories WHERE profile_id = 1 ORDER BY sort_order, name"
+    cph = ",".join("?" * len(category_ids))
+    src_cats = conn.execute(
+        f"SELECT id, name, target_pct FROM categories WHERE profile_id = ? AND id IN ({cph}) "
+        "ORDER BY sort_order, name",
+        [source_id, *category_ids],
     ).fetchall()
-    owner_subs_by_cat = {}
-    for s in conn.execute(
-        "SELECT category_id, name, target_pct, sort_order FROM subcategories WHERE profile_id = 1 ORDER BY sort_order, name"
-    ).fetchall():
-        owner_subs_by_cat.setdefault(s["category_id"], []).append(s)
+    if not src_cats:
+        conn.close()
+        return jsonify({"error": "No matching categories in this account"}), 404
 
-    cats_created = 0
-    cats_overwritten = 0
-    subs_pushed = 0
-    for pid in source_ids:
-        for oc in owner_cats:
-            name = (oc["name"] or "").strip()
+    src_subs_by_cat = {}
+    if include_subs:
+        for s in conn.execute(
+            f"SELECT category_id, name, target_pct FROM subcategories "
+            f"WHERE profile_id = ? AND category_id IN ({cph}) ORDER BY sort_order, name",
+            [source_id, *category_ids],
+        ).fetchall():
+            src_subs_by_cat.setdefault(s["category_id"], []).append(s)
+
+    tph = ",".join("?" * len(target_ids))
+    valid_targets = {
+        r["id"]: r["name"]
+        for r in conn.execute(
+            f"SELECT id, name FROM profiles WHERE id IN ({tph})", target_ids
+        ).fetchall()
+    }
+    if not valid_targets:
+        conn.close()
+        return jsonify({"error": "No matching accounts"}), 404
+
+    results = []
+    cats_created = subs_created = cats_skipped = 0
+    for pid in target_ids:
+        if pid not in valid_targets:
+            continue
+        next_sort = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM categories WHERE profile_id = ?",
+            (pid,),
+        ).fetchone()["n"]
+        acct_cats = acct_subs = acct_skipped = 0
+        for sc in src_cats:
+            name = (sc["name"] or "").strip()
             if not name:
                 continue
-            owner_subs = [s for s in owner_subs_by_cat.get(oc["id"], []) if (s["name"] or "").strip()]
-            owner_sub_names = {(s["name"] or "").strip() for s in owner_subs}
+            # Case-insensitive: the UNIQUE(name, profile_id) index would happily
+            # accept "anchors" next to an existing "Anchors", which is a duplicate
+            # bucket from the user's point of view.
             existing = conn.execute(
-                "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
+                "SELECT id FROM categories WHERE name = ? COLLATE NOCASE AND profile_id = ?",
                 (name, pid),
             ).fetchone()
             if existing:
+                # Leave the account's own category and target alone.
                 cat_id = existing["id"]
-                conn.execute(
-                    "UPDATE categories SET target_pct = ?, sort_order = ? WHERE id = ? AND profile_id = ?",
-                    (oc["target_pct"], oc["sort_order"], cat_id, pid),
-                )
-                cats_overwritten += 1
-                # Existing sub-categories in this sub-account, keyed by name.
-                existing_subs = {
-                    (r["name"] or "").strip(): r["id"]
-                    for r in conn.execute(
-                        "SELECT id, name FROM subcategories WHERE category_id = ? AND profile_id = ?",
-                        (cat_id, pid),
-                    ).fetchall()
-                }
-                # Overwrite: remove only the sub-categories the Owner no longer has.
-                # Their tickers fall back to unclassified within the parent category.
-                stale_ids = [sid for sname, sid in existing_subs.items() if sname not in owner_sub_names]
-                if stale_ids:
-                    sph = ",".join("?" * len(stale_ids))
-                    conn.execute(
-                        f"UPDATE ticker_categories SET subcategory_id = NULL WHERE profile_id = ? AND subcategory_id IN ({sph})",
-                        [pid, *stale_ids],
-                    )
-                    conn.execute(
-                        f"DELETE FROM subcategories WHERE profile_id = ? AND id IN ({sph})",
-                        [pid, *stale_ids],
-                    )
+                acct_skipped += 1
             else:
                 cur = conn.execute(
                     "INSERT INTO categories (name, target_pct, profile_id, sort_order) VALUES (?, ?, ?, ?)",
-                    (name, oc["target_pct"], pid, oc["sort_order"]),
+                    (name, sc["target_pct"] if include_targets else None, pid, next_sort),
                 )
                 cat_id = cur.lastrowid
-                cats_created += 1
-                existing_subs = {}
-            # Upsert the Owner's sub-categories BY NAME. Matching same-named
-            # sub-categories keep their id, so existing ticker -> sub-category
-            # assignments in the sub-account are preserved (only the target is synced).
-            for os in owner_subs:
-                sub_name = (os["name"] or "").strip()
-                if sub_name in existing_subs:
-                    conn.execute(
-                        "UPDATE subcategories SET target_pct = ?, sort_order = ? WHERE id = ? AND profile_id = ?",
-                        (os["target_pct"], os["sort_order"], existing_subs[sub_name], pid),
-                    )
-                else:
-                    conn.execute(
-                        "INSERT INTO subcategories (category_id, name, target_pct, profile_id, sort_order) VALUES (?, ?, ?, ?, ?)",
-                        (cat_id, sub_name, os["target_pct"], pid, os["sort_order"]),
-                    )
-                subs_pushed += 1
+                next_sort += 1
+                acct_cats += 1
+            src_subs = [s for s in src_subs_by_cat.get(sc["id"], []) if (s["name"] or "").strip()]
+            if not src_subs:
+                continue
+            existing_sub_names = {
+                (r["name"] or "").strip().lower()
+                for r in conn.execute(
+                    "SELECT name FROM subcategories WHERE category_id = ? AND profile_id = ?",
+                    (cat_id, pid),
+                ).fetchall()
+            }
+            next_sub_sort = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM subcategories "
+                "WHERE category_id = ? AND profile_id = ?",
+                (cat_id, pid),
+            ).fetchone()["n"]
+            for ss in src_subs:
+                sub_name = (ss["name"] or "").strip()
+                if sub_name.lower() in existing_sub_names:
+                    continue  # additive only — never re-target an existing sub-category
+                conn.execute(
+                    "INSERT INTO subcategories (category_id, name, target_pct, profile_id, sort_order) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (cat_id, sub_name, ss["target_pct"] if include_targets else None, pid, next_sub_sort),
+                )
+                next_sub_sort += 1
+                acct_subs += 1
+        cats_created += acct_cats
+        subs_created += acct_subs
+        cats_skipped += acct_skipped
+        results.append({
+            "profile_id": pid,
+            "name": valid_targets[pid],
+            "categories_created": acct_cats,
+            "subcategories_created": acct_subs,
+            "categories_skipped": acct_skipped,
+        })
     conn.commit()
     conn.close()
+
+    parts = [f"Created {cats_created} categor{'y' if cats_created == 1 else 'ies'}"]
+    if include_subs:
+        parts.append(f"{subs_created} sub-categor{'y' if subs_created == 1 else 'ies'}")
+    msg = " and ".join(parts) + f" across {len(results)} account{'' if len(results) == 1 else 's'}."
+    if cats_skipped:
+        msg += f" {cats_skipped} already existed and were left unchanged."
     return jsonify({
-        "message": f"Pushed {len(owner_cats)} categories to {len(source_ids)} sub-account(s)",
-        "subaccounts": len(source_ids),
+        "message": msg,
+        "accounts": len(results),
         "categories_created": cats_created,
-        "categories_overwritten": cats_overwritten,
-        "subcategories_pushed": subs_pushed,
+        "subcategories_created": subs_created,
+        "categories_skipped": cats_skipped,
+        "results": results,
     })
 
 
