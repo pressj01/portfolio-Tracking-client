@@ -515,7 +515,10 @@ export default function DividendCalendar() {
       if (filter === 'upcoming') return d >= today
       if (filter === 'next30') return d >= today && d <= next30end
       return true
-    })
+    }).sort((a, b) => (
+      (a.date || '').localeCompare(b.date || '')
+      || (a.ticker || '').localeCompare(b.ticker || '')
+    ))
   }, [events, filter, today])
 
   const optimization = useMemo(() => buildOptimization(events, today), [events, today])

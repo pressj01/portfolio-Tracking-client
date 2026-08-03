@@ -11479,6 +11479,7 @@ def _action_item(items, kind, priority, title, detail, route, **extra):
     priority_rank = {"critical": 0, "warning": 1, "info": 2, "success": 3}
     items.append({
         "id": extra.pop("id", f"{kind}-{len(items) + 1}"),
+        "can_complete": bool(extra.pop("can_complete", False)),
         "kind": kind,
         "priority": priority,
         "priority_rank": priority_rank.get(priority, 9),
@@ -11499,6 +11500,14 @@ def _action_center_profile_info(conn):
     names = {r["id"]: r["name"] for r in rows}
     profile_name = "Aggregate" if is_agg else names.get(pids[0], "Portfolio")
     return is_agg, pids, names, profile_name
+
+
+def _action_center_scope_key(is_agg, pids):
+    """Return the profile or aggregate scope that owns an action completion."""
+    aggregate_id = _request_aggregate_id()
+    if is_agg and aggregate_id is not None:
+        return f"aggregate:{aggregate_id}"
+    return f"profile:{int(pids[0]) if pids else 1}"
 
 
 def _action_center_refresh_profile_ids(conn, is_agg, pids):
@@ -11582,6 +11591,7 @@ def action_center():
                 "/holdings",
                 cta="Refresh Prices & Divs",
                 metric=oldest,
+                id="refresh-market-data",
             )
 
         upcoming = []
@@ -11589,6 +11599,7 @@ def action_center():
             iso, days = _action_days_from_today(h.get("div_pay_date"), today)
             if iso and days is not None and 0 <= days <= 14:
                 upcoming.append({
+                    "profile_id": h["profile_id"],
                     "ticker": h["ticker"],
                     "date": iso,
                     "days": days,
@@ -11607,6 +11618,7 @@ def action_center():
                 ticker=ev["ticker"],
                 date=ev["date"],
                 metric=ev["days"],
+                id=f"dividend-payment-{ev['profile_id']}-{ev['ticker']}-{ev['date']}",
             )
 
         missing_meta = [
@@ -11632,6 +11644,8 @@ def action_center():
                 "/holdings",
                 cta="Review holdings",
                 metric=len(missing_meta),
+                id="complete-dividend-metadata",
+                can_complete=True,
             )
 
         if total_monthly_income > 0 and holdings:
@@ -11652,6 +11666,8 @@ def action_center():
                     "/dividends",
                     ticker=top_income["ticker"],
                     metric=top_income_pct,
+                    id=f"income-concentration-{top_income['profile_id']}-{top_income['ticker']}",
+                    can_complete=True,
                 )
 
         if total_value > 0:
@@ -11692,6 +11708,8 @@ def action_center():
                     "/categories",
                     cta="Assign categories",
                     metric=unallocated_value,
+                    id="assign-unallocated-holdings",
+                    can_complete=True,
                 )
             for _, drift, category, actual, target, value in sorted(drift_rows, reverse=True)[:4]:
                 direction = "over" if drift > 0 else "under"
@@ -11704,6 +11722,8 @@ def action_center():
                     "/rebalance-wizard",
                     cta="Open Rebalance Wizard",
                     metric=abs(drift),
+                    id=f"allocation-drift-{re.sub(r'[^a-z0-9]+', '-', category.lower()).strip('-')}",
+                    can_complete=True,
                 )
 
         near_long_term = []
@@ -11714,9 +11734,9 @@ def action_center():
             held_days = (today - datetime.date.fromisoformat(iso)).days
             days_left = 366 - held_days
             if 0 <= days_left <= 45:
-                near_long_term.append((days_left, h))
+                near_long_term.append((days_left, h, iso))
         near_long_term.sort(key=lambda pair: pair[0])
-        for days_left, h in near_long_term[:3]:
+        for days_left, h, purchase_iso in near_long_term[:3]:
             _action_item(
                 items,
                 "tax",
@@ -11726,6 +11746,7 @@ def action_center():
                 "/tax-report",
                 ticker=h["ticker"],
                 metric=days_left,
+                id=f"long-term-status-{h['profile_id']}-{h['ticker']}-{purchase_iso}",
             )
 
         year_start = today.replace(month=1, day=1).isoformat()
@@ -11749,6 +11770,8 @@ def action_center():
                 "/tax-report",
                 cta="Open Tax Report",
                 metric=abs(realized),
+                id=f"review-realized-gains-{today.year}",
+                can_complete=True,
             )
 
         plan_rows = conn.execute(
@@ -11782,6 +11805,8 @@ def action_center():
                     metric=pending_work,
                     plan_id=row["id"],
                     updated_at=row["updated_at"],
+                    id=f"rebalance-plan-{row['id']}",
+                    can_complete=True,
                 )
 
         # Tax-loss harvest plans (status='planned')
@@ -11810,6 +11835,8 @@ def action_center():
                 cta="Open Tax-Loss Harvest",
                 metric=tax_saved,
                 plan_id=pr["id"],
+                id=f"tax-loss-plan-{pr['id']}",
+                can_complete=True,
             )
 
         if not items and holdings:
@@ -11821,11 +11848,30 @@ def action_center():
                 "Current data did not surface stale refreshes, large allocation drift, metadata gaps, or unfinished rebalance work.",
                 "/",
                 metric=0,
+                id="all-clear",
             )
 
         items.sort(key=lambda item: (item["priority_rank"], -float(item.get("metric") or 0), item["title"]))
         for item in items:
             item.pop("priority_rank", None)
+
+        scope_key = _action_center_scope_key(is_agg, pids)
+        completed_rows = conn.execute(
+            """SELECT action_id, completed_at
+               FROM action_center_completions
+               WHERE scope_key = ?""",
+            (scope_key,),
+        ).fetchall()
+        completed_at = {row["action_id"]: row["completed_at"] for row in completed_rows}
+        completed_items = [
+            {**item, "completed": True, "completed_at": completed_at[item["id"]]}
+            for item in items
+            if item["can_complete"] and item["id"] in completed_at
+        ]
+        items = [
+            item for item in items
+            if not (item["can_complete"] and item["id"] in completed_at)
+        ]
         counts = {}
         for item in items:
             counts[item["priority"]] = counts.get(item["priority"], 0) + 1
@@ -11836,10 +11882,61 @@ def action_center():
             "total_value": round(total_value, 2),
             "monthly_income": round(total_monthly_income, 2),
             "item_count": len(items),
+            "completed_count": len(completed_items),
             "counts": counts,
             "as_of": today.isoformat(),
         }
-        return jsonify({"summary": summary, "items": items[:limit]})
+        return jsonify({
+            "summary": summary,
+            "items": items[:limit],
+            "completed_items": completed_items[:limit],
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/api/action-center/completions", methods=["POST"])
+def action_center_completion_create():
+    """Record that the user has completed a reviewable Action Center item."""
+    data = request.get_json(force=True, silent=True) or {}
+    action_id = str(data.get("action_id") or "").strip()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9:-]{0,119}", action_id):
+        return jsonify({"error": "A valid action ID is required."}), 400
+
+    is_agg, pids = get_profile_filter()
+    scope_key = _action_center_scope_key(is_agg, pids)
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO action_center_completions (scope_key, action_id)
+               VALUES (?, ?)
+               ON CONFLICT(scope_key, action_id)
+               DO UPDATE SET completed_at = CURRENT_TIMESTAMP""",
+            (scope_key, action_id),
+        )
+        conn.commit()
+        return jsonify({"ok": True, "action_id": action_id})
+    finally:
+        conn.close()
+
+
+@app.route("/api/action-center/completions/<action_id>", methods=["DELETE"])
+def action_center_completion_delete(action_id):
+    """Restore a completed Action Center item to the active list."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9:-]{0,119}", action_id):
+        return jsonify({"error": "A valid action ID is required."}), 400
+
+    is_agg, pids = get_profile_filter()
+    scope_key = _action_center_scope_key(is_agg, pids)
+    conn = get_connection()
+    try:
+        conn.execute(
+            """DELETE FROM action_center_completions
+               WHERE scope_key = ? AND action_id = ?""",
+            (scope_key, action_id),
+        )
+        conn.commit()
+        return jsonify({"ok": True, "action_id": action_id})
     finally:
         conn.close()
 
@@ -15244,7 +15341,7 @@ def upcoming_dividends():
                 "color": freq_colors.get(freq, "#7ecfff"),
             })
 
-    events.sort(key=lambda e: e["ex_date"])
+    events.sort(key=lambda e: (e["ex_date"], e["ticker"]))
     _cache_set(_UPCOMING_DIVIDENDS_CACHE, cache_key, events)
     return jsonify(events)
 
@@ -25300,7 +25397,9 @@ def _build_cal_events():
             "pay_estimated": pay_estimated,
         })
 
-    events.sort(key=lambda e: e["pay_date"])
+    # Calendar cards lead with the ex-dividend date, so keep the grid in that
+    # chronological order rather than ordering by the (secondary) pay date.
+    events.sort(key=lambda e: (e["date"], e["ticker"]))
     _cache_set(_DIVIDEND_CALENDAR_CACHE, cache_key, events)
     return events
 
@@ -25870,13 +25969,8 @@ def _build_earnings_events():
             except Exception:
                 pass
 
-    # Upcoming first (soonest first), then past (most recent first).
-    def _sort_key(ev):
-        if ev["is_upcoming"]:
-            return (0, ev["days_until"] if ev["days_until"] is not None else 9999)
-        return (1, -datetime.fromisoformat(ev["date"]).toordinal())
-
-    events.sort(key=_sort_key)
+    # Every calendar grid progresses from earlier to later dates, left to right.
+    events.sort(key=lambda ev: (ev["date"], ev["ticker"]))
     _cache_set(_EARNINGS_CALENDAR_CACHE, cache_key, events)
     return events
 

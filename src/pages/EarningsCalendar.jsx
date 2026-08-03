@@ -105,7 +105,10 @@ export default function EarningsCalendar() {
       if (filter === 'next30') return ev.is_upcoming && d <= next30end
       if (filter === 'past30') return !ev.is_upcoming && d >= past30start
       return true
-    })
+    }).sort((a, b) => (
+      (a.date || '').localeCompare(b.date || '')
+      || (a.ticker || '').localeCompare(b.ticker || '')
+    ))
   }, [events, filter, today])
 
   if (loading) return <div style={{ padding: '2rem', color: 'var(--text-dim)' }}>Loading earnings calendar...</div>

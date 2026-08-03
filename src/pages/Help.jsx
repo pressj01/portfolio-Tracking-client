@@ -566,6 +566,7 @@ function ActionCenterHelp() {
         <li><strong>Needs Review</strong> — shows only warning-priority items that need action.</li>
         <li><strong>Watch</strong> — shows info-priority items to monitor.</li>
         <li><strong>Clear</strong> — shows success-priority items that are in good shape.</li>
+        <li><strong>Completed</strong> — shows reviewable items you marked complete; use Restore to return one to the active list.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Action Items</h3>
@@ -577,6 +578,7 @@ function ActionCenterHelp() {
         <li><strong>Priority badge</strong> — Needs Review (warning), Watch (info), or Clear (success).</li>
         <li><strong>Title &amp; Detail</strong> — a plain-English description of the issue or observation.</li>
         <li><strong>Open button</strong> — navigates directly to the relevant page in the app so you can act on the item.</li>
+        <li><strong>Mark complete</strong> — available only for items that can be manually reviewed or finished. It removes the item from the active list while keeping it available in Completed.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Dashboard Preview</h3>
@@ -589,7 +591,8 @@ function ActionCenterHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When Action Items Are Generated</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Items are computed from the data already in the app — holdings, dividend history, category weights,
-        and income estimates. They are recalculated each time you open the Action Center or Dashboard.
+        and income estimates. They are recalculated each time you open the Action Center or Dashboard; completed
+        reviewable items stay hidden until you restore them.
         No manual refresh is needed; click <strong>Refresh Data</strong> (links to Holdings) if you want
         to ensure market data is current before reviewing items.
       </p>
@@ -2717,8 +2720,8 @@ function EarningsCalendarHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What the Page Shows</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Each holding with an earnings date appears as a card. Cards are sorted upcoming-first
-        (soonest at the top), then past earnings most-recent first. Each card contains:
+        Each holding with an earnings date appears as a card. Cards are sorted chronologically from
+        earlier to later dates, left to right. Each card contains:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>

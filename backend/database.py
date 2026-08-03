@@ -1245,6 +1245,19 @@ def ensure_tables_exist(conn=None):
         ON tax_loss_plan (profile_id, status)
     """)
 
+    # ── action_center_completions ───────────────────────────────────────────
+    # Stores user-completed Action Center work separately from the underlying
+    # portfolio signal.  This lets a reviewed item stay out of the active list
+    # without changing holdings, saved plans, or tax-loss records.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS action_center_completions (
+            scope_key     TEXT NOT NULL,
+            action_id     TEXT NOT NULL,
+            completed_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (scope_key, action_id)
+        )
+    """)
+
     # ── regime_predictions (Brier score tracking) ─────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS regime_predictions (

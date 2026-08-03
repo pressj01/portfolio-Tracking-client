@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { convertMoneyText, formatMoney } from '../utils/money'
@@ -8,6 +8,7 @@ const PRIORITY_LABEL = {
   warning: 'Needs Review',
   info: 'Watch',
   success: 'Clear',
+  completed: 'Completed',
 }
 
 const KIND_LABEL = {
@@ -30,23 +31,46 @@ function ActionSummaryCard({ label, value, sub, tone }) {
   )
 }
 
-function ActionItem({ item }) {
+function ActionItem({ item, onComplete, onRestore, busy }) {
   const kind = KIND_LABEL[item.kind] || item.kind || 'Portfolio'
   return (
-    <div className={`ac-item ac-${item.priority || 'info'}`}>
+    <div className={`ac-item ac-${item.priority || 'info'}${item.completed ? ' ac-completed' : ''}`}>
       <div className="ac-item-main">
         <div className="ac-item-top">
           <span className="ac-kind">{kind}</span>
           <span className={`ac-priority ${item.priority || 'info'}`}>
             {item.priority === 'warning' ? 'Needs review' : item.priority === 'success' ? 'Clear' : 'Watch'}
           </span>
+          {item.completed && <span className="ac-complete-status">Completed</span>}
         </div>
         <h2>{convertMoneyText(item.title)}</h2>
         <p>{convertMoneyText(item.detail)}</p>
       </div>
-      <NavLink className="btn btn-secondary ac-item-link" to={item.route || '/'}>
-        {item.cta || 'Open'}
-      </NavLink>
+      <div className="ac-item-actions">
+        {item.completed ? (
+          <button
+            type="button"
+            className="btn btn-secondary ac-complete-btn"
+            onClick={() => onRestore(item)}
+            disabled={busy}
+          >
+            {busy ? 'Saving...' : 'Restore'}
+          </button>
+        ) : item.can_complete ? (
+          <button
+            type="button"
+            className="btn btn-secondary ac-complete-btn"
+            onClick={() => onComplete(item)}
+            disabled={busy}
+            title="Mark this action complete and remove it from the active list"
+          >
+            {busy ? 'Saving...' : 'Mark complete'}
+          </button>
+        ) : null}
+        <NavLink className="btn btn-secondary ac-item-link" to={item.route || '/'}>
+          {item.cta || 'Open'}
+        </NavLink>
+      </div>
     </div>
   )
 }
@@ -58,6 +82,8 @@ export default function ActionCenter() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [filter, setFilter] = useState('all')
+  const [busyItemId, setBusyItemId] = useState(null)
+  const [refreshVersion, setRefreshVersion] = useState(0)
 
   useEffect(() => {
     let stale = false
@@ -79,18 +105,46 @@ export default function ActionCenter() {
         if (!stale) setLoading(false)
       })
     return () => { stale = true }
-  }, [pf, selection])
+  }, [pf, selection, refreshVersion])
 
   const items = data?.items || []
-  const filteredItems = useMemo(() => (
-    filter === 'all' ? items : items.filter(item => item.priority === filter)
-  ), [items, filter])
+  const completedItems = data?.completed_items || []
+  const filteredItems = filter === 'completed'
+    ? completedItems
+    : filter === 'all'
+      ? items
+      : items.filter(item => item.priority === filter)
 
   const counts = data?.summary?.counts || {}
   const warningCount = counts.warning || 0
   const infoCount = counts.info || 0
-  const successCount = counts.success || 0
   const portfolioName = data?.summary?.profile || currentProfileName
+
+  const updateCompletion = async (item, method) => {
+    setBusyItemId(item.id)
+    setError(null)
+    try {
+      const res = await pf(
+        method === 'complete'
+          ? '/api/action-center/completions'
+          : `/api/action-center/completions/${encodeURIComponent(item.id)}`,
+        method === 'complete'
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action_id: item.id }),
+            }
+          : { method: 'DELETE' },
+      )
+      const body = await res.json()
+      if (!res.ok || body.error) throw new Error(body.error || 'Could not update this action.')
+      setRefreshVersion(version => version + 1)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusyItemId(null)
+    }
+  }
 
   return (
     <div className="page action-center-page">
@@ -116,31 +170,44 @@ export default function ActionCenter() {
           </div>
 
           <div className="ac-filter-row" role="tablist" aria-label="Action priority filters">
-            {['all', 'warning', 'info', 'success'].map(key => (
-              <button
-                key={key}
-                type="button"
-                className={`tr-pbtn${filter === key ? ' tr-pbtn-active' : ''}`}
-                onClick={() => setFilter(key)}
-              >
-                {PRIORITY_LABEL[key]} {key !== 'all' ? `(${counts[key] || 0})` : `(${items.length})`}
-              </button>
-            ))}
+            {['all', 'warning', 'info', 'success', 'completed'].map(key => {
+              const count = key === 'all'
+                ? items.length
+                : key === 'completed'
+                  ? completedItems.length
+                  : counts[key] || 0
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={`tr-pbtn${filter === key ? ' tr-pbtn-active' : ''}`}
+                  onClick={() => setFilter(key)}
+                >
+                  {PRIORITY_LABEL[key]} ({count})
+                </button>
+              )
+            })}
           </div>
 
           {filteredItems.length === 0 ? (
             <div className="card ac-empty">
-              No action items match this filter.
+              {filter === 'completed'
+                ? 'No completed action items.'
+                : data.summary.holding_count
+                  ? 'No active action items match this filter.'
+                  : 'No holdings are available for this portfolio yet. Import or add holdings to begin generating action items.'}
             </div>
           ) : (
             <div className="ac-list">
-              {filteredItems.map(item => <ActionItem key={item.id} item={item} />)}
-            </div>
-          )}
-
-          {items.length === 0 && (
-            <div className="card ac-empty">
-              No holdings are available for this portfolio yet. Import or add holdings to begin generating action items.
+              {filteredItems.map(item => (
+                <ActionItem
+                  key={item.id}
+                  item={item}
+                  busy={busyItemId === item.id}
+                  onComplete={action => updateCompletion(action, 'complete')}
+                  onRestore={action => updateCompletion(action, 'restore')}
+                />
+              ))}
             </div>
           )}
         </>

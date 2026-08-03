@@ -340,6 +340,10 @@ function UpcomingDividends({ events }) {
     )
   }
 
+  const sortedEvents = [...events].sort((a, b) => (
+    (a.ex_date || '').localeCompare(b.ex_date || '')
+    || (a.ticker || '').localeCompare(b.ticker || '')
+  ))
   const totalEst = events.reduce((s, e) => s + e.est_payment, 0)
 
   return (
@@ -349,7 +353,7 @@ function UpcomingDividends({ events }) {
         <span style={{ color: 'var(--pos)', fontWeight: 700, fontSize: '0.95rem' }}>Est. Total: {fmt(totalEst)}</span>
       </div>
       <div className="upcoming-grid">
-        {events.map((e, i) => (
+        {sortedEvents.map((e, i) => (
           <div key={i} className="upcoming-event" style={{ borderLeft: `3px solid ${e.color}` }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ color: 'var(--accent-bright)', fontWeight: 700 }}>{e.ticker}</span>
