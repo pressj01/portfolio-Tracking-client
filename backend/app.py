@@ -20001,6 +20001,8 @@ def dividend_analysis_data():
 
     profile_id = get_profile_id()
     conn = get_connection()
+    _ensure_basis_columns(conn)
+    basis_total = _basis_total_expr("")
 
     # Categories (with sub-categories) for the filter dropdown
     cats = conn.execute(
@@ -20025,17 +20027,28 @@ def dividend_analysis_data():
     sub_param = request.args.get("subcategory", "").strip()
     sub_ids = [int(s) for s in sub_param.split(",") if s.strip().isdigit()] if sub_param else []
 
-    # Load holdings
+    # Load holdings. Every cost-basis-derived figure is recomputed from the
+    # basis selected in the header (original vs broker adjusted) rather than
+    # read from the stored columns, so yield on cost, gain/loss and
+    # paid-for-itself all move together when the selector changes.
     rows = conn.execute(
-        """SELECT ticker, description, classification_type,
-                  ytd_divs, total_divs_received, paid_for_itself,
+        f"""SELECT ticker, description, classification_type,
+                  ytd_divs, total_divs_received,
+                  CASE WHEN {basis_total} > 0
+                       THEN IFNULL(total_divs_received, 0) / {basis_total}
+                       ELSE 0 END as paid_for_itself,
                   dividend_paid, estim_payment_per_year, approx_monthly_income,
-                  annual_yield_on_cost, current_annual_yield,
-                  purchase_value, current_value, gain_or_loss,
+                  CASE WHEN {basis_total} > 0
+                       THEN IFNULL(estim_payment_per_year, 0) / {basis_total}
+                       ELSE 0 END as annual_yield_on_cost,
+                  current_annual_yield,
+                  {basis_total} as purchase_value,
+                  current_value,
+                  IFNULL(current_value, 0) - {basis_total} as gain_or_loss,
                   div_frequency, ex_div_date, div_pay_date, reinvest, div, current_price,
                   quantity
            FROM all_account_info
-           WHERE purchase_value IS NOT NULL AND purchase_value > 0
+           WHERE {basis_total} IS NOT NULL AND {basis_total} > 0
              AND IFNULL(quantity, 0) > 0
              AND profile_id = ?
            ORDER BY IFNULL(total_divs_received, 0) DESC, ticker""",
@@ -20168,6 +20181,7 @@ def dividend_analysis_data():
             "current_annual_yield": _clean(row.get("current_annual_yield")),
             "gain_or_loss": _clean(row.get("gain_or_loss")),
             "current_value": _clean(row.get("current_value")),
+            "purchase_value": _clean(row.get("purchase_value")),
             "safety_score": _clean(safety.get("safety_score")),
             "safety_risk_level": safety.get("risk_level") or "Unknown",
             "cut_risk_flag": bool(safety.get("cut_risk_flag")),

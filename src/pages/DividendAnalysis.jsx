@@ -50,8 +50,15 @@ function SafetyModelLabel({ model }) {
 
 const METRIC_OPTIONS = [
   { value: 'yield_pct', label: 'Yield (%)' },
+  { value: 'yield_on_cost', label: 'Yield on Cost (%)' },
   { value: 'annual_payout', label: 'Annual payout' },
 ]
+// Which yield series the bars show, keyed by the selected metric. Sorting by
+// annual payout still plots current yield, which is the long-standing default.
+const BAR_SERIES = {
+  yield_pct: { key: 'yields', name: 'Current Yield (%)', hover: 'Yield' },
+  yield_on_cost: { key: 'yieldsOnCost', name: 'Yield on Cost (%)', hover: 'Yield on cost' },
+}
 const GROUP_OPTIONS = [
   { value: 'holdings', label: 'Holdings' },
   { value: 'categories', label: 'Categories' },
@@ -62,11 +69,13 @@ const DONUT_COLORS = [
   '#90a4ae', '#a1887f',
 ]
 
-function YieldPayoutChart({ rows }) {
+// `metric`/`group` are owned by the page, not this component: changing the
+// basis or category filter puts the page back into its loading branch, which
+// unmounts this chart. Local state would silently snap back to current yield
+// every time the basis selector is toggled.
+function YieldPayoutChart({ rows, metric, setMetric, group, setGroup }) {
   const chartRef = useRef(null)
   const { isDark } = useTheme()
-  const [metric, setMetric] = useState('yield_pct')
-  const [group, setGroup] = useState('holdings')
   const [metricOpen, setMetricOpen] = useState(false)
   const [groupOpen, setGroupOpen] = useState(false)
   const metricRef = useRef(null)
@@ -93,6 +102,15 @@ function YieldPayoutChart({ rows }) {
       return annualPayout > 0 && currentValue > 0 ? (annualPayout / currentValue) * 100 : 0
     }
 
+    const yieldOnCostPct = (row) => {
+      const directYield = Number(row.annual_yield_on_cost)
+      if (Number.isFinite(directYield) && directYield > 0) return directYield * 100
+
+      const annualPayout = Number(row.estim_payment_per_year) || 0
+      const costBasis = Number(row.purchase_value) || 0
+      return annualPayout > 0 && costBasis > 0 ? (annualPayout / costBasis) * 100 : 0
+    }
+
     const groupKey = {
       holdings: 'ticker',
       categories: 'category_name',
@@ -102,39 +120,40 @@ function YieldPayoutChart({ rows }) {
     const grouped = {}
     rows.forEach(r => {
       const key = r[groupKey] || 'Other'
-      if (!grouped[key]) grouped[key] = { yield_sum: 0, yield_count: 0, annual_payout: 0, value: 0 }
+      if (!grouped[key]) grouped[key] = { yield_sum: 0, yoc_sum: 0, yield_count: 0, annual_payout: 0, value: 0, cost: 0 }
       const yld = currentYieldPct(r)
       grouped[key].yield_sum += yld
+      grouped[key].yoc_sum += yieldOnCostPct(r)
       grouped[key].yield_count += 1
       grouped[key].annual_payout += (r.estim_payment_per_year || 0)
       grouped[key].value += (r.current_value || 0)
+      grouped[key].cost += (r.purchase_value || 0)
     })
 
     // Build arrays
-    let entries = Object.entries(grouped).map(([label, d]) => ({
-      label,
-      yield_pct: group === 'holdings'
-        ? currentYieldPct(rows.find(r => r.ticker === label) || {})
-        : (d.value > 0 ? (d.annual_payout / d.value) * 100 : (d.yield_count > 0 ? d.yield_sum / d.yield_count : 0)),
-      annual_payout: d.annual_payout,
-      value: d.value,
-    }))
+    let entries = Object.entries(grouped).map(([label, d]) => {
+      const single = group === 'holdings' ? (rows.find(r => r.ticker === label) || {}) : null
+      return {
+        label,
+        yield_pct: single
+          ? currentYieldPct(single)
+          : (d.value > 0 ? (d.annual_payout / d.value) * 100 : (d.yield_count > 0 ? d.yield_sum / d.yield_count : 0)),
+        yield_on_cost: single
+          ? yieldOnCostPct(single)
+          : (d.cost > 0 ? (d.annual_payout / d.cost) * 100 : (d.yield_count > 0 ? d.yoc_sum / d.yield_count : 0)),
+        annual_payout: d.annual_payout,
+        value: d.value,
+      }
+    })
 
     // Sort descending by selected metric
-    const sortKey = metric === 'yield_pct' ? 'yield_pct' : 'annual_payout'
-    entries.sort((a, b) => b[sortKey] - a[sortKey])
-
-    const yields = entries.map(e => e.yield_pct)
-    const payouts = entries.map(e => e.annual_payout)
-    const maxYield = Math.max(...yields, 0)
-    const minVisibleYield = maxYield > 0 ? Math.max(maxYield * 0.055, 3) : 0
-    const displayYields = yields.map(v => (v > 0 && v < minVisibleYield ? minVisibleYield : v))
+    entries.sort((a, b) => b[metric] - a[metric])
 
     return {
       labels: entries.map(e => e.label),
-      yields,
-      payouts,
-      displayYields,
+      yields: entries.map(e => e.yield_pct),
+      yieldsOnCost: entries.map(e => e.yield_on_cost),
+      payouts: entries.map(e => e.annual_payout),
     }
   }, [rows, metric, group])
 
@@ -143,18 +162,25 @@ function YieldPayoutChart({ rows }) {
     const el = chartRef.current
     const ct = chartTheme(isDark)
 
+    const bar = BAR_SERIES[metric] || BAR_SERIES.yield_pct
+    const barValues = chartData[bar.key]
+    // Give near-zero yields a visible stub so the bar doesn't vanish entirely.
+    const maxBar = Math.max(...barValues, 0)
+    const minVisibleBar = maxBar > 0 ? Math.max(maxBar * 0.055, 3) : 0
+    const displayBars = barValues.map(v => (v > 0 && v < minVisibleBar ? minVisibleBar : v))
+
     const traces = [
       {
         x: chartData.labels,
-        y: chartData.displayYields,
-        customdata: chartData.yields,
+        y: displayBars,
+        customdata: barValues,
         type: 'bar',
-        name: 'Yield (%)',
+        name: bar.name,
         marker: { color: '#38bdf8', line: { color: '#7dd3fc', width: 1 } },
         opacity: 0.95,
-        text: chartData.yields.map(v => `${v.toFixed(1)}%`),
+        text: barValues.map(v => `${v.toFixed(1)}%`),
         textposition: 'none',
-        hovertemplate: '%{x}<br>Yield: %{customdata:.2f}%<extra></extra>',
+        hovertemplate: `%{x}<br>${bar.hover}: %{customdata:.2f}%<extra></extra>`,
       },
       {
         x: chartData.labels,
@@ -176,7 +202,7 @@ function YieldPayoutChart({ rows }) {
         tickfont: { size: chartData.labels.length > 30 ? 9 : 11 },
       },
       yaxis: {
-        title: 'Yield (%)',
+        title: bar.name,
         titlefont: { color: '#38bdf8', size: 12 },
         tickfont: { color: '#38bdf8' },
         ticksuffix: '%',
@@ -268,7 +294,10 @@ function YieldPayoutChart({ rows }) {
         </div>
       </div>
       <div style={{ padding: '0 1rem 0.35rem', color: 'var(--p-9aa8ba)', fontSize: '0.78rem', lineHeight: 1.35 }}>
-        Blue bars show estimated annual yield on the left axis. Purple dots show estimated annual payout dollars on the right axis. Compare bars to bars and dots to dots; a high-yield holding may still pay fewer dollars if the position is small.
+        {metric === 'yield_on_cost'
+          ? 'Blue bars show estimated annual yield on your cost basis on the left axis (what the position pays relative to what you paid, not today’s price).'
+          : 'Blue bars show estimated annual yield on current market value on the left axis.'}
+        {' '}Purple dots show estimated annual payout dollars on the right axis. Compare bars to bars and dots to dots; a high-yield holding may still pay fewer dollars if the position is small.
       </div>
       <div ref={chartRef} style={{ width: '100%', height: '400px' }} />
     </div>
@@ -659,6 +688,8 @@ export default function DividendAnalysis() {
   const catRef = useRef(null)
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
+  const [yieldMetric, setYieldMetric] = useState('yield_pct')
+  const [yieldGroup, setYieldGroup] = useState('holdings')
   const [recalcMsg, setRecalcMsg] = useState(null)
   const [recalcing, setRecalcing] = useState(false)
 
@@ -954,7 +985,13 @@ export default function DividendAnalysis() {
 
           {/* Yield/Payout interactive chart */}
           <div className="da-chart-grid">
-            <YieldPayoutChart rows={data.rows} />
+            <YieldPayoutChart
+              rows={data.rows}
+              metric={yieldMetric}
+              setMetric={setYieldMetric}
+              group={yieldGroup}
+              setGroup={setYieldGroup}
+            />
           </div>
 
           {/* Charts */}
