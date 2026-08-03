@@ -79,6 +79,7 @@ from transaction_import import (
 import tax_report
 import tax_loss
 from options_api import register_routes as register_options_routes
+from option_dashboard import register_routes as register_option_dashboard_routes
 from put_scanner import register_routes as register_put_scanner_routes
 from call_scanner import register_routes as register_call_scanner_routes
 from bear_put_spread_scanner import register_routes as register_bear_put_spread_scanner_routes
@@ -41359,6 +41360,7 @@ def cef_scan():
 
 
 register_options_routes(app)
+register_option_dashboard_routes(app, download_history=_chunked_yf_download)
 register_put_scanner_routes(app)
 register_call_scanner_routes(app)
 register_bear_put_spread_scanner_routes(app)
