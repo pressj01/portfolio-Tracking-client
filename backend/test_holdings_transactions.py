@@ -824,6 +824,88 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_snowball_holdings_adds_only_missing_portfolio_categories(self):
+        import io
+
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (50, 'Snowball Migration', 'other', 0, 0)"
+        )
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (51, 'Other Portfolio', 'other', 0, 0)"
+        )
+        self._execute(
+            "INSERT INTO categories (id, name, target_pct, profile_id, sort_order) "
+            "VALUES (501, 'BDC', 25, 50, 0)"
+        )
+        self._execute(
+            "INSERT INTO categories (id, name, target_pct, profile_id, sort_order) "
+            "VALUES (502, 'Legacy Income', 75, 50, 1)"
+        )
+        self._execute(
+            "INSERT INTO categories (id, name, target_pct, profile_id, sort_order) "
+            "VALUES (503, 'CORE EQUITY', 100, 51, 0)"
+        )
+        self._execute(
+            "INSERT INTO ticker_categories (ticker, category_id, profile_id) "
+            "VALUES ('ARCC', 502, 50)"
+        )
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, purchase_value, current_price, current_value) "
+            "VALUES ('ARCC', 50, 'Ares Capital', 10, 20, 200, 22, 220)"
+        )
+        content = "\n".join([
+            "Holding,Holdings' name,Shares,Cost basis,Current value,Share price,Sector,Category",
+            "ARCC,Ares Capital,10,200,220,22,Financial Services,BDC",
+            "ADX,Adams Diversified Equity Fund,5,100,110,22,Funds,CORE EQUITY",
+        ])
+
+        orig_income = app_module.populate_income_tracking
+        orig_snapshot = app_module._snapshot_nav_after_profile_update
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+        try:
+            response = self.client.post(
+                "/api/import/transactions?profile_id=50",
+                data={
+                    "format": "snowball_holdings",
+                    "file": (io.BytesIO(content.encode()), "Snowball_Export_Holdings.csv"),
+                },
+                content_type="multipart/form-data",
+            )
+        finally:
+            app_module.populate_income_tracking = orig_income
+            app_module._snapshot_nav_after_profile_update = orig_snapshot
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertEqual(payload["categories_created"], 1)
+        self.assertEqual(payload["category_assignments_added"], 1)
+        self.assertEqual(payload["category_assignments_preserved"], 1)
+
+        conn = self._get_connection()
+        try:
+            categories = conn.execute(
+                "SELECT id, name FROM categories WHERE profile_id = 50 ORDER BY id"
+            ).fetchall()
+            assignments = conn.execute(
+                """SELECT tc.ticker, c.name
+                   FROM ticker_categories tc
+                   JOIN categories c ON c.id = tc.category_id
+                   WHERE tc.profile_id = 50
+                   ORDER BY tc.ticker"""
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual([row["name"] for row in categories], ["BDC", "Legacy Income", "CORE EQUITY"])
+        self.assertEqual(
+            [(row["ticker"], row["name"]) for row in assignments],
+            [("ADX", "CORE EQUITY"), ("ARCC", "Legacy Income")],
+        )
+
     def test_generic_transactions_import_builds_positions_and_deduplicates_reimports(self):
         import io
 

@@ -3376,15 +3376,28 @@ def _security_level_metadata_by_ticker(conn, profile_ids):
     return metadata
 
 
-def _assign_position_category(conn, profile_id, ticker, category_name):
+def _assign_position_category(
+    conn,
+    profile_id,
+    ticker,
+    category_name,
+    preserve_existing_assignment=False,
+):
     category_name = (category_name or "").strip()
     if not category_name:
-        return
+        return {
+            "category_created": False,
+            "assignment_added": False,
+            "assignment_preserved": False,
+        }
 
     existing_cat = conn.execute(
-        "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
-        (category_name, profile_id),
+        """SELECT id FROM categories
+           WHERE profile_id = ? AND LOWER(TRIM(name)) = LOWER(?)
+           ORDER BY id LIMIT 1""",
+        (profile_id, category_name),
     ).fetchone()
+    category_created = False
     if existing_cat:
         category_id = existing_cat["id"] if isinstance(existing_cat, dict) else existing_cat[0]
     else:
@@ -3398,8 +3411,31 @@ def _assign_position_category(conn, profile_id, ticker, category_name):
             (category_name, next_sort, profile_id),
         )
         category_id = cur.lastrowid
+        category_created = True
+
+    existing_assignment = conn.execute(
+        "SELECT category_id FROM ticker_categories WHERE ticker = ? AND profile_id = ?",
+        ((ticker or "").strip().upper(), profile_id),
+    ).fetchone()
+    if existing_assignment:
+        existing_category_id = (
+            existing_assignment["category_id"]
+            if isinstance(existing_assignment, dict)
+            else existing_assignment[0]
+        )
+        if preserve_existing_assignment or existing_category_id == category_id:
+            return {
+                "category_created": category_created,
+                "assignment_added": False,
+                "assignment_preserved": preserve_existing_assignment,
+            }
 
     _replace_ticker_category(conn, profile_id, ticker, category_id)
+    return {
+        "category_created": category_created,
+        "assignment_added": True,
+        "assignment_preserved": False,
+    }
 
 
 def _replace_ticker_category(conn, profile_id, ticker, category_id, subcategory_id=None):
@@ -4974,11 +5010,17 @@ def _import_positions(parsed, profile_id, nav_date=None):
 
     positions = parsed["positions"]
     positions_by_ticker = {pos["ticker"]: pos for pos in positions}
-    preserve_existing_income = parsed.get("source_format") == "snowball_holdings"
+    is_snowball_holdings = parsed.get("source_format") == "snowball_holdings"
+    preserve_existing_income = is_snowball_holdings
     imported_tickers = set()
     updated = 0
     inserted = 0
     preserved_quantity = []
+    category_stats = {
+        "categories_created": 0,
+        "category_assignments_added": 0,
+        "category_assignments_preserved": 0,
+    }
 
     try:
         _set_profile_positions_managed(profile_id, True, conn)
@@ -5099,7 +5141,16 @@ def _import_positions(parsed, profile_id, nav_date=None):
                 inserted += 1
 
             if pos.get("category"):
-                _assign_position_category(conn, profile_id, ticker, pos.get("category"))
+                category_result = _assign_position_category(
+                    conn,
+                    profile_id,
+                    ticker,
+                    pos.get("category"),
+                    preserve_existing_assignment=is_snowball_holdings,
+                )
+                category_stats["categories_created"] += int(category_result["category_created"])
+                category_stats["category_assignments_added"] += int(category_result["assignment_added"])
+                category_stats["category_assignments_preserved"] += int(category_result["assignment_preserved"])
 
         # Remove holdings no longer present in the imported positions file.
         removed = 0
@@ -5160,6 +5211,19 @@ def _import_positions(parsed, profile_id, nav_date=None):
                 f"{'' if len(preserved_quantity) == 1 else 's'} with an unexplained large "
                 f"drop in the import: {kept}{f', +{more} more' if more > 0 else ''}."
             )
+        if is_snowball_holdings:
+            created = category_stats["categories_created"]
+            assigned = category_stats["category_assignments_added"]
+            preserved = category_stats["category_assignments_preserved"]
+            msg += (
+                f" Added {created} missing Snowball categor{'y' if created == 1 else 'ies'}"
+                f" and assigned {assigned} uncategorized holding{'s' if assigned != 1 else ''}."
+            )
+            if preserved:
+                msg += (
+                    f" Preserved {preserved} existing category assignment"
+                    f"{'s' if preserved != 1 else ''}."
+                )
         _snapshot_nav_after_profile_update(profile_id, nav_date=nav_date)
         return jsonify({
             "message": msg,
@@ -5167,6 +5231,7 @@ def _import_positions(parsed, profile_id, nav_date=None):
             "inserted": inserted,
             "removed": removed,
             "preserved_quantity": preserved_quantity,
+            **category_stats,
         })
 
     except Exception as e:

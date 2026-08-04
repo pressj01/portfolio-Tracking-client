@@ -14,10 +14,28 @@ from transaction_import import (
     parse_schwab_csv,
     parse_shear_group_activity,
     parse_shear_group_positions,
+    parse_snowball_holdings_csv,
 )
 
 
 class TransactionImportParserTest(unittest.TestCase):
+    def test_snowball_holdings_reads_category_heading(self):
+        content = "\n".join([
+            "Holding,Holdings' name,Shares,Cost basis,Current value,Share price,Sector,Category",
+            "ARCC,Ares Capital,10,200,220,22,Financial Services,BDC",
+            "ADX,Adams Diversified Equity Fund,5,100,110,22,Funds,CORE EQUITY",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Snowball_Export_Holdings.csv"
+            path.write_text(content, encoding="utf-8")
+
+            result = parse_snowball_holdings_csv(str(path), path.name)
+
+        self.assertEqual(
+            {position["ticker"]: position["category"] for position in result["positions"]},
+            {"ARCC": "BDC", "ADX": "CORE EQUITY"},
+        )
+
     def _write_etrade_all_transactions_csv(self, path):
         rows = [
             ["All Transactions Activity Types"],
