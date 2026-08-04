@@ -1351,6 +1351,113 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    # ── fund_holdings ─────────────────────────────────────────────────────────
+    # Look-through constituents for a fund (what the ETF/CEF/mutual fund owns).
+    # Cached because resolving a 190-ticker portfolio live means one HTTP scrape
+    # per fund. source='manual' rows are user-entered and are never overwritten
+    # by a refresh.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fund_holdings (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            fund_ticker  TEXT NOT NULL,
+            symbol       TEXT,
+            name         TEXT,
+            weight_pct   REAL,
+            source       TEXT NOT NULL DEFAULT 'auto',
+            as_of        TEXT,
+            fetched_at   TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_fund_holdings_ticker
+        ON fund_holdings(fund_ticker)
+    """)
+
+    # ── fund_holdings_meta ────────────────────────────────────────────────────
+    # Per-fund resolution bookkeeping: which source answered, how much of the
+    # fund the stored rows actually cover, and whether it needs manual entry.
+    # coverage_pct is what keeps the UI honest — top-25 lists cover as little as
+    # 6% of a broad fund, so the remainder is reported as Undisclosed.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fund_holdings_meta (
+            fund_ticker    TEXT PRIMARY KEY,
+            status         TEXT DEFAULT 'unresolved',
+            source         TEXT,
+            coverage_pct   REAL,
+            holdings_count INTEGER DEFAULT 0,
+            security_type  TEXT,
+            is_manual      INTEGER DEFAULT 0,
+            note           TEXT,
+            as_of          TEXT,
+            fetched_at     TEXT,
+            updated_at     TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # ── fund_exposure_map ─────────────────────────────────────────────────────
+    # Economic exposure for synthetic / option-income funds. Their filed
+    # holdings are T-bills and option legs (KGLD files ~100% Treasuries), so a
+    # literal look-through misreports the portfolio as cash. These rows say what
+    # the fund is actually exposed to. exposure_pct values are percent of fund.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fund_exposure_map (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            fund_ticker   TEXT NOT NULL,
+            symbol        TEXT,
+            name          TEXT,
+            exposure_pct  REAL,
+            asset_class   TEXT,
+            source        TEXT NOT NULL DEFAULT 'seed',
+            updated_at    TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_fund_exposure_ticker
+        ON fund_exposure_map(fund_ticker)
+    """)
+
+    # ── fund_issuers ──────────────────────────────────────────────────────────
+    # Where a fund family publishes its holdings. The URL pattern lives here,
+    # not in code, so a new issuer is a row rather than a deploy. `parser` picks
+    # the format handler in diversification.py ({ticker} / {ticker_lower} are
+    # substituted into url_template).
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fund_issuers (
+            issuer_key   TEXT PRIMARY KEY,
+            label        TEXT NOT NULL,
+            url_template TEXT,
+            parser       TEXT NOT NULL DEFAULT 'generic_csv',
+            website      TEXT,
+            enabled      INTEGER DEFAULT 1,
+            note         TEXT,
+            updated_at   TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # ── fund_issuer_map ───────────────────────────────────────────────────────
+    # Which family a ticker belongs to. Editable, so mapping a newly launched
+    # fund to its issuer never requires touching Python.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fund_issuer_map (
+            fund_ticker  TEXT PRIMARY KEY,
+            issuer_key   TEXT NOT NULL,
+            source       TEXT NOT NULL DEFAULT 'seed',
+            url_override TEXT,
+            updated_at   TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    _fim_cols = {r[1] for r in cur.execute("PRAGMA table_info(fund_issuer_map)").fetchall()}
+    if "url_override" not in _fim_cols:
+        # Some issuers key their holdings file on an internal product id rather
+        # than the ticker (BlackRock), so one template cannot cover the family.
+        cur.execute("ALTER TABLE fund_issuer_map ADD COLUMN url_override TEXT")
+
+    _fi_cols = {r[1] for r in cur.execute("PRAGMA table_info(fund_issuers)").fetchall()}
+    if "match_pattern" not in _fi_cols:
+        # Keywords matched against a fund's family/name so a newly held fund
+        # routes to its issuer automatically instead of needing a manual map.
+        cur.execute("ALTER TABLE fund_issuers ADD COLUMN match_pattern TEXT")
+
     # ── option_strategies ─────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS option_strategies (

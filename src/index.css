@@ -6934,6 +6934,65 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 .stock-val-row-note { color: var(--text-muted); font-size: 0.76rem; margin-top: 0.1rem; }
 .stock-val-row-values { white-space: nowrap; }
 .stock-val-help-intro { margin: 0.4rem 0 0.2rem; color: var(--text-dim); }
+
+/* Diversification metric definitions stay out of the chart until requested. */
+.dv-inline-help {
+  display: inline-flex;
+  position: relative;
+}
+
+.dv-inline-help > button {
+  align-items: center;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: help;
+  display: inline-flex;
+  font-size: 0.66rem;
+  font-weight: 800;
+  height: 1.15rem;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  width: 1.15rem;
+}
+
+.dv-inline-help > button:hover,
+.dv-inline-help > button:focus-visible {
+  border-color: var(--accent);
+  color: var(--text-strong);
+  outline: none;
+}
+
+.dv-inline-help > [role='tooltip'] {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 400;
+  left: 50%;
+  line-height: 1.45;
+  max-width: min(360px, calc(100vw - 2rem));
+  opacity: 0;
+  padding: 0.65rem 0.75rem;
+  pointer-events: none;
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  transform: translateX(-18%);
+  transition: opacity 0.12s ease;
+  visibility: hidden;
+  width: max-content;
+  z-index: 50;
+}
+
+.dv-inline-help:hover > [role='tooltip'],
+.dv-inline-help:focus-within > [role='tooltip'] {
+  opacity: 1;
+  visibility: visible;
+}
 .stock-val-method-excluded td { color: var(--text-muted); opacity: 0.6; }
 .stock-val-method-excluded td:first-child { text-decoration: line-through; text-decoration-color: var(--text-muted); }
 .stock-val-method-excluded .stock-val-row-note { text-decoration: none; display: block; }

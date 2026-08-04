@@ -110,6 +110,8 @@ const GROUPS = [
       { id: 'income-growth', label: 'Income Growth' },
       { type: 'heading', label: 'Portfolio Diagnostics' },
       { id: 'analytics', label: 'Portfolio Analytics' },
+      { id: 'diversification', label: 'Diversification' },
+      { id: 'fund-definitions', label: 'Fund Definitions' },
       { id: 'correlation', label: 'Correlation Matrix' },
       { id: 'consolidation', label: 'Consolidation Analysis' },
       { id: 'macro-dashboard', label: 'Macro Regime Dashboard' },
@@ -4373,6 +4375,155 @@ function IncomeSimHelp() {
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="./help-screenshots/income-sim/Screenshot 2026-05-09 115453.jpg" alt="Monthly dividend chart with smoothing" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
+    </div>
+  )
+}
+
+function DiversificationHelp() {
+  return (
+    <div>
+      <h2>Diversification</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Funds hide what you actually own. If you hold three S&amp;P 500 funds, the holdings
+        screen shows three positions — but economically you own one basket of the same
+        500 companies, and your real NVDA exposure is the sum across all three. This page
+        opens each fund up and re-adds everything at the constituent level, so concentration
+        that is invisible position-by-position becomes obvious.
+      </p>
+
+      <h3>X-Ray Funds</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        The page opens <strong>off</strong> — your positions as you actually hold them,
+        one slice per holding. Turn it <strong>on</strong> and every fund is replaced by
+        what is inside it, with identical constituents merging into a single slice no
+        matter how many funds they arrived through.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Look-through is recursive. Several income funds are really a wrapper around one
+        ETF — TSPY is ~100% VOO, TDAQ ~100% QQQM — so those are expanded again into the
+        companies underneath rather than being left as a fund sitting in your chart. A
+        nested fund is only expanded when it is itself well covered; a thinly-covered one
+        stays put, because expanding it would convert known exposure into Undisclosed.
+      </p>
+
+      <h3>Economic exposure vs. Literal holdings</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Option-income funds do not hold what they track. KGLD's filed holdings are three
+        Treasury bills — it reaches gold through options written against that collateral.
+        Read literally, a portfolio full of these funds looks like a giant cash position.
+      </p>
+      <ul style={{ marginBottom: '1rem' }}>
+        <li><strong>Economic exposure</strong> (default) — KGLD reports as Gold, BTCI as
+          Bitcoin when the underlying exposure can be stated accurately.</li>
+        <li><strong>Literal holdings</strong> — every fund reports exactly what it files,
+          Treasury collateral and option legs included. Useful for seeing how much of the
+          portfolio is really sitting in short-term paper.</li>
+      </ul>
+      <h3>Cash, equivalents, and fund collateral</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Cash &amp; equivalents</strong> is actual cash-like exposure, including
+        money-market funds. <strong>Cash &amp; T-bill collateral</strong> is shown separately:
+        it is held inside option or leveraged funds to back derivatives and financing, so it
+        is not spendable account cash. The page lists its largest source funds. Economic mode
+        replaces collateral only when the underlying exposure can be stated accurately;
+        otherwise it remains visible rather than being guessed.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Funds that genuinely hold their underlying equities (QQQI, SPYI, CHPY) are
+        unaffected by this switch — their filed holdings are already correct.
+      </p>
+
+      <h3>The Undisclosed slice</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Free holdings sources often publish only a fund's largest positions. For a broad
+        fund that can be a small fraction of the whole — a top-25 list covers roughly 6% of
+        RSP and 18% of AVUV. Rather than rescaling the known names to 100% and overstating
+        them, the unknown remainder is charted as its own grey slice.
+        <strong> Every weight on this page is therefore a floor, not an estimate.</strong>
+        Where a fund's issuer publishes a complete holdings file, the full list is used and
+        the Undisclosed slice for that fund disappears.
+      </p>
+
+      <h3>Keeping it current</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Resolve gaps</strong> looks up new funds and retries incomplete funds against
+        their issuer's latest holdings download.
+        <strong> Refresh all</strong> re-fetches everything. Both run in the background and
+        report progress. Per-fund coverage — which source answered and how much of the fund
+        it covered — is in the expandable table at the bottom.
+      </p>
+    </div>
+  )
+}
+
+function FundDefinitionsHelp() {
+  return (
+    <div>
+      <h2>Fund Definitions</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Some funds cannot be opened up automatically — mutual funds in particular have no
+        free constituent source, and newer ETFs often have no published page yet. This page
+        lists them, largest position first, so you can fill in what they hold by hand.
+        Anything you define here immediately joins the{' '}
+        <strong>Diversification</strong> look-through.
+      </p>
+
+      <h3>The two tabs</h3>
+      <ul style={{ marginBottom: '1rem' }}>
+        <li><strong>Constituents</strong> — what the fund holds, as percentages of the fund.
+          You do not have to account for all 100%: whatever you leave out simply stays in the
+          Undisclosed slice, so entering a fund's top ten is a real improvement over nothing.</li>
+        <li><strong>Economic exposure</strong> — for funds whose filed holdings misrepresent
+          them. Use this when a fund holds Treasuries and options but is economically tracking
+          gold, bitcoin, or a single stock. This is what the Diversification page uses in
+          Economic exposure mode.</li>
+      </ul>
+
+      <h3>Hand-entered data always wins</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Definitions you enter are stored separately from fetched data and are
+        <strong> never overwritten by a refresh</strong>, including <em>Refresh all</em>. If
+        you later want a fund resolved automatically again, clear its rows and save.
+      </p>
+
+      <h3>Filters</h3>
+      <ul style={{ marginBottom: '1rem' }}>
+        <li><strong>Needs definition</strong> — no constituent data at all. Start here; the
+          list is ordered by dollar value, so the top rows move the chart most.</li>
+        <li><strong>Partial coverage</strong> — resolved, but under 90% of the fund is known.
+          Worth topping up by hand for large positions.</li>
+        <li><strong>Hand-defined</strong> — everything you have already entered.</li>
+      </ul>
+
+      <h3>Holdings sources (the lookup table)</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        The second tab lists fund families and where each one publishes its holdings.
+        None of it is hardcoded — adding a family, fixing a URL, or pointing a ticker at a
+        different issuer all happen here, and the next refresh picks them up. Put{' '}
+        <code>{'{ticker}'}</code> or <code>{'{ticker_lower}'}</code> in the URL where the
+        symbol belongs.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Format</strong> tells the app how to read what comes back:
+      </p>
+      <ul style={{ marginBottom: '1rem' }}>
+        <li><code>neos_csv</code>, <code>ssga_xlsx</code>, <code>vanguard_json</code> — those
+          issuers' specific file formats.</li>
+        <li><code>generic_csv</code> — any plain CSV; columns are detected by name.</li>
+        <li><code>html_table</code> — scrapes a holdings table straight off an issuer page.
+          Works for Reaves (UTG) and Adams (ADX).</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Test</strong> fetches a fund you actually own through that issuer and reports
+        how many holdings came back and what percentage they cover, so a URL can be validated
+        without running a full refresh.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Some issuers build their holdings table in JavaScript (TappAlpha, Nicholas/XFUNDS,
+        Cohen &amp; Steers, Aberdeen). There is no HTML table to read on those pages, so they
+        need either a published CSV/XLSX file — set its URL here — or hand entry on the Funds
+        tab.
+      </p>
     </div>
   )
 }
@@ -10982,6 +11133,8 @@ const CONTENT_MAP = {
   'single-strategy': SingleStrategyHelp,
   'income-sim': IncomeSimHelp,
   correlation: CorrelationHelp,
+  diversification: DiversificationHelp,
+  'fund-definitions': FundDefinitionsHelp,
   analytics: AnalyticsHelp,
   'portfolio-builder': PortfolioBuilderHelp,
   'portfolio-tester': PortfolioTesterHelp,

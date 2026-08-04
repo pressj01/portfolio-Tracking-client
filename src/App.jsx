@@ -33,6 +33,8 @@ import ManagePortfolios from './pages/ManagePortfolios'
 import Export from './pages/Export'
 import DividendCompare from './pages/DividendCompare'
 import ConsolidationAnalysis from './pages/ConsolidationAnalysis'
+import Diversification from './pages/Diversification'
+import FundDefinitions from './pages/FundDefinitions'
 import MacroRegimeDashboard from './pages/MacroRegimeDashboard'
 import IncomeGrowthSim from './pages/IncomeGrowthSim'
 import GrowthIncomeFreedom from './pages/GrowthIncomeFreedom'
@@ -215,6 +217,8 @@ function App() {
         <Route path="/export" element={<Export />} />
         <Route path="/div-compare" element={<DividendCompare />} />
         <Route path="/consolidation" element={<ConsolidationAnalysis />} />
+        <Route path="/diversification" element={<Diversification />} />
+        <Route path="/fund-definitions" element={<FundDefinitions />} />
         <Route path="/macro-dashboard" element={<MacroRegimeDashboard />} />
         <Route path="/dividend-history" element={<DividendHistory />} />
         <Route path="/reinvestment-impact" element={<ReinvestmentImpact />} />
@@ -389,6 +393,8 @@ function Nav() {
         </NavMenuGroup>
         <NavMenuGroup title="Portfolio Diagnostics">
           <NavLink to="/analytics">Portfolio Analytics</NavLink>
+          <NavLink to="/diversification">Diversification</NavLink>
+          <NavLink to="/fund-definitions">Fund Definitions</NavLink>
           <NavLink to="/correlation">Correlation Matrix</NavLink>
           <NavLink to="/consolidation">Consolidation Analysis</NavLink>
           <NavLink to="/macro-dashboard">Macro Regime Dashboard</NavLink>

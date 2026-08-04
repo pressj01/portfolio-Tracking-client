@@ -80,6 +80,7 @@ import tax_report
 import tax_loss
 from options_api import register_routes as register_options_routes
 from option_dashboard import register_routes as register_option_dashboard_routes
+from diversification import register_routes as register_diversification_routes
 from option_trade_tracker import (
     realized_option_income,
     register_routes as register_option_trade_routes,
@@ -6175,10 +6176,29 @@ def api_portfolio_value():
             ).fetchone()
             cash_value = float(cash_row[0] if cash_row else 0)
 
+        irr_profile_ids = profile_ids
+        if not is_aggregate and profile_ids == [1]:
+            owner_source_ids = _get_owner_source_profile_ids(conn)
+            if owner_source_ids:
+                irr_profile_ids = owner_source_ids
+        irr_excluded_tickers = {
+            ticker.strip().upper()
+            for ticker in request.args.get("irr_exclude", "").split(",")
+            if ticker.strip()
+        }
+        irr_details = _portfolio_irr_payload(
+            conn,
+            irr_profile_ids,
+            excluded_tickers=irr_excluded_tickers,
+        )
+        irr_details["source_profile_ids"] = irr_profile_ids
         return jsonify({
             "holdings_value": round(holdings_value, 2),
             "cash_value": round(cash_value, 2),
             "account_value": round(holdings_value + cash_value, 2),
+            "irr": irr_details.get("irr"),
+            "irr_pct": irr_details.get("irr_pct"),
+            "irr_details": irr_details,
         })
     finally:
         conn.close()
@@ -41829,6 +41849,7 @@ def cef_scan():
 
 register_options_routes(app)
 register_option_dashboard_routes(app, download_history=_chunked_yf_download)
+register_diversification_routes(app)
 register_option_trade_routes(app, get_profile_filter=get_profile_filter, get_profile_id=get_profile_id)
 register_put_scanner_routes(app)
 register_call_scanner_routes(app)

@@ -2,6 +2,7 @@ flask
 flask-cors
 pandas
 openpyxl
+xlrd
 yfinance
 plotly
 scipy
