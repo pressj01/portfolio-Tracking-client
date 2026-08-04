@@ -21,7 +21,9 @@ const GROUPS = [
     id: 'options-group',
     label: 'Options',
     sections: [
+      { id: 'option-dashboard', label: 'Options Dashboard' },
       { id: 'options', label: 'Options' },
+      { id: 'option-trades', label: 'Option Trades' },
       { id: 'put-selling-scanner', label: 'Put Selling Scanner' },
       { id: 'bull-put-spread-scanner', label: 'Bull Put Spread Scanner' },
       { id: 'covered-call-scanner', label: 'Covered Call Scanner' },
@@ -6032,6 +6034,311 @@ function OptionsHelp() {
   )
 }
 
+function OptionDashboardHelp() {
+  return (
+    <div>
+      <h2>Options Dashboard</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Options Dashboard answers the question that comes <em>before</em> picking a contract:
+        given what SPY, QQQ, and IWM are doing and what the economy looks like right now, which
+        scanner is worth opening first? It scores each of the three markets across three timeframes,
+        scores the macro backdrop from market-based proxies, then ranks all twelve option strategies
+        the app can scan for. It never selects a strike, an expiration, or a price &mdash; the linked
+        scanner still does that.
+      </p>
+
+      <div className="alert alert-info" style={{ marginBottom: '1.25rem' }}>
+        <strong>Ranks scanners, not trades.</strong> A high fit score means &ldquo;this structure suits
+        the current regime,&rdquo; not &ldquo;there is a good trade available today.&rdquo; The scanner you open
+        still has to find liquid contracts at acceptable prices, and it can legitimately return nothing.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Header and the four summary cards</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-dashboard/dashboard-overview.png"
+        alt="Options Dashboard header with the live/cached badge, Refresh market data button, and the Weekly market posture, Economic prediction, Volatility regime, and Best scanner fit cards"
+        caption="The top strip: data freshness on the right, then the four regime summaries."
+      />
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Freshness badge</strong> &mdash; <em>live</em> means the numbers were just built from a fresh download, <em>cached</em> means a snapshot less than 15 minutes old is being reused, and <em>stale</em> means the refresh failed and the last good snapshot is shown along with the error. <strong>Refresh market data</strong> forces a new download and rebuild.</li>
+        <li><strong>Market posture</strong> &mdash; the average technical score of the three markets for the selected timeframe, plus how many are bullish, how many are bearish, and an agreement percentage. High agreement with a strong score is a much cleaner signal than one market carrying the average.</li>
+        <li><strong>Economic prediction</strong> &mdash; the outlook and recession-risk read from the Economic Nowcast section below.</li>
+        <li><strong>Volatility regime</strong> &mdash; the average realized-volatility percentile of the three markets. Low percentiles favor buying premium; high percentiles favor selling it.</li>
+        <li><strong>Best scanner fit</strong> &mdash; the top-ranked row of the Action Ranking table <em>as currently filtered</em>, so it changes when you click a market card or change the Fit filter.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Timeframe and the trend map</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-dashboard/timeframe-trend-map.png"
+        alt="Daily, Weekly, and Monthly timeframe tabs above the SPY, QQQ, and IWM trend cards with technical score, price, trailing return, trend meter, and quick indicator values"
+        caption="Every number on the page &mdash; scores, indicators, and the strategy ranking &mdash; follows the selected timeframe."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        Daily bars are the raw session data, weekly bars are resampled to Friday closes, and monthly bars
+        to month ends. The trailing-return rule changes with the timeframe as well: 20 days on daily,
+        13 weeks on weekly, and 6 months on monthly. Use <strong>Monthly</strong> for the primary regime,
+        <strong> Weekly</strong> for the trade thesis, and <strong>Daily</strong> for entry timing;
+        agreement across all three is stronger evidence than any single tab.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each market card shows the technical score, the adjusted close, the trailing return, a
+        &minus;100&hellip;+100 meter, and the four values that most often decide a trade: RSI 14, MACD
+        histogram, ADX 14, and the realized-volatility percentile. <strong>Click a card</strong> to filter
+        the Action Ranking to that market; click it again to go back to all three. Scores of +50 or
+        better read as strong bullish, +20 to +50 bullish, &minus;20 to +20 neutral or mixed, and the
+        mirror images on the downside.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Show score calculation</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-dashboard/score-calculation.png"
+        alt="Expanded score calculation for SPY listing all eight technical rules with their +1, 0, or -1 contributions"
+        caption="Every score is auditable: eight rules, each worth +1, 0, or &minus;1."
+      />
+      <p style={{ marginBottom: '0.5rem' }}>
+        The score is simply the sum of the eight rules divided by eight and scaled to 100, so +62 means
+        five net positive rules. The rules are:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Trend structure</strong> &mdash; price vs EMA 20, EMA 20 vs EMA 50, and EMA 50 vs EMA 200.</li>
+        <li><strong>Momentum</strong> &mdash; MACD histogram above or below zero, RSI 14 (+1 at 55 or higher, &minus;1 at 45 or lower, otherwise 0), and the Awesome Oscillator.</li>
+        <li><strong>Confirmation</strong> &mdash; the trailing return for the timeframe, and ADX direction, which only scores when ADX 14 is 20 or higher; below that the trend is treated as non-directional and contributes 0.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Indicator evidence</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-dashboard/indicator-evidence.png"
+        alt="Indicator evidence table listing price, EMA 20/50/200, MACD, signal, histogram, RSI, Awesome Oscillator, ADX, +DI/-DI, ATR, realized volatility, and RV percentile for each market"
+        caption="The raw values behind the scores, including ATR and realized volatility."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        Nothing here is scored separately &mdash; this table exists so you can check a value yourself
+        rather than take the score on faith. Two columns matter beyond the rules: <strong>ATR 14</strong>
+        tells you how far the market typically travels in one bar, which is a sanity check on strike
+        distance, and <strong>RV percentile</strong> compares current realized volatility with its own
+        recent history, which is what drives the volatility part of every fit score.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Economic nowcast</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-dashboard/economic-nowcast.png"
+        alt="Economic nowcast showing the macro score and the six evidence cards for yield curve, credit, discretionary vs staples, industrials, inflation proxy, and VIX"
+        caption="Six market-implied proxies, each contributing a fixed number of macro points."
+      />
+      <p style={{ marginBottom: '0.5rem' }}>
+        The macro score is the sum of six weighted signals, each of which can be positive, neutral (zero
+        points), or negative:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>10Y &minus; 3M yield curve</strong> (25 pts) &mdash; positive above +0.25, warning below &minus;0.25.</li>
+        <li><strong>High-yield / quality credit</strong>, HYG vs LQD (20 pts) &mdash; the 3-month change in risk appetite.</li>
+        <li><strong>Discretionary / staples</strong>, XLY vs XLP (15 pts) &mdash; cyclical versus defensive consumer leadership.</li>
+        <li><strong>Industrials trend</strong>, XLI versus its 200-day EMA (15 pts).</li>
+        <li><strong>VIX stress gauge</strong> (15 pts) &mdash; supportive below 18, stressed above 25.</li>
+        <li><strong>Inflation pressure proxy</strong>, TIP vs IEF (10 pts) &mdash; rising pressure counts against the score because it restricts policy.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Totals of +40 or better read as &ldquo;Expansion likely,&rdquo; +15 to +40 as a soft landing,
+        &minus;15 to +15 as mixed or slowing, &minus;40 to &minus;15 as slowdown risk, and below
+        &minus;40 as contraction risk. This is a market-implied proxy model, not an official GDP forecast.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Action ranking</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-dashboard/action-ranking.png"
+        alt="Action ranking table with rank, market, trade to research, fit badge and score, technical, economy, and volatility components, the reasoning column, and Open scanner buttons"
+        caption="Twelve strategies scored against every market, filtered by the Market and Fit dropdowns."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each strategy carries its own preferred trend window, macro window, and volatility preference
+        (high for premium selling, low for debit structures, medium for the balanced flies). The fit
+        score is <strong>55% technical + 25% economic + 20% volatility</strong>, and the badge follows
+        from it: <strong>Ideal</strong> at 78 and above, <strong>Favorable</strong> at 65,
+        <strong> Selective</strong> at 50, and <strong>Avoid</strong> below that. Iron condors and iron
+        butterflies additionally lose points when ADX 14 reaches 25, because a strong directional trend
+        is the main way a neutral trade fails.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Why it ranks here</strong> column shows the strategy&rsquo;s thesis, the three facts
+        that produced the score, and any cautions in amber &mdash; for example premium being too cheap
+        for a short-volatility structure, or macro risk arguing for a defined-risk alternative to an
+        undefined-risk trade. <strong>Open scanner</strong> jumps to that scanner. Use the
+        <strong> Market</strong> dropdown (or a click on a trend card) and the <strong>Fit</strong>
+        dropdown to narrow the list; choose <strong>All fits</strong> if you want to see what the model
+        currently rates as poor.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to use the page</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Start on <strong>Monthly</strong> to establish the regime, then switch to <strong>Weekly</strong> for the trade thesis. If the two disagree, prefer smaller size or defined risk.</li>
+        <li>Read the posture and agreement card. Three markets agreeing is a much better backdrop than one strong index pulling the average.</li>
+        <li>Check the volatility regime. It decides whether you should be selling premium or buying it, regardless of direction.</li>
+        <li>Click the market you actually trade to filter the ranking, then read the reasoning and cautions on the top two or three rows rather than only the score.</li>
+        <li>Press <strong>Open scanner</strong> and let the scanner validate liquidity, expiration, strikes, and price. If it finds nothing acceptable, that is a valid answer &mdash; a good regime is not a trade.</li>
+      </ol>
+
+      <div className="alert alert-warning" style={{ marginTop: '0.75rem' }}>
+        <strong>Educational analysis only.</strong> Market data can be delayed or incomplete, and a
+        technical score plus an economic nowcast are decision aids, not guarantees or personalized
+        investment advice.
+      </div>
+    </div>
+  )
+}
+
+function OptionTradesHelp() {
+  return (
+    <div>
+      <h2>Option Trades</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Option Trades is the ledger for positions you actually opened, as opposed to the modeling done
+        on the Options page. It stores each leg and each broker execution, works out realized P/L,
+        maximum risk, win rate, and profit factor, and lets you decide which trades count as income.
+        It is a <strong>separate ledger from your holdings</strong> &mdash; adding, closing, or deleting
+        an option trade never changes share counts, cost basis, or dividends.
+      </p>
+
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/trades-overview.png"
+        alt="Option Trades header with Import option transactions and Add trade buttons, the Owner scope notice, and the six summary cards"
+        caption="The header, the account-scope notice, and the six summary cards."
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Which account you are looking at</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>The eyebrow above the title names the selected portfolio, and every number on the page follows the portfolio selector.</li>
+        <li>An <strong>owner rollup</strong> shows trades from its member accounts as well. Those rows are read-only here &mdash; the Actions column says <em>Manage in &lt;account&gt;</em>. Select the source account to close, classify, or delete them.</li>
+        <li>An <strong>aggregate</strong> view is fully read-only: adding, importing, closing, and deleting are disabled until you select a single portfolio.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The six summary cards</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        These always cover every trade in the selected account, not just the rows left after the table
+        filters. Each card has a <strong>?</strong> tooltip with the same definition.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Open trades</strong> &mdash; count of trades still open, and how many of those have a known maximum risk.</li>
+        <li><strong>Known open risk</strong> &mdash; the sum of maximum risk across open trades where risk is known. Trades with undefined risk are left out, so this is not your total account risk.</li>
+        <li><strong>Realized MTD / YTD</strong> &mdash; net realized option P/L for the current month and calendar year, across every purpose.</li>
+        <li><strong>Win rate</strong> &mdash; winning trades divided by fully closed trades. Open trades are excluded and breakeven trades stay in the denominator.</li>
+        <li><strong>Profit factor</strong> &mdash; gross wins divided by gross losses on fully closed trades. A dash means there are no closed losses yet.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Income view</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/income-view.png"
+        alt="Income view panel with the Include realized options toggle and the Fund YTD, Income options YTD, and Selected YTD total values"
+        caption="Option premium only joins your income total when the trade is classified as Income and the P/L is realized."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Include realized options</strong> adds <em>Income options YTD</em> to <em>Fund YTD</em>
+        to produce the selected total. Two rules keep this honest: only trades whose purpose is
+        <strong> Income</strong> qualify (Directional, Hedge, Adjustment, and Other never count), and only
+        <strong> realized</strong> P/L counts &mdash; premium collected on a position that is still open is
+        not income yet. The toggle is remembered between sessions and changes nothing in the ledger itself.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How these numbers are calculated</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/calculation-audit.png"
+        alt="Expanded How these numbers are calculated panel showing when P/L becomes realized, the month-to-date audit table, and the scope and income rules"
+        caption="Expand this panel to see every realization event that produced the current MTD figure."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        A leg becomes realized once <em>all</em> of its contracts are closed, expired, assigned, or
+        exercised; its realized amount is the opening cash flow plus the closing cash flow, less fees.
+        A finished leg counts even if the rest of the trade is still open, which is why MTD can move on a
+        trade whose status is still Open. The date of the final closing execution decides the month and
+        year. The middle column lists every event behind the current MTD total, so a surprising figure
+        can be traced to a specific fill.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The execution ledger</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/execution-ledger.png"
+        alt="Trades table with ticker, status, and purpose filters and columns for underlying, strategy, opened, expiration and DTE, entry, max risk, realized P/L, return on risk, status, and actions"
+        caption="Filter by ticker, status, and purpose; each row is one trade, however many legs it has."
+      />
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Underlying</strong> &mdash; ticker, leg count, and (in rollups) the account that owns the trade.</li>
+        <li><strong>Strategy / purpose</strong> &mdash; the structure plus the income classification. A <em>Needs classification</em> flag appears when the strategy is still &ldquo;Custom&rdquo; or the purpose is still &ldquo;Other,&rdquo; which is common right after an import.</li>
+        <li><strong>Expiration / DTE</strong> &mdash; the nearest expiration with open contracts and days to it; closed trades show the close date instead. A negative DTE means the trade holds legs that already expired and still need to be recorded.</li>
+        <li><strong>Entry</strong> &mdash; the net opening cash: green <strong>CREDIT</strong> for premium received, red <strong>DEBIT</strong> for premium paid.</li>
+        <li><strong>Max risk</strong> &mdash; what you entered, or a derived value with its method shown underneath: <em>net debit</em> for all-long positions, <em>derived spread width</em> for a two-leg vertical, and <em>derived condor width</em> for a four-leg condor (the wider wing minus the credit). Undefined-risk trades such as a naked short put show a dash.</li>
+        <li><strong>Realized P/L</strong> &mdash; realized cash with a WIN, LOSS, or BREAKEVEN tag once the trade is closed.</li>
+        <li><strong>Return on risk</strong> &mdash; realized P/L divided by maximum risk, only for closed trades that have a risk figure.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Row actions: <strong>Risk graph</strong> stages the trade on the Options page and draws its payoff
+        with live chain data; <strong>Classify</strong> / <strong>Edit class</strong> sets strategy, purpose,
+        max risk, and notes; <strong>Mark expired</strong> appears once open legs are past expiration and
+        records a zero-value expiration in one click; <strong>Close</strong> opens the execution form; and
+        <strong> Delete</strong> asks for a second click to confirm.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Expanding a trade</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/trade-detail-expanded.png"
+        alt="Expanded TSLA bull put spread showing source, total fees, net cash flow, risk method, notes, and a per-leg table with every execution"
+        caption="The + button opens a full audit: per-leg contracts, net cash, and every recorded fill."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        The summary line shows where the trade came from (manual entry or a broker format), total fees,
+        net cash flow so far, and how maximum risk was determined. The table below lists each leg with its
+        original and still-open contract counts, its net cash, and each execution with action, price, date,
+        and cash effect. Stock-backed trades such as covered calls also show a <strong>LONG STOCK</strong>
+        row that reads share coverage from the account&rsquo;s holdings &mdash; a read-only link that flags a
+        shortfall without altering the holding.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Adding a trade by hand</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/add-trade-form.png"
+        alt="Add option trade form with underlying, strategy, purpose, open date, maximum risk, notes, and one leg row"
+        caption="One row per contract leg; use + Add leg for spreads, condors, and butterflies."
+      />
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Premiums are entered <strong>per share</strong> &mdash; the 100&times; multiplier is applied for you, so a $2.99 credit on one contract becomes $299.</li>
+        <li>Side and type describe the leg (SHORT PUT, LONG CALL, and so on); the strategy dropdown only labels the trade, and <strong>Custom name&hellip;</strong> is there for structures not in the list.</li>
+        <li><strong>Maximum risk</strong> can be left blank for defined-risk verticals and condors, which are derived. Enter it manually when you want to record the cash actually set aside &mdash; for example the full assignment cost of a cash-secured put.</li>
+        <li><strong>Purpose</strong> is the field that decides whether this trade can ever reach your income total, so set it deliberately.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Closing works the same way in reverse: press <strong>Close</strong>, set the date, and give each
+        open leg an action &mdash; buy/sell to close with a price, or <strong>Expired</strong>,
+        <strong> Assigned</strong>, or <strong>Exercised</strong>, which are priced at zero automatically.
+        You can close part of a position by lowering the contract count, and fees can be entered per leg.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Importing broker executions</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/import-transactions.png"
+        alt="Import Option Transactions page with the file-format selector, drop zone, generic template download, and the rules explaining how rows are handled"
+        caption="Import option transactions accepts Schwab, E*TRADE, Fidelity, Robinhood, Shear Group, and a generic CSV/XLSX template."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        Pick the format, choose the file, and use <strong>Preview executions</strong> before importing;
+        the preview reports how many rows were recognized, how many are duplicates of executions already
+        stored, and how many closing rows could not be matched to an open contract. Legs are grouped into
+        one trade by broker trade ID first and order ID second, so multi-leg orders arrive intact.
+        Transaction history &mdash; not a positions export &mdash; is what produces accurate premium,
+        fees, and realized P/L; if your history starts after a position was opened, add the missing
+        opening executions with the generic template first. Imported trades usually arrive needing
+        classification, so set strategy and purpose afterwards.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Suggested workflow</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Select the individual account that actually holds the trades before adding or importing.</li>
+        <li>Import broker activity where you can, and add anything the broker export missed by hand.</li>
+        <li>Clear every <em>Needs classification</em> flag &mdash; the income total and the Income options figure depend on it.</li>
+        <li>Record closes, expirations, and assignments as they happen so MTD, win rate, and profit factor stay honest.</li>
+        <li>Use <strong>Risk graph</strong> on open positions to check where a live trade stands, and the expanded row to reconcile fees and fills against the broker statement.</li>
+      </ol>
+    </div>
+  )
+}
+
 function PutSellingScannerHelp() {
   const screenshotStyle = {
     maxWidth: '100%',
@@ -10619,6 +10926,8 @@ const CONTENT_MAP = {
   overview: Overview,
   'action-center': ActionCenterHelp,
   options: OptionsHelp,
+  'option-dashboard': OptionDashboardHelp,
+  'option-trades': OptionTradesHelp,
   'put-selling-scanner': PutSellingScannerHelp,
   'bull-put-spread-scanner': BullPutSpreadScannerHelp,
   'covered-call-scanner': CoveredCallScannerHelp,
