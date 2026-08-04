@@ -689,6 +689,7 @@ function DashboardHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li><strong>Est. Annual Income</strong> — estimated annual dividend income.</li>
         <li><strong>Portfolio Value</strong> — total current market value.</li>
+        <li><strong>Portfolio IRR / Filtered IRR</strong> — annualized money-weighted return from dated buys, sells, fees, recorded dividends, and current holdings value; idle account cash is excluded. The card shows <strong>Unavailable</strong> instead of estimating when transaction shares, transfers, or dividend payment history do not fully reconcile. <strong>Manage exclusions</strong> lists the blocking tickers and lets you omit selected ones. Any resulting number is labeled <strong>Filtered IRR</strong> and discloses the percentage of current portfolio value excluded, because it measures only the documented subset—not the whole account.</li>
         <li><strong>Avg Yield on Cost / Current Yield</strong> — dividend yield based on cost basis vs current price.</li>
         <li><strong>Price Return / Total Return</strong> — portfolio returns excluding and including dividends.</li>
         <li><strong>NAV Erosion Ratio</strong> — dollar-weighted benchmark-adjusted NAV erosion context for income-oriented funds. The portfolio severity follows the aggregate ratio thresholds: low at 0.25 or below, moderate from 0.25-0.75, and high above 0.75.</li>

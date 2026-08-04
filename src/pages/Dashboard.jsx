@@ -28,7 +28,41 @@ const CLOSURE_DISMISS_KEY = 'dashboard_closure_warning_dismissed_v1'
 const SHORT_WINDOW_MIN_TRADING_DAYS = 15
 const OVERVIEW_RETURN_MODE_KEY = 'dashboard_overview_return_mode_v1'
 const IMPORT_DISMISS_KEY = 'dashboard_import_warning_dismissed_v1'
+const IRR_EXCLUSIONS_KEY_PREFIX = 'dashboard_irr_exclusions_v1_'
 const validSp500 = value => value?.price != null && Number.isFinite(Number(value.price))
+
+const normalizeIrrExclusions = tickers => [...new Set((tickers || [])
+  .map(ticker => String(ticker || '').trim().toUpperCase())
+  .filter(Boolean))].sort()
+
+const readIrrExclusions = selection => {
+  if (typeof window === 'undefined' || !selection) return []
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(`${IRR_EXCLUSIONS_KEY_PREFIX}${selection}`) || '[]')
+    return Array.isArray(parsed) ? normalizeIrrExclusions(parsed) : []
+  } catch {
+    return []
+  }
+}
+
+const persistIrrExclusions = (selection, tickers) => {
+  if (typeof window === 'undefined' || !selection) return
+  try {
+    window.localStorage.setItem(
+      `${IRR_EXCLUSIONS_KEY_PREFIX}${selection}`,
+      JSON.stringify(normalizeIrrExclusions(tickers)),
+    )
+  } catch {
+    // best-effort
+  }
+}
+
+const portfolioValuePath = (selection, tickers = readIrrExclusions(selection)) => {
+  const exclusions = normalizeIrrExclusions(tickers)
+  if (!exclusions.length) return '/api/portfolio-value'
+  const params = new URLSearchParams({ irr_exclude: exclusions.join(',') })
+  return `/api/portfolio-value?${params}`
+}
 
 const DEFAULT_HOLDINGS_COLUMN_IDS = [
   'ticker',
@@ -277,12 +311,13 @@ function DismissibleBanner({ storageKey, signature, collapsedContent, children }
   )
 }
 
-function SummaryCard({ label, value, sub, color, className, title }) {
+function SummaryCard({ label, value, sub, color, className, title, action }) {
   return (
     <div className={`summary-card ${className || ''}`} title={title}>
       <div className="summary-label">{label}</div>
       <div className="summary-value" style={color ? { color } : undefined}>{value}</div>
       {sub && <div className="summary-sub">{sub}</div>}
+      {action && <div style={{ marginTop: '0.45rem' }}>{action}</div>}
     </div>
   )
 }
@@ -874,6 +909,10 @@ export default function Dashboard() {
   const [upcomingDivs, setUpcomingDivs] = useState([])
   const [incomeSummary, setIncomeSummary] = useState(null)
   const [portfolioValue, setPortfolioValue] = useState(null)
+  const [irrExcludedTickers, setIrrExcludedTickers] = useState([])
+  const [irrExclusionDraft, setIrrExclusionDraft] = useState([])
+  const [irrExclusionOpen, setIrrExclusionOpen] = useState(false)
+  const [irrExclusionLoading, setIrrExclusionLoading] = useState(false)
   const [brokerImportStatus, setBrokerImportStatus] = useState(null)
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
@@ -948,6 +987,10 @@ export default function Dashboard() {
 
   useEffect(() => {
     let stale = false
+    const selectionExclusions = readIrrExclusions(selection)
+    setIrrExcludedTickers(selectionExclusions)
+    setIrrExclusionDraft(selectionExclusions)
+    setIrrExclusionOpen(false)
     const cached = readDashboardCache(dashboardCacheKey)
     if (cached) {
       // Holding rows are editable and are also changed by imports/refreshes.
@@ -955,7 +998,13 @@ export default function Dashboard() {
       // /api/holdings read is the source of truth for every editable field.
       setHoldings([])
       setIncomeSummary(cached.incomeSummary || null)
-      setPortfolioValue(cached.portfolioValue || null)
+      const cachedExclusions = normalizeIrrExclusions(cached.portfolioValue?.irr_details?.excluded_tickers)
+      const savedExclusions = readIrrExclusions(selection)
+      setPortfolioValue(
+        JSON.stringify(cachedExclusions) === JSON.stringify(savedExclusions)
+          ? (cached.portfolioValue || null)
+          : null,
+      )
       setUpcomingDivs(cached.upcomingDivs || [])
       setTickerGrades(cached.tickerGrades || {})
       setTickerRisk(cached.tickerRisk || {})
@@ -1008,7 +1057,7 @@ export default function Dashboard() {
             .then(safeJson)
             .then(d => { if (!stale) setIncomeSummary(d) })
             .catch(() => {})
-          pf('/api/portfolio-value')
+          pf(portfolioValuePath(selection))
             .then(safeJson)
             .then(d => { if (!stale) setPortfolioValue(d) })
             .catch(() => {})
@@ -1121,7 +1170,7 @@ export default function Dashboard() {
               return Promise.all([
                 pf('/api/holdings').then(safeJson),
                 pf('/api/income-summary').then(safeJson).catch(() => null),
-                pf('/api/portfolio-value').then(safeJson).catch(() => null),
+                pf(portfolioValuePath(selection)).then(safeJson).catch(() => null),
               ])
             })
             .then(result => {
@@ -1426,6 +1475,68 @@ export default function Dashboard() {
   const dailyChangeTitle = dailyChange?.holdings_total > dailyChange?.holdings_covered
     ? `Price move from the previous market close. Based on ${dailyChange.holdings_covered} of ${dailyChange.holdings_total} holdings with available prices.`
     : 'Price move from the previous market close, based on current share counts.'
+  const irrDetails = portfolioValue?.irr_details || null
+  const portfolioIrr = portfolioValue?.irr == null ? null : Number(portfolioValue.irr)
+  const hasPortfolioIrr = Number.isFinite(portfolioIrr)
+  const unreconciledIrrValuePct = Number(irrDetails?.unreconciled_current_value_pct)
+  const excludedIrrValuePct = Number(irrDetails?.excluded_current_value_pct)
+  const appliedIrrExclusions = useMemo(
+    () => normalizeIrrExclusions(irrDetails?.excluded_tickers || irrExcludedTickers),
+    [irrDetails?.excluded_tickers, irrExcludedTickers],
+  )
+  const irrSub = hasPortfolioIrr && irrDetails?.start_date
+    ? `Money-weighted${Number.isFinite(excludedIrrValuePct) && excludedIrrValuePct > 0 ? ` · ${excludedIrrValuePct.toFixed(1)}% excluded` : ''} · since ${shortDate(irrDetails.start_date)}`
+    : irrDetails?.coverage_complete === false && Number.isFinite(unreconciledIrrValuePct) && unreconciledIrrValuePct > 0
+      ? `${unreconciledIrrValuePct.toFixed(1)}% of value lacks reconciled history`
+      : irrDetails?.coverage_complete === false
+        ? 'Cash-flow history is incomplete'
+      : null
+  const irrTitle = hasPortfolioIrr
+    ? `Annualized money-weighted return from dated buys, sells, fees, recorded dividends, and current holdings value. Idle account cash is excluded.${appliedIrrExclusions.length ? ` Filtered result excludes: ${appliedIrrExclusions.join(', ')}.` : ''}`
+    : irrDetails?.reason || 'Complete dated investment cash flows are required to calculate IRR.'
+  const irrExclusionOptions = useMemo(() => {
+    const reasonsByTicker = new Map()
+    const addReason = (ticker, reason) => {
+      const key = String(ticker || '').trim().toUpperCase()
+      if (!key) return
+      const reasons = reasonsByTicker.get(key) || []
+      if (reason && !reasons.includes(reason)) reasons.push(reason)
+      reasonsByTicker.set(key, reasons)
+    }
+    ;(irrDetails?.missing_transaction_tickers || []).forEach(ticker => addReason(ticker, 'No complete trade history'))
+    ;(irrDetails?.invalid_transaction_tickers || []).forEach(ticker => addReason(ticker, 'Missing or future trade date'))
+    ;(irrDetails?.zero_value_transaction_tickers || []).forEach(ticker => addReason(ticker, 'Trade has no cash value'))
+    ;(irrDetails?.unpaired_transfer_tickers || []).forEach(ticker => addReason(ticker, 'Transfer history is incomplete'))
+    ;(irrDetails?.share_mismatches || []).forEach(item => addReason(item.ticker, 'Trade shares do not match current shares'))
+    ;(irrDetails?.missing_dividend_tickers || []).forEach(item => addReason(item.ticker, `Missing ${fmt(item.missing_amount)} of dated dividends`))
+    appliedIrrExclusions.forEach(ticker => addReason(ticker, 'Currently excluded'))
+
+    const holdingByTicker = new Map(holdings.map(holding => [
+      String(holding.ticker || '').toUpperCase(),
+      holding,
+    ]))
+    return [...reasonsByTicker.entries()]
+      .map(([ticker, reasons]) => ({
+        ticker,
+        reasons,
+        description: holdingByTicker.get(ticker)?.description || '',
+        currentValue: Number(holdingByTicker.get(ticker)?.current_value || 0),
+      }))
+      .sort((a, b) => b.currentValue - a.currentValue || a.ticker.localeCompare(b.ticker))
+  }, [appliedIrrExclusions, holdings, irrDetails])
+
+  const applyIrrExclusions = useCallback(() => {
+    const next = normalizeIrrExclusions(irrExclusionDraft)
+    persistIrrExclusions(selection, next)
+    setIrrExcludedTickers(next)
+    setIrrExclusionOpen(false)
+    setIrrExclusionLoading(true)
+    pf(portfolioValuePath(selection, next))
+      .then(safeJson)
+      .then(setPortfolioValue)
+      .catch(() => {})
+      .finally(() => setIrrExclusionLoading(false))
+  }, [irrExclusionDraft, pf, selection])
 
   const filteredEnrichedHoldings = useMemo(() => {
     if (!filteredTickerSet) return enrichedHoldings
@@ -2387,6 +2498,27 @@ export default function Dashboard() {
           color="var(--accent-bright)"
           sub={totals.cashValue > 0 ? `Includes ${fmt(totals.cashValue)} cash` : null}
         />
+        <SummaryCard
+          label={appliedIrrExclusions.length ? 'Filtered IRR' : 'Portfolio IRR'}
+          value={irrExclusionLoading ? 'Updating…' : hasPortfolioIrr ? pct(portfolioIrr) : 'Unavailable'}
+          color={hasPortfolioIrr ? gradeColor(portfolioIrr) : undefined}
+          sub={irrSub}
+          title={irrTitle}
+          action={(irrExclusionOptions.length > 0 || appliedIrrExclusions.length > 0) ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}
+              disabled={irrExclusionLoading}
+              onClick={() => {
+                setIrrExclusionDraft(appliedIrrExclusions)
+                setIrrExclusionOpen(true)
+              }}
+            >
+              Manage exclusions
+            </button>
+          ) : null}
+        />
         <SummaryCard label="Avg Yield on Cost" value={pct(totals.avgYoc)} />
         <SummaryCard label="Current Yield" value={pct(totals.currentYield)} />
         {sp500 && (
@@ -2413,6 +2545,91 @@ export default function Dashboard() {
           />
         )}
       </div>
+
+      {irrExclusionOpen && (
+        <div className="modal-overlay" onClick={() => setIrrExclusionOpen(false)}>
+          <div
+            className="modal-content"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="irr-exclusion-title"
+            onClick={event => event.stopPropagation()}
+            style={{ maxWidth: 760, maxHeight: '85vh', overflow: 'auto' }}
+          >
+            <h3 id="irr-exclusion-title" style={{ marginTop: 0, color: 'var(--accent-2)' }}>
+              Filter incomplete tickers from IRR
+            </h3>
+            <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+              A filtered IRR measures only the included, fully documented holdings. It is not the
+              IRR of the entire account. The Dashboard will label it <strong>Filtered IRR</strong> and
+              disclose the percentage of portfolio value excluded.
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setIrrExclusionDraft(irrExclusionOptions.map(option => option.ticker))}
+              >
+                Select all incomplete
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setIrrExclusionDraft([])}
+              >
+                Clear exclusions
+              </button>
+            </div>
+            <div style={{ display: 'grid', gap: '0.45rem' }}>
+              {irrExclusionOptions.map(option => {
+                const checked = irrExclusionDraft.includes(option.ticker)
+                return (
+                  <label
+                    key={option.ticker}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'auto minmax(0, 1fr) auto',
+                      gap: '0.65rem',
+                      alignItems: 'start',
+                      padding: '0.6rem 0.7rem',
+                      border: '1px solid var(--border)',
+                      borderRadius: 6,
+                      background: checked ? 'var(--surface-inset)' : 'transparent',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => setIrrExclusionDraft(previous => checked
+                        ? previous.filter(ticker => ticker !== option.ticker)
+                        : normalizeIrrExclusions([...previous, option.ticker]))}
+                    />
+                    <span>
+                      <strong>{option.ticker}</strong>
+                      {option.description ? <span style={{ color: 'var(--text-dim)' }}> — {option.description}</span> : null}
+                      <span style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.76rem', marginTop: 2 }}>
+                        {option.reasons.join(' · ')}
+                      </span>
+                    </span>
+                    <span style={{ whiteSpace: 'nowrap', color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+                      {option.currentValue > 0 ? fmt(option.currentValue) : 'No current value'}
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '1rem' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setIrrExclusionOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn-primary" onClick={applyIrrExclusions}>
+                Apply {irrExclusionDraft.length} exclusion{irrExclusionDraft.length === 1 ? '' : 's'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Portfolio Equity Curve */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>

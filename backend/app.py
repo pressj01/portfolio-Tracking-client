@@ -736,6 +736,368 @@ def _portfolio_period_metrics(series_result):
     }
 
 
+def _xirr(cash_flows, guess=0.10):
+    """Return the annualized IRR for irregularly dated cash flows.
+
+    Cash paid into the investment is negative; proceeds, distributions, and
+    ending value are positive. Solving in log-rate space keeps the search
+    stable close to -100% and for unusually large positive returns. When a
+    non-conventional flow pattern has more than one solution, prefer the root
+    closest to the conventional 10% starting guess.
+    """
+    aggregated = {}
+    for flow_date, amount in cash_flows or []:
+        parsed_date = _portfolio_event_date(flow_date)
+        try:
+            parsed_amount = float(amount)
+        except (TypeError, ValueError):
+            continue
+        if parsed_date is None or not math.isfinite(parsed_amount):
+            continue
+        aggregated[parsed_date] = aggregated.get(parsed_date, 0.0) + parsed_amount
+
+    dated = sorted(
+        (flow_date, amount)
+        for flow_date, amount in aggregated.items()
+        if abs(amount) > 1e-9
+    )
+    if len(dated) < 2 or dated[0][0] == dated[-1][0]:
+        return None
+    if not any(amount < 0 for _, amount in dated) or not any(amount > 0 for _, amount in dated):
+        return None
+
+    origin = dated[0][0]
+    timed = [((flow_date - origin).days / 365.0, amount) for flow_date, amount in dated]
+
+    def npv_at_log_rate(log_rate):
+        total = 0.0
+        try:
+            for years, amount in timed:
+                exponent = -log_rate * years
+                if exponent > 700:
+                    return math.copysign(math.inf, amount)
+                if exponent < -700:
+                    continue
+                total += amount * math.exp(exponent)
+            return total
+        except (OverflowError, ValueError):
+            return math.nan
+
+    # Covers annual rates from about -99.9999% through +1,000,000%.
+    log_min = math.log(0.000001)
+    log_max = math.log(10001.0)
+    steps = 640
+    samples = [log_min + (log_max - log_min) * index / steps for index in range(steps + 1)]
+    roots = []
+    previous_log = samples[0]
+    previous_value = npv_at_log_rate(previous_log)
+
+    for current_log in samples[1:]:
+        current_value = npv_at_log_rate(current_log)
+        if math.isfinite(previous_value) and abs(previous_value) < 1e-7:
+            roots.append(previous_log)
+        if (
+            math.isfinite(previous_value)
+            and math.isfinite(current_value)
+            and previous_value * current_value < 0
+        ):
+            low, high = previous_log, current_log
+            low_value = previous_value
+            for _ in range(100):
+                middle = (low + high) / 2.0
+                middle_value = npv_at_log_rate(middle)
+                if not math.isfinite(middle_value) or abs(middle_value) < 1e-9:
+                    low = high = middle
+                    break
+                if low_value * middle_value <= 0:
+                    high = middle
+                else:
+                    low = middle
+                    low_value = middle_value
+            roots.append((low + high) / 2.0)
+        previous_log = current_log
+        previous_value = current_value
+
+    if math.isfinite(previous_value) and abs(previous_value) < 1e-7:
+        roots.append(previous_log)
+    if not roots:
+        return None
+
+    unique_roots = []
+    for root in roots:
+        if not any(abs(root - existing) < 1e-7 for existing in unique_roots):
+            unique_roots.append(root)
+    target = math.log1p(guess)
+    selected = min(unique_roots, key=lambda root: abs(root - target))
+    result = math.exp(selected) - 1.0
+    return result if math.isfinite(result) else None
+
+
+def _portfolio_irr_payload(conn, profile_ids, as_of_date=None, excluded_tickers=None):
+    """Build a strict money-weighted portfolio IRR.
+
+    No basis/date approximation is used. IRR is returned only when dated trade
+    quantities reconcile to the current holdings and recorded lifetime
+    dividends are represented by actual payment-ledger rows.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    excluded = {
+        str(ticker or "").strip().upper()
+        for ticker in (excluded_tickers or [])
+        if str(ticker or "").strip()
+    }
+    if not ids:
+        return {
+            "irr": None,
+            "irr_pct": None,
+            "coverage_complete": False,
+            "reason": "No portfolio was selected.",
+        }
+
+    as_of = _portfolio_event_date(as_of_date) or datetime.date.today()
+    placeholders = ",".join("?" * len(ids))
+    transaction_rows = conn.execute(
+        f"""SELECT ticker, profile_id, transaction_type, transaction_date,
+                   shares, price_per_share, fees, notes
+            FROM transactions
+            WHERE profile_id IN ({placeholders})
+            ORDER BY transaction_date, id""",
+        ids,
+    ).fetchall()
+    holding_rows = conn.execute(
+        f"""SELECT ticker, quantity, current_value, total_divs_received
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND COALESCE(quantity, 0) > 1e-9""",
+        ids,
+    ).fetchall()
+
+    cash_flows = []
+    transaction_tickers = set()
+    net_transaction_shares = {}
+    transfer_share_deltas = {}
+    transaction_count = 0
+    invalid_transaction_count = 0
+    zero_value_transaction_count = 0
+    invalid_transaction_tickers = set()
+    zero_value_transaction_tickers = set()
+    for raw_row in transaction_rows:
+        row = dict(raw_row)
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if ticker in excluded:
+            continue
+        txn_type = str(row.get("transaction_type") or "BUY").strip().upper()
+        if txn_type not in {"BUY", "SELL"}:
+            continue
+        shares = abs(float(row.get("shares") or 0))
+        if not ticker or shares <= 0:
+            continue
+        share_delta = shares if txn_type == "BUY" else -shares
+        transaction_tickers.add(ticker)
+        net_transaction_shares[ticker] = net_transaction_shares.get(ticker, 0.0) + share_delta
+        if _is_transfer_txn(row.get("notes")):
+            transfer_share_deltas[ticker] = transfer_share_deltas.get(ticker, 0.0) + share_delta
+            continue
+
+        flow_date = _portfolio_event_date(row.get("transaction_date"))
+        if flow_date is None or flow_date > as_of:
+            invalid_transaction_count += 1
+            invalid_transaction_tickers.add(ticker)
+            continue
+        price = float(row.get("price_per_share") or 0)
+        fees = abs(float(row.get("fees") or 0))
+        gross = shares * price
+        amount = -(gross + fees) if txn_type == "BUY" else gross - fees
+        if abs(amount) <= 1e-9:
+            zero_value_transaction_count += 1
+            zero_value_transaction_tickers.add(ticker)
+            continue
+        cash_flows.append((flow_date, amount))
+        transaction_count += 1
+
+    current_quantities = {}
+    current_values = {}
+    current_value = 0.0
+    total_scope_current_value = 0.0
+    excluded_current_value = 0.0
+    total_recorded_dividends = 0.0
+    recorded_dividends_by_ticker = {}
+    for raw_row in holding_rows:
+        row = dict(raw_row)
+        ticker = str(row.get("ticker") or "").strip().upper()
+        quantity = max(0.0, float(row.get("quantity") or 0))
+        holding_value = max(0.0, float(row.get("current_value") or 0))
+        total_scope_current_value += holding_value
+        if ticker in excluded:
+            excluded_current_value += holding_value
+            continue
+        current_quantities[ticker] = current_quantities.get(ticker, 0.0) + quantity
+        current_values[ticker] = current_values.get(ticker, 0.0) + holding_value
+        current_value += holding_value
+        recorded_dividends = max(0.0, float(row.get("total_divs_received") or 0))
+        total_recorded_dividends += recorded_dividends
+        recorded_dividends_by_ticker[ticker] = (
+            recorded_dividends_by_ticker.get(ticker, 0.0) + recorded_dividends
+        )
+
+    missing_transaction_tickers = sorted(
+        ticker for ticker, quantity in current_quantities.items()
+        if quantity > 1e-9 and ticker not in transaction_tickers
+    )
+    share_mismatches = []
+    for ticker in sorted(set(current_quantities) | set(net_transaction_shares)):
+        held = current_quantities.get(ticker, 0.0)
+        transacted = net_transaction_shares.get(ticker, 0.0)
+        tolerance = max(0.0001, abs(held) * 0.0001)
+        if abs(held - transacted) > tolerance:
+            share_mismatches.append({
+                "ticker": ticker,
+                "holding_shares": round(held, 6),
+                "transaction_shares": round(transacted, 6),
+                "difference": round(held - transacted, 6),
+            })
+
+    unpaired_transfer_tickers = sorted(
+        ticker for ticker, delta in transfer_share_deltas.items()
+        if abs(delta) > max(0.0001, abs(current_quantities.get(ticker, 0.0)) * 0.0001)
+    )
+
+    payment_ids = _dividend_payment_profile_ids_for_read(conn, ids)
+    payment_placeholders = ",".join("?" * len(payment_ids))
+    dividend_rows = conn.execute(
+        f"""SELECT ticker, profile_id, payment_date, amount, source
+            FROM dividend_payments
+            WHERE profile_id IN ({payment_placeholders})
+              AND payment_date IS NOT NULL
+              AND LOWER(COALESCE(source, '')) != ?
+            ORDER BY payment_date, id""",
+        [*payment_ids, REFRESH_ESTIMATE_DIVIDEND_SOURCE],
+    ).fetchall()
+    actual_dividend_total = 0.0
+    actual_dividends_by_ticker = {}
+    dividend_payment_count = 0
+    for raw_row in dividend_rows:
+        row = dict(raw_row)
+        flow_date = _portfolio_event_date(row.get("payment_date"))
+        amount = float(row.get("amount") or 0)
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if ticker in excluded:
+            continue
+        if flow_date is None or flow_date > as_of or amount <= 0:
+            continue
+        cash_flows.append((flow_date, amount))
+        actual_dividend_total += amount
+        actual_dividends_by_ticker[ticker] = actual_dividends_by_ticker.get(ticker, 0.0) + amount
+        dividend_payment_count += 1
+
+    missing_dividend_tickers = []
+    for ticker, recorded_amount in sorted(recorded_dividends_by_ticker.items()):
+        actual_amount = actual_dividends_by_ticker.get(ticker, 0.0)
+        missing_amount = max(0.0, recorded_amount - actual_amount)
+        tolerance = max(0.01, recorded_amount * 0.0001)
+        if missing_amount > tolerance:
+            missing_dividend_tickers.append({
+                "ticker": ticker,
+                "recorded_amount": round(recorded_amount, 2),
+                "dated_amount": round(actual_amount, 2),
+                "missing_amount": round(missing_amount, 2),
+            })
+    missing_dividend_amount = sum(item["missing_amount"] for item in missing_dividend_tickers)
+    dividend_history_complete = not missing_dividend_tickers
+
+    failure_reason = None
+    if missing_transaction_tickers:
+        sample = ", ".join(missing_transaction_tickers[:5])
+        suffix = "…" if len(missing_transaction_tickers) > 5 else ""
+        failure_reason = f"Import complete transaction history for: {sample}{suffix}."
+    elif invalid_transaction_count:
+        failure_reason = "Some investment transactions have missing or future dates."
+    elif zero_value_transaction_count:
+        failure_reason = "Some non-transfer investment transactions have no cash value."
+    elif unpaired_transfer_tickers:
+        sample = ", ".join(unpaired_transfer_tickers[:5])
+        suffix = "…" if len(unpaired_transfer_tickers) > 5 else ""
+        failure_reason = f"Transfer history is incomplete for: {sample}{suffix}."
+    elif share_mismatches:
+        sample = ", ".join(item["ticker"] for item in share_mismatches[:5])
+        suffix = "…" if len(share_mismatches) > 5 else ""
+        failure_reason = f"Transaction shares do not reconcile to current holdings for: {sample}{suffix}."
+    elif not dividend_history_complete:
+        sample = ", ".join(item["ticker"] for item in missing_dividend_tickers[:5])
+        suffix = "…" if len(missing_dividend_tickers) > 5 else ""
+        failure_reason = f"Dated dividend payment history is incomplete for: {sample}{suffix}."
+
+    coverage_complete = failure_reason is None
+    unreconciled_tickers = (
+        set(missing_transaction_tickers)
+        | {item["ticker"] for item in share_mismatches}
+        | set(unpaired_transfer_tickers)
+        | invalid_transaction_tickers
+        | zero_value_transaction_tickers
+        | {item["ticker"] for item in missing_dividend_tickers}
+    )
+    unreconciled_current_value = sum(
+        value for ticker, value in current_values.items()
+        if ticker in unreconciled_tickers
+    )
+    unreconciled_current_value_pct = (
+        unreconciled_current_value / current_value * 100.0
+        if current_value > 0 else 0.0
+    )
+    excluded_current_value_pct = (
+        excluded_current_value / total_scope_current_value * 100.0
+        if total_scope_current_value > 0 else 0.0
+    )
+    if coverage_complete and current_value > 0:
+        cash_flows.append((as_of, current_value))
+
+    irr = _xirr(cash_flows) if coverage_complete else None
+    valid_dates = sorted(
+        set(
+            parsed
+            for flow_date, amount in cash_flows
+            if abs(float(amount or 0)) > 1e-9
+            for parsed in [_portfolio_event_date(flow_date)]
+            if parsed is not None
+        )
+    )
+    reason = failure_reason
+    if coverage_complete and irr is None:
+        reason = "IRR needs cash flows on at least two dates with both investment and proceeds."
+
+    return {
+        "irr": round(irr, 8) if irr is not None else None,
+        "irr_pct": round(irr * 100.0, 4) if irr is not None else None,
+        "as_of_date": as_of.isoformat(),
+        "start_date": valid_dates[0].isoformat() if valid_dates else None,
+        "end_date": valid_dates[-1].isoformat() if valid_dates else None,
+        "transaction_count": transaction_count,
+        "dividend_payment_count": dividend_payment_count,
+        "missing_transaction_tickers": missing_transaction_tickers,
+        "invalid_transaction_count": invalid_transaction_count,
+        "invalid_transaction_tickers": sorted(invalid_transaction_tickers),
+        "zero_value_transaction_count": zero_value_transaction_count,
+        "zero_value_transaction_tickers": sorted(zero_value_transaction_tickers),
+        "unpaired_transfer_tickers": unpaired_transfer_tickers,
+        "share_mismatches": share_mismatches,
+        "recorded_dividend_total": round(total_recorded_dividends, 2),
+        "actual_dividend_total": round(actual_dividend_total, 2),
+        "missing_dividend_amount": round(missing_dividend_amount, 2),
+        "missing_dividend_tickers": missing_dividend_tickers,
+        "dividend_history_complete": dividend_history_complete,
+        "unreconciled_current_value": round(unreconciled_current_value, 2),
+        "unreconciled_current_value_pct": round(unreconciled_current_value_pct, 2),
+        "reconciled_current_value_pct": round(100.0 - unreconciled_current_value_pct, 2),
+        "excluded_tickers": sorted(excluded),
+        "excluded_current_value": round(excluded_current_value, 2),
+        "excluded_current_value_pct": round(excluded_current_value_pct, 2),
+        "included_current_value": round(current_value, 2),
+        "coverage_complete": coverage_complete,
+        "is_estimate": False,
+        "reason": reason,
+    }
+
+
 app = Flask(__name__)
 app.json = NanSafeJSONProvider(app)
 app.secret_key = "portfolio-tracking-client-secret-key"
@@ -5785,7 +6147,7 @@ def api_nav_history():
 
 @app.route("/api/portfolio-value", methods=["GET"])
 def api_portfolio_value():
-    """Return holdings, cash, and total account value for the active view."""
+    """Return holdings, cash, account value, and IRR for the active view."""
     is_aggregate, profile_ids = get_profile_filter()
     conn = get_connection()
     try:

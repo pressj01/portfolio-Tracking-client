@@ -2,6 +2,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -17,6 +18,24 @@ from app import (
     _validate_sell_quantity_available,
     _yahoo_symbol_for_ticker,
 )
+
+
+class PortfolioIrrMathTest(unittest.TestCase):
+    def test_xirr_annualizes_irregular_cash_flows(self):
+        result = app_module._xirr([
+            ("2025-01-01", -1000),
+            ("2025-07-02", 50),
+            ("2026-01-01", 1050),
+        ])
+
+        self.assertIsNotNone(result)
+        self.assertAlmostEqual(result, 0.1025, delta=0.001)
+
+    def test_xirr_requires_both_investment_and_proceeds(self):
+        self.assertIsNone(app_module._xirr([
+            ("2025-01-01", -1000),
+            ("2026-01-01", -100),
+        ]))
 
 
 class BrokerImportRoutingTest(unittest.TestCase):
@@ -798,6 +817,255 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             return row[0] if row else None
         finally:
             conn.close()
+
+    def test_portfolio_value_includes_transaction_based_irr(self):
+        today = datetime.date.today()
+        purchase_date = (today - datetime.timedelta(days=365)).isoformat()
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 0)"
+        )
+        self._execute(
+            """INSERT INTO all_account_info
+               (ticker, profile_id, quantity, purchase_value, current_value,
+                purchase_date, total_divs_received)
+               VALUES ('ABC', 1, 10, 1000, 1100, ?, 0)""",
+            (purchase_date,),
+        )
+        self._execute(
+            """INSERT INTO transactions
+               (ticker, profile_id, transaction_type, transaction_date,
+                shares, price_per_share, fees, notes)
+               VALUES ('ABC', 1, 'BUY', ?, 10, 100, 0, '')""",
+            (purchase_date,),
+        )
+        # Forward estimates are not realized cash flows and must not affect IRR.
+        self._execute(
+            """INSERT INTO dividend_payments
+               (ticker, profile_id, payment_date, amount, source)
+               VALUES ('ABC', 1, ?, 999, 'refresh_estimate')""",
+            ((today - datetime.timedelta(days=180)).isoformat(),),
+        )
+
+        response = self.client.get("/api/portfolio-value?profile_id=1")
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertAlmostEqual(payload["irr"], 0.10, places=5)
+        self.assertAlmostEqual(payload["irr_pct"], 10.0, places=3)
+        self.assertEqual(payload["irr_details"]["transaction_count"], 1)
+        self.assertEqual(payload["irr_details"]["dividend_payment_count"], 0)
+        self.assertTrue(payload["irr_details"]["coverage_complete"])
+        self.assertEqual(payload["irr_details"]["unreconciled_current_value_pct"], 0)
+        self.assertFalse(payload["irr_details"]["is_estimate"])
+
+    def test_owner_portfolio_irr_uses_owner_source_account_history(self):
+        today = datetime.date.today()
+        purchase_date = (today - datetime.timedelta(days=365)).isoformat()
+        conn = self._get_connection()
+        try:
+            conn.executemany(
+                "INSERT INTO profiles (id, name, include_in_owner) VALUES (?, ?, ?)",
+                [(1, "Owner", 0), (5, "Owner Source", 1)],
+            )
+            conn.executemany(
+                """INSERT INTO all_account_info
+                   (ticker, profile_id, quantity, purchase_value, current_value,
+                    purchase_date, total_divs_received)
+                   VALUES ('ABC', ?, 10, 1000, 1100, ?, 0)""",
+                [(1, purchase_date), (5, purchase_date)],
+            )
+            conn.execute(
+                """INSERT INTO transactions
+                   (ticker, profile_id, transaction_type, transaction_date,
+                    shares, price_per_share, fees, notes)
+                   VALUES ('ABC', 5, 'BUY', ?, 10, 100, 0, '')""",
+                (purchase_date,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        response = self.client.get("/api/portfolio-value?profile_id=1")
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertAlmostEqual(payload["irr"], 0.10, places=5)
+        self.assertEqual(payload["irr_details"]["source_profile_ids"], [5])
+        self.assertTrue(payload["irr_details"]["coverage_complete"])
+
+    def test_portfolio_value_refuses_irr_when_trades_are_missing(self):
+        today = datetime.date.today()
+        purchase_date = (today - datetime.timedelta(days=365)).isoformat()
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Broker Snapshot', 0)"
+        )
+        self._execute(
+            """INSERT INTO all_account_info
+               (ticker, profile_id, quantity, purchase_value, current_value,
+                purchase_date, total_divs_received)
+               VALUES ('XYZ', 2, 20, 1000, 1100, ?, 0)""",
+            (purchase_date,),
+        )
+
+        response = self.client.get("/api/portfolio-value?profile_id=2")
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertIsNone(payload["irr"])
+        self.assertFalse(payload["irr_details"]["coverage_complete"])
+        self.assertEqual(payload["irr_details"]["missing_transaction_tickers"], ["XYZ"])
+        self.assertEqual(payload["irr_details"]["unreconciled_current_value_pct"], 100)
+        self.assertIn("Import complete transaction history", payload["irr_details"]["reason"])
+
+    def test_portfolio_value_refuses_irr_when_dated_dividends_are_missing(self):
+        today = datetime.date.today()
+        purchase_date = (today - datetime.timedelta(days=365)).isoformat()
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (5, 'Missing Dividends', 0)"
+        )
+        self._execute(
+            """INSERT INTO all_account_info
+               (ticker, profile_id, quantity, purchase_value, current_value,
+                purchase_date, total_divs_received)
+               VALUES ('INCM', 5, 10, 1000, 1100, ?, 50)""",
+            (purchase_date,),
+        )
+        self._execute(
+            """INSERT INTO transactions
+               (ticker, profile_id, transaction_type, transaction_date,
+                shares, price_per_share, fees, notes)
+               VALUES ('INCM', 5, 'BUY', ?, 10, 100, 0, '')""",
+            (purchase_date,),
+        )
+
+        response = self.client.get("/api/portfolio-value?profile_id=5")
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertIsNone(payload["irr"])
+        self.assertFalse(payload["irr_details"]["dividend_history_complete"])
+        self.assertEqual(payload["irr_details"]["missing_dividend_amount"], 50)
+        self.assertEqual(payload["irr_details"]["missing_dividend_tickers"][0]["ticker"], "INCM")
+        self.assertIn("Dated dividend payment history is incomplete", payload["irr_details"]["reason"])
+
+    def test_portfolio_value_can_exclude_incomplete_tickers_from_irr(self):
+        today = datetime.date.today()
+        purchase_date = (today - datetime.timedelta(days=365)).isoformat()
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (30, 'Mixed IRR', 0)"
+        )
+        conn = self._get_connection()
+        try:
+            conn.executemany(
+                """INSERT INTO all_account_info
+                   (ticker, profile_id, quantity, purchase_value, current_value,
+                    purchase_date, total_divs_received)
+                   VALUES (?, 30, 10, 1000, ?, ?, ?)""",
+                [
+                    ("GOOD", 1100, purchase_date, 0),
+                    ("BAD", 900, purchase_date, 50),
+                ],
+            )
+            conn.execute(
+                """INSERT INTO transactions
+                   (ticker, profile_id, transaction_type, transaction_date,
+                    shares, price_per_share, fees, notes)
+                   VALUES ('GOOD', 30, 'BUY', ?, 10, 100, 0, '')""",
+                (purchase_date,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        unavailable = self.client.get("/api/portfolio-value?profile_id=30").get_json()
+        filtered_response = self.client.get(
+            "/api/portfolio-value?profile_id=30&irr_exclude=bad"
+        )
+
+        self.assertIsNone(unavailable["irr"])
+        self.assertEqual(
+            unavailable["irr_details"]["missing_transaction_tickers"],
+            ["BAD"],
+        )
+        self.assertEqual(
+            filtered_response.status_code,
+            200,
+            filtered_response.get_data(as_text=True),
+        )
+        filtered = filtered_response.get_json()
+        self.assertAlmostEqual(filtered["irr"], 0.10, places=5)
+        self.assertTrue(filtered["irr_details"]["coverage_complete"])
+        self.assertEqual(filtered["irr_details"]["excluded_tickers"], ["BAD"])
+        self.assertEqual(filtered["irr_details"]["excluded_current_value"], 900)
+        self.assertEqual(filtered["irr_details"]["excluded_current_value_pct"], 45)
+        self.assertEqual(filtered["irr_details"]["included_current_value"], 1100)
+
+    def test_portfolio_irr_does_not_treat_zero_value_transfer_as_investment_history(self):
+        today = datetime.date.today()
+        purchase_date = (today - datetime.timedelta(days=365)).isoformat()
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (3, 'Transferred Account', 0)"
+        )
+        self._execute(
+            """INSERT INTO all_account_info
+               (ticker, profile_id, quantity, purchase_value, current_value,
+                purchase_date, total_divs_received)
+               VALUES ('MOVE', 3, 10, 1000, 1100, ?, 0)""",
+            (purchase_date,),
+        )
+        self._execute(
+            """INSERT INTO transactions
+               (ticker, profile_id, transaction_type, transaction_date,
+                shares, price_per_share, fees, notes)
+               VALUES ('MOVE', 3, 'BUY', ?, 10, 0, 0, '[Transfer in]')""",
+            (purchase_date,),
+        )
+
+        response = self.client.get("/api/portfolio-value?profile_id=3")
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertIsNone(payload["irr"])
+        self.assertEqual(payload["irr_details"]["transaction_count"], 0)
+        self.assertEqual(payload["irr_details"]["unpaired_transfer_tickers"], ["MOVE"])
+        self.assertFalse(payload["irr_details"]["coverage_complete"])
+
+    def test_portfolio_irr_excludes_holdings_without_cash_flow_dates(self):
+        today = datetime.date.today()
+        purchase_date = (today - datetime.timedelta(days=365)).isoformat()
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (4, 'Mixed History', 0)"
+        )
+        conn = self._get_connection()
+        try:
+            conn.executemany(
+                """INSERT INTO all_account_info
+                   (ticker, profile_id, quantity, purchase_value, current_value,
+                    purchase_date, import_date, total_divs_received)
+                   VALUES (?, 4, ?, ?, ?, ?, ?, 0)""",
+                [
+                    ("DATED", 10, 1000, 1100, purchase_date, None),
+                    ("UNDATED", 100, 9000, 10000, None, None),
+                ],
+            )
+            conn.execute(
+                """INSERT INTO transactions
+                   (ticker, profile_id, transaction_type, transaction_date,
+                    shares, price_per_share, fees, notes)
+                   VALUES ('DATED', 4, 'BUY', ?, 10, 100, 0, '')""",
+                (purchase_date,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        response = self.client.get("/api/portfolio-value?profile_id=4")
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertIsNone(payload["irr"])
+        self.assertEqual(payload["irr_details"]["missing_transaction_tickers"], ["UNDATED"])
+        self.assertFalse(payload["irr_details"]["coverage_complete"])
 
     def test_snowball_transactions_layer_on_broker_and_generic_positions(self):
         sources = ["schwab", "etrade", "fidelity", "shear_group", "generic", "other"]
