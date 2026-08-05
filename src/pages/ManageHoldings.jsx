@@ -1088,19 +1088,34 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
   const [syncing, setSyncing] = useState(false)
   const [filter, setFilter] = useState('')
   const [dirty, setDirty] = useState(false)
+  const [loadError, setLoadError] = useState(null)
 
   const load = async () => {
     setLoading(true)
+    setLoadError(null)
     try {
       const res = await pf('/api/drip-matrix')
       const data = await res.json()
       setProfiles(data.profiles || [])
       setTickers(data.tickers || [])
-    } catch (e) { console.error(e) }
+    } catch (e) {
+      console.error(e)
+      setProfiles([])
+      setTickers([])
+      setLoadError(e?.message || String(e))
+    }
     setLoading(false)
   }
 
   useEffect(() => { load() }, [pf])
+
+  // Escape always closes — the header Close button can be pushed out of view
+  // on narrow layouts, so never leave the modal without an exit.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !syncing) onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, syncing])
 
   const handleToggle = async (ticker, profileId, currentVal) => {
     const newVal = !currentVal
@@ -1159,27 +1174,35 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
   const tdStyle = { padding: '5px 10px', borderBottom: '1px solid var(--grid-line)' }
 
   return (
-    <div style={{
-      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-      background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      zIndex: 1000,
-    }}>
-      <div className="card" style={{ width: Math.min(900, 300 + profiles.length * 140), maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+    <div
+      onMouseDown={e => { if (e.target === e.currentTarget && !syncing) onClose() }}
+      style={{
+        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+        background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 1000,
+      }}
+    >
+      {/* Width floor keeps the header controls (incl. Close) inside the card even
+          with zero sub-profiles, which would otherwise size this to 300px.
+          maxWidth/maxHeight are viewport-relative so this still fits small monitors. */}
+      <div className="card" style={{ width: Math.max(640, Math.min(900, 300 + profiles.length * 140)), maxWidth: '95vw', maxHeight: '90vh', margin: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* flexShrink 0: on a short window the table must absorb the squeeze, never the
+            header — otherwise the Close button gets clipped vertically instead. */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', flexShrink: 0, marginBottom: '0.75rem' }}>
           <h2 style={{ margin: 0 }}>DRIP Matrix</h2>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <input
               type="text" placeholder="Filter ticker..." value={filter}
               onChange={e => setFilter(e.target.value)}
               style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid var(--p-334155)', background: 'var(--p-0f1b2d)', color: 'var(--text)', fontSize: '0.8rem', width: 130 }}
             />
-            <button className="btn btn-primary" onClick={handleSync} disabled={syncing}>
+            <button className="btn btn-primary" style={{ whiteSpace: 'nowrap' }} onClick={handleSync} disabled={syncing || tickers.length === 0}>
               {syncing ? <><span className="spinner" /> Syncing...</> : 'Sync to Owner'}
             </button>
-            <button className="btn btn-secondary" onClick={onClose}>Close</button>
+            <button className="btn btn-secondary" style={{ whiteSpace: 'nowrap' }} onClick={onClose} disabled={syncing}>Close</button>
           </div>
         </div>
-        <p style={{ fontSize: '0.75rem', color: 'var(--p-888)', margin: '0 0 0.5rem' }}>
+        <p style={{ fontSize: '0.75rem', color: 'var(--p-888)', margin: '0 0 0.5rem', flexShrink: 0 }}>
           Toggle DRIP per ticker per account. Click "Sync to Owner" to update Owner's DRIP flags and share counts.
         </p>
 
@@ -1188,7 +1211,7 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
           const dripIncome = tickers.reduce((s, t) => s + (t.drip_income || 0), 0)
           const pct = totalIncome > 0 ? (dripIncome / totalIncome * 100) : 0
           return (
-            <div style={{ display: 'flex', gap: '2rem', marginBottom: '0.75rem', padding: '0.6rem 1rem', background: 'var(--p-0f1b2d)', borderRadius: 6, fontSize: '0.85rem' }}>
+            <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', flexShrink: 0, marginBottom: '0.75rem', padding: '0.6rem 1rem', background: 'var(--p-0f1b2d)', borderRadius: 6, fontSize: '0.85rem' }}>
               <div>
                 <span style={{ color: 'var(--p-888)' }}>Total Annual Income: </span>
                 <span style={{ color: 'var(--text)', fontWeight: 600 }}>{formatMoney(totalIncome)}</span>
@@ -1207,6 +1230,27 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
 
         {loading ? (
           <div style={{ textAlign: 'center', padding: '2rem' }}><span className="spinner" /> Loading...</div>
+        ) : loadError ? (
+          <div style={{ padding: '1.5rem', textAlign: 'center', fontSize: '0.85rem' }}>
+            <div style={{ color: 'var(--danger)', fontWeight: 600, marginBottom: '0.4rem' }}>Couldn't load the DRIP matrix</div>
+            <div style={{ color: 'var(--p-888)', marginBottom: '0.9rem' }}>
+              {loadError.includes('JSON')
+                ? 'The backend is not responding. Make sure the Flask server on port 5001 is running, then retry.'
+                : loadError}
+            </div>
+            <button className="btn btn-secondary" onClick={load}>Retry</button>
+          </div>
+        ) : profiles.length === 0 ? (
+          <div style={{ padding: '1.5rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--p-888)' }}>
+            No sub-accounts are included in Owner, so there is nothing to toggle here.
+            <div style={{ marginTop: '0.5rem' }}>
+              Turn on "Include in Owner" for your brokerage accounts on the Manage Portfolios screen, then reopen this matrix.
+            </div>
+          </div>
+        ) : tickers.length === 0 ? (
+          <div style={{ padding: '1.5rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--p-888)' }}>
+            None of Owner's tickers are held in the included sub-accounts, so there is nothing to map.
+          </div>
         ) : (
           <div style={{ overflow: 'auto', flex: 1 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
@@ -1221,6 +1265,13 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
                 </tr>
               </thead>
               <tbody>
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={profiles.length + 3} style={{ ...tdStyle, textAlign: 'center', color: 'var(--p-888)', padding: '1.25rem' }}>
+                      No ticker matches "{filter}".
+                    </td>
+                  </tr>
+                )}
                 {filtered.map(t => (
                   <tr key={t.ticker}>
                     <td style={{ ...tdStyle, fontWeight: 600, textAlign: 'left' }}>{t.ticker}</td>
