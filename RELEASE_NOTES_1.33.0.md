@@ -4,6 +4,13 @@ Desktop installers are available for Windows PC, Intel Mac, and Apple-silicon Ma
 
 This release includes every change merged after v1.32.1: 39 commits spanning two new pages, portfolio-performance analysis, income planning, options research, imports, market-data reliability, layout improvements, and automated coverage.
 
+## Desktop Deployment
+
+- Added a GitHub Actions deployment path for Windows PC, Intel Mac, and Apple-silicon Mac installers from the same release workflow.
+- Windows builds are signed through Microsoft Azure Trusted Signing using the public certificate profile for James Presser, so the installer, app executable, and bundled backend executable are Authenticode signed before upload.
+- Added CI signature verification for the Windows installer, desktop executable, and packaged backend before the installer artifact is published.
+- The GitHub release now uses this full release description so Windows and Mac downloads share one complete feature and bug-fix summary.
+
 ## New Pages
 
 ### Put Selling Scanner
@@ -93,6 +100,8 @@ This release includes every change merged after v1.32.1: 39 commits spanning two
 
 ## Options, Imports, Watchlists, and Scanners
 
+- Updated the Option Trade Tracker with improved open-risk handling, realized-performance calculations, income classification, and a clearer execution ledger for multi-leg option positions.
+- Added focused backend coverage for option trade tracker calculations and close/expire behavior.
 - Added CBTX option-import parsing and automated coverage.
 - Routed broker imports by each portfolio’s configured source so transactions and positions land in the correct account.
 - Preserved frozen original cost basis during transaction rollups while allowing broker-adjusted basis to remain authoritative for broker-managed accounts.
@@ -156,5 +165,7 @@ The following commits are included after v1.32.1:
 - Route broker imports by portfolio source.
 - Unify portfolio performance periods and grades.
 - Add the Put Selling Scanner and income-planning updates.
+- Update the Option Trade Tracker calculations, ledger behavior, and tests.
+- Add signed Windows deployment and a shared PC/Mac GitHub release description.
 
 **Full Changelog**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.32.1...v1.33.0

@@ -53,6 +53,32 @@ jobs:
 
       - name: Build frontend and Windows installer
         run: npm run build && npx electron-builder --win --publish never
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Verify Windows signatures
+        shell: powershell
+        run: |
+          $files = @(
+            "release\win-unpacked\Portfolio Tracking Client.exe",
+            "release\win-unpacked\resources\flask-backend\backend.exe",
+            "release\Portfolio Tracking Client Setup $((Get-Content package.json | ConvertFrom-Json).version).exe"
+          )
+
+          foreach ($file in $files) {
+            if (-not (Test-Path $file)) {
+              throw "Expected signed file was not found: $file"
+            }
+
+            $signature = Get-AuthenticodeSignature -FilePath $file
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid signature for $file. Status: $($signature.Status)"
+            }
+
+            Write-Host "$file signed by $($signature.SignerCertificate.Subject)"
+          }
 
       - name: Smoke test packaged Windows app
         shell: powershell
@@ -119,7 +145,7 @@ jobs:
           files: |
             release/*.exe
             release/*.blockmap
-          generate_release_notes: true
+          body_path: RELEASE_NOTES_1.33.0.md
 
   build-mac:
     if: ${{ github.event.inputs.platform != 'windows' }}
@@ -178,3 +204,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: release/*.dmg
+          body_path: RELEASE_NOTES_1.33.0.md
