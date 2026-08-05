@@ -4391,12 +4391,46 @@ function DiversificationHelp() {
         that is invisible position-by-position becomes obvious.
       </p>
 
-      <h3>X-Ray Funds</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How the page opens</h3>
+      <HelpScreenshot
+        src="./help-screenshots/diversification/as-held.png"
+        alt="The Diversification page with X-Ray Funds off, showing the donut and ranked bar list of all 51 positions exactly as they are held"
+        caption="X-Ray off: one slice per position, the portfolio as your broker shows it."
+      />
       <p style={{ marginBottom: '1rem' }}>
-        The page opens <strong>off</strong> — your positions as you actually hold them,
-        one slice per holding. Turn it <strong>on</strong> and every fund is replaced by
-        what is inside it, with identical constituents merging into a single slice no
-        matter how many funds they arrived through.
+        The page opens with <strong>X-Ray Funds</strong> off — your positions as you actually
+        hold them, largest first, with the donut and the ranked list always agreeing on a
+        slice's colour. Nothing here is looked through yet, so CHPY is simply CHPY.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The control bar</h3>
+      <HelpScreenshot
+        src="./help-screenshots/diversification/controls.png"
+        alt="The control bar with X-Ray Funds checked, the Economic exposure and Literal holdings buttons, and the Define funds, Resolve gaps, and Refresh all buttons"
+        caption="Turning X-Ray on reveals the Synthetic funds switch. The count on Define funds is how many of your funds still have no holdings data."
+      />
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>X-Ray Funds</strong> — replaces every fund with what is inside it.</li>
+        <li><strong>Synthetic funds</strong> — how option-income funds report themselves; see below.</li>
+        <li><strong>Define funds (n)</strong> — jumps to Fund Definitions, already filtered to the
+          funds nothing could be found for. The number is that count.</li>
+        <li><strong>Resolve gaps</strong> — looks up new funds and retries incomplete ones against
+          their issuer's latest holdings download.</li>
+        <li><strong>Refresh all</strong> — re-fetches everything. Both run in the background and
+          report progress on a bar; hand-entered definitions are never overwritten.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>X-Ray Funds</h3>
+      <HelpScreenshot
+        src="./help-screenshots/diversification/xray-lookthrough.png"
+        alt="X-Ray on: the collateral and undisclosed banners above the Look-through holdings card, where 51 positions have become 2,735 constituents led by cash collateral, Gold, and NVDA"
+        caption="Same portfolio, looked through: 51 positions become 2,735 constituents, and NVDA arrives as one 3.30% slice instead of hiding inside a dozen funds."
+      />
+      <p style={{ marginBottom: '1rem' }}>
+        Every fund is replaced by what is inside it, with identical constituents merging into a
+        single slice no matter how many funds they arrived through. The two banners above the
+        chart are the honesty notes — how much is fund collateral rather than exposure, and how
+        much no issuer discloses. Both are explained below.
       </p>
       <p style={{ marginBottom: '1rem' }}>
         Look-through is recursive. Several income funds are really a wrapper around one
@@ -4406,51 +4440,90 @@ function DiversificationHelp() {
         stays put, because expanding it would convert known exposure into Undisclosed.
       </p>
 
-      <h3>Economic exposure vs. Literal holdings</h3>
-      <p style={{ marginBottom: '1rem' }}>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Economic exposure vs. Literal holdings</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
         Option-income funds do not hold what they track. KGLD's filed holdings are three
         Treasury bills — it reaches gold through options written against that collateral.
         Read literally, a portfolio full of these funds looks like a giant cash position.
+        The top of the same portfolio, in each mode, shows what that costs you:
       </p>
-      <ul style={{ marginBottom: '1rem' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ flex: '1 1 340px', minWidth: 300 }}>
+          <HelpScreenshot
+            src="./help-screenshots/diversification/mode-economic.png"
+            alt="Top constituents in Economic exposure mode: cash collateral 9.40%, Gold 3.95%, NVDA 3.30%, Bitcoin 2.41%"
+            caption="Economic exposure — Gold and Bitcoin appear as themselves, collateral is 9.40%."
+          />
+        </div>
+        <div style={{ flex: '1 1 340px', minWidth: 300 }}>
+          <HelpScreenshot
+            src="./help-screenshots/diversification/mode-literal.png"
+            alt="The same constituents in Literal holdings mode: cash collateral 16.34%, no Gold or Bitcoin rows, and an Options and derivatives row at 2.36%"
+            caption="Literal holdings — the same money reads as 16.34% collateral plus option legs."
+          />
+        </div>
+      </div>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Economic exposure</strong> (default) — KGLD reports as Gold, BTCI as
           Bitcoin when the underlying exposure can be stated accurately.</li>
         <li><strong>Literal holdings</strong> — every fund reports exactly what it files,
           Treasury collateral and option legs included. Useful for seeing how much of the
           portfolio is really sitting in short-term paper.</li>
       </ul>
-      <h3>Cash, equivalents, and fund collateral</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Funds that genuinely hold their underlying equities (QQQI, SPYI, CHPY) are
+        unaffected by this switch — their filed holdings are already correct, which is why
+        NVDA, IEFA, AAPL, and MSFT hold the same weight in both pictures.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Cash, equivalents, and fund collateral</h3>
       <p style={{ marginBottom: '1rem' }}>
         <strong>Cash &amp; equivalents</strong> is actual cash-like exposure, including
         money-market funds. <strong>Cash &amp; T-bill collateral</strong> is shown separately:
         it is held inside option or leveraged funds to back derivatives and financing, so it
-        is not spendable account cash. The page lists its largest source funds. Economic mode
-        replaces collateral only when the underlying exposure can be stated accurately;
-        otherwise it remains visible rather than being guessed.
-      </p>
-      <p style={{ marginBottom: '1rem' }}>
-        Funds that genuinely hold their underlying equities (QQQI, SPYI, CHPY) are
-        unaffected by this switch — their filed holdings are already correct.
+        is not spendable account cash. Whenever it reaches 0.25% of the portfolio the banner
+        appears and names its largest source funds. Economic mode replaces collateral only
+        when the underlying exposure can be stated accurately; otherwise it remains visible
+        rather than being guessed.
       </p>
 
-      <h3>The Undisclosed slice</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The Undisclosed slice</h3>
       <p style={{ marginBottom: '1rem' }}>
         Free holdings sources often publish only a fund's largest positions. For a broad
         fund that can be a small fraction of the whole — a top-25 list covers roughly 6% of
         RSP and 18% of AVUV. Rather than rescaling the known names to 100% and overstating
-        them, the unknown remainder is charted as its own grey slice.
-        <strong> Every weight on this page is therefore a floor, not an estimate.</strong>
+        them, the unknown remainder is charted as its own grey slice, and rows such as
+        <em> UTG — rest not disclosed by issuer</em> name the fund it came from.
+        <strong> Every weight on this page is therefore a floor, not an estimate.</strong>{' '}
         Where a fund's issuer publishes a complete holdings file, the full list is used and
         the Undisclosed slice for that fund disappears.
       </p>
-
-      <h3>Keeping it current</h3>
       <p style={{ marginBottom: '1rem' }}>
-        <strong>Resolve gaps</strong> looks up new funds and retries incomplete funds against
-        their issuer's latest holdings download.
-        <strong> Refresh all</strong> re-fetches everything. Both run in the background and
-        report progress. Per-fund coverage — which source answered and how much of the fund
-        it covered — is in the expandable table at the bottom.
+        The banner separates the two cases by colour, because they call for different
+        responses. <strong>Grey</strong> is what the issuer will not publish — a ceiling you
+        cannot do anything about. <strong>Amber</strong> is a fund with no holdings data at
+        all, which is fixable: point it at a holdings source or define it by hand.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Per-fund coverage</h3>
+      <HelpScreenshot
+        src="./help-screenshots/diversification/fund-coverage.png"
+        alt="The expanded per-fund coverage table listing fund, value, source, as-of date, basis, and coverage percentage for each of 45 funds"
+        caption="Which source answered for each fund, and how much of that fund it actually covered."
+      />
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Source</strong> is who supplied the holdings — an issuer (<code>neos</code>,
+        <code> yieldmax</code>, <code>firsttrust</code>), a general source, <code>manual</code> for
+        anything you entered on Fund Definitions, or <code>exposure</code> when an economic mapping
+        was used instead. <strong>Basis</strong> says whether that data is the fund's literal
+        filing or a mapped economic exposure. <strong>Coverage</strong> is the share of the fund
+        those holdings account for: green at 95% and above, red below 50%, and a
+        <em> no data — define</em> link when nothing was found at all.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Read it top-down. The table is ordered by dollar value, so a poor coverage figure in the
+        first few rows distorts the chart far more than a missing small position, and those are
+        the funds worth defining by hand first.
       </p>
     </div>
   )
