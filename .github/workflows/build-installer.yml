@@ -53,6 +53,10 @@ jobs:
 
       - name: Build frontend and Windows installer
         run: npm run build && npx electron-builder --win --publish never
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
       - name: Smoke test packaged Windows app
         shell: powershell
