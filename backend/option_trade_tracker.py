@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import re
 import sqlite3
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime
 
 from flask import jsonify, request
@@ -654,6 +655,60 @@ def _contract_key(row, side=None):
     )
 
 
+def _execution_identity(row):
+    """Return the source-independent economic identity of an execution."""
+    return (
+        str(row["executed_at"] or "")[:10],
+        str(row["action"] or "").upper(),
+        str(row["underlying"] or "").upper(),
+        str(row["option_type"] or "").upper(),
+        str(row["expiration"] or "")[:10],
+        round(float(row["strike"] or 0), 4),
+        int(row["contracts"] or 0),
+        round(float(row["price"] or 0), 6),
+        round(float(row["fees"] or 0), 2),
+    )
+
+
+def _existing_execution_counts(conn, profile_id):
+    rows = conn.execute(
+        """SELECT e.executed_at, e.action, t.underlying, l.option_type,
+                  l.expiration, l.strike, e.contracts, e.price, e.fees
+             FROM option_executions e
+             JOIN option_trade_legs l ON l.id = e.leg_id
+             JOIN option_trades t ON t.id = e.trade_id
+            WHERE t.profile_id = ?""",
+        (profile_id,),
+    ).fetchall()
+    return Counter(_execution_identity(row) for row in rows)
+
+
+def _assert_import_source_allowed(conn, profile_id, source_format):
+    if source_format != "generic":
+        return
+    broker_import = conn.execute(
+        """SELECT 1
+             FROM option_trades
+            WHERE profile_id = ?
+              AND source = 'broker_import'
+              AND COALESCE(source_format, '') NOT IN ('', 'generic')
+            LIMIT 1""",
+        (profile_id,),
+    ).fetchone()
+    if broker_import:
+        raise ValueError(
+            "Generic option transactions cannot be imported after broker "
+            "transactions have been used in this portfolio. Select the "
+            "original broker format instead."
+        )
+
+
+def _stored_import_hash(profile_id, parsed_hash, occurrence):
+    """Scope the parser hash to a portfolio and preserve identical multi-fills."""
+    value = f"option-execution-v2|{profile_id}|{parsed_hash}|{occurrence}"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
 def _find_matching_open_leg(conn, profile_id, execution, preferred_trade_id=None):
     sides = _position_sides_for_action(execution["action"])
     side_placeholders = ",".join("?" for _ in sides)
@@ -680,19 +735,31 @@ def _find_matching_open_leg(conn, profile_id, execution, preferred_trade_id=None
 
 def import_option_executions(conn, profile_id, parsed):
     source_format = parsed["source_format"]
-    existing_hashes = {
-        row["dedupe_hash"] for row in conn.execute(
-            "SELECT dedupe_hash FROM option_executions WHERE dedupe_hash IS NOT NULL"
-        ).fetchall()
-    }
+    # Serialize the read/count/write sequence so two rapid import requests cannot
+    # both decide that the same execution is new.
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    _assert_import_source_allowed(conn, profile_id, source_format)
+    existing_counts = _existing_execution_counts(conn, profile_id)
+    incoming_counts = Counter()
+    hash_occurrences = Counter()
     group_trades = {}
     touched = set()
     inserted = duplicates = unmatched = 0
     errors = []
     for execution in parsed["executions"]:
-        if execution["dedupe_hash"] in existing_hashes:
+        identity = _execution_identity(execution)
+        incoming_counts[identity] += 1
+        parsed_hash = execution["dedupe_hash"]
+        hash_occurrences[parsed_hash] += 1
+        if incoming_counts[identity] <= existing_counts[identity]:
             duplicates += 1
             continue
+        stored_hash = _stored_import_hash(
+            profile_id,
+            parsed_hash,
+            hash_occurrences[parsed_hash],
+        )
         group_key = execution["group_key"]
         trade_id = group_trades.get(group_key)
 
@@ -766,10 +833,9 @@ def import_option_executions(conn, profile_id, parsed):
             (
                 trade_id, leg_id, execution["action"], execution["executed_at"],
                 execution["contracts"], execution["price"], execution["fees"],
-                execution.get("external_id"), execution["dedupe_hash"], execution.get("notes"),
+                execution.get("external_id"), stored_hash, execution.get("notes"),
             ),
         )
-        existing_hashes.add(execution["dedupe_hash"])
         inserted += 1
         touched.add(trade_id)
 
@@ -780,20 +846,21 @@ def import_option_executions(conn, profile_id, parsed):
 
 
 def annotate_import_preview(conn, profile_id, parsed):
-    hashes = {
-        row["dedupe_hash"] for row in conn.execute(
-            "SELECT dedupe_hash FROM option_executions WHERE dedupe_hash IS NOT NULL"
-        ).fetchall()
-    }
+    _assert_import_source_allowed(conn, profile_id, parsed["source_format"])
+    existing_counts = _existing_execution_counts(conn, profile_id)
+    incoming_counts = Counter()
     opening_keys = {_contract_key(row) for row in parsed["executions"] if row["action"] in OPEN_ACTIONS}
     duplicate_count = unmatched_count = 0
     rows = []
     for raw in parsed["executions"]:
         row = dict(raw)
-        row["duplicate"] = row["dedupe_hash"] in hashes
+        identity = _execution_identity(row)
+        incoming_counts[identity] += 1
+        row["duplicate"] = incoming_counts[identity] <= existing_counts[identity]
         if row["duplicate"]:
             duplicate_count += 1
-        if row["action"] in CLOSE_ACTIONS:
+            row["match_status"] = "duplicate"
+        elif row["action"] in CLOSE_ACTIONS:
             match = any(
                 _contract_key(row, side) in opening_keys
                 for side in _position_sides_for_action(row["action"])
@@ -950,6 +1017,8 @@ def register_routes(app, get_profile_filter, get_profile_id):
         conn = get_connection()
         try:
             return jsonify(annotate_import_preview(conn, get_profile_id(), parsed))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         finally:
             conn.close()
 
@@ -965,6 +1034,9 @@ def register_routes(app, get_profile_filter, get_profile_id):
         try:
             result = import_option_executions(conn, get_profile_id(), parsed)
             return jsonify({**result, "parsed": parsed["summary"], "source_format": parsed["source_format"]})
+        except ValueError as exc:
+            conn.rollback()
+            return jsonify({"error": str(exc)}), 400
         except Exception:
             conn.rollback()
             raise

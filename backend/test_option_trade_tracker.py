@@ -122,6 +122,92 @@ class OptionTradeLedgerTest(unittest.TestCase):
         self.assertEqual(trade["status"], "CLOSED")
         self.assertEqual(trade["realized_pnl"], 98)
 
+    def test_transaction_import_deduplicates_across_broker_source_formats(self):
+        rows = [
+            ["Date", "Action", "Option Symbol", "Contracts", "Price", "Fees"],
+            ["2026-01-02", "Buy to Open", "QQQ260220C00500000", 1, 2.00, 1.00],
+            ["2026-01-20", "Sell to Close", "QQQ260220C00500000", 1, 3.00, 1.00],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "broker.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            schwab = parse_option_transactions(str(path), path.name, "schwab")
+            etrade = parse_option_transactions(str(path), path.name, "etrade")
+
+        first = tracker.import_option_executions(self.conn, 1, schwab)
+        preview = tracker.annotate_import_preview(self.conn, 1, etrade)
+        second = tracker.import_option_executions(self.conn, 1, etrade)
+
+        self.assertEqual(first["inserted"], 2)
+        self.assertEqual(preview["summary"]["duplicates"], 2)
+        self.assertEqual(preview["summary"]["unmatched_closes"], 0)
+        self.assertEqual(second["inserted"], 0)
+        self.assertEqual(second["duplicates"], 2)
+        self.assertEqual(len(tracker.load_trades(self.conn, [1])), 1)
+
+    def test_generic_import_is_rejected_after_broker_import(self):
+        rows = [
+            ["Date", "Action", "Option Symbol", "Contracts", "Price", "Fees"],
+            ["2026-01-02", "Buy to Open", "QQQ260220C00500000", 1, 2.00, 1.00],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "broker.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            schwab = parse_option_transactions(str(path), path.name, "schwab")
+            generic = parse_option_transactions(str(path), path.name, "generic")
+
+        tracker.import_option_executions(self.conn, 1, schwab)
+
+        with self.assertRaisesRegex(ValueError, "Select the original broker format"):
+            tracker.annotate_import_preview(self.conn, 1, generic)
+        with self.assertRaisesRegex(ValueError, "Select the original broker format"):
+            tracker.import_option_executions(self.conn, 1, generic)
+        self.conn.rollback()
+
+    def test_transaction_import_preserves_identical_fills_from_one_file(self):
+        rows = [
+            ["Date", "Action", "Option Symbol", "Contracts", "Price", "Fees"],
+            ["2026-01-02", "Buy to Open", "QQQ260220C00500000", 1, 2.00, 1.00],
+            ["2026-01-02", "Buy to Open", "QQQ260220C00500000", 1, 2.00, 1.00],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "broker.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+
+        first = tracker.import_option_executions(self.conn, 1, parsed)
+        second = tracker.import_option_executions(self.conn, 1, parsed)
+        trade = tracker.load_trades(self.conn, [1])[0]
+
+        self.assertEqual(first["inserted"], 2)
+        self.assertEqual(second["duplicates"], 2)
+        self.assertEqual(trade["open_contracts"], 2)
+        self.assertEqual(len(trade["legs"][0]["executions"]), 2)
+
+    def test_transaction_import_dedupe_is_scoped_to_portfolio(self):
+        self.conn.execute("INSERT INTO profiles (id, name) VALUES (2, 'Other Portfolio')")
+        self.conn.commit()
+        rows = [
+            ["Date", "Action", "Option Symbol", "Contracts", "Price", "Fees"],
+            ["2026-01-02", "Buy to Open", "QQQ260220C00500000", 1, 2.00, 1.00],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "broker.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+
+        first = tracker.import_option_executions(self.conn, 1, parsed)
+        second = tracker.import_option_executions(self.conn, 2, parsed)
+
+        self.assertEqual(first["inserted"], 1)
+        self.assertEqual(second["inserted"], 1)
+        self.assertEqual(len(tracker.load_trades(self.conn, [1])), 1)
+        self.assertEqual(len(tracker.load_trades(self.conn, [2])), 1)
+
     def test_covered_call_links_only_the_required_stock_from_same_account(self):
         self.conn.execute(
             """INSERT INTO all_account_info
