@@ -27,6 +27,7 @@ const CLOSURE_DISMISS_KEY = 'dashboard_closure_warning_dismissed_v1'
 // backend will annualize a risk ratio over. Only used to explain the 7D tab.
 const SHORT_WINDOW_MIN_TRADING_DAYS = 15
 const OVERVIEW_RETURN_MODE_KEY = 'dashboard_overview_return_mode_v1'
+const NAV_RETURN_MODE_KEY = 'dashboard_nav_return_mode_v1'
 const IMPORT_DISMISS_KEY = 'dashboard_import_warning_dismissed_v1'
 const IRR_EXCLUSIONS_KEY_PREFIX = 'dashboard_irr_exclusions_v1_'
 const validSp500 = value => value?.price != null && Number.isFinite(Number(value.price))
@@ -166,6 +167,22 @@ const persistOverviewReturnMode = (mode) => {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(OVERVIEW_RETURN_MODE_KEY, mode)
+  } catch {}
+}
+
+const readNavReturnMode = () => {
+  if (typeof window === 'undefined') return 'price'
+  try {
+    return window.localStorage.getItem(NAV_RETURN_MODE_KEY) === 'total' ? 'total' : 'price'
+  } catch {
+    return 'price'
+  }
+}
+
+const persistNavReturnMode = (mode) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(NAV_RETURN_MODE_KEY, mode)
   } catch {}
 }
 
@@ -930,6 +947,7 @@ export default function Dashboard() {
   const [sp500, setSp500] = useState(null)
   const [dailyChange, setDailyChange] = useState(null)
   const [navHistory, setNavHistory] = useState([])
+  const [navReturnMode, setNavReturnMode] = useState(readNavReturnMode)
   const [navSnapping, setNavSnapping] = useState(false)
   const [navBackfilling, setNavBackfilling] = useState(false)
   const [navRepairing, setNavRepairing] = useState(false)
@@ -2007,8 +2025,13 @@ export default function Dashboard() {
   useEffect(() => {
     const el = navChartRef.current
     if (!el || !window.Plotly || navHistory.length < 1) return
+    const isTotalReturn = navReturnMode === 'total'
     const points = navHistory
-      .map(r => ({ date: r.date, value: Number(r.value) }))
+      .map(r => ({
+        date: r.date,
+        value: Number(isTotalReturn ? (r.total_return_value ?? r.value) : r.value),
+        dividends: Number(r.cumulative_dividends) || 0,
+      }))
       .filter(r => r.date && Number.isFinite(r.value))
     if (points.length < 1) return
 
@@ -2045,10 +2068,14 @@ export default function Dashboard() {
     const valueTrace = {
       x: dates, y: values,
       mode: singlePoint ? 'markers+text' : denseHistory ? 'lines' : 'lines+markers',
-      line: { color: '#7ecfff', width: 2 },
-      marker: { color: '#7ecfff', size: markerSize },
+      name: isTotalReturn ? 'Total Return' : 'Price Return',
+      line: { color: isTotalReturn ? (isDark ? '#4dff91' : '#15803d') : '#7ecfff', width: 2 },
+      marker: { color: isTotalReturn ? (isDark ? '#4dff91' : '#15803d') : '#7ecfff', size: markerSize },
       textposition: 'top center',
-      hovertemplate: '%{x|%b %d, %Y}<br>$%{y:,.2f}<extra></extra>',
+      customdata: points.map(point => point.dividends),
+      hovertemplate: isTotalReturn
+        ? '%{x|%b %d, %Y}<br>Total return value: $%{y:,.2f}<br>Dividends added: $%{customdata:,.2f}<extra></extra>'
+        : '%{x|%b %d, %Y}<br>Portfolio value: $%{y:,.2f}<extra></extra>',
     }
     if (singlePoint) {
       valueTrace.text = values.map(v => fmt(v))
@@ -2078,7 +2105,7 @@ export default function Dashboard() {
       template: ct.template,
       paper_bgcolor: ct.paper, plot_bgcolor: ct.plot,
       xaxis,
-      yaxis: { title: { text: 'Portfolio Value ($)', font: { size: 12, color: ct.font } }, gridcolor: ct.grid, color: ct.font, tickprefix: '$', range: yRange },
+      yaxis: { title: { text: isTotalReturn ? 'Value + Dividends ($)' : 'Portfolio Value ($)', font: { size: 12, color: ct.font } }, gridcolor: ct.grid, color: ct.font, tickprefix: '$', range: yRange },
       margin: { l: 90, r: 20, t: 10, b: 52 },
       height: 300,
       hovermode: 'x unified',
@@ -2095,7 +2122,7 @@ export default function Dashboard() {
         // Plot cleanup should not affect dashboard rendering.
       }
     }
-  }, [navHistory, isDark])
+  }, [navHistory, navReturnMode, isDark])
 
   if (loading) {
     return <div className="page" style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
@@ -2633,8 +2660,35 @@ export default function Dashboard() {
 
       {/* Portfolio Equity Curve */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '0.5rem' }}>
           <h3 style={{ color: 'var(--accent-2)', margin: 0, fontSize: '1rem' }}>Portfolio Value Over Time</h3>
+          <div
+            role="group"
+            aria-label="Portfolio value chart return type"
+            style={{ display: 'flex', marginLeft: 'auto' }}
+          >
+            {[
+              { value: 'price', label: 'Price Return', title: 'Show recorded portfolio value without adding dividend payments' },
+              { value: 'total', label: 'Total Return', title: 'Add actual recorded dividend payments since the first chart date' },
+            ].map((option, index, options) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`btn btn-sm${navReturnMode === option.value ? ' btn-active' : ''}`}
+                style={{
+                  borderRadius: index === 0 ? '4px 0 0 4px' : index === options.length - 1 ? '0 4px 4px 0' : 0,
+                }}
+                aria-pressed={navReturnMode === option.value}
+                title={option.title}
+                onClick={() => {
+                  setNavReturnMode(option.value)
+                  persistNavReturnMode(option.value)
+                }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
           <button
             className="btn btn-secondary"
             style={{ fontSize: '0.8rem', padding: '0.25rem 0.6rem' }}

@@ -104,6 +104,7 @@ from market_calendar import (
     eastern_now,
     market_has_closed,
 )
+from nav_history import build_nav_history_payload
 from dividend_safety import (
     apply_nav_coverage_overlay,
     get_dividend_safety_for_holdings,
@@ -6104,12 +6105,22 @@ def api_nav_history():
     def trim_incompatible_position_history(rows, profile_id, conn):
         return _trim_incompatible_position_nav_history(rows, profile_id, conn)
 
-    def history_payload(rows):
-        return [
-            {"date": r["nav_date"], "value": r["total_value"]}
-            for r in rows
-            if is_nyse_trading_day(r["nav_date"])
+    def history_payload(rows, payment_profile_ids, conn):
+        trading_day_rows = [
+            row for row in rows if is_nyse_trading_day(row["nav_date"])
         ]
+        if not trading_day_rows:
+            return []
+        placeholders = ",".join("?" * len(payment_profile_ids))
+        payment_rows = conn.execute(
+            f"""SELECT payment_date, amount, source
+                FROM dividend_payments
+                WHERE profile_id IN ({placeholders})
+                  AND payment_date IS NOT NULL
+                ORDER BY payment_date""",
+            payment_profile_ids,
+        ).fetchall()
+        return build_nav_history_payload(trading_day_rows, payment_rows)
 
     conn = get_connection()
     try:
@@ -6130,7 +6141,8 @@ def api_nav_history():
             query += " GROUP BY nav_date HAVING COUNT(DISTINCT profile_id) = ? ORDER BY nav_date"
             params.append(len(profile_ids))
             rows = conn.execute(query, params).fetchall()
-            return jsonify(history_payload(rows))
+            payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
+            return jsonify(history_payload(rows, payment_profile_ids, conn))
         else:
             profile_id = get_profile_id()
             query = "SELECT nav_date, total_value FROM portfolio_nav WHERE profile_id = ?"
@@ -6141,7 +6153,8 @@ def api_nav_history():
             query += " ORDER BY nav_date"
             rows = conn.execute(query, params).fetchall()
             rows = trim_incompatible_position_history(rows, profile_id, conn)
-            return jsonify(history_payload(rows))
+            payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, [profile_id])
+            return jsonify(history_payload(rows, payment_profile_ids, conn))
     finally:
         conn.close()
 
