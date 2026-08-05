@@ -92,6 +92,20 @@ def _derived_max_risk(trade, legs):
 
     if entry_net < 0 and all(leg["position_side"] == "LONG" for leg in legs):
         return round(abs(entry_net), 2), "net debit"
+    if (
+        len(legs) == 1
+        and legs[0]["position_side"] == "SHORT"
+        and legs[0]["option_type"] == "PUT"
+    ):
+        # A broker execution export usually supplies the contract but not its
+        # capital requirement. The economic maximum loss of a short put assumes
+        # assignment and the underlying falling to zero, less the opening credit.
+        assignment_value = (
+            float(legs[0]["strike"])
+            * int(legs[0]["contracts"])
+            * int(legs[0]["multiplier"])
+        )
+        return round(max(0, assignment_value - max(0, entry_net)), 2), "derived short put"
     if len(legs) == 2 and len(option_types) == 1 and len(expirations) == 1 and sides == {"LONG", "SHORT"} and equal_contracts:
         width = abs(float(legs[0]["strike"]) - float(legs[1]["strike"]))
         gross_width = width * int(legs[0]["contracts"]) * int(legs[0]["multiplier"])
@@ -151,6 +165,37 @@ def _trade_payload(trade_row, leg_rows, execution_rows, today=None):
         realized = round(sum(leg["net_cash_flow"] for leg in legs if leg["open_contracts"] == 0), 2)
 
     max_risk, risk_source = _derived_max_risk(trade, legs)
+    opening_dte = None
+    try:
+        opened_date = date.fromisoformat(str(trade.get("opened_at") or "")[:10])
+        expiration_dates = [
+            date.fromisoformat(str(leg.get("expiration") or "")[:10])
+            for leg in legs
+            if leg.get("expiration")
+        ]
+        if expiration_dates:
+            opening_dte = (min(expiration_dates) - opened_date).days
+    except ValueError:
+        opening_dte = None
+    annualized_return_pct = (
+        round(entry_net / max_risk * 365 / opening_dte * 100, 2)
+        if entry_net > 0 and max_risk and opening_dte and opening_dte > 0
+        else None
+    )
+    days_held = None
+    realized_annualized_return_pct = None
+    if is_closed:
+        try:
+            opened_date = date.fromisoformat(str(trade.get("opened_at") or "")[:10])
+            closed_date = date.fromisoformat(str(trade.get("closed_at") or "")[:10])
+            days_held = (closed_date - opened_date).days
+        except ValueError:
+            days_held = None
+        if max_risk and days_held and days_held > 0:
+            realized_annualized_return_pct = round(
+                realized / max_risk * 365 / days_held * 100,
+                2,
+            )
     open_expirations = []
     for leg in legs:
         if leg["open_contracts"] <= 0:
@@ -192,6 +237,10 @@ def _trade_payload(trade_row, leg_rows, execution_rows, today=None):
         "max_risk": max_risk,
         "max_risk_source": risk_source,
         "return_on_risk_pct": round(realized / max_risk * 100, 2) if is_closed and max_risk else None,
+        "annualized_return_pct": annualized_return_pct,
+        "opening_dte": opening_dte,
+        "realized_annualized_return_pct": realized_annualized_return_pct,
+        "days_held": days_held,
         "dte": dte,
         "outcome": outcome,
         "open_contracts": sum(leg["open_contracts"] for leg in legs),

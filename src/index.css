@@ -9159,7 +9159,7 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 .ot-ledger-heading { align-items: flex-end; }
 .ot-filters { display: flex; flex-wrap: wrap; gap: .45rem; justify-content: flex-end; }
 .ot-filters input { max-width: 105px; }
-.ot-trade-table { min-width: 1280px; width: 100%; }
+.ot-trade-table { min-width: 1500px; width: 100%; }
 .ot-trade-table th, .ot-detail-table th, .oti-preview-table th {
   color: var(--text-muted);
   font-size: .62rem;

@@ -75,6 +75,12 @@ class OptionTradeLedgerTest(unittest.TestCase):
         trade = tracker.load_trades(self.conn, [1])[0]
         self.assertEqual(trade["entry_net_amount"], 151)
         self.assertEqual(trade["max_risk"], 349)
+        self.assertEqual(trade["opening_dte"], 48)
+        self.assertAlmostEqual(
+            trade["annualized_return_pct"],
+            151 / 349 * 365 / 48 * 100,
+            places=2,
+        )
         self.assertEqual(len(trade["legs"]), 4)
 
         close_rows = []
@@ -85,6 +91,13 @@ class OptionTradeLedgerTest(unittest.TestCase):
         closed = tracker.load_trades(self.conn, [1])[0]
         self.assertEqual(closed["status"], "CLOSED")
         self.assertEqual(closed["realized_pnl"], 127)
+        self.assertEqual(closed["annualized_return_pct"], trade["annualized_return_pct"])
+        self.assertEqual(closed["days_held"], 2)
+        self.assertAlmostEqual(
+            closed["realized_annualized_return_pct"],
+            127 / 349 * 365 / 2 * 100,
+            places=2,
+        )
         self.assertEqual(closed["outcome"], "WIN")
         self.assertEqual(tracker.realized_option_income(self.conn, [1], "2026-08-01", "2026-08-31"), 127)
 
@@ -143,6 +156,14 @@ class OptionTradeLedgerTest(unittest.TestCase):
             }],
         })
         expired = tracker.load_trades(self.conn, [1])[0]
+        self.assertEqual(expired["max_risk"], 19875)
+        self.assertEqual(expired["max_risk_source"], "derived short put")
+        self.assertEqual(expired["opening_dte"], 32)
+        self.assertAlmostEqual(
+            expired["annualized_return_pct"],
+            125 / 19875 * 365 / 32 * 100,
+            places=2,
+        )
         tracker.close_trade(self.conn, 1, expired_id, {
             "closed_at": "2026-08-03",
             "executions": [{
@@ -153,6 +174,12 @@ class OptionTradeLedgerTest(unittest.TestCase):
         closed = next(trade for trade in tracker.load_trades(self.conn, [1]) if trade["id"] == expired_id)
         self.assertEqual(closed["status"], "CLOSED")
         self.assertEqual(closed["realized_pnl"], 125)
+        self.assertEqual(closed["days_held"], 33)
+        self.assertAlmostEqual(
+            closed["realized_annualized_return_pct"],
+            125 / 19875 * 365 / 33 * 100,
+            places=2,
+        )
 
         future_id = tracker.create_trade(self.conn, 1, {
             "underlying": "SPY", "strategy_type": "Long Call", "purpose": "Directional",
@@ -163,6 +190,8 @@ class OptionTradeLedgerTest(unittest.TestCase):
             }],
         })
         future = next(trade for trade in tracker.load_trades(self.conn, [1]) if trade["id"] == future_id)
+        self.assertIsNone(future["annualized_return_pct"])
+        self.assertIsNone(future["realized_annualized_return_pct"])
         with self.assertRaisesRegex(ValueError, "does not expire until"):
             tracker.close_trade(self.conn, 1, future_id, {
                 "closed_at": "2026-08-03",

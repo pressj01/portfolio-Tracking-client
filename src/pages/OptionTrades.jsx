@@ -554,7 +554,7 @@ export default function OptionTrades() {
         ) : (
           <div className="table-scroll">
             <table className="ot-trade-table">
-              <thead><tr><th /><th>Underlying</th><th>Strategy / purpose</th><th>Opened</th><th>Expiration / DTE</th><th>Entry</th><th>Max risk</th><th>Realized P/L</th><th>Return on risk</th><th>Status</th><th>Actions</th></tr></thead>
+              <thead><tr><th /><th>Underlying</th><th>Strategy / purpose</th><th>Opened</th><th>Expiration / DTE</th><th>Entry</th><th>Max risk</th><th>Realized P/L</th><th>Return on risk</th><th title="Entry Annualized Return = (Premium ÷ Capital at Risk) × (365 ÷ opening Days to Expiration)">Entry annualized</th><th title="Realized Annualized Return = (Realized P/L ÷ Capital at Risk) × (365 ÷ Actual Days Held)">Realized annualized</th><th>Status</th><th>Actions</th></tr></thead>
               <tbody>{filteredTrades.map(trade => {
                 const openExpirations = trade.legs.filter(leg => leg.open_contracts > 0).map(leg => leg.expiration).sort()
                 const expiration = openExpirations[0] || trade.legs.map(leg => leg.expiration).sort().at(-1)
@@ -573,6 +573,8 @@ export default function OptionTrades() {
                     <td>{money(trade.max_risk)}<small>{trade.max_risk_source || ''}</small></td>
                     <td className={trade.realized_pnl >= 0 ? 'ot-positive' : 'ot-negative'}>{trade.status === 'CLOSED' || trade.realized_pnl ? money(trade.realized_pnl) : '—'}{trade.outcome && <small>{trade.outcome}</small>}</td>
                     <td>{percent(trade.return_on_risk_pct)}</td>
+                    <td>{percent(trade.annualized_return_pct)}{trade.annualized_return_pct != null && <small>{trade.opening_dte} opening DTE</small>}</td>
+                    <td>{percent(trade.realized_annualized_return_pct)}{trade.realized_annualized_return_pct != null && <small>{trade.days_held} days held</small>}</td>
                     <td><span className={`ot-status ot-status-${trade.status.toLowerCase()}`}>{trade.status}</span></td>
                     <td>
                       <div className="ot-row-actions">
@@ -585,9 +587,9 @@ export default function OptionTrades() {
                       </div>
                     </td>
                   </tr>,
-                  classifyingId === trade.id && canEditTrade ? <tr key={`classify-${trade.id}`}><td colSpan="11"><ClassificationForm trade={trade} onCancel={() => setClassifyingId(null)} onSaved={() => { setClassifyingId(null); load() }} /></td></tr> : null,
-                  closingId === trade.id && canEditTrade ? <tr key={`close-${trade.id}`}><td colSpan="11"><CloseTradeForm trade={trade} onCancel={() => setClosingId(null)} onSaved={() => { setClosingId(null); load() }} /></td></tr> : null,
-                  expanded.has(trade.id) ? <tr key={`detail-${trade.id}`}><td colSpan="11"><TradeDetails trade={trade} /></td></tr> : null,
+                  classifyingId === trade.id && canEditTrade ? <tr key={`classify-${trade.id}`}><td colSpan="13"><ClassificationForm trade={trade} onCancel={() => setClassifyingId(null)} onSaved={() => { setClassifyingId(null); load() }} /></td></tr> : null,
+                  closingId === trade.id && canEditTrade ? <tr key={`close-${trade.id}`}><td colSpan="13"><CloseTradeForm trade={trade} onCancel={() => setClosingId(null)} onSaved={() => { setClosingId(null); load() }} /></td></tr> : null,
+                  expanded.has(trade.id) ? <tr key={`detail-${trade.id}`}><td colSpan="13"><TradeDetails trade={trade} /></td></tr> : null,
                 ]
               })}</tbody>
             </table>
