@@ -1,4 +1,4 @@
-# Portfolio Tracking Client v1.33.0
+# Portfolio Tracking Client v1.33.1
 
 Desktop installers are available for Windows PC, Intel Mac, and Apple-silicon Mac.
 
@@ -168,4 +168,4 @@ The following commits are included after v1.32.1:
 - Update the Option Trade Tracker calculations, ledger behavior, and tests.
 - Add signed Windows deployment and a shared PC/Mac GitHub release description.
 
-**Full Changelog**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.32.1...v1.33.0
+**Full Changelog**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.32.1...v1.33.1
