@@ -2248,34 +2248,6 @@ export default function OptionTradingTools() {
         </section>
       ) : (
         <section className={`card opt-risk-workspace${riskLoading && risk ? ' is-repricing' : ''}`} aria-busy={riskLoading}>
-          <div className="opt-risk-chain-entry">
-            <div><strong>Build on this trade</strong><span>Add any listed strike and DTE, including deep out-of-the-money options and LEAPS. The graph reprices every active leg together.</span></div>
-            <button type="button" className="btn btn-primary" onClick={showRiskChainPicker ? closeRiskChainPicker : openRiskChainPicker} disabled={!showRiskChainPicker && (!expirations.length || marketLoading)} aria-expanded={showRiskChainPicker}>
-              {showRiskChainPicker ? 'Hide option chain' : '+ Add from option chain'}
-            </button>
-          </div>
-          {showRiskChainPicker && <OptionChainPicker
-            sectionRef={chainCardRef}
-            ticker={ticker}
-            expirations={expirations}
-            expandedExpiration={expandedTradeExpiration}
-            onToggleExpiration={toggleTradeExpiration}
-            chainTargetLeg={chainTargetLeg}
-            onCancelTarget={() => setChainTargetLegId(null)}
-            strikeRange={strikeRange}
-            onStrikeRangeChange={setStrikeRange}
-            visibleColumns={visibleChainColumns}
-            mirroredPutColumns={mirroredPutColumns}
-            onSetColumnIds={setChainColumnIds}
-            chainLoading={chainLoading}
-            chainRows={chainRows}
-            spot={spot}
-            onAdd={addLeg}
-            expirationBrowserRef={expirationBrowserRef}
-            expandedChainWrapRef={expandedChainWrapRef}
-            riskMode
-            onClose={closeRiskChainPicker}
-          />}
           <div className="opt-risk-controls" ref={riskControlsRef}>
             <label><span>Analysis date</span><input type="date" min={TODAY()} max={analysisHorizon} value={evaluationDate} onInput={event => setBoundedEvaluationDate(event.target.value)} onChange={event => setBoundedEvaluationDate(event.target.value)} /></label>
             <label className="opt-time-slider"><span>Move through time · day {evaluationOffset} of {evolutionDays}</span><input type="range" min="0" max={evolutionDays} value={evaluationOffset} onInput={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} onChange={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} /></label>
@@ -2298,103 +2270,11 @@ export default function OptionTradingTools() {
             <label><span>Price range</span><div className="opt-suffix-input"><input type="number" min="5" max="100" value={priceRangePct} onChange={event => setPriceRangePct(event.target.value)} /><b>±%</b></div></label>
             <label><span>Day-step lines</span><select value={dayStep} onChange={event => setDayStep(Number(event.target.value))}><option value="0">Off</option><option value="1">Every day</option><option value="3">Every 3 days</option><option value="5">Every 5 days</option><option value="7">Every 7 days</option><option value="14">Every 14 days</option></select></label>
           </div>
-          {!!activeOptionLegs.length && <div className="opt-volatility-scenario-panel">
-            <div className="opt-volatility-scenario-heading">
-              <div><span>Volatility scenario</span><strong>Model the whole surface, skew and expiration curve</strong></div>
-              <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                <button type="button" onClick={applyCrashVolatilityPreset} title="Apply a +50% parallel IV move plus 2 volatility points of additional downside skew per 10% lower strike">Apply crash-vol spike</button>
-                <button type="button" onClick={resetVolatilityScenario}>Reset to current surface</button>
-              </div>
-            </div>
-            <div className="opt-volatility-scenario-controls">
-              <label>
-                <span>Price-path behavior</span>
-                <select value={volatilityDynamics} onChange={event => setVolatilityDynamics(event.target.value)}>
-                  <option value={VOLATILITY_DYNAMICS.STICKY_STRIKE}>Sticky strike</option>
-                  <option value={VOLATILITY_DYNAMICS.STICKY_DELTA}>Sticky delta</option>
-                </select>
-              </label>
-              <label>
-                <span>Downside skew change</span>
-                <div className="opt-inline-scenario-input"><input type="number" min={MIN_VOLATILITY_SKEW_POINTS} max={MAX_VOLATILITY_SKEW_POINTS} step="0.5" value={volatilitySkewPointsValue} onChange={event => setVolatilitySkewPoints(event.target.value)} onBlur={event => setVolatilitySkewPoints(clampVolatilitySkewPoints(event.target.value))} /><b>pts / 10%</b></div>
-              </label>
-              <div className="opt-volatility-term-controls">
-                <span>Expiration-specific IV change</span>
-                <div>{activeExpirations.map(expiration => <label key={expiration} title="Add or subtract volatility points for this expiration after the parallel and skew changes"><small>{formatShortDate(expiration)}</small><div className="opt-inline-scenario-input"><input type="number" min={MIN_VOLATILITY_TERM_POINTS} max={MAX_VOLATILITY_TERM_POINTS} step="0.5" value={clampVolatilityTermPoints(volatilityTermShocks[expiration])} onChange={event => setVolatilityTermShocks(previous => ({ ...previous, [expiration]: event.target.value }))} onBlur={event => setVolatilityTermShocks(previous => ({ ...previous, [expiration]: clampVolatilityTermPoints(event.target.value) }))} /><b>pts</b></div></label>)}</div>
-              </div>
-            </div>
-            <div className="opt-volatility-bubbles" aria-label="Volatility scenario assumptions">
-              <span><small>Baseline</small><strong>{ticker} market IV by leg</strong></span>
-              <span><small>Parallel surface</small><strong>{volatilitySurfaceShockLabel}</strong></span>
-              <span><small>Downside skew</small><strong>{volatilitySkewPointsLabel}</strong></span>
-              <span><small>Curve behavior</small><strong>{volatilityDynamics === VOLATILITY_DYNAMICS.STICKY_DELTA ? 'Sticky delta' : 'Sticky strike'}</strong></span>
-              <span><small>Term changes</small><strong>{activeExpirations.some(expiration => Number(volatilityTermShocks[expiration])) ? `${activeExpirations.filter(expiration => Number(volatilityTermShocks[expiration])).length} active` : 'None'}</strong></span>
-            </div>
-            <p className="opt-volatility-assumption">
-              {volatilityDynamics === VOLATILITY_DYNAMICS.STICKY_DELTA
-                ? 'Sticky delta moves the modeled surface with the underlying. As each fixed strike moves through moneyness, its IV follows the modeled skew for that expiration. An expiration with fewer than two distinct strikes falls back to fixed strike IV.'
-                : 'Sticky strike keeps each contract\'s modeled IV fixed as the chart sweeps underlying prices.'}
-              {' '}The current chain supplies the underlying-specific baseline. Scenario changes are manual assumptions, not a historical IV calibration.
-              {Number(risk?.portfolio_greeks?.vega) < 0 && volatilitySurfaceShockValue > 0 && volatilitySkewPointsValue === 0
-                ? <><strong> This position is short vega near the live price, so a parallel IV increase alone is not expected to lift the purple curve there.</strong> Apply the crash-vol spike or enter a positive downside-skew change to model the combined level-and-skew move seen in a selloff.</>
-                : null}
-            </p>
-            <div className="opt-table-wrap opt-volatility-table-wrap"><table className="opt-volatility-table"><thead><tr><th>Leg</th><th>Expiration</th><th>Market IV</th><th>After leg adj</th><th>Parallel</th><th>Skew</th><th>Term</th><th>Modeled IV</th></tr></thead><tbody>{activeOptionLegs.map(leg => {
-              const scenario = legVolatilityScenarios[leg.local_id]
-              return <tr key={leg.local_id}><td>{leg.side} {leg.qty} {leg.opt_type} {fmt(leg.strike)}</td><td>{formatShortDate(leg.expiration)}</td><td>{percent(scenario?.marketIv, 2)}</td><td>{percent(scenario?.adjustedIv, 2)}</td><td>{scenario?.parallelChangePoints > 0 ? '+' : ''}{fmt(scenario?.parallelChangePoints, 2)} pts</td><td>{scenario?.skewContributionPoints > 0 ? '+' : ''}{fmt(scenario?.skewContributionPoints, 2)} pts</td><td>{scenario?.termContributionPoints > 0 ? '+' : ''}{fmt(scenario?.termContributionPoints, 2)} pts</td><td><strong>{percent(scenario?.modeledIv, 2)}</strong></td></tr>
-            })}</tbody></table></div>
-          </div>}
-          <div className="opt-probability-controls">
-            <label className="opt-probability-toggle"><span>Probability shading</span><strong><input type="checkbox" checked={showProbabilityRange} onChange={event => setShowProbabilityRange(event.target.checked)} disabled={!activeOptionLegs.length} /> Show range</strong></label>
-            <label><span>Reference option</span><select value={probabilityAnchor?.local_id || ''} onChange={event => setProbabilityAnchorId(event.target.value)} disabled={!activeOptionLegs.length}>{activeOptionLegs.map(leg => <option key={leg.local_id} value={leg.local_id}>{leg.opt_type} {fmt(leg.strike)} · {formatExpiration(leg.expiration)}</option>)}</select></label>
-            <label><span>Range type</span><select value={probabilityRangeMode} onChange={event => setProbabilityRangeMode(event.target.value)} disabled={!probabilityAnchor}><option value="moneyness">Moneyness</option><option value="probability">Probability</option></select></label>
-            <label><span>Prob mode</span><select value={probabilityMode} onChange={event => setProbabilityMode(event.target.value)} disabled={!probabilityAnchor}><option value="ITM">ITM</option><option value="OTM">OTM</option><option value="TOUCH">Touch</option></select></label>
-            {probabilityRangeMode === 'probability'
-              ? <label><span>Probability range</span><div className="opt-suffix-input"><input type="number" min="1" max="99.9" step="0.01" value={probabilityMassPct} onChange={event => setProbabilityMassPct(event.target.value)} onBlur={event => setProbabilityMassPct(Math.min(99.9, Math.max(1, Number(event.target.value) || 68.27)))} disabled={!probabilityAnchor} /><b>%</b></div></label>
-              : <>
-                <label><span>In the money</span><div className="opt-suffix-input"><input type="number" min="1" step="1" value={itmRangePct} onChange={event => setItmRangePct(event.target.value)} onBlur={event => setItmRangePct(Math.max(1, Number(event.target.value) || 1))} disabled={!probabilityAnchor} /><b>%</b></div></label>
-                <label><span>Out of the money</span><div className="opt-suffix-input"><input type="number" min="1" step="1" value={otmRangePct} onChange={event => setOtmRangePct(event.target.value)} onBlur={event => setOtmRangePct(Math.max(1, Number(event.target.value) || 1))} disabled={!probabilityAnchor} /><b>%</b></div></label>
-              </>}
-            <label><span>Analysis volatility</span><div className="opt-suffix-input"><input type="number" min="0.01" step="0.5" value={probabilityAnchor ? (legVolatilityScenarios[probabilityAnchor.local_id]?.modeledIv * 100).toFixed(2) : ''} onChange={event => setAnalysisIvPct(event.target.value)} disabled={!probabilityAnchor} title="Sets the reference leg's final modeled IV by adjusting the parallel surface shock; skew and expiration changes remain in place" /><b>%</b></div></label>
-            <div className="opt-probability-readout">
-              {risk?.probability_range ? <>
-                <span className={probabilityMode === 'ITM' ? 'selected itm' : ''}><small>Probability ITM</small><strong>{fmt(risk.probability_range.probability_itm_pct, 1)}%</strong></span>
-                <span className={probabilityMode === 'OTM' ? 'selected otm' : ''}><small>Probability OTM</small><strong>{fmt(risk.probability_range.probability_otm_pct, 1)}%</strong></span>
-                <span className={probabilityMode === 'TOUCH' ? 'selected touch' : ''}><small>Probability touch</small><strong>{fmt(risk.probability_range.probability_touch_pct, 1)}%</strong></span>
-                <span><small>Inside shaded range</small><strong>{fmt(risk.probability_range.inside_pct, 1)}%</strong></span>
-                <em>{probabilityRangeMode === 'probability' ? 'Drag either boundary or type the probability range.' : 'Drag either boundary or type the ITM and OTM percentages.'}</em>
-              </> : <em>{activeOptionLegs.length ? 'Probability updates with date and volatility.' : 'Add an option leg to show a probability range.'}</em>}
-            </div>
-            {risk?.probability_range && <div className="opt-moneyness-key">
-              <span className={risk.probability_range.range_mode === 'probability' ? 'tail' : String(risk.probability_range.lower_label).endsWith('ITM') ? 'itm' : 'otm'}><strong>{risk.probability_range.lower_label}</strong>{money(risk.probability_range.low)}</span>
-              <span className="atm"><strong>Reference strike</strong>{money(risk.probability_range.anchor_strike)}</span>
-              <span className={risk.probability_range.range_mode === 'probability' ? 'tail' : String(risk.probability_range.upper_label).endsWith('ITM') ? 'itm' : 'otm'}><strong>{risk.probability_range.upper_label}</strong>{money(risk.probability_range.high)}</span>
-            </div>}
-          </div>
           {hasMixedExpirations && <div className="opt-horizon-note"><strong>Mixed expirations:</strong> analysis ends at the first expiration, {formatExpiration(analysisHorizon)}. Later-dated legs retain their remaining modeled time value.</div>}
           {riskLoading && <div className="opt-calculating">Updating the risk graph…</div>}
           {riskError && <div className="opt-error">{riskError}</div>}
-          {!activeLegs.length ? <div className="opt-risk-empty"><strong>{legs.length ? 'No legs are included in the risk graph.' : 'Add positions to build a risk profile.'}</strong><span>{legs.length ? 'Check Use for each leg you want included in the graph and risk totals.' : 'Add stock, use the option chain, or choose a learning template, then return here.'}</span>{!legs.length && <button className="btn btn-primary" onClick={() => setWorkspace('trades')}>Open simulated trade</button>}</div> : risk && (
-            <>
-              <div className="opt-summary-grid">
-                <SummaryMetric label="Entry" value={netDebit >= 0 ? `${money(netDebit)} debit` : `${money(Math.abs(netDebit))} credit`} />
-                <SummaryMetric
-                  label={risk.max_profit_unlimited || risk.theoretical_max_profit != null ? 'Max profit' : 'Range max profit'}
-                  value={risk.max_profit_unlimited ? 'Unlimited' : money(risk.theoretical_max_profit ?? risk.max_profit)}
-                  tone="positive"
-                  helper={risk.max_profit_unlimited || risk.theoretical_max_profit != null ? 'At expiration' : 'Within displayed prices'}
-                />
-                <SummaryMetric
-                  label={risk.max_loss_unlimited || risk.theoretical_max_loss != null ? 'Max loss' : 'Range max loss'}
-                  value={risk.max_loss_unlimited ? 'Unlimited' : money(risk.theoretical_max_loss ?? risk.max_loss)}
-                  tone="negative"
-                  helper={risk.max_loss_unlimited || risk.theoretical_max_loss != null ? 'At expiration' : 'Within displayed prices'}
-                />
-                <SummaryMetric label="Breakeven" value={(risk.breakevens || []).length ? risk.breakevens.map(value => fmt(value)).join(' · ') : 'None in range'} />
-                <SummaryMetric label="Delta" value={fmt(risk.portfolio_greeks?.delta, 2)} />
-                <SummaryMetric label="Theta / day" value={fmt(risk.portfolio_greeks?.theta, 2)} tone={Number(risk.portfolio_greeks?.theta) >= 0 ? 'positive' : 'negative'} />
-                <SummaryMetric label="Vega / point" value={fmt(risk.portfolio_greeks?.vega, 2)} />
-              </div>
+          {!activeLegs.length && <div className="opt-risk-empty"><strong>{legs.length ? 'No legs are included in the risk graph.' : 'Add positions to build a risk profile.'}</strong><span>{legs.length ? 'Check Use for each leg you want included in the graph and risk totals.' : 'Add stock, use the option chain, or choose a learning template, then return here.'}</span>{!legs.length && <button className="btn btn-primary" onClick={() => setWorkspace('trades')}>Open simulated trade</button>}</div>}
+          {risk && <>
               {!!positionStrikes.length && <div className="opt-position-strikes"><strong>Position strikes</strong>{positionStrikes.map(strike => <span key={strike}>{money(strike)}</span>)}</div>}
               {strikeStructure && <div className="opt-structure-drag-hint"><span aria-hidden="true">↔</span><span>Drag either blue strike handle to widen or narrow the entire structure around <strong>{money(strikeStructure.center)}</strong>.</span></div>}
               <RiskChart result={risk} evaluationDate={evaluationDate} strikeStructure={strikeStructure} positionStrikes={positionStrikes} onResizeStructure={resizeLegStructure} onAdjustProbabilityBoundary={adjustProbabilityBoundary} />
@@ -2422,10 +2302,131 @@ export default function OptionTradingTools() {
                   {!!brokerChartRecords.length && <BrokerMoneynessChart ticker={ticker} spot={spot} legs={activeOptionLegs} records={brokerChartRecords} chartType={brokerChartType} />}
                 </>}
               </div>}
+              <div className="opt-summary-grid">
+                <SummaryMetric label="Entry" value={netDebit >= 0 ? `${money(netDebit)} debit` : `${money(Math.abs(netDebit))} credit`} />
+                <SummaryMetric
+                  label={risk.max_profit_unlimited || risk.theoretical_max_profit != null ? 'Max profit' : 'Range max profit'}
+                  value={risk.max_profit_unlimited ? 'Unlimited' : money(risk.theoretical_max_profit ?? risk.max_profit)}
+                  tone="positive"
+                  helper={risk.max_profit_unlimited || risk.theoretical_max_profit != null ? 'At expiration' : 'Within displayed prices'}
+                />
+                <SummaryMetric
+                  label={risk.max_loss_unlimited || risk.theoretical_max_loss != null ? 'Max loss' : 'Range max loss'}
+                  value={risk.max_loss_unlimited ? 'Unlimited' : money(risk.theoretical_max_loss ?? risk.max_loss)}
+                  tone="negative"
+                  helper={risk.max_loss_unlimited || risk.theoretical_max_loss != null ? 'At expiration' : 'Within displayed prices'}
+                />
+                <SummaryMetric label="Breakeven" value={(risk.breakevens || []).length ? risk.breakevens.map(value => fmt(value)).join(' · ') : 'None in range'} />
+                <SummaryMetric label="Delta" value={fmt(risk.portfolio_greeks?.delta, 2)} />
+                <SummaryMetric label="Theta / day" value={fmt(risk.portfolio_greeks?.theta, 2)} tone={Number(risk.portfolio_greeks?.theta) >= 0 ? 'positive' : 'negative'} />
+                <SummaryMetric label="Vega / point" value={fmt(risk.portfolio_greeks?.vega, 2)} />
+              </div>
+            </>}
+              <div className="opt-risk-chain-entry">
+                <div><strong>Build on this trade</strong><span>Add any listed strike and DTE, including deep out-of-the-money options and LEAPS. The graph reprices every active leg together.</span></div>
+                <button type="button" className="btn btn-primary" onClick={showRiskChainPicker ? closeRiskChainPicker : openRiskChainPicker} disabled={!showRiskChainPicker && (!expirations.length || marketLoading)} aria-expanded={showRiskChainPicker}>
+                  {showRiskChainPicker ? 'Hide option chain' : '+ Add from option chain'}
+                </button>
+              </div>
+              {showRiskChainPicker && <OptionChainPicker
+                sectionRef={chainCardRef}
+                ticker={ticker}
+                expirations={expirations}
+                expandedExpiration={expandedTradeExpiration}
+                onToggleExpiration={toggleTradeExpiration}
+                chainTargetLeg={chainTargetLeg}
+                onCancelTarget={() => setChainTargetLegId(null)}
+                strikeRange={strikeRange}
+                onStrikeRangeChange={setStrikeRange}
+                visibleColumns={visibleChainColumns}
+                mirroredPutColumns={mirroredPutColumns}
+                onSetColumnIds={setChainColumnIds}
+                chainLoading={chainLoading}
+                chainRows={chainRows}
+                spot={spot}
+                onAdd={addLeg}
+                expirationBrowserRef={expirationBrowserRef}
+                expandedChainWrapRef={expandedChainWrapRef}
+                riskMode
+                onClose={closeRiskChainPicker}
+              />}
+              {!!activeOptionLegs.length && <div className="opt-volatility-scenario-panel">
+                <div className="opt-volatility-scenario-heading">
+                  <div><span>Volatility scenario</span><strong>Model the whole surface, skew and expiration curve</strong></div>
+                  <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <button type="button" onClick={applyCrashVolatilityPreset} title="Apply a +50% parallel IV move plus 2 volatility points of additional downside skew per 10% lower strike">Apply crash-vol spike</button>
+                    <button type="button" onClick={resetVolatilityScenario}>Reset to current surface</button>
+                  </div>
+                </div>
+                <div className="opt-volatility-scenario-controls">
+                  <label>
+                    <span>Price-path behavior</span>
+                    <select value={volatilityDynamics} onChange={event => setVolatilityDynamics(event.target.value)}>
+                      <option value={VOLATILITY_DYNAMICS.STICKY_STRIKE}>Sticky strike</option>
+                      <option value={VOLATILITY_DYNAMICS.STICKY_DELTA}>Sticky delta</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Downside skew change</span>
+                    <div className="opt-inline-scenario-input"><input type="number" min={MIN_VOLATILITY_SKEW_POINTS} max={MAX_VOLATILITY_SKEW_POINTS} step="0.5" value={volatilitySkewPointsValue} onChange={event => setVolatilitySkewPoints(event.target.value)} onBlur={event => setVolatilitySkewPoints(clampVolatilitySkewPoints(event.target.value))} /><b>pts / 10%</b></div>
+                  </label>
+                  <div className="opt-volatility-term-controls">
+                    <span>Expiration-specific IV change</span>
+                    <div>{activeExpirations.map(expiration => <label key={expiration} title="Add or subtract volatility points for this expiration after the parallel and skew changes"><small>{formatShortDate(expiration)}</small><div className="opt-inline-scenario-input"><input type="number" min={MIN_VOLATILITY_TERM_POINTS} max={MAX_VOLATILITY_TERM_POINTS} step="0.5" value={clampVolatilityTermPoints(volatilityTermShocks[expiration])} onChange={event => setVolatilityTermShocks(previous => ({ ...previous, [expiration]: event.target.value }))} onBlur={event => setVolatilityTermShocks(previous => ({ ...previous, [expiration]: clampVolatilityTermPoints(event.target.value) }))} /><b>pts</b></div></label>)}</div>
+                  </div>
+                </div>
+                <div className="opt-volatility-bubbles" aria-label="Volatility scenario assumptions">
+                  <span><small>Baseline</small><strong>{ticker} market IV by leg</strong></span>
+                  <span><small>Parallel surface</small><strong>{volatilitySurfaceShockLabel}</strong></span>
+                  <span><small>Downside skew</small><strong>{volatilitySkewPointsLabel}</strong></span>
+                  <span><small>Curve behavior</small><strong>{volatilityDynamics === VOLATILITY_DYNAMICS.STICKY_DELTA ? 'Sticky delta' : 'Sticky strike'}</strong></span>
+                  <span><small>Term changes</small><strong>{activeExpirations.some(expiration => Number(volatilityTermShocks[expiration])) ? `${activeExpirations.filter(expiration => Number(volatilityTermShocks[expiration])).length} active` : 'None'}</strong></span>
+                </div>
+                <p className="opt-volatility-assumption">
+                  {volatilityDynamics === VOLATILITY_DYNAMICS.STICKY_DELTA
+                    ? 'Sticky delta moves the modeled surface with the underlying. As each fixed strike moves through moneyness, its IV follows the modeled skew for that expiration. An expiration with fewer than two distinct strikes falls back to fixed strike IV.'
+                    : 'Sticky strike keeps each contract\'s modeled IV fixed as the chart sweeps underlying prices.'}
+                  {' '}The current chain supplies the underlying-specific baseline. Scenario changes are manual assumptions, not a historical IV calibration.
+                  {Number(risk?.portfolio_greeks?.vega) < 0 && volatilitySurfaceShockValue > 0 && volatilitySkewPointsValue === 0
+                    ? <><strong> This position is short vega near the live price, so a parallel IV increase alone is not expected to lift the purple curve there.</strong> Apply the crash-vol spike or enter a positive downside-skew change to model the combined level-and-skew move seen in a selloff.</>
+                    : null}
+                </p>
+                <div className="opt-table-wrap opt-volatility-table-wrap"><table className="opt-volatility-table"><thead><tr><th>Leg</th><th>Expiration</th><th>Market IV</th><th>After leg adj</th><th>Parallel</th><th>Skew</th><th>Term</th><th>Modeled IV</th></tr></thead><tbody>{activeOptionLegs.map(leg => {
+                  const scenario = legVolatilityScenarios[leg.local_id]
+                  return <tr key={leg.local_id}><td>{leg.side} {leg.qty} {leg.opt_type} {fmt(leg.strike)}</td><td>{formatShortDate(leg.expiration)}</td><td>{percent(scenario?.marketIv, 2)}</td><td>{percent(scenario?.adjustedIv, 2)}</td><td>{scenario?.parallelChangePoints > 0 ? '+' : ''}{fmt(scenario?.parallelChangePoints, 2)} pts</td><td>{scenario?.skewContributionPoints > 0 ? '+' : ''}{fmt(scenario?.skewContributionPoints, 2)} pts</td><td>{scenario?.termContributionPoints > 0 ? '+' : ''}{fmt(scenario?.termContributionPoints, 2)} pts</td><td><strong>{percent(scenario?.modeledIv, 2)}</strong></td></tr>
+                })}</tbody></table></div>
+              </div>}
+              <div className="opt-probability-controls">
+                <label className="opt-probability-toggle"><span>Probability shading</span><strong><input type="checkbox" checked={showProbabilityRange} onChange={event => setShowProbabilityRange(event.target.checked)} disabled={!activeOptionLegs.length} /> Show range</strong></label>
+                <label><span>Reference option</span><select value={probabilityAnchor?.local_id || ''} onChange={event => setProbabilityAnchorId(event.target.value)} disabled={!activeOptionLegs.length}>{activeOptionLegs.map(leg => <option key={leg.local_id} value={leg.local_id}>{leg.opt_type} {fmt(leg.strike)} · {formatExpiration(leg.expiration)}</option>)}</select></label>
+                <label><span>Range type</span><select value={probabilityRangeMode} onChange={event => setProbabilityRangeMode(event.target.value)} disabled={!probabilityAnchor}><option value="moneyness">Moneyness</option><option value="probability">Probability</option></select></label>
+                <label><span>Prob mode</span><select value={probabilityMode} onChange={event => setProbabilityMode(event.target.value)} disabled={!probabilityAnchor}><option value="ITM">ITM</option><option value="OTM">OTM</option><option value="TOUCH">Touch</option></select></label>
+                {probabilityRangeMode === 'probability'
+                  ? <label><span>Probability range</span><div className="opt-suffix-input"><input type="number" min="1" max="99.9" step="0.01" value={probabilityMassPct} onChange={event => setProbabilityMassPct(event.target.value)} onBlur={event => setProbabilityMassPct(Math.min(99.9, Math.max(1, Number(event.target.value) || 68.27)))} disabled={!probabilityAnchor} /><b>%</b></div></label>
+                  : <>
+                    <label><span>In the money</span><div className="opt-suffix-input"><input type="number" min="1" step="1" value={itmRangePct} onChange={event => setItmRangePct(event.target.value)} onBlur={event => setItmRangePct(Math.max(1, Number(event.target.value) || 1))} disabled={!probabilityAnchor} /><b>%</b></div></label>
+                    <label><span>Out of the money</span><div className="opt-suffix-input"><input type="number" min="1" step="1" value={otmRangePct} onChange={event => setOtmRangePct(event.target.value)} onBlur={event => setOtmRangePct(Math.max(1, Number(event.target.value) || 1))} disabled={!probabilityAnchor} /><b>%</b></div></label>
+                  </>}
+                <label><span>Analysis volatility</span><div className="opt-suffix-input"><input type="number" min="0.01" step="0.5" value={probabilityAnchor ? (legVolatilityScenarios[probabilityAnchor.local_id]?.modeledIv * 100).toFixed(2) : ''} onChange={event => setAnalysisIvPct(event.target.value)} disabled={!probabilityAnchor} title="Sets the reference leg's final modeled IV by adjusting the parallel surface shock; skew and expiration changes remain in place" /><b>%</b></div></label>
+                <div className="opt-probability-readout">
+                  {risk?.probability_range ? <>
+                    <span className={probabilityMode === 'ITM' ? 'selected itm' : ''}><small>Probability ITM</small><strong>{fmt(risk.probability_range.probability_itm_pct, 1)}%</strong></span>
+                    <span className={probabilityMode === 'OTM' ? 'selected otm' : ''}><small>Probability OTM</small><strong>{fmt(risk.probability_range.probability_otm_pct, 1)}%</strong></span>
+                    <span className={probabilityMode === 'TOUCH' ? 'selected touch' : ''}><small>Probability touch</small><strong>{fmt(risk.probability_range.probability_touch_pct, 1)}%</strong></span>
+                    <span><small>Inside shaded range</small><strong>{fmt(risk.probability_range.inside_pct, 1)}%</strong></span>
+                    <em>{probabilityRangeMode === 'probability' ? 'Drag either boundary or type the probability range.' : 'Drag either boundary or type the ITM and OTM percentages.'}</em>
+                  </> : <em>{activeOptionLegs.length ? 'Probability updates with date and volatility.' : 'Add an option leg to show a probability range.'}</em>}
+                </div>
+                {risk?.probability_range && <div className="opt-moneyness-key">
+                  <span className={risk.probability_range.range_mode === 'probability' ? 'tail' : String(risk.probability_range.lower_label).endsWith('ITM') ? 'itm' : 'otm'}><strong>{risk.probability_range.lower_label}</strong>{money(risk.probability_range.low)}</span>
+                  <span className="atm"><strong>Reference strike</strong>{money(risk.probability_range.anchor_strike)}</span>
+                  <span className={risk.probability_range.range_mode === 'probability' ? 'tail' : String(risk.probability_range.upper_label).endsWith('ITM') ? 'itm' : 'otm'}><strong>{risk.probability_range.upper_label}</strong>{money(risk.probability_range.high)}</span>
+                </div>}
+              </div>
+              {risk && <>
               <div className="opt-slice-heading"><div><span>Price slices</span><h3>Greeks and modeled P/L at selected prices</h3></div><div className="opt-slice-inputs">{sliceOffsets.map((offset, index) => <label key={index}><input type="number" value={offset} onChange={event => setSliceOffsets(values => values.map((value, current) => current === index ? Number(event.target.value) : value))} /><span>%</span></label>)}</div></div>
               <div className="opt-table-wrap"><table className="opt-slices-table"><thead><tr><th>Underlying</th><th>Move</th><th>Delta</th><th>Gamma</th><th>Theta</th><th>Vega</th><th>P/L open</th><th>1-day theta</th></tr></thead><tbody>{(risk.price_slices || []).map((slice, index) => <tr key={`${slice.s}-${index}`}><td>{money(slice.s)}</td><td>{Number(sliceOffsets[index]) > 0 ? '+' : ''}{sliceOffsets[index]}%</td><td>{fmt(slice.delta, 3)}</td><td>{fmt(slice.gamma, 4)}</td><td>{fmt(slice.theta, 2)}</td><td>{fmt(slice.vega, 2)}</td><td className={Number(slice.pnl_open) >= 0 ? 'opt-positive' : 'opt-negative'}>{signedMoney(slice.pnl_open)}</td><td className={Number(slice.pnl_day) >= 0 ? 'opt-positive' : 'opt-negative'}>{signedMoney(slice.pnl_day)}</td></tr>)}</tbody></table></div>
-            </>
-          )}
+            </>}
         </section>
       )}
 

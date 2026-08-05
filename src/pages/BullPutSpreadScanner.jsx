@@ -610,7 +610,7 @@ export default function BullPutSpreadScanner() {
             Underlying setup passed, but the trade is not currently actionable
           </span>
         </summary>
-        <div className="sst-wrap" style={{ maxHeight: '45vh', borderLeft: 0, borderRight: 0, borderBottom: 0 }}>
+        <div className="sst-wrap bull-put-watchlist-table" style={{ maxHeight: '45vh', borderLeft: 0, borderRight: 0, borderBottom: 0 }}>
           <table className="sst">
             <thead><tr><th /><th>Ticker</th><th>Type</th><th>Score</th><th>Pullback</th><th>Status</th><th>Indicative Spread</th><th style={{ textAlign: 'right' }}>DTE</th><th>Warnings</th></tr></thead>
             <tbody>{watchlistRows.map(row => {
@@ -626,10 +626,10 @@ export default function BullPutSpreadScanner() {
                   <td><strong style={{ color: 'var(--accent-bright)' }}>{row.ticker}</strong><div style={{ color: 'var(--text-dim)', fontSize: '0.68rem' }}>{row.name}</div></td>
                   <td><KindBadge row={row} /></td><td><GradeBadge row={row} /><ConfidenceBadge row={row} /></td>
                   <td>{pct(-row.drawdown_pct)} · {sigma(row.stretch_sigma)}</td>
-                  <td style={{ color: 'var(--amber)', maxWidth: 300 }}><strong>{status}</strong><div style={{ color: 'var(--text-dim)', fontSize: '0.68rem' }}>{row.watchlist_reason}</div></td>
-                  <td>{row.spread ? `$${row.spread.short_strike} / $${row.spread.long_strike} · ${usd(row.spread.credit)} credit` : '—'}</td>
+                  <td className="bull-put-watchlist-status"><strong>{status}</strong><div>{row.watchlist_reason}</div></td>
+                  <td className="bull-put-watchlist-spread">{row.spread ? `$${row.spread.short_strike} / $${row.spread.long_strike} · ${usd(row.spread.credit)} credit` : '—'}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.spread ? `${row.spread.dte}d` : '—'}</td>
-                  <td><Flags flags={row.flags} /></td>
+                  <td className="bull-put-watchlist-warnings"><Flags flags={row.flags} /></td>
                 </tr>
                 {open && <DetailRow row={row} colSpan={9} />}
               </React.Fragment>

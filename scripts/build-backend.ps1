@@ -55,7 +55,8 @@ $hiddenImports = @(
   "transaction_import",
   "portfolio_tester",
   "options_pricing",
-  "options_api"
+  "options_api",
+  "diversification"
 )
 $dataFiles = @(
   "config.py${dataSeparator}.",

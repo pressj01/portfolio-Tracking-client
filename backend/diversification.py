@@ -27,6 +27,7 @@ import html as html_lib
 import io
 import json
 import re
+import sys
 import threading
 import time
 import urllib.parse
@@ -1358,10 +1359,17 @@ def _fetch_via_app(ticker, limit=25):
     totalling 69.8% -- first-match would have silently kept the worse half and
     inflated the Undisclosed slice.
     """
-    try:
-        import app as _app
-    except Exception:
-        return [], None
+    # When app.py is frozen by PyInstaller it runs as ``__main__`` and is not
+    # importable under the name ``app``.  Re-importing app.py in source builds
+    # also creates a second Flask application and a second set of route state.
+    # Reuse the running entry module first; importing by name is only a fallback
+    # for tests and callers that imported diversification independently.
+    _app = sys.modules.get("__main__")
+    if not _app or not hasattr(_app, "_fetch_stockanalysis_top_holdings"):
+        try:
+            import app as _app
+        except Exception:
+            return [], None
 
     sym = ticker.strip().upper()
     candidates = []

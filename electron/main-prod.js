@@ -1,11 +1,13 @@
 const { app, BrowserWindow, nativeImage, dialog } = require('electron')
 const path = require('path')
 const fs = require('fs')
+const http = require('http')
+const crypto = require('crypto')
 const { spawn, execSync } = require('child_process')
-const net = require('net')
 
 let mainWindow
 let flaskProcess
+let backendInstanceToken
 let startupLogPath
 app.setAppUserModelId('com.press.portfolio.tracker.client')
 
@@ -118,13 +120,18 @@ function startFlask() {
   const exePath = getBackendPath()
   const cwd = getBackendCwd()
   const databaseDir = getDatabaseDir()
+  backendInstanceToken = crypto.randomUUID()
   logStartup(`Starting backend: ${exePath}`)
   logStartup(`Working directory: ${cwd}`)
   logStartup(`Database directory: ${databaseDir}`)
 
   flaskProcess = spawn(exePath, [], {
     cwd: cwd,
-    env: { ...process.env, PORTFOLIO_DB_DIR: databaseDir },
+    env: {
+      ...process.env,
+      PORTFOLIO_DB_DIR: databaseDir,
+      PORTFOLIO_BACKEND_TOKEN: backendInstanceToken,
+    },
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',  // Create new process group on macOS/Linux for clean tree kill
   })
@@ -139,25 +146,48 @@ function waitForBackend(port, timeout) {
   return new Promise((resolve, reject) => {
     const start = Date.now()
     const check = () => {
-      const socket = new net.Socket()
-      socket.setTimeout(500)
-      socket.on('connect', () => {
-        socket.destroy()
-        resolve()
+      if (flaskProcess && flaskProcess.exitCode !== null) {
+        reject(new Error(`Backend exited during startup with code ${flaskProcess.exitCode}`))
+        return
+      }
+
+      const req = http.get({
+        hostname: '127.0.0.1',
+        port,
+        path: '/api/health',
+        timeout: 750,
+      }, (res) => {
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk) => { body += chunk })
+        res.on('end', () => {
+          try {
+            const health = JSON.parse(body)
+            if (res.statusCode === 200 && health.ok && health.instance_token === backendInstanceToken) {
+              resolve()
+              return
+            }
+          } catch {
+            // A different process may be answering on the port while our
+            // backend is still starting. Keep polling for our instance token.
+          }
+          retry()
+        })
       })
-      socket.on('error', () => {
-        socket.destroy()
+
+      let retryScheduled = false
+      const retry = () => {
+        if (retryScheduled) return
+        retryScheduled = true
+        req.destroy()
         if (Date.now() - start > timeout) {
           reject(new Error('Backend failed to start'))
         } else {
           setTimeout(check, 300)
         }
-      })
-      socket.on('timeout', () => {
-        socket.destroy()
-        setTimeout(check, 300)
-      })
-      socket.connect(port, '127.0.0.1')
+      }
+      req.on('error', retry)
+      req.on('timeout', retry)
     }
     check()
   })

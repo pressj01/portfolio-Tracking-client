@@ -4318,6 +4318,27 @@ label {
 .sst thead th:hover { background: var(--surface-2); color: var(--text-strong); }
 .sst tbody tr:hover td { background: var(--surface-2) !important; }
 
+/* Bull-put watchlist rows carry a full sentence explaining why a candidate is
+   not actionable. Keep that note inside its own column instead of letting it
+   paint over the indicative spread, DTE, and warning badges. */
+.bull-put-watchlist-table .sst { min-width: 1450px; }
+.bull-put-watchlist-table .sst td { vertical-align: top; }
+.bull-put-watchlist-table .bull-put-watchlist-status {
+  color: var(--amber);
+  min-width: 330px;
+  max-width: 410px;
+  white-space: normal;
+}
+.bull-put-watchlist-status > div {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  margin-top: 0.14rem;
+  overflow-wrap: anywhere;
+}
+.bull-put-watchlist-spread { min-width: 230px; }
+.bull-put-watchlist-warnings { min-width: 300px; white-space: normal !important; }
+
 /* Watchlist freeze pane: keep Ticker through Signal visible while the
    indicator columns scroll horizontally. */
 .watchlist-wrap .sst { min-width: 1550px; }

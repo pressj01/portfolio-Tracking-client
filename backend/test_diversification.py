@@ -545,6 +545,31 @@ class GapKindTest(unittest.TestCase):
         self.assertEqual(result["coverage"]["unresolved_funds"], 1)
 
 
+class PackagedFallbackTest(unittest.TestCase):
+    def test_app_fetchers_are_reused_from_frozen_main_module(self):
+        """PyInstaller exposes app.py as __main__, not as importable app."""
+        original_main = sys.modules.get("__main__")
+        fake_main = SimpleNamespace(
+            _fetch_stockanalysis_top_holdings=lambda ticker, limit=None: [
+                {"symbol": "AAA", "name": "Alpha", "weight_pct": 50.0},
+                {"symbol": "BBB", "name": "Beta", "weight_pct": 30.0},
+                {"symbol": "CCC", "name": "Gamma", "weight_pct": 20.0},
+            ],
+        )
+        sys.modules["__main__"] = fake_main
+        try:
+            rows, source = dv._fetch_via_app("TEST")
+        finally:
+            if original_main is None:
+                sys.modules.pop("__main__", None)
+            else:
+                sys.modules["__main__"] = original_main
+
+        self.assertEqual(source, "stockanalysis")
+        self.assertEqual([row["symbol"] for row in rows], ["AAA", "BBB", "CCC"])
+        self.assertAlmostEqual(sum(row["weight_pct"] for row in rows), 100.0)
+
+
 class SymbolNormalisationTest(unittest.TestCase):
     def test_share_class_punctuation_collapses(self):
         self.assertEqual(dv._norm_symbol("BRK.B"), dv._norm_symbol("BRK-B"))

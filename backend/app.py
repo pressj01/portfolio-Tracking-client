@@ -1106,6 +1106,21 @@ app.secret_key = "portfolio-tracking-client-secret-key"
 CORS(app)
 app.config["PROPAGATE_EXCEPTIONS"] = False
 
+
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    """Identify the backend instance started by the desktop launcher.
+
+    A plain port check can accidentally attach an installed window to a
+    developer's Flask process already listening on port 5001.  The launcher
+    supplies a per-process token and waits for that same token here before it
+    opens the window.
+    """
+    return jsonify({
+        "ok": True,
+        "instance_token": os.environ.get("PORTFOLIO_BACKEND_TOKEN", ""),
+    })
+
 _PORTFOLIO_SUMMARY_CACHE = {}
 _PORTFOLIO_COVERAGE_CACHE = {}
 _NAV_BENCHMARK_OVERRIDE_CACHE = {"ts": 0, "data": {}}
@@ -1252,7 +1267,11 @@ def handle_api_exception(e):
 def handle_404(e):
     return jsonify({"error": "Not found"}), 404
 
-UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "uploads")
+# Everything created at runtime belongs beside the configured database.  In an
+# installed build ``__file__`` is inside Program Files, which is intentionally
+# read-only for a non-administrator; trying to create ``uploads`` there caused
+# the packaged backend to exit before Flask could start.
+UPLOAD_FOLDER = os.path.join(os.path.dirname(DB_PATH), "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
